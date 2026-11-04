@@ -1,0 +1,600 @@
+import type { Usage } from "@veyyon/ai";
+import { type } from "@veyyon/ai/utils/schema/arktype";
+import { lazy } from "@veyyon/utils/abortable";
+// Owners, not the `@veyyon/utils` barrel: 1 module against 74.
+import { $envpos } from "@veyyon/utils/env";
+import type { BaseType } from "arktype";
+import type { RetryRecoveryMode } from "../modes/retry-display";
+import type { AgentSessionEvent } from "../session/agent-session-types";
+import type { ConfiguredThinkingLevel } from "../thinking";
+import { DEFAULT_SPAWN_AGENT } from "./spawn-policy";
+import type { NestedRepoPatch, TaskIsolationMode } from "./worktree";
+
+/** Source of an agent definition */
+export type AgentSource = "bundled" | "user" | "project";
+
+/** Maximum output bytes per agent */
+export const MAX_OUTPUT_BYTES = $envpos("VEYYON_TASK_MAX_OUTPUT_BYTES", 500_000);
+
+/** Maximum output lines per agent */
+export const MAX_OUTPUT_LINES = $envpos("VEYYON_TASK_MAX_OUTPUT_LINES", 5000);
+
+/** EventBus channel for raw agent events. In-process only: `collab/host.ts` forwards the two `subagent` channels below and not this one, so its spelling is not wire vocabulary. */
+export const TASK_SUBAGENT_EVENT_CHANNEL = "task:agent:event";
+
+/** EventBus channel for aggregated agent progress. The string is a wire spelling a collab guest matches on; it does not change. */
+export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
+
+/** EventBus channel for agent lifecycle (start/end). The string is a wire spelling a collab guest matches on; it does not change. */
+export const TASK_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
+
+/** Payload emitted on TASK_SUBAGENT_PROGRESS_CHANNEL */
+export interface AgentProgressPayload {
+	index: number;
+	agent: string;
+	agentSource: AgentSource;
+	task: string;
+	parentToolCallId?: string;
+	assignment?: string;
+	progress: AgentProgress;
+	sessionFile?: string;
+	/** See {@link AgentLifecyclePayload.detached}. */
+	detached?: boolean;
+}
+
+/** Payload emitted on TASK_SUBAGENT_EVENT_CHANNEL */
+export interface AgentEventPayload {
+	id: string;
+	event: AgentSessionEvent;
+}
+
+/** Payload emitted on TASK_SUBAGENT_LIFECYCLE_CHANNEL */
+export interface AgentLifecyclePayload {
+	id: string;
+	agent: string;
+	agentSource: AgentSource;
+	description?: string;
+	status: "started" | "completed" | "failed" | "aborted";
+	sessionFile?: string;
+	parentToolCallId?: string;
+	index: number;
+	/**
+	 * Spawn runs as a detached background job: the parent turn keeps working
+	 * while this agent runs. Sync task spawns (parent blocked on the call) and
+	 * eval `agent()` bridge spawns (rendered inside their eval cell) leave this
+	 * unset — surfaces like the agent HUD only list detached spawns.
+	 */
+	detached?: boolean;
+}
+
+/** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
+export const LABEL_MAX = 80;
+
+export const taskItemSchema = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"cwd?": "string",
+		"successorOf?": "string",
+		"+": "delete",
+	}),
+);
+const taskItemSchemaIsolated = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"isolated?": "boolean",
+		"cwd?": "string",
+		"successorOf?": "string",
+		"+": "delete",
+	}),
+);
+
+/** Single task item. Fields are optional defensively: args stream in token by token. */
+export interface TaskItem {
+	/** Stable agent name; becomes the registry/IRC id. Default = generated AdjectiveNoun. */
+	name?: string;
+	/** Agent type to run this item (e.g. "scout"). Defaults to the spawn policy's default agent. */
+	agent?: string;
+	/** The work; required by the schema. */
+	task?: string;
+	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
+	isolated?: boolean;
+	/** Per-spawn cwd override; see {@link TaskParams.cwd}. */
+	cwd?: string;
+	/** Predecessor agent ID when this spawn is an explicit successor. */
+	successorOf?: string;
+}
+
+export const taskSchema = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"isolated?": "boolean",
+		"cwd?": "string",
+		"successorOf?": "string",
+		"+": "delete",
+	}),
+);
+const taskSchemaNoIsolation = lazy(() =>
+	type({
+		"name?": "string",
+		agent: "string = 'deep'",
+		task: "string",
+		"cwd?": "string",
+		"successorOf?": "string",
+		"+": "delete",
+	}),
+);
+const taskSchemaBatch = lazy(() =>
+	type({
+		context: "string",
+		tasks: taskItemSchemaIsolated.value.array(),
+		"+": "delete",
+	}),
+);
+const taskSchemaBatchNoIsolation = lazy(() =>
+	type({
+		context: "string",
+		tasks: taskItemSchema.value.array(),
+		"+": "delete",
+	}),
+);
+
+type DynamicTaskSchema =
+	| typeof taskSchema.value
+	| typeof taskSchemaNoIsolation.value
+	| typeof taskSchemaBatch.value
+	| typeof taskSchemaBatchNoIsolation.value;
+export type TaskSchema = typeof taskSchema.value;
+/** Active task tool parameter schema for the current isolation / batch flags */
+export type TaskToolSchemaInstance = DynamicTaskSchema | BaseType;
+
+const taskSchemaCache = new Map<string, BaseType>();
+
+function taskAgentSchemaRule(defaultAgent: string | undefined, enabledAgentNames?: readonly string[]) {
+	const trimmedDefault = defaultAgent?.trim();
+	if (enabledAgentNames === undefined) {
+		return trimmedDefault ? type("string").default(trimmedDefault) : "string";
+	}
+	const names = Array.from(new Set(enabledAgentNames.map(name => name.trim()).filter(Boolean)));
+	const enabled = type.enumerated(...names);
+	return trimmedDefault ? enabled.default(trimmedDefault) : enabled;
+}
+
+function createTaskSchema(options: {
+	isolationEnabled: boolean;
+	batchEnabled: boolean;
+	defaultAgent: string | undefined;
+	enabledAgentNames?: readonly string[];
+}): BaseType {
+	const agent = taskAgentSchemaRule(options.defaultAgent, options.enabledAgentNames);
+	if (options.batchEnabled) {
+		if (options.isolationEnabled) {
+			const item = type.raw({
+				"name?": "string",
+				agent,
+				task: "string",
+				"isolated?": "boolean",
+				"cwd?": "string",
+				"successorOf?": "string",
+				"+": "delete",
+			});
+			return type.raw({
+				context: "string",
+				tasks: item.array(),
+				"+": "delete",
+			});
+		}
+		const item = type.raw({
+			"name?": "string",
+			agent,
+			task: "string",
+			"cwd?": "string",
+			"successorOf?": "string",
+			"+": "delete",
+		});
+		return type.raw({
+			context: "string",
+			tasks: item.array(),
+			"+": "delete",
+		});
+	}
+	if (options.isolationEnabled) {
+		return type.raw({
+			"name?": "string",
+			agent,
+			task: "string",
+			"isolated?": "boolean",
+			"cwd?": "string",
+			"successorOf?": "string",
+			"+": "delete",
+		});
+	}
+	return type.raw({
+		"name?": "string",
+		agent,
+		task: "string",
+		"cwd?": "string",
+		"successorOf?": "string",
+		"+": "delete",
+	});
+}
+
+export function getTaskSchema(options: { isolationEnabled: boolean; batchEnabled: boolean }): DynamicTaskSchema;
+export function getTaskSchema(options: {
+	isolationEnabled: boolean;
+	batchEnabled: boolean;
+	defaultAgent: string | undefined;
+	enabledAgentNames?: readonly string[];
+}): TaskToolSchemaInstance;
+export function getTaskSchema(options: {
+	isolationEnabled: boolean;
+	batchEnabled: boolean;
+	defaultAgent?: string;
+	enabledAgentNames?: readonly string[];
+}): TaskToolSchemaInstance {
+	const hasDefaultAgent = Object.hasOwn(options, "defaultAgent");
+	const defaultAgent = hasDefaultAgent ? options.defaultAgent : DEFAULT_SPAWN_AGENT;
+	const enabledAgentNames = options.enabledAgentNames;
+	if (enabledAgentNames === undefined && defaultAgent === DEFAULT_SPAWN_AGENT) {
+		if (options.batchEnabled)
+			return options.isolationEnabled ? taskSchemaBatch.value : taskSchemaBatchNoIsolation.value;
+		return options.isolationEnabled ? taskSchema.value : taskSchemaNoIsolation.value;
+	}
+	const encodedNames =
+		enabledAgentNames === undefined
+			? "unconstrained"
+			: enabledAgentNames.map(name => `${name.length}:${name}`).join(",");
+	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${defaultAgent === undefined ? "unset" : `set:${defaultAgent.length}:${defaultAgent}`}:agents:${encodedNames}`;
+	const cached = taskSchemaCache.get(key);
+	if (cached) return cached;
+	const schema = createTaskSchema({ ...options, defaultAgent, enabledAgentNames });
+	taskSchemaCache.set(key, schema);
+	return schema;
+}
+
+/**
+ * Runtime params union over both wire shapes. The model sees exactly one shape
+ * (`{ context, tasks[] }` when `task.batch` is on, `{ name?, agent?, task }`
+ * otherwise); runtime stays permissive so internal callers and stale
+ * transcripts using the flat form keep working under either setting.
+ */
+export interface TaskParams {
+	/** Stable agent name (flat form). */
+	name?: string;
+	/** Agent type to spawn (flat form); omitted values resolve from the session spawn policy. */
+	agent?: string;
+	/** The work (flat form). */
+	task?: string;
+	/** Batch form (`task.batch`): one agent per item. */
+	tasks?: TaskItem[];
+	/** Batch form: shared background prepended to every assignment; required by the batch schema. */
+	context?: string;
+	/** Run in an isolated worktree (flat form; per-item in batch form). */
+	isolated?: boolean;
+	/**
+	 * Working directory for this spawn.
+	 * Default / `"inherit"` = parent's live session cwd at spawn time.
+	 * A relative path resolves against the parent's cwd (e.g. `libs/scanner/rulec`
+	 * from where the parent agent runs); an absolute path is used as-is. Either
+	 * must exist and be a directory.
+	 */
+	cwd?: string;
+	/** Predecessor agent ID for an explicit successor spawn. */
+	successorOf?: string;
+	/** Internal native-ledger ticket identity; never exposed by the model-facing schema. */
+	ticketId?: string;
+	/** Internal WorkerBackend run identity; never exposed by the model-facing schema. */
+	runId?: string;
+	/** Internal ledger path used to bind WorkerBackend state without touching another ledger. */
+	ledgerPath?: string;
+	/** Internal marker proving the dispatch binding was recorded before execution. */
+	nativeDispatchBound?: boolean;
+}
+
+/**
+ * One-line, length-capped label safe for a single roster line, a registry
+ * `displayName`, or a system-prompt field. Collapses every run of whitespace
+ * AND control/format characters — including U+0085 NEL, ESC/ANSI, and the
+ * zero-width separators that `\s` misses — to a single space, then caps length.
+ * So untrusted text (a generated task label, a peer activity gist) can neither
+ * break the line, inject prompt structure, nor smuggle terminal escapes. Caps at
+ * `max` characters (clamped to >= 1; default `LABEL_MAX`), appending an ellipsis when truncated.
+ */
+export function oneLineLabel(text: string, max = LABEL_MAX): string {
+	const oneLine = text.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim();
+	const cap = Math.max(1, max);
+	// Count/cut by code point, not UTF-16 code unit, so truncation can never
+	// split an astral character into a lone surrogate.
+	const chars = [...oneLine];
+	return chars.length > cap ? `${chars.slice(0, cap - 1).join("")}…` : oneLine;
+}
+
+/**
+ * Whether an agent at `taskDepth` may still spawn children. The configured
+ * value counts nested agent levels, so zero allows the root session at depth
+ * zero to spawn direct children, but those children at depth one are leaves.
+ * `maxNestedSpawnDepth < 0` disables the cap entirely.
+ */
+export function canSpawnAtDepth(maxNestedSpawnDepth: number, taskDepth: number): boolean {
+	return maxNestedSpawnDepth < 0 || taskDepth <= maxNestedSpawnDepth;
+}
+
+/** A code review finding reported by the reviewer agent */
+export interface ReviewFinding {
+	title: string;
+	body: string;
+	priority: number;
+	confidence: number;
+	file_path: string;
+	line_start: number;
+	line_end: number;
+}
+
+/** Review summary submitted by the reviewer agent */
+export interface ReviewSummary {
+	overall_correctness: "correct" | "incorrect";
+	explanation: string;
+	confidence: number;
+}
+
+/** Structured review data extracted from reviewer agent */
+export interface ReviewData {
+	findings: ReviewFinding[];
+	summary?: ReviewSummary;
+}
+
+/**
+ * Which skills a role's system prompt lists. `all` (the default) lists every skill; `none` lists
+ * none; an array lists only those names. Unlisted skills stay loadable by `skill://<name>`.
+ */
+export type SkillListSelection = "all" | "none" | string[];
+
+/** Agent definition (bundled or discovered) */
+export interface AgentDefinition {
+	name: string;
+	description: string;
+	systemPrompt: string;
+	tools?: string[];
+	spawns?: string[] | "*";
+	model?: string[];
+	thinkingLevel?: ConfiguredThinkingLevel;
+	output?: unknown;
+	blocking?: boolean;
+	autoloadSkills?: string[];
+	/**
+	 * Name of a context-file variant (e.g. `lane`): each inherited context file `<dir>/AGENTS.md` is
+	 * replaced by `<dir>/AGENTS.<variant>.md` when that sibling exists. Absent = the full files.
+	 */
+	contextVariant?: string;
+	/** Which skills the system prompt lists; absent = all. See {@link SkillListSelection}. */
+	skillList?: SkillListSelection;
+	/** When `false`, the agent's `read` tool returns verbatim file content instead of structural summaries. */
+	readSummarize?: boolean;
+	source: AgentSource;
+	filePath?: string;
+}
+
+/** Details extracted from an agent `yield` tool call for final-result assembly and task rendering. */
+export interface YieldItem {
+	data?: unknown;
+	status?: "success" | "aborted";
+	error?: string;
+	/** A string label is terminal; a non-empty array of labels is incremental. */
+	type?: string | string[];
+	/** Resolve this yield's payload from the latest durable assistant text instead of `data`. */
+	useLastTurn?: boolean;
+	/**
+	 * Set by the in-tool yield validator when it exhausted its retry budget and
+	 * accepted schema-invalid data anyway. The executor preserves that override
+	 * during post-mortem validation.
+	 */
+	schemaOverridden?: boolean;
+}
+
+/** Progress tracking for a single agent */
+export interface AgentProgress {
+	index: number;
+	id: string;
+	agent: string;
+	agentSource: AgentSource;
+	status: "pending" | "running" | "completed" | "failed" | "aborted";
+	task: string;
+	assignment?: string;
+	description?: string;
+	lastIntent?: string;
+	currentTool?: string;
+	currentToolArgs?: string;
+	currentToolStartMs?: number;
+	recentTools: Array<{ tool: string; args: string; endMs: number }>;
+	recentOutput: string[];
+	toolCount: number;
+	/** Count of assistant requests (assistant message_end events) across the run. Drives the soft request budget guard. */
+	requests: number;
+	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
+	tokens: number;
+	/**
+	 * Current per-turn context size: latest assistant message's `usage.totalTokens`.
+	 * This is the number to compare against `contextWindow` — what compaction
+	 * decides on, what the user typically reads as "how full is the context".
+	 * Distinct from `tokens`, which is a lifetime billing-volume counter.
+	 */
+	contextTokens?: number;
+	/** Model's context window in tokens, when known. Lets the UI render `<curr>/<window>` gauges. */
+	contextWindow?: number;
+	/** Cumulative billing cost in USD, accumulated incrementally from message_end events. */
+	cost: number;
+	durationMs: number;
+	modelOverride?: string | string[];
+	/**
+	 * Resolved model display string in the form `<provider>/<id>`, suffixed with `:<thinkingLevel>`
+	 * whenever the effort this agent runs at is known. That includes an effort it INHERITED, not
+	 * only one typed as an explicit suffix: effort resolves on its own axis (the agent's lane, its
+	 * frontmatter, then the default effort), so an agent with no suffix still runs at a definite
+	 * effort and the badge built from this string has to be able to say which.
+	 * Undefined when the model could not be resolved.
+	 */
+	resolvedModel?: string;
+	/**
+	 * The model this agent STARTED on, set only once it has fallen back to
+	 * another entry in its configured chain. `resolvedModel` alone says what it
+	 * runs on now and cannot say that it is not the model you picked, which is
+	 * the question you have when one agent is mysteriously slower than its peers.
+	 */
+	fellBackFrom?: string;
+	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
+	extractedToolData?: Record<string, unknown[]>;
+	/**
+	 * Auto-retry state when the agent is sleeping between provider retries
+	 * (e.g. 429 rate-limit with retry-after). Cleared when the retry resolves
+	 * or fails. Surfacing this to the parent prevents the task tool from
+	 * looking indefinitely "in progress" when a child is actually blocked on
+	 * provider quota.
+	 */
+	retryState?: {
+		attempt: number;
+		maxAttempts: number;
+		delayMs: number;
+		errorMessage: string;
+		startedAtMs: number;
+		/** Which recovery is waiting; absent means a retry. */
+		mode?: RetryRecoveryMode;
+	};
+	/**
+	 * Terminal recovery failure surfaced once the agent gave up (retry-after
+	 * exceeded the cap, all attempts exhausted, or a continuation that ran out
+	 * of allowance). Carries the final error and which recovery gave up, so the
+	 * parent UI can name what happened instead of waiting for a status that
+	 * never arrives.
+	 */
+	retryFailure?: {
+		attempt: number;
+		errorMessage: string;
+		/** Which recovery gave up; absent means a retry. */
+		mode?: RetryRecoveryMode;
+	};
+	/**
+	 * Snapshot of the most recent `task` tool call's in-flight `TaskToolDetails`,
+	 * captured from `tool_execution_update`. Lets the parent UI surface live
+	 * nested-agent progress while this agent is still inside its own `task`
+	 * call. Cleared when the call ends — finalized data lives in
+	 * `extractedToolData.task` after that.
+	 */
+	inflightTaskDetails?: TaskToolDetails;
+}
+
+/** Result from a single agent execution */
+export interface SingleResult {
+	index: number;
+	id: string;
+	agent: string;
+	agentSource: AgentSource;
+	task: string;
+	assignment?: string;
+	description?: string;
+	lastIntent?: string;
+	exitCode: number;
+	output: string;
+	stderr: string;
+	truncated: boolean;
+	durationMs: number;
+	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
+	tokens: number;
+	/** Count of assistant requests (assistant message_end events) across the run. */
+	requests: number;
+	/** Latest per-turn context size at task completion. See `AgentProgress.contextTokens`. */
+	contextTokens?: number;
+	/** Model's context window in tokens, when known. */
+	contextWindow?: number;
+	modelOverride?: string | string[];
+	/** Resolved model display string in the form `<provider>/<id>`, suffixed with `:<thinkingLevel>` whenever the effort the agent runs at is known, including an inherited one. Omitted from tool-result JSON when undefined to keep wire payloads small. */
+	resolvedModel?: string;
+	error?: string;
+	aborted?: boolean;
+	abortReason?: string;
+	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
+	usage?: Usage;
+	/** Output path for the task result */
+	outputPath?: string;
+	/** Patch path for isolated worktree output */
+	patchPath?: string;
+	/** Branch name for isolated branch-mode output */
+	branchName?: string;
+	/**
+	 * Baseline commit SHA the task branch was created from. Passed to
+	 * `mergeTaskBranches` so cherry-pick uses the inclusive range
+	 * `branchBaseSha..branchName` and preserves every agent commit's message.
+	 */
+	branchBaseSha?: string;
+	/** Nested repo patches to apply after parent merge */
+	nestedPatches?: NestedRepoPatch[];
+	/**
+	 * Set when an explicit `agent.isolation.mode` could not be honoured and the
+	 * run used another backend. `auto` never reports one: the resolver picking
+	 * is what `auto` asks for.
+	 */
+	isolationFallback?: { requested: TaskIsolationMode; actual: TaskIsolationMode; reason: string };
+	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
+	extractedToolData?: Record<string, unknown[]>;
+	/**
+	 * Terminal recovery failure, when the agent exited because a recovery
+	 * gave up (retry-after exceeded the cap, all attempts exhausted, or a
+	 * continuation that ran out of allowance). The parent copies this onto the
+	 * progress row it renders, so `mode` has to cross the boundary with it: a
+	 * settled background task otherwise reports every continuation as a retry.
+	 */
+	retryFailure?: {
+		attempt: number;
+		errorMessage: string;
+		/** Which recovery gave up; absent means a retry. */
+		mode?: RetryRecoveryMode;
+	};
+	/** Output metadata for agent:// URL integration */
+	outputMeta?: { lineCount: number; charCount: number };
+	/** Structured salvage state captured when a run is force-stopped by budget or timeout cutoff. */
+	salvageState?: SalvageState;
+	/** Ran inside an isolation worktree; not resumable or messageable. */
+	isolated?: boolean;
+	/** On-disk copies of `nestedPatches` written before isolation workspace removal. */
+	nestedPatchPaths?: string[];
+	/** False when `patchPath` is an empty root diff and work lives in `nestedPatchPaths`. */
+	hasRootChanges?: boolean;
+}
+
+/** Structured salvage state emitted when a run is force-stopped by budget or timeout. */
+export interface SalvageState {
+	requests: number;
+	tokens: number;
+	lastActivity: string;
+	reason?: string;
+	headSha?: string;
+	modifiedFiles?: string[];
+	uncommittedDiffs?: string;
+	remainingCriteria?: string[];
+	blockers?: string[];
+}
+
+/** Tool details for TUI rendering */
+export interface TaskToolDetails {
+	projectAgentsDir: string | null;
+	results: SingleResult[];
+	totalDurationMs: number;
+	/** Aggregated usage across all agents. */
+	usage?: Usage;
+	outputPaths?: string[];
+	progress?: AgentProgress[];
+	/** Operator-facing warning for a spawn refused before any agent started. */
+	warning?: {
+		kind: "homogeneous-triage";
+		message: string;
+	};
+	async?: {
+		state: "running" | "completed" | "failed";
+		jobId: string;
+		type: "task";
+	};
+}

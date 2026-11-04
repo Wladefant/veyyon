@@ -1,0 +1,282 @@
+# Plugin manager and installer plumbing
+
+This document describes how `veyyon plugin` npm/git/link operations mutate plugin state on disk and how installed npm/git/link plugins become runtime capabilities (tools and extensions today, hooks/commands path resolution available). Marketplace installs use separate marketplace registries and cache plumbing; see `docs/handbook/src/features/marketplace.md`.
+
+## Scope and architecture
+
+There is one plugin-management implementation in the codebase:
+
+1. **Active path used by CLI commands**: `PluginManager` (`src/extensibility/plugins/manager.ts`), the sole plugin-management implementation. The legacy `installer.ts` helper module was deleted (commit bbaf24df); no installer module exists under `packages/coding-agent/src`.
+
+`veyyon plugin` npm/git/link actions go through `PluginManager`; marketplace actions go through `MarketplaceManager`. `install` classifies each target (`classifyInstallTarget` in `cli/classify-install-target.ts`): `name@marketplace` routes to the marketplace manager, local paths route to `PluginManager.link()`, git and npm specs to `PluginManager.install()`.
+
+## Lifecycle: from CLI invocation to runtime availability
+
+```text
+veyyon plugin <npm/link action> ...
+  -> src/commands/plugin.ts
+  -> runPluginCommand(...) in src/cli/plugin-cli.ts
+  -> PluginManager method (install/list/uninstall/link/...)
+  -> mutate ~/.veyyon/profiles/default/plugins/{package.json,node_modules,veyyon-plugins.lock.json}
+  -> runtime discovery: discoverAndLoadCustomTools(...) and discoverAndLoadExtensions(...)
+  -> getAllPluginToolPaths(cwd) / getAllPluginExtensionPaths(cwd)
+  -> custom tool loader imports tool modules; extension loader imports extension modules
+
+veyyon plugin install name@marketplace / veyyon install name@marketplace
+  -> MarketplaceManager
+  -> mutate ~/.veyyon/profiles/default/marketplaces.json, ~/.veyyon/profiles/default/plugins/installed_plugins.json, cache dirs
+  -> installed marketplace plugin cache is surfaced as plugin roots/capabilities
+```
+
+### Command entrypoints
+
+- `src/commands/plugin.ts` defines command/flags and forwards to `runPluginCommand`.
+- `src/cli/plugin-cli.ts` maps npm/link subcommands to `PluginManager` methods:
+  - `install`, `uninstall`, `list`, `link`, `doctor`, `features`, `config`, `enable`, `disable`
+- `discover`, `upgrade`, and `marketplace ...` subcommands use `MarketplaceManager`.
+- No explicit npm-plugin `update` action exists; update is done by re-running `install` with a new package/version spec.
+
+## On-disk model
+
+Global plugin state lives under `~/.veyyon/profiles/default/plugins`:
+
+- `package.json`: dependency manifest used by `bun install`/`bun uninstall` for npm-installed plugins
+- `node_modules/`: installed npm plugin packages or symlinks
+- `veyyon-plugins.lock.json`: runtime state for npm/link plugins:
+  - enabled/disabled per plugin
+  - selected feature set per plugin
+  - persisted plugin settings
+
+Project-local overrides live at:
+
+- `<cwd>/.veyyon/plugin-overrides.json` (loader reads every project config base via `getConfigDirPaths`, so `.claude`/`.codex`/`.gemini` variants are also honored, highest priority first)
+
+Overrides are read-only from manager/loader perspective (no write path here) and can disable plugins or override features/settings for this project.
+
+Marketplace registries live separately:
+
+- `~/.veyyon/profiles/default/marketplaces.json`: configured marketplace catalogs (profile-scoped via `getConfigRootDir()`)
+- `~/.veyyon/profiles/default/plugins/installed_plugins.json`: user-scoped marketplace installs
+- `<project-root>/.veyyon/plugins/installed_plugins.json`: project-scoped marketplace installs (`resolveActiveProjectRegistryPath` walks up from cwd to the nearest project config dir, stopping before the home dir)
+- `~/.veyyon/profiles/default/plugins/cache/{marketplaces,plugins}/`: cached catalogs and plugin directories
+
+## Plugin spec parsing and metadata interpretation
+
+## Install spec grammar
+
+`parsePluginSpec` (`parser.ts`) supports:
+
+- `pkg` -> `features: null` (defaults behavior)
+- `pkg[*]` -> enable all manifest features
+- `pkg[]` -> enable no optional features
+- `pkg[a,b]` -> enable named features
+- `@scope/pkg@1.2.3[feat]` -> scoped + versioned package with explicit feature selection
+
+`PluginManager.install` also accepts git sources (validated by `validateGitSpec` instead of the npm regex): namespaced shorthands `github:user/repo[#ref]`, `gitlab:`, `bitbucket:`, `codeberg:`, `sourcehut:`/`srht:`, and full git URLs (`https://github.com/user/repo`, `git@github.com:user/repo`, `ssh://…`, `git+https://…`). Git specs do not encode the package name, so install diffs `plugins/package.json#dependencies` before/after `bun install` to resolve it.
+
+`extractPackageName` strips version suffix for on-disk path lookup after install.
+
+## Manifest source and required fields
+
+Manifest is resolved through the one-owner helper `manifestFromPackageJson()` (`kernel/src/loader/manifest-key.ts`, `MANIFEST_KEYS = ["veyyon", "omp", "pi"]`, first defined key wins):
+
+1. `package.json.veyyon`
+2. legacy `package.json.omp`
+3. legacy `package.json.pi`
+4. fallback `{ version: package.version }` (installer path only)
+
+A source-scan lock test (`test/manifest-key.test.ts`) fails if any extensibility source reads `pkg.omp`/`pkg.pi` inline instead of the helper.
+
+Implications:
+
+- There is no strict schema validation in manager/loader.
+- A package missing every manifest key is still installable and listable.
+- Runtime plugin loading (`getEnabledPlugins`) skips packages without a manifest key.
+- `manifest.version` is always overwritten from package `version`.
+
+Malformed `package.json` JSON is a hard failure at read time; malformed manifest shape may fail later only when specific fields are consumed.
+
+## Install/update flow (`PluginManager.install`)
+
+1. Parse feature bracket syntax from install spec.
+2. Validate the spec: git specs via `validateGitSpec`; npm specs against the package-name regex + shell-metacharacter denylist.
+3. Ensure plugin `package.json` exists (`veyyon-plugins`, private dependencies map).
+4. Run `bun install <packageSpec>` in `~/.veyyon/profiles/default/plugins`.
+5. Resolve the installed package name (npm: strip version via `extractPackageName`; git: diff `dependencies` before/after) and read `node_modules/<name>/package.json`.
+6. Resolve manifest and compute `enabledFeatures`:
+   - `[*]`: all declared features (or `null` if no feature map)
+   - `[a,b]`: validates each feature exists in manifest features map
+   - `[]`: empty feature list
+   - bare spec: `null` (use defaults policy later in loader)
+7. Validate declared extension entries (`#validateInstalledExtensions`): each manifest `extensions` entry must resolve on disk and import to a factory function. On failure, roll back the install, restore the previous plugins-root `package.json`, remove the freshly installed package, and restore any prior version from a backup taken before `bun install`, then abort.
+8. Upsert lockfile runtime state: `{ version, enabledFeatures, enabled: true }`.
+
+### Update semantics
+
+Because update is install-driven:
+
+- `veyyon plugin install pkg@newVersion` updates dependency and lockfile version.
+- Existing settings are preserved; state entry is overwritten for version/features/enabled.
+- No separate “check updates” or transactional migration logic exists.
+
+## Remove flow (`PluginManager.uninstall`)
+
+1. Validate package name.
+2. Run `bun uninstall <name>` in plugin dir.
+3. Remove plugin runtime state from lockfile:
+   - `config.plugins[name]`
+   - `config.settings[name]`
+
+If uninstall command fails, runtime state is not changed.
+
+## List flow (`PluginManager.list`)
+
+1. Read plugin dependency map from `~/.veyyon/profiles/default/plugins/package.json`.
+2. Load lockfile runtime config (missing file -> empty defaults).
+3. Load project overrides from `<cwd>/.veyyon/plugin-overrides.json` only (multi-base override reading happens only in the runtime loader), parse/read errors -> empty object with warning.
+4. For each dependency with a resolvable package.json:
+   - build `InstalledPlugin` record
+   - merge feature/enable state:
+     - base from lockfile (or defaults)
+     - project overrides can replace feature selection
+     - project `disabled` list masks plugin as disabled
+
+This is the effective state used by CLI status output and settings/features operations.
+
+## Link flow (`PluginManager.link`)
+
+`link` supports local plugin development by symlinking a local package into `~/.veyyon/profiles/default/plugins/node_modules/<pkg.name>`.
+
+Behavior:
+
+1. Resolve `localPath` against manager cwd.
+2. Require local `package.json` and `name` field.
+3. Ensure plugin dirs exist.
+4. For scoped names, create scope directory.
+5. Remove existing path at target link location.
+6. Create symlink.
+7. Add runtime lockfile entry enabled with default features (`null`).
+
+Caveat: `PluginManager.link` performs no cwd path-boundary or symlink-target traversal checks, so trust is the caller’s responsibility.
+
+## Runtime loading: from installed plugin to callable capabilities
+
+## Discovery gate
+
+`getEnabledPlugins(cwd)` (`src/extensibility/plugins/loader.ts`) enumerates two roots: the user root (`getPluginsDir(home)`) plus, when a `.veyyon/` or `.git/` anchor exists at or above cwd, the project root `<anchor>/.veyyon/plugins`. Each root contributes its plugin dependency manifest (`package.json`) unioned with lockfile plugin entries, so `plugin link`-only plugins without a dependency entry are still discovered, and project entries shadow same-named user entries. It then reads:
+
+- lockfile runtime state
+- project overrides via `getConfigDirPaths("plugin-overrides.json", { user: false, cwd })`
+
+Filtering:
+
+- skip if no plugin package.json
+- skip if manifest (`veyyon`/`omp`/`pi`) absent
+- skip if globally disabled in lockfile
+- skip if project-disabled
+
+## Capability path resolution
+
+For each enabled plugin:
+
+- `resolvePluginExtensionPaths(plugin)`
+- `resolvePluginToolPaths(plugin)`
+- `resolvePluginHookPaths(plugin)`
+- `resolvePluginCommandPaths(plugin)`
+
+Each resolver includes base entries plus feature entries:
+
+- base entries are always included
+- explicit feature list -> only selected features
+- `enabledFeatures === null` -> enable features marked `default: true`
+
+Manifest entries may point to a file or to a directory containing `index.ts`, `index.js`, `index.mjs`, or `index.cjs`. Missing files are silently skipped (`statSync`/`existsSync` guard).
+
+## Current runtime wiring differences
+
+- **Tools are wired into runtime today** via `discoverAndLoadCustomTools` (`custom-tools/loader.ts`), which calls `getAllPluginToolPaths(cwd)`.
+- **Extensions are wired into runtime today** via `discoverAndLoadExtensions` (`extensions/loader.ts`), which calls `getAllPluginExtensionPaths(cwd)`.
+- Paths are de-duplicated by resolved absolute path in custom tool and extension discovery (`seen` set, first path wins).
+- **Hooks/commands resolvers exist** and are exported, but this code path does not currently wire them into a runtime registry in the same way tools and extensions are wired.
+
+## Lock/state management details
+
+`PluginManager` caches runtime config in memory per instance (`#runtimeConfig`) and lazily loads once.
+
+Load behavior:
+
+- lockfile missing -> `{ plugins: {}, settings: {} }`
+- lockfile read/parse failure -> warning + same empty defaults
+
+Save behavior:
+
+- writes full lockfile JSON pretty-printed each mutation
+
+No cross-process locking or merge strategy exists; concurrent writers can overwrite each other.
+
+## Safety checks and trust boundaries
+
+## Input/package validation
+
+Active manager path enforces package-name validation:
+
+- npm specs: a package-name regex (`VALID_PACKAGE_NAME`) for scoped/unscoped specs, optionally with version.
+- npm shell-metacharacter denylist: `;`, `&`, `|`, backtick, `$`, `(`, `)`, `{`, `}`, `[`, `]`, `<`, `>`, `\`: applied after `parsePluginSpec` strips the feature brackets, so a normal `pkg[feat]` spec never reaches it.
+- git specs: `validateGitSpec` rejects only the shared `SHELL_METACHARS` set (`;`, `&`, `|`, backtick, `$`, `(`, `)`, `{`, `}`, `<`, `>`, `\`, newline, CR, tab) instead of the npm regex, so `:`, `/`, `#`, `+`, `.`, `-`, `_`, `~`, `@` are permitted.
+
+This limits command-injection risk when invoking `bun install/uninstall`.
+
+## Filesystem trust boundary
+
+- Plugin code executes in-process when custom tool modules are imported; no sandboxing.
+- Manifest relative paths are joined against plugin package directory and only existence-checked.
+- The plugin package itself is trusted code once installed.
+
+## Link-time checks
+
+No link-time boundary or traversal guards exist anywhere in the current codebase: `PluginManager.link`
+requires only a local `package.json` with a `name` field, so trust is the caller's responsibility.
+
+## Failure, partial success, and rollback behavior
+
+Install is guarded by a snapshot + rollback path (`#rollbackFailedInstall` restores `package.json`, `bun.lock`, and the prior package backup); uninstall and link are not transactional.
+
+| Operation stage                                          | Failure behavior           | Rollback                                                                      |
+| -------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------- |
+| `bun install` fails                                      | install aborts with stderr | N/A (no state writes yet)                                                     |
+| Install succeeds, then feature validation fails          | command fails              | Rolls back (same `#rollbackFailedInstall` path as extension validation)       |
+| Install succeeds, then extension validation fails        | command fails              | Rolls back: restores `package.json`, removes installed package, restores prior version from backup |
+| Install succeeds, then runtime lock write fails          | command fails              | Rolls back the installed package (write happens inside the guarded try block) |
+| `bun uninstall` succeeds, lockfile write fails           | command fails              | Package removed, stale runtime state may remain                               |
+| `link` removes old target then symlink creation fails    | command fails              | No restoration of previous link/dir                                           |
+
+Operationally, `doctor --fix` can repair some drift (`bun install`, orphaned config cleanup, invalid-feature cleanup), but it is best-effort.
+
+## Malformed/missing manifest behavior summary
+
+- Missing `veyyon`/`omp`/`pi` field:
+  - install/list: tolerated (minimal manifest)
+  - runtime enabled-plugin discovery: skipped as non-plugin
+- Missing feature referenced by install spec or `features --set/--enable`: hard error with available feature list
+- Invalid `plugin-overrides.json`: ignored with fallback to `{}` in both manager and loader paths
+- Missing tool/hook/command file paths referenced by manifest: silently ignored during resolver expansion; flagged as errors only by `doctor`
+
+## Mode differences and precedence
+
+- `--dry-run` (install): returns a synthetic install result with no `bun install`, no network, and no lockfile/runtime-state writes (it still ensures the plugins `package.json` skeleton exists).
+- `--json`: output formatting only, no behavior change.
+- Project overrides always take precedence over global lockfile for feature/settings view.
+- Effective enablement is `runtimeEnabled && !projectDisabled`.
+
+## Implementation files
+
+- [`src/commands/plugin.ts`](../../packages/coding-agent/src/commands/plugin.ts): CLI command declaration and flag mapping
+- [`src/cli/plugin-cli.ts`](../../packages/coding-agent/src/cli/plugin-cli.ts): action dispatch, user-facing command handlers
+- [`src/extensibility/plugins/manager.ts`](../../packages/coding-agent/src/extensibility/plugins/manager.ts): active install/remove/list/link/state/doctor implementation (link performs no path-boundary/traversal safety checks)
+- [`src/extensibility/plugins/loader.ts`](../../packages/coding-agent/src/extensibility/plugins/loader.ts): enabled-plugin discovery and tool/hook/command path resolution
+- [`kernel/src/loader/plugins/parser.ts`](../../kernel/src/loader/plugins/parser.ts): install spec and package-name parsing helpers
+- [`kernel/src/loader/plugins/types.ts`](../../kernel/src/loader/plugins/types.ts): manifest/runtime/override type contracts
+- [`src/extensibility/custom-tools/loader.ts`](../../packages/coding-agent/src/extensibility/custom-tools/loader.ts): runtime wiring for plugin-provided tool modules
+- [`src/extensibility/extensions/loader.ts`](../../packages/coding-agent/src/extensibility/extensions/loader.ts): runtime wiring for plugin-provided extension modules
+
+*Verified against `a9aad1d21` on 2026-08-31.*

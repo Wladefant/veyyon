@@ -1,0 +1,730 @@
+/**
+ * AWS credential resolution for the Bedrock provider.
+ *
+ * Chain (first hit wins):
+ *  1. Static credentials from the environment
+ *     (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` [+ `AWS_SESSION_TOKEN`]).
+ *  2. Profile in `~/.aws/credentials` (and `~/.aws/config` for SSO):
+ *      - static `aws_access_key_id` / `aws_secret_access_key` / `aws_session_token`
+ *      - SSO profile referencing a cached token in `~/.aws/sso/cache/*.json`,
+ *        which we exchange for short-lived role credentials via
+ *        `https://portal.sso.{region}.amazonaws.com/federation/credentials`.
+ *      - `credential_process` — an external command emitting the AWS SDK
+ *        `Version: 1` JSON envelope on stdout. Used by `aws-vault`, `granted`,
+ *        in-house brokers, etc.
+ *  3. EC2 IMDSv2 (only when `AWS_EC2_METADATA_DISABLED` is unset / falsey and
+ *     `169.254.169.254` is reachable within a 1 s timeout).
+ *
+ * Resolved credentials are cached process-wide per profile and refreshed
+ * 60 s before `Expiration` to absorb clock skew.
+ */
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { atomicWriteFile } from "@veyyon/utils/atomic-write";
+import { $env } from "@veyyon/utils/env";
+import { isEnoent } from "@veyyon/utils/fs-error";
+import * as logger from "@veyyon/utils/logger";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { readPipeText } from "@veyyon/utils/stream";
+import * as AIError from "../error";
+import type { FetchImpl } from "../types";
+import { raceWithSignal } from "../utils/abort";
+import type { AwsCredentials } from "./aws-sigv4";
+
+export interface ResolvedCredentials extends AwsCredentials {
+	/** Absolute expiration timestamp in ms. `undefined` for non-expiring static creds. */
+	expiresAt?: number;
+}
+
+export interface CredentialResolveOptions {
+	/** Named profile from `~/.aws/credentials` / `~/.aws/config`. */
+	profile?: string;
+	/** Falls back to env (`AWS_REGION` / `AWS_DEFAULT_REGION`) and finally `us-east-1`. */
+	region?: string;
+	signal?: AbortSignal;
+	fetch?: FetchImpl;
+}
+
+const REFRESH_SKEW_MS = 60_000;
+/**
+ * TTL for file-sourced credentials that carry a session token but no expiry.
+ * Tools like aws-vault/saml2aws rewrite ~/.aws/credentials with short-lived STS
+ * session keys; caching them forever serves stale creds after rotation.
+ */
+const FILE_SESSION_CREDS_TTL_MS = 5 * 60_000;
+/**
+ * Bound for the detached (signal-free) shared resolution: a hung
+ * credential_process/SSO/IMDS fetch must not pin the inflight slot forever.
+ */
+const SHARED_RESOLVE_TIMEOUT_MS = 30_000;
+
+interface CacheEntry {
+	creds: ResolvedCredentials;
+	expiresAt: number;
+}
+
+const cache: Map<string, CacheEntry> = new Map();
+const inflight: Map<string, Promise<ResolvedCredentials>> = new Map();
+
+export async function resolveAwsCredentials(opts: CredentialResolveOptions = {}): Promise<ResolvedCredentials> {
+	const profile = opts.profile || $env.AWS_PROFILE || "default";
+	const region = opts.region || $env.AWS_REGION || $env.AWS_DEFAULT_REGION || "us-east-1";
+	const cacheKey = `${profile}\x00${region}`;
+
+	const hit = cache.get(cacheKey);
+	if (hit && hit.expiresAt - REFRESH_SKEW_MS > Date.now()) return hit.creds;
+
+	// Single-flight: N concurrent cold calls must not each spawn credential_process/SSO/IMDS fetches.
+	// The shared resolution is deliberately detached from any caller's signal — aborting one
+	// request must not fail every waiter — and bounded by its own timeout instead; each caller
+	// races its own signal against the shared promise.
+	const existing = inflight.get(cacheKey);
+	if (existing) return raceWithSignal(existing, opts.signal);
+
+	const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchImpl);
+	const promise = (async () => {
+		// Scoped so the shared-resolve timer is cleared on settle instead of
+		// staying armed like a bare AbortSignal.timeout.
+		const resolveTimeout = scopedTimeoutSignal(SHARED_RESOLVE_TIMEOUT_MS);
+		try {
+			const creds = await resolveFresh(profile, resolveTimeout.signal, fetchImpl);
+			cache.set(cacheKey, { creds, expiresAt: creds.expiresAt ?? Number.POSITIVE_INFINITY });
+			return creds;
+		} finally {
+			resolveTimeout.cancel();
+			inflight.delete(cacheKey);
+		}
+	})();
+	inflight.set(cacheKey, promise);
+	return raceWithSignal(promise, opts.signal);
+}
+
+async function resolveFresh(
+	profile: string,
+	signal?: AbortSignal,
+	fetchImpl: FetchImpl = globalThis.fetch as FetchImpl,
+): Promise<ResolvedCredentials> {
+	// 1. Environment first — matches the AWS SDK chain order.
+	const envCreds = readEnvCredentials();
+	if (envCreds) return envCreds;
+
+	// 2. Profile (static or SSO).
+	const profileCreds = await readProfileCredentials(profile, signal, fetchImpl);
+	if (profileCreds) return profileCreds;
+
+	// 3. EC2 IMDSv2.
+	if ($env.AWS_EC2_METADATA_DISABLED?.toLowerCase() !== "true") {
+		const imdsCreds = await readImdsCredentials(signal, fetchImpl);
+		if (imdsCreds) return imdsCreds;
+	}
+
+	throw new AIError.AwsCredentialsError(
+		`Unable to resolve AWS credentials. Set AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY, ` +
+			`or configure profile '${profile}' in ~/.aws/credentials (or ~/.aws/config for SSO).`,
+		"resolution",
+	);
+}
+
+function readEnvCredentials(): ResolvedCredentials | undefined {
+	const ak = $env.AWS_ACCESS_KEY_ID;
+	const sk = $env.AWS_SECRET_ACCESS_KEY;
+	if (!ak || !sk) return undefined;
+	const token = $env.AWS_SESSION_TOKEN;
+	return token
+		? { accessKeyId: ak, secretAccessKey: sk, sessionToken: token }
+		: { accessKeyId: ak, secretAccessKey: sk };
+}
+
+// ---------- INI parsing ----------
+
+/** Map of section name -> map of key -> value. Section names are stripped of
+ * any leading `profile ` (so `~/.aws/config` aligns with `~/.aws/credentials`). */
+type IniFile = Record<string, Record<string, string>>;
+
+function parseIni(text: string): IniFile {
+	const out: IniFile = {};
+	let current: Record<string, string> | null = null;
+	for (const rawLine of text.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+		if (line.startsWith("[") && line.endsWith("]")) {
+			let name = line.slice(1, -1).trim();
+			if (name.startsWith("profile ")) name = name.slice(8).trim();
+			if (name.startsWith("sso-session ")) name = `sso-session:${name.slice(12).trim()}`;
+			let section = out[name];
+			if (!section) {
+				section = {};
+				out[name] = section;
+			}
+			current = section;
+			continue;
+		}
+		if (!current) continue;
+		const eq = line.indexOf("=");
+		if (eq === -1) continue;
+		current[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+	}
+	return out;
+}
+
+async function readIniFile(p: string): Promise<IniFile | undefined> {
+	try {
+		const text = await fs.promises.readFile(p, "utf8");
+		return parseIni(text);
+	} catch (err) {
+		if (isEnoent(err)) return undefined;
+		throw err;
+	}
+}
+
+// ---------- Profile / SSO ----------
+
+async function readProfileCredentials(
+	profile: string,
+	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
+): Promise<ResolvedCredentials | undefined> {
+	const home = os.homedir();
+	const credentialsPath = $env.AWS_SHARED_CREDENTIALS_FILE || path.join(home, ".aws", "credentials");
+	const configPath = $env.AWS_CONFIG_FILE || path.join(home, ".aws", "config");
+
+	const credentialsIni = await readIniFile(credentialsPath);
+	const configIni = await readIniFile(configPath);
+
+	// Static credentials live in ~/.aws/credentials; SSO config lives in
+	// ~/.aws/config under `[profile foo]`. Merge into a single view.
+	const merged: Record<string, string> = { ...(configIni?.[profile] ?? {}), ...(credentialsIni?.[profile] ?? {}) };
+	if (Object.keys(merged).length === 0) return undefined;
+
+	if (merged.aws_access_key_id && merged.aws_secret_access_key) {
+		const out: ResolvedCredentials = {
+			accessKeyId: merged.aws_access_key_id,
+			secretAccessKey: merged.aws_secret_access_key,
+		};
+		if (merged.aws_session_token) {
+			out.sessionToken = merged.aws_session_token;
+			// Session-token creds in the credentials file are short-lived STS keys that
+			// external tools rotate in place; cap the cache so rotations are picked up.
+			out.expiresAt = Date.now() + FILE_SESSION_CREDS_TTL_MS;
+		}
+		return out;
+	}
+
+	if (merged.sso_account_id && merged.sso_role_name) {
+		return readSsoCredentials(merged, configIni, signal, fetchImpl);
+	}
+
+	if (merged.credential_process) {
+		return readCredentialProcess(profile, merged.credential_process, signal);
+	}
+
+	return undefined;
+}
+
+interface SsoCachedToken {
+	accessToken?: string;
+	expiresAt?: string;
+	startUrl?: string;
+	region?: string;
+	/** Present when the token was minted with the refresh_token grant enabled. */
+	refreshToken?: string;
+	clientId?: string;
+	clientSecret?: string;
+	/** Client registration expiry; refresh is impossible once this passes. */
+	registrationExpiresAt?: string;
+}
+
+/** A cache hit plus the filename it came from, so a refresh can be written back. */
+interface SsoCacheEntry {
+	token: SsoCachedToken;
+	file: string;
+}
+
+/** Refresh this long before `expiresAt` so a request in flight cannot age out. */
+const SSO_TOKEN_REFRESH_SKEW_MS = 60_000;
+
+async function readSsoCredentials(
+	profileCfg: Record<string, string>,
+	configIni: IniFile | undefined,
+	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
+): Promise<ResolvedCredentials | undefined> {
+	// Two SSO profile shapes:
+	//   - legacy: `sso_start_url` + `sso_region` directly on the profile
+	//   - sso-session: `sso_session = my-session` references a `[sso-session my-session]` block
+	let startUrl = profileCfg.sso_start_url;
+	let ssoRegion = profileCfg.sso_region;
+	const sessionName = profileCfg.sso_session;
+	if (sessionName && configIni) {
+		const session = configIni[`sso-session:${sessionName}`];
+		if (session) {
+			startUrl = startUrl || session.sso_start_url;
+			ssoRegion = ssoRegion || session.sso_region;
+		}
+	}
+	if (!startUrl || !ssoRegion) return undefined;
+
+	const cached = await loadSsoCachedToken(startUrl, sessionName);
+	if (!cached?.token.accessToken) {
+		throw new AIError.AwsCredentialsError(
+			`AWS SSO token for ${startUrl} not found in ~/.aws/sso/cache. Run 'aws sso login' first.`,
+			"sso-token-missing",
+		);
+	}
+	let accessToken = cached.token.accessToken;
+	const expiresAt = cached.token.expiresAt ? Date.parse(cached.token.expiresAt) : Number.POSITIVE_INFINITY;
+	const expired = Number.isFinite(expiresAt) && expiresAt <= Date.now();
+	// Access tokens are short-lived (often 1 h) but ship with a refresh token whose
+	// client registration lasts weeks. The AWS CLI refreshes transparently, so a
+	// profile that works under `aws` must not fail here; only a genuinely
+	// unrefreshable token warrants sending the user back to `aws sso login`.
+	if (Number.isFinite(expiresAt) && expiresAt - SSO_TOKEN_REFRESH_SKEW_MS <= Date.now()) {
+		const refreshed = await refreshSsoToken(cached.token, cached.file, ssoRegion, signal, fetchImpl);
+		if (refreshed?.accessToken) accessToken = refreshed.accessToken;
+		else if (expired) {
+			throw new AIError.AwsCredentialsError(
+				`AWS SSO token for ${startUrl} has expired. Run 'aws sso login' to refresh.`,
+				"sso-token-expired",
+			);
+		}
+	}
+
+	const url =
+		`https://portal.sso.${ssoRegion}.amazonaws.com/federation/credentials` +
+		`?account_id=${encodeURIComponent(profileCfg.sso_account_id)}` +
+		`&role_name=${encodeURIComponent(profileCfg.sso_role_name)}`;
+	const response = await fetchImpl(url, {
+		method: "GET",
+		headers: { "x-amz-sso_bearer_token": accessToken },
+		signal,
+	});
+	if (!response.ok) {
+		// The STATUS is the failure; the body is the detail attached to it. An unreadable body must not replace
+		// a credential-service error with a read error, and this endpoint answers a bearer token, so its body
+		// goes through the shared redactor rather than a local slice.
+		const detail = await AIError.readProviderErrorDetail(response);
+		throw new AIError.AwsCredentialsError(
+			`AWS SSO GetRoleCredentials failed: ${response.status} ${detail}`,
+			"sso-role",
+		);
+	}
+	const json = (await response.json()) as {
+		roleCredentials?: { accessKeyId: string; secretAccessKey: string; sessionToken: string; expiration: number };
+	};
+	const role = json.roleCredentials;
+	if (!role)
+		throw new AIError.AwsCredentialsError(
+			"AWS SSO GetRoleCredentials: missing roleCredentials in response",
+			"sso-role",
+		);
+
+	return {
+		accessKeyId: role.accessKeyId,
+		secretAccessKey: role.secretAccessKey,
+		sessionToken: role.sessionToken,
+		expiresAt: role.expiration,
+	};
+}
+
+async function loadSsoCachedToken(
+	startUrl: string,
+	sessionName: string | undefined,
+): Promise<SsoCacheEntry | undefined> {
+	const cacheDir = path.join(os.homedir(), ".aws", "sso", "cache");
+	let entries: string[];
+	try {
+		entries = await fs.promises.readdir(cacheDir);
+	} catch (err) {
+		if (isEnoent(err)) return undefined;
+		throw err;
+	}
+	// Prefer the deterministic hash for legacy `sso_start_url` profiles or the
+	// session name for the newer `sso-session` shape; otherwise scan.
+	const candidates: string[] = [];
+	const hash = await sha1Hex(sessionName || startUrl);
+	candidates.push(`${hash}.json`);
+	for (const entry of entries) {
+		if (entry.endsWith(".json") && !candidates.includes(entry)) candidates.push(entry);
+	}
+	// A file that cannot be read or parsed might have been the one we needed, and
+	// we cannot tell which without reading it. Errors are therefore collected
+	// rather than dropped, and reported below only when the scan came up empty,
+	// which is exactly the case where a swallowed error IS the reason for the
+	// failure. Reporting them on a successful scan would fire on every unrelated
+	// profile's stale file and train everyone to ignore the line.
+	const unreadable: string[] = [];
+	for (const file of candidates) {
+		if (!entries.includes(file)) continue;
+		try {
+			const text = await fs.promises.readFile(path.join(cacheDir, file), "utf8");
+			const parsed = JSON.parse(text) as SsoCachedToken;
+			if (parsed.startUrl === startUrl || (sessionName && file === `${hash}.json`)) {
+				return { token: parsed, file };
+			}
+		} catch (err) {
+			unreadable.push(`${file}: ${String(err)}`);
+		}
+	}
+	if (unreadable.length > 0) {
+		logger.warn(
+			"No cached AWS SSO token was found, and some cache files could not be read; one of them may have been the token, so you may be asked to log in again unnecessarily",
+			{ cacheDir, startUrl, sessionName, unreadable },
+		);
+	}
+	return undefined;
+}
+
+/**
+ * Exchange the cached refresh token for a fresh access token via SSO OIDC
+ * `CreateToken`, which is what the AWS CLI does transparently on every command.
+ *
+ * Returns `undefined` when refresh is impossible (no refresh grant material, or
+ * the client registration itself has expired) or when the exchange fails, so a
+ * broken refresh surfaces the existing "run aws sso login" remedy rather than an
+ * opaque network error.
+ */
+async function refreshSsoToken(
+	token: SsoCachedToken,
+	file: string,
+	ssoRegion: string,
+	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
+): Promise<SsoCachedToken | undefined> {
+	if (!token.refreshToken || !token.clientId || !token.clientSecret) return undefined;
+	const registrationExpiresAt = token.registrationExpiresAt ? Date.parse(token.registrationExpiresAt) : Number.NaN;
+	if (Number.isFinite(registrationExpiresAt) && registrationExpiresAt <= Date.now()) {
+		logger.debug("aws-credentials: SSO client registration expired; cannot refresh");
+		return undefined;
+	}
+
+	let response: Response;
+	try {
+		response = await fetchImpl(`https://oidc.${ssoRegion}.amazonaws.com/token`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				clientId: token.clientId,
+				clientSecret: token.clientSecret,
+				grantType: "refresh_token",
+				refreshToken: token.refreshToken,
+			}),
+			signal,
+		});
+	} catch (err) {
+		logger.debug("aws-credentials: SSO token refresh request failed", { err: String(err) });
+		return undefined;
+	}
+	if (!response.ok) {
+		const body = await response.text().catch(() => "");
+		logger.debug("aws-credentials: SSO token refresh rejected", {
+			status: response.status,
+			body: body.slice(0, 200),
+		});
+		return undefined;
+	}
+	const json = (await response.json().catch(() => undefined)) as
+		| { accessToken?: string; expiresIn?: number; refreshToken?: string }
+		| undefined;
+	if (!json?.accessToken) {
+		logger.debug("aws-credentials: SSO token refresh returned no accessToken");
+		return undefined;
+	}
+
+	const updated: SsoCachedToken = {
+		...token,
+		accessToken: json.accessToken,
+		// `expiresIn` is seconds from now; the cache records an absolute instant.
+		// Trim milliseconds to match the format the AWS CLI writes.
+		expiresAt: new Date(Date.now() + (json.expiresIn ?? 0) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+		// The service may rotate the refresh token; persisting the new one keeps
+		// the following refresh working.
+		refreshToken: json.refreshToken ?? token.refreshToken,
+	};
+	await writeSsoCachedToken(file, updated);
+	return updated;
+}
+
+/**
+ * Persist a refreshed token so the AWS CLI, other SDKs, and the next Veyyon process
+ * all start from a live token. The write is atomic, so a concurrent reader never
+ * observes a half-written cache entry; a failure here is logged and ignored, since
+ * the in-memory token is still usable for this run.
+ */
+async function writeSsoCachedToken(file: string, token: SsoCachedToken): Promise<void> {
+	const target = path.join(os.homedir(), ".aws", "sso", "cache", file);
+	try {
+		await atomicWriteFile(target, JSON.stringify(token));
+	} catch (err) {
+		logger.debug("aws-credentials: failed to persist refreshed SSO token", { file, err: String(err) });
+	}
+}
+
+async function sha1Hex(input: string): Promise<string> {
+	const digest = await globalThis.crypto.subtle.digest("SHA-1", new TextEncoder().encode(input));
+	const bytes = new Uint8Array(digest);
+	let out = "";
+	for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
+	return out;
+}
+
+// ---------- credential_process ----------
+
+/** JSON envelope emitted by an external credential process. Matches the
+ * AWS CLI / SDK contract documented at
+ * https://docs.aws.amazon.com/sdkref/latest/guide/feature-process-credentials.html */
+interface CredentialProcessEnvelope {
+	Version?: number;
+	AccessKeyId?: string;
+	SecretAccessKey?: string;
+	SessionToken?: string;
+	Expiration?: string;
+}
+
+async function readCredentialProcess(
+	profile: string,
+	command: string,
+	signal: AbortSignal | undefined,
+): Promise<ResolvedCredentials> {
+	const argv = buildCredentialProcessArgv(profile, command);
+	const child = Bun.spawn(argv, {
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+		signal,
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		readPipeText(child.stdout),
+		readPipeText(child.stderr),
+		child.exited,
+	]);
+	if (exitCode !== 0) {
+		const tail = stderr.trim().slice(-512) || stdout.trim().slice(-512) || "(no output)";
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' exited ${exitCode}: ${tail}`,
+			"credential-process",
+		);
+	}
+
+	let parsed: CredentialProcessEnvelope;
+	try {
+		parsed = JSON.parse(stdout) as CredentialProcessEnvelope;
+	} catch (err) {
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' did not emit valid JSON: ${String(err)}`,
+			"credential-process",
+			{ cause: err },
+		);
+	}
+	if (parsed.Version !== 1) {
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' returned unsupported Version ${parsed.Version ?? "<missing>"}; expected 1.`,
+			"credential-process",
+		);
+	}
+	if (!parsed.AccessKeyId || !parsed.SecretAccessKey) {
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' returned envelope without AccessKeyId/SecretAccessKey.`,
+			"credential-process",
+		);
+	}
+
+	const out: ResolvedCredentials = {
+		accessKeyId: parsed.AccessKeyId,
+		secretAccessKey: parsed.SecretAccessKey,
+	};
+	if (parsed.SessionToken) out.sessionToken = parsed.SessionToken;
+	if (parsed.Expiration) {
+		const exp = Date.parse(parsed.Expiration);
+		if (!Number.isNaN(exp)) out.expiresAt = exp;
+	}
+	return out;
+}
+
+/** Resolve the argv for `Bun.spawn`. On Windows we route `.cmd`/`.bat` helpers
+ * through `cmd.exe /c` because direct execution refuses batch files (mirrors
+ * Node's `execFile` policy and avoids surprise no-ops). */
+function buildCredentialProcessArgv(profile: string, command: string): string[] {
+	const tokens = tokenizeCredentialProcessCommand(command);
+	if (tokens.length === 0) {
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' is empty.`,
+			"credential-process",
+		);
+	}
+	if (process.platform === "win32" && isBatchScript(tokens[0])) {
+		return ["cmd.exe", "/d", "/s", "/c", command];
+	}
+	return tokens;
+}
+
+function isBatchScript(executable: string): boolean {
+	const lower = executable.toLowerCase();
+	return lower.endsWith(".cmd") || lower.endsWith(".bat");
+}
+
+/** POSIX-shell-style tokenizer used by the AWS CLI for `credential_process`.
+ *
+ * Outside quotes a backslash escapes the next character. Inside single quotes
+ * everything is literal (no escapes, cannot contain `'`). Inside double quotes
+ * a backslash only escapes `$`, `` ` ``, `"`, and `\` — every other backslash
+ * is preserved verbatim, which is what makes Windows paths like
+ * `"C:\Program Files\tool\auth.exe"` survive tokenization. */
+export function tokenizeCredentialProcessCommand(cmd: string): string[] {
+	const tokens: string[] = [];
+	let current = "";
+	let hasToken = false;
+	let mode: "normal" | "single" | "double" = "normal";
+	for (let i = 0; i < cmd.length; i++) {
+		const ch = cmd[i];
+		if (mode === "normal") {
+			if (ch === "'") {
+				mode = "single";
+				hasToken = true;
+				continue;
+			}
+			if (ch === '"') {
+				mode = "double";
+				hasToken = true;
+				continue;
+			}
+			if (ch === "\\" && i + 1 < cmd.length) {
+				current += cmd[++i];
+				hasToken = true;
+				continue;
+			}
+			if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+				if (hasToken) {
+					tokens.push(current);
+					current = "";
+					hasToken = false;
+				}
+				continue;
+			}
+			current += ch;
+			hasToken = true;
+			continue;
+		}
+		if (mode === "single") {
+			if (ch === "'") {
+				mode = "normal";
+				continue;
+			}
+			current += ch;
+			continue;
+		}
+		// double-quote
+		if (ch === '"') {
+			mode = "normal";
+			continue;
+		}
+		if (ch === "\\" && i + 1 < cmd.length) {
+			const next = cmd[i + 1];
+			if (next === "$" || next === "`" || next === '"' || next === "\\") {
+				current += next;
+				i++;
+				continue;
+			}
+			// Preserve literal backslash for Windows paths.
+			current += ch;
+			continue;
+		}
+		current += ch;
+	}
+	if (mode !== "normal") {
+		throw new AIError.AwsCredentialsError(
+			"AWS credential_process command has an unterminated quote.",
+			"credential-process",
+		);
+	}
+	if (hasToken) tokens.push(current);
+	return tokens;
+}
+
+// ---------- IMDSv2 ----------
+
+const IMDS_HOST = "169.254.169.254";
+const IMDS_TIMEOUT_MS = 1000;
+
+async function readImdsCredentials(
+	parentSignal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
+): Promise<ResolvedCredentials | undefined> {
+	// Scoped so the 1s probe timer is cleared on settle instead of staying
+	// armed like a bare AbortSignal.timeout; the fence spans every body read.
+	const imdsTimeout = scopedTimeoutSignal(IMDS_TIMEOUT_MS, parentSignal);
+	const signal = imdsTimeout.signal;
+	try {
+		const tokenRes = await fetchImpl(`http://${IMDS_HOST}/latest/api/token`, {
+			method: "PUT",
+			headers: { "x-aws-ec2-metadata-token-ttl-seconds": "21600" },
+			signal,
+		});
+		if (!tokenRes.ok) return undefined;
+		const token = await tokenRes.text();
+
+		const roleRes = await fetchImpl(`http://${IMDS_HOST}/latest/meta-data/iam/security-credentials/`, {
+			headers: { "x-aws-ec2-metadata-token": token },
+			signal,
+		});
+		if (!roleRes.ok) return undefined;
+		const role = (await roleRes.text()).trim();
+		if (!role) return undefined;
+
+		const credsRes = await fetchImpl(
+			`http://${IMDS_HOST}/latest/meta-data/iam/security-credentials/${encodeURIComponent(role)}`,
+			{
+				headers: { "x-aws-ec2-metadata-token": token },
+				signal,
+			},
+		);
+		if (!credsRes.ok) return undefined;
+		const body = (await credsRes.json()) as {
+			AccessKeyId?: string;
+			SecretAccessKey?: string;
+			Token?: string;
+			Expiration?: string;
+		};
+		if (!body.AccessKeyId || !body.SecretAccessKey) return undefined;
+		const out: ResolvedCredentials = {
+			accessKeyId: body.AccessKeyId,
+			secretAccessKey: body.SecretAccessKey,
+		};
+		if (body.Token) out.sessionToken = body.Token;
+		if (body.Expiration) out.expiresAt = Date.parse(body.Expiration);
+		return out;
+	} catch {
+		// Undefined means "IMDS did not give us credentials", which is also what a host with no instance
+		// role gives. The credential chain moves to the next source and reports when EVERY source fails,
+		// naming them; failing here would break the chain on a host that simply is not on EC2.
+		return undefined;
+	} finally {
+		imdsTimeout.cancel();
+	}
+}
+
+/**
+ * Test/diagnostic helper — drops cached credentials AND any resolution still in
+ * flight. Leaving the in-flight map behind hands the next caller the promise
+ * this reset was meant to discard.
+ */
+export function clearAwsCredentialCache(): void {
+	cache.clear();
+	inflight.clear();
+}
+
+/**
+ * Drop the cache entry for one profile/region. Called by the Bedrock provider on
+ * 401/403 responses so stale credentials are re-resolved instead of served until restart.
+ */
+export function invalidateAwsCredentialCache(opts: { profile?: string; region?: string } = {}): void {
+	const profile = opts.profile || $env.AWS_PROFILE || "default";
+	const region = opts.region || $env.AWS_REGION || $env.AWS_DEFAULT_REGION || "us-east-1";
+	const cacheKey = `${profile}\x00${region}`;
+	cache.delete(cacheKey);
+	// A resolution already running was started from the credentials now known to be
+	// stale, so a caller arriving during it must start its own rather than join it.
+	inflight.delete(cacheKey);
+}

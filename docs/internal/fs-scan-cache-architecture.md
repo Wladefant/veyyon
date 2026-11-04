@@ -1,0 +1,200 @@
+# Filesystem Scan Cache Architecture Contract
+
+This document defines the current contract for the shared filesystem scan cache implemented in Rust (`natives/search/walker/src/cache.rs`) and consumed through the `veyyon_walker::WalkRequest` builder by native discovery/search APIs exposed to `packages/coding-agent`.
+
+## What this cache is
+
+The cache stores full directory-scan entry lists (`CollectedEntry` vectors) keyed by scan root plus the complete walk-option set. Higher-level operations (`glob` filtering and `fuzzyFind` scoring) run against those cached entries.
+
+Primary goals:
+
+- avoid repeated filesystem walks for repeated discovery/search calls
+- keep consistency across native discovery/search flows when they share the same scan policy
+- allow explicit staleness recovery for empty results and explicit invalidation after file mutations
+
+## Ownership and public surface
+
+- Cache implementation and policy: `natives/search/walker/src/cache.rs` (`collect_entries`, `invalidate_path`, `invalidate_path_string`, `invalidate_all`, env-configured policy getters)
+- Walk entry point that consults the cache: `veyyon_walker::WalkRequest` (`natives/search/walker/src/lib.rs`): the `.cache(bool)` builder flag routes `collect_entries` through `get_or_scan`, a filtered request through `collect_entries_filtered`, and `collect_shared_with_heartbeat` through `collect_entries_shared`
+- Native consumers (`natives/bridge/addon/src/`):
+  - `glob.rs`: cache opt-in via config
+  - `fd.rs` (`fuzzyFind`): cache opt-in via config; reads the scan in place through `collect_shared_with_heartbeat`
+  - `ast.rs` (`astGrep`/`astEdit` file discovery): **not cached**: it builds its walk with `.cache(false)`, because a cached scan keeps every entry under the root, about 1 GB for a tree of 6 million files, and a structure search reads each file once; `astGrep` streams the walk through `for_each_file_candidate_parallel` instead of collecting it
+  - `grep.rs`: **not cached**: it builds its walk with `.cache(false)`; there is no cached grep directory mode today
+- JS binding/export:
+  - `natives/bridge/bindings/native/index.d.ts` (`invalidateFsScanCache`)
+  - `natives/bridge/bindings/native/index.js`
+- Coding-agent mutation invalidation helpers:
+  - `packages/coding-agent/src/tools/core/fs-cache-invalidation.ts`
+
+## Cache key partitioning (hard contract)
+
+Each entry is keyed by `CacheKey { root, options }`:
+
+- canonicalized `root` directory path
+- the full `WalkOptions` struct with the `cache` flag zeroed out (`cache_key()` sets `options.cache = false` so cached and would-be-cached requests share entries)
+
+`WalkOptions` dimensions that therefore partition the cache:
+
+- `include_hidden`
+- `use_gitignore`
+- `skip_git`
+- `skip_node_modules`
+- `follow_links` (`FollowLinks::Never | Always | ...`): **is** part of the key
+- `detail` (`WalkDetail::Minimal` or `WalkDetail::Full`)
+- `order`, `emit_root`, `min_depth`, `max_depth`
+
+Implications:
+
+- Hidden and non-hidden scans do **not** share entries.
+- Gitignore-respecting and ignore-disabled scans do **not** share entries.
+- Scans that prune `node_modules` do **not** share entries with scans that include it.
+- Minimal scans (path + file type only) do **not** share entries with full scans (mtime + regular-file size metadata).
+- Calls that differ only by `follow_links` (or depth bounds, order, `emit_root`) get **separate** cache partitions.
+
+Consumers must pass stable semantics for every walk option; changing any keyed flag creates a different cache partition.
+
+## Scan collection behavior
+
+Cache population uses the in-house parallel walker (`collect_entries_native` in `veyyon-walker`; the external `ignore::WalkBuilder` is no longer used for this path):
+
+- entries sorted by path when `WalkOrder::Path` is requested (the common consumer setting)
+- `.git` is pruned when `skip_git=true`: every native consumer sets `.skip_git(true)`; `should_skip_path` additionally drops `.git`/unmentioned `node_modules` components in user-facing discovery
+- `node_modules` is pruned at traversal time when `skip_node_modules=true`
+- cancellation heartbeat is checked every `HEARTBEAT_INTERVAL` (128) visited entries
+- `WalkDetail::Minimal` records normalized relative path and file type only
+- `WalkDetail::Full` also records mtime and regular-file size
+- parallelism uses a centralized rayon pool: `VEYYON_WALK_WORKERS` (default 4; `0` = auto-detect, `1` = serial), engaged only at `PARALLEL_MIN_FILES` (256) or more items
+
+Search roots for cache scans are resolved by `cache::resolve_search_path`:
+
+- relative paths are resolved against current cwd
+- target must be an existing directory
+- root is canonicalized when possible
+
+## Freshness and eviction policy
+
+Global policy (environment-overridable):
+
+- `FS_SCAN_CACHE_TTL_MS` (default `1000`)
+- `FS_SCAN_EMPTY_RECHECK_MS` (default `200`)
+- `FS_SCAN_CACHE_MAX_ENTRIES` (default `16`)
+
+Behavior (`get_or_scan`, `collect_entries_filtered` and `collect_entries_shared`, internal to `cache.rs`):
+
+- if TTL is `0`: bypass cache entirely, always fresh scan (`cache_age_ms = 0`)
+- the TTL counts from the moment a walk finishes (`CacheEntry::stored_at`), so a walk that takes longer than the TTL is still served for one TTL after it lands
+- on cache hit within TTL: `get_or_scan` returns a clone of every cached entry, `collect_entries_filtered` a clone of each accepted entry, and `collect_entries_shared` the cache entry's own `Arc<Vec<CollectedEntry>>`, each with a non-zero `cache_age_ms`
+- on expired hit or miss, all three go through `cached_entries`, which runs at most one walk per key at a time (`FLIGHTS`):
+  - if a walk of the same key is running and no invalidation has landed since it began, the request waits for it and returns its scan; while waiting it calls its own heartbeat every `JOIN_POLL` (10 ms), so a cancelled request stops waiting and the walk continues for the others
+  - otherwise the request leads: drop every expired entry (`release_expired_scans`), walk, store, return with `cache_age_ms = 0`
+  - a walk that fails, is cancelled or panics stores nothing, and each request waiting on it starts over, one of them leading a new walk
+- a caller holding a shared scan keeps its entries allocated after an eviction or a release drops the cache's reference, until the caller drops its own
+- max entry enforcement is oldest-first eviction by `stored_at` after insert (`evict_oldest`)
+- the addon's `releaseFreeHeapPages()`, which the idle trim calls, drops every expired entry before `malloc_trim`, so a quiet process holds no scan past its TTL
+
+There is no public `force_rescan` API anymore; an uncached request (`.cache(false)`) walks fresh without touching the shared cache.
+
+An uncached filtered request (`WalkRequest::collect` and `collect_ranked` with `.cache(false)`, caller-supplied overrides, or `FS_SCAN_CACHE_TTL_MS=0`) walks on the same pool and allocates only the entries its filter accepts, then sorts those by path (`collect_filtered_parallel`). It falls back to the serial collector when `walk_workers()` is 1, links are followed, the walk stays on one file system, `contents_first` is set, or the root itself is emitted. On Linux a `WalkDetail::Full` request with no `max_file_size` bound lists without metadata and reads mtime and size for each accepted entry by name in its directory; a size bound needs every entry's size, so it lists with `Full`. `scanned_entries` counts every admitted entry inside the depth bounds, as the serial collector does, and a directory error under `DirectoryErrorMode::SkipSkippable` fails the walk with the same `InvalidData` error.
+
+## Empty-result fast recheck (separate from normal hits)
+
+Normal cache hit:
+
+- a cache hit inside TTL returns cached entries and does nothing else.
+
+Empty-result fast recheck:
+
+- this is now **walker-internal** policy, configured per request via `.empty_recheck(EmptyRecheck::Never | Configured | AfterMillis(n))`
+- after filtering, if the surviving entry list is empty, the scan came from cache (`cache_age_ms > 0`), and the age is at or above the threshold (`empty_recheck_ms()` for `Configured`), the walker re-collects once with `options.cache = false`: a fresh, **uncached** scan that is not stored back
+- intended to reduce stale-negative results when files were added while the cache is still inside TTL
+
+Current consumers all pass `EmptyRecheck::Configured`: `glob` and `fuzzyFind` (`fd.rs`).
+
+## Consumer defaults and cache usage
+
+Cache is opt-in on `glob`/`fuzzyFind` (`cache?: boolean`, default `false`). `astGrep`/`astEdit` file discovery and `grep` never use it (`.cache(false)`).
+
+Current defaults in native APIs:
+
+- `glob`: `hidden` per config, `gitignore=true`, `skip_git=true`, `node_modules` skipped unless the pattern mentions `node_modules`, `follow_links=Never`, `WalkOrder::Path`, full detail only when mtime/size metadata is needed (e.g. `sortByMtime=true` or a max-file-size filter)
+- `fuzzyFind`: `hidden=false` by default, `gitignore=true`, `skip_git=true`, `node_modules` always skipped, `follow_links=Always`, minimal detail
+- `astGrep`/`astEdit` (file discovery): `hidden=true`, `gitignore=true`, `skip_git=true`, uncached, `follow_links=Never`, minimal detail
+
+Current callers:
+
+- `@`-mention fuzzy file autocomplete enables cache (`fuzzyFind` with `cache: true`):
+  - `packages/utils/src/autocomplete.ts`
+- Mutation flows invalidate through `packages/coding-agent/src/tools/core/fs-cache-invalidation.ts`.
+
+## Invalidation contract
+
+Native invalidation entrypoint:
+
+- `invalidateFsScanCache(path?: string)` → `cache::invalidate_path_string` / `cache::invalidate_all`
+  - with `path`: remove cache entries whose root is a prefix of the target path (`target.starts_with(root)`)
+  - without path: clear all scan cache entries
+- every invalidation increments `GENERATION` and holds its lock while it removes entries; a walk records the generation when it starts and stores its scan under the same lock only if the generation is unchanged
+  - a walk that an invalidation overtook is neither stored nor joined, whatever its root, because it may have listed a directory before the change; the next request for its key starts a new walk
+
+Path handling details:
+
+- relative invalidation paths are resolved against cwd
+- invalidation attempts canonicalization
+- if target does not exist (for example after delete), fallback canonicalizes the parent and reattaches the filename when possible
+- this preserves invalidation behavior for create/delete/rename where one side may not exist
+
+## Coding-agent mutation flow responsibilities
+
+Coding-agent code must invalidate after successful filesystem mutations.
+
+Central helpers:
+
+- `invalidateFsScanAfterWrite(path)`
+- `invalidateFsScanAfterDelete(path)`
+- `invalidateFsScanAfterRename(oldPath, newPath)` (invalidates both sides when paths differ)
+
+Current mutation callsites include:
+
+- `packages/coding-agent/src/tools/fs/write.ts`
+- `packages/coding-agent/src/tools/core/acp-bridge.ts`
+- `packages/coding-agent/src/edit/hashline/filesystem.ts`
+- `packages/coding-agent/src/edit/modes/patch.ts`
+- `packages/coding-agent/src/edit/modes/replace.ts`
+
+Rule: if a flow mutates filesystem content or location and bypasses these helpers, cache staleness bugs are expected.
+
+## Adding a new cache consumer safely
+
+When introducing cache use in a new scanner/search path:
+
+1. **Use stable scan policy inputs**
+   - decide hidden/gitignore/node_modules/follow-links/detail/depth semantics first
+   - pass them consistently on every `WalkRequest` so cache partitions are intentional
+
+2. **Treat cache data as pre-filtered only by traversal policy**
+   - apply tool-specific filtering (glob patterns, type filters, scoring) after retrieval: `WalkFilter` runs on top of the cached entry list
+   - never assume cached entries already reflect your higher-level filters
+
+3. **Enable empty-result fast recheck only for stale-negative risk**
+   - set `.empty_recheck(EmptyRecheck::Configured)` (or `AfterMillis(n)` for a custom threshold)
+   - the walker handles the retry internally; do not hand-roll a second scan
+
+4. **Respect no-cache mode explicitly**
+   - when the caller disables cache, pass `.cache(false)`: the walk runs fresh and never populates the shared cache
+
+5. **Wire mutation invalidation for any new write path**
+   - after successful write/edit/delete/rename, call the coding-agent invalidation helper
+   - for rename/move, invalidate both old and new paths
+
+6. **Do not add per-call TTL knobs**
+   - current contract is global policy only (env-configured), no per-request TTL override
+
+## Known boundaries
+
+- Cache scope is process-local in-memory (`DashMap`), not persisted across process restarts.
+- Cache stores scan entries, not final tool results.
+- `glob`/`fuzzyFind` share scan entries only when the full `WalkOptions` key matches.
+- Every native consumer sets `skip_git=true`, so `.git` is excluded from all cached scans in practice; `should_skip_path` re-enforces it at the discovery-filter layer.
+
+*Verified against `e2ff92d2236a07e8f7c8bf6a12a09657bb7ebe86` on 2026-10-19.*

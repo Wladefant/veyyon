@@ -1,0 +1,489 @@
+# Porting From pi-mono: A Practical Merge Guide
+
+This guide is a repeatable checklist for porting changes from pi-mono into this repo.
+Use it for any merge: single file, feature branch, or full release sync.
+
+## Last Sync Point (historical upstream marker)
+
+**Commit:** `b21b42d032919de2f2e6920a76fa9a37c3920c0a`
+**Date:** 2026-03-22
+
+Update this section after each sync; do not reuse the previous range. This commit is an upstream pi-mono marker and may not exist in this repo's local object database.
+
+When starting a new sync, generate patches from this commit forward in a pi-mono checkout or remote that contains the commit:
+
+```bash
+git format-patch b21b42d032919de2f2e6920a76fa9a37c3920c0a..HEAD --stdout > changes.patch
+```
+
+## 0) Define the scope
+
+- Identify the upstream reference (commit, tag, or PR).
+- List the packages or folders you plan to touch.
+- Decide which features are in-scope and which are intentionally skipped.
+
+## 1) Bring code over safely
+
+- Prefer a clean, focused diff rather than a wholesale copy.
+- Avoid copying built artifacts or generated files.
+- If upstream added new files, add them explicitly and review contents.
+
+## 2) Match import extension conventions
+
+Most runtime TypeScript sources omit `.js` in internal imports, but several current entrypoints and tool modules keep `.js` for ESM/runtime compatibility. Follow the surrounding file and package export style; do not blanket-strip or blanket-add extensions.
+
+- In `packages/coding-agent` runtime sources, prefer extensionless internal imports when the surrounding module does, but preserve existing `.js` imports in files that already require them.
+- In `hosts/terminal/engine/test` and `natives/bridge/bindings/bench`, keep `.js` where surrounding files already use it.
+- Keep real file extensions when required by tooling or import assertions (e.g., `.json`, `.css`, `.md` text embeds).
+- Example: `import { x } from "./foo.js";` → `import { x } from "./foo";` only when that package/file convention is extensionless.
+
+## 3) Replace import scopes
+
+Upstream uses different package scopes. Replace them consistently.
+
+- Replace old scopes with the local scope used here.
+- Examples (adjust to match the actual packages you are porting):
+  - `@mariozechner/pi-coding-agent` → `@veyyon/coding-agent`
+  - `@mariozechner/pi-agent-core` → `@veyyon/agent-core`
+  - `@mariozechner/pi-tui` → `@veyyon/tui`
+  - `@mariozechner/pi-ai` → `@veyyon/ai`
+  - `@mariozechner/pi-utils` → `@veyyon/utils`
+- Some upstream packages publish under the `@earendil-works/*` scope instead of `@mariozechner/*`. Map it the same way (`@earendil-works/pi-coding-agent` → `@veyyon/coding-agent`, and so on).
+- The bare `typebox` package is not an `@veyyon/*` scope; do not rewrite it as one. See the Extensions divergence in section 15 for how tool-parameter schemas map.
+
+## 4) Runtime APIs: portable first
+
+We run on Bun, and the direction is portable: in new code reach for the language, then `node:*`,
+then POSIX tooling, then Bun, and choose a Bun API only where no reasonable portable equivalent
+exists. The root `AGENTS.md` holds the full table. Existing Bun code is correct and stays; do not
+widen a port to convert a file, and do not mechanically rewrite either direction.
+
+**Replace when porting new code:**
+
+- Process spawning: `execFile`/`spawn` from `node:child_process`. Upstream `` $`cmd` `` and `Bun.spawn` become the `node:child_process` spelling unless the port needs streaming semantics Bun already implements here.
+- HTTP clients: `node-fetch`, `axios` → native `fetch`
+- SQLite: `better-sqlite3` → `bun:sqlite`, which has no portable equivalent
+- Env loading: `dotenv` → `process.env`
+- Runtime text/assets: `import … with { type: "text" }` over copy steps or bundled fallback file reads. This is the mandated spelling for prompts.
+
+**DO NOT replace (these work fine in Bun):**
+
+- `os.homedir()`: do NOT replace with `Bun.env.HOME` or literal `"~"`
+- `os.tmpdir()`: do NOT replace with `Bun.env.TMPDIR || "/tmp"` or hardcoded paths
+- `fs.mkdtempSync()`: do NOT replace with manual path construction
+- `path.join()`, `path.resolve()`, etc.: these are fine
+
+**Import style:** Use the `node:` prefix for Node standard-library imports. Namespace imports are common, but named imports are acceptable where the surrounding code already uses them.
+
+**Additional conventions:**
+
+- `fs.readFile`/`fs.writeFile` from `node:fs/promises`, not `Bun.file()`/`Bun.write()`. Existing synchronous `node:fs` calls are acceptable when the calling flow is intentionally synchronous.
+- Avoid an existence check before a read; use `isEnoent` handling in try/catch.
+- `setTimeout` from `node:timers/promises`, not `Bun.sleep(ms)`.
+- `process.env`, not `Bun.env`. `import.meta.dirname`, not `import.meta.dir`.
+
+**Wrong:**
+
+```typescript
+// BROKEN: env vars may be undefined, "~" is not expanded
+const home = Bun.env.HOME || "~";
+const tmp = Bun.env.TMPDIR || "/tmp";
+```
+
+**Correct:**
+
+```typescript
+import * as os from "node:os";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+const configDir = path.join(os.homedir(), ".config", "myapp");
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "myapp-"));
+```
+
+## 5) Embed assets (no copying)
+
+Do not add new runtime asset copy steps. Keep assets in repo and use import attributes; preserve existing explicit generation workflows such as `packages/coding-agent/src/export/html/tool-views.generated.js` (built from collab-web sources via `bun run gen:tool-views`).
+
+- If upstream copies assets into a dist folder, replace with an embedded import.
+- Prompts are static `.md` files; use text imports (`with { type: "text" }`) and Handlebars instead of inline prompt strings.
+- Use `import.meta.dirname` + `fs.readFile` to load adjacent non-text resources. Never `import.meta.dir`.
+- Keep assets in-repo and let the bundler include them.
+- Eliminate copy scripts unless the user explicitly requests them or the package already has an intentional generation step.
+- If upstream reads a bundled fallback file at runtime, replace filesystem reads with a Bun text embed import unless the current package already uses a generated asset pipeline.
+  - Example (Codex instructions fallback):
+    - `const FALLBACK_PROMPT_PATH = join(import.meta.dir, "codex-instructions.md");` -> removed
+    - `import FALLBACK_INSTRUCTIONS from "./codex-instructions.md" with { type: "text" };`
+    - Use `return FALLBACK_INSTRUCTIONS;` instead of `readFileSync(FALLBACK_PROMPT_PATH, "utf8")`
+
+## 6) Port `package.json` carefully
+
+Treat `package.json` as a contract. Merge intentionally.
+
+- Keep existing `name`, `version`, `type`, `exports`, and `bin` unless the port requires changes.
+- Replace npm/node scripts with Bun equivalents (e.g., `bun check`, `bun test`).
+- Ensure dependencies use the correct scope.
+- Do not downgrade dependencies to fix type errors; upgrade instead.
+- Validate workspace package links and `peerDependencies`.
+
+## 7) Align code style and tooling
+
+- Keep existing formatting conventions.
+- Do not introduce `any` unless required.
+- Avoid dynamic imports unless they are required for optional dependencies, startup cost, or runtime-only modules; prefer top-level imports otherwise.
+- Never build prompts in code; prompts are static `.md` files rendered with Handlebars.
+- In `packages/coding-agent`, use `logger` from `@veyyon/utils` for internal/runtime logging; CLI command files may use `console.*` for intentional user-facing output.
+- Use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
+- Prefer ES `#` private fields for new encapsulated state. Constructor parameter properties already exist in current code and are acceptable; do not churn unrelated access modifiers while porting.
+- Prefer existing helpers and utilities over new ad-hoc code.
+  Preserve the runtime decisions already made in this repo:
+  - Runtime is Bun (no Node entry points for the main CLI).
+  - Package manager is Bun (no npm lockfiles).
+  - `node:*` is the default spelling in new code. Current source uses `node:crypto`, `node:readline`, synchronous `node:fs`, and `child_process` where they fit provider, CLI, or process-control semantics.
+  - Lightweight Node APIs (`os.homedir`, `os.tmpdir`, `fs.mkdtempSync`, `path.*`) are kept.
+  - CLI shebangs use `bun` (not `node`, not `tsx`).
+  - TypeScript packages generally use source files directly; `@veyyon/natives` exports generated native bindings from `natives/bridge/bindings/native`.
+  - CI workflows run Bun for install/check/test.
+
+## 8) Remove old compatibility layers
+
+Unless requested, remove upstream compatibility shims.
+
+- Delete old APIs that were replaced.
+- Update all call sites to the new API directly.
+- Do not keep `*_v2` or parallel versions.
+
+## 9) Update docs and references
+
+- Replace pi-mono repo links where appropriate.
+- Update examples to use Bun and correct package scopes.
+- Ensure README instructions still match the current repo behavior.
+
+## 10) Validate the port
+
+Run the standard checks after changes:
+
+- `bun check`
+
+If the repo already has failing checks unrelated to your changes, call that out.
+Tests use Bun's runner (not Vitest), but only run `bun test` when explicitly requested.
+
+## 11) Protect improved features (regression trap list)
+
+If you already improved behavior locally, treat those as **non‑negotiable**. Before porting, write down
+the improvements and add explicit checks so they don’t get lost in the merge.
+
+- **Freeze the expected behavior**: add a short “before/after” note for each improvement (inputs, outputs,
+  defaults, edge cases). This prevents silent rollback.
+- **Map old → new APIs**: if upstream renamed concepts (hooks → extensions, custom tools → tools, etc.),
+  ensure every old entry point still wires through. One missed flag or export equals lost functionality.
+- **Verify exports**: check `package.json` `exports`, public types, and barrel files. Upstream ports often
+  forget to re-export local additions.
+- **Cover non‑happy paths**: if you fixed error handling, timeouts, or fallback logic, add a test or at
+  least a manual checklist that exercises those paths.
+- **Check defaults and config merge order**: improvements often live in defaults. Confirm new defaults
+  didn’t revert (e.g., new config precedence, disabled features, tool lists).
+- **Audit env/shell behavior**: if you fixed execution or sandboxing, verify the new path still uses your
+  sanitized env and does not reintroduce alias/function overrides.
+- **Re-run targeted samples**: keep a minimal set of "known good" examples and run them after the port
+  (CLI flags, extension registration, tool execution).
+
+## 12) Detect and handle reworked code
+
+Before porting a file, check if upstream significantly refactored it:
+
+```bash
+# Compare the file you're about to port against what you have locally
+git diff HEAD upstream/main -- path/to/file.ts
+```
+
+If the diff shows the file was **reworked** (not just patched):
+
+- New abstractions, renamed concepts, merged modules, changed data flow
+
+Then you must **read the new implementation thoroughly** before porting. Blind merging of reworked code loses functionality because:
+
+Note: interactive mode was recently split into controllers/utils/types. When backporting related changes, port updates into the individual files we created and ensure `interactive-mode.ts` wiring stays in sync.
+
+1. **Defaults change silently** - A new variable `defaultFoo = [a, b]` may replace an old `getAllFoo()` that returned `[a, b, c, d, e]`.
+
+2. **API options get dropped** - When systems merge (e.g., `hooks` + `customTools` → `extensions`), old options may not wire through to the new implementation.
+
+3. **Code paths go stale** - A renamed concept (e.g., `hookMessage` → `custom`) needs updates in every switch statement, type guard, and handler: not just the definition.
+
+4. **Context/capabilities shrink** - Old APIs may have exposed `{ logger, typebox, pi }` that new APIs forgot to include.
+
+### Semantic porting process
+
+When upstream reworked a module:
+
+1. **Read the old implementation** - Understand what it did, what options it accepted, what it exposed.
+
+2. **Read the new implementation** - Understand the new abstractions and how they map to old behavior.
+
+3. **Verify feature parity** - For each capability in the old code, confirm the new code preserves it or explicitly removes it.
+
+4. **Grep for stragglers** - Search for old names/concepts that may have been missed in switch statements, handlers, UI components.
+
+5. **Test the boundaries** - CLI flags, SDK options, event handlers, default values: these are where regressions hide.
+
+### Quick checks
+
+```bash
+# Find all uses of an old concept that may need updating
+rg "oldConceptName" --type ts
+
+# Compare default values between versions
+git show upstream/main:path/to/file.ts | rg "default|DEFAULT"
+
+# Check if all enum/union values have handlers
+rg "case \"" path/to/file.ts
+```
+
+## 13) Quick audit checklist
+
+Use this as a final pass before you finish:
+
+- [ ] Import extensions follow the local package convention (no blanket `.js` stripping)
+- [ ] No newly introduced Node-only APIs unless they match an existing justified pattern
+- [ ] All package scopes updated
+- [ ] `package.json` scripts use Bun
+- [ ] Prompts are `.md` text imports (no inline prompt strings)
+- [ ] No internal/runtime `console.*` in coding-agent; CLI user-facing output is intentional
+- [ ] Assets load via Bun embed/import patterns, or through an existing intentional generation pipeline
+- [ ] Tests or checks run (or explicitly noted as blocked)
+- [ ] No functionality regressions (see sections 11-12)
+
+## 14) Commit message format
+
+When committing a backport, follow the repo format `<type>(scope): <past-tense description>` and keep the commit
+range in the title.
+
+```
+fix(coding-agent): backported pi-mono changes (<from>..<to>)
+
+packages/<package>:
+- <type>: <description>
+- <type>: <description> (#<issue> by @<contributor>)
+
+packages/<other-package>:
+- <type>: <description>
+```
+
+**Example:**
+
+```
+fix(coding-agent): backported pi-mono changes (9f3eef65f..52532c7c0)
+
+packages/ai:
+- fix: handle "sensitive" stop reason from Anthropic API
+- fix: normalize tool call IDs with special characters for Responses API
+- fix: add overflow detection for Bedrock, MiniMax, Kimi providers
+- fix: 429 status is rate limiting, not context overflow
+
+hosts/terminal/engine:
+- fix: refactored autocomplete state tracking
+- fix: file autocomplete should not trigger on empty text
+- fix: configurable autocomplete max visible items
+- fix: improved table column width calculation with word-aware wrapping
+
+packages/coding-agent:
+- fix: preserve external config.yml edits on save (#1046 by @nicobailonMD)
+- fix: resolve macOS NFD and curly quote variants in file paths
+```
+
+**Rules:**
+
+- Group changes by package
+- Use conventional commit types (`fix`, `feat`, `refactor`, `perf`, `docs`)
+- Include upstream issue/PR numbers and contributor attribution for external contributions
+- The commit range in the title helps track sync points
+
+## 15) Intentional Divergences
+
+Our fork has architectural decisions that differ from upstream. **Do not port these upstream patterns:**
+
+### UI Architecture
+
+| Upstream                                    | Our Fork                                                  | Reason                                                                |
+| ------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------- |
+| `FooterDataProvider` class                  | `StatusLineComponent`                                     | Simpler, integrated status line                                       |
+| `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | Removed entirely (neither member exists on `ExtensionUIContext` / `HookUIContext`) | Every host implemented both as empty functions, so dead members were removed |
+| `ctx.ui.setEditorComponent()`               | Moved to optional `ui.terminal` capability (`ctx.ui.terminal?.setEditorComponent(...)`) in interactive mode; omitted in non-terminal contexts | Custom editor replacement requires TUI/terminal access; non-terminal hosts omit `ui.terminal` |
+| `ctx.ui.addAutocompleteProvider()`          | Wired in interactive mode; no-op stubs in ACP/RPC/headless contexts | Factory wrapping matches upstream; veyyon's editor has no custom `triggerCharacters`, so wrapped providers surface at the built-in trigger points |
+| `InteractiveModeOptions` options object     | Positional constructor args (options type still exported) | Keep constructor signature; update the type when upstream adds fields |
+
+### Component Naming
+
+| Upstream                     | Our Fork                |
+| ---------------------------- | ----------------------- |
+| `extension-input.ts`         | `hook-input.ts`         |
+| `extension-selector.ts`      | `hook-selector.ts`      |
+| `ExtensionInputComponent`    | `HookInputComponent`    |
+| `ExtensionSelectorComponent` | `HookSelectorComponent` |
+
+### API Naming
+
+| Upstream                                 | Our Fork                                 | Notes                                     |
+| ---------------------------------------- | ---------------------------------------- | ----------------------------------------- |
+| `sessionManager.appendSessionInfo(name)` | `sessionManager.setSessionName(name)`    | We use `sessionName` throughout           |
+| `sessionManager.getSessionName()`        | `sessionManager.getSessionName()`        | Same (we unified to match upstream's RPC) |
+| `agent.sessionName` / `setSessionName()` | `agent.sessionName` / `setSessionName()` | Same                                      |
+
+### File Consolidation
+
+| Upstream                                           | Our Fork                                                  | Reason                                        |
+| -------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------- |
+| `clipboard.ts` + `clipboard-image.ts` (tool files) | `src/utils/clipboard.ts` backed by `@veyyon/natives` | Native implementation with a small TS wrapper |
+
+### Test Framework
+
+| Upstream                  | Our Fork                      |
+| ------------------------- | ----------------------------- |
+| `vitest` with `vi.mock()` | `bun:test` with `vi` from bun |
+| `node:test` assertions    | `expect()` matchers           |
+
+### Tool Architecture
+
+| Upstream                            | Our Fork                                                                                                      | Notes                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `createTool(cwd: string, options?)` | `createTools(session: ToolSession)` via `BUILTIN_TOOLS` registry                                              | Tool factories accept `ToolSession` and can return `null` |
+| Per-tool `*Operations` interfaces   | Only current per-tool override interfaces remain (for example `FindOperations`)                               | Used for SSH/remote overrides where present               |
+| Node.js `fs/promises` everywhere    | `node:fs/promises`, with existing `Bun.file`/`Bun.write` call sites left as they are and selected sync `node:fs` where needed | New code uses the portable spelling      |
+
+### Auth Storage
+
+| Upstream                        | Our Fork                                    | Notes                                        |
+| ------------------------------- | ------------------------------------------- | -------------------------------------------- |
+| `proper-lockfile` + `auth.json` | `agent.db` (bun:sqlite)                     | Credentials stored exclusively in `agent.db` |
+| Single credential per provider  | Multi-credential with round-robin selection | Session affinity and backoff logic preserved |
+
+### Extensions
+
+| Upstream                                                         | Our Fork                                                                                          |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `jiti` for TypeScript loading                                    | Native Bun `import()`                                                                              |
+| `pkg.pi` manifest field                                          | `pkg.veyyon` preferred; `omp` and `pi` remain accepted as legacy keys (`MANIFEST_KEYS` in `kernel/src/loader/manifest-key.ts`, first defined wins) |
+| `StringEnum` from `pi-ai`                                        | `Type.Enum` from the `pi.typebox` shim (or author the schema with `pi.zod`); `pi-ai` no longer exports `StringEnum` |
+| `formatSize` from `pi-coding-agent`                              | `formatBytes` from `@veyyon/utils`                                                            |
+| `DefaultResourceLoader` / `DefaultPackageManager` / `SettingsManager` / `createEventBus` | Capability-based discovery (`loadCapability(...)`) plus the `Settings` singleton and `EventBus` |
+
+### Skip These Upstream Features
+
+When porting, **skip** these files/features entirely:
+
+- `footer-data-provider.ts`: we use StatusLineComponent
+- `clipboard-image.ts`: image clipboard support is exposed through `src/utils/clipboard.ts` backed by `@veyyon/natives`
+- GitHub workflow files: we have our own CI
+- `models.generated.ts`: auto-generated, regenerate locally (as models.json instead)
+
+### Features We Added (Preserve These)
+
+These exist in our fork but not upstream. **Never overwrite:**
+
+- `StatusLineComponent` in interactive mode
+- Multi-credential auth with session affinity
+- Capability-based discovery system (`defineCapability`, `registerProvider`, `loadCapability`, `skillCapability`, etc.)
+- MCP/Exa/SSH integrations
+- LSP writethrough for format-on-save
+- Bash interception (`checkBashInterception`)
+- Fuzzy path suggestions in read tool
+
+## 16) Upstream lineage
+
+What the fork took from oh-my-pi:
+
+- The TypeScript/Bun agent loop, TUI, and mode system (`packages/coding-agent`,
+  `packages/agent`, `packages/ai`, `packages/catalog`, and most of `packages/*`).
+  The terminal renderer moved after the fork: upstream's `packages/tui` is
+  `hosts/terminal/engine`, and the published package name `@veyyon/tui` is
+  unchanged.
+- The Rust native hot paths, including their vendored third-party dependencies
+  under `natives/vendor/`. The crates were renamed after the fork, so the paths
+  here are the current ones: search in `natives/search/grep-kernel` and
+  `natives/search/uu-grep`, the shell and its output minimizer in
+  `natives/shell`, and the PTY and the rest of the N-API surface in
+  `natives/bridge/addon`. The hashline edit engine is TypeScript, in
+  `plugins/hashline`, not in a crate.
+- The prompt/agent model, hashline edit engine, mnemopi memory system, and
+  provider catalog that oh-my-pi shipped.
+
+What diverged since: the name, brand constants, config directory, package
+scope, splash and theme, emoji removal, and settings simplification came first;
+then the prompt and context contract, model effort and subsystem routing,
+compaction, credential and session storage, tool and extension architecture,
+worker operations, native kernels, and documentation. Veyyon is not a drop-in
+resync target. Changes here are not assumed to belong upstream, and upstream
+changes are not pulled automatically.
+
+This repository's history begins with one imported snapshot rather than
+oh-my-pi's individual pre-fork commits. Commits after that snapshot are
+Veyyon's work. Use the `upstream` remote to compare current oh-my-pi behavior
+with Veyyon when you reconcile a specific change; the sync markers and
+intentional divergences are in the sections above.
+
+`UPSTREAM.md` states the fork and lists where the legal notices live. Neither
+file tracks ordinary runtime dependency licenses declared in `package.json` /
+`Cargo.toml` and resolved via `bun.lock` / `Cargo.lock`: the package managers
+manage those and they are audited separately. The notice list covers code that
+is forked, vendored, or adapted directly into this repository's source tree.
+
+## 17) Staying current: the port pipeline
+
+Upstream keeps merging fixes after the fork point, so the repo keeps a port
+pipeline. It has two halves:
+
+1. The radar (`scripts/upstream-radar.ts`) mirrors newly merged upstream fixes
+   and performance corrections into `upstream-port` issues. It runs on demand:
+   it was on a 30-minute schedule and no longer is, because mirroring every
+   merged pull request produced a queue nobody read. It also mirrors feature
+   additions whose touched files avoid every architecture-owned surface in
+   `scripts/upstream-port-policy.json`. This is a conservative candidate
+   screen, not an assertion that the feature belongs in veyyon. Refactors,
+   chores, and upstream product or infrastructure direction stay excluded.
+   Documentation-only feature diffs are excluded; documentation accompanying an
+   implementation does not block an otherwise clean candidate. Fixes touching a
+   diverged surface still enter semantic triage with a warning, so the
+   underlying bug can be adapted to veyyon's design.
+2. veybot (`clients/python/veybot`) watches the `upstream-port` label. It prepares each
+   port in its own worktree and opens one candidate pull request that closes the
+   tracking issue. The issue body is evidence only; the execution contract is in
+   veybot's own prompts, starting at
+   `clients/python/veybot/src/prompts/kickoff_port_upstream.md`. When a candidate's
+   checks go red veybot repairs that branch in place, at most
+   `VEYBOT_CI_MAX_REPAIRS` times per head commit, and never by weakening a gate.
+
+veybot never merges a pull request, never enables auto-merge, and never pushes
+to the default branch. No merge path exists anywhere in its tree, and that
+absence is what makes it safe to run unattended. An issue carrying only
+`upstream-port` is queued; once a candidate is open, the pull request is the
+state a human reviews.
+
+`RADAR_MAX_ISSUES` is an advisory burst threshold, not a truncation limit. The
+runner creates every eligible issue it found in the current lookback window,
+because it has no separate durable queue for deferred pull requests.
+
+### Reviewing a candidate port
+
+Prove the fix before you merge it. Run the ported test, revert the source
+change, and confirm the test fails; restore it and confirm the test passes. A
+ported test that passes both ways tests nothing, which is easy to ship when the
+fix is someone else's and the mechanism is unfamiliar. Ports #6217, #6226,
+#6233 and #6296 were each landed after checking the test in both directions.
+
+Add the cases the port left out while you are there. An upstream fix arrives
+with the one test that reproduces its bug and rarely with the negative twin:
+#6296 gained coverage for the per-tool floor still winning over the global cap
+and for `0` meaning no cap, and #6233 gained proof that the discovery pass it
+adds to startup stays off the path an ordinary launch takes.
+
+Read the whole diff, not the title. A porting agent works from a clone that
+goes stale while it runs, and reconciling that clone in its own favour reverses
+commits that landed meanwhile. That is invisible in the title and nearly
+invisible in review: PR #184 was titled a one-file IME composition fix, and its
+diff reverted the port manager, the radar, four workflows and 180 rendered
+handbook pages. `neverPorted` in `scripts/upstream-port-policy.json` lists the
+paths a port has no business authoring, which is the checklist to read that diff
+against.
+
+*Verified against `504c88b39f` on 2026-09-11.*

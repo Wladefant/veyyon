@@ -1,0 +1,1560 @@
+import type { AgentToolResult, AnyAgentTool } from "@veyyon/agent-core";
+import type { ImageContent, TextContent } from "@veyyon/ai";
+import type { SnapshotStore } from "@veyyon/hashline";
+import {
+	Box,
+	type Component,
+	Container,
+	getImageDimensions,
+	Image,
+	type ImageDisplayListener,
+	ImageProtocol,
+	imageFallback,
+	type NativeScrollbackLiveRegion,
+	Spacer,
+	TERMINAL,
+	Text,
+	type TUI,
+} from "@veyyon/tui";
+import { formatMoreLines, logger } from "@veyyon/utils";
+import type { ImageFallbackReason } from "@veyyon/utils/image-fallback";
+import { isRecord } from "@veyyon/utils/type-guards";
+import type { ToolView } from "@veyyon/view";
+import type {
+	ToolExecutionBlock,
+	ToolExecutionDisplay,
+	ToolExecutionImageItem,
+	ToolExecutionMultiFileItem,
+	ToolExecutionPolicies,
+} from "@veyyon/wire/presentation";
+import type { RenderResultOptions } from "../../../../extensibility/custom-tools/types";
+import {
+	buildToolRenderContext,
+	createToolExecutionProducer,
+	notExecutedReason,
+	type ToolExecutionBuildParams,
+	type ToolExecutionDrawContext,
+	type ToolExecutionListener,
+	ToolExecutionProducer,
+	toolExecutionImages,
+} from "../../../../presentation/tool-execution";
+import { recordImageDisplay } from "../../../../session/image-visibility";
+import type { HighlightRequest } from "../../../../theme/highlight";
+import { TOOL_OUTPUT_IMAGE_THEME } from "../../../../theme/image-theme";
+import { transitionsEnabled } from "../../../../theme/shimmer";
+import type { Theme } from "../../../../theme/theme";
+import { getThemeEpoch, theme } from "../../../../theme/theme";
+import {
+	formatArgsInline,
+	JSON_TREE_MAX_DEPTH_COLLAPSED,
+	JSON_TREE_MAX_DEPTH_EXPANDED,
+	JSON_TREE_MAX_LINES_COLLAPSED,
+	JSON_TREE_MAX_LINES_EXPANDED,
+	JSON_TREE_SCALAR_LEN_COLLAPSED,
+	JSON_TREE_SCALAR_LEN_EXPANDED,
+	renderJsonTreeLines,
+} from "../../../../tools/core/json-tree-render";
+import {
+	formatExpandHint,
+	replaceTabs,
+	resolveImageOptions,
+	shortenEmbeddedPaths,
+	truncateToWidth,
+} from "../../../../tools/core/render-utils";
+import { formatStatusIcon } from "../../../../tools/core/tool-ui-status";
+import { toolViewDefinitions } from "../../../../tools/view-registry";
+import { drawToolView, type SpinnerFrameSource, toolViewHighlightRequests } from "../../draw/draw-tool-view";
+import {
+	CachedOutputBlock,
+	isFramedBlockComponent,
+	markFramedBlockComponent,
+	outputBlockContentWidth,
+} from "../../draw/output-block";
+import {
+	paintRailMotion,
+	RAIL_IDLE_STEP_MS,
+	RAIL_SETTLE_FRAME_MS,
+	RAIL_SETTLE_FRAMES,
+	type RailMotion,
+	railClockMs,
+	railIdleHeadAtMs,
+	railRowCount,
+	railStreamHeadAtRow,
+} from "../../draw/rail-motion";
+import { renderStatusLine } from "../../draw/status-line";
+import { WidthAwareText } from "../../draw/width-aware-text";
+import { asyncToolState } from "../../utils/async-tool-state";
+import { COMPOSER_INSET_COLS } from "../composer/composer-chrome";
+import { reportRendererFailure } from "./renderer-failure";
+
+export { turnFailedToolResult } from "../../../../presentation/tool-execution";
+
+export type DisplaceableToolName = "job" | "todo";
+
+/** What a card's call phase draws: its title row, the tool's own renderer, a failure, its view, or nothing. */
+type CallDrawing =
+	| { readonly kind: "title" }
+	| { readonly kind: "custom" }
+	| { readonly kind: "failure"; readonly error: string }
+	| { readonly kind: "view"; readonly view: ToolView }
+	| { readonly kind: "nothing" };
+
+/** What a card's result phase draws. */
+type ResultDrawing =
+	| { readonly kind: "custom" }
+	| { readonly kind: "failure"; readonly error: string; readonly fallbackText: string | undefined }
+	| { readonly kind: "multiFile"; readonly items: readonly ToolExecutionMultiFileItem[] }
+	| { readonly kind: "view"; readonly view: ToolView }
+	| { readonly kind: "generic" }
+	| { readonly kind: "raw" };
+
+const DRAW_TITLE = { kind: "title" } as const;
+const DRAW_CUSTOM = { kind: "custom" } as const;
+const DRAW_NOTHING = { kind: "nothing" } as const;
+const DRAW_GENERIC = { kind: "generic" } as const;
+const DRAW_RAW = { kind: "raw" } as const;
+
+const ROW_INDENT_PATTERN = /^((?:\x1b\[[0-9;]*m)*)( *)/;
+
+function dedent(rows: readonly string[]): string[] {
+	let shared = Number.POSITIVE_INFINITY;
+	for (const row of rows) {
+		if (row.trim() === "") continue;
+		shared = Math.min(shared, ROW_INDENT_PATTERN.exec(row)?.[2]?.length ?? 0);
+		if (shared === 0) return [...rows];
+	}
+	if (!Number.isFinite(shared) || shared === 0) return [...rows];
+	return rows.map(row =>
+		row.trim() === ""
+			? row
+			: row.replace(ROW_INDENT_PATTERN, (_, color: string, indent: string) => color + indent.slice(shared)),
+	);
+}
+
+interface ImagePlaceholder {
+	readonly block: { data?: string; mimeType?: string };
+	readonly reason: ImageFallbackReason;
+}
+
+/** The render options a tool's call and result renderers receive. */
+type ToolRenderState = RenderResultOptions & { renderContext?: Record<string, unknown> };
+
+function isAgentToolLike(value: unknown): value is AnyAgentTool {
+	return (
+		isRecord(value) && ("execute" in value || "renderCall" in value || "renderResult" in value || "view" in value)
+	);
+}
+
+export interface TranscriptLiveRegionProbe {
+	isBlockInLiveRegion(component: Component): boolean;
+}
+
+export interface ToolExecutionOptions {
+	snapshots?: SnapshotStore;
+	showImages?: boolean;
+	editFuzzyThreshold?: number;
+	editAllowFuzzy?: boolean;
+	liveRegion?: TranscriptLiveRegionProbe;
+	ui?: TUI;
+	expanded?: boolean;
+	cwd?: string;
+	tool?: AnyAgentTool;
+	dataSource?: ToolExecutionProducer;
+	customRenderer?: {
+		renderCall?: (args: unknown, options: RenderResultOptions, theme: Theme) => Component;
+		renderResult?: (
+			result: AgentToolResult<unknown>,
+			options: RenderResultOptions & { renderContext?: Record<string, unknown> },
+			theme: Theme,
+			args?: unknown,
+		) => Component;
+	};
+}
+
+export interface ToolExecutionHandle extends Component {
+	updateArgs(args: unknown, toolCallId?: string): void;
+	updateResult(
+		result: {
+			content?: Array<{ type: string; text?: string; data?: string; mimeType?: string }> | string;
+			details?: unknown;
+			isError?: boolean;
+		},
+		isPartial?: boolean,
+		toolCallId?: string,
+	): void;
+	setArgsComplete(toolCallId?: string): void;
+	setExpanded(expanded: boolean): void;
+	seal(): void;
+}
+
+export const SPINNER_RENDER_INTERVAL_MS = 80;
+export const SPINNER_GLYPH_ADVANCE_MS = 80;
+
+export function sharedSpinnerFrame(frameCount: number, now: number = performance.now()): number {
+	return frameCount > 0 ? Math.floor(now / SPINNER_GLYPH_ADVANCE_MS) % frameCount : 0;
+}
+
+let toolExecutionInstanceSeq = 0;
+
+/**
+ * The rail frame each card built around a child, keyed by that child: one table for every card rather
+ * than a WeakMap per card. The frame holds its owner, since it draws its card's status.
+ */
+const railWrappers = new WeakMap<Component, RailFrame>();
+
+function isDrawnRow(line: string): boolean {
+	return line.trim() !== "";
+}
+
+/**
+ * The frame a card draws around a child that does not frame itself: the child's first drawn row is
+ * the header and the rest the body, on a rail in the card's status. A class rather than an object of
+ * closures, so a framed child costs its card two objects and shares the methods with every other.
+ */
+class RailFrame implements Component {
+	readonly owner: ToolExecutionComponent;
+	readonly #child: Component;
+	readonly #block = new CachedOutputBlock();
+
+	constructor(owner: ToolExecutionComponent, child: Component) {
+		this.owner = owner;
+		this.#child = child;
+		markFramedBlockComponent(this);
+	}
+
+	render(width: number): readonly string[] {
+		const inner = this.#child.render(outputBlockContentWidth(width, 0));
+		const first = inner.findIndex(isDrawnRow);
+		if (first === -1) return [];
+		const rows = dedent(inner.slice(first));
+		const body = rows.slice(1);
+		return this.#block.render(
+			{
+				header: rows[0],
+				state: this.owner.railState,
+				sections: body.length > 0 ? [{ lines: body }] : [],
+				contentPaddingLeft: 0,
+				width,
+			},
+			theme,
+		);
+	}
+
+	invalidate(): void {
+		this.#block.invalidate();
+		this.#child.invalidate?.();
+	}
+
+	releaseRenderCache(): void {
+		this.#block.invalidate();
+		this.#child.releaseRenderCache?.();
+	}
+
+	dispose(): void {
+		this.#child.dispose?.();
+	}
+}
+
+/** Records, for one image of a tool call's result, whether it reached the screen. */
+class ImageDisplayReport implements ImageDisplayListener {
+	readonly #toolCallId: string;
+	readonly #index: number;
+
+	constructor(toolCallId: string, index: number) {
+		this.#toolCallId = toolCallId;
+		this.#index = index;
+	}
+
+	imageDisplayed(fallback: ImageFallbackReason | undefined): void {
+		recordImageDisplay(this.#toolCallId, this.#index, fallback);
+	}
+}
+
+export class ToolExecutionComponent
+	extends Container
+	implements NativeScrollbackLiveRegion, ToolExecutionHandle, ToolExecutionListener, SpinnerFrameSource
+{
+	#contentBox: Box;
+	/** The generic fallback row, created by the first display that draws it; a card whose tool draws its
+	 *  own call or result never holds one. */
+	#contentText: WidthAwareText | undefined;
+	#multiFileBoxes: (Box | Spacer)[] = [];
+	#imageComponents: Image[] = [];
+	#imageSpacers: Spacer[] = [];
+	#notExecutedNotice: Text | undefined;
+	readonly #instanceId = ++toolExecutionInstanceSeq;
+	/** What the card draws from: a producer it builds its block from, or a block it was handed whole. */
+	#source: ToolExecutionProducer | ToolExecutionBlock;
+	#options: ToolExecutionOptions;
+	#ui?: TUI;
+	#expanded = false;
+	#showImages: boolean;
+	#isPartial = true;
+	#resultVersion = 1;
+	#lastDisplayKey: string | undefined;
+	#displayInputVersion = 0;
+	#displayStale = true;
+	#renderedImageCount = 0;
+	/** Created on the first Kitty conversion: almost no card holds an image to convert. */
+	#convertedImages: Map<number, { data: string; mimeType: string }> | undefined;
+	#imageConversionFailures: Set<number> | undefined;
+	#spinnerFrame?: number;
+	/**
+	 * Whether the drawn display read the spinner frame while it was built, so a new frame draws it
+	 * again. A framed block reads the frame when it renders, and a streaming write's body does not
+	 * change with the glyph in its trailing row: drawing its whole body again for that glyph was most
+	 * of what a spinner frame cost.
+	 */
+	#frameDrawn = true;
+	#drawing = false;
+	#spinnerInterval?: NodeJS.Timeout;
+	#railIdleLive = false;
+	#railIdleInterval?: NodeJS.Timeout;
+	#railSettleFrame?: number;
+	#railSettleInterval?: NodeJS.Timeout;
+	#railWasLive = false;
+	#railSettled = false;
+	#railRowsPresent?: boolean;
+	#sealed = false;
+	#backgroundTaskFrozen = false;
+	#firstResultViewportRepaintShapePainted = false;
+	#partialResultShapePainted = false;
+	#rawArgs: unknown;
+	/** The producer this card listens to, so a change of source stops listening to the old one. */
+	#subscribedProducer: ToolExecutionProducer | undefined;
+	#inSyncUpdate = false;
+
+	constructor(
+		blockOrToolName: ToolExecutionBlock | string,
+		argsOrOptions: unknown = {},
+		optionsOrTool: ToolExecutionOptions | AnyAgentTool = {},
+		toolOrUi?: AnyAgentTool | TUI,
+		uiOrCwd?: TUI | string,
+		cwdOrToolCallId?: string,
+		toolCallIdArg?: string,
+	) {
+		super();
+
+		let options: ToolExecutionOptions;
+		let tool: AnyAgentTool | undefined;
+		let ui: TUI | undefined;
+		let cwd: string | undefined;
+		let toolCallId: string | undefined;
+
+		if (typeof blockOrToolName === "string") {
+			// (toolName, args, options, tool, ui, cwd, toolCallId)
+			const toolName = blockOrToolName;
+			const args = argsOrOptions;
+			options = (
+				isRecord(optionsOrTool) && !isAgentToolLike(optionsOrTool) ? optionsOrTool : {}
+			) as ToolExecutionOptions;
+			tool = (isAgentToolLike(optionsOrTool) ? optionsOrTool : toolOrUi) as AnyAgentTool | undefined;
+			ui = (
+				toolOrUi && isRecord(toolOrUi) && ("requestRender" in toolOrUi || "requestComponentRender" in toolOrUi)
+					? toolOrUi
+					: uiOrCwd && isRecord(uiOrCwd) && ("requestRender" in uiOrCwd || "requestComponentRender" in uiOrCwd)
+						? uiOrCwd
+						: undefined
+			) as TUI | undefined;
+			cwd =
+				typeof uiOrCwd === "string" ? uiOrCwd : typeof cwdOrToolCallId === "string" ? cwdOrToolCallId : undefined;
+			toolCallId =
+				typeof cwdOrToolCallId === "string" && typeof uiOrCwd === "string" ? cwdOrToolCallId : toolCallIdArg;
+
+			this.#options = { ...options };
+			if (tool) this.#options.tool = tool;
+			if (ui) this.#options.ui = ui;
+			if (cwd) this.#options.cwd = cwd;
+			this.#ui = this.#options.ui;
+			this.#showImages = this.#options.showImages ?? true;
+			this.#expanded = this.#options.expanded ?? false;
+
+			this.#source = createToolExecutionProducer({
+				toolName,
+				args,
+				options: this.#options,
+				tool: this.#options.tool,
+				toolCallId,
+				cwd: this.#options.cwd,
+			});
+		} else {
+			// (block, options)
+			this.#source = blockOrToolName;
+			this.#options = (argsOrOptions as ToolExecutionOptions) ?? {};
+			if (isAgentToolLike(optionsOrTool)) {
+				this.#options.tool = optionsOrTool;
+			}
+			if (toolOrUi && isRecord(toolOrUi) && ("requestRender" in toolOrUi || "requestComponentRender" in toolOrUi)) {
+				this.#options.ui = toolOrUi as TUI;
+			}
+			this.#ui = this.#options.ui;
+			this.#showImages = this.#options.showImages ?? true;
+			this.#expanded = this.#options.expanded ?? false;
+
+			const dataSource = this.#options.dataSource;
+			if (!dataSource && (this.#options.tool || !blockOrToolName.display)) {
+				this.#applyRawBlock(blockOrToolName);
+			} else {
+				if (dataSource) this.#source = dataSource;
+				this.#adoptBlockLifecycle(blockOrToolName);
+			}
+		}
+
+		this.#contentBox = new Box(COMPOSER_INSET_COLS, 1);
+
+		this.addChild(this.#contentBox);
+		this.setIgnoreTight(true);
+
+		this.#updateSpinnerAnimation();
+		this.#updateRailMotion();
+		this.#setupProducerSubscription();
+		this.#updateDisplay();
+	}
+
+	/** The producer the card builds its block from, when it has one. */
+	get #producer(): ToolExecutionProducer | undefined {
+		return this.#source instanceof ToolExecutionProducer ? this.#source : undefined;
+	}
+
+	/**
+	 * The block the card draws: its producer's block for the card's expansion, spinner frame and
+	 * freeze, or the block it was handed. The producer builds it on the first read after a change, so
+	 * a card handed its call, its result and a spinner start and stop between two frames builds one
+	 * block, for the frame that draws it.
+	 */
+	get #block(): ToolExecutionBlock {
+		const source = this.#source;
+		return source instanceof ToolExecutionProducer ? source.produceBlock(this.#drawContext()) : source;
+	}
+
+	/** The card's presentation policies, read without building the views its block carries. */
+	#policies(): ToolExecutionPolicies | undefined {
+		const source = this.#source;
+		return source instanceof ToolExecutionProducer ? source.policies(this.#drawContext()) : source.display?.policies;
+	}
+
+	#drawContext(): ToolExecutionDrawContext {
+		return { expanded: this.#expanded, frame: this.#spinnerFrame, frozen: this.#backgroundTaskFrozen };
+	}
+
+	/** Take whether the card is unsettled, sealed and frozen from a block it was handed. */
+	#adoptBlockLifecycle(block: ToolExecutionBlock): void {
+		this.#isPartial = block.status === "pending" || block.status === "running";
+		this.#sealed = block.display?.policies?.sealed ?? !this.#isPartial;
+		this.#backgroundTaskFrozen = block.display?.policies?.backgroundTaskFrozen ?? false;
+	}
+
+	#setupProducerSubscription(): void {
+		const producer = this.#producer;
+		if (!producer) return;
+		this.#unsubscribeProducer();
+		producer.subscribe(this);
+		this.#subscribedProducer = producer;
+	}
+
+	#unsubscribeProducer(): void {
+		this.#subscribedProducer?.unsubscribe(this);
+		this.#subscribedProducer = undefined;
+	}
+
+	/** The producer's block changed. The card itself is the listener, so it holds no closure for it. */
+	toolExecutionChanged(): void {
+		// A synchronous update (args, result, seal) bumps its own version and rebuilds once it has
+		// finished. A recompute the producer started itself (a streaming diff preview settling)
+		// changes no input the display key reads, so the key moves here or the settled preview
+		// waits for the next spinner tick to be drawn.
+		if (this.#inSyncUpdate) return;
+		this.#displayInputVersion++;
+		this.#updateDisplay();
+		this.#requestScopedRender();
+	}
+
+	#applyRawBlock(block: ToolExecutionBlock): void {
+		const args = parseInputArgs(block.input);
+		const producer =
+			this.#producer ??
+			createToolExecutionProducer({
+				toolName: block.toolName,
+				args,
+				options: this.#options,
+				tool: this.#options.tool,
+				toolCallId: block.toolCallId,
+				id: block.id,
+				cwd: this.#options.cwd,
+			});
+		this.#source = producer;
+		producer.updateArgs(args, block.toolCallId);
+		if (block.output !== undefined || block.error !== undefined) {
+			producer.updateResult(
+				{
+					content: [{ type: "text", text: block.error ?? block.output ?? "" }],
+					isError: block.status === "failed" || block.status === "rejected" || block.status === "aborted",
+				},
+				block.status === "running" || block.status === "pending",
+				block.toolCallId,
+			);
+		}
+		this.#isPartial = producer.isPartial || producer.result === undefined;
+		this.#sealed = producer.sealed;
+	}
+
+	getTranscriptBlockVersion(): number {
+		return this.#resultVersion + this.#displayInputVersion;
+	}
+
+	set(block: ToolExecutionBlock): void {
+		this.#rawArgs = undefined;
+		if (!block.display) {
+			const previousProducer = this.#producer;
+			this.#inSyncUpdate = true;
+			try {
+				this.#applyRawBlock(block);
+			} finally {
+				this.#inSyncUpdate = false;
+			}
+			if (this.#producer !== previousProducer) this.#setupProducerSubscription();
+		} else {
+			this.#unsubscribeProducer();
+			if (this.#producer !== this.#options.dataSource) this.#producer?.seal();
+			this.#source = block;
+			this.#adoptBlockLifecycle(block);
+		}
+		this.#resultVersion++;
+		this.#displayInputVersion++;
+		this.#updateSpinnerAnimation();
+		this.#updateRailMotion();
+		this.#updateDisplay();
+		this.#requestScopedRender();
+	}
+
+	updateArgs(args: unknown, toolCallId?: string): void {
+		if (toolCallId) this.#source.toolCallId = toolCallId;
+		if (this.#rawArgs === args) return;
+		this.#rawArgs = args;
+		this.#inSyncUpdate = true;
+		try {
+			let producer = this.#producer;
+			if (!producer) {
+				producer = createToolExecutionProducer({
+					toolName: this.#block.toolName,
+					args,
+					options: this.#options,
+					tool: this.#options.tool,
+					toolCallId: this.#block.toolCallId,
+					id: this.#block.id,
+					cwd: this.#options.cwd,
+				});
+				this.#source = producer;
+				this.#setupProducerSubscription();
+			}
+			producer.updateArgs(args, toolCallId);
+			this.#displayInputVersion++;
+			this.#updateSpinnerAnimation();
+			this.#updateDisplay();
+		} finally {
+			this.#inSyncUpdate = false;
+		}
+	}
+
+	setArgsComplete(toolCallId?: string): void {
+		if (toolCallId) this.#source.toolCallId = toolCallId;
+		this.#inSyncUpdate = true;
+		try {
+			this.#producer?.setArgsComplete(toolCallId);
+			// The producer's block changed, and its change notice is held back by the synchronous update.
+			this.#displayInputVersion++;
+			this.#updateSpinnerAnimation();
+			this.#updateDisplay();
+		} finally {
+			this.#inSyncUpdate = false;
+		}
+	}
+
+	async whenPreviewSettled(): Promise<void> {
+		if (this.#producer) {
+			await this.#producer.whenSettled();
+		}
+	}
+
+	updateResult(
+		result: {
+			content?: Array<{ type: string; text?: string; data?: string; mimeType?: string }> | string;
+			details?: unknown;
+			isError?: boolean;
+		},
+		isPartial = false,
+		toolCallId?: string,
+	): void {
+		if (toolCallId) this.#source.toolCallId = toolCallId;
+		if (isPartial && this.#source.toolName === "task" && this.#maybeFreezeBackgroundTask()) {
+			return;
+		}
+		const wasPartialResult = this.#isPartial;
+		// The first result after a frame painted the no-result shape repaints the viewport. The block is
+		// read for it only when such a frame was painted, so a card handed its result before its first
+		// frame, as every card of a rebuilt transcript is, never builds the block it no longer draws.
+		const firstResultAfterRepaintShapePaint =
+			this.#firstResultViewportRepaintShapePainted &&
+			wasPartialResult &&
+			this.#block.output === undefined &&
+			this.#block.error === undefined;
+		const partialResultPainted = this.#partialResultShapePainted;
+		this.#firstResultViewportRepaintShapePainted = false;
+		this.#partialResultShapePainted = false;
+
+		this.#inSyncUpdate = true;
+		try {
+			let producer = this.#producer;
+			if (!producer) {
+				producer = createToolExecutionProducer({
+					toolName: this.#block.toolName,
+					args: parseInputArgs(this.#block.input),
+					options: this.#options,
+					tool: this.#options.tool,
+					toolCallId: this.#block.toolCallId,
+					id: this.#block.id,
+					cwd: this.#options.cwd,
+				});
+				this.#source = producer;
+				this.#setupProducerSubscription();
+			}
+			producer.updateResult(result, isPartial, toolCallId);
+			this.#isPartial = isPartial;
+			this.#resultVersion++;
+			this.#updateSpinnerAnimation();
+			this.#updateRailMotion();
+			this.#updateDisplay();
+			this.#resetDisplayForResultTopologyChange(
+				firstResultAfterRepaintShapePaint,
+				wasPartialResult && partialResultPainted,
+				isPartial,
+			);
+			this.#maybeConvertImagesForKitty(result);
+		} finally {
+			this.#inSyncUpdate = false;
+		}
+	}
+
+	#imageSourceName(): string | undefined {
+		return this.#block.display?.imageSourcePath;
+	}
+
+	#imagePlaceholderRows(placeholders: readonly ImagePlaceholder[]): string {
+		const filename = this.#imageSourceName();
+		return placeholders
+			.map(({ block, reason }) => {
+				const mimeType = block.mimeType ?? "image";
+				const dimensions = block.data ? (getImageDimensions(block.data, mimeType) ?? undefined) : undefined;
+				return imageFallback({ mimeType, dimensions, filename, reason });
+			})
+			.join("\n");
+	}
+
+	#reportImageDisplay(index: number, fallback: ImageFallbackReason | undefined): void {
+		const toolCallId = this.#source.toolCallId;
+		if (!toolCallId) return;
+		recordImageDisplay(toolCallId, index, fallback);
+	}
+
+	#maybeConvertImagesForKitty(result: ToolExecutionBuildParams["result"]): void {
+		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
+		// Every streamed partial result lands here. The block's images are a function of the result, so
+		// they are read from it: building the block to find them would project every view of the card,
+		// once per update, for a frame that draws only the last one.
+		const images = toolExecutionImages(result);
+		if (!images || images.length === 0) return;
+
+		for (let i = 0; i < images.length; i++) {
+			const img = images[i];
+			if (!img.data || !img.mimeType) continue;
+			if (img.mimeType === "image/png") continue;
+			if (this.#convertedImages?.has(i)) continue;
+			if (this.#imageConversionFailures?.has(i)) continue;
+
+			const index = i;
+			new Bun.Image(Buffer.from(img.data, "base64"))
+				.png()
+				.toBase64()
+				.then(data => {
+					this.#convertedImages ??= new Map();
+					this.#convertedImages.set(index, { data, mimeType: "image/png" });
+					this.#displayInputVersion++;
+					this.#updateDisplay();
+					if (typeof this.#ui?.requestRender === "function") this.#ui.requestRender();
+				})
+				.catch(() => {
+					this.#imageConversionFailures ??= new Set();
+					this.#imageConversionFailures.add(index);
+					this.#displayInputVersion++;
+					this.#updateDisplay();
+					if (typeof this.#ui?.requestRender === "function") this.#ui.requestRender();
+				});
+		}
+	}
+
+	#updateSpinnerAnimation(): void {
+		const policies = this.#policies();
+		const toolName = this.#source.toolName;
+		const isStreamingArgs =
+			!this.#sealed &&
+			this.#isPartial &&
+			(toolName === "edit" || toolName === "apply_patch" || toolName === "write");
+		const isBackgroundAsyncRunning = policies?.backgroundTaskFrozen === true;
+		const pendingCallConsumesSpinner = this.#isPartial && policies?.animatedPendingPreview === true;
+		const partialResultConsumesSpinner = this.#isPartial && policies?.animatedPartialResult === true;
+		const isLivePartialTool =
+			this.#isPartial &&
+			!isBackgroundAsyncRunning &&
+			(pendingCallConsumesSpinner || partialResultConsumesSpinner || policies?.displaceable === "job");
+		const needsSpinner = isStreamingArgs || isLivePartialTool;
+
+		if (needsSpinner && !this.#spinnerInterval) {
+			const frameCount = theme.spinnerFrames.length;
+			const frame = sharedSpinnerFrame(frameCount);
+			this.#spinnerFrame = frame;
+			this.#spinnerInterval = setInterval(() => {
+				if (this.#maybeFreezeBackgroundTask()) return;
+				if (!Array.isArray(theme?.spinnerFrames)) {
+					logger.warn("Spinner stopped: the active theme has no spinner frames", {
+						tool: this.#source.toolName,
+						theme: theme === undefined ? "unset" : "no spinnerFrames",
+					});
+					this.stopAnimation();
+					return;
+				}
+				const fCount = theme.spinnerFrames.length;
+				this.#spinnerFrame = sharedSpinnerFrame(fCount, performance.now());
+				this.#updateDisplay();
+				this.#requestScopedRender();
+			}, SPINNER_RENDER_INTERVAL_MS);
+		} else if (!needsSpinner && this.#spinnerInterval) {
+			clearInterval(this.#spinnerInterval);
+			this.#spinnerInterval = undefined;
+			this.#spinnerFrame = undefined;
+		}
+	}
+
+	#maybeFreezeBackgroundTask(): boolean {
+		if (this.#backgroundTaskFrozen) return true;
+		if (this.#source.toolName !== "task" || this.#options.liveRegion === undefined) return false;
+		if (!this.#options.liveRegion.isBlockInLiveRegion(this)) {
+			this.#backgroundTaskFrozen = true;
+			this.#updateSpinnerAnimation();
+			this.#updateRailMotion();
+			this.#updateDisplay();
+			this.#requestScopedRender();
+			return true;
+		}
+		return false;
+	}
+
+	#updateRailMotion(): void {
+		if (!transitionsEnabled()) {
+			this.#stopRailMotion();
+			return;
+		}
+		const live = !this.#sealed && !this.#backgroundTaskFrozen && this.#isPartial;
+		if (live) {
+			this.#stopRailSettle();
+			if (this.#railIdleInterval) return;
+			this.#railIdleLive = true;
+			this.#railIdleInterval = setInterval(() => {
+				// A background task above the seam settles like the spinner does: its rows
+				// are native-scrollback history, and a card rebuilt from a session whose
+				// agent reported "running" when it was saved otherwise animates for the
+				// rest of the process, re-rendering the transcript at the rail rate.
+				if (this.#maybeFreezeBackgroundTask()) return;
+				if (this.#railRowsPresent !== true) return;
+				this.#requestScopedRender();
+			}, RAIL_IDLE_STEP_MS);
+			return;
+		}
+		this.#stopRailIdle();
+		if (this.#sealed || this.#backgroundTaskFrozen || !this.#isPartial) {
+			if (!this.#railSettled && this.#railWasLive && !this.#sealed && !this.#backgroundTaskFrozen) {
+				this.#railSettled = true;
+				this.#railSettleFrame = 1;
+				this.#railSettleInterval = setInterval(() => {
+					const next = (this.#railSettleFrame ?? 0) + 1;
+					if (next > RAIL_SETTLE_FRAMES) {
+						this.#stopRailSettle();
+					} else {
+						this.#railSettleFrame = next;
+					}
+					this.#requestScopedRender();
+				}, RAIL_SETTLE_FRAME_MS);
+				return;
+			}
+			this.#stopRailSettle();
+		}
+	}
+
+	#stopRailIdle(): void {
+		if (this.#railIdleInterval) {
+			clearInterval(this.#railIdleInterval);
+			this.#railIdleInterval = undefined;
+		}
+		this.#railIdleLive = false;
+	}
+
+	#stopRailSettle(): void {
+		if (this.#railSettleInterval) {
+			clearInterval(this.#railSettleInterval);
+			this.#railSettleInterval = undefined;
+		}
+		this.#railSettleFrame = undefined;
+	}
+
+	#stopRailMotion(): void {
+		this.#stopRailIdle();
+		this.#stopRailSettle();
+	}
+
+	#onRail(component: Component): Component {
+		if (isFramedBlockComponent(component)) return component;
+		const cached = railWrappers.get(component);
+		if (cached?.owner === this) return cached;
+		const framed = new RailFrame(this, component);
+		railWrappers.set(component, framed);
+		return framed;
+	}
+
+	/** The status the rail frames around this card's children draw, read without building its block. */
+	get railState(): "running" | "error" | "success" {
+		if (this.#isPartial) return "running";
+		const status = this.#source.status;
+		return status === "failed" || status === "rejected" || status === "aborted" ? "error" : "success";
+	}
+
+	#railMotion(railRows: number): RailMotion | undefined {
+		if (this.#railSettleFrame !== undefined) return { kind: "settle", frame: this.#railSettleFrame };
+		if (!this.#railIdleLive) return undefined;
+		const toolName = this.#source.toolName;
+		if (this.#isPartial && (toolName === "edit" || toolName === "apply_patch" || toolName === "write")) {
+			return { kind: "idle", head: railStreamHeadAtRow(railRows) };
+		}
+		return { kind: "idle", head: railIdleHeadAtMs(railClockMs()) };
+	}
+
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		if (!this.isTranscriptBlockFinalized()) return 0;
+		if (this.#railSettleFrame !== undefined) return 0;
+		return undefined;
+	}
+
+	isTranscriptBlockFinalized(): boolean {
+		if (this.#sealed) return true;
+		// A displaceable snapshot stays live: its rows are kept out of native scrollback so a
+		// follow-up tool call can remove the block.
+		if (this.#policies()?.displaceable) return false;
+		if (!this.#isPartial) return true;
+		// Partial result: a background async tool is accepted to freeze (the agent continues while
+		// it runs and would otherwise pin an unbounded live region); a foreground tool streaming
+		// partial output stays live until it finishes.
+		return this.#backgroundTaskFrozen || asyncToolState(this.#producer?.result?.details) === "running";
+	}
+
+	#requestScopedRender(): void {
+		if (this.#ui && typeof this.#ui.requestComponentRender === "function") {
+			this.#ui.requestComponentRender(this);
+			return;
+		}
+		if (this.#ui && typeof this.#ui.requestRender === "function") {
+			this.#ui.requestRender();
+		}
+	}
+
+	seal(): void {
+		if (this.#sealed) return;
+		this.#sealed = true;
+		this.#backgroundTaskFrozen = true;
+		this.stopAnimation();
+		this.#updateDisplay();
+		this.#requestScopedRender();
+	}
+
+	isDisplaceableBlock(): boolean {
+		return Boolean(this.#policies()?.displaceable) && !this.#sealed;
+	}
+
+	canBeDisplacedBy(nextToolName: string | undefined): boolean {
+		const displaceable = this.#policies()?.displaceable;
+		return Boolean(displaceable) && displaceable === nextToolName && !this.#sealed;
+	}
+
+	stopAnimation(): void {
+		if (this.#spinnerInterval) {
+			clearInterval(this.#spinnerInterval);
+			this.#spinnerInterval = undefined;
+			this.#spinnerFrame = undefined;
+		}
+		this.#stopRailMotion();
+		this.#unsubscribeProducer();
+		this.#producer?.seal();
+	}
+
+	override dispose(): void {
+		this.stopAnimation();
+		super.dispose();
+	}
+
+	setExpanded(expanded: boolean): void {
+		this.#expanded = expanded;
+		this.#updateDisplay();
+	}
+
+	setShowImages(show: boolean): void {
+		this.#showImages = show;
+		this.#updateDisplay();
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		this.#updateDisplay();
+	}
+
+	/**
+	 * Drop the drawn display with every row it memoized, and the producer's built block it was drawn
+	 * from. Both derive from the call and result, so the next render builds them again from the same
+	 * inputs; forgetting the key is what makes that render draw rather than keep a display that is no
+	 * longer there.
+	 */
+	override releaseRenderCache(): void {
+		this.#removeMultiFileBoxes();
+		this.#removeImages();
+		this.#removeNotExecutedNotice();
+		// A rail frame outlives the content box: `railWrappers` keeps it beside the child it frames,
+		// and a field child (`#contentText`) outlives every rebuild, so the frame's rows are dropped
+		// here rather than left to the table.
+		this.#contentBox.releaseRenderCache();
+		for (const child of this.#contentBox.children) child.dispose?.();
+		this.#contentBox.clear();
+		this.#producer?.releaseBlock();
+		this.#lastDisplayKey = undefined;
+		this.#displayStale = true;
+		super.releaseRenderCache();
+	}
+
+	/**
+	 * Mark the drawn display stale; the next `render` rebuilds it once.
+	 *
+	 * A card changes several times before it is drawn: a rebuilt transcript constructs it with the
+	 * call, expands it, hands it the result and seals it, and a streaming call gets more argument
+	 * deltas than frames. Drawing on each change highlighted the whole call view of every rebuilt
+	 * write only to replace it with the result view a moment later: on a 4,712-block session,
+	 * rebuilding and drawing the transcript took 999 ms that way and takes 603 ms drawn at render.
+	 * Drawing at render draws the state the frame shows, and nothing the frame never shows.
+	 */
+	#updateDisplay(): void {
+		this.#displayStale = true;
+	}
+
+	#ensureDisplay(): void {
+		if (!this.#displayStale) return;
+		this.#displayStale = false;
+		const key = this.#displayKey();
+		if (key === this.#lastDisplayKey) return;
+		this.#lastDisplayKey = key;
+		this.#drawing = true;
+		this.#frameDrawn = false;
+		try {
+			this.#rebuildDisplay();
+		} finally {
+			this.#drawing = false;
+		}
+		// The draw settles whether the frame is among the inputs, so the key is taken again after it.
+		this.#lastDisplayKey = this.#displayKey();
+	}
+
+	/**
+	 * The frame the drawn display animates at. A read while the display is drawn makes the frame an
+	 * input of the display; a read while it renders does not, since the rows it reads it for are
+	 * composed on every render.
+	 */
+	get spinnerFrame(): number | undefined {
+		if (this.#drawing) this.#frameDrawn = true;
+		return this.#spinnerFrame;
+	}
+
+	/**
+	 * Every input the drawn display depends on: the display is redrawn when this changes. The frame
+	 * is one only for a display that read it while it was drawn; any other states only whether there
+	 * is a frame.
+	 */
+	#displayKey(): string {
+		const frame = this.#spinnerFrame === undefined ? "-" : this.#frameDrawn ? this.#spinnerFrame : "~";
+		return `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${frame}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${this.#backgroundTaskFrozen}|${this.#sealed}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}`;
+	}
+
+	/**
+	 * Add the sources the next draw of this card hands the highlighter to `into`: none when the next
+	 * render would not redraw it. A rebuilt transcript collects them from every card and highlights
+	 * them together before the frame that draws them.
+	 */
+	highlightRequests(into: HighlightRequest[]): void {
+		if (!this.#displayStale || this.#displayKey() === this.#lastDisplayKey) return;
+		const display = this.#block.display;
+		const { hasResult, drawsCall } = this.#phases(display);
+		if (drawsCall) {
+			const call = this.#callDrawing(display, hasResult);
+			if (call.kind === "view") toolViewHighlightRequests(call.view, into);
+		}
+		if (!hasResult) return;
+		const result = this.#resultDrawing(display);
+		if (result.kind === "view") {
+			toolViewHighlightRequests(result.view, into);
+		} else if (result.kind === "multiFile") {
+			for (const item of result.items) {
+				if (item.view) toolViewHighlightRequests(item.view, into);
+			}
+		}
+	}
+
+	/** Whether the display draws a result, and whether it draws the call, which a merged result replaces. */
+	#phases(display: ToolExecutionDisplay | undefined): { readonly hasResult: boolean; readonly drawsCall: boolean } {
+		const hasResult =
+			!display?.neverRan &&
+			(!this.#isPartial || this.#block.output !== undefined || this.#block.error !== undefined);
+		const mergeCallAndResult =
+			display?.policies?.mergeCallAndResult ??
+			Boolean(toolViewDefinitions[this.#block.toolName]?.mergeCallAndResult);
+		return { hasResult, drawsCall: !hasResult || !mergeCallAndResult };
+	}
+
+	#needsFirstResultViewportRepaintAtRender(): boolean {
+		return this.#policies()?.forceFirstResultViewportRepaint === true;
+	}
+
+	#resetDisplayForResultTopologyChange(
+		firstResultAfterRepaintShapePaint: boolean,
+		partialResultPaintedBeforeSettle: boolean,
+		isPartial: boolean,
+	): void {
+		const provisionalResultSettled =
+			partialResultPaintedBeforeSettle &&
+			!isPartial &&
+			this.#policies()?.forceResultViewportRepaintOnSettle === true;
+		if (firstResultAfterRepaintShapePaint || provisionalResultSettled) {
+			if (typeof this.#ui?.resetDisplay === "function") {
+				this.#ui.resetDisplay();
+			}
+		}
+	}
+
+	override render(width: number): readonly string[] {
+		this.#ensureDisplay();
+		const lines = super.render(width);
+		this.#firstResultViewportRepaintShapePainted = this.#needsFirstResultViewportRepaintAtRender();
+		this.#partialResultShapePainted = this.#isPartial;
+
+		if (this.#railSettleFrame === undefined && !this.#railIdleLive) return lines;
+		const railRows = railRowCount(lines, theme.symbol("block.rail"));
+		this.#railRowsPresent = railRows > 0;
+		if (railRows === 0) return lines;
+		const motion = this.#railMotion(railRows);
+		if (!motion) return lines;
+		if (motion.kind === "idle") this.#railWasLive = true;
+		return paintRailMotion(lines, motion, theme);
+	}
+
+	#imageSizeKey(): string {
+		if (this.#renderedImageCount === 0) return "-";
+		const o = resolveImageOptions();
+		return `${o.maxWidthCells}:${o.maxHeightCells ?? "-"}`;
+	}
+
+	#rebuildDisplay(): void {
+		this.#railRowsPresent = undefined;
+		const display = this.#block.display;
+		// A block whose views change with the frame is drawn again for each one.
+		if (this.#producer?.followsFrame) this.#frameDrawn = true;
+
+		// Clean up previous multi-file boxes
+		this.#removeMultiFileBoxes();
+
+		this.#contentBox.setBgFn(undefined);
+		const previousChildren = this.#contentBox.children;
+		this.#contentBox.clear();
+
+		const fallbackText = this.#block.error ?? this.#block.output ?? "";
+		const renderState: ToolRenderState = {
+			expanded: this.#expanded,
+			isPartial: this.#isPartial,
+			spinnerFrame: this.#spinnerFrame,
+			renderContext: buildToolRenderContext(
+				this.#block.toolName,
+				this.#args(),
+				{
+					content: this.#producer?.result?.content ?? [{ type: "text", text: fallbackText }],
+					details: this.#producer?.result?.details,
+					isError: this.#producer?.result?.isError ?? Boolean(this.#block.error),
+				},
+				{ expanded: this.#expanded, frozen: this.#backgroundTaskFrozen },
+			),
+		};
+
+		const { hasResult, drawsCall } = this.#phases(display);
+		const callArgs = this.#producer ? this.#producer.callPreview.arguments : this.#args();
+
+		const callRendered = drawsCall ? this.#renderCallPhase(display, hasResult, callArgs, renderState) : false;
+		if (hasResult) {
+			this.#renderResultPhase(display, callArgs, renderState);
+		} else if (!callRendered && display?.generic) {
+			this.#addGenericContent();
+		}
+
+		this.#rebuildImages(display?.images);
+		this.#rebuildNotExecutedNotice(display);
+		if (previousChildren.length > 0) {
+			const retained = new Set(this.#contentBox.children);
+			for (const child of previousChildren) {
+				if (!retained.has(child)) child.dispose?.();
+			}
+		}
+		this.#renderedImageCount = this.#imageComponents.length;
+	}
+
+	/**
+	 * The call's arguments: the producer's own, else parsed from the block the card was handed. The
+	 * block states them serialized, and a streaming write's serialized arguments are the whole file.
+	 * Arguments that arrived as a string are parsed as the block's serialized form would be.
+	 */
+	#args(): unknown {
+		const producer = this.#producer;
+		if (!producer) return parseInputArgs(this.#block.input);
+		const args = producer.args;
+		return typeof args === "string" ? parseInputArgs(args) : args;
+	}
+
+	/** The tool's title row: its display label, or its name. */
+	#addTitleRow(display: ToolExecutionDisplay | undefined): void {
+		this.#contentBox.addChild(
+			this.#onRail(new Text(theme.fg("toolTitle", theme.bold(display?.toolLabel ?? this.#block.toolName)), 0, 0)),
+		);
+	}
+
+	/** Report a call renderer failure and fall back to the title row. */
+	#addCallFailure(display: ToolExecutionDisplay | undefined, err: unknown): void {
+		this.#contentBox.addChild(
+			reportRendererFailure(`tool "${this.#block.toolName}" call`, err, "showing the tool name only"),
+		);
+		this.#addTitleRow(display);
+	}
+
+	/** Report a result renderer failure and fall back to the raw output, when there is any. */
+	#addResultFailure(err: unknown, raw: string | undefined): void {
+		const fallback = raw ? "showing raw output" : "there is no raw output to show instead";
+		this.#contentBox.addChild(reportRendererFailure(`tool "${this.#block.toolName}" result`, err, fallback));
+		this.#addRawOutput(raw);
+	}
+
+	#addRawOutput(raw: string | undefined): void {
+		if (!raw) return;
+		this.#contentBox.addChild(
+			this.#onRail(new Text(theme.fg("toolOutput", replaceTabs(shortenEmbeddedPaths(raw))), 0, 0)),
+		);
+	}
+
+	#addGenericContent(): void {
+		// The generic card's rows are kept at their width, and its status icon is drawn at the frame.
+		this.#frameDrawn = true;
+		this.#contentText ??= new WidthAwareText(contentWidth => this.#formatGenericFallback(contentWidth), 0, 0);
+		const text = this.#contentText;
+		this.#contentBox.addChild(this.#onRail(text));
+		text.invalidate();
+	}
+
+	/**
+	 * What the call phase draws. Chosen apart from the drawing, so `highlightRequests` reads the
+	 * choice the draw makes.
+	 */
+	#callDrawing(display: ToolExecutionDisplay | undefined, hasResult: boolean): CallDrawing {
+		// A call render that IS a live widget (`callIsLiveWidget`, today only `ask`) is replaced by
+		// the plain label once the call is known never to have run, so an unasked question is not
+		// left looking answerable.
+		if (display?.neverRan === true && display.policies?.callIsLiveWidget === true) return DRAW_TITLE;
+		if (this.#options.customRenderer?.renderCall ?? this.#options.tool?.renderCall) return DRAW_CUSTOM;
+		const failure = display?.failures?.call;
+		if (failure) return { kind: "failure", error: failure.error };
+		if (display?.callView) return { kind: "view", view: display.callView };
+		return !hasResult && !display?.generic ? DRAW_TITLE : DRAW_NOTHING;
+	}
+
+	/** Draw the call phase. True when it added a row for the call. */
+	#renderCallPhase(
+		display: ToolExecutionDisplay | undefined,
+		hasResult: boolean,
+		callArgs: unknown,
+		renderState: ToolRenderState,
+	): boolean {
+		const drawing = this.#callDrawing(display, hasResult);
+		switch (drawing.kind) {
+			case "title":
+				this.#addTitleRow(display);
+				return true;
+			case "custom":
+				return this.#renderCustomCall(display, callArgs, renderState);
+			case "failure":
+				this.#addCallFailure(display, new Error(drawing.error));
+				return true;
+			case "view":
+				try {
+					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this)));
+				} catch (err) {
+					this.#addCallFailure(display, err);
+				}
+				return true;
+			case "nothing":
+				return false;
+		}
+	}
+
+	/** Draw the call through the tool's own renderer. True when it drew a row. */
+	#renderCustomCall(
+		display: ToolExecutionDisplay | undefined,
+		callArgs: unknown,
+		renderState: ToolRenderState,
+	): boolean {
+		const custom = this.#options.customRenderer;
+		const tool = this.#options.tool;
+		const customCall = custom?.renderCall ?? tool?.renderCall;
+		if (!customCall) return false;
+		// A renderer of the tool's own composes its rows now, and may read the frame or the clock.
+		this.#frameDrawn = true;
+		try {
+			const comp = customCall.call(custom?.renderCall ? custom : tool, callArgs, renderState, theme) as
+				| Component
+				| undefined;
+			if (!comp) return false;
+			this.#contentBox.addChild(this.#onRail(comp));
+		} catch (err) {
+			this.#addCallFailure(display, err);
+		}
+		return true;
+	}
+
+	/** What the result phase draws, chosen apart from the drawing as `#callDrawing` is. */
+	#resultDrawing(display: ToolExecutionDisplay | undefined): ResultDrawing {
+		if (this.#options.customRenderer?.renderResult ?? this.#options.tool?.renderResult) return DRAW_CUSTOM;
+		const failure = display?.failures?.result;
+		if (failure) return { kind: "failure", error: failure.error, fallbackText: failure.fallbackText };
+		if (display?.multiFileViews && display.multiFileViews.length > 1) {
+			return { kind: "multiFile", items: display.multiFileViews };
+		}
+		if (display?.resultView) return { kind: "view", view: display.resultView };
+		return display?.generic ? DRAW_GENERIC : DRAW_RAW;
+	}
+
+	#renderResultPhase(
+		display: ToolExecutionDisplay | undefined,
+		callArgs: unknown,
+		renderState: ToolRenderState,
+	): void {
+		const drawing = this.#resultDrawing(display);
+		switch (drawing.kind) {
+			case "custom":
+				this.#renderCustomResult(callArgs, renderState);
+				return;
+			case "failure":
+				this.#addResultFailure(
+					new Error(drawing.error),
+					drawing.fallbackText ?? this.#block.error ?? this.#block.output,
+				);
+				return;
+			case "multiFile":
+				this.#renderMultiFileViews(drawing.items, display?.remainingPendingFiles);
+				return;
+			case "view":
+				try {
+					this.#contentBox.addChild(this.#onRail(drawToolView(drawing.view, theme, this)));
+				} catch (err) {
+					this.#addResultFailure(err, this.#block.error ?? this.#block.output);
+				}
+				return;
+			case "generic":
+				this.#addGenericContent();
+				return;
+			case "raw":
+				this.#addRawOutput(this.#block.error ?? this.#block.output);
+				return;
+		}
+	}
+
+	#renderCustomResult(callArgs: unknown, renderState: ToolRenderState): void {
+		const custom = this.#options.customRenderer;
+		const tool = this.#options.tool;
+		const fallbackText = this.#block.error ?? this.#block.output ?? "";
+		// A renderer of the tool's own composes its rows now, and may read the frame or the clock.
+		this.#frameDrawn = true;
+		const rawContent = this.#producer?.result?.content;
+		const content: (TextContent | ImageContent)[] = Array.isArray(rawContent)
+			? (rawContent as (TextContent | ImageContent)[])
+			: typeof rawContent === "string"
+				? [{ type: "text", text: rawContent }]
+				: [{ type: "text", text: fallbackText }];
+		const resultPayload: AgentToolResult<unknown> = {
+			content,
+			details: this.#producer?.result?.details,
+			isError: this.#producer?.result?.isError ?? Boolean(this.#block.error),
+		};
+		try {
+			const comp = (
+				custom?.renderResult
+					? custom.renderResult(resultPayload, renderState, theme, callArgs)
+					: tool?.renderResult?.(resultPayload, renderState, theme, callArgs)
+			) as Component | undefined;
+			if (comp) this.#contentBox.addChild(this.#onRail(comp));
+		} catch (err) {
+			this.#addResultFailure(err, this.#block.error ?? this.#block.output);
+		}
+	}
+
+	#addMultiFileChild(child: Box | Spacer): void {
+		this.#multiFileBoxes.push(child);
+		this.addChild(child);
+	}
+
+	#renderMultiFileViews(
+		views: readonly ToolExecutionMultiFileItem[],
+		remainingPendingFiles: number | undefined,
+	): void {
+		for (let i = 0; i < views.length; i++) {
+			if (i > 0) this.#addMultiFileChild(new Spacer(1));
+			this.#addMultiFileChild(this.#multiFileBox(views[i]));
+		}
+		if (remainingPendingFiles && remainingPendingFiles > 0 && this.#isPartial) {
+			this.#addMultiFileChild(new Spacer(1));
+			this.#addMultiFileChild(this.#pendingFilesBox(remainingPendingFiles));
+		}
+	}
+
+	#multiFileBox(item: ToolExecutionMultiFileItem): Box {
+		const fileBox = new Box(COMPOSER_INSET_COLS, 0);
+		if (item.view) {
+			try {
+				fileBox.addChild(this.#onRail(drawToolView(item.view, theme, this)));
+			} catch (err) {
+				fileBox.addChild(
+					reportRendererFailure(
+						`tool "${this.#block.toolName}" result`,
+						err,
+						`no result is shown for ${item.path}`,
+					),
+				);
+			}
+		} else if (item.errorNotice) {
+			fileBox.addChild(
+				reportRendererFailure(
+					`tool "${this.#block.toolName}" result`,
+					new Error(item.errorNotice),
+					`no result is shown for ${item.path}`,
+				),
+			);
+		}
+		return fileBox;
+	}
+
+	#pendingFilesBox(count: number): Box {
+		const pendingBox = new Box(COMPOSER_INSET_COLS, 0);
+		const frame = this.spinnerFrame;
+		const spinner = frame !== undefined ? formatStatusIcon("running", theme, frame) : "";
+		const pendingText = renderStatusLine(
+			{
+				iconOverride: spinner,
+				title: "Edit",
+				description: theme.fg("dim", `${count} more file${count > 1 ? "s" : ""} pending…`),
+			},
+			theme,
+		);
+		pendingBox.addChild(this.#onRail(new Text(pendingText, 0, 0)));
+		return pendingBox;
+	}
+
+	#removeMultiFileBoxes(): void {
+		for (const box of this.#multiFileBoxes) this.removeChild(box);
+		this.#multiFileBoxes = [];
+	}
+
+	#removeImages(): void {
+		for (const img of this.#imageComponents) this.removeChild(img);
+		this.#imageComponents = [];
+		for (const spacer of this.#imageSpacers) this.removeChild(spacer);
+		this.#imageSpacers = [];
+	}
+
+	#removeNotExecutedNotice(): void {
+		if (!this.#notExecutedNotice) return;
+		this.removeChild(this.#notExecutedNotice);
+		this.#notExecutedNotice = undefined;
+	}
+
+	#rebuildImages(images: readonly ToolExecutionImageItem[] | undefined): void {
+		this.#removeImages();
+		if (!images || images.length === 0) return;
+
+		const hiddenReason: ImageFallbackReason | undefined =
+			TERMINAL.imageProtocol && this.#showImages ? undefined : TERMINAL.imageProtocol ? "images-off" : "no-protocol";
+		const undrawable: ImagePlaceholder[] = [];
+		for (let i = 0; i < images.length; i++) {
+			const img = images[i];
+			const reason = hiddenReason ?? this.#addImage(img, i);
+			if (reason === undefined) continue;
+			undrawable.push({ block: img, reason });
+			this.#reportImageDisplay(i, reason);
+		}
+		if (undrawable.length > 0) {
+			const rows = this.#imagePlaceholderRows(undrawable);
+			this.#contentBox.addChild(this.#onRail(new Text(theme.fg("dim", rows), 0, 0)));
+		}
+	}
+
+	/** Add a drawable image with its spacer. The reason it cannot be drawn, when it has image data it cannot show. */
+	#addImage(img: ToolExecutionImageItem, i: number): ImageFallbackReason | undefined {
+		if (!img.data || !img.mimeType) return undefined;
+		const converted = this.#convertedImages?.get(i);
+		const imageData = converted?.data ?? img.data;
+		const imageMimeType = converted?.mimeType ?? img.mimeType;
+		if (TERMINAL.imageProtocol === ImageProtocol.Kitty && imageMimeType !== "image/png") {
+			return this.#imageConversionFailures?.has(i) ? "unsupported-format" : undefined;
+		}
+		const spacer = new Spacer(1);
+		this.addChild(spacer);
+		this.#imageSpacers.push(spacer);
+		this.#reportImageDisplay(i, undefined);
+		const toolCallId = this.#source.toolCallId;
+		const imageComponent = new Image(imageData, imageMimeType, TOOL_OUTPUT_IMAGE_THEME, {
+			...resolveImageOptions(),
+			budget: this.#ui?.imageBudget,
+			imageKey: `te${this.#instanceId}:${i}`,
+			displayListener: toolCallId ? new ImageDisplayReport(toolCallId, i) : undefined,
+		});
+		this.#imageComponents.push(imageComponent);
+		this.addChild(imageComponent);
+		return undefined;
+	}
+
+	#rebuildNotExecutedNotice(display: ToolExecutionDisplay | undefined): void {
+		this.#removeNotExecutedNotice();
+		const reason =
+			display?.notExecutedReason ??
+			notExecutedReason(
+				this.#block.output !== undefined || this.#block.error !== undefined ? { details: undefined } : undefined,
+				this.#sealed,
+			);
+		if (reason === undefined) return;
+		this.#notExecutedNotice = new Text(
+			theme.fg("warning", `${theme.status.warning} ${reason}`),
+			COMPOSER_INSET_COLS,
+			0,
+		);
+		this.addChild(this.#notExecutedNotice);
+	}
+
+	#formatGenericFallback(contentWidth: number): string {
+		const lines: string[] = [];
+		const display = this.#block.display;
+		const generic = display?.generic;
+		const icon =
+			generic?.icon ??
+			(this.#isPartial
+				? this.#spinnerFrame !== undefined
+					? "running"
+					: "pending"
+				: this.#block.status === "failed"
+					? "error"
+					: "done");
+		lines.push(
+			renderStatusLine(
+				{ icon, spinnerFrame: this.#spinnerFrame, title: display?.toolLabel ?? this.#block.toolName },
+				theme,
+			),
+		);
+
+		const args = this.#args();
+		const argsObject = args && typeof args === "object" ? (args as Record<string, unknown>) : null;
+
+		if (!this.#expanded && argsObject && Object.keys(argsObject).length > 0) {
+			const inlineBudget = Math.max(20, contentWidth - 2);
+			const preview = generic?.argsPreview ?? formatArgsInline(argsObject, inlineBudget, shortenEmbeddedPaths);
+			if (preview) {
+				lines.push(` ${theme.fg("dim", replaceTabs(shortenEmbeddedPaths(preview)))}`);
+			}
+		}
+
+		if (this.#expanded && args !== undefined) {
+			lines.push("");
+			lines.push(theme.fg("dim", "Args"));
+			const tree = renderJsonTreeLines(
+				args,
+				theme,
+				JSON_TREE_MAX_DEPTH_EXPANDED,
+				JSON_TREE_MAX_LINES_EXPANDED,
+				JSON_TREE_SCALAR_LEN_EXPANDED,
+			);
+			for (let j = 0; j < tree.lines.length; j++) lines.push(tree.lines[j]);
+			if (tree.truncated) {
+				lines.push(theme.fg("dim", "…"));
+			}
+			lines.push("");
+		}
+
+		const output = this.#block.error ?? this.#block.output;
+		if (!output) {
+			return lines.join("\n");
+		}
+
+		const textContent = replaceTabs(shortenEmbeddedPaths(output.trimEnd()));
+		if (!textContent) {
+			lines.push(theme.fg("dim", "(no output)"));
+			return lines.join("\n");
+		}
+
+		if (generic?.isJson || textContent.startsWith("{") || textContent.startsWith("[")) {
+			try {
+				const parsed = JSON.parse(textContent);
+				const maxDepth = this.#expanded ? JSON_TREE_MAX_DEPTH_EXPANDED : JSON_TREE_MAX_DEPTH_COLLAPSED;
+				const maxLines = this.#expanded ? JSON_TREE_MAX_LINES_EXPANDED : JSON_TREE_MAX_LINES_COLLAPSED;
+				const maxScalarLen = this.#expanded ? JSON_TREE_SCALAR_LEN_EXPANDED : JSON_TREE_SCALAR_LEN_COLLAPSED;
+				const tree = renderJsonTreeLines(parsed, theme, maxDepth, maxLines, maxScalarLen);
+
+				if (tree.lines.length > 0) {
+					for (let j = 0; j < tree.lines.length; j++) lines.push(tree.lines[j]);
+					if (!this.#expanded) {
+						lines.push(formatExpandHint(theme, this.#expanded, true));
+					} else if (tree.truncated) {
+						lines.push(theme.fg("dim", "…"));
+					}
+					return lines.join("\n");
+				}
+			} catch {}
+		}
+
+		const outputLines = textContent.split("\n");
+		const maxOutputLines = this.#expanded ? 12 : 4;
+		const displayLines = outputLines.slice(0, maxOutputLines);
+
+		for (const line of displayLines) {
+			lines.push(theme.fg("toolOutput", truncateToWidth(replaceTabs(shortenEmbeddedPaths(line)), contentWidth)));
+		}
+
+		if (outputLines.length > maxOutputLines) {
+			const remaining = outputLines.length - maxOutputLines;
+			lines.push(
+				`${theme.fg("dim", `… ${formatMoreLines(remaining)}`)} ${formatExpandHint(theme, this.#expanded, true)}`,
+			);
+		} else if (!this.#expanded) {
+			lines.push(formatExpandHint(theme, this.#expanded, true));
+		}
+
+		return lines.join("\n");
+	}
+}
+
+function parseInputArgs(input: string): unknown {
+	if (!input) return undefined;
+	try {
+		return JSON.parse(input);
+	} catch {
+		return input;
+	}
+}

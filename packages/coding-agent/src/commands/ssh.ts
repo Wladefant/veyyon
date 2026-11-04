@@ -1,0 +1,56 @@
+/**
+ * Manage SSH host configurations.
+ */
+import { Args, Command, Flags } from "@veyyon/utils/cli";
+import { runSSHCommand, SSH_ACTIONS, type SSHAction, type SSHCommandArgs } from "../cli/ssh-cli";
+import { initTheme } from "../theme/theme";
+
+export default class SSH extends Command {
+	static description = "Manage SSH host configurations";
+
+	static args = {
+		action: Args.string({
+			description: "SSH action",
+			required: false,
+			options: SSH_ACTIONS,
+		}),
+		targets: Args.string({
+			description: "Host name or arguments",
+			required: false,
+			multiple: true,
+		}),
+	};
+
+	static flags = {
+		json: Flags.boolean({ description: "Output JSON" }),
+		host: Flags.string({ description: "Host address" }),
+		user: Flags.string({ description: "Username" }),
+		port: Flags.string({ description: "Port number" }),
+		key: Flags.string({ description: "Identity key path" }),
+		desc: Flags.string({ description: "Host description" }),
+		compat: Flags.boolean({ description: "Enable compatibility mode" }),
+	};
+
+	async run(): Promise<void> {
+		const { args, flags } = await this.parse(SSH);
+		const action = (args.action ?? "list") as SSHAction;
+		const targets = Array.isArray(args.targets) ? args.targets : args.targets ? [args.targets] : [];
+
+		const cmd: SSHCommandArgs = {
+			action,
+			args: targets,
+			flags: {
+				json: flags.json,
+				host: flags.host,
+				user: flags.user,
+				port: flags.port,
+				key: flags.key,
+				desc: flags.desc,
+				compat: flags.compat,
+			},
+		};
+
+		await initTheme();
+		await runSSHCommand(cmd);
+	}
+}

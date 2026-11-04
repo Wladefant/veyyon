@@ -1,0 +1,215 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Tool as AiTool } from "@veyyon/ai";
+import { toolWireSchema } from "@veyyon/ai/utils/schema";
+import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
+import { loadBundledAgents } from "@veyyon/coding-agent/task/agents";
+import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { EvalTool, getEvalToolDescription } from "@veyyon/coding-agent/tools/shell/eval";
+import { makeToolSession } from "../helpers/tool-session";
+
+/**
+ * `backends` is keyed by real setting paths, so it says so. The previous
+ * `Record<string, boolean>` plus a `key as never` cast let any string through and
+ * a renamed setting would have kept compiling while configuring nothing.
+ */
+function makeSession(opts: { spawns?: string | null; backends?: Partial<Record<SettingPath, boolean>> }): ToolSession {
+	const settings = Settings.isolated();
+	for (const [key, value] of Object.entries(opts.backends ?? {})) {
+		settings.set(key as SettingPath, value);
+	}
+	return makeToolSession({
+		cwd: "/tmp/eval-test",
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => opts.spawns ?? "*",
+		settings,
+	});
+}
+
+/** Pull the model-facing cell-schema fields (sorted `language` enum + descriptions) from the flat wire schema. */
+function wireCellFields(tool: EvalTool): {
+	languages: string[];
+	languageDescription?: string;
+	timeoutDescription?: string;
+	codeDescription?: string;
+} {
+	const wire = toolWireSchema(tool as unknown as AiTool) as {
+		properties?: {
+			language?: { enum?: string[]; const?: string; description?: string };
+			timeout?: { description?: string };
+			code?: { description?: string };
+		};
+	};
+	const props = wire.properties;
+	const language = props?.language;
+	const languages = Array.isArray(language?.enum)
+		? [...language.enum].sort()
+		: typeof language?.const === "string"
+			? [language.const]
+			: [];
+	return {
+		languages,
+		languageDescription: language?.description,
+		codeDescription: props?.code?.description,
+		timeoutDescription: props?.timeout?.description,
+	};
+}
+
+describe("eval tool description", () => {
+	it("advertises agent() when spawns are allowed", () => {
+		const text = getEvalToolDescription({ py: true, js: true, spawns: true });
+		expect(text).toContain("agent(prompt");
+	});
+
+	it("omits agent() when the session forbids spawning", () => {
+		// Agents with spawns: undefined (resolved to "") cannot launch tasks.
+		// The prelude doc must not promise a helper that always throws.
+		const text = getEvalToolDescription({ py: true, js: true, spawns: false });
+		expect(text).not.toContain("agent(prompt");
+	});
+
+	it("advertises the first named spawn as the agent() default and lists the allowed set", () => {
+		// A concrete allowlist (not just `true`) must surface the first entry as the default
+		// argument value and enumerate every allowed agent, so cell code knows what it may call.
+		const description = getEvalToolDescription({ py: true, js: false, spawns: "fact-finder,oracle" });
+		expect(description).toContain('agent(prompt, agent?="fact-finder"');
+		expect(description).toContain("omit it to use `fact-finder`");
+		expect(description).toContain("Allowed agents: `fact-finder`, `oracle`.");
+	});
+
+	it("omits both agent() and the <dag> block when spawning is disabled by an empty allowlist", () => {
+		// An empty-string allowlist is the resolved form of "no spawns"; neither the agent()
+		// helper nor the multi-agent <dag> orchestration syntax may be advertised.
+		const description = getEvalToolDescription({ py: true, js: false, spawns: "" });
+		expect(description).not.toContain("agent(prompt");
+		expect(description).not.toContain("<dag>");
+	});
+
+	/**
+	 * The session-driven half. `EvalTool.description` no longer reads the raw
+	 * spawn policy: it resolves the enabled catalog and advertises `agent()` only
+	 * when something is left to spawn. Both arms are handed the same bundled
+	 * catalog so the difference between them is the spawn policy alone; building
+	 * the denied arm with no agents at all would pass on an empty catalog and
+	 * prove nothing about the policy.
+	 */
+	it("EvalTool description reflects spawn policy from the session", () => {
+		const agents = loadBundledAgents();
+		const wildcard = new EvalTool(makeSession({ spawns: "*" }), { discoveredAgents: agents }).description;
+		const denied = new EvalTool(makeSession({ spawns: "" }), { discoveredAgents: agents }).description;
+		expect(wildcard).toContain("agent(prompt");
+		expect(denied).not.toContain("agent(prompt");
+	});
+
+	it("documents zero as the unlimited timeout value", () => {
+		const tool = new EvalTool(makeSession({}));
+		const fields = wireCellFields(tool);
+		expect(fields.timeoutDescription).toContain("0 disables the cell timeout");
+		expect(tool.description).toContain("`0` disables the cell timeout");
+	});
+});
+
+describe("eval tool dynamic schema", () => {
+	// resolveEvalBackends lets PI_* env flags override settings; neutralize them per-test
+	// so the schema is driven purely by the isolated settings (and restore to avoid leaks).
+	const EVAL_ENV_FLAGS = ["VEYYON_PY", "VEYYON_JS", "VEYYON_RB", "VEYYON_JL"] as const;
+	let savedEnv: Record<string, string | undefined>;
+	beforeEach(() => {
+		savedEnv = {};
+		for (const flag of EVAL_ENV_FLAGS) {
+			savedEnv[flag] = Bun.env[flag];
+			delete Bun.env[flag];
+		}
+	});
+	afterEach(() => {
+		for (const flag of EVAL_ENV_FLAGS) {
+			const prior = savedEnv[flag];
+			if (prior === undefined) delete Bun.env[flag];
+			else Bun.env[flag] = prior;
+		}
+	});
+
+	it("hides rb/jl from the wire schema, summary, description, and examples by default", () => {
+		const tool = new EvalTool(makeSession({}));
+		const fields = wireCellFields(tool);
+		// Default config: rb/jl off → the wire schema is byte-identical to the pre-feature py/js one.
+		expect(fields.languages).toEqual(["js", "py"]);
+		expect(fields.languageDescription).toBe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM');
+		expect(fields.codeDescription).toBe("code to run in this eval call, verbatim. Use top-level await freely.");
+		expect(tool.summary).toBe("Execute Python or JavaScript code in an in-process eval backend");
+		expect(tool.description).not.toMatch(/ruby|julia/i);
+		// Examples must not advertise a disabled backend. Two py cells: the third
+		// (reuse the loaded config) was cut as a variant of the second.
+		const exampleLangs = tool.examples.map(ex => ("call" in ex ? ex.call.language : null));
+		expect(exampleLangs).toEqual(["py", "py"]);
+		expect(tool.examples.some(ex => "call" in ex && ex.call.language === "rb")).toBe(false);
+	});
+
+	it("advertises rb/jl across enum, descriptions, summary, and prelude once enabled", () => {
+		const tool = new EvalTool(makeSession({ backends: { "eval.rb": true, "eval.jl": true } }));
+		const fields = wireCellFields(tool);
+		expect(fields.languages).toEqual(["jl", "js", "py", "rb"]);
+		expect(fields.languageDescription).toBe(
+			'runtime: "py" for the IPython kernel, "js" for the persistent JS VM, "rb" for the persistent Ruby kernel, "jl" for the persistent Julia kernel',
+		);
+		expect(fields.codeDescription).toContain(
+			"code to run in this eval call, verbatim. Top-level `await` is available in py/js; rb/jl auto-display the last expression like a REPL.",
+		);
+		expect(tool.summary).toBe("Execute Python, JavaScript, Ruby, or Julia code in a persistent eval backend");
+		expect(tool.description).toMatch(/ruby/i);
+		expect(tool.description).toMatch(/julia/i);
+		// Ruby examples appear once rb is enabled.
+		const rbExampleLangs = tool.examples.filter(ex => "call" in ex && ex.call.language === "rb");
+		expect(rbExampleLangs.length).toBe(2);
+	});
+
+	it("advertises only the enabled subset of optional backends", () => {
+		const tool = new EvalTool(makeSession({ backends: { "eval.rb": true } }));
+		const fields = wireCellFields(tool);
+		expect(fields.languages).toEqual(["js", "py", "rb"]);
+		expect(tool.summary).toBe("Execute Python, JavaScript, or Ruby code in a persistent eval backend");
+		expect(tool.description).toMatch(/ruby/i);
+		expect(tool.description).not.toMatch(/julia/i);
+	});
+});
+
+describe("python workspace mode guidance", () => {
+	it("preserves exact default description byte parity when eval.pyWorkspace is false", () => {
+		const baseline = getEvalToolDescription({ py: true, js: true, spawns: true });
+		const withExplicitFalse = getEvalToolDescription({ py: true, js: true, spawns: true, pyWorkspace: false });
+		expect(withExplicitFalse).toBe(baseline);
+		expect(baseline).not.toContain("<workspace>");
+		expect(baseline).not.toContain("Retain large results in variables");
+
+		const defaultSessionTool = new EvalTool(makeSession({}));
+		const explicitFalseSessionTool = new EvalTool(makeSession({ backends: { "eval.pyWorkspace": false } }));
+		expect(defaultSessionTool.description).toBe(explicitFalseSessionTool.description);
+		expect(defaultSessionTool.description).not.toContain("<workspace>");
+	});
+
+	it("includes workspace guidance when pyWorkspace is true and Python is enabled", () => {
+		const description = getEvalToolDescription({ py: true, js: true, spawns: true, pyWorkspace: true });
+		expect(description).toContain("<workspace>");
+		expect(description).toContain("Use the persistent Python kernel as your working data environment:");
+		expect(description).toContain("Retain large results in variables");
+		expect(description).toContain("Inspect and transform in-kernel");
+		expect(description).toContain("Define reusable helpers");
+		expect(description).toContain("Display only compact conclusions");
+
+		const sessionTool = new EvalTool(makeSession({ backends: { "eval.pyWorkspace": true } }));
+		expect(sessionTool.description).toContain("<workspace>");
+		expect(sessionTool.description).toContain("Retain large results in variables");
+	});
+
+	it("omits workspace guidance when Python is disabled even if pyWorkspace is true", () => {
+		const pyDisabledDirect = getEvalToolDescription({ py: false, js: true, spawns: true, pyWorkspace: true });
+		expect(pyDisabledDirect).not.toContain("<workspace>");
+		expect(pyDisabledDirect).not.toContain("Retain large results in variables");
+
+		const pyDisabledSessionTool = new EvalTool(
+			makeSession({ backends: { "eval.py": false, "eval.pyWorkspace": true } }),
+		);
+		expect(pyDisabledSessionTool.description).not.toContain("<workspace>");
+		expect(pyDisabledSessionTool.description).not.toContain("Retain large results in variables");
+	});
+});

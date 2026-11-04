@@ -1,0 +1,1673 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { clearWorktrees } from "@veyyon/coding-agent/cli/worktree-cli";
+import {
+	findLinkedWorktreeAdminDirs,
+	ISOLATION_CLAIM_FILE,
+	ISOLATION_OWNER_FILE,
+	REGISTRATION_OWNER_FILE,
+	RETAINED_BACKEND_FILE,
+	stampLinkedWorktreeRegistration,
+	writeIsolationOwner,
+	writeRetainedBackend,
+} from "@veyyon/coding-agent/task/isolation-ownership";
+import { retainIsolationWorkspace } from "@veyyon/coding-agent/task/isolation-runner";
+import {
+	applyNestedPatches,
+	captureBaseline,
+	captureDeltaPatch,
+	cleanupIsolation,
+	cleanupTaskBranches,
+	commitToBranch,
+	ensureIsolation,
+	getGitNoIndexNullPath,
+	getRepoRoot,
+	mergeTaskBranches,
+	parseIsolationMode,
+	removeLinkedWorktreeRegistrations,
+} from "@veyyon/coding-agent/task/worktree";
+import * as git from "@veyyon/coding-agent/utils/git";
+import * as jj from "@veyyon/coding-agent/utils/jj";
+import * as natives from "@veyyon/natives";
+import { getWorktreesDir, removeWithRetries, setWorktreesDir } from "@veyyon/utils";
+import { useIsolatedAgentDir, useIsolatedWorktreesDir } from "../helpers/isolated-agent-dir";
+
+// Spawning a task writes a session (and, for worktree runs, a checkout) under the
+// ACTIVE PROFILE's agent dir, so without this the suite creates them inside the
+// developer's real `~/.veyyon/profiles/<profile>/agent`.
+useIsolatedAgentDir();
+// Worktrees resolve through their own chain rooted at the CONFIG dir, not the
+// agent dir, so they need their own redirect or a cleanup `fs.rm` lands on the
+// real `~/.veyyon/profiles/<profile>/wt`.
+useIsolatedWorktreesDir();
+
+const tempDirs: string[] = [];
+
+async function runGit(repo: string, args: string[]): Promise<string> {
+	const proc = Bun.spawn(["git", ...args], {
+		cwd: repo,
+		stderr: "pipe",
+		stdout: "pipe",
+		windowsHide: true,
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	if ((exitCode ?? 0) !== 0) {
+		throw new Error(stderr.trim() || stdout.trim() || `git ${args.join(" ")} failed with exit code ${exitCode ?? 0}`);
+	}
+	return stdout.trim();
+}
+
+async function createGitRepo(): Promise<{ baseBranch: string; repo: string }> {
+	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-worktree-"));
+	tempDirs.push(repo);
+	await runGit(repo, ["init"]);
+	await runGit(repo, ["config", "user.email", "test@example.com"]);
+	await runGit(repo, ["config", "user.name", "Test User"]);
+	await fs.writeFile(path.join(repo, "merged.txt"), "base version\n");
+	await fs.writeFile(path.join(repo, "staged.txt"), "base staged\n");
+	await runGit(repo, ["add", "."]);
+	await runGit(repo, ["commit", "-m", "initial"]);
+	return {
+		baseBranch: await runGit(repo, ["branch", "--show-current"]),
+		repo,
+	};
+}
+
+// `clearWorktrees` sets a failing exit code when it refuses a slot; keep that out of the runner's exit status.
+const initialExitCode = process.exitCode;
+
+afterEach(async () => {
+	process.exitCode = initialExitCode ?? 0;
+	vi.restoreAllMocks();
+	jj.repo.clearRootCache();
+	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
+});
+describe("worktree isolation helpers", () => {
+	it("returns platform-specific null path for git --no-index diffs", () => {
+		const expected = process.platform === "win32" ? "NUL" : "/dev/null";
+		expect(getGitNoIndexNullPath()).toBe(expected);
+	});
+
+	it("maps every isolation mode to the native backend contract", () => {
+		expect(parseIsolationMode("none")).toBeUndefined();
+		expect(parseIsolationMode("auto")).toBeUndefined();
+		expect(parseIsolationMode("apfs")).toBe(natives.IsoBackendKind.Apfs);
+		expect(parseIsolationMode("btrfs")).toBe(natives.IsoBackendKind.Btrfs);
+		expect(parseIsolationMode("zfs")).toBe(natives.IsoBackendKind.Zfs);
+		expect(parseIsolationMode("reflink")).toBe(natives.IsoBackendKind.LinuxReflink);
+		expect(parseIsolationMode("overlayfs")).toBe(natives.IsoBackendKind.Overlayfs);
+		expect(parseIsolationMode("fuse-overlay")).toBe(natives.IsoBackendKind.Overlayfs);
+		expect(parseIsolationMode("projfs")).toBe(natives.IsoBackendKind.Projfs);
+		expect(parseIsolationMode("fuse-projfs")).toBe(natives.IsoBackendKind.Projfs);
+		expect(parseIsolationMode("block-clone")).toBe(natives.IsoBackendKind.WindowsBlockClone);
+		expect(parseIsolationMode("rcopy")).toBe(natives.IsoBackendKind.Rcopy);
+		expect(parseIsolationMode("worktree")).toBe(natives.IsoBackendKind.Rcopy);
+	});
+
+	// Real git worktree/stash/merge I/O is the contract under test and cannot be
+	// faked. One initialized fixture repo is built once in `beforeAll` (whose time
+	// is excluded from per-test body time) and shared: the costly `git init`,
+	// initial commit, and the immutable mergeable task branch are all set up there.
+	// Tests that rewind the fixture do so with a cheap `reset --hard`; the read-only
+	// and first-mutator tests run straight off the pristine fixture.
+	describe("git-backed worktree helpers", () => {
+		const BASE_BRANCH = "main";
+		const TASK_BRANCH = "task/merge-staged";
+		let repo: string;
+		let initialSha: string;
+
+		beforeAll(async () => {
+			repo = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-worktree-"));
+			await runGit(repo, ["init", "-q", "-b", BASE_BRANCH]);
+			await runGit(repo, ["config", "user.email", "test@example.com"]);
+			await runGit(repo, ["config", "user.name", "Test User"]);
+			await Promise.all([
+				fs.writeFile(path.join(repo, "merged.txt"), "base version\n"),
+				fs.writeFile(path.join(repo, "staged.txt"), "base staged\n"),
+			]);
+			await runGit(repo, ["add", "."]);
+			await runGit(repo, ["commit", "-q", "-m", "initial"]);
+			initialSha = await runGit(repo, ["rev-parse", "HEAD"]);
+
+			// Immutable fixture branch with a single mergeable commit. mergeTaskBranches
+			// cherry-picks (reads) it without mutating it, so it survives `reset --hard`
+			// and never needs rebuilding per test.
+			await runGit(repo, ["checkout", "-q", "-b", TASK_BRANCH]);
+			await fs.writeFile(path.join(repo, "merged.txt"), "task branch change\n");
+			await runGit(repo, ["commit", "-q", "-am", "task-change"]);
+			await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
+		});
+
+		afterAll(async () => {
+			await removeWithRetries(repo);
+		});
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		// WHY: a retained Projfs projection remains in its original deterministic
+		// slot. Retrying the task must never remove it, with or without metadata.
+		// Native mount setup is substituted; actual kernel mounts are not proved.
+		for (const sidecarFails of [false, true]) {
+			it(`preserves a retained projection on slot reuse when metadata ${sidecarFails ? "fails" : "succeeds"}`, async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Projfs,
+					candidates: [natives.IsoBackendKind.Projfs],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+					await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "unrecovered projection");
+				});
+				const id = `retained-projection-${sidecarFails}`;
+				const handle = await ensureIsolation(repo, id);
+				if (sidecarFails) {
+					vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("ENOSPC"));
+				}
+				const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
+				expect(retained.sidecarOk).toBe(!sidecarFails);
+				expect(retained.dir).toBe(handle.mergedDir);
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+				expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe(
+					"unrecovered projection",
+				);
+				await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });
+			});
+		}
+		// WHY: a slot claimed by ensureIsolation holds no mount directory until the
+		// native start returns, which reads to `veyyon worktree clear` as an empty
+		// orphan. Clear removed the claim, so a third same-id task claimed the slot
+		// while the first was still being set up. A live claim must survive an
+		// ordinary clear; a claim left by a dead process must not. Native mount
+		// setup is substituted; actual kernel mounts are not proved.
+		describe("clearing isolation claims", () => {
+			let previousRoot: string | undefined;
+			let previousExitCode: typeof process.exitCode;
+			beforeEach(async () => {
+				previousRoot = process.env.VEYYON_WORKTREE_DIR;
+				previousExitCode = process.exitCode;
+				process.exitCode = 0;
+				const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-clear-claim-"));
+				tempDirs.push(fixture);
+				process.env.VEYYON_WORKTREE_DIR = path.join(fixture, "wt");
+				await fs.mkdir(getWorktreesDir());
+			});
+			afterEach(() => {
+				if (previousRoot === undefined) delete process.env.VEYYON_WORKTREE_DIR;
+				else process.env.VEYYON_WORKTREE_DIR = previousRoot;
+				process.exitCode = previousExitCode;
+			});
+			it("keeps a slot claimed during native setup through an ordinary clear", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				const started = Promise.withResolvers<void>();
+				const proceed = Promise.withResolvers<void>();
+				let starts = 0;
+				let liveSlot = "";
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					liveSlot = path.dirname(mergedDir);
+					// Only the first start blocks, so a regression that lets a later task claim the slot fails
+					// the assertion instead of hanging on `proceed`.
+					if (++starts === 1) {
+						started.resolve();
+						await proceed.promise;
+					}
+					await fs.mkdir(mergedDir, { recursive: true });
+					await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "first task");
+				});
+				const log = vi.spyOn(console, "log").mockImplementation(() => {});
+				const id = "claim-during-setup";
+				const first = ensureIsolation(repo, id);
+				// Racing `first` fails fast when the claim itself throws, instead of waiting out the test timeout.
+				await Promise.race([started.promise, first]);
+				// This test owns the extra orphan too: dry-run must include it, but not the live slot.
+				const orphan = path.join(getWorktreesDir(), "t000000001");
+				await fs.mkdir(path.join(orphan, "m"), { recursive: true });
+				await writeRetainedBackend(orphan, natives.IsoBackendKind.Rcopy);
+
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+				// A dry run reports what the scan classifies as orphaned, independent of the removal guards.
+				log.mockClear();
+				await clearWorktrees({ all: false, dryRun: true, json: true });
+				const dryRun = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+				expect(dryRun.wouldRemove ?? []).not.toContain(liveSlot);
+				expect(dryRun.wouldRemove).toContain(orphan);
+				await clearWorktrees({ all: false, dryRun: false, json: true });
+				expect(process.exitCode ?? 0).toBe(0);
+				const claimed: string[] = [];
+				for (const entry of await fs.readdir(getWorktreesDir())) {
+					if (await Bun.file(path.join(getWorktreesDir(), entry, ISOLATION_CLAIM_FILE)).exists())
+						claimed.push(entry);
+				}
+				// The clear must leave the in-flight slot, with its owner marker, on disk.
+				expect(claimed).toHaveLength(1);
+				await expect(ensureIsolation(repo, id)).rejects.toThrow("refusing replacement");
+
+				proceed.resolve();
+				const handle = await first;
+				expect(await fs.readFile(path.join(handle.mergedDir, "sentinel.txt"), "utf8")).toBe("first task");
+				const left = await fs.readdir(path.dirname(handle.mergedDir));
+				// Setup records the backend (unretained) so a crashed owner's slot stays reclaimable.
+				expect(left.sort()).toEqual(
+					[ISOLATION_OWNER_FILE, RETAINED_BACKEND_FILE, path.basename(handle.mergedDir)].sort(),
+				);
+				const setupRecord = JSON.parse(
+					await fs.readFile(path.join(path.dirname(handle.mergedDir), RETAINED_BACKEND_FILE), "utf8"),
+				);
+				expect(setupRecord).toEqual({ backend: natives.IsoBackendKind.Rcopy });
+				expect(left).not.toContain(ISOLATION_CLAIM_FILE);
+				await fs.rm(path.dirname(handle.mergedDir), { recursive: true, force: true });
+			});
+
+			it("clears a claim whose process is gone", async () => {
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				const slot = path.join(getWorktreesDir(), "tdeadca11a");
+				await fs.mkdir(slot, { recursive: true });
+				await fs.writeFile(path.join(slot, ISOLATION_CLAIM_FILE), JSON.stringify({ pid: gone.pid }));
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				await clearWorktrees({ all: false, dryRun: false, json: true });
+				expect(process.exitCode ?? 0).toBe(0);
+				await expect(fs.stat(slot)).rejects.toThrow();
+			});
+			it("does not let a stale handle remove a slot that now belongs to another owner", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+				});
+				const handle = await ensureIsolation(repo, "stale-handle-token");
+				const baseDir = path.dirname(handle.mergedDir);
+				// Another task took the slot after this handle was preempted.
+				await fs.writeFile(
+					path.join(baseDir, ISOLATION_OWNER_FILE),
+					JSON.stringify({ pid: process.pid, startIdentity: null, token: "someone-else", createdAt: "now" }),
+				);
+
+				await cleanupIsolation(handle);
+
+				expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(baseDir, { recursive: true, force: true });
+			});
+
+			it("lets clear reclaim a slot whose owner crashed after setup, but not one with a live owner", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+				});
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				const live = await ensureIsolation(repo, "crash-live-owner");
+				const crashed = await ensureIsolation(repo, "crash-dead-owner");
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				const crashedBase = path.dirname(crashed.mergedDir);
+				const owner = JSON.parse(await fs.readFile(path.join(crashedBase, ISOLATION_OWNER_FILE), "utf8"));
+				await fs.writeFile(
+					path.join(crashedBase, ISOLATION_OWNER_FILE),
+					JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
+				);
+
+				await clearWorktrees({ all: true, dryRun: false, json: true });
+
+				await expect(fs.stat(crashedBase)).rejects.toThrow();
+				expect((await fs.stat(live.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(path.dirname(live.mergedDir), { recursive: true, force: true });
+			});
+
+			it("prunes the linked-worktree registration when clear removes a crashed copy-backend slot", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
+				});
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				const crashed = await ensureIsolation(repo, "crash-registered");
+				const base = path.dirname(crashed.mergedDir);
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
+				await fs.writeFile(
+					path.join(base, ISOLATION_OWNER_FILE),
+					JSON.stringify({ ...owner, pid: gone.pid, startIdentity: null }),
+				);
+
+				await clearWorktrees({ all: true, dryRun: false, json: true });
+
+				await expect(fs.stat(base)).rejects.toThrow();
+				// The source repo no longer lists the removed checkout, so the same id can be set up again.
+				expect(await runGit(repo, ["worktree", "list", "--porcelain"])).not.toContain("prunable");
+				const again = await ensureIsolation(repo, "crash-registered");
+				expect((await fs.stat(again.mergedDir)).isDirectory()).toBe(true);
+				await cleanupIsolation(again);
+			});
+
+			it("collects and removes only a registration that names this checkout and carries this slot's owner token", async () => {
+				const slot = await fs.mkdtemp(path.join(os.tmpdir(), "slot-"));
+				tempDirs.push(slot);
+				const owner = await writeIsolationOwner(slot);
+				const admin = path.join(slot, "src", ".git", "worktrees", "wt");
+				await fs.mkdir(admin, { recursive: true });
+				const checkout = path.join(slot, "mount");
+				await fs.mkdir(checkout);
+				await fs.writeFile(path.join(checkout, ".git"), `gitdir: ${admin}\n`);
+				const gitdirFile = path.join(admin, "gitdir");
+				const tokenFile = path.join(admin, REGISTRATION_OWNER_FILE);
+
+				// Copied view of a source linked worktree: the registration names the source, not this copy.
+				await fs.writeFile(gitdirFile, path.join(slot, "source", ".git"));
+				await fs.writeFile(tokenFile, owner.token);
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+
+				// Right backlink but another isolation's token (or none): not provably ours.
+				await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
+				await fs.writeFile(tokenFile, "someone-else");
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+				await fs.rm(tokenFile);
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+
+				await fs.writeFile(tokenFile, owner.token);
+				const found = await findLinkedWorktreeAdminDirs(slot);
+				expect(found).toHaveLength(1);
+
+				// A forged token or a repointed backlink after collection makes removal a no-op.
+				await fs.writeFile(tokenFile, "forged");
+				await removeLinkedWorktreeRegistrations(found);
+				expect(await Bun.file(gitdirFile).exists()).toBe(true);
+				await fs.writeFile(tokenFile, owner.token);
+				await fs.writeFile(gitdirFile, path.join(slot, "other", ".git"));
+				await removeLinkedWorktreeRegistrations(found);
+				expect(await Bun.file(gitdirFile).exists()).toBe(true);
+
+				await fs.writeFile(gitdirFile, path.join(checkout, ".git"));
+				await removeLinkedWorktreeRegistrations(found);
+				expect(await Bun.file(gitdirFile).exists()).toBe(false);
+			});
+
+			it("never lets another isolation reuse the registration name freed after the final backlink read", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
+					await runGit(source, ["worktree", "add", "--detach", mergedDir]);
+				});
+				const { repo: source } = await createGitRepo();
+				const a = await ensureIsolation(source, "reuse-a");
+				const baseA = path.dirname(a.mergedDir);
+				const found = await findLinkedWorktreeAdminDirs(baseA);
+				expect(found).toHaveLength(1);
+				const adminDir = found[0].adminDir;
+
+				// Slot A is removed; right at A's registration delete, real git frees the name (prune) and a
+				// different-id isolation B is registered.
+				await fs.rm(baseA, { recursive: true, force: true });
+				const realRm = fs.rm;
+				let b: Awaited<ReturnType<typeof ensureIsolation>> | undefined;
+				vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+					if (target === adminDir && b === undefined) {
+						await runGit(source, ["worktree", "prune", "--expire", "now"]);
+						b = await ensureIsolation(source, "reuse-b");
+						await fs.writeFile(path.join(b.mergedDir, "sentinel-b"), "b\n");
+						await runGit(b.mergedDir, ["add", "sentinel-b"]);
+					}
+					return realRm(target, options);
+				});
+
+				await removeLinkedWorktreeRegistrations(found);
+
+				if (b === undefined) throw new Error("the registration delete was never reached");
+				const adminB = (await findLinkedWorktreeAdminDirs(path.dirname(b.mergedDir)))[0].adminDir;
+				expect(adminB).not.toBe(adminDir);
+				expect(await Bun.file(path.join(adminDir, "gitdir")).exists()).toBe(false);
+				expect(await runGit(b.mergedDir, ["status", "--porcelain"])).toContain("sentinel-b");
+				await cleanupIsolation(b);
+			});
+
+			it("does not repoint a source isolation's registration when retaining a copied .git pointer", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => {
+					await runGit(source, ["worktree", "add", "--detach", mergedDir]);
+				});
+				const { repo: source } = await createGitRepo();
+				const live = await ensureIsolation(source, "retain-live");
+				const liveAdmin = (await findLinkedWorktreeAdminDirs(path.dirname(live.mergedDir)))[0].adminDir;
+
+				// Copy backends materialise regular files, including the live checkout's `.git` pointer.
+				const slot = await fs.mkdtemp(path.join(os.tmpdir(), "retain-adopt-"));
+				tempDirs.push(slot);
+				const mergedDir = path.join(slot, path.basename(live.mergedDir));
+				await fs.cp(live.mergedDir, mergedDir, { recursive: true });
+				await writeIsolationOwner(slot);
+				expect(await findLinkedWorktreeAdminDirs(slot)).toEqual([]);
+
+				const retained = await retainIsolationWorkspace(mergedDir, natives.IsoBackendKind.Rcopy);
+
+				expect(retained.dir).not.toBe(mergedDir);
+				expect(await findLinkedWorktreeAdminDirs(path.dirname(retained.dir))).toEqual([]);
+				expect(path.resolve(liveAdmin, (await fs.readFile(path.join(liveAdmin, "gitdir"), "utf8")).trim())).toBe(
+					path.join(live.mergedDir, ".git"),
+				);
+				expect(await runGit(live.mergedDir, ["status", "--porcelain"])).toBe("");
+				await cleanupIsolation(live);
+			});
+
+			it("removes only its own worktree registration, never another slot's of the same repo", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await runGit(repo, ["worktree", "add", "--detach", mergedDir]);
+				});
+				const a = await ensureIsolation(repo, "registration-a");
+				const b = await ensureIsolation(repo, "registration-b");
+				// B is mid-retention: its checkout has moved but the registration is not repaired yet.
+				const moved = `${b.mergedDir}-moved`;
+				await fs.rename(b.mergedDir, moved);
+				const registrations = path.join(repo, ".git", "worktrees");
+				const before = await fs.readdir(registrations);
+				expect(before).toHaveLength(2);
+
+				await cleanupIsolation(a);
+
+				// A's teardown removes A's registration only. A repo-wide `git worktree prune` would also
+				// drop B's, because its recorded path is missing, and B's repair would then fail.
+				const after = await fs.readdir(registrations);
+				expect(after).toHaveLength(1);
+				await runGit(repo, ["worktree", "repair", moved]);
+				expect(await runGit(moved, ["rev-parse", "--is-inside-work-tree"])).toBe("true");
+				await fs.rm(path.dirname(b.mergedDir), { recursive: true, force: true });
+			});
+
+			it("refuses to clear a slot whose owner record cannot be read", async () => {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind: natives.IsoBackendKind.Rcopy,
+					candidates: [natives.IsoBackendKind.Rcopy],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, _source, mergedDir) => {
+					await fs.mkdir(mergedDir, { recursive: true });
+					await fs.writeFile(path.join(mergedDir, "sentinel.txt"), "live owner work");
+				});
+				vi.spyOn(console, "log").mockImplementation(() => {});
+				const live = await ensureIsolation(repo, "unreadable-owner");
+				const base = path.dirname(live.mergedDir);
+				await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), "{ not json");
+
+				await clearWorktrees({ all: true, dryRun: false, json: true });
+
+				expect(await fs.readFile(path.join(live.mergedDir, "sentinel.txt"), "utf8")).toBe("live owner work");
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			// WHY: the tests below pin guards of the isolation lifecycle that mutation testing showed no
+			// test defended (Wladefant/veyyon#498, review of Wladefant/veyyon#408). Native mounts are
+			// substituted; actual kernel mounts are not proved.
+			function mockBackend(
+				kind: natives.IsoBackendKind,
+				start: (source: string, mergedDir: string) => Promise<void>,
+			): void {
+				vi.spyOn(natives, "isoResolve").mockReturnValue({
+					kind,
+					candidates: [kind],
+					fellBack: false,
+					reason: undefined,
+				});
+				vi.spyOn(natives, "isoStart").mockImplementation(async (_, source, mergedDir) => start(source, mergedDir));
+			}
+			const addWorktree = (source: string, mergedDir: string) =>
+				runGit(source, ["worktree", "add", "--detach", mergedDir]).then(() => {});
+			const makeDir = (_source: string, mergedDir: string) =>
+				fs.mkdir(mergedDir, { recursive: true }).then(() => {});
+			async function deadPid(): Promise<number> {
+				const gone = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" });
+				await gone.exited;
+				return gone.pid;
+			}
+			async function rewriteOwner(base: string, patch: Record<string, unknown>): Promise<void> {
+				const owner = JSON.parse(await fs.readFile(path.join(base, ISOLATION_OWNER_FILE), "utf8"));
+				await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), JSON.stringify({ ...owner, ...patch }));
+			}
+			const gone = (target: string) =>
+				fs.stat(target).then(
+					() => false,
+					() => true,
+				);
+			async function clearResult(): Promise<{ removed: number; failed: number; results: { error?: string }[] }> {
+				let out = "";
+				vi.spyOn(console, "log").mockImplementation(line => {
+					out = String(line);
+				});
+				await clearWorktrees({ all: true, dryRun: false, json: true });
+				return JSON.parse(out);
+			}
+
+			it("repairs the registration of an owned linked worktree when retaining it (M8)", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, addWorktree);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "retain-owned");
+
+				const retained = await retainIsolationWorkspace(handle.mergedDir, handle.backend);
+
+				expect(retained.dir).not.toBe(handle.mergedDir);
+				const [registration] = await findLinkedWorktreeAdminDirs(path.dirname(retained.dir));
+				expect(registration.backlink).toBe(path.join(retained.dir, ".git"));
+				expect(await runGit(retained.dir, ["status", "--porcelain"])).toBe("");
+				await fs.rm(path.dirname(retained.dir), { recursive: true, force: true });
+			});
+
+			it("names the live owner when it refuses a slot without retained backend metadata (M10)", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const slot = await ensureIsolation(source, "no-sidecar-live");
+				const base = path.dirname(slot.mergedDir);
+				await fs.rm(path.join(base, RETAINED_BACKEND_FILE));
+				const stop = vi.spyOn(natives, "isoStop").mockResolvedValue(undefined);
+
+				const result = await clearResult();
+
+				expect(result.results[0].error).toContain(`refusing removal (active live owner PID ${process.pid})`);
+				expect(stop).not.toHaveBeenCalled();
+				expect((await fs.stat(slot.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("refuses removal when the owner token changes while the mount is being stopped (M15)", async () => {
+				mockBackend(natives.IsoBackendKind.Overlayfs, makeDir);
+				const { repo: source } = await createGitRepo();
+				const slot = await ensureIsolation(source, "owner-swap");
+				const base = path.dirname(slot.mergedDir);
+				await rewriteOwner(base, { pid: await deadPid(), startIdentity: null });
+				vi.spyOn(natives, "isoStop").mockImplementation(async () => {
+					await rewriteOwner(base, { token: "replacement-owner" });
+				});
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 0, failed: 1 });
+				expect(result.results[0].error).toContain("Isolation directory instance changed during cleanup");
+				expect((await fs.stat(slot.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("keeps a reservation whose claim marker is unreadable even though its owner is dead (M18)", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const slot = await ensureIsolation(source, "unreadable-claim");
+				const base = path.dirname(slot.mergedDir);
+				await rewriteOwner(base, { pid: await deadPid(), startIdentity: null });
+				await fs.rm(slot.mergedDir, { recursive: true });
+				await fs.rm(path.join(base, RETAINED_BACKEND_FILE));
+				await fs.writeFile(path.join(base, ISOLATION_CLAIM_FILE), "{ not json");
+				expect((await fs.readdir(base)).sort()).toEqual([ISOLATION_CLAIM_FILE, ISOLATION_OWNER_FILE]);
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 0, failed: 1 });
+				expect(await fs.readFile(path.join(base, ISOLATION_CLAIM_FILE), "utf8")).toBe("{ not json");
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("PA stamping never writes this slot's token into another checkout's registration", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, addWorktree);
+				const { repo: source } = await createGitRepo();
+				const live = await ensureIsolation(source, "pa-live");
+				const liveAdmin = (await findLinkedWorktreeAdminDirs(path.dirname(live.mergedDir)))[0].adminDir;
+				const before = await fs.readFile(path.join(liveAdmin, REGISTRATION_OWNER_FILE), "utf8");
+				const copy = await fs.mkdtemp(path.join(os.tmpdir(), "pa-copy-"));
+				tempDirs.push(copy);
+				await fs.cp(live.mergedDir, copy, { recursive: true });
+
+				await stampLinkedWorktreeRegistration(copy, "copy-token");
+
+				expect(await fs.readFile(path.join(liveAdmin, REGISTRATION_OWNER_FILE), "utf8")).toBe(before);
+				await cleanupIsolation(live);
+			});
+
+			it("PB cleanupIsolation prunes the linked-worktree registration on the normal path", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, addWorktree);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "pb");
+				const admin = (await findLinkedWorktreeAdminDirs(path.dirname(handle.mergedDir)))[0].adminDir;
+
+				await cleanupIsolation(handle);
+
+				expect(await gone(admin)).toBe(true);
+				expect(await runGit(source, ["worktree", "list", "--porcelain"])).not.toContain("prunable");
+			});
+
+			it("PC cleanupIsolation leaves the slot when the owner record is unreadable", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "pc");
+				const base = path.dirname(handle.mergedDir);
+				await fs.writeFile(path.join(base, ISOLATION_OWNER_FILE), "{not json");
+
+				await cleanupIsolation(handle);
+
+				expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("PD keeps an owner with unknown start identity and a live pid, and reclaims a dead pid", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const liveSlot = await ensureIsolation(source, "pd-live");
+				const deadSlot = await ensureIsolation(source, "pd-dead");
+				const liveBase = path.dirname(liveSlot.mergedDir);
+				const deadBase = path.dirname(deadSlot.mergedDir);
+				await rewriteOwner(liveBase, { startIdentity: null });
+				await rewriteOwner(deadBase, { pid: await deadPid(), startIdentity: "linux:bogus:1" });
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 1, failed: 1 });
+				expect((await fs.stat(liveBase)).isDirectory()).toBe(true);
+				expect(await gone(deadBase)).toBe(true);
+				await fs.rm(liveBase, { recursive: true, force: true });
+			});
+
+			// OPEN (Wladefant/veyyon#498 item 3): a crash between the mount and the setup sidecar write leaves
+			// an owner record and no sidecar. Clear cannot tell a copy backend from a live overlay mount without
+			// the sidecar, so today it fails closed and the slot needs manual removal. This pins that behaviour.
+			it("PE fails closed on a dead-owner slot whose setup sidecar was never written", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const handle = await ensureIsolation(source, "pe");
+				const base = path.dirname(handle.mergedDir);
+				await fs.rm(path.join(base, RETAINED_BACKEND_FILE));
+				await rewriteOwner(base, { pid: await deadPid(), startIdentity: null });
+
+				const result = await clearResult();
+
+				expect(result).toMatchObject({ removed: 0, failed: 1 });
+				expect(result.results[0].error).toContain("Missing retained backend metadata");
+				expect(result.results[0].error).toContain('docs/tools/task.md, "Slot left after a crash during setup"');
+				expect(process.exitCode).toBe(1);
+				const reuseError = await ensureIsolation(source, "pe").then(
+					() => "",
+					(error: Error) => error.message,
+				);
+				expect(reuseError).toContain("refusing replacement");
+				expect(reuseError).toContain('docs/tools/task.md, "Slot left after a crash during setup"');
+				expect((await fs.stat(handle.mergedDir)).isDirectory()).toBe(true);
+				await fs.rm(base, { recursive: true, force: true });
+			});
+
+			it("PF clear removes a deliberately retained workspace of a live owner but refuses one whose retention sidecar failed", async () => {
+				mockBackend(natives.IsoBackendKind.Rcopy, makeDir);
+				const { repo: source } = await createGitRepo();
+				const ok = await ensureIsolation(source, "pf-ok");
+				const okRetained = await retainIsolationWorkspace(ok.mergedDir, ok.backend);
+				expect(okRetained.sidecarOk).toBe(true);
+				const bad = await ensureIsolation(source, "pf-bad");
+				const realWrite = fs.writeFile;
+				const failing = vi.spyOn(fs, "writeFile").mockImplementation(async (file, ...rest) => {
+					if (String(file).endsWith(RETAINED_BACKEND_FILE)) throw new Error("ENOSPC");
+					return realWrite(file, ...(rest as [never]));
+				});
+				const badRetained = await retainIsolationWorkspace(bad.mergedDir, bad.backend);
+				failing.mockRestore();
+				expect(badRetained.sidecarOk).toBe(false);
+
+				await clearResult();
+
+				expect(await gone(path.dirname(okRetained.dir))).toBe(true);
+				expect((await fs.stat(badRetained.dir)).isDirectory()).toBe(true);
+				await fs.rm(path.dirname(badRetained.dir), { recursive: true, force: true });
+			});
+		});
+
+		it("retries isoResolve candidates when a backend is path-unavailable", async () => {
+			const unavailable = new Error("ISO_UNAVAILABLE: btrfs source is not a subvolume");
+			const isoResolve = vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Btrfs,
+				candidates: [natives.IsoBackendKind.Btrfs, natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			const isoStart = vi
+				.spyOn(natives, "isoStart")
+				.mockRejectedValueOnce(unavailable)
+				.mockResolvedValueOnce(undefined);
+			vi.spyOn(natives, "isoIsUnavailableError").mockImplementation(message =>
+				message.startsWith("ISO_UNAVAILABLE:"),
+			);
+
+			const handle = await ensureIsolation(repo, "retry-path-unavailable");
+
+			expect(isoResolve).toHaveBeenCalledWith(null);
+			expect(isoStart.mock.calls.map(call => call[0])).toEqual([
+				natives.IsoBackendKind.Btrfs,
+				natives.IsoBackendKind.Rcopy,
+			]);
+			expect(handle.backend).toBe(natives.IsoBackendKind.Rcopy);
+			expect(handle.fellBack).toBe(true);
+			expect(handle.fallbackReason).toBe(unavailable.message);
+		});
+
+		it("uses compact isolation paths that do not embed long task ids", async () => {
+			const originalWorktreeDir = process.env.VEYYON_WORKTREE_DIR;
+			const worktreeBase = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-worktree-base-"));
+			tempDirs.push(worktreeBase);
+			delete process.env.VEYYON_WORKTREE_DIR;
+			setWorktreesDir(worktreeBase);
+			vi.spyOn(natives, "isoResolve").mockReturnValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			vi.spyOn(natives, "isoStart").mockResolvedValue(undefined);
+
+			try {
+				const longTaskId = "orchestrate-goal-execution.Test1-0982d2a";
+				const handle = await ensureIsolation(repo, longTaskId);
+				const mergedLeaf = path.basename(handle.mergedDir);
+				const isolationSegment = path.basename(path.dirname(handle.mergedDir));
+
+				expect(mergedLeaf).toMatch(/^m-[0-9a-f]{16}$/);
+				expect(isolationSegment).not.toContain(longTaskId);
+				expect(isolationSegment.length).toBeLessThanOrEqual(12);
+			} finally {
+				if (originalWorktreeDir === undefined) {
+					delete process.env.VEYYON_WORKTREE_DIR;
+				} else {
+					process.env.VEYYON_WORKTREE_DIR = originalWorktreeDir;
+				}
+				setWorktreesDir(undefined);
+			}
+		});
+
+		// First mutator: runs on the pristine fixture, so no reset is needed. Leaves
+		// behind a stash that the next test's reset clears.
+		it("does not pop an unrelated pre-existing stash when the working tree is clean", async () => {
+			// A tracked-file edit makes the cheapest possible "unrelated" stash; the
+			// kind of stash is irrelevant — mergeTaskBranches must not pop one it did
+			// not create. Stashing restores the working tree to clean.
+			await fs.writeFile(path.join(repo, "merged.txt"), "unrelated user change\n");
+			await runGit(repo, ["stash", "push", "-m", "preexisting-user-stash"]);
+
+			const result = await mergeTaskBranches(repo, []);
+
+			const [stashList, status] = await Promise.all([
+				runGit(repo, ["stash", "list"]),
+				runGit(repo, ["status", "--porcelain=v1"]),
+			]);
+			expect(result).toEqual({ failed: [], merged: [] });
+			const stashEntries = stashList.split("\n").filter(Boolean);
+			expect(stashEntries).toHaveLength(1);
+			expect(stashEntries[0]).toContain("preexisting-user-stash");
+			expect(status).toBe("");
+		});
+
+		// These rewind the fixture so each starts from the pristine post-`initial`
+		// state: `reset --hard` restores HEAD + index + tracked files and the parallel
+		// `stash clear` drops any leftover stash. No `git clean` is needed — none of
+		// these tests leave untracked files behind (the baseline test commits its own).
+		// The fixture branch is untouched by `reset --hard`.
+		describe("after rewinding the shared fixture", () => {
+			beforeEach(async () => {
+				await Promise.all([runGit(repo, ["reset", "-q", "--hard", initialSha]), runGit(repo, ["stash", "clear"])]);
+			});
+
+			it("restores staged changes with index preservation after merging task branches", async () => {
+				await fs.writeFile(path.join(repo, "staged.txt"), "local staged change\n");
+				await runGit(repo, ["add", "staged.txt"]);
+
+				const result = await mergeTaskBranches(repo, [{ branchName: TASK_BRANCH, taskId: "task-1" }]);
+
+				const [mergedContent, status, cached, stashList] = await Promise.all([
+					fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+					runGit(repo, ["status", "--porcelain=v1"]),
+					runGit(repo, ["diff", "--cached", "--", "staged.txt"]),
+					runGit(repo, ["stash", "list"]),
+				]);
+				expect(result).toEqual({ failed: [], merged: [TASK_BRANCH] });
+				expect(mergedContent).toBe("task branch change\n");
+				expect(status).toBe("M  staged.txt");
+				expect(cached).toContain("+local staged change");
+				expect(stashList).toBe("");
+			});
+
+			// Regression for #4175: a stash-pop conflict used to leave stage 1/2/3
+			// unmerged entries in `.git/index` (no `MERGE_HEAD`, no way to abort).
+			// The corrupted index survived indefinitely and every subsequent
+			// overlay-isolated task read it through the lower layer, so
+			// `captureRepoDeltaPatch` produced `diff --cc` output that `git apply`
+			// rejects. mergeTaskBranches MUST leave the index clean regardless of
+			// whether the stash could be popped.
+			it("keeps the index clean when stash pop would conflict with a cherry-picked change", async () => {
+				// User's WIP touches the same file the task branch modifies, so a
+				// naive stash push → cherry-pick → stash pop conflicts on pop.
+				await fs.writeFile(path.join(repo, "merged.txt"), "user wip\n");
+
+				const result = await mergeTaskBranches(repo, [{ branchName: TASK_BRANCH, taskId: "task-1" }]);
+
+				const [status, unmerged, stashList, headContent] = await Promise.all([
+					runGit(repo, ["status", "--porcelain=v1"]),
+					runGit(repo, ["ls-files", "--unmerged"]),
+					runGit(repo, ["stash", "list"]),
+					fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+				]);
+
+				// Cherry-pick landed on HEAD; only the WIP restore was declined.
+				expect(result.merged).toEqual([TASK_BRANCH]);
+				expect(result.failed).toEqual([]);
+				expect(result.stashConflict).toBeDefined();
+				// The invariant that was previously broken: no unmerged entries.
+				expect(unmerged).toBe("");
+				// Working tree matches the merged HEAD, and the WIP is preserved
+				// as a stash entry for the user to reconcile manually.
+				expect(status).toBe("");
+				expect(headContent).toBe("task branch change\n");
+				expect(stashList).toContain("veyyon-task-merge");
+
+				// Downstream contract: with a clean index, captureDeltaPatch
+				// produces a valid unified diff (not `diff --cc`) that a
+				// subsequent isolated task's `git apply --cached` accepts.
+				// Editing a tracked file keeps the shared fixture clean —
+				// `reset --hard` on the next test restores it.
+				const baseline = await captureBaseline(repo);
+				await fs.writeFile(path.join(repo, "staged.txt"), "downstream edit\n");
+				const delta = await captureDeltaPatch(repo, baseline);
+				expect(delta.rootPatch).not.toContain("diff --cc");
+				expect(delta.rootPatch).toContain("+downstream edit");
+			});
+
+			it("cleans restored stash files with literal pathspecs", async () => {
+				// Force the fallback branch: preflight would normally refuse this
+				// pop before Git can restore anything, but mode/delete edge cases can
+				// still pass preflight and fail during the actual stash pop. Git can
+				// restore unrelated untracked files before reporting the tracked
+				// conflict. If the task branch also adds an ignore rule for that
+				// restored path, the fallback must clean the restored ignored path
+				// without interpreting stash-derived filenames as pathspec magic.
+				const magicName = ":(glob)*";
+				const buildLog = path.join(repo, "build.log");
+				const ignoredBranch = "task/ignored-restored-untracked";
+				await fs.writeFile(path.join(repo, ".gitignore"), "*.log\n");
+				await runGit(repo, ["add", ".gitignore"]);
+				await runGit(repo, ["commit", "-q", "-m", "ignore-build-artifacts"]);
+				await runGit(repo, ["checkout", "-q", "-b", ignoredBranch]);
+				await Promise.all([
+					fs.writeFile(path.join(repo, "merged.txt"), "task branch change\n"),
+					fs.writeFile(path.join(repo, ".gitignore"), `*.log\n${magicName}\n`),
+				]);
+				await runGit(repo, ["add", ".gitignore", "merged.txt"]);
+				await runGit(repo, ["commit", "-q", "-m", "task-change-ignored-note"]);
+				await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
+				try {
+					vi.spyOn(git.patch, "canApplyText").mockResolvedValue(true);
+					await fs.writeFile(path.join(repo, "merged.txt"), "user wip\n");
+					await fs.writeFile(path.join(repo, magicName), "untracked wip\n");
+					await fs.writeFile(buildLog, "ignored build artifact\n");
+
+					const result = await mergeTaskBranches(repo, [{ branchName: ignoredBranch, taskId: "task-1" }]);
+
+					const [status, unmerged, stashList, headContent, magicExists, buildLogExists] = await Promise.all([
+						runGit(repo, ["status", "--porcelain=v1"]),
+						runGit(repo, ["ls-files", "--unmerged"]),
+						runGit(repo, ["stash", "list"]),
+						fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+						Bun.file(path.join(repo, magicName)).exists(),
+						Bun.file(buildLog).exists(),
+					]);
+
+					expect(result.merged).toEqual([ignoredBranch]);
+					expect(result.failed).toEqual([]);
+					expect(result.stashConflict).toBeDefined();
+					expect(unmerged).toBe("");
+					expect(status).toBe("");
+					expect(magicExists).toBe(false);
+					expect(buildLogExists).toBe(true);
+					expect(headContent).toBe("task branch change\n");
+					expect(stashList).toContain("veyyon-task-merge");
+				} finally {
+					await cleanupTaskBranches(repo, [ignoredBranch]);
+					await Promise.all([
+						fs.rm(path.join(repo, magicName), { force: true }),
+						fs.rm(buildLog, { force: true }),
+					]);
+				}
+			});
+
+			it("commits isolated edits when parent dirt only changes nearby context", async () => {
+				const fixtureName = "EXP_DIRTY_TEST.txt";
+				const fixturePath = path.join(repo, fixtureName);
+				const cleanLines = Array.from({ length: 10 }, (_, index) => `line${index + 1}`);
+				await fs.writeFile(fixturePath, `${cleanLines.join("\n")}\n`);
+				await runGit(repo, ["add", fixtureName]);
+				await runGit(repo, ["commit", "-q", "-m", "add dirty merge fixture"]);
+
+				const parentDirtyLines = cleanLines.map((line, index) => (index === 1 ? "LINE2-DIRTY-PARENT" : line));
+				await fs.writeFile(fixturePath, `${parentDirtyLines.join("\n")}\n`);
+				const baseline = await captureBaseline(repo);
+
+				const isoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-worktree-iso-"));
+				tempDirs.push(isoRoot);
+				const iso = path.join(isoRoot, "repo");
+				await runGit(isoRoot, ["clone", "-q", repo, iso]);
+				await runGit(iso, ["config", "user.email", "test@example.com"]);
+				await runGit(iso, ["config", "user.name", "Test User"]);
+				const isolatedLines = parentDirtyLines.map((line, index) => (index === 4 ? "LINE5-AGENT-EDIT" : line));
+				await fs.writeFile(path.join(iso, fixtureName), `${isolatedLines.join("\n")}\n`);
+
+				const taskId = `dirty-context-${path.basename(isoRoot)}`;
+				let branchName = `veyyon/task/${taskId}`;
+				try {
+					const commitResult = await commitToBranch(iso, baseline, taskId, "dirty context merge");
+					if (!commitResult?.branchName) throw new Error("expected task branch");
+					branchName = commitResult.branchName;
+
+					const mergeResult = await mergeTaskBranches(repo, [{ branchName, taskId }]);
+					const finalContent = await fs.readFile(fixturePath, "utf8");
+
+					expect(mergeResult).toEqual({ failed: [], merged: [branchName] });
+					expect(finalContent).toBe(`${isolatedLines.join("\n")}\n`);
+				} finally {
+					await cleanupTaskBranches(repo, [branchName]);
+				}
+			});
+
+			it("subtracts baseline dirty state even when the task commits it", async () => {
+				await Promise.all([
+					fs.writeFile(path.join(repo, "merged.txt"), "baseline dirty change\n"),
+					fs.writeFile(path.join(repo, "preexisting.txt"), "baseline untracked\n"),
+				]);
+				const baseline = await captureBaseline(repo);
+
+				// The task produces new output and commits everything — baseline dirt
+				// included. The delta must still subtract the baseline (both the tracked
+				// edit and the untracked file) and surface only the task's own addition.
+				await fs.writeFile(path.join(repo, "task.txt"), "task output\n");
+				await runGit(repo, ["add", "-A"]);
+				await runGit(repo, ["commit", "-q", "-m", "committed inside isolation"]);
+
+				const delta = await captureDeltaPatch(repo, baseline);
+
+				expect(delta.nestedPatches).toEqual([]);
+				expect(delta.rootPatch).toContain("task.txt");
+				expect(delta.rootPatch).toContain("+task output");
+				expect(delta.rootPatch).not.toContain("baseline dirty change");
+				expect(delta.rootPatch).not.toContain("preexisting.txt");
+			});
+
+			// Regression for #4438: cherry-picking a range where an intermediate
+			// commit becomes empty (redundant with HEAD, or 3-way merged to HEAD)
+			// used to abort the whole range and mark the branch failed, dropping
+			// every remaining commit. The fixup here restores merged.txt to the
+			// content the shared fixture branch already established on HEAD, so
+			// the sequencer stops with "The previous cherry-pick is now empty".
+			// The follow-up commit contains real, non-overlapping work that MUST
+			// still land.
+			it("auto-skips empty cherry-picks so remaining commits in the range still land", async () => {
+				const REDUNDANT_BRANCH = "task/redundant-then-real";
+				await runGit(repo, ["checkout", "-q", "-b", REDUNDANT_BRANCH, initialSha]);
+				const branchBase = await runGit(repo, ["rev-parse", "HEAD"]);
+				// This commit sets merged.txt to the exact content TASK_BRANCH
+				// establishes on HEAD. Once TASK_BRANCH is cherry-picked, the
+				// 3-way merge for this commit sees theirs == ours == target,
+				// resolves to HEAD, and stops the sequencer with the "The
+				// previous cherry-pick is now empty" message.
+				await fs.writeFile(path.join(repo, "merged.txt"), "task branch change\n");
+				await runGit(repo, ["commit", "-q", "-am", "redundant: same as task branch tip"]);
+				// A non-overlapping follow-up that MUST land even though the
+				// preceding commit collapsed to empty.
+				await fs.writeFile(path.join(repo, "downstream.txt"), "unrelated follow-up\n");
+				await runGit(repo, ["add", "downstream.txt"]);
+				await runGit(repo, ["commit", "-q", "-m", "unrelated follow-up commit"]);
+				await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
+				try {
+					const result = await mergeTaskBranches(repo, [
+						{ branchName: TASK_BRANCH, taskId: "task-1" },
+						{ branchName: REDUNDANT_BRANCH, taskId: "task-2", baseSha: branchBase },
+					]);
+
+					const [status, unmerged, mergedContent, downstreamContent, log] = await Promise.all([
+						runGit(repo, ["status", "--porcelain=v1"]),
+						runGit(repo, ["ls-files", "--unmerged"]),
+						fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+						fs.readFile(path.join(repo, "downstream.txt"), "utf8"),
+						runGit(repo, ["log", "--pretty=%s", `${initialSha}..HEAD`]),
+					]);
+
+					expect(result).toEqual({ failed: [], merged: [TASK_BRANCH, REDUNDANT_BRANCH] });
+					// No cherry-pick sequencer state, no unmerged entries: the
+					// skip advanced cleanly.
+					expect(status).toBe("");
+					expect(unmerged).toBe("");
+					// TASK_BRANCH landed and the empty commit did NOT re-land it
+					// as a duplicate.
+					expect(mergedContent).toBe("task branch change\n");
+					expect(downstreamContent).toBe("unrelated follow-up\n");
+					const subjects = log.split("\n").filter(Boolean);
+					expect(subjects).toContain("unrelated follow-up commit");
+					expect(subjects).toContain("task-change");
+					// The redundant commit MUST NOT survive in history as a
+					// duplicate no-op.
+					expect(subjects).not.toContain("redundant: same as task branch tip");
+				} finally {
+					await cleanupTaskBranches(repo, [REDUNDANT_BRANCH]);
+				}
+			});
+
+			// A genuine content conflict (unmerged files, no "now empty" hint)
+			// must NOT be misclassified as empty. The branch stays in `failed`
+			// and the sequencer aborts cleanly — no lingering cherry-pick state,
+			// no unmerged index entries.
+			it("still aborts on genuine cherry-pick conflicts", async () => {
+				const CONFLICT_BRANCH = "task/genuine-conflict";
+				await runGit(repo, ["checkout", "-q", "-b", CONFLICT_BRANCH, initialSha]);
+				const branchBase = await runGit(repo, ["rev-parse", "HEAD"]);
+				await fs.writeFile(path.join(repo, "merged.txt"), "incompatible edit\n");
+				await runGit(repo, ["commit", "-q", "-am", "incompatible merged.txt edit"]);
+				await runGit(repo, ["checkout", "-q", BASE_BRANCH]);
+				try {
+					const result = await mergeTaskBranches(repo, [
+						{ branchName: TASK_BRANCH, taskId: "task-1" },
+						{ branchName: CONFLICT_BRANCH, taskId: "task-2", baseSha: branchBase },
+					]);
+
+					const [status, unmerged, cherryPickHeadExit] = await Promise.all([
+						runGit(repo, ["status", "--porcelain=v1"]),
+						runGit(repo, ["ls-files", "--unmerged"]),
+						runGit(repo, ["rev-parse", "--verify", "--quiet", "CHERRY_PICK_HEAD"]).then(
+							() => 0,
+							() => 1,
+						),
+					]);
+
+					expect(result.merged).toEqual([TASK_BRANCH]);
+					expect(result.failed).toEqual([CONFLICT_BRANCH]);
+					expect(result.conflict).toContain(CONFLICT_BRANCH);
+					// No stuck sequencer, no unmerged entries: the abort cleaned
+					// up after itself.
+					expect(status).toBe("");
+					expect(unmerged).toBe("");
+					expect(cherryPickHeadExit).toBe(1);
+				} finally {
+					await cleanupTaskBranches(repo, [CONFLICT_BRANCH]);
+				}
+			});
+		});
+	});
+});
+
+describe("getRepoRoot", () => {
+	it("returns the git root for a plain git checkout", async () => {
+		const { repo } = await createGitRepo();
+		expect(await getRepoRoot(repo)).toBe(repo);
+	});
+
+	it("returns the git root for a colocated jj-git workspace", async () => {
+		const { repo } = await createGitRepo();
+		await fs.mkdir(path.join(repo, ".jj", "repo", "store"), { recursive: true });
+		expect(await getRepoRoot(repo)).toBe(repo);
+	});
+
+	it("rejects pure jj workspaces with an actionable Jujutsu message", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-purejj-"));
+		tempDirs.push(dir);
+		await fs.mkdir(path.join(dir, ".jj", "repo", "store"), { recursive: true });
+		await expect(getRepoRoot(dir)).rejects.toThrow(/pure Jujutsu/);
+		await expect(getRepoRoot(dir)).rejects.toThrow(/jj git init --colocate/);
+	});
+
+	it("preserves the generic git-not-found error for directories without any repo", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-norepo-"));
+		tempDirs.push(dir);
+		await expect(getRepoRoot(dir)).rejects.toThrow("Git repository not found for isolated task execution.");
+	});
+
+	it("rejects a pure jj workspace nested inside an unrelated outer git checkout", async () => {
+		// `git.repo.root(inner)` walks up and finds the outer .git — without
+		// the pure-jj check running first, isolation would silently target the
+		// surrounding git tree behind jj's back.
+		const { repo: outer } = await createGitRepo();
+		const inner = path.join(outer, "nested-jj");
+		await fs.mkdir(path.join(inner, ".jj", "repo", "store"), { recursive: true });
+
+		await expect(getRepoRoot(inner)).rejects.toThrow(/pure Jujutsu/);
+		await expect(getRepoRoot(inner)).rejects.toThrow(/jj git init --colocate/);
+	});
+
+	it("returns the nested git root when a git checkout lives under an outer jj workspace", async () => {
+		// Mirror image of the case above: `jj.repo.root(inner)` finds the outer
+		// .jj, but `git.repo.root(inner)` finds the inner .git, so Git
+		// automation targets the nested checkout safely. Isolation must keep
+		// working here exactly as it did before the pure-jj guard landed.
+		const outer = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-outerjj-"));
+		tempDirs.push(outer);
+		await fs.mkdir(path.join(outer, ".jj", "repo", "store"), { recursive: true });
+		const inner = path.join(outer, "vendor");
+		await fs.mkdir(inner, { recursive: true });
+		await runGit(inner, ["init", "-q", "-b", "main"]);
+		await runGit(inner, ["config", "user.email", "test@example.com"]);
+		await runGit(inner, ["config", "user.name", "Test"]);
+
+		expect(await getRepoRoot(inner)).toBe(inner);
+	});
+});
+
+describe("applyNestedPatches", () => {
+	let parentRepo: string;
+	let nestedRel: string;
+	let nestedDir: string;
+
+	beforeEach(async () => {
+		parentRepo = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-nested-apply-"));
+		await runGit(parentRepo, ["init", "-q", "-b", "main"]);
+		await runGit(parentRepo, ["config", "user.email", "test@example.com"]);
+		await runGit(parentRepo, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(parentRepo, ".gitignore"), "sub/\n");
+		await runGit(parentRepo, ["add", "."]);
+		await runGit(parentRepo, ["commit", "-q", "-m", "parent-init"]);
+
+		nestedRel = "sub";
+		nestedDir = path.join(parentRepo, nestedRel);
+		await fs.mkdir(nestedDir, { recursive: true });
+		await runGit(nestedDir, ["init", "-q", "-b", "main"]);
+		await runGit(nestedDir, ["config", "user.email", "test@example.com"]);
+		await runGit(nestedDir, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(nestedDir, "file.txt"), "v1\n");
+		await runGit(nestedDir, ["add", "."]);
+		await runGit(nestedDir, ["commit", "-q", "-m", "nested-init"]);
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(parentRepo);
+	});
+
+	it("does not fold pre-existing dirty nested-repo state into the agent commit", async () => {
+		// User has unrelated work-in-progress in the nested repo before the agent runs.
+		await fs.writeFile(path.join(nestedDir, "other.txt"), "user wip\n");
+
+		const patch =
+			"diff --git a/file.txt b/file.txt\n" +
+			"--- a/file.txt\n" +
+			"+++ b/file.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-v1\n" +
+			"+v2\n";
+		await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch }]);
+
+		const [committedFiles, headContent, otherContent, statusPorcelain] = await Promise.all([
+			runGit(nestedDir, ["log", "-1", "--name-only", "--pretty=format:"]),
+			fs.readFile(path.join(nestedDir, "file.txt"), "utf8"),
+			fs.readFile(path.join(nestedDir, "other.txt"), "utf8"),
+			runGit(nestedDir, ["status", "--porcelain=v1"]),
+		]);
+		expect(committedFiles.trim()).toBe("file.txt");
+		expect(headContent).toBe("v2\n");
+		expect(otherContent).toBe("user wip\n");
+		expect(statusPorcelain).toBe("?? other.txt");
+	});
+
+	it("restores pre-existing staged WIP to the index, not just the working tree", async () => {
+		// Pre-existing tracked file with a staged edit; the patch should leave
+		// this entirely alone, and the stash pop must re-stage it (--index).
+		await fs.writeFile(path.join(nestedDir, "other.txt"), "tracked v1\n");
+		await runGit(nestedDir, ["add", "other.txt"]);
+		await runGit(nestedDir, ["commit", "-q", "-m", "add-other"]);
+		await fs.writeFile(path.join(nestedDir, "other.txt"), "staged wip\n");
+		await runGit(nestedDir, ["add", "other.txt"]);
+
+		const patch =
+			"diff --git a/file.txt b/file.txt\n" +
+			"--- a/file.txt\n" +
+			"+++ b/file.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-v1\n" +
+			"+v2\n";
+		await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch }]);
+
+		const [committedFiles, statusPorcelain, cachedDiff] = await Promise.all([
+			runGit(nestedDir, ["log", "-1", "--name-only", "--pretty=format:"]),
+			runGit(nestedDir, ["status", "--porcelain=v1"]),
+			runGit(nestedDir, ["diff", "--cached", "--", "other.txt"]),
+		]);
+		expect(committedFiles.trim()).toBe("file.txt");
+		// Leading "M " (with trailing space) marks an index-only modification —
+		// "M" in the first slot, " " in the second. " M" would mean unstaged.
+		expect(statusPorcelain).toBe("M  other.txt");
+		expect(cachedDiff).toContain("+staged wip");
+	});
+
+	it("returns a stash-restore warning when pop conflicts with the agent commit", async () => {
+		// User had unrelated WIP on the same file the agent will edit, so the
+		// stash will conflict with the committed version after pop.
+		await fs.writeFile(path.join(nestedDir, "file.txt"), "user wip\n");
+
+		const patch =
+			"diff --git a/file.txt b/file.txt\n" +
+			"--- a/file.txt\n" +
+			"+++ b/file.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-v1\n" +
+			"+v2\n";
+		const warnings = await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch }]);
+
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("could not be auto-restored");
+		expect(warnings[0]).toContain(nestedRel);
+
+		// Commit landed and the stash entry is preserved for manual recovery.
+		const [committedFiles, stashList] = await Promise.all([
+			runGit(nestedDir, ["log", "-1", "--name-only", "--pretty=format:"]),
+			runGit(nestedDir, ["stash", "list"]),
+		]);
+		expect(committedFiles.trim()).toBe("file.txt");
+		expect(stashList).toContain("veyyon-isolation-");
+	});
+});
+
+describe("commitToBranch preserves agent commits", () => {
+	let parent: string;
+	let isolation: string;
+
+	async function gitr(repo: string, args: string[]): Promise<string> {
+		return runGit(repo, args);
+	}
+
+	beforeEach(async () => {
+		parent = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-commit-parent-"));
+		isolation = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-commit-iso-"));
+		await gitr(parent, ["init", "-q", "-b", "main"]);
+		await gitr(parent, ["config", "user.email", "user@example.com"]);
+		await gitr(parent, ["config", "user.name", "Parent User"]);
+		await fs.writeFile(
+			path.join(parent, "EXP_CLEAN_COMMIT.txt"),
+			"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
+		);
+		await gitr(parent, ["add", "."]);
+		await gitr(parent, ["commit", "-q", "-m", "add clean test fixture"]);
+
+		// Simulate copy-on-write isolation: a real local clone so the agent's
+		// commit objects live in `isolation/.git`, just like the overlay/rcopy
+		// isolation backends would arrange them at runtime.
+		await fs.rm(isolation, { recursive: true, force: true });
+		await gitr(parent, ["clone", "-q", "--no-hardlinks", "--local", parent, isolation]);
+		await gitr(isolation, ["config", "user.email", "agent@example.com"]);
+		await gitr(isolation, ["config", "user.name", "Agent User"]);
+	});
+
+	afterEach(async () => {
+		await Promise.all([removeWithRetries(parent), removeWithRetries(isolation)]);
+	});
+
+	// Reproduces issue #3842: agent commits with a specific message inside
+	// isolation; the merged commit on the parent branch must keep that exact
+	// message instead of an AI-generated summary.
+	it("preserves the agent's commit message after merge", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(
+			path.join(isolation, "EXP_CLEAN_COMMIT.txt"),
+			"line1\nline2\nline3\nline4\nLINE5-AGENT-WITH-MESSAGE\nline6\nline7\nline8\nline9\nline10\n",
+		);
+		await gitr(isolation, ["add", "EXP_CLEAN_COMMIT.txt"]);
+		const agentMessage = "fix(test): agent committed with specific message for preservation check";
+		await gitr(isolation, ["commit", "-q", "-m", agentMessage]);
+
+		const taskId = "preservation-check";
+		const aiMessage = vi.fn(async () => "fix: update line5 in clean commit example");
+		const result = await commitToBranch(isolation, baseline, taskId, undefined, aiMessage);
+
+		expect(result?.branchName).toBe(`veyyon/task/${taskId}`);
+		expect(result?.baseSha).toBe(baseline.root.headCommit);
+		// commitMessage callback must NOT have been invoked — the agent's
+		// message is taken verbatim.
+		expect(aiMessage).not.toHaveBeenCalled();
+
+		const branchSubject = await gitr(parent, ["log", "-1", "--pretty=%s", result!.branchName!]);
+		expect(branchSubject).toBe(agentMessage);
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId, baseSha: result!.baseSha! },
+		]);
+		expect(merge.failed).toEqual([]);
+		expect(merge.merged).toEqual([result!.branchName!]);
+
+		const headSubject = await gitr(parent, ["log", "-1", "--pretty=%s"]);
+		expect(headSubject).toBe(agentMessage);
+	});
+
+	it("preserves every message when the agent makes multiple commits", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(path.join(isolation, "a.txt"), "alpha\n");
+		await gitr(isolation, ["add", "a.txt"]);
+		await gitr(isolation, ["commit", "-q", "-m", "feat: add alpha file"]);
+		await fs.writeFile(path.join(isolation, "b.txt"), "beta\n");
+		await gitr(isolation, ["add", "b.txt"]);
+		await gitr(isolation, ["commit", "-q", "-m", "test: add beta coverage"]);
+
+		const result = await commitToBranch(isolation, baseline, "multi", undefined);
+		expect(result?.branchName).toBe("veyyon/task/multi");
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId: "multi", baseSha: result!.baseSha! },
+		]);
+		expect(merge).toEqual({ failed: [], merged: ["veyyon/task/multi"] });
+
+		const subjects = (await gitr(parent, ["log", "-2", "--pretty=%s"])).split("\n");
+		expect(subjects).toEqual(["test: add beta coverage", "feat: add alpha file"]);
+	});
+
+	it("appends one trailing commit when the agent leaves uncommitted work after committing", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(path.join(isolation, "a.txt"), "alpha\n");
+		await gitr(isolation, ["add", "a.txt"]);
+		await gitr(isolation, ["commit", "-q", "-m", "feat: add alpha file"]);
+		// Uncommitted change on top of the agent's commit — should land as one
+		// extra commit with the AI-generated message, NOT silently dropped.
+		await fs.writeFile(path.join(isolation, "b.txt"), "beta\n");
+
+		const aiMessage = vi.fn(async () => "chore: leftover beta wip");
+		const result = await commitToBranch(isolation, baseline, "leftover", undefined, aiMessage);
+		expect(result?.branchName).toBe("veyyon/task/leftover");
+		expect(aiMessage).toHaveBeenCalledTimes(1);
+
+		const subjects = (await gitr(parent, ["log", "-2", "--pretty=%s", result!.branchName!])).split("\n");
+		expect(subjects).toEqual(["chore: leftover beta wip", "feat: add alpha file"]);
+	});
+
+	it("filters baseline WIP when the agent commits with git add -A", async () => {
+		await fs.writeFile(path.join(parent, "staged.txt"), "baseline staged wip\n");
+		await gitr(parent, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(parent, "user-wip.txt"), "baseline untracked wip\n");
+		await fs.writeFile(path.join(isolation, "staged.txt"), "baseline staged wip\n");
+		await gitr(isolation, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(isolation, "user-wip.txt"), "baseline untracked wip\n");
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(
+			path.join(isolation, "EXP_CLEAN_COMMIT.txt"),
+			"line1\nline2\nline3\nline4\nLINE5-AGENT-WITH-MESSAGE\nline6\nline7\nline8\nline9\nline10\n",
+		);
+		await gitr(isolation, ["add", "-A"]);
+		const agentMessage = "fix(test): preserve message without baseline wip";
+		await gitr(isolation, ["commit", "-q", "-m", agentMessage]);
+
+		const aiMessage = vi.fn(async () => "fix: generated fallback");
+		const result = await commitToBranch(isolation, baseline, "dirty-baseline", undefined, aiMessage);
+		expect(result?.branchName).toBe("veyyon/task/dirty-baseline");
+		expect(aiMessage).not.toHaveBeenCalled();
+
+		const branchFiles = (await gitr(parent, ["show", "--name-only", "--pretty=format:", result!.branchName!]))
+			.split("\n")
+			.filter(Boolean);
+		expect(branchFiles).toEqual(["EXP_CLEAN_COMMIT.txt"]);
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId: "dirty-baseline", baseSha: result!.baseSha! },
+		]);
+		expect(merge).toEqual({ failed: [], merged: ["veyyon/task/dirty-baseline"] });
+
+		const [headSubject, status, fixture] = await Promise.all([
+			gitr(parent, ["log", "-1", "--pretty=%s"]),
+			gitr(parent, ["status", "--porcelain=v1"]),
+			fs.readFile(path.join(parent, "EXP_CLEAN_COMMIT.txt"), "utf8"),
+		]);
+		expect(headSubject).toBe(agentMessage);
+		expect(status.split("\n").sort()).toEqual(["?? user-wip.txt", "A  staged.txt"]);
+		expect(fixture).toContain("LINE5-AGENT-WITH-MESSAGE");
+	});
+
+	it("merges a committed agent edit beside unrelated dirty-parent lines", async () => {
+		const parentLines = [
+			"line1",
+			"LINE2-DIRTY-PARENT",
+			"line3",
+			"line4",
+			"line5",
+			"line6",
+			"line7",
+			"line8",
+			"line9",
+			"line10",
+			"",
+		];
+		await fs.writeFile(path.join(parent, "EXP_CLEAN_COMMIT.txt"), parentLines.join("\n"));
+		await fs.writeFile(path.join(isolation, "EXP_CLEAN_COMMIT.txt"), parentLines.join("\n"));
+		const baseline = await captureBaseline(parent);
+
+		const agentLines = parentLines.slice();
+		agentLines[4] = "LINE5-AGENT-EDIT";
+		await fs.writeFile(path.join(isolation, "EXP_CLEAN_COMMIT.txt"), agentLines.join("\n"));
+		await gitr(isolation, ["add", "EXP_CLEAN_COMMIT.txt"]);
+		await gitr(isolation, ["commit", "-q", "-m", "agent: edit line 5"]);
+
+		const taskId = "dirty-parent-committed-agent";
+		const result = await commitToBranch(isolation, baseline, taskId, undefined);
+		expect(result?.branchName).toBe(`veyyon/task/${taskId}`);
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId, baseSha: result!.baseSha! },
+		]);
+		expect(merge).toEqual({ failed: [], merged: [result!.branchName!] });
+		expect(await fs.readFile(path.join(parent, "EXP_CLEAN_COMMIT.txt"), "utf8")).toBe(agentLines.join("\n"));
+	});
+
+	it("falls back to the AI-generated message when the agent never committed", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(path.join(isolation, "a.txt"), "alpha\n");
+
+		const aiMessage = vi.fn(async () => "feat: add alpha");
+		const result = await commitToBranch(isolation, baseline, "nocommit", undefined, aiMessage);
+
+		expect(result?.branchName).toBe("veyyon/task/nocommit");
+		expect(aiMessage).toHaveBeenCalledTimes(1);
+
+		const branchSubject = await gitr(parent, ["log", "-1", "--pretty=%s", result!.branchName!]);
+		expect(branchSubject).toBe("feat: add alpha");
+	});
+
+	it("returns null when nothing changed in isolation", async () => {
+		const baseline = await captureBaseline(parent);
+		const result = await commitToBranch(isolation, baseline, "empty", undefined);
+		expect(result).toBeNull();
+	});
+
+	// Regression: #4136. Baseline WIP made captureRepoDeltaPatch record hunks
+	// against `HEAD + WIP`; commitPatchToBranchWorktree then failed to apply
+	// those hunks to a fresh worktree pinned at HEAD when the WIP-side file was
+	// missing from HEAD's index (untracked WIP files, staged-new WIP files) or
+	// when --3way couldn't resolve the overlap. Each scenario below reproduced
+	// the failure before the fix.
+	describe("with baseline WIP overlapping the agent's changes (#4136)", () => {
+		async function seedWipFileFromParent(destRoot: string, relPath: string): Promise<void> {
+			await fs.mkdir(path.join(destRoot, path.dirname(relPath)), { recursive: true });
+			await fs.copyFile(path.join(parent, relPath), path.join(destRoot, relPath));
+		}
+
+		it("commits an agent-only delta via --3way when WIP and agent modify unrelated hunks of the same tracked file", async () => {
+			const fixture = "src/foo.py";
+			const head = Array.from({ length: 40 }, (_, i) => `# line ${i + 1}\n`).join("");
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			await fs.writeFile(path.join(parent, fixture), head);
+			await gitr(parent, ["add", "."]);
+			await gitr(parent, ["commit", "-q", "-m", "add fixture"]);
+
+			// Isolation must be re-cloned so the fixture is present in HEAD.
+			await fs.rm(isolation, { recursive: true, force: true });
+			await gitr(parent, ["clone", "-q", "--no-hardlinks", "--local", parent, isolation]);
+			await gitr(isolation, ["config", "user.email", "agent@example.com"]);
+			await gitr(isolation, ["config", "user.name", "Agent User"]);
+
+			// Parent WIP: change line 10 (unstaged edit to an existing tracked file).
+			const wipLines = head.split("\n");
+			wipLines[9] = "# line 10 thinkingLevel: medium";
+			await fs.writeFile(path.join(parent, fixture), wipLines.join("\n"));
+			await seedWipFileFromParent(isolation, fixture);
+
+			// Agent modifies line 30, far from the WIP change.
+			const agentLines = wipLines.slice();
+			agentLines[29] = "# line 30 def new_func()";
+			await fs.writeFile(path.join(isolation, fixture), agentLines.join("\n"));
+
+			const baseline = await captureBaseline(parent);
+			const result = await commitToBranch(isolation, baseline, "wip-tracked-file", undefined);
+			expect(result?.branchName).toBe("veyyon/task/wip-tracked-file");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("+# line 30 def new_func()");
+			// --3way must subtract the WIP change from the commit; only the
+			// agent's line 30 edit belongs on the task branch.
+			expect(branchDiff).not.toContain("thinkingLevel: medium");
+		});
+
+		it("commits an untracked WIP file that the agent modifies inside isolation", async () => {
+			// Parent WIP: add a new untracked file the agent also touches.
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			await fs.writeFile(path.join(parent, "src/new.py"), "WIP header\nunchanged\n");
+			await fs.mkdir(path.join(isolation, "src"), { recursive: true });
+			await fs.copyFile(path.join(parent, "src/new.py"), path.join(isolation, "src/new.py"));
+
+			// Agent extends the file inside isolation.
+			await fs.writeFile(path.join(isolation, "src/new.py"), "WIP header\nagent-edit\n");
+
+			const baseline = await captureBaseline(parent);
+			expect(baseline.root.untracked).toContain("src/new.py");
+			const result = await commitToBranch(isolation, baseline, "wip-untracked", undefined);
+			expect(result?.branchName).toBe("veyyon/task/wip-untracked");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("new file mode");
+			expect(branchDiff).toContain("src/new.py");
+			expect(branchDiff).toContain("+WIP header");
+			expect(branchDiff).toContain("+agent-edit");
+		});
+
+		it("commits a staged-new WIP file that the agent modifies inside isolation", async () => {
+			// Parent WIP: stage a new file that isn't yet in HEAD.
+			await fs.writeFile(path.join(parent, "notes.md"), "l1\nl2\nl3\n");
+			await gitr(parent, ["add", "notes.md"]);
+			await fs.copyFile(path.join(parent, "notes.md"), path.join(isolation, "notes.md"));
+			await gitr(isolation, ["add", "notes.md"]);
+
+			// Agent edits the staged-new file.
+			await fs.writeFile(path.join(isolation, "notes.md"), "l1\nl2 agent\nl3\n");
+
+			const baseline = await captureBaseline(parent);
+			expect(baseline.root.staged).toContain("new file mode");
+			const result = await commitToBranch(isolation, baseline, "wip-staged-new", undefined);
+			expect(result?.branchName).toBe("veyyon/task/wip-staged-new");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("new file mode");
+			expect(branchDiff).toContain("notes.md");
+			expect(branchDiff).toContain("+l2 agent");
+		});
+
+		it("does not leak WIP-only files into the branch commit when the agent leaves them untouched", async () => {
+			// Parent WIP: touch two files. The agent only edits `wanted.py`;
+			// `wip-only.py` must not appear in the branch commit at all.
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			await fs.writeFile(path.join(parent, "src/wanted.py"), "unchanged\n");
+			await fs.writeFile(path.join(parent, "src/wip-only.py"), "unchanged\n");
+			await gitr(parent, ["add", "."]);
+			await gitr(parent, ["commit", "-q", "-m", "seed"]);
+			await fs.rm(isolation, { recursive: true, force: true });
+			await gitr(parent, ["clone", "-q", "--no-hardlinks", "--local", parent, isolation]);
+			await gitr(isolation, ["config", "user.email", "agent@example.com"]);
+			await gitr(isolation, ["config", "user.name", "Agent User"]);
+
+			await fs.writeFile(path.join(parent, "src/wip-only.py"), "wip edit\n");
+			await fs.writeFile(path.join(parent, "src/wanted.py"), "wip mixed\n");
+			await fs.copyFile(path.join(parent, "src/wip-only.py"), path.join(isolation, "src/wip-only.py"));
+			await fs.copyFile(path.join(parent, "src/wanted.py"), path.join(isolation, "src/wanted.py"));
+			// Untracked WIP file the agent also does not touch.
+			await fs.writeFile(path.join(parent, "user-wip.txt"), "user wip\n");
+			await fs.copyFile(path.join(parent, "user-wip.txt"), path.join(isolation, "user-wip.txt"));
+
+			// Agent only extends `wanted.py`; leaves `wip-only.py` and
+			// `user-wip.txt` alone.
+			await fs.writeFile(path.join(isolation, "src/wanted.py"), "wip mixed\nagent line\n");
+
+			const baseline = await captureBaseline(parent);
+			const result = await commitToBranch(isolation, baseline, "wip-filter", undefined);
+			expect(result?.branchName).toBe("veyyon/task/wip-filter");
+
+			const files = (await gitr(parent, ["show", "--name-only", "--pretty=format:", result!.branchName!]))
+				.split("\n")
+				.filter(Boolean);
+			// Only the agent-touched file lands on the branch — no WIP-only files.
+			expect(files).toEqual(["src/wanted.py"]);
+		});
+
+		it("still seeds WIP when the agent commits only baseline WIP and leaves the real edit uncommitted", async () => {
+			// Regression for the review on #4140: `agentCommits.length` alone
+			// hid this case — the agent had commits, but every filtered patch
+			// collapsed to empty (they only replayed baseline WIP via `git
+			// add -A`), so tmpDir was still pinned at baselineSha and the
+			// leftover patch still carried HEAD+WIP context.
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			// Parent WIP: untracked file the agent will also modify. The
+			// no-tracked-in-HEAD trigger from #4136 is the sharpest way to
+			// prove the WIP-seeded fallback fires.
+			await fs.writeFile(path.join(parent, "src/new.py"), "WIP header\nunchanged\n");
+
+			// Agent replays baseline WIP as a commit (`git add -A`), then makes
+			// the real edit uncommitted. `agentCommits.length` = 1, but the
+			// filtered commit patch is empty because it's identical to the
+			// baseline dirty tree.
+			await fs.mkdir(path.join(isolation, "src"), { recursive: true });
+			await fs.copyFile(path.join(parent, "src/new.py"), path.join(isolation, "src/new.py"));
+			await gitr(isolation, ["add", "-A"]);
+			await gitr(isolation, ["commit", "-q", "-m", "chore: capture baseline"]);
+
+			// Real, uncommitted agent edit on top of the WIP file.
+			await fs.writeFile(path.join(isolation, "src/new.py"), "WIP header\nagent-edit\n");
+
+			const baseline = await captureBaseline(parent);
+			expect(baseline.root.untracked).toContain("src/new.py");
+			const result = await commitToBranch(isolation, baseline, "wip-only-commit", undefined);
+			expect(result?.branchName).toBe("veyyon/task/wip-only-commit");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("new file mode");
+			expect(branchDiff).toContain("src/new.py");
+			expect(branchDiff).toContain("+WIP header");
+			expect(branchDiff).toContain("+agent-edit");
+		});
+	});
+});

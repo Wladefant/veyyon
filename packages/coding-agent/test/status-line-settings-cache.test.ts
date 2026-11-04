@@ -1,0 +1,254 @@
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import type { StatusLineSettings } from "@veyyon/coding-agent/modes/terminal/components/status-line/index";
+import { STATUS_LINE_PRESETS } from "@veyyon/coding-agent/modes/terminal/components/status-line/presets";
+import { withIcon } from "@veyyon/coding-agent/theme/icon-label";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
+import * as git from "@veyyon/coding-agent/utils/git";
+import { removeSyncWithRetries, setProjectDir } from "@veyyon/utils";
+import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { makeStatusLineProducer } from "./helpers/status-line-session";
+
+let settingsState: SettingsTestState | undefined;
+let projectDir = "";
+
+beforeEach(async () => {
+	settingsState = beginSettingsTest();
+	projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-status-line-settings-cache-"));
+	setProjectDir(projectDir);
+	await Settings.init({ inMemory: true, cwd: projectDir });
+	await initTheme();
+});
+
+afterEach(() => {
+	restoreSettingsTestState(settingsState);
+	settingsState = undefined;
+	if (projectDir) {
+		removeSyncWithRetries(projectDir);
+	}
+	projectDir = "";
+});
+
+function makeSession(sessionName = "Cache Session") {
+	return makeStatusLineProducer({
+		modelId: "test-model",
+		modelName: "Test Model",
+		contextWindow: 100_000,
+		contextUsage: undefined,
+		sessionName,
+	});
+}
+
+function makeComponent(statusLineSettings: StatusLineSettings): StatusLineComponent {
+	const component = new StatusLineComponent(makeSession());
+	component.updateSettings(statusLineSettings);
+	return component;
+}
+
+describe("StatusLineComponent effective settings cache", () => {
+	it("keeps repeated cached renders byte-identical across presets and widths", () => {
+		const cases: StatusLineSettings[] = [
+			{ preset: "default" },
+			{ preset: "minimal" },
+			{
+				preset: "custom",
+				leftSegments: ["pi", "model"],
+				rightSegments: ["session_name", "context_pct"],
+				segmentOptions: { model: { showThinkingLevel: false } },
+			},
+		];
+
+		for (const statusLineSettings of cases) {
+			const component = makeComponent(statusLineSettings);
+			for (const width of [36, 120]) {
+				const first = component.renderQuietLine(width);
+				const second = component.renderQuietLine(width);
+				expect(second).toEqual(first);
+			}
+		}
+	});
+
+	it("invalidates on updateSettings and reflects hook visibility changes", () => {
+		const component = makeComponent({
+			preset: "custom",
+			leftSegments: ["pi"],
+			rightSegments: [],
+			showHookStatus: false,
+		});
+		const firstEffective = component.getEffectiveSettingsForTest();
+		component.setHookStatus("lint", "lint running");
+		expect(component.render(80)).toEqual([]);
+
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["session_name"],
+			rightSegments: [],
+			showHookStatus: true,
+			segmentOptions: { path: { maxLength: 12 } },
+		});
+
+		const secondEffective = component.getEffectiveSettingsForTest();
+		expect(secondEffective).not.toBe(firstEffective);
+		expect(secondEffective.leftSegments).toEqual(["session_name"]);
+		expect(secondEffective.segmentOptions.path?.maxLength).toBe(12);
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).toContain("Cache Session");
+		expect(component.render(80)).toEqual(["lint running"]);
+	});
+
+	it("preserves preset option siblings while user segment options win", () => {
+		const component = makeComponent({
+			preset: "default",
+			segmentOptions: {
+				path: { maxLength: 7 },
+				git: { showBranch: false },
+			},
+		});
+
+		const effective = component.getEffectiveSettingsForTest();
+		expect(effective.segmentOptions.path).toEqual({ abbreviate: true, maxLength: 7, stripWorkPrefix: true });
+		expect(effective.segmentOptions.git?.showBranch).toBe(false);
+	});
+
+	it("uses custom segment arrays only for the custom preset", () => {
+		const defaultComponent = makeComponent({ preset: "default", leftSegments: ["session_name"], rightSegments: [] });
+		expect(defaultComponent.getEffectiveSettingsForTest().leftSegments).toEqual(
+			STATUS_LINE_PRESETS.default.leftSegments,
+		);
+
+		const customComponent = makeComponent({ preset: "custom", leftSegments: [], rightSegments: [] });
+		expect(customComponent.getEffectiveSettingsForTest().leftSegments).toEqual([]);
+		expect(customComponent.getEffectiveSettingsForTest().rightSegments).toEqual([]);
+		expect(stripVTControlCharacters(customComponent.renderQuietLine(120) ?? "")).toContain(
+			withIcon(theme.icon.agents, "0"),
+		);
+	});
+
+	it("surfaces active agents even when custom segments omit agents", () => {
+		const component = makeComponent({ preset: "custom", leftSegments: [], rightSegments: [] });
+
+		component.setAgentCount(2);
+
+		const content = stripVTControlCharacters(component.renderQuietLine(120) ?? "");
+		expect(content).toContain(withIcon(theme.icon.agents, "2"));
+		expect(content).not.toContain("agents");
+	});
+
+	it("keeps plan and hook state dynamic without settings invalidation", () => {
+		const component = makeComponent({ preset: "custom", leftSegments: ["mode"], rightSegments: [] });
+		const effective = component.getEffectiveSettingsForTest();
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).toContain(withIcon(theme.icon.agents, "0"));
+
+		component.setPlanModeStatus({ enabled: true, paused: false });
+		expect(stripVTControlCharacters(component.renderQuietLine(80) ?? "")).toContain("Plan");
+		expect(component.getEffectiveSettingsForTest()).toBe(effective);
+
+		component.setHookStatus("hook", "hook running");
+		expect(component.render(80)).toEqual(["hook running"]);
+		component.setHookStatus("hook", "hook done");
+		expect(component.render(80)).toEqual(["hook done"]);
+		expect(component.getEffectiveSettingsForTest()).toBe(effective);
+	});
+
+	it("joins hook statuses sorted by key with one space each, an empty one included", () => {
+		const component = makeComponent({ preset: "default", showHookStatus: true });
+		component.setHookStatus("b-lint", "lint running");
+		component.setHookStatus("a-empty", "");
+		component.setHookStatus("c-test", "tests green");
+		expect(component.render(80)).toEqual([" lint running tests green"]);
+	});
+
+	it("does not mutate shared preset segment options during narrow renders", () => {
+		const before = { ...STATUS_LINE_PRESETS.default.segmentOptions?.path };
+		const component = makeComponent({ preset: "default" });
+
+		component.renderQuietLine(12);
+		component.renderQuietLine(200);
+
+		expect(STATUS_LINE_PRESETS.default.segmentOptions?.path).toEqual(before);
+		expect(component.getEffectiveSettingsForTest().segmentOptions.path).toEqual(before);
+	});
+
+	it("reuses the effective-settings object until settings change", () => {
+		const component = makeComponent({ preset: "default" });
+		const effective = component.getEffectiveSettingsForTest();
+
+		for (let i = 0; i < 5; i++) {
+			component.renderQuietLine(100);
+			expect(component.getEffectiveSettingsForTest()).toBe(effective);
+		}
+
+		component.updateSettings({ preset: "minimal" });
+		const nextEffective = component.getEffectiveSettingsForTest();
+		expect(nextEffective).not.toBe(effective);
+		expect(component.getEffectiveSettingsForTest()).toBe(nextEffective);
+	});
+	it("skips git probes when git integration is disabled", async () => {
+		const headSpy = spyOn(git.head, "resolveSync").mockReturnValue(null);
+		const statusSpy = spyOn(git.status, "summary").mockResolvedValue({
+			staged: 0,
+			truncated: false,
+			unstaged: 0,
+			untracked: 0,
+		});
+		const repoSpy = spyOn(git.repo, "resolveSync").mockReturnValue(null);
+		try {
+			Settings.instance.override("git.enabled", false);
+			const component = makeComponent({
+				preset: "custom",
+				leftSegments: ["git", "pr"],
+				rightSegments: [],
+			});
+
+			component.watchGitState(() => {
+				throw new Error("git watcher should not fire while git integration is disabled");
+			});
+			component.renderQuietLine(100);
+			await Promise.resolve();
+
+			expect(repoSpy).not.toHaveBeenCalled();
+			expect(headSpy).not.toHaveBeenCalled();
+			expect(statusSpy).not.toHaveBeenCalled();
+		} finally {
+			repoSpy.mockRestore();
+			statusSpy.mockRestore();
+			headSpy.mockRestore();
+		}
+	});
+
+	it("skips git probes when no git-backed segment is visible", async () => {
+		const headSpy = spyOn(git.head, "resolveSync").mockReturnValue(null);
+		const statusSpy = spyOn(git.status, "summary").mockResolvedValue({
+			staged: 0,
+			truncated: false,
+			unstaged: 0,
+			untracked: 0,
+		});
+		const repoSpy = spyOn(git.repo, "resolveSync").mockReturnValue(null);
+		try {
+			const component = makeComponent({
+				preset: "custom",
+				leftSegments: ["pi"],
+				rightSegments: ["session_name"],
+			});
+
+			component.watchGitState(() => {
+				throw new Error("git watcher should not fire when no git-backed segment is visible");
+			});
+			component.renderQuietLine(100);
+			await Promise.resolve();
+
+			expect(repoSpy).not.toHaveBeenCalled();
+			expect(headSpy).not.toHaveBeenCalled();
+			expect(statusSpy).not.toHaveBeenCalled();
+		} finally {
+			repoSpy.mockRestore();
+			statusSpy.mockRestore();
+			headSpy.mockRestore();
+		}
+	});
+});

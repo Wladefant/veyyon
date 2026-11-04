@@ -1,0 +1,725 @@
+import { scheduler } from "node:timers/promises";
+import { bareModelId, parseAnthropicModel } from "@veyyon/catalog/identity";
+import { toNumber } from "@veyyon/catalog/utils";
+import { isCancellation } from "@veyyon/utils/abortable";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
+import { clamp, clamp01 } from "@veyyon/utils/math";
+import { HOUR_MS, WEEK_MS } from "@veyyon/utils/time";
+import * as AIError from "../error";
+import {
+	type CredentialRankingContext,
+	type CredentialRankingStrategy,
+	resolveUsedFraction,
+	type UsageAmount,
+	type UsageFetchContext,
+	type UsageFetchParams,
+	type UsageLimit,
+	type UsageProvider,
+	type UsageReport,
+	type UsageStatus,
+	type UsageWindow,
+} from "../usage";
+import { isRecord } from "../utils";
+import {
+	ANTHROPIC_RESET_PROGRAM,
+	ANTHROPIC_RESET_STATUS_QUERY,
+	anthropicResetCredits,
+	parseAnthropicResetStatus,
+} from "./anthropic-reset";
+import { claudeOAuthHeaders, normalizeClaudeBaseUrl } from "./claude-oauth-endpoint";
+import { usageStatusFromUsedFraction } from "./shared";
+
+const FIVE_HOURS_MS = 5 * HOUR_MS;
+const MAX_ATTEMPTS = 3;
+const BASE_RETRY_DELAY_MS = 500;
+
+interface ClaudeUsageBucket {
+	utilization?: number;
+	resets_at?: string;
+}
+
+interface ParsedUsageBucket {
+	utilization?: number;
+	resetsAt?: number;
+}
+type ClaudeUnifiedWindow = "5h" | "7d" | "7d_oi";
+type ClaudeModelKind = "opus" | "sonnet" | "fable" | "mythos";
+
+interface ClaudeUsageResponse {
+	five_hour?: ClaudeUsageBucket | null;
+	seven_day?: ClaudeUsageBucket | null;
+	seven_day_opus?: ClaudeUsageBucket | null;
+	seven_day_sonnet?: ClaudeUsageBucket | null;
+	limits?: unknown;
+	/** Reset-program status block, present when the query asks for it; see `./anthropic-reset`. */
+	cedar_ember?: unknown;
+}
+
+interface ClaudeApiLimitModelScope {
+	display_name?: string | null;
+}
+
+interface ClaudeApiLimitScope {
+	model?: ClaudeApiLimitModelScope | null;
+}
+
+interface ClaudeApiLimitEntry {
+	kind?: string;
+	percent?: unknown;
+	resets_at?: string | null;
+	scope?: ClaudeApiLimitScope | null;
+	is_active?: boolean;
+}
+
+interface ParsedApiLimitEntry {
+	kind: string;
+	bucket: ParsedUsageBucket;
+	displayName?: string;
+}
+
+type ClaudeUsagePayload = {
+	payload: ClaudeUsageResponse;
+	orgId?: string;
+};
+
+function parseIsoTime(value: string | undefined): number | undefined {
+	if (!value) return undefined;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseBucket(bucket: unknown): ParsedUsageBucket | undefined {
+	if (!isRecord(bucket)) return undefined;
+	const utilization = toNumber(bucket.utilization);
+	const resetsAt = parseIsoTime(typeof bucket.resets_at === "string" ? bucket.resets_at : undefined);
+	if (utilization === undefined && resetsAt === undefined) {
+		return undefined;
+	}
+	return { utilization, resetsAt };
+}
+
+function getApiLimitDisplayName(scope: unknown): string | undefined {
+	if (!isRecord(scope)) return undefined;
+	const model = scope.model;
+	if (!isRecord(model)) return undefined;
+	const displayName = model.display_name;
+	return typeof displayName === "string" && displayName.trim() ? displayName.trim() : undefined;
+}
+
+/**
+ * Anthropic kept the legacy account-wide buckets populated, but as of
+ * 2026-07-02 the legacy per-model weekly buckets (`seven_day_opus` /
+ * `seven_day_sonnet`) are permanently null. Model-scoped weekly caps now arrive
+ * only through generic `limits[]` entries (`kind: "weekly_scoped"`) with the
+ * model family named by `scope.model.display_name`.
+ */
+function parseApiLimitEntries(raw: unknown): ParsedApiLimitEntry[] {
+	if (!Array.isArray(raw)) return [];
+	const entries: ParsedApiLimitEntry[] = [];
+	for (const rawEntry of raw) {
+		if (!isRecord(rawEntry)) continue;
+		const entry = rawEntry as ClaudeApiLimitEntry;
+		if (typeof entry.kind !== "string") continue;
+		if (entry.is_active === false) continue;
+		const utilization = toNumber(entry.percent);
+		const resetsAt = parseIsoTime(typeof entry.resets_at === "string" ? entry.resets_at : undefined);
+		if (utilization === undefined && resetsAt === undefined) continue;
+		const displayName = getApiLimitDisplayName(entry.scope);
+		entries.push({
+			kind: entry.kind,
+			bucket: { utilization, resetsAt },
+			...(displayName ? { displayName } : {}),
+		});
+	}
+	return entries;
+}
+
+function parseUnifiedWindow(
+	headers: Record<string, string>,
+	window: ClaudeUnifiedWindow,
+): ParsedUsageBucket | undefined {
+	const prefix = `anthropic-ratelimit-unified-${window}-`;
+	const utilizationFraction = toNumber(headers[`${prefix}utilization`]);
+	const resetSeconds = toNumber(headers[`${prefix}reset`]);
+	const utilization = utilizationFraction === undefined ? undefined : utilizationFraction * 100;
+	const resetsAt = resetSeconds !== undefined && resetSeconds > 0 ? resetSeconds * 1000 : undefined;
+	if (utilization === undefined && resetsAt === undefined) {
+		return undefined;
+	}
+	return { utilization, resetsAt };
+}
+
+function getPayloadString(payload: Record<string, unknown>, key: string): string | undefined {
+	const value = payload[key];
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function getNestedPayloadString(payload: Record<string, unknown>, key: string, nestedKey: string): string | undefined {
+	const nested = payload[key];
+	return isRecord(nested) ? getPayloadString(nested, nestedKey) : undefined;
+}
+
+/**
+ * The account identity a usage payload names. Organization ids are never account ids: a report's
+ * `accountId` is compared with a credential's, and the stored credential holds the account uuid,
+ * so an org id written here made every sibling account of a provider reject its own report. The
+ * org id travels separately as `metadata.orgId`.
+ */
+function extractUsageIdentity(payload: ClaudeUsageResponse): { accountId?: string; email?: string } {
+	if (!isRecord(payload)) return {};
+	const accountId =
+		getPayloadString(payload, "account_id") ??
+		getPayloadString(payload, "accountId") ??
+		getPayloadString(payload, "user_id") ??
+		getPayloadString(payload, "userId") ??
+		getNestedPayloadString(payload, "account", "uuid") ??
+		getNestedPayloadString(payload, "account", "id") ??
+		getNestedPayloadString(payload, "user", "uuid") ??
+		getNestedPayloadString(payload, "user", "id");
+	const email =
+		getPayloadString(payload, "email") ??
+		getPayloadString(payload, "user_email") ??
+		getPayloadString(payload, "userEmail") ??
+		getNestedPayloadString(payload, "account", "email") ??
+		getNestedPayloadString(payload, "user", "email");
+	return { accountId, email };
+}
+
+function hasUsageData(payload: ClaudeUsageResponse): boolean {
+	return (
+		parseBucket(payload.five_hour)?.utilization !== undefined ||
+		parseBucket(payload.seven_day)?.utilization !== undefined ||
+		parseBucket(payload.seven_day_opus)?.utilization !== undefined ||
+		parseBucket(payload.seven_day_sonnet)?.utilization !== undefined ||
+		parseApiLimitEntries(payload.limits).some(entry => entry.bucket.utilization !== undefined)
+	);
+}
+
+/**
+ * What the usage endpoint states for itself: it never retries a 429. The endpoint is informational
+ * and throttled per source IP, so a second attempt inside one poll cannot succeed and only deepens
+ * the throttle; the caller's cool-down and the next poll are the answer. The rest of the verdict is
+ * `retryResponse`'s.
+ */
+const USAGE_RESPONSE_RETRY_POLICY: AIError.ResponseRetryPolicy = { api: "anthropic", neverRetry: [429] };
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+	if (signal?.aborted) return true;
+	if (!isRecord(error)) return false;
+	return isCancellation(error);
+}
+
+function retryDelayMs(attempt: number, retryAfter: string | null): number {
+	const baseline = exponentialBackoffDelay(attempt, { baseMs: BASE_RETRY_DELAY_MS, jitter: 0 });
+	if (!retryAfter?.trim()) return baseline;
+	const seconds = Number.parseFloat(retryAfter);
+	if (Number.isFinite(seconds)) return Math.max(baseline, Math.max(0, seconds * 1000));
+	const dateDelay = Date.parse(retryAfter) - Date.now();
+	return Number.isFinite(dateDelay) ? Math.max(baseline, Math.max(0, dateDelay)) : baseline;
+}
+
+async function waitBeforeRetry(
+	attempt: number,
+	retryAfter: string | null,
+	signal?: AbortSignal,
+	retryWait?: UsageFetchContext["retryWait"],
+): Promise<boolean> {
+	if (signal?.aborted) return false;
+	if (attempt >= MAX_ATTEMPTS - 1) return false;
+	try {
+		const delayMs = retryDelayMs(attempt, retryAfter);
+		if (retryWait) {
+			await retryWait(delayMs, signal);
+		} else {
+			await scheduler.wait(delayMs, { signal });
+		}
+		return !signal?.aborted;
+	} catch (error) {
+		if (isAbortError(error, signal)) return false;
+		throw error;
+	}
+}
+
+/** An attempt's verdict: the read's result, or `"next"` to send the request again. */
+type ClaudeUsageStep = ClaudeUsagePayload | null | "next";
+
+/**
+ * One usage read of up to `MAX_ATTEMPTS` requests. The read ends with `null` when an attempt fails
+ * without a retry, or when the attempts run out before a response carries usage data.
+ */
+class ClaudeUsageRead {
+	#url: string;
+	#headers: Record<string, string>;
+	#ctx: UsageFetchContext;
+	#signal: AbortSignal | undefined;
+
+	constructor(url: string, headers: Record<string, string>, ctx: UsageFetchContext, signal: AbortSignal | undefined) {
+		this.#url = url;
+		this.#headers = headers;
+		this.#ctx = ctx;
+		this.#signal = signal;
+	}
+
+	async run(): Promise<ClaudeUsagePayload | null> {
+		if (this.#signal?.aborted) return null;
+		for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+			const step = await this.#attempt(attempt);
+			if (step !== "next") return step;
+		}
+		return null;
+	}
+
+	async #attempt(attempt: number): Promise<ClaudeUsageStep> {
+		try {
+			const response = await this.#ctx.fetch(this.#url, { headers: this.#headers, signal: this.#signal });
+			const orgId = response.headers.get("anthropic-organization-id")?.trim() || undefined;
+			return response.ok
+				? await this.#readUsage(response, orgId, attempt)
+				: await this.#readFailure(response, attempt);
+		} catch (error) {
+			if (isAbortError(error, this.#signal)) return null;
+			this.#ctx.logger?.warn("Claude usage fetch error", {
+				error: String(error),
+				attempt,
+				willRetry: attempt < MAX_ATTEMPTS - 1,
+			});
+			return this.#retry(attempt, null);
+		}
+	}
+
+	async #readFailure(response: Response, attempt: number): Promise<ClaudeUsageStep> {
+		const retryable = await AIError.retryResponseAfterReading(response, USAGE_RESPONSE_RETRY_POLICY);
+		this.#ctx.logger?.warn("Claude usage fetch failed", {
+			status: response.status,
+			statusText: response.statusText,
+			attempt,
+			willRetry: retryable && attempt < MAX_ATTEMPTS - 1,
+		});
+		if (!retryable) return null;
+		return this.#retry(attempt, response.headers.get("retry-after"));
+	}
+
+	async #readUsage(response: Response, orgId: string | undefined, attempt: number): Promise<ClaudeUsageStep> {
+		const parsed = (await response.json()) as unknown;
+		const payload = isRecord(parsed) ? (parsed as ClaudeUsageResponse) : undefined;
+		if (payload && hasUsageData(payload)) return { payload, orgId };
+		this.#ctx.logger?.warn("Claude usage response missing usage data", {
+			attempt,
+			willRetry: attempt < MAX_ATTEMPTS - 1,
+		});
+		return this.#retry(attempt, null);
+	}
+
+	async #retry(attempt: number, retryAfter: string | null): Promise<"next" | null> {
+		return (await waitBeforeRetry(attempt, retryAfter, this.#signal, this.#ctx.retryWait)) ? "next" : null;
+	}
+}
+
+interface ClaudeProfile {
+	uuid?: string;
+	email?: string;
+	account?: {
+		uuid?: string;
+		email?: string;
+	};
+}
+
+function extractProfileIdentity(profile: ClaudeProfile | null): { accountId?: string; email?: string } {
+	if (!profile || !isRecord(profile)) return {};
+	const account = isRecord(profile.account) ? profile.account : undefined;
+	return {
+		accountId:
+			(typeof profile.uuid === "string" && profile.uuid.trim() ? profile.uuid.trim() : undefined) ??
+			(typeof account?.uuid === "string" && account.uuid.trim() ? account.uuid.trim() : undefined),
+		email:
+			(typeof profile.email === "string" && profile.email.trim() ? profile.email.trim() : undefined) ??
+			(typeof account?.email === "string" && account.email.trim() ? account.email.trim() : undefined),
+	};
+}
+
+async function fetchProfile(
+	baseUrl: string,
+	headers: Record<string, string>,
+	ctx: UsageFetchContext,
+	signal?: AbortSignal,
+): Promise<ClaudeProfile | null> {
+	if (signal?.aborted) return null;
+	const url = `${baseUrl}/profile`;
+	try {
+		const response = await ctx.fetch(url, { headers, signal });
+		if (!response.ok) return null;
+		const payload = (await response.json()) as unknown;
+		return isRecord(payload) ? (payload as ClaudeProfile) : null;
+	} catch (error) {
+		if (isAbortError(error, signal)) return null;
+		ctx.logger?.debug("Claude profile fetch error", { error: String(error) });
+		return null;
+	}
+}
+
+function buildUsageAmount(utilization: number | undefined): UsageAmount | undefined {
+	if (utilization === undefined) return undefined;
+	const clamped = clamp(utilization, 0, 100);
+	const usedFraction = clamped / 100;
+	return {
+		used: clamped,
+		limit: 100,
+		remaining: Math.max(0, 100 - clamped),
+		usedFraction,
+		remainingFraction: Math.max(0, 1 - usedFraction),
+		unit: "percent",
+	};
+}
+
+// Claude omits the status field entirely when the used fraction is unknown
+// (rather than emitting "unknown"), so the undefined case stays here; the
+// defined-fraction ladder is the shared owner.
+function buildUsageStatus(usedFraction: number | undefined): UsageStatus | undefined {
+	return usedFraction === undefined ? undefined : usageStatusFromUsedFraction(usedFraction);
+}
+
+function buildUsageLimit(args: {
+	id: string;
+	label: string;
+	windowId: string;
+	windowLabel: string;
+	durationMs: number;
+	bucket: ParsedUsageBucket | undefined;
+	provider: "anthropic";
+	tier?: string;
+	shared?: boolean;
+}): UsageLimit | null {
+	if (!args.bucket) return null;
+	const amount = buildUsageAmount(args.bucket.utilization);
+	if (!amount) return null;
+	const window: UsageWindow = {
+		id: args.windowId,
+		label: args.windowLabel,
+		durationMs: args.durationMs,
+		...(args.bucket.resetsAt !== undefined ? { resetsAt: args.bucket.resetsAt } : {}),
+	};
+	return {
+		id: args.id,
+		label: args.label,
+		scope: {
+			provider: args.provider,
+			windowId: args.windowId,
+			...(args.tier !== undefined ? { tier: args.tier } : {}),
+			...(args.shared !== undefined ? { shared: args.shared } : {}),
+		},
+		window,
+		amount,
+		status: buildUsageStatus(amount.usedFraction),
+	};
+}
+
+function slugifyClaudeLimitDisplayName(displayName: string): string {
+	return displayName
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Scoped weekly rows are per-model-family counters, not account-wide windows.
+ * They deliberately leave `scope.shared` unset so credential-wide exhaustion
+ * gating only considers the shared umbrella windows; an exhausted Fable weekly
+ * cap must not block Opus or Sonnet requests on the same credential.
+ */
+function buildScopedWeeklyUsageLimits(entries: readonly ParsedApiLimitEntry[]): UsageLimit[] {
+	const seenSlugs = new Set<string>();
+	const limits: UsageLimit[] = [];
+	for (const entry of entries) {
+		if (entry.kind !== "weekly_scoped" || !entry.displayName) continue;
+		const slug = slugifyClaudeLimitDisplayName(entry.displayName);
+		if (!slug || seenSlugs.has(slug)) continue;
+		seenSlugs.add(slug);
+		const limit = buildUsageLimit({
+			id: `anthropic:7d:${slug}`,
+			label: `Claude 7 Day (${entry.displayName})`,
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: entry.bucket,
+			provider: "anthropic",
+			tier: slug,
+		});
+		if (limit) limits.push(limit);
+	}
+	return limits;
+}
+
+/** The account-wide 5-hour and 7-day windows that the usage endpoint and the rate-limit headers both report. */
+function accountWindowLimits(
+	fiveHour: ParsedUsageBucket | undefined,
+	sevenDay: ParsedUsageBucket | undefined,
+): Array<UsageLimit | null> {
+	return [
+		buildUsageLimit({
+			id: "anthropic:5h",
+			label: "Claude 5 Hour",
+			windowId: "5h",
+			windowLabel: "5 Hour",
+			durationMs: FIVE_HOURS_MS,
+			bucket: fiveHour,
+			provider: "anthropic",
+			shared: true,
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d",
+			label: "Claude 7 Day",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: sevenDay,
+			provider: "anthropic",
+			shared: true,
+		}),
+	];
+}
+
+export function parseClaudeRateLimitHeaders(headers: Record<string, string>, now = Date.now()): UsageReport | null {
+	const fiveHour = parseUnifiedWindow(headers, "5h");
+	const sevenDay = parseUnifiedWindow(headers, "7d");
+	const modelScopedSevenDay = parseUnifiedWindow(headers, "7d_oi");
+	const limits = [
+		...accountWindowLimits(fiveHour, sevenDay),
+		buildUsageLimit({
+			id: "anthropic:7d:fable",
+			label: "Claude 7 Day (Fable)",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: modelScopedSevenDay,
+			provider: "anthropic",
+			tier: "fable",
+		}),
+	].filter((limit): limit is UsageLimit => limit !== null);
+
+	if (limits.length === 0) return null;
+	return {
+		provider: "anthropic",
+		fetchedAt: now,
+		limits,
+		metadata: { source: "ratelimit-headers" },
+	};
+}
+
+/**
+ * The account-wide windows, the legacy per-model weekly buckets and the model-scoped weekly rows,
+ * with each account-wide window read from `limits[]` when its legacy bucket is absent.
+ */
+function buildClaudeUsageLimits(payload: ClaudeUsageResponse): UsageLimit[] {
+	const apiLimitEntries = parseApiLimitEntries(payload.limits);
+	const fiveHour = parseBucket(payload.five_hour) ?? apiLimitEntries.find(entry => entry.kind === "session")?.bucket;
+	const sevenDay =
+		parseBucket(payload.seven_day) ?? apiLimitEntries.find(entry => entry.kind === "weekly_all")?.bucket;
+	return [
+		...accountWindowLimits(fiveHour, sevenDay),
+		buildUsageLimit({
+			id: "anthropic:7d:opus",
+			label: "Claude 7 Day (Opus)",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: parseBucket(payload.seven_day_opus),
+			provider: "anthropic",
+			tier: "opus",
+		}),
+		buildUsageLimit({
+			id: "anthropic:7d:sonnet",
+			label: "Claude 7 Day (Sonnet)",
+			windowId: "7d",
+			windowLabel: "7 Day",
+			durationMs: WEEK_MS,
+			bucket: parseBucket(payload.seven_day_sonnet),
+			provider: "anthropic",
+			tier: "sonnet",
+		}),
+		...buildScopedWeeklyUsageLimits(apiLimitEntries),
+	].filter((limit): limit is UsageLimit => limit !== null);
+}
+
+/** The usage payload's identity, completed from the credential and then, while either is missing, from `/profile`. */
+async function resolveClaudeIdentity(
+	params: UsageFetchParams,
+	ctx: UsageFetchContext,
+	usageIdentity: { accountId?: string; email?: string },
+	baseUrl: string,
+	headers: Record<string, string>,
+): Promise<{ accountId?: string; email?: string }> {
+	const accountId = usageIdentity.accountId ?? params.credential.accountId;
+	const email = usageIdentity.email ?? params.credential.email;
+	if (accountId && email) return { accountId, email };
+	const profileIdentity = extractProfileIdentity(await fetchProfile(baseUrl, headers, ctx, params.signal));
+	return { accountId: accountId ?? profileIdentity.accountId, email: email ?? profileIdentity.email };
+}
+
+async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null> {
+	if (params.provider !== "anthropic") return null;
+	const credential = params.credential;
+	if (credential.type !== "oauth" || !credential.accessToken) return null;
+
+	const baseUrl = normalizeClaudeBaseUrl(params.baseUrl);
+	// The reset-status query makes the one usage read also carry the account's reset grants.
+	const url = `${baseUrl}/usage?${ANTHROPIC_RESET_STATUS_QUERY}`;
+	const headers = claudeOAuthHeaders(credential.accessToken);
+
+	const payloadResult = await new ClaudeUsageRead(url, headers, ctx, params.signal).run();
+	if (!payloadResult) return null;
+	const { payload, orgId } = payloadResult;
+
+	const limits = buildClaudeUsageLimits(payload);
+	if (limits.length === 0) return null;
+	const { accountId, email } = await resolveClaudeIdentity(
+		params,
+		ctx,
+		extractUsageIdentity(payload),
+		baseUrl,
+		headers,
+	);
+
+	const resetStatus = parseAnthropicResetStatus(payload[ANTHROPIC_RESET_PROGRAM]);
+	const report: UsageReport = {
+		provider: params.provider,
+		fetchedAt: Date.now(),
+		limits,
+		...(resetStatus ? { resetCredits: anthropicResetCredits(resetStatus) } : {}),
+		metadata: {
+			endpoint: url,
+			...(accountId ? { accountId } : {}),
+			...(email ? { email } : {}),
+			...(orgId ? { orgId } : {}),
+		},
+		raw: payload,
+	};
+
+	return report;
+}
+
+export const claudeUsageProvider: UsageProvider = {
+	id: "anthropic",
+	fetchUsage: fetchClaudeUsage,
+	parseRateLimitHeaders: parseClaudeRateLimitHeaders,
+	supports: params => params.provider === "anthropic" && params.credential.type === "oauth",
+};
+
+function getClaudeModelKind(context: CredentialRankingContext | undefined): ClaudeModelKind | undefined {
+	const modelId = context?.modelId;
+	if (!modelId) return undefined;
+	return parseAnthropicModel(bareModelId(modelId))?.kind;
+}
+
+/**
+ * Claude model-scoped rows are only relevant to the matching model family.
+ * Credential-wide exhaustion checks stay on shared umbrella windows unless the
+ * request model parses to a concrete Anthropic kind, preventing a Fable cap from
+ * suppressing unrelated Opus/Sonnet traffic.
+ */
+function scopeClaudeLimitsForModel(report: UsageReport, context: CredentialRankingContext | undefined): UsageLimit[] {
+	const kind = getClaudeModelKind(context);
+	return report.limits.filter(
+		limit => limit.scope.shared === true || (kind !== undefined && limit.scope.tier === kind),
+	);
+}
+
+/**
+ * A Fable/Mythos weekly row is trusted for gating only at full exhaustion
+ * (server `exhausted` status or used fraction >= 1) with a live reset
+ * timestamp. Anything below that stays untrusted: the counters are
+ * notoriously unreliable short of the cap (they report high utilization
+ * while the account can still serve requests).
+ */
+function isConfirmedExhaustedTierRow(limit: UsageLimit, nowMs: number): boolean {
+	const resetsAt = limit.window?.resetsAt;
+	if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt) || resetsAt <= nowMs) return false;
+	if (limit.status === "exhausted") return true;
+	const fraction = resolveUsedFraction(limit);
+	return typeof fraction === "number" && fraction >= 1;
+}
+
+/**
+ * Scope limits for proactive hard-blocking (gating). Fable and Mythos tier
+ * weekly caps participate only when {@link isConfirmedExhaustedTierRow}
+ * confirms them, so a confirmed-dead account is skipped up front and a
+ * reactive 429 block extends to the tier reset in markUsageLimitReached,
+ * while unconfirmed rows remain ranking pressure only via
+ * scopeClaudeLimitsForModel.
+ */
+function scopeClaudeLimitsForModelHardBlock(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit[] {
+	const kind = getClaudeModelKind(context);
+	const requireConfirmedTierRow = kind === "fable" || kind === "mythos";
+	const nowMs = Date.now();
+	return report.limits.filter(limit => {
+		if (limit.scope.shared === true) return true;
+		if (kind === undefined || limit.scope.tier !== kind) return false;
+		return !requireConfirmedTierRow || isConfirmedExhaustedTierRow(limit, nowMs);
+	});
+}
+
+function rankingUsedFraction(limit: UsageLimit): number {
+	const fraction = resolveUsedFraction(limit);
+	if (typeof fraction !== "number" || !Number.isFinite(fraction)) return 0.5;
+	return clamp01(fraction);
+}
+
+function rankingDrainRate(limit: UsageLimit, nowMs: number): number {
+	const usedFraction = rankingUsedFraction(limit);
+	const durationMs = limit.window?.durationMs ?? WEEK_MS;
+	if (!Number.isFinite(durationMs) || durationMs <= 0) return usedFraction;
+	const resetAt = limit.window?.resetsAt;
+	if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return usedFraction;
+	const remainingWindowMs = resetAt - nowMs;
+	const clampedRemainingWindowMs = clamp(remainingWindowMs, 0, durationMs);
+	const elapsedMs = durationMs - clampedRemainingWindowMs;
+	if (elapsedMs <= 0) return usedFraction;
+	const elapsedHours = elapsedMs / (60 * 60 * 1000);
+	if (!Number.isFinite(elapsedHours) || elapsedHours <= 0) return usedFraction;
+	return usedFraction / elapsedHours;
+}
+
+function morePressuredLimit(
+	left: UsageLimit | undefined,
+	right: UsageLimit | undefined,
+	nowMs: number,
+): UsageLimit | undefined {
+	if (!left) return right;
+	if (!right) return left;
+	const leftDrainRate = rankingDrainRate(left, nowMs);
+	const rightDrainRate = rankingDrainRate(right, nowMs);
+	if (rightDrainRate !== leftDrainRate) return rightDrainRate > leftDrainRate ? right : left;
+	return rankingUsedFraction(right) > rankingUsedFraction(left) ? right : left;
+}
+
+function findClaudeSecondaryLimit(
+	report: UsageReport,
+	context: CredentialRankingContext | undefined,
+): UsageLimit | undefined {
+	const nowMs = Date.now();
+	return scopeClaudeLimitsForModel(report, context)
+		.filter(limit => limit.scope.windowId === "7d" || limit.window?.id === "7d")
+		.reduce<UsageLimit | undefined>((selected, limit) => morePressuredLimit(selected, limit, nowMs), undefined);
+}
+
+export const claudeRankingStrategy: CredentialRankingStrategy = {
+	findWindowLimits(report, context) {
+		const primary = report.limits.find(limit => limit.id === "anthropic:5h");
+		const secondary = findClaudeSecondaryLimit(report, context);
+		return { primary, secondary };
+	},
+	scopeLimits: scopeClaudeLimitsForModelHardBlock,
+	/**
+	 * Fable/Mythos usage-limit errors map to tier-local weekly counters. Scope
+	 * reactive backoff blocks for those tiers, mirroring the per-counter
+	 * precedent in packages/ai/src/usage/google-antigravity.ts:466-497.
+	 */
+	blockScope(context) {
+		const kind = getClaudeModelKind(context);
+		return kind === "fable" || kind === "mythos" ? `tier:${kind}` : undefined;
+	},
+	windowDefaults: { primaryMs: 5 * HOUR_MS, secondaryMs: WEEK_MS },
+};

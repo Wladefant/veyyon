@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+# Record one scene under swayfx, so the capture has the blur, the rounded corners
+# and the shadow a compositor draws natively.
+#
+#   proof/docker/wlsession.sh proof/scenes/<name>.sh
+#
+# This is xsession.sh's twin and keeps its contract exactly: it exports SCENE_NAME,
+# SCENE_OUT and SCENE_T0, sources proof/scenes/lib.sh and then the scene, records
+# video for the whole run, and writes <name>.mp4 plus one PNG per shot into /out.
+#
+# WHY A SECOND SESSION SCRIPT RATHER THAN A BRANCH IN THE FIRST. Almost nothing is
+# shared: there is no X server, no window manager to work around, no window id to
+# chase, no xdotool, and the capture and the encoder are different programs. The
+# parts that ARE shared -- the backdrop recipe, the knob defaults, the scene
+# handoff -- are in proof/docker/scene-config.sh, which both sessions source, so
+# neither file owns a second copy of a colour, a rate or an ImageMagick pipeline.
+#
+# What this stack cost to find, kept here because each one is a container:
+#   * swayfx will not run as root and exits at main.cpp:59, so the session runs as
+#     an unprivileged user and only the setup above it is root.
+#   * wlroots' gles2 renderer refuses to start without a DRM render node even on
+#     the headless backend. WLR_RENDERER=pixman needs no node and cannot run the
+#     blur shader, so the node is a requirement: the container needs
+#     `--device /dev/dri/renderD128` and the render group.
+#   * The compositor is ready when grim can copy the output, not when the socket
+#     exists. wlroots advertises the socket before the output is committed.
+set -euo pipefail
+
+SCENE="${1:?usage: wlsession.sh <scene.sh>}"
+NAME="$(basename "${SCENE}" .sh)"
+OUT="${SCENE_OUT_DIR:-/out}"
+# shellcheck source=proof/docker/scene-config.sh
+source /repo/proof/docker/scene-config.sh
+W="${SCENE_WIDTH}"
+H="${SCENE_HEIGHT}"
+FPS="${SCENE_FPS}"
+MARGIN=0
+mkdir -p "${OUT}"
+OUT="$(cd "${OUT}" && pwd -P)"
+
+# Source function-only helpers before initialization and cleanup traps
+# shellcheck source=proof/docker/session-scratch.sh
+source "$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-scratch.sh"
+# shellcheck source=proof/docker/session-artifacts.sh
+source "$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-artifacts.sh"
+# shellcheck source=proof/docker/magick-tmpdir.sh
+source "$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)/magick-tmpdir.sh"
+
+session_scratch_init "${OUT}" "${NAME}" || exit 1
+
+cleanup_root() {
+	trap - EXIT
+	type magick_tmpdir_release >/dev/null 2>&1 && magick_tmpdir_release || true
+	session_scratch_cleanup
+}
+trap cleanup_root EXIT
+
+magick_tmpdir_scope "${TMPDIR}"
+
+# The same parse-time bundle the X twin guards. This session runs the terminal as
+# an unprivileged user, so the artifact is materialized here, while root still
+# owns the checkout's write path.
+ensure_session_artifacts /repo
+if [ "${SCENE_THEME}" != "plain" ]; then
+	MARGIN="${SCENE_MARGIN}"
+	scene_backdrop "${W}" "${H}" "${TMPDIR}/backdrop.png"
+fi
+
+TW=$((W - 2 * MARGIN))
+TH=$((H - 2 * MARGIN))
+
+# The terminal's options are the X11 session's, minus the ones that only meant
+# something to a compositor scraping an X pixmap. background_opacity is the
+# client's own here and it works: on Wayland the terminal picks an ARGB buffer
+# without needing a GLX visual with an alpha channel, which is exactly what it
+# could not do on Xvfb.
+# The session's HOME is the SEEDED one, not a fresh home for the unprivileged
+# user. record-wl.sh copies the profile into ${HOME}/.veyyon before this script
+# runs, and the product reads its models, its config and its vault from there; a
+# session started with any other HOME finds no profile and comes up in first-run
+# onboarding, which is what the first glass take actually recorded.
+SESSION_HOME="${HOME:-/sandbox/home}"
+mkdir -p "${SESSION_HOME}/.config/kitty"
+cat >"${SESSION_HOME}/.config/kitty/kitty.conf" <<KITTY
+font_family JetBrains Mono
+font_size ${SCENE_FONT_SIZE}
+background ${SCENE_BG}
+foreground ${SCENE_FG}
+background_opacity ${SCENE_OPACITY}
+dynamic_background_opacity yes
+cursor_blink_interval 0
+window_padding_width ${SCENE_PADDING}
+remember_window_size no
+initial_window_width ${TW}
+initial_window_height ${TH}
+hide_window_decorations yes
+confirm_os_window_close 0
+scrollback_lines 20000
+enable_audio_bell no
+focus_follows_mouse yes
+allow_remote_control socket-only
+KITTY
+
+# The window's rectangle is stated, not discovered. On X11 the session had to find
+# a window id, move it, and read the placement back, because kitty maps and
+# retires a window during startup and a take once recorded full-bleed with the
+# backdrop nowhere on screen. Here the compositor is told the rectangle before the
+# client exists, and the scene library is told the same numbers.
+cat >"${TMPDIR}/sway.conf" <<CONF
+output ${SCENE_OUTPUT} resolution ${W}x${H}
+default_border none
+default_floating_border none
+gaps inner 0
+focus_follows_mouse no
+
+corner_radius ${SCENE_RADIUS}
+blur enable
+blur_passes ${SCENE_BLUR_PASSES}
+blur_radius ${SCENE_BLUR_RADIUS}
+blur_noise ${SCENE_BLUR_NOISE}
+blur_brightness ${SCENE_BLUR_BRIGHTNESS}
+shadows enable
+shadows_on_csd enable
+shadow_blur_radius ${SCENE_SHADOW_BLUR}
+shadow_color ${SCENE_SHADOW_COLOR}
+shadow_offset 0 6
+layer_effects "swaybg" blur disable
+
+for_window [app_id="kitty"] floating enable, resize set ${TW} ${TH}, move position ${MARGIN} ${MARGIN}
+CONF
+if [ "${SCENE_THEME}" != "plain" ]; then
+	printf 'exec swaybg -i %s -m fill\n' "${TMPDIR}/backdrop.png" >>"${TMPDIR}/sway.conf"
+else
+	printf 'output %s background %s solid_color\n' "${SCENE_OUTPUT}" "${SCENE_BG}" >>"${TMPDIR}/sway.conf"
+fi
+
+# The scene's own command, run in the terminal, exactly as the X11 path does it:
+# the grid the scene aims at comes from `stty size` inside that shell.
+#
+# The window OUTLIVES the command through kitty's own --hold, not through a shell
+# left running after it. The X11 path could let kitty close with the product,
+# because a crash was still readable in a log written as root; here the container
+# is torn down straight after, and the first glass take of the real product
+# recorded an empty window whose reason had already gone.
+#
+# The command is `exec`ed, exactly as the X11 path does it, and that is a finding
+# rather than a preference: with a shell kept as the parent the product started,
+# held the pty and painted NOTHING (a bare cursor, 709 near-background pixels in
+# the whole top text band, an empty `get-text`, an empty stderr and no exit
+# status), while kitty logged a garbled private mode nobody sends. --hold keeps
+# whatever it printed on screen and in `get-text` after it exits, which is where
+# a crash has to be readable once the container is gone.
+cat >"${TMPDIR}/bootstrap.sh" <<'BOOT'
+#!/usr/bin/env bash
+# One number in the environment, for a scene that stores a credential with `/secret
+# from-env` and then asks the model to sign with the placeholder. Exported here rather
+# than typed in the session, which is the point: a credential that reaches the vault
+# through the environment never appears in the transcript, so what the recording shows
+# being spent is a placeholder. xsession.sh has always done this and this file did not,
+# which cost a full rehearsal: every turn ran, and the one the take exists for reported
+# "the environment variable RELEASE_SIGNATURE is not set in this process".
+export RELEASE_SIGNATURE="${SCENE_SIGNING_NUMBER}"
+printf 'stty=%s\n' "$(stty size)" >"${TMPDIR}/geom"
+cd "${SCENE_CWD}" || cd /
+exec script -q -f -c "${SCENE_COMMAND}" "${TMPDIR}/app-out.raw" 2>"${TMPDIR}/app-stderr.log"
+BOOT
+chmod +x "${TMPDIR}/bootstrap.sh"
+
+# THE SESSION USER IS THE REPO'S OWNER, and that is not cosmetic. swayfx refuses to
+# run as root, so this path cannot keep the X11 session's root, and an arbitrary
+# unprivileged uid cannot write the repo: bun needs its cache and the product needs
+# its logs, so the product exits and the take records an empty window. The uid that
+# owns the bind mount can do both and is still not root.
+PUID="${SCENE_UID:-$(stat -c %u /repo)}"
+[ "${PUID}" != 0 ] || PUID=1500
+PUSER="$(getent passwd "${PUID}" | cut -d: -f1 || true)"
+if [ -z "${PUSER}" ]; then
+	groupadd -g "${PUID}" proof 2>/dev/null || true
+	useradd -m -u "${PUID}" -g "${PUID}" -s /bin/bash proof
+	PUSER=proof
+fi
+PGID="$(id -g "${PUSER}")"
+getent group "${SCENE_RENDER_GID:-993}" >/dev/null 2>&1 ||
+	groupadd -g "${SCENE_RENDER_GID:-993}" rendernode
+usermod -aG "${SCENE_RENDER_GID:-993}" "${PUSER}"
+usermod -aG video "${PUSER}" 2>/dev/null || true
+chmod 666 /dev/dri/* 2>/dev/null || true
+chmod 775 "${TMPDIR}"
+mkdir -p "${TMPDIR}/xdg"
+chmod 700 "${TMPDIR}/xdg"
+chown -R "${PUID}:${PGID}" "${TMPDIR}" "${OUT}"
+[ -n "${MAGICK_SCOPED_TMPDIR:-}" ] && chown -R "${PUID}:${PGID}" "${MAGICK_SCOPED_TMPDIR}" 2>/dev/null || true
+# The seeded HOME is handed over rather than copied: it already holds the profile
+# record-wl.sh wrote, including the models file whose base URL was rewritten for
+# this host, and the demo project seed-demo.sh git-inited.
+chown -R "${PUID}:${PGID}" "${SESSION_HOME}" 2>/dev/null || true
+
+cat >"${TMPDIR}/session.sh" <<SESSION
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck disable=SC1091
+[ -f /repo/proof/docker/magick-tmpdir.sh ] && source /repo/proof/docker/magick-tmpdir.sh
+export TMPDIR="${TMPDIR}"
+export XDG_RUNTIME_DIR="${TMPDIR}/xdg"
+export WLR_BACKENDS=headless
+export WLR_HEADLESS_OUTPUTS=1
+export WLR_RENDERER=gles2
+export WLR_LIBINPUT_NO_DEVICES=1
+export WLR_NO_HARDWARE_CURSORS=1
+export XDG_SESSION_TYPE=wayland
+export WAYLAND_DISPLAY=wayland-1
+[ -n "\${SCENE_RENDER_NODE:-}" ] && export WLR_RENDER_DRM_DEVICE="\${SCENE_RENDER_NODE}"
+
+sway -c "${TMPDIR}/sway.conf" >"${TMPDIR}/sway.log" 2>&1 &
+SWAY_PID=\$!
+export SWAYSOCK="\${XDG_RUNTIME_DIR}/sway-ipc.\$(id -u).\${SWAY_PID}.sock"
+
+ready=0
+for _ in \$(seq 1 120); do
+	kill -0 "\${SWAY_PID}" 2>/dev/null || break
+	if grim -o "\${SCENE_OUTPUT}" "${TMPDIR}/ready.png" >/dev/null 2>&1; then
+		ready=1
+		break
+	fi
+	sleep 0.5
+done
+if [ "\${ready}" != 1 ]; then
+	echo "chrome: swayfx never produced a copyable output" >&2
+	tail -25 "${TMPDIR}/sway.log" >&2
+	exit 1
+fi
+echo "chrome: swayfx radius \${SCENE_RADIUS} blur \${SCENE_BLUR_PASSES}x\${SCENE_BLUR_RADIUS} shadow \${SCENE_SHADOW_BLUR} composited the output" >&2
+
+kitty --hold --listen-on "\${KITTY_SOCKET}" "${TMPDIR}/bootstrap.sh" >"${TMPDIR}/term.log" 2>&1 &
+KITTY_PID=\$!
+# The terminal is up when its socket answers, which is also the channel every
+# typed character and every screen read goes through, so this waits on the thing
+# the scene actually depends on rather than on a window appearing.
+for _ in \$(seq 1 120); do
+	kitty @ --to "\${KITTY_SOCKET}" ls >/dev/null 2>&1 && break
+	sleep 0.5
+done
+for _ in \$(seq 1 60); do
+	[ -s "${TMPDIR}/geom" ] && break
+	sleep 0.5
+done
+
+# wf-recorder takes its frames through wlr-screencopy, the same protocol grim
+# uses, so a still and the video frame at that second are the same pixels.
+wf-recorder -o "\${SCENE_OUTPUT}" -f "\${SCENE_VIDEO}" -r "\${SCENE_FPS}" \
+	-c libx264 -p preset=veryfast -p crf=20 --no-damage >"${TMPDIR}/wf.log" 2>&1 &
+WF_PID=\$!
+sleep 1
+rm -f "\${SCENE_OUT}/\${SCENE_NAME}-marks.tsv"
+export SCENE_T0="\$(date +%s%3N)"
+
+cleanup() {
+	# THE SCREEN IS READ BEFORE ANYTHING IS KILLED. This ran after `kill
+	# "${KITTY_PID}"` and so asked a dead terminal what it was showing: the
+	# capture came back empty on every take, which read as "the product painted
+	# nothing" and sent the diagnosis after the product instead of after this
+	# function. An empty capture must mean an empty screen, or it is not evidence.
+	kitty @ --to "\${KITTY_SOCKET}" get-text >"\${SCENE_OUT}/\${SCENE_NAME}-screen.txt" 2>/dev/null || true
+	# wf-recorder needs SIGINT to finalise the container; killing it outright
+	# leaves an mp4 with no moov atom, which plays nowhere.
+	kill -INT "\${WF_PID}" 2>/dev/null || true
+	wait "\${WF_PID}" 2>/dev/null || true
+	# Judge the take on motion, not on the header it was written with. wf-recorder
+	# reports the rate it was asked for whatever the compositor actually handed it,
+	# so an mp4 that plays as three frames a second is indistinguishable from a
+	# smooth one until the unique frames are counted. The X path has been gated
+	# since the blur was found; a Wayland take that is never measured is the same
+	# defect waiting on a different display server.
+	local motion_failed=0
+	if [ "\${SCENE_MOTION_GATE}" = "1" ]; then
+		bash "\${SCENE_MOTION_GATE_BIN}" "\${SCENE_VIDEO}" >&2 || motion_failed=1
+	fi
+	kill "\${KITTY_PID}" 2>/dev/null || true
+	swaymsg exit >/dev/null 2>&1 || kill "\${SWAY_PID}" 2>/dev/null || true
+	# The container is gone the moment this returns, and with it every reason a
+	# take came out wrong. The first glass take of the real product recorded an
+	# empty window and the log that said why had already been destroyed, so the
+	# logs leave with the artifacts.
+	for log in "${TMPDIR}/term.log" "${TMPDIR}/sway.log" "${TMPDIR}/wf.log" "${TMPDIR}/app-stderr.log" "${TMPDIR}/app-exit" "${TMPDIR}/app-out.raw"; do
+		[ -s "\${log}" ] && cp -f "\${log}" "\${SCENE_OUT}/\${SCENE_NAME}-\$(basename "\${log}")" 2>/dev/null
+	done
+	type magick_tmpdir_release >/dev/null 2>&1 && magick_tmpdir_release || true
+	# The verdict is taken after the artifacts are out, so a failed take is still a
+	# take somebody can look at, and `exit` here rather than `return` because an
+	# EXIT trap that only returns leaves the status the run already had -- which is
+	# success, which is how an unwatchable take reports as a good one.
+	if [ "\${motion_failed}" = "1" ]; then exit 1; fi
+	return 0
+}
+trap cleanup EXIT
+
+export SCENE_SERVER=wayland
+export KITTY_SOCKET="\${KITTY_SOCKET}"
+# The scene library reads the window rectangle from these rather than asking the
+# compositor: sway was told the rectangle, so these are the numbers it applied.
+export SCENE_WIN_W="\${SCENE_TW}"
+export SCENE_WIN_H="\${SCENE_TH}"
+export SCENE_WIN_X="\${SCENE_MARGIN_PX}"
+export SCENE_WIN_Y="\${SCENE_MARGIN_PX}"
+_WL_PTR_X=\$((SCENE_MARGIN_PX + SCENE_TW / 2))
+_WL_PTR_Y=\$((SCENE_MARGIN_PX + SCENE_TH / 2))
+export _WL_PTR_X _WL_PTR_Y
+swaymsg -- seat "\${SCENE_SEAT}" cursor set "\${_WL_PTR_X}" "\${_WL_PTR_Y}" >/dev/null 2>&1 || true
+
+# shellcheck disable=SC1090
+source "\${SCENE_LIB:-/repo/proof/scenes/lib.sh}"
+# shellcheck disable=SC1090
+source "\${SCENE_FILE}"
+
+sleep 1
+cleanup
+trap - EXIT
+SESSION
+chmod +x "${TMPDIR}/session.sh"
+chown "${PUID}:${PGID}" "${TMPDIR}/session.sh"
+
+scene_env_pairs
+setpriv --reuid "${PUID}" --regid "${PGID}" --init-groups --inh-caps=-all \
+	env "HOME=${SESSION_HOME}" PATH=/opt/glass/bin:/usr/local/bin:/usr/bin:/bin \
+	"SCENE_FILE=${SCENE}" "SCENE_NAME=${NAME}" "SCENE_OUT=${OUT}" \
+	"SCENE_VIDEO=${OUT}/${NAME}.mp4" "SCENE_TW=${TW}" "SCENE_TH=${TH}" \
+	"SCENE_MARGIN_PX=${MARGIN}" "SCENE_FPS=${FPS}" \
+	"SCENE_RENDER_NODE=${SCENE_RENDER_NODE:-/dev/dri/renderD128}" \
+	"${SCENE_ENV_PAIRS[@]}" \
+	"LOCAL_LLM_KEY=${LOCAL_LLM_KEY:-none}" \
+	"PROOF_LLM_BASE_URL=${PROOF_LLM_BASE_URL:-}" \
+	"VEYYON_DEMO_SECRET=${VEYYON_DEMO_SECRET:-}" \
+	"SCENE_LIB=${SCENE_LIB:-/repo/proof/scenes/lib.sh}" \
+	"TYPE_DELAY=${TYPE_DELAY:-}" \
+	"SCENE_TYPING_REPEAT=${SCENE_TYPING_REPEAT:-}" \
+	"TERM=xterm-kitty" "COLORTERM=truecolor" "LANG=C.UTF-8" "LC_ALL=C.UTF-8" \
+	"MAGICK_SCOPED_TMPDIR=${MAGICK_SCOPED_TMPDIR:-}" "MAGICK_SCOPED_TMPDIR_TOKEN=${MAGICK_SCOPED_TMPDIR_TOKEN:-}" \
+	"MAGICK_TMPDIR=${MAGICK_TMPDIR:-}" "MAGICK_TEMPORARY_PATH=${MAGICK_TEMPORARY_PATH:-}" \
+	"TMPDIR=${TMPDIR}" "KITTY_SOCKET=${KITTY_SOCKET}" \
+	bash "${TMPDIR}/session.sh"
+
+ls -la "${OUT}/${NAME}.mp4"

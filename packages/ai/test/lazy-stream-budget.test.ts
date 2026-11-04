@@ -1,0 +1,386 @@
+/**
+ * The watchdog budget each class of lazy provider stream runs under.
+ *
+ * This suite exists because of a live report that grok, cursor and devin were
+ * "very slow and constantly error out" in veyyon while behaving perfectly in
+ * their own harnesses, surfacing as:
+ *
+ *     Provider stream stalled while waiting for the next event
+ *
+ * The cause was entirely in the budget these streams were handed.
+ * `cursor-agent` and `devin-agent` were the only two lazy providers registered
+ * with no `LazyStreamLimits` at all, so they inherited the generic 100s
+ * first-event / 120s idle defaults meant for token streams. Both are backends
+ * that run their own agent loop remotely and emit nothing to us while the agent
+ * plans, edits and runs commands, which routinely outlasts two minutes. The
+ * watchdog then aborted a healthy session. Their own harnesses impose no such
+ * budget, which is exactly why the same model looked fine there.
+ *
+ * `resolveLazyStreamBudget` is asserted directly rather than through a live
+ * stream because the failure is a deadline: observing it end to end means
+ * waiting out ten real minutes, and a test that cannot afford to do that would
+ * quietly stop defending the numbers.
+ *
+ * `cursor-agent` has since left that widened budget: 600s was still a guess, and a recorded
+ * session showed healthy gaps of 355s and seven turns dying at exactly 600s. It now runs under
+ * {@link CURSOR_LAZY_STREAM_LIMITS}, where the wrapper keeps the first-event watchdog and drops
+ * the idle one because `cursor.ts` asks the HTTP/2 connection whether it is alive. What is
+ * asserted here is the budget that reaches it; what a live connection does with that budget is
+ * `cursor-silence-is-not-a-dead-connection.test.ts`.
+ */
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+	AGENTIC_BACKEND_LAZY_STREAM_LIMITS,
+	CURSOR_LAZY_STREAM_LIMITS,
+	GEMINI_LAZY_STREAM_LIMITS,
+	type LazyStreamLimits,
+	resolveLazyStreamBudget,
+} from "@veyyon/ai/providers/register-builtins";
+import { getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { ANTIGRAVITY_MODEL_WIRE_PROFILES } from "@veyyon/catalog/wire/gemini-headers";
+import { $env } from "@veyyon/utils/env";
+
+/** The generic defaults in `idle-iterator.ts` — what an unlimited provider inherits. */
+const GENERIC_FIRST_EVENT_MS = 300_000;
+const GENERIC_IDLE_MS = 300_000;
+
+const ENV_KEYS = [
+	"VEYYON_STREAM_IDLE_TIMEOUT_MS",
+	"VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS",
+	"VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS",
+] as const;
+
+const savedEnv = new Map<string, string | undefined>();
+
+function setEnv(key: (typeof ENV_KEYS)[number], value: string): void {
+	if (!savedEnv.has(key)) savedEnv.set(key, $env[key]);
+	($env as Record<string, string | undefined>)[key] = value;
+}
+
+afterEach(() => {
+	for (const [key, value] of savedEnv) {
+		if (value === undefined) delete ($env as Record<string, string | undefined>)[key];
+		else ($env as Record<string, string | undefined>)[key] = value;
+	}
+	savedEnv.clear();
+});
+
+describe("lazy provider stream budget", () => {
+	describe("agentic backends on a widened budget (devin-agent)", () => {
+		/**
+		 * The fix itself. A remote agent that thinks and runs tools for several
+		 * minutes without emitting must not be read as a stalled provider, so the
+		 * idle budget has to clear the generic 120s by a wide margin. If this
+		 * regresses to the generic default, the original bug is back verbatim.
+		 */
+		it("waits minutes, not two minutes, before calling silence a stall", () => {
+			const budget = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(600_000);
+			expect(budget.idleTimeoutMs!).toBeGreaterThan(GENERIC_IDLE_MS);
+		});
+
+		/**
+		 * The first event is the other half of the report: a cold agent start
+		 * spends a long time on the remote side before the first token reaches
+		 * us, and the generic budget killed the turn before it began.
+		 *
+		 * The resolved value is 600s rather than the 300s floor the limits name,
+		 * because `getStreamFirstEventTimeoutMs` takes `max(fallback, idle)` — a
+		 * stream is never given less time to start than it is given to continue.
+		 * The 300s floor is not dead config; it is what survives when an operator
+		 * lowers idle, which the next test pins.
+		 */
+		it("allows a long cold start before the first event", () => {
+			const budget = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(budget.firstItemTimeoutMs).toBe(600_000);
+			expect(budget.firstItemTimeoutMs!).toBeGreaterThan(GENERIC_FIRST_EVENT_MS);
+		});
+
+		/**
+		 * A cold agent start is slow for reasons that have nothing to do with
+		 * steady-state silence, so the 300s first-event floor must hold even when
+		 * an operator tightens the idle budget well below it. Without the floor,
+		 * lowering idle to seconds would also cut the cold start to seconds and
+		 * reproduce the original report on the very first event.
+		 */
+		it("keeps the cold-start floor when an operator tightens idle", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(5000);
+			expect(budget.firstItemTimeoutMs).toBe(300_000);
+		});
+
+		/**
+		 * Widening the budget must not become "no budget". `devin.ts` is a bare
+		 * Connect frame reader with no timeout of its own, so a genuinely dead
+		 * socket has nothing but this watchdog to end it. Both deadlines stay
+		 * finite and armed.
+		 */
+		it("still arms both watchdogs, so a dead socket cannot hang forever", () => {
+			const budget = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBeDefined();
+			expect(Number.isFinite(budget.idleTimeoutMs!)).toBe(true);
+			expect(budget.firstItemTimeoutMs).toBeGreaterThan(0);
+			expect(Number.isFinite(budget.firstItemTimeoutMs!)).toBe(true);
+		});
+
+		/**
+		 * The widened numbers are a default, not a policy. An operator who wants
+		 * the old aggression back sets the env var and gets it, with no code
+		 * change and no rebuild.
+		 */
+		it("yields to an operator env override", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(5000);
+		});
+
+		/**
+		 * `VEYYON_STREAM_IDLE_TIMEOUT_MS=0` is the documented way to disable the
+		 * idle watchdog. Handing a provider a wider default must not silently
+		 * re-arm a watchdog the operator turned off.
+		 */
+		it("honors an env value of 0 as watchdog disabled", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "0");
+
+			const budget = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBeUndefined();
+		});
+
+		/**
+		 * A per-call option is the most specific signal there is and outranks
+		 * both the widened default and the env var.
+		 */
+		it("yields to an explicit caller option over env and default alike", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget(
+				{ streamIdleTimeoutMs: 777, streamFirstEventTimeoutMs: 888 },
+				AGENTIC_BACKEND_LAZY_STREAM_LIMITS,
+			);
+
+			expect(budget.idleTimeoutMs).toBe(777);
+			expect(budget.firstItemTimeoutMs).toBe(888);
+		});
+	});
+
+	describe("cursor-agent, which governs its own idleness", () => {
+		/**
+		 * The whole change in one assertion: no idle deadline reaches the stream by
+		 * default, because no number here can tell a remote agent that is working
+		 * from a connection that has died. `cursor.ts` asks the transport instead.
+		 */
+		it("arms no idle watchdog by default", () => {
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBeUndefined();
+		});
+
+		/**
+		 * Dropping the idle watchdog is not dropping every watchdog. A stream that
+		 * never opens has no transport liveness to consult — there is nothing to
+		 * probe yet — so the first-event deadline stays armed and stays wide enough
+		 * for a cold agent start.
+		 */
+		it("keeps a widened first-event watchdog", () => {
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.firstItemTimeoutMs).toBe(300_000);
+			expect(budget.firstItemTimeoutMs!).toBeGreaterThanOrEqual(GENERIC_FIRST_EVENT_MS);
+		});
+
+		/**
+		 * An operator who pins the generic knob still gets a number, and it reaches
+		 * the provider as the ceiling on unbroken silence rather than being ignored
+		 * by a provider that has decided it knows better.
+		 */
+		it("takes an operator env value as the silence ceiling", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(5000);
+		});
+
+		/**
+		 * The OpenAI-family alias is the same knob for this purpose; an operator who
+		 * has only ever set that one must not find the ceiling silently absent.
+		 */
+		it("accepts the openai-family alias for that ceiling", () => {
+			setEnv("VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS", "7000");
+
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(7000);
+		});
+
+		/**
+		 * `0` is the documented way to disable the watchdog, and it must still mean
+		 * that here rather than being read as a zero-length ceiling that ends every
+		 * turn instantly.
+		 */
+		it("honors an env value of 0 as watchdog disabled", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "0");
+
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBeUndefined();
+		});
+
+		/**
+		 * A per-call option is the most specific signal there is and outranks the
+		 * env var, exactly as it does for every other provider class.
+		 */
+		it("yields to an explicit caller option over the env var", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({ streamIdleTimeoutMs: 777 }, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(777);
+		});
+
+		/**
+		 * The negative control for the fix: the budget cursor used to run under is
+		 * still what an unmodified agentic backend gets, so this documents what was
+		 * removed rather than asserting the removal in isolation.
+		 */
+		it("no longer runs the widened blind idle budget", () => {
+			const cursor = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+			const widened = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(widened.idleTimeoutMs).toBe(600_000);
+			expect(cursor.idleTimeoutMs).not.toBe(widened.idleTimeoutMs);
+		});
+	});
+
+	describe("Gemini wires, which deliver a function call whole", () => {
+		/**
+		 * Under the slowest tenth of measured Gemini 4 Argon tool-call decodes, which ran at 99 to
+		 * 100 tokens/s; the median was 119.
+		 */
+		const SLOW_DECODE_TOKENS_PER_S = 100;
+		const GEMINI_WIRE_APIS = new Set<string>(["google-generative-ai", "google-vertex", "google-gemini-cli"]);
+
+		/**
+		 * The largest output one Gemini-wire request is sent with, read from the catalog. A Cloud Code
+		 * Assist request through `google-antigravity` is sent with its wire profile's cap; every other
+		 * request with its model's `maxTokens`.
+		 */
+		function largestRequestOutputCap(): number {
+			const caps = Object.values(ANTIGRAVITY_MODEL_WIRE_PROFILES).map(profile => profile.maxOutputTokens);
+			for (const provider of getBundledProviders()) {
+				if (provider === "google-antigravity") continue;
+				for (const model of getBundledModels(provider)) {
+					if (GEMINI_WIRE_APIS.has(model.api) && model.maxTokens !== null) caps.push(model.maxTokens);
+				}
+			}
+			return Math.max(...caps);
+		}
+
+		/**
+		 * The fix. The stream is silent while the model decodes a call's arguments, so a budget shorter
+		 * than that decode cuts every large `write` or `edit`, and the retry decodes the same call into
+		 * the same deadline. The first event gets the same budget: a call decoded with no thinking
+		 * first is the same silence before the first event.
+		 */
+		it("waits out the silent decode of a call at the largest request output cap", () => {
+			const budget = resolveLazyStreamBudget({}, GEMINI_LAZY_STREAM_LIMITS);
+			const decodeMs = Math.ceil(largestRequestOutputCap() / SLOW_DECODE_TOKENS_PER_S) * 1000;
+
+			expect(budget.idleTimeoutMs!).toBeGreaterThanOrEqual(decodeMs);
+			expect(budget.firstItemTimeoutMs!).toBeGreaterThanOrEqual(decodeMs);
+		});
+
+		/** An operator who lowers idle keeps the 300s wait for a cold first event. */
+		it("keeps the cold-start floor when an operator tightens idle", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, GEMINI_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(5000);
+			expect(budget.firstItemTimeoutMs).toBe(300_000);
+		});
+	});
+
+	describe("providers that own their watchdog", () => {
+		/**
+		 * Every OpenAI-family and Anthropic provider wraps its own transport
+		 * timeouts. The lazy wrapper must stay out of the way entirely rather
+		 * than race them with a second, differently-tuned deadline and a generic
+		 * error message that hides the provider's own diagnosis.
+		 */
+		it("arms neither watchdog", () => {
+			const budget = resolveLazyStreamBudget({}, { providerHandlesStreamTimeouts: true });
+
+			expect(budget.idleTimeoutMs).toBeUndefined();
+			expect(budget.firstItemTimeoutMs).toBe(0);
+		});
+
+		/**
+		 * The exemption is unconditional: a stray env var must not reintroduce
+		 * the double watchdog this flag exists to prevent.
+		 */
+		it("stays disarmed even when the env vars are set", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+			setEnv("VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, { providerHandlesStreamTimeouts: true });
+
+			expect(budget.idleTimeoutMs).toBeUndefined();
+			expect(budget.firstItemTimeoutMs).toBe(0);
+		});
+	});
+
+	describe("providers with no limits", () => {
+		/**
+		 * Pins the generic defaults that the agentic backends used to inherit.
+		 * This is the negative control for the whole fix: it documents the exact
+		 * budget that was aborting cursor and devin turns, and it is what the
+		 * agentic numbers above are asserted to exceed.
+		 */
+		it("inherits the generic token-stream defaults", () => {
+			const budget = resolveLazyStreamBudget({}, undefined);
+
+			expect(budget.idleTimeoutMs).toBe(GENERIC_IDLE_MS);
+			// Floored up to idle by `max(fallback, idle)`, the same rule the
+			// agentic case follows; the 100s constant only shows through when a
+			// caller or env var pushes idle below it.
+			expect(budget.firstItemTimeoutMs).toBe(GENERIC_IDLE_MS);
+		});
+
+		/**
+		 * The 100s generic cold-start default is reachable, not vestigial: it is
+		 * what an unlimited provider gets once idle drops beneath it.
+		 */
+		it("falls back to the 100s cold-start default once idle drops below it", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, undefined);
+
+			expect(budget.firstItemTimeoutMs).toBe(GENERIC_FIRST_EVENT_MS);
+		});
+	});
+
+	describe("partial limits", () => {
+		/**
+		 * A provider that widens only the first-event floor must keep the generic idle budget rather
+		 * than have it silently dragged along.
+		 */
+		it("widening only the first event leaves idle at the generic default", () => {
+			const limits: LazyStreamLimits = { defaultFirstEventTimeoutMs: 300_000 };
+
+			const budget = resolveLazyStreamBudget({}, limits);
+
+			expect(budget.firstItemTimeoutMs).toBe(300_000);
+			expect(budget.idleTimeoutMs).toBe(GENERIC_IDLE_MS);
+		});
+	});
+});

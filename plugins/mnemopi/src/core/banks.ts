@@ -1,0 +1,149 @@
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { dataDir as configuredDataDir, DEFAULT_DB_FILENAME } from "../config";
+import { closeQuietly, openDatabase } from "../db";
+
+export class ValueError extends Error {
+	override name = "ValueError";
+}
+
+export interface BankStats {
+	readonly name: string;
+	readonly exists: boolean;
+	readonly db_path: string;
+	readonly dbSizeBytes: number;
+	readonly db_size_bytes: number;
+}
+
+export class BankManager {
+	readonly dataDir: string;
+	readonly banksDir: string;
+
+	/**
+	 * Resolves the bank paths and creates NOTHING.
+	 *
+	 * This used to `mkdirSync(this.banksDir)`, which made every read a write. `bankDbPath()`,
+	 * `bankExists()`, `listBanks()` and `getBankStats()` each construct a manager to answer a
+	 * question, and `resolveDbPath()` in `core/memory.ts` constructs one just to spell a path,
+	 * so merely asking where a bank lives created `~/.hermes/mnemopi/data/banks` in the real
+	 * home. `createBank()` is the one operator action that needs the directory, and its own
+	 * recursive `mkdirSync` already makes it.
+	 */
+	constructor(dataDir?: string) {
+		this.dataDir = dataDir ?? configuredDataDir();
+		this.banksDir = join(this.dataDir, "banks");
+	}
+
+	createBank(name: string): string {
+		validateName(name);
+		const bankDir = join(this.banksDir, name);
+		if (existsSync(bankDir)) throw new ValueError(`Bank '${name}' already exists`);
+		mkdirSync(bankDir, { recursive: true });
+		const dbPath = join(bankDir, DEFAULT_DB_FILENAME);
+		const db = openDatabase(dbPath);
+		closeQuietly(db);
+		return dbPath;
+	}
+	deleteBank(name: string, force = false): boolean {
+		validateName(name);
+		if (name === "default") {
+			if (!force) throw new ValueError("Cannot delete 'default' bank without force=True");
+			// The default bank's DB lives at dataDir/mnemopi.db (the exact path
+			// getBankDbPath resolves), NOT under banksDir/default/. Deleting a
+			// banksDir/default dir here used to be a silent no-op: the caller was
+			// told nothing was deleted (or worse, believed the data was wiped)
+			// while the real default DB survived. Act on the same path the reads
+			// use, including the SQLite sidecars.
+			const dbPath = this.getBankDbPath("default");
+			if (!existsSync(dbPath)) return false;
+			for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
+				rmSync(p, { force: true });
+			}
+			return true;
+		}
+		const bankDir = join(this.banksDir, name);
+		if (!existsSync(bankDir)) return false;
+		rmSync(bankDir, { recursive: true, force: true });
+		return true;
+	}
+	listBanks(): string[] {
+		const banks: string[] = ["default"];
+		if (existsSync(this.banksDir)) {
+			for (const entry of readdirSync(this.banksDir, { withFileTypes: true })) {
+				if (entry.isDirectory() && entry.name !== "default") banks.push(entry.name);
+			}
+		}
+		return banks.sort();
+	}
+	bankExists(name: string): boolean {
+		if (name === "default") return true;
+		return existsSync(join(this.banksDir, name));
+	}
+	getBankDbPath(name: string): string {
+		if (name.length === 0 || name === "default") return join(this.dataDir, DEFAULT_DB_FILENAME);
+		validateName(name);
+		return join(this.banksDir, name, DEFAULT_DB_FILENAME);
+	}
+	renameBank(oldName: string, newName: string): string {
+		if (oldName === "default") throw new ValueError("Cannot rename 'default' bank");
+		// Validate BOTH names. Every other bank operation validates its name, but
+		// renameBank historically checked only newName — so an oldName containing a
+		// path separator or `..` escaped banksDir on the rename SOURCE, letting
+		// `renameBank("../../somedir", "captured")` move an out-of-tree directory
+		// into the bank store. The name charset (validateName) rejects `/` and `.`,
+		// so this closes the traversal boundary that newName already had.
+		validateName(oldName);
+		validateName(newName);
+		const oldDir = join(this.banksDir, oldName);
+		const newDir = join(this.banksDir, newName);
+		if (!existsSync(oldDir)) throw new ValueError(`Bank '${oldName}' does not exist`);
+		if (existsSync(newDir)) throw new ValueError(`Bank '${newName}' already exists`);
+		renameSync(oldDir, newDir);
+		return join(newDir, DEFAULT_DB_FILENAME);
+	}
+	getBankStats(name: string): BankStats {
+		const dbPath = this.getBankDbPath(name);
+		const present = existsSync(dbPath);
+		const size = present ? statSync(dbPath).size : 0;
+		return { name, exists: present, db_path: dbPath, dbSizeBytes: size, db_size_bytes: size };
+	}
+}
+
+function validateName(name: string): void {
+	if (name.length === 0) throw new ValueError("Bank name cannot be empty");
+	if (name === "default") return;
+	if (name.length > 64) throw new ValueError(`Bank name '${name}' exceeds 64 characters`);
+	for (let i = 0; i < name.length; i++) {
+		const code = name.charCodeAt(i);
+		const ok =
+			(code >= 48 && code <= 57) ||
+			(code >= 65 && code <= 90) ||
+			(code >= 97 && code <= 122) ||
+			code === 45 ||
+			code === 95;
+		if (!ok) throw new ValueError(`Invalid bank name '${name}'. Use alphanumeric, hyphens, underscores only.`);
+	}
+}
+
+export function createBank(name: string, dataDir?: string): string {
+	const manager = new BankManager(dataDir);
+	return manager.createBank(name);
+}
+export function deleteBank(name: string, dataDir?: string, force = false): boolean {
+	const manager = new BankManager(dataDir);
+	return manager.deleteBank(name, force);
+}
+export function listBanks(dataDir?: string): string[] {
+	const manager = new BankManager(dataDir);
+	return manager.listBanks();
+}
+export function bankExists(name: string, dataDir?: string): boolean {
+	const manager = new BankManager(dataDir);
+	return manager.bankExists(name);
+}
+// `name` is required: the process default bank is owned by `core/memory.ts`, which is the
+// copy that actually routes the singleton. A second default here would be a silent fork.
+export function bankDbPath(name: string, dataDir?: string): string {
+	const manager = new BankManager(dataDir);
+	return manager.getBankDbPath(name);
+}

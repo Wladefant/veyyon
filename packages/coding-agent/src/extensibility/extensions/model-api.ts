@@ -1,0 +1,38 @@
+/**
+ * Model query facade exposed to extensions as `ctx.models`.
+ *
+ * Read-only: lets an extension select a model the same way core does — list
+ * authenticated models, read the session model, resolve a model selector or chain,
+ * and compare model families — without touching the mutable registry or
+ * duplicating resolution/family heuristics.
+ */
+import type { Api, Model } from "@veyyon/ai";
+import { modelFamilyToken } from "@veyyon/catalog/identity";
+import type { ModelRegistry } from "../../config/model-registry";
+import { getModelMatchPreferences, resolveModelSelectorValue } from "../../config/model-resolver";
+import type { Settings } from "../../config/settings";
+import type { ExtensionModelQuery } from "./types";
+
+/**
+ * Build the `ctx.models` facade. `getModel` is read lazily so `current()` always
+ * reflects the live session model (it can change mid-session via `/model`).
+ */
+export function createExtensionModelQuery(
+	modelRegistry: ModelRegistry,
+	settings: Settings | undefined,
+	getModel: () => Model | undefined,
+): ExtensionModelQuery {
+	return {
+		list: () => modelRegistry.getAvailable(),
+		current: () => getModel(),
+		// resolveModelSelectorValue splits a chain (`a,b`) and tries each pattern — the
+		// same path core selection uses — so a fallback model later in the chain still
+		// resolves. A plain model string is a one-entry chain.
+		resolve: (spec: string): Model<Api> | undefined =>
+			resolveModelSelectorValue(spec, modelRegistry.getAvailable(), {
+				settings,
+				matchPreferences: getModelMatchPreferences(settings),
+			}).model,
+		family: (model: Model<Api>): string => modelFamilyToken(model.id) || model.provider.toLowerCase(),
+	};
+}

@@ -1,0 +1,14 @@
+# Machine-wide config for the recording container only. The operator's own
+# ~/.veyyon is not mounted here; this file exists so a tape does not spend its
+# first fifteen seconds in the setup wizard, and so every capture is taken
+# against one known theme and one known model.
+onboardingVersion: 99
+theme: titanium
+# Not the model any row records against: every scene names its model on the command
+# line, and a launch that names none showed this file's value ignored in favour of the
+# first local row anyway. Left as the small model so nothing here implies otherwise.
+model: local/qwen2.5-1.5b
+# `/branch` follows this setting: `tree` sends it to the session tree, which the
+# recordings reach with `/tree` anyway. Seeding `branch` is what makes the
+# fourth picker -- the user-message card -- reachable in a scene.
+doubleEscapeAction: branch

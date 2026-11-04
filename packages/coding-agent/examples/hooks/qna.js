@@ -1,0 +1,118 @@
+/**
+ * Q&A extraction hook - extracts questions from assistant responses
+ *
+ * Demonstrates the "prompt generator" pattern:
+ * 1. /qna command gets the last assistant message
+ * 2. Shows a spinner while extracting (hides editor)
+ * 3. Loads the result into the editor for user to fill in answers
+ */
+import { complete } from "@veyyon/ai";
+import { ComposerLoader } from "@veyyon/coding-agent";
+import { mapJsonStrings } from "@veyyon/coding-agent/secrets/obfuscator";
+const SYSTEM_PROMPT = `You are a question extractor. Given text from a conversation, extract any questions that need answering and format them for the user to fill in.
+
+Output format:
+- List each question on its own line, prefixed with "Q: "
+- After each question, add a blank line for the answer prefixed with "A: "
+- If no questions are found, output "No questions found in the last message."
+
+Example output:
+Q: What is your preferred database?
+A: 
+
+Q: Should we use TypeScript or JavaScript?
+A: 
+
+Keep questions in the order they appeared. Be concise.`;
+export default function (pi) {
+    pi.registerCommand("qna", {
+        description: "Extract questions from last assistant message into editor",
+        handler: async (_args, ctx) => {
+            if (!ctx.hasUI) {
+                ctx.ui.notify("qna requires interactive mode", "error");
+                return;
+            }
+            if (!ctx.model) {
+                ctx.ui.notify("No model selected", "error");
+                return;
+            }
+            // Find the last assistant message on the current branch
+            const branch = ctx.sessionManager.getBranch();
+            let lastAssistantText;
+            for (let i = branch.length - 1; i >= 0; i--) {
+                const entry = branch[i];
+                if (entry.type === "message") {
+                    const msg = entry.message;
+                    if ("role" in msg && msg.role === "assistant") {
+                        if (msg.stopReason !== "stop") {
+                            ctx.ui.notify(`Last assistant message incomplete (${msg.stopReason})`, "error");
+                            return;
+                        }
+                        const textParts = msg.content
+                            .filter((c) => c.type === "text")
+                            .map(c => c.text);
+                        if (textParts.length > 0) {
+                            lastAssistantText = textParts.join("\n");
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!lastAssistantText) {
+                ctx.ui.notify("No assistant messages found", "error");
+                return;
+            }
+            // The loader takes over the screen, so it needs a host that offers one.
+            const terminal = ctx.ui.terminal;
+            if (!terminal) {
+                ctx.ui.notify("Question extraction needs an interactive terminal.", "warning");
+                return;
+            }
+            // Run extraction with loader UI
+            const result = await terminal.custom((tui, theme, _keybindings, done) => {
+                const loader = new ComposerLoader(tui, theme, `Extracting questions using ${ctx.model.id}…`);
+                loader.onAbort = () => done(null);
+                // Do the work
+                const doExtract = async () => {
+                    const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+                    if (!apiKey)
+                        return null;
+                    const sanitizeLive = (text) => ctx.obfuscateProviderText(text);
+                    const providerContext = { messages: [] };
+                    const buildAttemptContext = () => {
+                        const userMessage = {
+                            role: "user",
+                            content: [{ type: "text", text: sanitizeLive(lastAssistantText) }],
+                            timestamp: Date.now(),
+                        };
+                        providerContext.systemPrompt = [sanitizeLive(SYSTEM_PROMPT)];
+                        providerContext.messages = [userMessage];
+                    };
+                    buildAttemptContext();
+                    const response = await complete(ctx.model, providerContext, {
+                        apiKey,
+                        signal: loader.signal,
+                        onPayload: payload => mapJsonStrings(payload, sanitizeLive),
+                    });
+                    if (response.stopReason === "aborted") {
+                        return null;
+                    }
+                    return response.content
+                        .filter((c) => c.type === "text")
+                        .map(c => c.text)
+                        .join("\n");
+                };
+                doExtract()
+                    .then(done)
+                    .catch(() => done(null));
+                return loader;
+            });
+            if (result === null) {
+                ctx.ui.notify("Cancelled", "info");
+                return;
+            }
+            ctx.ui.setEditorText(result);
+            ctx.ui.notify("Questions loaded. Edit and submit when ready.", "info");
+        },
+    });
+}

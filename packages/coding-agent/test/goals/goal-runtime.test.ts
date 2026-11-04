@@ -1,0 +1,668 @@
+import { describe, expect, it } from "bun:test";
+import {
+	GoalRuntime,
+	type GoalRuntimeHost,
+	goalTokenDelta,
+	remainingTokens,
+	renderGoalPrompt,
+	renderTrustedObjective,
+} from "@veyyon/coding-agent/goals/runtime";
+import type { Goal, GoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "@veyyon/coding-agent/goals/state";
+import { escapeXmlText } from "@veyyon/utils";
+
+function createUsage(overrides: Partial<GoalTokenUsage> = {}): GoalTokenUsage {
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		...overrides,
+	};
+}
+
+function createGoal(overrides: Partial<Goal> = {}): Goal {
+	return {
+		id: "goal-1",
+		objective: "Ship <fast> & safely",
+		status: "active",
+		tokenBudget: undefined,
+		tokensUsed: 0,
+		timeUsedSeconds: 0,
+		turnsCompleted: 0,
+		createdAt: 0,
+		updatedAt: 0,
+		...overrides,
+	};
+}
+
+function cloneGoal(goal: Goal): Goal {
+	return { ...goal };
+}
+
+function cloneState(state: GoalModeState | undefined): GoalModeState | undefined {
+	return state ? { ...state, goal: cloneGoal(state.goal) } : undefined;
+}
+
+function cloneEvent(event: GoalRuntimeEvent): GoalRuntimeEvent {
+	if (event.type === "goal_updated") {
+		return {
+			...event,
+			goal: event.goal ? cloneGoal(event.goal) : null,
+			state: cloneState(event.state),
+		};
+	}
+	return { ...event };
+}
+
+function createHarness(
+	initial: { state?: GoalModeState; usage?: GoalTokenUsage; now?: number; budgetsEnabled?: boolean } = {},
+) {
+	let state = cloneState(initial.state);
+	let usage = createUsage(initial.usage);
+	let now = initial.now ?? 0;
+	const events: GoalRuntimeEvent[] = [];
+	const persists: Array<{ mode: "goal" | "goal_paused" | "none"; state?: GoalModeState }> = [];
+	const hiddenMessages: Array<{ customType: string; content: string; deliverAs?: "steer" | "followUp" | "nextTurn" }> =
+		[];
+	const host: GoalRuntimeHost = {
+		getState: () => cloneState(state),
+		setState: next => {
+			state = cloneState(next);
+		},
+		budgetsEnabled: () => initial.budgetsEnabled ?? true,
+		getCurrentUsage: () => createUsage(usage),
+		emit: async event => {
+			events.push(cloneEvent(event));
+		},
+		persist: (mode, persistedState) => {
+			persists.push({ mode, state: cloneState(persistedState) });
+		},
+		sendHiddenMessage: async message => {
+			hiddenMessages.push({ ...message });
+		},
+		now: () => now,
+	};
+	return {
+		runtime: new GoalRuntime(host),
+		getState: () => cloneState(state),
+		setState: (next: GoalModeState | undefined) => {
+			state = cloneState(next);
+		},
+		setUsage: (next: Partial<GoalTokenUsage>) => {
+			usage = createUsage(next);
+		},
+		advance: (ms: number) => {
+			now += ms;
+		},
+		events,
+		persists,
+		hiddenMessages,
+	};
+}
+
+describe("goal runtime", () => {
+	it("counts cache writes but ignores cache reads in token deltas", () => {
+		expect(
+			goalTokenDelta(
+				createUsage({ input: 13, output: 6, cacheRead: 999, cacheWrite: 8 }),
+				createUsage({ input: 10, output: 4, cacheRead: 1, cacheWrite: 5 }),
+			),
+		).toBe(8);
+	});
+
+	it("clamps token deltas at zero across usage resets", () => {
+		expect(
+			goalTokenDelta(
+				createUsage({ input: 10, output: 5, cacheRead: 0, cacheWrite: 2 }),
+				createUsage({ input: 100, output: 50, cacheRead: 500, cacheWrite: 20 }),
+			),
+		).toBe(0);
+	});
+
+	it("clamps each component independently, so one component dropping cannot cancel another's growth", () => {
+		// input +10 and output +1 both grew, but cacheWrite fell 9 -> 1 (e.g. the 1h ephemeral cache
+		// rotated). Per-component Math.max floors the cacheWrite delta at 0, giving 11. A single clamp on
+		// the TOTAL would instead net the -8 against the +11 and report 3, undercounting real new work.
+		expect(
+			goalTokenDelta(
+				createUsage({ input: 20, output: 5, cacheRead: 0, cacheWrite: 1 }),
+				createUsage({ input: 10, output: 4, cacheRead: 0, cacheWrite: 9 }),
+			),
+		).toBe(11);
+	});
+
+	it("advances wall-clock accounting only by persisted whole seconds", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.advance(2_500);
+		harness.setUsage(createUsage({ input: 1 }));
+		await harness.runtime.flushUsage("suppressed");
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(2);
+		expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(2_000);
+		expect(harness.persists).toHaveLength(1);
+
+		harness.advance(400);
+		await harness.runtime.flushUsage("suppressed");
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(2);
+		expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(2_000);
+		expect(harness.persists).toHaveLength(1);
+
+		harness.advance(700);
+		harness.setUsage(createUsage({ input: 2 }));
+		await harness.runtime.flushUsage("suppressed");
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(3);
+		expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(3_000);
+		expect(harness.persists).toHaveLength(2);
+	});
+
+	it("increments turnsCompleted once per agent turn accounted to the active goal", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+		expect(harness.getState()?.goal.turnsCompleted).toBe(0);
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.setUsage(createUsage({ output: 10 }));
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 10 }) });
+		expect(harness.getState()?.goal.turnsCompleted).toBe(1);
+		expect(harness.getState()?.goal.tokensUsed).toBe(10);
+
+		harness.runtime.onTurnStart("turn-2");
+		harness.setUsage(createUsage({ output: 25 }));
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 25 }) });
+		expect(harness.getState()?.goal.turnsCompleted).toBe(2);
+		expect(harness.getState()?.goal.tokensUsed).toBe(25);
+	});
+
+	// WHY: a tool flush fires on `tool_execution_end`, which the agent loop emits BEFORE it appends
+	// the tool-result message, so the session totals it reads do not yet include the usage a
+	// agent reported in that result. Reading early is not a loss, and this is the property that
+	// makes it not one: the flush rebases its baseline on the usage it actually observed, so the
+	// tokens it could not see are still owed and the next flush pays them. Lose this and every
+	// early read becomes a permanent undercount.
+	it("still credits usage a tool flush was too early to see", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+		harness.runtime.onTurnStart("turn-1");
+
+		// tool_execution_end: the result message carrying the agent's usage is not in state yet.
+		harness.setUsage(createUsage({ output: 10 }));
+		await harness.runtime.onToolCompleted("task");
+		expect(harness.getState()?.goal.tokensUsed).toBe(10);
+
+		// message_end: the agent's 300 tokens land in the session totals.
+		harness.setUsage(createUsage({ output: 310 }));
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 310 }) });
+		expect(harness.getState()?.goal.tokensUsed).toBe(310);
+	});
+
+	// WHY: the `goal` tool completes a goal in the middle of the turn that completed it, and
+	// accounting stopped right there. Every token the rest of that turn spent — the sibling tool
+	// calls in the same batch, an agent among them, and the closing message written once they
+	// returned — was spent on the goal and landed after it stopped counting, so the total reported
+	// for the finished goal was short by exactly the work that finished it. These pin the
+	// reconciliation, its bound (once, for that turn only) and what it must NOT reopen. Not
+	// covered: whether the session's own usage total is itself right, which is upstream of this.
+	it("credits a completed goal for what the completing turn spent after the goal tool ran", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+		harness.runtime.onTurnStart("turn-1");
+
+		// The assistant tokens for the batch that called `goal complete`.
+		harness.setUsage(createUsage({ output: 40 }));
+		await harness.runtime.completeGoalFromTool();
+		expect(harness.getState()?.goal.tokensUsed).toBe(40);
+
+		// The sibling task call in the same batch returns, then the model writes its closing message.
+		harness.setUsage(createUsage({ output: 140 }));
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 140 }) });
+		expect(harness.getState()?.goal.tokensUsed).toBe(140);
+		expect(harness.getState()?.goal.status).toBe("complete");
+	});
+
+	it("credits the completing turn even when that turn is interrupted", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+		harness.runtime.onTurnStart("turn-1");
+		harness.setUsage(createUsage({ output: 40 }));
+		await harness.runtime.completeGoalFromTool();
+
+		harness.setUsage(createUsage({ output: 90 }));
+		await harness.runtime.onTaskAborted({ reason: "interrupted" });
+		expect(harness.getState()?.goal.tokensUsed).toBe(90);
+	});
+
+	it("reconciles a completed goal once, and never for a later turn", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+		harness.runtime.onTurnStart("turn-1");
+		harness.setUsage(createUsage({ output: 40 }));
+		await harness.runtime.completeGoalFromTool();
+		harness.setUsage(createUsage({ output: 140 }));
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 140 }) });
+
+		harness.runtime.onTurnStart("turn-2");
+		harness.setUsage(createUsage({ output: 500 }));
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 500 }) });
+		expect(harness.getState()?.goal.tokensUsed).toBe(140);
+		expect(harness.getState()?.goal.turnsCompleted).toBe(0);
+	});
+
+	it("does not reopen a budget the completed goal's final tokens pass", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal({ tokenBudget: 100 }) },
+		});
+		harness.runtime.onTurnStart("turn-1");
+		harness.setUsage(createUsage({ output: 40 }));
+		await harness.runtime.completeGoalFromTool();
+
+		harness.setUsage(createUsage({ output: 400 }));
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 400 }) });
+		expect(harness.getState()?.goal.tokensUsed).toBe(400);
+		expect(harness.getState()?.goal.status).toBe("complete");
+		expect(harness.hiddenMessages).toHaveLength(0);
+	});
+
+	it("does not count a turn while the goal is paused (no accounting state)", async () => {
+		const harness = createHarness({
+			state: { enabled: false, mode: "active", goal: createGoal({ status: "paused" }) },
+		});
+		harness.runtime.onTurnStart("turn-1");
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 10 }) });
+		expect(harness.getState()?.goal.turnsCompleted).toBe(0);
+	});
+
+	it("does not count an agent-end with no turn started under the goal", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+		// No onTurnStart -> no snapshot -> the agent-end is not attributed to the goal.
+		await harness.runtime.onAgentEnd({ currentUsage: createUsage({ output: 10 }) });
+		expect(harness.getState()?.goal.turnsCompleted).toBe(0);
+	});
+
+	it("does not persist snapshots on wall-clock-only flushes", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.advance(2_500);
+		// Flush wall-clock time without any token usage changes.
+		await harness.runtime.flushUsage("suppressed");
+		// The in-memory state should still be updated.
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(2);
+		// But it should not write/persist to the session log.
+		expect(harness.persists).toHaveLength(0);
+	});
+
+	it("persists wall-clock-only usage before internal compaction or session-switch aborts", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.advance(2_500);
+		await harness.runtime.onTaskAborted({ reason: "internal" });
+
+		expect(harness.getState()?.enabled).toBe(true);
+		expect(harness.getState()?.goal.status).toBe("active");
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(2);
+		expect(harness.persists).toHaveLength(1);
+		expect(harness.persists[0]).toMatchObject({
+			mode: "goal",
+			state: { goal: { timeUsedSeconds: 2 } },
+		});
+	});
+
+	it("resets wall-clock baseline when preserving an active goal after a no-goal switch", async () => {
+		const goal = createGoal();
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal },
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.setState(undefined);
+		harness.advance(10_000);
+		harness.setState({ enabled: true, mode: "active", goal });
+
+		const resumed = await harness.runtime.onThreadResumed({ preserveActiveGoal: true });
+		harness.advance(1_000);
+		await harness.runtime.flushUsage("suppressed");
+
+		expect(resumed?.goal.status).toBe("active");
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(1);
+		expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(11_000);
+	});
+
+	it("clears stale accounting when reconciling to a no-goal session", async () => {
+		const goal = createGoal();
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal },
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.setState(undefined);
+		harness.runtime.clearAccounting();
+		harness.advance(10_000);
+		harness.setState({ enabled: true, mode: "active", goal });
+
+		await harness.runtime.onThreadResumed({ preserveActiveGoal: true });
+		harness.advance(1_000);
+		await harness.runtime.flushUsage("suppressed");
+
+		expect(harness.getState()?.goal.timeUsedSeconds).toBe(1);
+		expect(harness.runtime.snapshot.wallClock.lastAccountedAt).toBe(11_000);
+	});
+
+	it("steers only once until a budget mutation resets the cycle", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ tokenBudget: 10, tokensUsed: 8 }),
+			},
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.setUsage({ input: 2 });
+		await harness.runtime.flushUsage("allowed");
+		expect(harness.getState()?.goal.status).toBe("budget-limited");
+		expect(harness.hiddenMessages).toHaveLength(1);
+		expect(harness.hiddenMessages[0]).toMatchObject({
+			customType: "goal-budget-limit",
+			deliverAs: "steer",
+		});
+
+		harness.setUsage({ input: 5 });
+		await harness.runtime.flushUsage("allowed");
+		expect(harness.hiddenMessages).toHaveLength(1);
+
+		await harness.runtime.onBudgetMutated(20);
+		expect(harness.getState()?.enabled).toBe(true);
+		expect(harness.getState()?.goal.status).toBe("active");
+		expect(harness.getState()?.goal.tokenBudget).toBe(20);
+		expect(harness.hiddenMessages).toHaveLength(1);
+
+		harness.setUsage({ input: 15 });
+		await harness.runtime.flushUsage("allowed");
+		expect(harness.getState()?.goal.status).toBe("budget-limited");
+		expect(harness.hiddenMessages).toHaveLength(2);
+	});
+
+	it("pauses an active goal when an interruption aborts the task", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.advance(1_000);
+		harness.setUsage({ output: 4 });
+		await harness.runtime.onTaskAborted({ reason: "interrupted" });
+
+		const state = harness.getState();
+		expect(state?.enabled).toBe(false);
+		expect(state?.goal.status).toBe("paused");
+		expect(state?.goal.tokensUsed).toBe(4);
+		expect(state?.goal.timeUsedSeconds).toBe(1);
+		expect(harness.persists.at(-1)?.mode).toBe("goal_paused");
+	});
+
+	it("auto-pauses active goals when a thread resumes", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+
+		const resumed = await harness.runtime.onThreadResumed();
+		expect(resumed?.enabled).toBe(false);
+		expect(resumed?.goal.status).toBe("paused");
+		expect(harness.getState()?.enabled).toBe(false);
+		expect(harness.getState()?.goal.status).toBe("paused");
+		expect(harness.persists.at(-1)?.mode).toBe("goal_paused");
+	});
+
+	it("preserves an active goal during internal session-switch reconciliation", async () => {
+		const harness = createHarness({
+			state: { enabled: true, mode: "active", goal: createGoal() },
+		});
+
+		const resumed = await harness.runtime.onThreadResumed({ preserveActiveGoal: true });
+
+		expect(resumed?.enabled).toBe(true);
+		expect(resumed?.goal.status).toBe("active");
+		expect(harness.getState()?.enabled).toBe(true);
+		expect(harness.getState()?.goal.status).toBe("active");
+		expect(harness.persists).toHaveLength(0);
+	});
+
+	it("escapes XML in goal helpers and rendered prompts", () => {
+		const objective = "Fix <root>&keep>safe";
+		const goal = createGoal({ objective });
+		const prompt = renderGoalPrompt("active", goal);
+
+		expect(renderTrustedObjective(objective)).toBe("<objective>\nFix &lt;root&gt;&amp;keep&gt;safe\n</objective>");
+		expect(prompt).toContain("Fix &lt;root&gt;&amp;keep&gt;safe");
+		expect(prompt).not.toContain(objective);
+	});
+
+	/**
+	 * Disabled goal budgets must disappear from hidden model steering, not merely
+	 * reject mutation after the model has already been taught the feature.
+	 */
+	it("omits all budget guidance from goal prompts while budgets are disabled", () => {
+		const prompt = renderGoalPrompt(
+			"active",
+			createGoal({ objective: "Ship safely", tokenBudget: 100, tokensUsed: 40 }),
+			{ budgetsEnabled: false },
+		);
+
+		expect(prompt).toContain("Ship safely");
+		expect(prompt).not.toContain("Budget:");
+		expect(prompt).not.toContain("Token budget");
+		expect(prompt).not.toContain("Tokens remaining");
+		expect(prompt).not.toContain("Budget exhaustion");
+	});
+
+	/**
+	 * A persisted budget must become behaviorally inert when the operator turns
+	 * the feature off. Usage accounting continues, but no limit or steer fires.
+	 */
+	it("does not enforce persisted budgets while the feature is disabled", async () => {
+		const harness = createHarness({
+			budgetsEnabled: false,
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ tokenBudget: 10 }),
+			},
+		});
+		harness.runtime.onTurnStart("turn-1");
+		harness.setUsage({ input: 20 });
+
+		await harness.runtime.flushUsage("allowed");
+
+		expect(harness.getState()?.goal.tokensUsed).toBe(20);
+		expect(harness.getState()?.goal.status).toBe("active");
+		expect(harness.hiddenMessages).toEqual([]);
+		await expect(harness.runtime.onBudgetMutated(30)).rejects.toThrow("Goal budgets are disabled");
+	});
+
+	it("returns the input verbatim when escapeXmlText has nothing to escape", () => {
+		const input = "plain text — with 'quotes' and \"double\" plus unicode ✓";
+		expect(escapeXmlText(input)).toBe(input);
+		// fast-path identity: the helper should not allocate a new string when nothing changed
+		expect(escapeXmlText(input)).toBe(escapeXmlText(input));
+	});
+
+	it("escapeXmlText escapes only the XML-significant trio and leaves other characters untouched", () => {
+		expect(escapeXmlText("a & b < c > d")).toBe("a &amp; b &lt; c &gt; d");
+		expect(escapeXmlText("'\"`")).toBe("'\"`");
+	});
+
+	it("onBudgetMutated downward to below current usage flips active to budget-limited and steers", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ tokenBudget: 100, tokensUsed: 30, status: "active" }),
+			},
+		});
+
+		const next = await harness.runtime.onBudgetMutated(20);
+
+		expect(next?.goal.status).toBe("budget-limited");
+		expect(next?.goal.tokenBudget).toBe(20);
+		expect(next?.goal.tokensUsed).toBe(30);
+		expect(harness.hiddenMessages).toHaveLength(1);
+		expect(harness.hiddenMessages[0]?.customType).toBe("goal-budget-limit");
+	});
+
+	it("completeGoalFromTool clears enabled and flips status to complete with mode exiting (fix #1)", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ tokenBudget: 100, tokensUsed: 42, timeUsedSeconds: 7 }),
+			},
+		});
+
+		const completed = await harness.runtime.completeGoalFromTool();
+
+		expect(completed.status).toBe("complete");
+		const state = harness.getState();
+		expect(state?.enabled).toBe(false);
+		expect(state?.mode).toBe("exiting");
+		expect(state?.reason).toBe("completed");
+		expect(state?.goal.status).toBe("complete");
+	});
+
+	it("dropGoal emits goal_updated with the dropped goal and clears persisted state", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ id: "g-99", objective: "Ship soon" }),
+			},
+		});
+
+		const dropped = await harness.runtime.dropGoal();
+
+		expect(dropped?.status).toBe("dropped");
+		expect(dropped?.id).toBe("g-99");
+		expect(harness.getState()).toBeUndefined();
+		const lastEvent = harness.events.at(-1);
+		if (lastEvent?.type !== "goal_updated") {
+			throw new Error("expected goal_updated event after dropGoal");
+		}
+		expect(lastEvent.goal?.status).toBe("dropped");
+		expect(lastEvent.state?.enabled).toBe(false);
+	});
+
+	it("rejects op=create on the runtime when a non-dropped goal already exists", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ objective: "Existing" }),
+			},
+		});
+
+		await expect(harness.runtime.createGoal({ objective: "Second" })).rejects.toThrow(
+			"cannot create a new goal because this session already has a goal",
+		);
+	});
+
+	it("replaces an active goal with a fresh active goal", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ objective: "Existing", tokenBudget: 100 }),
+			},
+		});
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.advance(1_000);
+		harness.setUsage({ input: 12 });
+
+		const next = await harness.runtime.replaceGoal({ objective: "Second", tokenBudget: 25 });
+
+		expect(next.enabled).toBe(true);
+		expect(next.goal.objective).toBe("Second");
+		expect(next.goal.status).toBe("active");
+		expect(next.goal.tokenBudget).toBe(25);
+		expect(next.goal.tokensUsed).toBe(0);
+		expect(next.goal.timeUsedSeconds).toBe(0);
+		expect(next.goal.id).not.toBe("goal-1");
+		expect(harness.persists.at(-1)?.state?.goal.objective).toBe("Second");
+	});
+
+	it("allows creating a new goal after the previous one is complete", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: false,
+				mode: "exiting",
+				reason: "completed",
+				goal: createGoal({ status: "complete" }),
+			},
+		});
+
+		const next = await harness.runtime.createGoal({ objective: "Phase 4" });
+		expect(next.goal.objective).toBe("Phase 4");
+		expect(next.goal.status).toBe("active");
+		expect(next.enabled).toBe(true);
+	});
+
+	/**
+	 * Locks out: a default token budget being injected for a goal created without one.
+	 *
+	 * The goal tool has no budget argument and `Goal.tokenBudget` remains `number |
+	 * undefined` for persisted sessions, so "no budget" must mean genuinely unbounded:
+	 * unbounded remaining, and a status that can never flip to `budget-limited` no matter
+	 * how much the goal spends.
+	 */
+	it("leaves a goal created without a token budget genuinely unbounded", async () => {
+		const harness = createHarness();
+
+		const created = await harness.runtime.createGoal({ objective: "Ship the thing" });
+		expect(created.goal.tokenBudget).toBeUndefined();
+		expect(remainingTokens(created.goal)).toBeNull();
+		expect(renderGoalPrompt("active", created.goal)).toContain("unbounded");
+
+		harness.runtime.onTurnStart("turn-1");
+		harness.setUsage(createUsage({ output: 5_000_000 }));
+		await harness.runtime.flushUsage("allowed");
+
+		const after = harness.getState();
+		expect(after?.goal.tokensUsed).toBe(5_000_000);
+		expect(after?.goal.tokenBudget).toBeUndefined();
+		expect(after?.goal.status).toBe("active");
+		expect(remainingTokens(after?.goal)).toBeNull();
+		// A budget-limit steer is the observable consequence of a ceiling; there must be none.
+		expect(harness.hiddenMessages).toEqual([]);
+	});
+
+	it("completeGoalFromTool succeeds for a paused goal (enabled=false)", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: false,
+				mode: "active",
+				goal: createGoal({ status: "paused", tokensUsed: 30, timeUsedSeconds: 5 }),
+			},
+		});
+
+		const completed = await harness.runtime.completeGoalFromTool();
+		expect(completed.status).toBe("complete");
+		const state = harness.getState();
+		expect(state?.enabled).toBe(false);
+		expect(state?.mode).toBe("exiting");
+		expect(state?.goal.status).toBe("complete");
+	});
+});

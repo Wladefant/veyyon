@@ -1,0 +1,426 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
+import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import * as compactionModule from "@veyyon/agent-core/compaction";
+import type { Model, TextContent } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as codexSessionState from "@veyyon/ai/providers/openai-codex/session-state";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { convertToLlm } from "@veyyon/coding-agent/session/messages";
+import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { TodoTool, USER_TODO_EDIT_CUSTOM_TYPE } from "@veyyon/coding-agent/tools/agent/todo";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
+import { type } from "arktype";
+
+// Re-injecting eager preludes after compaction: the first-message preludes are the
+// oldest messages, so compaction summarizes them away and the agent silently loses
+// the delegate-via-tasks / phased-todo guidance. The post-compaction auto-continuation
+// turn must carry the gated reminders again (reminder-only — never a forced tool_choice).
+
+const CONTINUE_MARKER = "Resume work on the user's most recent intent";
+
+type ObservedPromptCall = {
+	toolChoice: string | undefined;
+	messageTexts: string[];
+};
+
+type WaitForCall = (predicate: (call: ObservedPromptCall) => boolean) => Promise<ObservedPromptCall>;
+
+/**
+ * A re-injected nudge is prepended immediately before the auto-continuation prompt, so
+ * that contiguous run of `<system-reminder>` blocks is the only place this turn's nudges
+ * can appear. A prelude from the first user turn that outlived the summary cut is still
+ * somewhere in the retained history, and asserting mere presence would read it as a
+ * re-injection — which is how the surviving-todos case went green while the nudge was
+ * correctly suppressed.
+ */
+function reinjectedText(call: ObservedPromptCall, needle: string): string | undefined {
+	const marker = call.messageTexts.findIndex(text => text.includes(CONTINUE_MARKER));
+	if (marker < 0) return undefined;
+	for (let i = marker - 1; i >= 0; i--) {
+		const text = call.messageTexts[i] ?? "";
+		if (!text.startsWith("<system-reminder>")) return undefined;
+		if (text.includes(needle)) return text;
+	}
+	return undefined;
+}
+
+function reinjected(call: ObservedPromptCall, needle: string): boolean {
+	return reinjectedText(call, needle) !== undefined;
+}
+
+type Harness = {
+	session: AgentSession;
+	observedCalls: ObservedPromptCall[];
+	sessionManager: SessionManager;
+	// Resolves with the first provider call (already-seen or future) matching the predicate.
+	// Awaiting the real streamFn call avoids wall-clock polling for the async compaction path.
+	waitForCall: WaitForCall;
+};
+
+function isTextContentBlock(value: unknown): value is TextContent {
+	if (!value || typeof value !== "object") return false;
+	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
+}
+
+function getToolChoiceName(choice: unknown): string | undefined {
+	if (!choice) return undefined;
+	if (typeof choice === "string") return choice;
+	if (typeof choice !== "object" || !("type" in choice)) return undefined;
+	const toolChoice = choice as { type?: string; name?: string; function?: { name?: string } };
+	if (toolChoice.type === "tool") return toolChoice.name;
+	if (toolChoice.type === "function") return toolChoice.name ?? toolChoice.function?.name;
+	return undefined;
+}
+
+function getMessageText(message: AgentMessage): string {
+	if (!("content" in message)) return "";
+	if (typeof message.content === "string") return message.content;
+	if (!Array.isArray(message.content)) return "";
+	return message.content
+		.filter(isTextContentBlock)
+		.map(content => content.text)
+		.join("\n");
+}
+
+function createAssistantResponse(text: string) {
+	return {
+		role: "assistant" as const,
+		content: [{ type: "text" as const, text }],
+		api: "anthropic-messages" as const,
+		provider: "anthropic" as const,
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop" as const,
+		timestamp: Date.now(),
+	};
+}
+
+/** Short-circuit the LLM summary so compaction completes without a network call. */
+function stubCompaction(firstKeptEntryId?: string): void {
+	vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+		summary: "compacted",
+		shortSummary: undefined,
+		firstKeptEntryId: firstKeptEntryId ?? preparation.firstKeptEntryId,
+		tokensBefore: preparation.tokensBefore,
+		details: {},
+	}));
+}
+
+/** Emit a high-usage assistant turn to drive threshold (context-full) auto-compaction. */
+function emitHighUsageTurn(session: AgentSession): void {
+	const assistantMsg = {
+		role: "assistant" as const,
+		content: [{ type: "text" as const, text: "Done." }],
+		api: "anthropic-messages" as const,
+		provider: "anthropic" as const,
+		model: "claude-sonnet-4-5",
+		stopReason: "stop" as const,
+		usage: {
+			input: 190_000,
+			output: 1_000,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 191_000,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		timestamp: Date.now(),
+	};
+	session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+	session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+}
+
+describe("AgentSession eager prelude re-injection after compaction", () => {
+	let tempDir: TempDir;
+	const cleanups: Array<() => Promise<void>> = [];
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@pi-agent-session-eager-compaction-");
+		cleanups.length = 0;
+	});
+
+	afterEach(async () => {
+		for (const cleanup of cleanups) await cleanup();
+		cleanups.length = 0;
+		tempDir.removeSync();
+		vi.restoreAllMocks();
+	});
+
+	async function createHarness(
+		settingsOverride: Record<string, unknown> = {},
+		opts: { agentId?: string; agentKind?: "main" | "sub"; model?: Model } = {},
+	): Promise<Harness> {
+		const observedCalls: ObservedPromptCall[] = [];
+		const waiters: Array<{
+			predicate: (call: ObservedPromptCall) => boolean;
+			resolve: (call: ObservedPromptCall) => void;
+		}> = [];
+		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!defaultModel) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const selectedModel = opts.model ?? defaultModel;
+		// Pin the window and output reservation: usage figures below trip the
+		// context-full strategy at a 200k/64k threshold; catalog regeneration must
+		// not shift the headroom math.
+		const model = { ...selectedModel, contextWindow: 200_000, maxTokens: 64_000 };
+
+		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${cleanups.length}.db`));
+		authStorage.setRuntimeApiKey(model.provider, "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
+		const settings = Settings.isolated({
+			"compaction.enabled": true,
+			"compaction.autoContinue": true,
+			"agent.delegation": "required",
+			"todo.enabled": false,
+			"todo.eager": "default",
+			"todo.reminders": false,
+			...settingsOverride,
+		});
+		// `compaction.strategy` legacy values (e.g. "context-full") are collapsed to the
+		// user-facing handoff|snap enum during Settings construction (see
+		// config/compaction-strategy.ts), so the isolated-overrides constructor path above
+		// can never leave the raw "context-full" engine action in effect. Route it through
+		// the runtime `override()` API instead, which bypasses that migration — same pattern
+		// as agent-session-auto-compaction-progress-guard.test.ts and agent-session-handoff.test.ts.
+		settings.override(
+			"compaction.strategy",
+			((settingsOverride["compaction.strategy"] as string | undefined) ?? "context-full") as never,
+		);
+		const sessionManager = SessionManager.inMemory(tempDir.path());
+
+		// `enabledAgentNames` is what makes this a task tool that can actually spawn something.
+		// Delegation strength resolves against it (`enabledAgentNames`), so a mock without it
+		// describes a session where every `task` call would be refused, and `agent.delegation:
+		// "required"` correctly produces no reminder to re-inject. See the negative twin in
+		// `agent-session-eager-task.test.ts`.
+		const mockTaskTool = {
+			name: "task",
+			label: "Task",
+			description: "Mock task tool",
+			parameters: type({}),
+			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+			enabledAgentNames: ["general", "scout"],
+		} as AgentTool;
+		const mockBashTool: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "Mock bash tool",
+			parameters: type({}),
+			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+		};
+		const todoEnabled = settings.get("todo.enabled") === true;
+		const toolSession: ToolSession = {
+			cwd: tempDir.path(),
+			hasUI: false,
+			getSessionFile: () => sessionManager.getSessionFile() ?? null,
+			getSessionSpawns: () => "*",
+			settings,
+		};
+		const todoTool = todoEnabled ? new TodoTool(toolSession) : undefined;
+		const tools: AgentTool[] = todoTool
+			? [todoTool as unknown as AgentTool, mockTaskTool, mockBashTool]
+			: [mockTaskTool, mockBashTool];
+
+		let session: AgentSession;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools, messages: [] },
+			convertToLlm,
+			getToolChoice: () => session?.nextToolChoiceDirective(),
+			streamFn: (_model, context, options) => {
+				const call: ObservedPromptCall = {
+					toolChoice: getToolChoiceName(options?.toolChoice),
+					messageTexts: context.messages.map(message => getMessageText(message)),
+				};
+				observedCalls.push(call);
+				for (let i = waiters.length - 1; i >= 0; i--) {
+					const waiter = waiters[i];
+					if (waiter?.predicate(call)) {
+						waiter.resolve(call);
+						waiters.splice(i, 1);
+					}
+				}
+				const response = createAssistantResponse("done");
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: response });
+					stream.push({ type: "done", reason: "stop", message: response });
+				});
+				return stream;
+			},
+		});
+
+		const toolRegistry = new Map<string, AgentTool>([
+			[mockTaskTool.name, mockTaskTool],
+			[mockBashTool.name, mockBashTool],
+		]);
+		if (todoTool) toolRegistry.set(todoTool.name, todoTool as unknown as AgentTool);
+
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			toolRegistry,
+			agentId: opts.agentId,
+			agentKind: opts.agentKind,
+		});
+
+		const waitForCall: WaitForCall = predicate => {
+			const existing = observedCalls.find(predicate);
+			if (existing) return Promise.resolve(existing);
+			const { promise, resolve } = Promise.withResolvers<ObservedPromptCall>();
+			waiters.push({ predicate, resolve });
+			return promise;
+		};
+
+		cleanups.push(async () => {
+			await session.dispose();
+			authStorage.close();
+		});
+		return { session, observedCalls, sessionManager, waitForCall };
+	}
+
+	/** Run the first prompt, drive a compaction, and resolve with the auto-continuation provider call. */
+	async function runToContinuation(session: AgentSession, waitForCall: WaitForCall): Promise<ObservedPromptCall> {
+		await session.prompt("refactor the parser across modules");
+		emitHighUsageTurn(session);
+		return waitForCall(call => call.messageTexts.some(text => text.includes(CONTINUE_MARKER)));
+	}
+
+	it("re-injects the delegation reminder on the auto-continuation turn (delegation required)", async () => {
+		const { session, waitForCall } = await createHarness();
+		stubCompaction();
+
+		const continuation = await runToContinuation(session, waitForCall);
+
+		const reminder = reinjectedText(continuation, "delegation is enabled");
+		expect(reminder).toBeDefined();
+		expect(reminder).toContain("`task`");
+		// Reminder-only: the post-compaction nudge never forces a tool on the resumed turn.
+		expect(continuation.toolChoice).toBeUndefined();
+	});
+
+	it("does not re-inject the delegation reminder when delegation is merely allowed", async () => {
+		const { session, waitForCall } = await createHarness({ "agent.delegation": "allowed" });
+		stubCompaction();
+
+		const continuation = await runToContinuation(session, waitForCall);
+
+		expect(reinjected(continuation, "delegation is enabled")).toBe(false);
+	});
+
+	it("does not re-inject the delegation reminder when delegation is preferred", async () => {
+		const { session, waitForCall } = await createHarness({ "agent.delegation": "preferred" });
+		stubCompaction();
+
+		const continuation = await runToContinuation(session, waitForCall);
+
+		expect(reinjected(continuation, "delegation is enabled")).toBe(false);
+	});
+
+	it("does not re-inject the eager task reminder for agent sessions", async () => {
+		const { session, waitForCall } = await createHarness({}, { agentId: "Agent", agentKind: "sub" });
+		stubCompaction();
+
+		const continuation = await runToContinuation(session, waitForCall);
+
+		expect(reinjected(continuation, "delegation is enabled")).toBe(false);
+	});
+
+	it("does not re-inject the eager task reminder in plan mode", async () => {
+		const { session, waitForCall } = await createHarness();
+		session.setPlanModeState({ enabled: true, planFilePath: path.join(tempDir.path(), "plan.md") });
+		stubCompaction();
+
+		const continuation = await runToContinuation(session, waitForCall);
+
+		expect(reinjected(continuation, "delegation is enabled")).toBe(false);
+	});
+
+	it("re-injects the eager todo reminder on the auto-continuation turn (todo.eager preferred)", async () => {
+		const { session, waitForCall } = await createHarness({
+			"agent.delegation": "allowed",
+			"todo.enabled": true,
+			"todo.eager": "preferred",
+		});
+		stubCompaction();
+
+		const continuation = await runToContinuation(session, waitForCall);
+
+		expect(reinjected(continuation, "Consider calling")).toBe(true);
+		expect(continuation.toolChoice).toBeUndefined();
+	});
+
+	it("re-injects the eager todo reminder reminder-only for todo.eager always (no forced tool)", async () => {
+		const { session, waitForCall } = await createHarness({
+			"agent.delegation": "allowed",
+			"todo.enabled": true,
+			"todo.eager": "always",
+		});
+		stubCompaction();
+
+		const continuation = await runToContinuation(session, waitForCall);
+
+		// `always` keeps the strong forced wording in the reminder text...
+		expect(reinjected(continuation, "You MUST call")).toBe(true);
+		// ...but post-compaction never attaches the forced todo tool_choice.
+		expect(continuation.toolChoice).toBeUndefined();
+	});
+
+	/** Persisted todo state must suppress a duplicate eager reminder after summary recovery resumes. */
+	it("does not re-inject the eager todo reminder when todos survived compaction", async () => {
+		const { session, sessionManager, waitForCall } = await createHarness({
+			"agent.delegation": "allowed",
+			"todo.enabled": true,
+			"todo.eager": "preferred",
+		});
+		await session.prompt("refactor the parser across modules");
+		// Persist the todo normally; forcing it to be the summary cut point retained
+		// the pre-compaction high-usage snapshot and correctly tripped the progress guard.
+		sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, {
+			phases: [{ name: "Work", tasks: [{ content: "do the thing", status: "pending" }] }],
+		});
+		stubCompaction();
+
+		const continuationPromise = waitForCall(call => call.messageTexts.some(text => text.includes(CONTINUE_MARKER)));
+		emitHighUsageTurn(session);
+		const continuation = await continuationPromise;
+
+		expect(session.getTodoPhases().length).toBeGreaterThan(0);
+		expect(reinjected(continuation, "Consider calling")).toBe(false);
+		expect(reinjected(continuation, "You MUST call")).toBe(false);
+	});
+
+	it("resets Codex provider history after successful auto-compaction", async () => {
+		const model = getBundledModel("openai-codex", "gpt-5.6-terra");
+		if (!model) throw new Error("Expected gpt-5.6-terra model to exist");
+		const resetSpy = vi.spyOn(codexSessionState, "resetOpenAICodexHistoryAfterCompaction");
+		const { session, waitForCall } = await createHarness({}, { model });
+		stubCompaction();
+
+		await runToContinuation(session, waitForCall);
+
+		expect(resetSpy).toHaveBeenCalledTimes(1);
+		const reset = resetSpy.mock.calls[0]?.[0];
+		if (!reset) throw new Error("Expected Codex compaction reset");
+		expect(reset.providerSessionState).toBe(session.providerSessionState);
+		expect(reset.sessionId).toBe(session.sessionId);
+		expect(reset.compaction).toMatchObject({
+			trigger: "auto",
+			reason: "context_limit",
+			phase: "pre_turn",
+		});
+	});
+});

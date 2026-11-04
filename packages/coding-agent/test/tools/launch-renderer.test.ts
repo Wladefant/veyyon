@@ -1,0 +1,282 @@
+/**
+ * Launch renderer contract: one merged status header per op carrying the op,
+ * target name, and daemon state — replacing the old stacked "pending header +
+ * bare `✓ Launch` + raw text" render — plus per-op body rules (logs strip the
+ * LLM-facing `[name: state; cursor=N]` suffix, list caps collapsed rows).
+ */
+import { describe, expect, it } from "bun:test";
+import type { DaemonSnapshot } from "@veyyon/coding-agent/launch/protocol";
+import { renderTerminalOutput } from "@veyyon/coding-agent/launch/terminal-output";
+import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
+import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
+import type { LaunchToolDetails } from "@veyyon/coding-agent/tools/shell/launch";
+import { sanitizeText } from "@veyyon/utils";
+
+/**
+ * The card the registry draws for `launch`, which is the one a rebuilt transcript reaches.
+ *
+ * The tool describes a `ToolView` now, so the drawing under test is the terminal's mapping of that
+ * view rather than a renderer the tool owns: taking the entry rather than importing a module keeps
+ * this suite on the path a card actually takes.
+ */
+const launchToolRenderer = toolRenderers.launch;
+
+async function theme() {
+	const t = await getThemeByName("dark");
+	expect(t).toBeDefined();
+	return t!;
+}
+
+const lines = (component: { render: (w: number) => readonly string[] }, width = 200) =>
+	sanitizeText(component.render(width).join("\n")).split("\n");
+
+const daemon = (overrides: Partial<DaemonSnapshot>): DaemonSnapshot => ({
+	name: "web",
+	id: "d-1",
+	state: "running",
+	pid: 51234,
+	createdAt: 0,
+	startedAt: Date.now() - 22_600,
+	restartCount: 0,
+	outputBytes: 0,
+	persist: false,
+	detached: false,
+	...overrides,
+});
+
+describe("launchToolRenderer", () => {
+	it("is registered with merged call/result so the pending header is replaced, not stacked", () => {
+		expect(toolRenderers.launch.mergeCallAndResult).toBe(true);
+		expect(typeof toolRenderers.launch.renderCall).toBe("function");
+		expect(typeof toolRenderers.launch.renderResult).toBe("function");
+	});
+
+	it("folds a stop result into one header with op, name, and exit state", async () => {
+		const uiTheme = await theme();
+		const rendered = lines(
+			launchToolRenderer.renderResult(
+				{
+					content: [{ type: "text", text: "Stopped pyc-profile-run: exited exit=0 uptime=22.6s restarts=0" }],
+					details: {
+						op: "stop",
+						daemon: daemon({ name: "pyc-profile-run", state: "exited", exitedAt: Date.now(), exitCode: 0 }),
+					} satisfies LaunchToolDetails,
+				},
+				{ expanded: false, isPartial: false },
+				uiTheme,
+				{ op: "stop", name: "pyc-profile-run" },
+			),
+		);
+		expect(rendered).toHaveLength(1);
+		expect(rendered[0]).toContain("Launch stop");
+		expect(rendered[0]).toContain("pyc-profile-run");
+		expect(rendered[0]).toContain("exited");
+		expect(rendered[0]).toContain("exit 0");
+	});
+
+	it("renders log lines without the trailing cursor-status suffix, surfacing it as header meta", async () => {
+		const uiTheme = await theme();
+		const rendered = lines(
+			launchToolRenderer.renderResult(
+				{
+					content: [{ type: "text", text: "line one\nline two\n[web: running; cursor=2210]" }],
+					details: { op: "logs", cursor: 2210, timedOut: false, state: "running" } satisfies LaunchToolDetails,
+				},
+				{ expanded: false, isPartial: false },
+				uiTheme,
+				{ op: "logs", name: "web" },
+			),
+		);
+		expect(rendered[0]).toContain("Launch logs");
+		expect(rendered[0]).toContain("cursor 2210");
+		// A block hangs every row on one rail, the title row included, so the block
+		// has a single left edge from its first row to its last. The box glyphs this
+		// used to assert are a shape the product no longer draws.
+		expect(rendered[0]).not.toContain("┌");
+		expect(rendered.at(-1)).not.toContain("└");
+		expect(rendered[0]!.trimStart().startsWith(uiTheme.symbol("block.rail"))).toBe(true);
+		expect(rendered[1]).toContain("Output");
+
+		// The log body, in order and complete. Two `some(...)` checks asserted the
+		// lines existed somewhere and a third asserted the `[web: running; ...]`
+		// suffix did not, none of which could tell whether the tail was rendered in
+		// order, which is the one thing a log tail has to get right. Reading the
+		// body out as an array proves the ordering and the suffix stripping at
+		// once: a line that survived would have to appear here.
+		const rail = uiTheme.symbol("block.rail");
+		const body = rendered
+			.slice(1)
+			.filter(line => line.trimStart().startsWith(rail))
+			.map(line => line.trimStart().slice(rail.length).trim())
+			.filter(line => line.length > 0 && line !== "Output");
+
+		expect(body).toEqual(["line one", "line two"]);
+	});
+
+	it("replays terminal screen rows so cursor rewrites retain their final color and weight", async () => {
+		const terminalRows = await renderTerminalOutput(
+			"\x1b[1;31mold\x1b[0m\r\x1b[2K\x1b[12G\x1b[1;32mready\x1b[0m\x1b[K",
+			{
+				head: false,
+				maxRows: 10,
+			},
+		);
+		if (terminalRows === undefined) throw new Error("terminal replay failed");
+		expect(Bun.stripANSI(terminalRows[0] ?? "")).toBe("           ready");
+
+		const uiTheme = await theme();
+		const component = launchToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "ready\n[web: running; cursor=2210]" }],
+				details: {
+					op: "logs",
+					cursor: 2210,
+					timedOut: false,
+					state: "running",
+					terminalRows,
+				} satisfies LaunchToolDetails,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ op: "logs", name: "web" },
+		);
+		const raw = component.render(200).join("\n");
+		const plain = Bun.stripANSI(raw);
+		expect(plain).toContain("ready");
+		expect(plain).not.toContain("old");
+		expect(raw).toContain("\x1b[1;38;5;2mready");
+	});
+
+	it("caps a collapsed list to the preview item limit with a more-items row", async () => {
+		const uiTheme = await theme();
+		const daemons = Array.from({ length: 11 }, (_, i) => daemon({ name: `svc-${i}`, id: `d-${i}` }));
+		const rendered = lines(
+			launchToolRenderer.renderResult(
+				{
+					content: [{ type: "text", text: "" }],
+					details: { op: "list", daemons } satisfies LaunchToolDetails,
+				},
+				{ expanded: false, isPartial: false },
+				uiTheme,
+				{ op: "list" },
+			),
+		);
+		expect(rendered[0]).toContain("11 processes");
+
+		// Which eight survived the cap, in which order, and that the notice is the
+		// last row. The three checks that stood here said only that svc-0 appeared,
+		// svc-10 did not, and the words "3 more processes" were present somewhere:
+		// a renderer that kept svc-3 through svc-10 and dropped the first three
+		// satisfied every one of them, and so did one that put the more-row first.
+		// Each row's uptime is derived from the clock, so the row IDENTITY is read
+		// out rather than the whole line, and the leading indent is dropped first:
+		// the terminal sets a headed block's lines two columns in under the row that
+		// names them, where the hand-written renderer left them in column zero.
+		const rows = rendered.slice(1).map(line => line.trim().split(" ")[0]);
+
+		expect(rows).toEqual(["svc-0", "svc-1", "svc-2", "svc-3", "svc-4", "svc-5", "svc-6", "svc-7", "…"]);
+		expect(rendered.at(-1)).toContain("3 more processes");
+	});
+
+	it("marks a failed start with the daemon's exit reason even though the result is not an error", async () => {
+		const uiTheme = await theme();
+		const rendered = lines(
+			launchToolRenderer.renderResult(
+				{
+					content: [{ type: "text", text: "Failed to launch web: failed exit=127" }],
+					details: {
+						op: "start",
+						daemon: daemon({
+							state: "failed",
+							exitedAt: Date.now(),
+							exitCode: 127,
+							exitReason: "spawn bun ENOENT",
+						}),
+					} satisfies LaunchToolDetails,
+				},
+				{ expanded: false, isPartial: false },
+				uiTheme,
+				{ op: "start", name: "web", application: "bun", args: ["run", "dev"] },
+			),
+		);
+		expect(rendered[0]).toContain("Launch start");
+		expect(rendered[0]).toContain("failed");
+		expect(rendered.some(line => line.includes("spawn bun ENOENT"))).toBe(true);
+	});
+
+	it("names the unmet readiness condition instead of a contradictory Ready + timed-out pair", async () => {
+		const uiTheme = await theme();
+		const rendered = lines(
+			launchToolRenderer.renderResult(
+				{
+					content: [{ type: "text", text: "" }],
+					details: {
+						op: "start",
+						timedOut: true,
+						daemon: daemon({
+							state: "starting",
+							readyMatch: "Local: http://localhost:3100",
+							readyPending: ["port"],
+						}),
+					} satisfies LaunchToolDetails,
+				},
+				{ expanded: false, isPartial: false },
+				uiTheme,
+				{ op: "start", name: "web", application: "bunx", args: ["vite"], ready: { log: "Local:", port: 3100 } },
+			),
+		);
+		expect(rendered[0]).toContain("waiting on port");
+		expect(rendered.some(line => line.includes("log matched: Local: http://localhost:3100"))).toBe(true);
+		expect(rendered.some(line => line.includes("port 3100 on 127.0.0.1 never accepted connections"))).toBe(true);
+		// The old render labeled the log match a bare "ready:" while also saying readiness timed out.
+		expect(rendered.some(line => line.includes("ready: Local:"))).toBe(false);
+	});
+
+	/**
+	 * WHY: the pending header interpolated `args.name ?? command` straight into
+	 * the status description, and a failure pushed one row per line of whatever
+	 * the process printed. A `launch start` of a long command line therefore
+	 * drew a header wider than any terminal, and a daemon that died with a
+	 * hundred-line trace filled the transcript with it before anyone asked to
+	 * see it. Both bounds are the display contract every other tool follows.
+	 *
+	 * Not caught: the expanded error view is deliberately unbounded, because an
+	 * operator who expands a failure is asking for the whole trace.
+	 */
+	it("truncates a long launch target in the pending header", async () => {
+		const uiTheme = await theme();
+		const command = `bunx ${"--define=SOME_VERY_LONG_FLAG_NAME=1 ".repeat(20)}vite`;
+		const [header] = lines(
+			launchToolRenderer.renderCall(
+				{ op: "start", application: command },
+				{ expanded: false, isPartial: false },
+				uiTheme,
+			),
+		);
+		expect(header!.length).toBeLessThan(command.length);
+		expect(header).toContain("…");
+	});
+
+	it("collapses a long failure to a few lines with a count of the rest", async () => {
+		const uiTheme = await theme();
+		const trace = Array.from({ length: 40 }, (_, i) => `    at frame ${i}`).join("\n");
+		const render = (expanded: boolean) =>
+			lines(
+				launchToolRenderer.renderResult(
+					{ content: [{ type: "text", text: trace }], isError: true, details: { op: "start" } },
+					{ expanded, isPartial: false },
+					uiTheme,
+					{ op: "start", name: "web" },
+				),
+			);
+
+		const collapsed = render(false);
+		expect(collapsed.length).toBeLessThan(10);
+		expect(collapsed.some(line => line.includes("more line"))).toBe(true);
+		expect(collapsed.some(line => line.includes("at frame 39"))).toBe(false);
+
+		// Expanding is the request for the whole trace, so nothing is withheld.
+		const expanded = render(true);
+		expect(expanded.some(line => line.includes("at frame 39"))).toBe(true);
+	});
+});

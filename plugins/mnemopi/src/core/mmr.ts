@@ -1,0 +1,75 @@
+import { jaccardWordSimilarity } from "../util/text-similarity";
+
+export interface MmrResult {
+	readonly content?: string;
+	readonly score?: number;
+	readonly [key: string]: unknown;
+}
+
+export type SimilarityFn = (textA: string, textB: string) => number;
+
+export function jaccardSimilarity(textA: string, textB: string): number {
+	return jaccardWordSimilarity(textA, textB);
+}
+function maxSimilarity(content: string, selected: readonly MmrResult[], similarityFn: SimilarityFn): number {
+	let max = 0.0;
+	for (const selectedResult of selected) {
+		const similarity = similarityFn(content, selectedResult.content ?? "");
+		if (similarity > max) max = similarity;
+	}
+	return max;
+}
+
+/** Index of the candidate with the highest MMR score; the first wins a tie. */
+function bestMmrIndex(
+	remaining: readonly MmrResult[],
+	selected: readonly MmrResult[],
+	lambdaParam: number,
+	similarityFn: SimilarityFn,
+): number {
+	let bestIdx = 0;
+	let bestScore = Number.NEGATIVE_INFINITY;
+	for (let idx = 0; idx < remaining.length; idx += 1) {
+		const candidate = remaining[idx];
+		if (candidate === undefined) continue;
+		const similarity = maxSimilarity(candidate.content ?? "", selected, similarityFn);
+		const mmrScore = lambdaParam * (candidate.score ?? 0) - (1.0 - lambdaParam) * similarity;
+		if (mmrScore > bestScore) {
+			bestScore = mmrScore;
+			bestIdx = idx;
+		}
+	}
+	return bestIdx;
+}
+
+export function mmrRerank<T extends MmrResult>(
+	results: readonly T[],
+	lambdaParam = 0.7,
+	topK = 10,
+	similarityFn: SimilarityFn = jaccardSimilarity,
+): T[] {
+	const limit = Math.max(0, Math.trunc(topK));
+	if (limit <= 0) return [];
+	if (results.length <= 1) return results.slice(0, limit);
+
+	const sortedResults = results.slice().sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
+	const first = sortedResults[0];
+	if (first === undefined) return [];
+
+	const selected: T[] = [first];
+	const remaining = sortedResults.slice(1);
+
+	while (remaining.length > 0 && selected.length < limit) {
+		const chosen = remaining.splice(bestMmrIndex(remaining, selected, lambdaParam, similarityFn), 1)[0];
+		if (chosen !== undefined) selected.push(chosen);
+	}
+
+	// No top-up from `remaining` is needed here: the loop above exits only when
+	// `remaining` is empty or `selected` has reached `limit`. Every iteration
+	// splices exactly one entry out of `remaining`, so by the time `selected`
+	// could still be short of `limit`, `remaining` is already drained. A tail
+	// `remaining.slice(...)` would therefore always be empty — the earlier form
+	// that spread it in was dead code. `selected.length` is min(defined results,
+	// limit); undefined candidates are dropped rather than padding the result.
+	return selected;
+}

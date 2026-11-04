@@ -1,0 +1,62 @@
+import { describe, expect, it } from "bun:test";
+import { parseTurnBudget } from "@veyyon/coding-agent/session/turn-budget";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+
+describe("parseTurnBudget", () => {
+	it("parses k/m multipliers and decimals", () => {
+		expect(parseTurnBudget("+500k")).toEqual({ total: 500_000, hard: false });
+		expect(parseTurnBudget("+2m")).toEqual({ total: 2_000_000, hard: false });
+		expect(parseTurnBudget("+1.5k")).toEqual({ total: 1_500, hard: false });
+	});
+
+	it("marks the budget hard only with a trailing !", () => {
+		expect(parseTurnBudget("+500k!")).toEqual({ total: 500_000, hard: true });
+		expect(parseTurnBudget("audit this thoroughly +250k!")).toEqual({ total: 250_000, hard: true });
+	});
+
+	it("matches the directive embedded in a sentence", () => {
+		expect(parseTurnBudget("be exhaustive +500k please")).toEqual({ total: 500_000, hard: false });
+	});
+
+	it("ignores non-directives and junk", () => {
+		expect(parseTurnBudget("nothing here")).toBeNull();
+		expect(parseTurnBudget("version 1.2.3")).toBeNull();
+		expect(parseTurnBudget("+0")).toBeNull();
+		expect(parseTurnBudget("c++ stuff")).toBeNull();
+		// `+` glued to a non-numeric or trailing garbage must not match.
+		expect(parseTurnBudget("+500kfoo")).toBeNull();
+		// The k/m unit is MANDATORY, which is why a bare `+1500` is junk here rather
+		// than a 1,500 token ceiling. An unsuffixed `+<digits>` is overwhelmingly
+		// ordinary prose (a diff stat, a version, a score), and reading it as a
+		// directive silently capped turns nobody meant to budget.
+		expect(parseTurnBudget("+1500")).toBeNull();
+	});
+});
+
+describe("SessionManager turn budget accounting", () => {
+	it("snapshots a window, accrues eval-agent output, and reports the ceiling + hard flag", () => {
+		const sm = SessionManager.inMemory();
+
+		sm.beginTurnBudget(100_000, true);
+		expect(sm.getTurnBudget()).toEqual({ total: 100_000, spent: 0, hard: true });
+
+		sm.recordEvalAgentOutput(3_000);
+		sm.recordEvalAgentOutput(1_500);
+		expect(sm.getTurnBudget()).toEqual({ total: 100_000, spent: 4_500, hard: true });
+
+		// Non-positive / non-finite deltas are ignored.
+		sm.recordEvalAgentOutput(0);
+		sm.recordEvalAgentOutput(Number.NaN);
+		expect(sm.getTurnBudget().spent).toBe(4_500);
+	});
+
+	it("resets spend and clears the ceiling when a new window opens with no directive", () => {
+		const sm = SessionManager.inMemory();
+		sm.beginTurnBudget(50_000, false);
+		sm.recordEvalAgentOutput(9_000);
+		expect(sm.getTurnBudget()).toEqual({ total: 50_000, spent: 9_000, hard: false });
+
+		sm.beginTurnBudget(null, false);
+		expect(sm.getTurnBudget()).toEqual({ total: null, spent: 0, hard: false });
+	});
+});

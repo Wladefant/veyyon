@@ -1,0 +1,171 @@
+// Runs in the page and, as the worker prelude, in every worker before its own script, so the page and
+// its workers name one GPU. `stealthProfile.webgl` lists GPUs of the host's OS, one per ANGLE backend.
+const webglProfiles = stealthProfile.webgl;
+const webglContextProfiles = new Page_WeakMap();
+const webglIsObjectKey = (value) =>
+	(typeof value === "object" && value !== null) || typeof value === "function";
+
+const webglLooksSoftware = (value) => {
+	const text = String(value || "").toLowerCase();
+	return (
+		text.includes("swiftshader") ||
+		text.includes("llvmpipe") ||
+		text.includes("lavapipe") ||
+		text.includes("software") ||
+		text.includes("mesa offscreen") ||
+		text.includes("google inc. (google)")
+	);
+};
+
+// The ANGLE backend a renderer string names. Shader translation follows the backend, so a claimed GPU
+// keeps the native backend: SwiftShader is Vulkan, and its translated shaders are SPIR-V.
+const webglBackendOf = (renderer) => {
+	const text = String(renderer || "").toLowerCase();
+	if (text.includes("direct3d") || text.includes("d3d1")) return "direct3d";
+	if (text.includes("vulkan")) return "vulkan";
+	if (text.includes("metal")) return "metal";
+	if (text.includes("opengl")) return "opengl";
+	return "";
+};
+
+const webglProfileForBackend = (backend) => {
+	for (let index = 0; index < webglProfiles.length; index += 1) {
+		if (webglProfiles[index].backend === backend) return webglProfiles[index];
+	}
+	return undefined;
+};
+
+const webglGetContextProfile = (target, thisArg) => {
+	if (!webglIsObjectKey(thisArg)) return webglProfiles[0];
+	const cached = Reflect_apply(Page_WeakMap_get, webglContextProfiles, [thisArg]);
+	if (cached) return cached;
+
+	let nativeVendor;
+	let nativeRenderer;
+	try {
+		nativeVendor = Reflect_apply(target, thisArg, [0x9245]);
+		nativeRenderer = Reflect_apply(target, thisArg, [0x9246]);
+	} catch {}
+
+	// A real GPU on a backend Chrome runs on this OS is reported as it is.
+	const nativeBackendProfile = webglProfileForBackend(webglBackendOf(nativeRenderer));
+	const profile =
+		typeof nativeVendor === "string" &&
+		typeof nativeRenderer === "string" &&
+		nativeVendor &&
+		nativeRenderer &&
+		!webglLooksSoftware(nativeVendor) &&
+		!webglLooksSoftware(nativeRenderer) &&
+		nativeBackendProfile
+			? { vendor: nativeVendor, renderer: nativeRenderer }
+			: nativeBackendProfile || webglProfiles[0];
+
+	Reflect_apply(Page_WeakMap_set, webglContextProfiles, [thisArg, profile]);
+	return profile;
+};
+
+const webglGetParameterHandler = {
+	apply(target, thisArg, args) {
+		const nativeValue = Reflect_apply(target, thisArg, args);
+		const param = args[0];
+		if (param === 0x1f00 && typeof nativeValue === "string") return "WebKit";
+		if (param === 0x1f01 && typeof nativeValue === "string") return "WebKit WebGL";
+		if ((param === 0x9245 || param === 0x9246) && typeof nativeValue === "string") {
+			const profile = webglGetContextProfile(target, thisArg);
+			return param === 0x9245 ? profile.vendor : profile.renderer;
+		}
+		return nativeValue;
+	},
+};
+
+const webglFloatPrecisionTypes = {
+	0x8df0: true,
+	0x8df1: true,
+	0x8df2: true,
+};
+
+const webglClonePrecisionFormat = (result, values) => {
+	const ownKeys = Reflect_ownKeys(result);
+	let hasRangeMin = false;
+	let hasRangeMax = false;
+	let hasPrecision = false;
+	for (let index = 0; index < ownKeys.length; index += 1) {
+		if (ownKeys[index] === "rangeMin") hasRangeMin = true;
+		if (ownKeys[index] === "rangeMax") hasRangeMax = true;
+		if (ownKeys[index] === "precision") hasPrecision = true;
+	}
+	if (!hasRangeMin || !hasRangeMax || !hasPrecision) return result;
+
+	const clone = Object_create(Object_getPrototypeOf(result));
+	for (let index = 0; index < ownKeys.length; index += 1) {
+		const key = ownKeys[index];
+		const descriptor = Object_getOwnPropertyDescriptor(result, key);
+		if (!descriptor) return result;
+		if (key === "rangeMin" || key === "rangeMax" || key === "precision") {
+			if (!("value" in descriptor)) return result;
+			descriptor.value = values[key];
+		}
+		try {
+			Object_defineProperty(clone, key, descriptor);
+		} catch {
+			return result;
+		}
+	}
+	return clone;
+};
+
+const webglGetShaderPrecisionFormatHandler = {
+	apply(target, thisArg, args) {
+		const result = Reflect_apply(target, thisArg, args);
+		const precisionType = args[1];
+		if (!result || !webglFloatPrecisionTypes[precisionType]) return result;
+
+		const rangeMin = result.rangeMin;
+		const rangeMax = result.rangeMax;
+		const precision = result.precision;
+		if (
+			typeof rangeMin !== "number" ||
+			typeof rangeMax !== "number" ||
+			typeof precision !== "number"
+		) {
+			return result;
+		}
+
+		const values = {
+			rangeMin: Math_max(rangeMin, 127),
+			rangeMax: Math_max(rangeMax, 127),
+			precision: Math_max(precision, 23),
+		};
+		if (
+			values.rangeMin === rangeMin &&
+			values.rangeMax === rangeMax &&
+			values.precision === precision
+		) {
+			return result;
+		}
+		return webglClonePrecisionFormat(result, values);
+	},
+};
+
+const webglInstallMethodProxy = (proto, name, handler) => {
+	if (!proto) return;
+	const descriptor = Object_getOwnPropertyDescriptor(proto, name);
+	if (!descriptor || typeof descriptor.value !== "function") return;
+	const proxy = new Window_Proxy(descriptor.value, handler);
+	patchToString(proxy, name);
+	try {
+		Object_defineProperty(proto, name, {
+			value: proxy,
+			writable: descriptor.writable,
+			configurable: descriptor.configurable,
+			enumerable: descriptor.enumerable,
+		});
+	} catch {}
+};
+
+for (const contextName of ["WebGLRenderingContext", "WebGL2RenderingContext"]) {
+	const context = self[contextName];
+	if (!context) continue;
+	webglInstallMethodProxy(context.prototype, "getParameter", webglGetParameterHandler);
+	webglInstallMethodProxy(context.prototype, "getShaderPrecisionFormat", webglGetShaderPrecisionFormatHandler);
+}

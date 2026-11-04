@@ -1,0 +1,480 @@
+/**
+ * A TTSR nudge that matches has to actually reach the model, and has to be able to match again.
+ *
+ * WHY THIS SUITE EXISTS. `cwd-reroot` was reported as "it just does not work" — not firing wrongly,
+ * not firing at all, most of the time. Three separate defects on the tool-scoped delivery path each
+ * produced that symptom, and none of them was visible from outside: a suppressed rule looks exactly
+ * like a rule whose condition did not match.
+ *
+ * A. THE BODY WAS NEVER RENDERED. There are two delivery paths. A stream-interrupting rule went
+ *    through `#getTtsrInjectionContent`, which resolves the body's template. A tool-scoped rule
+ *    (`interruptMode: never`, matching on a tool argument stream) had its RAW body folded into the
+ *    tool result. `cwd-reroot` only ever takes the second path, so what reached the model was
+ *    `{{#if matchedPath}}…{{/if}}` markup: it named neither directory and advised calling a tool
+ *    that is not registered by default. The nudge arrived and said nothing usable.
+ *
+ * B. THE CLAIM WAS TAKEN BEFORE DELIVERY AND NEVER GIVEN BACK. A tool-scoped rule is claimed the
+ *    moment it is bucketed, so a sibling tool call in the same assistant message cannot re-match it.
+ *    Delivery happens later, in `afterToolCall`. A turn that aborts or errors never gets there, and
+ *    the bucket was cleared without releasing the claim — so under the default `repeatMode: "once"`
+ *    one interrupted turn retired the rule for the whole session, and the retirement was persisted
+ *    across resume.
+ *
+ * C. `repeatMode: "once"` IS THE WRONG DEFAULT FOR NAVIGATIONAL ADVICE. Firing once per session is
+ *    right for a rule stating a convention and wrong for one whose advice applies again to a
+ *    different directory. Under the global default, `cwd-reroot` fired for the first foreign project
+ *    a session touched and stayed silent for every later one.
+ *
+ * Each defect gets its own block below. The claim-release and repeat-policy contracts are asserted
+ * against `TtsrManager` directly, which is where the state lives. Defect A's two delivery paths are
+ * private to `AgentSession`, so it is covered two ways: the render is exercised through the same
+ * context the session builds, and a source lock pins that neither path can go back to passing a raw
+ * body — a leak that a behavioural test cannot see, because raw markup is still a non-empty string.
+ */
+
+import { describe, expect, it } from "bun:test";
+import type { TtsrSettings } from "@veyyon/coding-agent/config/settings";
+import { getCapability } from "@veyyon/coding-agent/discovery/capability";
+import {
+	BUILTIN_DEFAULTS_PROVIDER_ID,
+	type Rule,
+	ruleCapability,
+} from "@veyyon/coding-agent/discovery/capability/rule";
+import type { LoadContext } from "@veyyon/coding-agent/discovery/capability/types";
+import { buildRuleFromMarkdown } from "@veyyon/coding-agent/discovery/helpers";
+import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";
+import { prompt } from "@veyyon/utils";
+import "@veyyon/coding-agent/discovery";
+import { deliveredText, type TtsrHarness, ttsrHarness } from "../helpers/ttsr-runtime";
+import { warmUpRule } from "../helpers/ttsr-warmup";
+
+const CWD = "/work/project";
+const OUTSIDE_PATH = "/work/other-project/crates/cli/src/main.rs";
+const OUTSIDE = `{"path":"${OUTSIDE_PATH}"}`;
+const TOOL = { source: "tool", toolName: "read" } as const;
+
+async function loadBuiltinRules(): Promise<Rule[]> {
+	const cap = getCapability(ruleCapability.id);
+	if (!cap) throw new Error("rules capability missing");
+	const provider = cap.providers.find(p => p.id === BUILTIN_DEFAULTS_PROVIDER_ID);
+	if (!provider) throw new Error("builtin-defaults provider missing");
+	const ctx: LoadContext = { cwd: "/tmp", home: "/tmp/home", repoRoot: null };
+	const result = await (provider.load as (ctx: LoadContext) => Promise<{ items: Rule[] }>)(ctx);
+	return result.items;
+}
+
+async function builtinRule(name: string): Promise<Rule> {
+	const rule = (await loadBuiltinRules()).find(r => r.name === name);
+	if (!rule) throw new Error(`bundled rule ${name} missing`);
+	return rule;
+}
+
+/** A rule matching any absolute path of four or more segments, scoped to paths outside the cwd. */
+function pathRule(overrides: Partial<Rule> = {}): Rule {
+	return {
+		name: "path-rule",
+		path: "/rules/path-rule.md",
+		content: "body",
+		condition: ["(?:^|[\\s\"'=(,])/(?:[\\w.@+-]+/){3,}[\\w.@+-]+"],
+		scope: ["tool:read"],
+		interruptMode: "never",
+		pathScope: "outside-cwd",
+		_source: { provider: "test", providerName: "test", path: "/rules/path-rule.md", level: "project" },
+		...overrides,
+	};
+}
+
+/** A rule that DOES interrupt, so a deferred retry gets scheduled alongside a tool-scoped bucket. */
+function interruptingRule(overrides: Partial<Rule> = {}): Rule {
+	return {
+		name: "interrupting-rule",
+		path: "/rules/interrupting-rule.md",
+		content: "stop and read this",
+		condition: ["INTERRUPT"],
+		interruptMode: "always",
+		_source: { provider: "test", providerName: "test", path: "/rules/interrupting-rule.md", level: "project" },
+		...overrides,
+	};
+}
+
+function settings(overrides: Partial<TtsrSettings> = {}): TtsrSettings {
+	return {
+		enabled: true,
+		contextMode: "discard",
+		interruptMode: "never",
+		repeatMode: "once",
+		repeatGap: 10,
+		...overrides,
+	};
+}
+
+/** A manager holding one rule, with the working directory the path scope compares against. */
+function managerWith(rule: Rule, overrides: Partial<TtsrSettings> = {}): TtsrManager {
+	const manager = new TtsrManager(settings(overrides), { getCwd: () => CWD });
+	expect(manager.addRule(rule)).toBe(true);
+	return manager;
+}
+
+function matchNames(manager: TtsrManager, delta = OUTSIDE): string[] {
+	manager.resetBuffer();
+	return manager.checkDelta(delta, TOOL).map(r => r.name);
+}
+
+describe("A: the body a tool-scoped rule delivers", () => {
+	/**
+	 * The tool-scoped path used to fold the raw body in, so this asserts the resolved text of the one
+	 * rule that only ever takes that path. Unresolved markup is what the model actually saw.
+	 */
+	it("carries no unresolved template markup once rendered with the session's context", async () => {
+		const rule = await builtinRule("cwd-reroot");
+
+		const rendered = prompt.render(rule.content, {
+			argot: false,
+			cwd: CWD,
+			matchedPath: "/work/other-project/crates/cli/src/main.rs",
+		});
+
+		expect(rendered).not.toContain("{{");
+		expect(rendered).not.toContain("}}");
+		expect(rendered).toContain("/work/other-project/crates/cli/src/main.rs");
+		expect(rendered).toContain(CWD);
+	});
+
+	/**
+	 * The raw body is not merely unresolved, it is WRONG: it advises `argot_load`, a tool that is not
+	 * registered unless `argot.enabled` is on. Delivering the raw body therefore delivered dead advice
+	 * to every default install, which is the difference between "unrendered" and "harmless".
+	 */
+	it("drops the argot advice the raw body carries when argot is off", async () => {
+		const rule = await builtinRule("cwd-reroot");
+
+		expect(rule.content).toContain("argot_load");
+		expect(prompt.render(rule.content, { argot: false, cwd: CWD, matchedPath: undefined })).not.toContain("argot");
+		expect(prompt.render(rule.content, { argot: true, cwd: CWD, matchedPath: undefined })).toContain("argot_load");
+	});
+
+	/**
+	 * Both delivery paths render through one owner, and that owner resolves every variable a bundled
+	 * body may reference. Passing `content: r.content` on either path is exactly the defect, and the
+	 * delivered text is what distinguishes them: raw markup is a non-empty string, so only reading
+	 * what the model was actually handed can tell a rendered body from an unrendered one.
+	 */
+	it("is rendered by one owner on both delivery paths", async () => {
+		const rule = await builtinRule("cwd-reroot");
+
+		const scoped = ttsrHarness([rule], { settings: settings() });
+		warmUpRule(scoped.manager, rule, OUTSIDE, TOOL);
+		expect(await scoped.toolDelta(OUTSIDE, "call-1")).toBe(false);
+		scoped.runtime.afterToolCall({
+			toolCall: { id: "call-1", name: "read", type: "toolCall", arguments: {} },
+			isError: false,
+		} as never);
+		const reminder = deliveredText(scoped.runtime.takePendingToolReminders());
+		expect(reminder).not.toContain("{{");
+		expect(reminder).toContain(OUTSIDE_PATH);
+		expect(reminder).toContain(CWD);
+
+		const interrupting = ttsrHarness([{ ...rule, interruptMode: "always" }], { settings: settings() });
+		warmUpRule(interrupting.manager, rule, OUTSIDE, TOOL);
+		expect(await interrupting.toolDelta(OUTSIDE, "call-2")).toBe(true);
+		await interrupting.drain();
+		const injected = deliveredText(interrupting.recorded.appended.at(0));
+		expect(injected).not.toContain("{{");
+		expect(injected).toContain(OUTSIDE_PATH);
+		expect(injected).toContain(CWD);
+	});
+});
+
+describe("B: a claim taken but never delivered", () => {
+	/** The premise: a claim does suppress the next match, which is why releasing it matters. */
+	it("suppresses the rule while it is held", () => {
+		const manager = managerWith(pathRule());
+
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual([]);
+	});
+
+	/**
+	 * THE regression. An aborted turn drops the bucket, so the claim has to come back or the rule is
+	 * retired for the session having shown the model nothing.
+	 */
+	it("lets the rule match again after the claim is released", () => {
+		const manager = managerWith(pathRule());
+		manager.markInjectedByNames(["path-rule"]);
+		expect(matchNames(manager)).toEqual([]);
+
+		manager.releaseInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+	});
+
+	/**
+	 * Release also has to erase the record that is PERSISTED, not only the in-memory suppression.
+	 * `getInjectedRuleNames` is what the session writes to disk; a released claim left in there comes
+	 * back on resume and suppresses the rule in the next session too.
+	 */
+	it("removes the released name from the state that is persisted across resume", () => {
+		const manager = managerWith(pathRule());
+		manager.markInjectedByNames(["path-rule"]);
+		expect(manager.getInjectedRuleNames()).toEqual(["path-rule"]);
+
+		manager.releaseInjectedByNames(["path-rule"]);
+
+		expect(manager.getInjectedRuleNames()).toEqual([]);
+	});
+
+	it("releases only the named rule and leaves other claims standing", () => {
+		const manager = managerWith(pathRule());
+		expect(manager.addRule(pathRule({ name: "other-rule", path: "/rules/other.md" }))).toBe(true);
+		manager.markInjectedByNames(["path-rule", "other-rule"]);
+
+		manager.releaseInjectedByNames(["path-rule"]);
+
+		expect(manager.getInjectedRuleNames()).toEqual(["other-rule"]);
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+	});
+
+	it("ignores a blank or unknown name rather than throwing mid-abort", () => {
+		// This runs on the abort/error path, where a throw would replace the user's real failure.
+		const manager = managerWith(pathRule());
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(() => manager.releaseInjectedByNames(["", "   ", "never-registered"])).not.toThrow();
+
+		expect(manager.getInjectedRuleNames()).toEqual(["path-rule"]);
+	});
+
+	it("is idempotent, so a double abort does not resurrect a delivered reminder", () => {
+		const manager = managerWith(pathRule());
+		manager.markInjectedByNames(["path-rule"]);
+
+		manager.releaseInjectedByNames(["path-rule"]);
+		manager.releaseInjectedByNames(["path-rule"]);
+
+		expect(manager.getInjectedRuleNames()).toEqual([]);
+	});
+
+	/**
+	 * Every path that clears the tool-scoped bucket must give the claims back.
+	 *
+	 * Three separate paths clear it — the turn that aborts or errors before the tool ran, the
+	 * deferred retry that finds itself stale, and the deferred retry that proceeds — and each one
+	 * that forgets the release reintroduces the defect on its own. All three are driven here, and
+	 * each asserts the rule can match AGAIN, which is the observable form of "the claim came back".
+	 */
+	describe("is the only way the tool-scoped bucket is cleared", () => {
+		/** Bucket `path-rule` against one tool call, without delivering it. */
+		async function bucketed(): Promise<TtsrHarness> {
+			const h = ttsrHarness([pathRule()], { settings: settings() });
+			expect(await h.toolDelta(OUTSIDE, "call-1")).toBe(false);
+			expect(h.manager.getInjectedRuleNames()).toEqual(["path-rule"]);
+			return h;
+		}
+
+		it("releases the claim when the turn aborts before the tool ran", async () => {
+			const h = await bucketed();
+
+			h.runtime.onAssistantSettled({ stopReason: "aborted" } as never);
+
+			expect(h.manager.getInjectedRuleNames()).toEqual([]);
+		});
+
+		it("releases the claim when the turn errors before the tool ran", async () => {
+			const h = await bucketed();
+
+			h.runtime.onAssistantSettled({ stopReason: "error" } as never);
+
+			expect(h.manager.getInjectedRuleNames()).toEqual([]);
+		});
+
+		it("releases the claim when a deferred retry finds itself stale", async () => {
+			const h = ttsrHarness([pathRule(), interruptingRule()], { settings: settings() });
+			expect(await h.toolDelta(OUTSIDE, "call-1")).toBe(false);
+			expect(await h.delta("INTERRUPT")).toBe(true);
+
+			h.generation += 1;
+			await h.drain();
+
+			expect(h.manager.getInjectedRuleNames()).toEqual([]);
+		});
+
+		it("releases the tool-scoped claim when a deferred retry proceeds and injects", async () => {
+			const h = ttsrHarness([pathRule(), interruptingRule()], { settings: settings() });
+			expect(await h.toolDelta(OUTSIDE, "call-1")).toBe(false);
+			expect(await h.delta("INTERRUPT")).toBe(true);
+
+			await h.drain();
+
+			// The interrupting rule was delivered, so it stays claimed; the tool-scoped one was not.
+			expect(h.manager.getInjectedRuleNames()).toEqual(["interrupting-rule"]);
+		});
+
+		/** A reminder rendered but never drained as an aside is undelivered too, and releases the same way. */
+		it("releases a rendered reminder that never reached a step boundary", async () => {
+			const h = await bucketed();
+			h.runtime.afterToolCall({
+				toolCall: { id: "call-1", name: "read", type: "toolCall", arguments: {} },
+				isError: false,
+			} as never);
+
+			h.runtime.onAssistantSettled({ stopReason: "aborted" } as never);
+
+			expect(h.manager.getInjectedRuleNames()).toEqual([]);
+			expect(h.runtime.takePendingToolReminders()).toBeNull();
+		});
+	});
+});
+
+describe("C: a rule's own repeat policy", () => {
+	/** The global default stays exactly as it was for a rule that expresses no preference. */
+	it("falls back to the global setting when the rule states none", () => {
+		const manager = managerWith(pathRule());
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual([]);
+	});
+
+	/**
+	 * THE fix for the reported symptom: navigational advice applies again to the next project, so the
+	 * rule may say so even though the global default retires a rule after one injection.
+	 */
+	it("lets a rule opt out of the global once-per-session default", () => {
+		const manager = managerWith(pathRule({ repeatMode: "after-gap", repeatGap: 0 }));
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+	});
+
+	it("holds the rule's own gap, counted in messages since the injection", () => {
+		const manager = managerWith(pathRule({ repeatMode: "after-gap", repeatGap: 2 }), { repeatGap: 0 });
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual([]);
+		manager.incrementMessageCount();
+		expect(matchNames(manager)).toEqual([]);
+		manager.incrementMessageCount();
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+	});
+
+	/** Per-rule wins in BOTH directions, or it is a preference the rule author cannot rely on. */
+	it("can also pin a rule to once while the operator's global setting repeats", () => {
+		const manager = managerWith(pathRule({ repeatMode: "once" }), { repeatMode: "after-gap", repeatGap: 0 });
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual([]);
+	});
+
+	it("ignores the rule's gap when the rule pins the mode to once", () => {
+		const manager = managerWith(pathRule({ repeatMode: "once", repeatGap: 0 }));
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual([]);
+	});
+
+	/** A rule that gives a gap and no mode is still governed by the global mode. */
+	it("does not turn a global once into a repeat just because a gap is present", () => {
+		const manager = managerWith(pathRule({ repeatGap: 0 }));
+		manager.markInjectedByNames(["path-rule"]);
+
+		expect(matchNames(manager)).toEqual([]);
+	});
+
+	it("resets per-compact rules when resetForCompaction is called", () => {
+		const manager = managerWith(pathRule({ repeatMode: "per-compact" }));
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+		manager.markInjectedByNames(["path-rule"]);
+		expect(matchNames(manager)).toEqual([]);
+
+		manager.resetForCompaction();
+		expect(matchNames(manager)).toEqual(["path-rule"]);
+	});
+});
+
+describe("C: parsing a repeat policy out of rule frontmatter", () => {
+	function parse(frontmatter: string): Rule {
+		return buildRuleFromMarkdown("parsed-rule", `---\n${frontmatter}\n---\n\nbody\n`, "/rules/parsed-rule.md", {
+			provider: "test",
+			providerName: "test",
+			path: "/rules/parsed-rule.md",
+			level: "project",
+		});
+	}
+
+	it("reads both fields off the frontmatter", () => {
+		const rule = parse('condition: "x"\nrepeatMode: after-gap\nrepeatGap: 8');
+
+		expect(rule.repeatMode).toBe("after-gap");
+		expect(rule.repeatGap).toBe(8);
+	});
+	it("parses per-compact repeatMode off frontmatter", () => {
+		const rule = parse('condition: "x"\nrepeatMode: per-compact');
+		expect(rule.repeatMode).toBe("per-compact");
+	});
+
+	it("leaves both undefined when the rule says nothing, so the global setting governs", () => {
+		const rule = parse('condition: "x"');
+
+		expect(rule.repeatMode).toBeUndefined();
+		expect(rule.repeatGap).toBeUndefined();
+	});
+
+	it("accepts a zero gap, which means every match may fire", () => {
+		// Zero is a real value here and the falsy trap is easy to write, so it is pinned separately.
+		expect(parse('condition: "x"\nrepeatGap: 0').repeatGap).toBe(0);
+	});
+
+	it("ignores a mode it does not recognise instead of storing it", () => {
+		// An unknown mode must not become a third policy by accident; the global setting governs.
+		expect(parse('condition: "x"\nrepeatMode: sometimes').repeatMode).toBeUndefined();
+		expect(parse('condition: "x"\nrepeatMode: 3').repeatMode).toBeUndefined();
+	});
+
+	it("ignores a gap that is not a whole non-negative count", () => {
+		// A negative gap is not a smaller gap and a fractional one is not a count; both are typos, and
+		// silently coercing either would invent a policy the author did not write.
+		expect(parse('condition: "x"\nrepeatGap: -1').repeatGap).toBeUndefined();
+		expect(parse('condition: "x"\nrepeatGap: 1.5').repeatGap).toBeUndefined();
+		expect(parse('condition: "x"\nrepeatGap: "8"').repeatGap).toBeUndefined();
+	});
+});
+
+describe("the bundled cwd-reroot rule", () => {
+	/**
+	 * The whole point of the three fixes, asserted on the shipped rule rather than on a fixture: it
+	 * takes the tool-scoped delivery path, and it repeats, so a session that settles into a second
+	 * foreign project gets the same advice as it did for the first.
+	 *
+	 * It repeats per COMPACTION now rather than after a gap of messages. Under the gap it came back
+	 * eight messages after it was heard, which on a long session is the same paragraph several times
+	 * about work that had already moved on.
+	 */
+	it("repeats, because its advice applies again to the next project", async () => {
+		const rule = await builtinRule("cwd-reroot");
+
+		expect(rule.interruptMode).toBe("never");
+		expect(rule.repeatMode).toBe("per-compact");
+		expect(rule.warmupMatches).toBeGreaterThan(1);
+	});
+
+	it("fires again for a different project once the transcript has been replaced", async () => {
+		const rule = await builtinRule("cwd-reroot");
+		const manager = managerWith(rule);
+
+		warmUpRule(manager, rule, OUTSIDE, TOOL);
+		expect(matchNames(manager)).toEqual(["cwd-reroot"]);
+		manager.markInjectedByNames(["cwd-reroot"]);
+		expect(matchNames(manager)).toEqual([]);
+
+		manager.resetForCompaction();
+		// Re-armed, but the habit has to be established again: the reminder was heard, so the next
+		// one is earned by reaching over there repeatedly rather than by the transcript rolling.
+		const third = '{"path":"/work/third-project/src/lib/main.rs"}';
+		expect(matchNames(manager, third)).toEqual([]);
+		warmUpRule(manager, rule, third, TOOL, "after-compaction");
+		expect(matchNames(manager, third)).toEqual(["cwd-reroot"]);
+	});
+});

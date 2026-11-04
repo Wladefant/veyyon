@@ -1,0 +1,192 @@
+/**
+ * Owner tests for the scoped-timeout signal primitives. The scoped variants
+ * exist because a bare `AbortSignal.timeout` keeps its backing timer armed
+ * after the operation settles, which crashed Bun's concurrent GC when leaked
+ * signals aborted later (`JSAbortSignal::visitAdditionalChildren`) — so the
+ * load-bearing assertions here are that the timer is dead once the operation
+ * finishes or `cancel()` runs.
+ */
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import { isTimeoutError } from "../src/abortable";
+import { raceWithTimeout, scopedTimeoutSignal, settleWithin, withScopedTimeoutSignal } from "../src/scoped-timeout";
+
+describe("withScopedTimeoutSignal with a parent signal", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("hands the callback a signal already aborted with the parent's reason", async () => {
+		const parent = new AbortController();
+		parent.abort(new Error("caller cancelled"));
+		const seen = await withScopedTimeoutSignal(60_000, async signal => signal.reason, parent.signal);
+		expect((seen as Error).message).toBe("caller cancelled");
+	});
+
+	it("leaves no timer armed once the operation settles", async () => {
+		vi.useFakeTimers();
+		const parent = new AbortController();
+		let captured: AbortSignal | undefined;
+		await withScopedTimeoutSignal(
+			60_000,
+			async signal => {
+				captured = signal;
+				expect(vi.getTimerCount()).toBe(1);
+			},
+			parent.signal,
+		);
+		expect(vi.getTimerCount()).toBe(0);
+		vi.advanceTimersByTime(60_000);
+		expect(captured?.aborted).toBe(false);
+	});
+});
+
+describe("withScopedTimeoutSignal", () => {
+	it("aborts the callback signal with a TimeoutError once the deadline passes", async () => {
+		await expect(
+			withScopedTimeoutSignal(10, async signal => {
+				await new Promise(resolve => setTimeout(resolve, 100));
+				signal.throwIfAborted();
+				return "unreachable";
+			}),
+		).rejects.toMatchObject({ name: "TimeoutError" });
+	});
+
+	it("never aborts the signal after the operation settles inside the deadline", async () => {
+		let captured: AbortSignal | undefined;
+		const result = await withScopedTimeoutSignal(15, async signal => {
+			captured = signal;
+			return "done";
+		});
+		expect(result).toBe("done");
+		// The 15ms timer was cleared on settle: waiting past the deadline must
+		// not flip the signal — a late abort is exactly the leaked-timer bug.
+		await new Promise(resolve => setTimeout(resolve, 40));
+		expect(captured?.aborted).toBe(false);
+	});
+});
+
+describe("scopedTimeoutSignal", () => {
+	it("aborts with a TimeoutError after the deadline when never cancelled", async () => {
+		const timeout = scopedTimeoutSignal(10);
+		try {
+			await new Promise(resolve => setTimeout(resolve, 40));
+			expect(timeout.signal.aborted).toBe(true);
+			expect(isTimeoutError(timeout.signal.reason)).toBe(true);
+		} finally {
+			timeout.cancel();
+		}
+	});
+
+	it("cancel() defuses the timer so the signal never aborts", async () => {
+		const timeout = scopedTimeoutSignal(10);
+		timeout.cancel();
+		await new Promise(resolve => setTimeout(resolve, 40));
+		expect(timeout.signal.aborted).toBe(false);
+	});
+
+	it("combines with a parent signal and preserves the parent's abort reason", () => {
+		const parent = new AbortController();
+		const timeout = scopedTimeoutSignal(60_000, parent.signal);
+		try {
+			expect(timeout.signal.aborted).toBe(false);
+			parent.abort(new Error("caller cancelled"));
+			expect(timeout.signal.aborted).toBe(true);
+			expect((timeout.signal.reason as Error).message).toBe("caller cancelled");
+			expect(isTimeoutError(timeout.signal.reason)).toBe(false);
+		} finally {
+			timeout.cancel();
+		}
+	});
+
+	it("parent aborts still propagate after cancel()", () => {
+		const parent = new AbortController();
+		const timeout = scopedTimeoutSignal(60_000, parent.signal);
+		timeout.cancel();
+		parent.abort(new Error("late cancel"));
+		expect(timeout.signal.aborted).toBe(true);
+		expect((timeout.signal.reason as Error).message).toBe("late cancel");
+	});
+});
+
+describe("raceWithTimeout", () => {
+	it("resolves with the promise value inside the deadline", async () => {
+		await expect(raceWithTimeout(Promise.resolve(42), 5_000, () => new Error("too slow"))).resolves.toBe(42);
+	});
+
+	it("rejects with the factory error and awaits onTimeout when the deadline fires", async () => {
+		let hookRan = false;
+		const never = new Promise<never>(() => {});
+		await expect(
+			raceWithTimeout(never, 10, () => new Error("too slow"), {
+				onTimeout: async () => {
+					hookRan = true;
+				},
+			}),
+		).rejects.toThrow("too slow");
+		expect(hookRan).toBe(true);
+	});
+
+	it("propagates the promise's own rejection without invoking onTimeout", async () => {
+		let hookRan = false;
+		await expect(
+			raceWithTimeout(Promise.reject(new Error("worker died")), 5_000, () => new Error("too slow"), {
+				onTimeout: async () => {
+					hookRan = true;
+				},
+			}),
+		).rejects.toThrow("worker died");
+		expect(hookRan).toBe(false);
+	});
+
+	it("rejects with the caller signal's reason when it aborts first", async () => {
+		const controller = new AbortController();
+		const never = new Promise<never>(() => {});
+		const race = raceWithTimeout(never, 5_000, () => new Error("too slow"), { signal: controller.signal });
+		controller.abort(new Error("caller cancelled"));
+		await expect(race).rejects.toThrow("caller cancelled");
+	});
+
+	it("rejects immediately when the caller signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort(new Error("already aborted"));
+		await expect(
+			raceWithTimeout(Promise.resolve(1), 5_000, () => new Error("too slow"), { signal: controller.signal }),
+		).rejects.toThrow("already aborted");
+	});
+});
+
+describe("settleWithin", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("resolves with the work's value and leaves no timer armed when the work wins", async () => {
+		vi.useFakeTimers();
+		const work = Promise.withResolvers<string>();
+		const raced = settleWithin(work.promise, 5_000, "fallback");
+		expect(vi.getTimerCount()).toBe(1);
+		work.resolve("value");
+		expect(await raced).toBe("value");
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("resolves with the fallback once the deadline passes and the work is still pending", async () => {
+		vi.useFakeTimers();
+		const raced = settleWithin(Promise.withResolvers<string>().promise, 5_000, "fallback");
+		vi.advanceTimersByTime(4_999);
+		const early = await Promise.race([raced, Promise.resolve("pending")]);
+		expect(early).toBe("pending");
+		vi.advanceTimersByTime(1);
+		expect(await raced).toBe("fallback");
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("propagates the work's rejection and clears the timer", async () => {
+		vi.useFakeTimers();
+		const work = Promise.withResolvers<string>();
+		const raced = settleWithin(work.promise, 5_000, "fallback");
+		work.reject(new Error("worker died"));
+		await expect(raced).rejects.toThrow("worker died");
+		expect(vi.getTimerCount()).toBe(0);
+	});
+});

@@ -1,0 +1,30 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+const repo=resolve(import.meta.dir,"../..");
+const root=join("C:/Users/Public",`veyyon-cloud693-${randomUUID()}`);
+const config=join(root,"config");const agent=join(config,"profiles/default/agent");
+await mkdir(agent,{recursive:true});await writeFile(join(agent,"config.yml"),"checkpoints:\n  enabled: true\n");
+const workspace=join(root,"workspace");await mkdir(workspace);await writeFile(join(workspace,"dirty.ts"),'export const canary = "dirty";\n');
+process.env.VEYYON_CONFIG_DIR=config;process.env.VEYYON_CODING_AGENT_DIR=agent;
+// This canary intentionally loads the module after setting isolated configuration paths.
+const { SessionManager } = await import("../../kernel/src/session/session-manager");
+const manager=SessionManager.create(workspace,join(root,"sessions"));
+manager.appendMessage({role:"user",content:"Checkpoint canary input; no tools or provider jobs ran.",timestamp:Date.now()});
+await manager.ensureOnDisk();
+await manager.flush();const file=manager.getSessionFile()!;const id=manager.getSessionId();await manager.close();
+const artifactRoot=file.slice(0,-6);await mkdir(artifactRoot,{recursive:true});await writeFile(join(artifactRoot,"canary.bin"),new Uint8Array([0,1,255]));
+const env={...process.env,VEYYON_PROFILE:"default",VEYYON_CONFIG_DIR:config,VEYYON_CODING_AGENT_DIR:agent,VEYYON_CHECKPOINT_URL:"https://veyyon-checkpoints.polysimulator.workers.dev",VEYYON_CHECKPOINT_TOKEN:await readFile("C:/Users/wkiri/.veyyon/shared-auth/veyyon_checkpoint_token.txt","utf8"),VEYYON_CHECKPOINT_KEY:await readFile("C:/Users/wkiri/.veyyon/shared-auth/veyyon_checkpoint_key.txt","utf8")};
+const cli=join(repo,"packages/coding-agent/src/cli.ts");
+function command(args:string[],expected=0){const run=spawnSync(process.execPath,[cli,"session",...args],{cwd:workspace,env,windowsHide:true,timeout:60000,encoding:"utf8"});if(run.status!==expected)throw new Error(`Canary command ${args[0]} failed (${run.status}): ${run.error?.message ?? ""} ${run.stderr} ${run.stdout}`);return run.stdout;}
+command(["checkpoint-export","--file",file,"--workspace",join(workspace,"dirty.ts")]);
+const target=join(root,"restored");command(["checkpoint-restore",id,"--output",target]);
+const original=await readFile(file);const restored=await readFile(join(target,"sessions/session.jsonl"));if(!original.equals(restored))throw new Error("Journal bytes changed during restore");
+if((await readFile(join(target,"workspace/dirty.ts"),"utf8"))!==(await readFile(join(workspace,"dirty.ts"),"utf8")))throw new Error("Dirty file lost");
+if(!(await readFile(join(target,"sessions/session/canary.bin"))).equals(Buffer.from([0,1,255])))throw new Error("Artifact lost");
+const reopened=await SessionManager.open(join(target,"sessions/session.jsonl"),undefined,undefined,{suppressBreadcrumb:true});if(reopened.getSessionId()!==id || !reopened.getEntries().some(e=>e.type==="message"))throw new Error("Native journal cannot resume");await reopened.close();
+const fork=JSON.parse(command(["checkpoint-fork",id]));if(fork.sessionId===id)throw new Error("Fork reused original ID");
+await writeFile(join(agent,"config.yml"),"checkpoints:\n  enabled: false\n");command(["checkpoint-status",id],1);
+const receipt={result:"PASS",sessionId:id,root,journalBytes:original.length,checks:["real CLI export","real CLI restore","byte-exact native journal","artifact bytes","approved dirty file","native SessionManager reopen","explicit fork ID","cloud-off rejection"],completedAt:new Date().toISOString()};
+await writeFile(join(root,"receipt.json"),JSON.stringify(receipt,null,2));console.log(JSON.stringify(receipt));

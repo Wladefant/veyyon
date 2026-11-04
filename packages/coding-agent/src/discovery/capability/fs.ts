@@ -1,0 +1,210 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { isFsError, isMissingPath } from "@veyyon/utils/fs-error";
+import { readFileText } from "@veyyon/utils/fs-io";
+import * as logger from "@veyyon/utils/logger";
+import { errorMessage } from "@veyyon/utils/type-guards";
+
+const contentCache = new Map<string, string | null>();
+const dirCache = new Map<string, fs.Dirent[]>();
+const contentReadErrors = new Map<string, string>();
+const readErrorScope = new AsyncLocalStorage<Map<string, string>>();
+
+/** Capture fail-soft discovery reads without changing startup's warning behavior. */
+export async function captureDiscoveryReadErrors<T>(
+	discover: () => Promise<T>,
+): Promise<{ result: T; errors: string[] }> {
+	const errors = new Map<string, string>();
+	const result = await readErrorScope.run(errors, discover);
+	return { result, errors: [...errors.values()] };
+}
+
+/** Feed structured loader failures into the current reload, without changing startup. */
+export function reportDiscoveryFailures(warnings: readonly string[]): void {
+	const errors = readErrorScope.getStore();
+	if (!errors) return;
+	for (const warning of warnings) errors.set(warning, warning);
+}
+/** Lookups of {@link findRepoRoot}, keyed by the resolved start directory; a concurrent call shares one. */
+const repoRootCache = new Map<string, Promise<string | null>>();
+
+function resolvePath(filePath: string): string {
+	return path.resolve(filePath);
+}
+
+export async function readFile(filePath: string): Promise<string | null> {
+	const abs = resolvePath(filePath);
+	if (contentCache.has(abs)) {
+		const error = contentReadErrors.get(abs);
+		if (error) readErrorScope.getStore()?.set(abs, error);
+		return contentCache.get(abs) ?? null;
+	}
+
+	try {
+		// Gate on the file type first: discovery scans foreign config dirs
+		// (~/.claude, ~/.cursor, project trees), and reading a FIFO/socket/char
+		// device with `.text()` blocks until EOF — i.e. forever — hanging
+		// startup with zero output. `stat` follows symlinks, so symlinked
+		// context files (CLAUDE.md -> AGENTS.md) still resolve.
+		const stats = await fs.promises.stat(abs);
+		if (!stats.isFile()) {
+			contentCache.set(abs, null);
+			const error = `${abs}: not a regular file`;
+			contentReadErrors.set(abs, error);
+			readErrorScope.getStore()?.set(abs, error);
+			return null;
+		}
+		const content = await readFileText(abs);
+		contentCache.set(abs, content);
+		return content;
+	} catch (err) {
+		contentCache.set(abs, null);
+		// ENOENT/ENOTDIR mean the path genuinely is not there: the common,
+		// benign case when discovery probes optional context files. Anything
+		// else (EACCES, EIO, EMFILE, EBUSY, ...) means the file EXISTS but we
+		// could not read it. Surface that loudly instead of silently dropping
+		// the context, so the operator learns why a CLAUDE.md/AGENTS.md went
+		// missing from the prompt (Law 10: no silent recall loss). We still
+		// return null so startup proceeds; the cached null above suppresses
+		// re-warning on repeat reads of the same path.
+		if (!isMissingPath(err)) {
+			const message = `${abs}: ${errorMessage(err)}`;
+			contentReadErrors.set(abs, message);
+			readErrorScope.getStore()?.set(abs, message);
+			logger.warn("Context file exists but could not be read; dropped from discovery", {
+				path: abs,
+				code: isFsError(err) ? err.code : undefined,
+				error: errorMessage(err),
+			});
+		}
+		return null;
+	}
+}
+
+export async function readDirEntries(dirPath: string): Promise<fs.Dirent[]> {
+	const abs = resolvePath(dirPath);
+	if (dirCache.has(abs)) {
+		const error = contentReadErrors.get(abs);
+		if (error) readErrorScope.getStore()?.set(abs, error);
+		return dirCache.get(abs) ?? [];
+	}
+
+	try {
+		const entries = await fs.promises.readdir(abs, { withFileTypes: true });
+		dirCache.set(abs, entries);
+		return entries;
+	} catch (err) {
+		dirCache.set(abs, []);
+		// Same split as readFile: a missing directory (ENOENT/ENOTDIR) is the
+		// expected probe-miss during discovery, but a directory that exists yet
+		// cannot be listed (EACCES, EMFILE, ...) is a real error that would
+		// otherwise silently hide every context file beneath it. Warn, cache
+		// the empty result so we do not re-warn, and fail soft with [].
+		if (!isMissingPath(err)) {
+			const message = `${abs}: ${errorMessage(err)}`;
+			contentReadErrors.set(abs, message);
+			readErrorScope.getStore()?.set(abs, message);
+			logger.warn("Directory exists but could not be listed; skipped during discovery", {
+				path: abs,
+				code: isFsError(err) ? err.code : undefined,
+				error: errorMessage(err),
+			});
+		}
+		return [];
+	}
+}
+
+/**
+ * The type of the entry `name` inside `dir`, read without following a symlink as a directory listing
+ * reports it, or null when there is none. A directory that exists but cannot be searched is logged
+ * and holds no entry, as a listing that fails holds none.
+ */
+async function entryStats(dir: string, name: string): Promise<fs.Stats | null> {
+	const entryPath = path.join(dir, name);
+	try {
+		return await fs.promises.lstat(entryPath);
+	} catch (err) {
+		if (!isMissingPath(err)) {
+			readErrorScope.getStore()?.set(entryPath, `${entryPath}: ${errorMessage(err)}`);
+			logger.warn("Directory entry exists but could not be inspected; skipped during discovery", {
+				path: entryPath,
+				code: isFsError(err) ? err.code : undefined,
+				error: errorMessage(err),
+			});
+		}
+		return null;
+	}
+}
+
+export async function walkUp(
+	startDir: string,
+	name: string,
+	opts: { file?: boolean; dir?: boolean } = {},
+): Promise<string | null> {
+	const { file = true, dir = true } = opts;
+	let current = resolvePath(startDir);
+
+	while (true) {
+		const entry = await entryStats(current, name);
+		if (entry) {
+			if (file && entry.isFile()) return path.join(current, name);
+			if (dir && entry.isDirectory()) return path.join(current, name);
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+}
+
+/**
+ * Walk up from startDir looking for a `.git` entry (file or directory).
+ * Returns the directory containing `.git` (the repo root), or null if not in a git repo.
+ * Each ancestor is checked for `.git` alone, so no ancestor is listed, and the result is cached
+ * per start directory until {@link invalidate} or {@link clearCache}.
+ */
+export function findRepoRoot(startDir: string): Promise<string | null> {
+	const start = resolvePath(startDir);
+	let root = repoRootCache.get(start);
+	if (!root) {
+		root = lookUpRepoRoot(start);
+		repoRootCache.set(start, root);
+	}
+	return root;
+}
+
+async function lookUpRepoRoot(start: string): Promise<string | null> {
+	let current = start;
+	while (true) {
+		if (await entryStats(current, ".git")) return current;
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+}
+
+export function cacheStats(): { content: number; dir: number } {
+	return {
+		content: contentCache.size,
+		dir: dirCache.size,
+	};
+}
+
+export function clearCache(): void {
+	contentCache.clear();
+	contentReadErrors.clear();
+	dirCache.clear();
+	repoRootCache.clear();
+}
+
+export function invalidate(filePath: string): void {
+	const abs = resolvePath(filePath);
+	contentCache.delete(abs);
+	contentReadErrors.delete(abs);
+	dirCache.delete(abs);
+	repoRootCache.clear();
+	const parent = path.dirname(abs);
+	if (parent !== abs) {
+		dirCache.delete(parent);
+	}
+}

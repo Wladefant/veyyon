@@ -1,0 +1,637 @@
+# Configuration
+
+Settings grouped by task. For provider and sign-in setup, see [Models and providers](../reference/models-yml.md) and [Authentication](./authentication.md). For the full list of every key, see the repository's `docs/handbook/src/reference/settings.md`.
+
+## Where settings live
+
+Settings are YAML mappings. Persistent settings live in `config.yml`; custom model providers live in
+`models.yml`; MCP servers live in `mcp.json`.
+
+| Scope | Path | Notes |
+| --- | --- | --- |
+| Profile | `~/.veyyon/profiles/<name>/agent/config.yml` | The main persistent file. `/settings` and `veyyon config set` write here. |
+| Machine-global | `~/.veyyon/config.yml` | The few keys shared by every profile (`defaultProfile`, `profileSharing`, auth-broker keys). |
+| CLI overlay | any file passed with `--config <file>` | Process-local, repeatable, never persisted. |
+
+A repository cannot hold settings: a checked-in `.veyyon/config.yml` is not read. When one
+repository needs different behavior, pass an overlay (`--config ./repo.yml`) or use a path-scoped
+`enabledModels` / `disabledProviders` entry in your profile config.
+
+Precedence, low to high:
+
+```text
+defaults  <-  profile config  <-  --config overlays  <-  runtime flags
+```
+
+Read and write from a shell with `veyyon config`:
+
+```console
+$ veyyon config list                    # all settings with effective values
+$ veyyon config get tools.approvalMode
+$ veyyon config set compaction.strategy summary
+$ veyyon config path                     # print the active agent directory
+```
+
+`/settings` does the same inside a live session. A key must be a full schema path
+(`theme.dark`, not `theme`).
+
+### <a id="reload-routing-defaults-without-restarting"></a>Reload configuration, rules, and skills without restarting
+
+After editing the active profile configuration, rule files, or skills, send `/reload-config`
+(or `/reload`) in the running TUI, RPC, or ACP session. SDK callers use `await session.settings.reloadConfig()` and `await session.reloadRules()`.
+The command rediscovers the main configuration filename in normal startup order, re-reads existing
+`--config` overlays, re-reads loaded extensions, and re-reads global, profile, and project rule
+files (`AGENTS.md`, `CLAUDE.md`, sticky rules) and skills from disk without restarting the session.
+Deleting the main file restores absent/default routing; replacing
+`config.yml` with a supported alternate filename is discovered on the next reload.
+Malformed or unreadable files, invalid lane members (including nested lanes), and missing
+explicit overlays reject the affected reload and preserve prior routing. No file is quarantined
+or rewritten. If a settings save is in flight, wait for it to finish and retry.
+Starting a newer reload supersedes older in-flight reloads, including while the newer
+request is still reading or when later edits restore the original values.
+A superseded request rejects without changing live routing; retry the command to read the current files.
+
+**Rule files, skills, and next-turn semantics:** Reload re-reads global rules (`~/.veyyon/AGENTS.md`),
+active profile rules (`AGENTS.md`, sticky rules), project rules (workspace `AGENTS.md` / `CLAUDE.md`),
+and discovered skills from disk without a session restart. It rebuilds the running session's system prompt,
+so modified instructions take effect on the very next turn.
+The reload summary names added, changed, and dropped paths without repeating file contents.
+It preserves the normal layer precedence and discovery warnings.
+If a file cannot be read or rule frontmatter cannot be parsed, reload keeps the last good rule and skill snapshot and reports the path and error.
+Deleted files still leave the snapshot. Fix an unreadable file and retry to apply pending edits.
+Skill body edits count as changed files, even when their names and descriptions stay the same.
+An unchanged reload keeps the existing advisor agent.
+SDK-supplied context files, skills, and rules remain caller-owned and do not become disk-discovered inputs.
+There is no automatic file watching or mtime polling. Running workers need their own reload command or SDK call.
+
+**Hot-reloadable:** non-startup `modelRoles.<role>` values (including `modelRoles.advisor`), `agent.agents` lane
+settings (including nested `model` and `thinkingLevel`), `agent.model`,
+`agent.sharedModel`, `agent.thinkingLevel`, and `agent.maxConcurrency`. A raised
+`agent.maxConcurrency` admits lanes already queued for a slot at once; a lowered one
+admits nothing new and lets running lanes finish. Legacy `subagent.*` spellings
+are migrated to `agent.*` when read, so feedback uses the canonical names.
+Runtime/CLI overrides retain precedence. Shared model/effort settings govern spawns
+only when `agent.sharedModel` is enabled; otherwise per-agent lanes govern them.
+Task, eval and vibe dispatch capture one settings snapshot before resolving a model
+or effort and before asynchronous allocation. A spawn already being prepared keeps
+that snapshot; the next spawn reads the accepted routing. Existing workers are unchanged.
+
+Each task, eval and vibe spawn also applies config-file edits by itself, so an edited
+agent pin reaches the next spawn without `/reload-config`. Before it takes that snapshot,
+the dispatcher hashes the same files the command reads; when they differ from the last
+spawn, it runs the same reload. A rejected reload (a malformed file, an invalid value, a
+save in flight) does not fail the spawn: the spawn keeps the active routing, the warning is
+logged once per file state, and the next spawn retries.
+
+**Restart-only:** `defaultEffort`, `modelRoles.default`, and
+all settings outside the routing set above. If the current default role
+references another role (`@role`), this narrow reload retains the entire role map
+to avoid changing a startup-bound target indirectly; direct lane settings can still apply.
+`pickInitialThinkingLevel` captures `defaultEffort` at startup and
+`resolveAgentThinkingLevel` always supplies a concrete lane, frontmatter or
+`AGENT_DEFAULT_EFFORT` value, so a reload cannot honestly change dispatched worker
+effort through `defaultEffort`. Change the applicable lane/shared `thinkingLevel`
+instead. A bare root `thinkingLevel` is not a supported setting.
+
+Every supported routing leaf is reported as `applied` (with an effective diff) or
+`unchanged`; every changed restart-only key is reported as `restart-required` with
+its reason and retains its active value. Valid mixed edits apply the supported
+keys without letting one restart-only key block an otherwise valid model change.
+Malformed/invalid edits still apply **nothing**. SDK callers receive the same
+`outcomes`, plus `changed` and `restartRequired` arrays.
+
+**Read-once versus per-use:** SDK startup resolves the default role and initial
+effort into the session's established model/thinking binding. An established advisor
+runtime re-resolves its model when reload changes `modelRoles.advisor` or an alias
+target, rebuilding the advisor without rebinding Main or existing forks.
+The task/eval/vibe dispatchers instead invoke `resolveAgentModel` and
+`resolveAgentThinkingLevel` per spawn; the executor forks that same dispatch snapshot
+for the child. Reload preserves the existing latest-started generation guard for
+overlapping requests and commits the applicable leaves synchronously.
+
+**Running Main is never rebound.** Use explicit session model/effort controls to
+change Main. Settings outside this narrow routing reload—including tools, provider
+initialization, transports, lifecycle, concurrency limits other than `agent.maxConcurrency`, plugins, UI and role presentation
+metadata—retain their active values and report changed keys as requiring restart.
+Credentials, environment variables, catalogs, and profile
+selection are not reloaded.
+`Settings.init()` is startup initialization, not a reload API. `/reload-plugins` refreshes
+plugin/project registries, not profile routing; SIGHUP tears down the session.
+
+Regenerate the production-command differential with
+`proof/record.sh proof/scenes/config-hot-reload.sh`: `off` shows the running session
+before applying the disk edit, `on` shows `/reload-config` applying it, and `unchanged`
+shows an idempotent repeat. This is a one-shot command, not an enablement flag.
+Run `bun packages/coding-agent/bench/config-hot-reload.bench.ts` in the supported test
+sandbox for the identical 32-lane corpus and exact off-arm routing parity.
+
+### Session Working Directory (`session.workdir` vs `set_cwd`)
+
+- **Persistent Profile Default (`session.workdir`)**: Configures the default working directory for a profile across all future sessions. Set interactively via `/settings` (Interaction › Profile) or in `~/.veyyon/profiles/<profile>/agent/config.yml`.
+- **Ephemeral Session Re-root (`set_cwd` tool / `/cwd`)**: Re-roots the active session's working directory temporarily. It never writes `session.workdir`.
+- **What a re-root costs**: the system prompt includes the working directory and that project's context files and workspace tree, so a re-root rebuilds it. That rebuild invalidates the provider's prefix prompt cache, and the next request re-reads the whole context as fresh input. Without the rebuild, the header would state the directory the session left, and the model would follow the previous project's `AGENTS.md` and resolve relative paths against the old directory. The rebuild happens once per move, in every mode, and a re-root to the directory already in force does nothing at all.
+### Your comments and formatting survive a save
+
+`config.yml` is yours to edit by hand, and veyyon writes to the same file when you change a
+setting from `/settings` or `veyyon config set`. A save edits only the lines it needs to, so
+your comments, blank lines, key order, and quoting stay as you wrote them:
+
+```yaml
+# my machine runs hot
+temperature: 0.7
+
+# search
+topK: 40
+```
+
+Change `topK` from the UI and the file becomes:
+
+```yaml
+# my machine runs hot
+temperature: 0.7
+
+# search
+topK: 60
+```
+
+A new setting is appended at the end, and a setting you reset has its line removed. If the
+key you removed had a comment above it, the comment moves to the next key rather than being
+deleted with it.
+
+One exception: a file veyyon could not read at all is rewritten from scratch, because there
+is nothing in it to edit. Your original is preserved first, which is the case the next
+section describes.
+
+The same holds for every other file veyyon writes that you also edit by hand:
+
+| file | when veyyon writes it |
+| --- | --- |
+| `config.yml` | you change a setting from `/settings` or `veyyon config set` |
+| `~/.veyyon/config.yml` | you set a default profile or profile sharing |
+| `keybindings.yml` | a binding you wrote uses a name from an older release |
+| `WATCHDOG.yml` | you edit an advisor from the dashboard |
+
+A `keybindings.yml` using older binding names is the interesting one, because veyyon renames
+those names for you on the next launch. The rename happens where the binding already sits, so
+this:
+
+```yaml
+# hold this one, muscle memory
+interrupt: ctrl+x
+```
+
+becomes this, and not a file with the binding moved to the bottom and the comment left behind:
+
+```yaml
+# hold this one, muscle memory
+app.interrupt: ctrl+x
+```
+
+Copying a profile follows the same rule. `veyyon profile new <new> --from <old>` copies the
+old profile's `config.yml` and removes one key from the copy, `profile.displayName`, so the new
+profile does not claim the old one's name. Everything else in the file, comments included,
+arrives as you wrote it.
+
+### When a settings file has a syntax error
+
+If you edit a config file by hand and leave it with invalid YAML, veyyon cannot
+read it. It reports the file at startup and runs the session on
+defaults for whatever that file held:
+
+```text
+Could not read your settings, so this session is using defaults for them:
+  ~/.veyyon/profiles/default/agent/config.yml
+    original kept at ~/.veyyon/profiles/default/agent/config.yml.corrupt
+```
+
+Your original file is copied to `<name>.corrupt` before anything else touches it,
+so nothing is lost.
+
+The most common cause is a value containing a colon. YAML reads that second colon
+as the start of a nested mapping, so this line is invalid:
+
+```text
+statusLine: time: %H:%M
+```
+
+Quoting the value fixes it:
+
+```yaml
+statusLine: "time: %H:%M"
+```
+
+Fix the syntax in the original file, or copy the preserved file back over it and
+edit from there.
+
+### When a setting cannot be saved
+
+If veyyon cannot write your config file, it reports the failure in the session rather than letting the
+change disappear. This happens when the file or its directory is not writable, when the disk
+is full, or when something has left a directory where `config.yml` should be:
+
+```text
+Could not save your settings after 3 attempts, so this change will not survive a restart:
+  ~/.veyyon/profiles/default/agent/config.yml
+    EACCES: permission denied, open '~/.veyyon/profiles/default/agent/config.yml'
+Check that the file and its directory are writable, then change the setting again.
+```
+
+The setting still applies to the session you are in, and the UI shows the new value, so without
+the message the only sign of the failure is the setting reverting the next time you launch. Veyyon retries first and reports only when the retries have not worked, so a
+brief clash with another veyyon writing at the same moment stays quiet. Fix the permissions
+and change the setting again, and nothing further is reported.
+
+## Pick models and providers
+
+Configure the default model, agent policy, helper models, and compaction model separately:
+
+| Goal | What to set |
+| --- | --- |
+| Choose the model you talk to | `--model` / `/model` (persisted as `defaultModel`) |
+| Run every agent on one model and effort | `agent.sharedModel`, then `agent.model` and `agent.thinkingLevel` |
+| Customize one agent | `agent.agents.<name>` or Settings → Agents → Agents |
+| Choose the model for context compaction | `compaction.model` |
+| Choose the model a feature runs (plan, advisor, titles, …) | `agent.helpers.<id>` or Settings → Agents → Roster → Helpers |
+| Add a local or BYOK provider | a `providers:` entry in `models.yml` (see [Models](../reference/models-yml.md)) |
+
+```yaml
+# ~/.veyyon/profiles/default/agent/config.yml
+defaultModel: openai/gpt-5        # session model (persisted default)
+agent:
+  model: deepseek/deepseek-chat
+  thinkingLevel: high
+  helpers:
+    title:
+      model: openai/gpt-4.1-mini
+  agents:
+    reviewer:
+      enabled: true
+      thinkingLevel: auto
+compaction:
+  model: openai/gpt-5-mini        # optional; else inherit interactive
+```
+
+`/model` changes the session model (persists to `defaultModel` when saved as default) and shows the current one. `/session info` shows session stats. Helper list and Ctrl+P cycling: [Models, helpers, and profiles](./roles-and-profiles.md).
+
+## Stay safe (approvals)
+
+| Goal | What to set |
+| --- | --- |
+| When Veyyon prompts before acting | `tools.approvalMode`: `plan`, `ask`, `ask-command`, `auto` (default), `yolo`; legacy `always-ask`/`write`/`auto-edit` accepted |
+| Per-tool policy | `tools.approval`: map a tool to `allow` / `deny` / `prompt` |
+| Advisor review pass | `advisor.enabled` + `agent.helpers.advisor` |
+
+```yaml
+tools:
+  approvalMode: ask-command
+  approval:
+    bash: prompt
+    read: allow
+```
+
+Per run, `--approval-mode <mode>` and `--auto-approve` / `--yolo` override the mode. There is no
+OS shell sandbox. The mode is the main boundary, and three checks apply on top of it: the
+working-directory boundary, the secret-use boundary, and the destructive-command floor in the bash
+tool's command check. The first two hold on every rung except `yolo`, the shipped `auto` included. The floor holds
+on `yolo` as well, and only `tools.approval.bash: allow` lifts it. See
+[Approvals](../features/sandbox.md) and [Safety](./safety.md).
+
+## Run unattended or in CI
+
+| Goal | What to pass |
+| --- | --- |
+| Non-interactive one-shot | `veyyon --print "…"` (prompt as arg or piped stdin), on the default `auto` rung so no tier prompt can stall the run |
+| Force `tools.approvalMode: yolo` for the run | `--yolo` |
+| Temporary settings for one run | `--config ./ci-settings.yml` (repeatable) |
+
+Lifecycle automation inside sessions uses [hooks](../features/hooks.md).
+
+## Control context, memory, and compaction
+
+Compaction compresses older history instead of truncating it. Common keys:
+
+| Goal | What to set |
+| --- | --- |
+| Auto-compaction threshold | `compaction.threshold`: `auto`, a percent (`85%`), or a token amount (`170000`) |
+| Compaction type | `compaction.strategy: summary`, the sole strategy |
+| Compaction model | `compaction.model` (unset = interactive model) |
+| Cross-session memory backend | `memory.backend`: `off` (default), `local`, `hindsight`, `mnemopi` |
+
+```yaml
+compaction:
+  threshold: "80%"
+  strategy: summary
+  model: openai/gpt-5-mini
+
+memory:
+  backend: mnemopi
+```
+
+See [Compaction and project memory](../context/compaction-memory.md) and
+[Memory](../features/memory.md).
+
+## Save tokens with project shorthand (Argot, experimental)
+
+A project accumulates long strings that recur in its work: file paths, import
+roots, canonical build commands. Argot lets the model write a short handle in
+their place. The handle is `§` followed by a name, for example `§dbconn`. veyyon
+expands every handle back to its full text before anything outside the model's
+own history reads it, so tools receive the real string and the display shows the
+real string. The short handle is what stays in the conversation, which is where
+the token saving comes from.
+
+Turn it on with one setting:
+
+```yaml
+argot:
+  enabled: true
+```
+
+The default is `false`. You do not write or commit any dictionary. When Argot is
+on and the model is allowed to write shorthand (see the next section), veyyon
+loads the folder you started the session in, and the system prompt describes the
+notation to the model and gives it two tools, `argot_load` and `argot_unload`, so it
+can load further projects itself. You can turn the startup load off and leave
+every load to the agent, described under
+[Choose when a project is loaded](#choose-when-a-project-is-loaded) below.
+
+Loading a folder resolves it to its project root (the nearest `.git`, or a
+`.argot` marker for a project with no git), reads the project's files (the ones
+git tracks, or a walk of the tree for a `.argot` project), proposes handles for
+the strings that would save the most tokens, and keeps the result in a local
+cache under its own config directory. In a monorepo the agent loads the one
+package it works in, not the repo root. Loading reads a project tree and writes
+the cache, so it is a write-tier call: the modes that prompt for writes (`ask`, and
+`plan` during a plan-mode session) prompt before running it and show the resolved root; unloading never needs approval, because it only
+removes handles from the prompt and every handle already written keeps expanding.
+
+Nothing is written to the working tree, so there is no file for a pull request
+to pick up. Each cache entry is immutable and named by the content it was built
+from (the git commit for a git project, or a signature of the file listing for a
+project with a `.argot` marker). A new commit reads a new entry, built from the
+new tree; the old entry is never rewritten. Nothing depends on a handle keeping
+its name across states, because veyyon expands every handle before it reaches the
+saved transcript, so an entry never has to agree with an older one. Once a
+project is loaded, veyyon lists its handles in the system prompt, and the model
+writes them from then on. A session where nothing is ever loaded writes
+full strings, the same as with Argot off.
+
+### You never see a handle
+
+Shorthand is for the model, not for you. Everywhere veyyon shows you what the
+model wrote, it shows the full text. If the model writes `§conn`, you read the
+full path it stands for, such as "packages/server/src/database/connection.ts".
+
+That holds for every surface, not only the reply text:
+
+- the answer as it streams in, and the finished message
+- the model's reasoning, when you have thinking blocks visible
+- a tool call's arguments, including the file body of a `write` while it is
+  still being typed out
+- the one-line intent shown beside a running tool
+- the transcript after you resize the window, change theme, or resume the
+  session later
+- `--print` output and an exported or shared session
+
+The saving is real all the same, because the short form is what stays in the
+conversation the model rereads. You are reading an expanded copy; the model is
+reading the handles. A handle is only ever expanded for display, so nothing you
+see depends on the dictionary still being loaded.
+
+While a handle is arriving,
+veyyon holds back the last few characters rather than showing you a partial
+`§co` that is about to become something else. The text catches up on the next
+chunk. You may notice a word appearing a fraction later; you will not see a
+handle.
+
+### Choose which models write shorthand
+
+Enabling Argot alone does not make any model write handles. You also list the
+models allowed to do so:
+
+```yaml
+argot:
+  enabled: true
+  encode:
+    models:
+      - anthropic/claude-opus-4
+```
+
+A model on this list is taught the notation; a model left off never is. The list
+is empty by default, so turning Argot on without setting a model stays inert. This
+lets you keep shorthand on for a model you trust to recall the dictionary and off
+for one you are still measuring. Expansion never depends on this list: a handle
+already written expands whatever model is active, so switching models never
+leaves a raw handle behind.
+
+The two settings under `encode` are the two that control whether a model is taught
+to write shorthand: this list, and the context cutoff described below. Everything
+else about Argot sits directly under `argot`, because it sets whether the
+feature runs, when a dictionary is built, how large it is, and what an agent
+starts with. The split is there to make one thing obvious: nothing under `encode`
+affects reading. A handle already in the conversation expands whatever these hold.
+
+If you have `argot.models` or `argot.disableAboveTokens` in a config from an
+earlier version, you do not have to change anything. veyyon moves them under
+`encode` the first time it reads the file, keeps the value, and drops the old key
+the next time it saves.
+
+### Choose when a project is loaded
+
+A dictionary has to be built before any handle exists, and there are two ways
+that happens. veyyon loads the folder you started the session in, once, in the
+background as the session comes up; and the model loads any further project it
+moves into by calling `argot_load` itself. The first of those is what
+`argot.autoload` controls:
+
+```yaml
+argot:
+  enabled: true
+  encode:
+    models:
+      - anthropic/claude-opus-4
+  autoload: false
+```
+
+The default is `true`, so the project you launched in is ready without the model
+spending a turn on it. Set it to `false` when you want every load to be a
+deliberate act by the agent: a session then starts with no dictionary, and stays
+that way until the model calls `argot_load`. Use it on a
+machine where the first walk of a very large repository is expensive enough
+that you would rather pay it only when shorthand is wanted.
+
+Turning it off changes when a dictionary is built, never whether a handle
+expands. The startup load runs in the background, so a session never waits on it
+either way; when it finishes it refreshes the system prompt to list the handles,
+which is the same thing `argot_load` does.
+
+### Size the dictionary
+
+The generated dictionary is packed under a token budget: handles are added in
+value order until the next one would breach it, so the budget sets how many
+strings earn shorthand. A larger budget lists more handles, which gives the
+model more chances to save tokens in its writing, but it also makes the notation
+preamble longer every turn. A smaller budget keeps the preamble cheap and lists
+only the most central strings. Set it with `argot.tokenBudget`:
+
+```yaml
+argot:
+  enabled: true
+  encode:
+    models:
+      - anthropic/claude-opus-4
+  tokenBudget: 2000
+```
+
+The default is `1000`. Changing the budget generates a new dictionary: the cache
+key folds in the budget, so an entry built under one budget is never reused for
+another, and the old entry is left in place. A value that is not a positive
+number is rejected and the default is used, so a bad setting never quietly
+produces an empty dictionary.
+
+### Stop shorthand in a large context
+
+Recall of the dictionary degrades as a conversation grows. To bound that risk,
+stop teaching shorthand once the context passes a token threshold:
+
+```yaml
+argot:
+  enabled: true
+  encode:
+    models:
+      - anthropic/claude-opus-4
+    disableAboveTokens: 400000
+```
+
+Past the threshold the model writes in full instead of risking a garbled handle.
+Handles written earlier still expand losslessly, because the cutoff stops only
+the teaching, never the expansion. The default is `-1`, which never stops on
+size.
+
+### Choose how agents start
+
+An agent (a child veyyon spawns for a task) can start with its own shorthand,
+or none. Set that with `argot.agents`:
+
+```yaml
+argot:
+  enabled: true
+  encode:
+    models:
+      - anthropic/claude-opus-4
+  agents: fresh
+```
+
+The three values are:
+
+- `off` (the default): an agent gets no shorthand. It reads full text and
+  writes full text.
+- `fresh`: an agent gets its own shorthand session and loads the project of
+  its own task through `argot_load`, independent of the parent. Use this when a
+  agent works a different project than its parent, for example a parent in a
+  monorepo and a child scoped to one crate.
+- `inherit`: an agent starts from a copy of the parent's loaded shorthand, so it
+  writes the parent's handles from its first turn.
+
+This setting only trades tokens; it never changes what the agents agree on. Every
+agent expands its own output before it reaches a tool, the saved transcript, a
+prompt it hands to a child, or the result it returns to a parent, so a handle
+never crosses between a parent and a child in either direction. An agent that
+starts with no shorthand writes in full, so `off` is a safe default and the other two
+are optimizations.
+
+The generated cache is per project and local to your machine. To rebuild it from
+scratch, delete the project's cache directory under veyyon's config root; the
+next `argot_load` regenerates it.
+
+## Restrict tools for a repo or role
+
+Deny a tool with per-tool policy, or disable a built-in tool entirely:
+
+```yaml
+tools:
+  approval:
+    bash: deny
+    edit: deny
+
+bash:
+  enabled: false
+```
+
+Plan mode and agent definitions can narrow the tool set further. `enabled: false` removes the tool from both
+the model-visible set and the dispatch registry; `tools.approval.*: deny` keeps the tool visible but
+rejects every call with an error stating the policy.
+
+## Set the default working directory
+
+Each profile can pin a default session working directory so launches from `$HOME`
+(or any other directory) still root tools at the right project:
+
+| Goal | What to set |
+| --- | --- |
+| Per-profile default cwd | `session.workdir` (absolute or `~`-relative path) |
+| One-shot override for this launch | `--cwd <path>` |
+
+Launch precedence for the session cwd, highest first:
+
+```text
+explicit --cwd  >  session.workdir  >  process cwd
+```
+
+```yaml
+# ~/.veyyon/profiles/work/agent/config.yml
+session:
+  workdir: ~/src/veyyon
+```
+
+```console
+$ veyyon config set session.workdir ~/src/veyyon
+$ veyyon --cwd /tmp/scratch          # wins over session.workdir for this run
+```
+
+`session.workdir` must resolve to an existing directory; a relative path or a
+missing directory fails launch rather than falling back silently. Mid-session
+overrides via the agent `set_cwd` tool or `/cwd` are session-scoped only: they
+re-root the live session (the cwd, and with it the path-scoped settings,
+secrets, capabilities, ssh tool, and system-prompt project framing) and
+never write `session.workdir`. Persist a new default with `veyyon config set` or
+`/settings`.
+
+## Profiles
+
+Each profile is `~/.veyyon/profiles/<name>/agent/` (including `default`). Activate with `--profile <name>` (`-p` is `--print`, not profile), `VEYYON_PROFILE`, or TUI `/profile` (relaunch).
+
+```console
+$ veyyon --profile work
+$ # edit ~/.veyyon/profiles/work/agent/config.yml
+```
+
+See [Profiles](../features/profiles.md), [File locations](../reference/file-locations.md).
+
+## Wire MCP servers and hooks
+
+MCP servers are configured as JSON, not in `config.yml`:
+
+In `~/.veyyon/profiles/default/agent/mcp.json` (JSON is strict, no comments):
+
+```json
+{
+  "mcpServers": {
+    "database": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/db-mcp-server/index.js"]
+    }
+  }
+}
+```
+
+Hooks: TypeScript modules under project/profile hook paths (`pi.on(...)`). See [Hooks](../features/hooks.md), [Task guides](./task-guides.md). MCP: [MCP](../features/mcp.md).
+
+## Related
+
+- [Getting started](./getting-started.md)
+- [Task guides](./task-guides.md)
+- [Safety](./safety.md): `tools.approvalMode` (default `auto`)
+- [Extending](./extending.md)
+- [CLI](../reference/cli.md)

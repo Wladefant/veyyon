@@ -1,0 +1,5 @@
+# The desktop front end is a binary that owns its process: `main` and its
+# launch failure paths return a status to the shell with `process::exit`. A
+# package-local clippy.toml replaces the workspace one, so the ban on exit and
+# abort (issue #73) is lifted here and only here.
+disallowed-methods = []

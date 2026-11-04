@@ -1,0 +1,814 @@
+import { describe, expect, it, spyOn } from "bun:test";
+import type { AgentMessage } from "@veyyon/agent-core";
+import { buildSessionContext, getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	ModelChangeEntry,
+	SessionEntry,
+	SessionMessageEntry,
+	ThinkingLevelChangeEntry,
+} from "@veyyon/kernel/session/session-entries";
+
+function msg(id: string, parentId: string | null, role: "user" | "assistant", text: string): SessionMessageEntry {
+	const base = { type: "message" as const, id, parentId, timestamp: "2025-01-01T00:00:00Z" };
+	if (role === "user") {
+		return { ...base, message: { role, content: text, timestamp: 1 } };
+	}
+	return {
+		...base,
+		message: {
+			role,
+			content: [{ type: "text", text }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-test",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 1,
+		},
+	};
+}
+
+function compaction(id: string, parentId: string | null, summary: string, firstKeptEntryId: string): CompactionEntry {
+	return {
+		type: "compaction",
+		id,
+		parentId,
+		timestamp: "2025-01-01T00:00:00Z",
+		summary,
+		firstKeptEntryId,
+		tokensBefore: 1000,
+	};
+}
+
+function branchSummary(id: string, parentId: string | null, summary: string, fromId: string): BranchSummaryEntry {
+	return { type: "branch_summary", id, parentId, timestamp: "2025-01-01T00:00:00Z", summary, fromId };
+}
+
+/** The exact summary the removed provider-native remote path wrote. */
+const LEGACY_PLACEHOLDER_SUMMARY = "Remote compaction preserved provider-native history for this session.";
+
+/** Readable text of a rebuilt message, so assertions compare strings not shapes. */
+function messageText(message: AgentMessage): string {
+	if (message.role === "user" && typeof message.content === "string") return message.content;
+	if (message.role === "compactionSummary") return message.summary;
+	if (message.role === "assistant") {
+		const block = message.content.find(item => item.type === "text");
+		if (block?.type === "text") return block.text;
+	}
+	throw new Error(`No extractable text on a ${message.role} message`);
+}
+
+function thinkingLevel(id: string, parentId: string | null, level: string): ThinkingLevelChangeEntry {
+	return { type: "thinking_level_change", id, parentId, timestamp: "2025-01-01T00:00:00Z", thinkingLevel: level };
+}
+
+function modelChange(id: string, parentId: string | null, provider: string, modelId: string): ModelChangeEntry {
+	return { type: "model_change", id, parentId, timestamp: "2025-01-01T00:00:00Z", model: `${provider}/${modelId}` };
+}
+
+/**
+ * getLatestCompactionEntry is the small backward scan buildSessionContext (and callers deciding
+ * whether a session even has compacted history) rely on to find the compaction in effect. It had no
+ * direct test. It must return the LAST compaction in entry order (not the first), and null when
+ * there is none, or a stale/earlier compaction would drive the rebuilt context and the wrong turns
+ * would be kept. These pin the pick-latest and null-when-absent contracts.
+ */
+describe("getLatestCompactionEntry", () => {
+	it("returns null when the entry list is empty", () => {
+		expect(getLatestCompactionEntry([])).toBeNull();
+	});
+
+	it("returns null when no entry is a compaction", () => {
+		const entries: SessionEntry[] = [msg("1", null, "user", "hi"), msg("2", "1", "assistant", "yo")];
+		expect(getLatestCompactionEntry(entries)).toBeNull();
+	});
+
+	it("returns the last compaction when several are present, never an earlier one", () => {
+		const entries: SessionEntry[] = [
+			compaction("c1", null, "first", "1"),
+			msg("m", "c1", "user", "hi"),
+			compaction("c2", "m", "second", "m"),
+			msg("m2", "c2", "assistant", "yo"),
+		];
+		const latest = getLatestCompactionEntry(entries);
+		expect(latest?.id).toBe("c2");
+		expect(latest?.summary).toBe("second");
+	});
+
+	it("finds a single trailing compaction", () => {
+		const entries: SessionEntry[] = [msg("m", null, "user", "hi"), compaction("c1", "m", "only", "m")];
+		expect(getLatestCompactionEntry(entries)?.id).toBe("c1");
+	});
+});
+
+describe("buildSessionContext", () => {
+	describe("trivial cases", () => {
+		it("empty entries returns empty context", () => {
+			const ctx = buildSessionContext([]);
+			expect(ctx.messages).toEqual([]);
+			expect(ctx.thinkingLevel).toBe("off");
+			expect(ctx.models).toEqual({});
+		});
+
+		it("single user message", () => {
+			const entries: SessionEntry[] = [msg("1", null, "user", "hello")];
+			const ctx = buildSessionContext(entries);
+			expect(ctx.messages).toHaveLength(1);
+			expect(ctx.messages[0].role).toBe("user");
+		});
+
+		it("rehydrates custom_message attribution from entries", () => {
+			const entries: SessionEntry[] = [
+				{
+					type: "custom_message",
+					id: "1",
+					parentId: null,
+					timestamp: "2025-01-01T00:00:00Z",
+					customType: "skill-prompt",
+					content: "Summarize this file",
+					display: true,
+					attribution: "user",
+				},
+			];
+			const ctx = buildSessionContext(entries);
+			expect(ctx.messages).toHaveLength(1);
+			const customMessage = ctx.messages[0];
+			expect(customMessage?.role).toBe("custom");
+			if (customMessage?.role !== "custom") throw new Error("Expected custom message");
+			expect(customMessage.attribution).toBe("user");
+		});
+		it("preserves missing custom_message attribution on rehydration", () => {
+			const entries: SessionEntry[] = [
+				{
+					type: "custom_message",
+					id: "1",
+					parentId: null,
+					timestamp: "2025-01-01T00:00:00Z",
+					customType: "skill-prompt",
+					content: "Summarize this file",
+					display: true,
+				},
+			];
+			const ctx = buildSessionContext(entries);
+			expect(ctx.messages).toHaveLength(1);
+			const customMessage = ctx.messages[0];
+			expect(customMessage?.role).toBe("custom");
+			if (customMessage?.role !== "custom") throw new Error("Expected custom message");
+			expect(customMessage.attribution).toBeUndefined();
+		});
+		it("simple conversation", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "hello"),
+				msg("2", "1", "assistant", "hi there"),
+				msg("3", "2", "user", "how are you"),
+				msg("4", "3", "assistant", "great"),
+			];
+			const ctx = buildSessionContext(entries);
+			expect(ctx.messages).toHaveLength(4);
+			expect(ctx.messages.map(m => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+		});
+
+		it("builds deep linear paths without quadratic unshift work", () => {
+			const entries: SessionEntry[] = [];
+			let parentId: string | null = null;
+			for (let i = 0; i < 1000; i++) {
+				const id = `entry-${i}`;
+				entries.push(msg(id, parentId, "user", id));
+				parentId = id;
+			}
+
+			const unshift = spyOn(Array.prototype, "unshift");
+			try {
+				const ctx = buildSessionContext(entries, parentId);
+				expect(ctx.messages.map(message => (message.role === "user" ? message.content : ""))).toEqual(
+					entries.map(entry =>
+						entry.type === "message" && entry.message.role === "user" ? entry.message.content : "",
+					),
+				);
+				expect(unshift).not.toHaveBeenCalled();
+			} finally {
+				unshift.mockRestore();
+			}
+		});
+
+		it("tracks thinking level changes", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "hello"),
+				thinkingLevel("2", "1", "high"),
+				msg("3", "2", "assistant", "thinking hard"),
+			];
+			const ctx = buildSessionContext(entries);
+			expect(ctx.thinkingLevel).toBe("high");
+			expect(ctx.messages).toHaveLength(2);
+		});
+
+		it("tracks model from assistant message", () => {
+			const entries: SessionEntry[] = [msg("1", null, "user", "hello"), msg("2", "1", "assistant", "hi")];
+			const ctx = buildSessionContext(entries);
+			expect(ctx.models.default).toBe("anthropic/claude-test");
+		});
+
+		it("tracks model from model change entry", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "hello"),
+				modelChange("2", "1", "openai", "gpt-4"),
+				msg("3", "2", "assistant", "hi"),
+			];
+			const ctx = buildSessionContext(entries);
+			// Issue #849: an explicit model_change with role="default" must NOT
+			// be silently overwritten by a later assistant message tagged with a
+			// different model id. Temporary fallbacks and provider-side
+			// downgrades both produce such mismatched messages.
+			expect(ctx.models.default).toBe("openai/gpt-4");
+		});
+	});
+
+	describe("with compaction", () => {
+		it("includes summary before kept messages", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "response1"),
+				msg("3", "2", "user", "second"),
+				msg("4", "3", "assistant", "response2"),
+				compaction("5", "4", "Summary of first two turns", "3"),
+				msg("6", "5", "user", "third"),
+				msg("7", "6", "assistant", "response3"),
+			];
+			const ctx = buildSessionContext(entries);
+
+			// Should have: summary + kept (3,4) + after (6,7) = 5 messages
+			expect(ctx.messages).toHaveLength(5);
+			expect((ctx.messages[0] as any).summary).toContain("Summary of first two turns");
+			expect((ctx.messages[1] as any).content).toBe("second");
+			expect((ctx.messages[2] as any).content[0].text).toBe("response2");
+			expect((ctx.messages[3] as any).content).toBe("third");
+			expect((ctx.messages[4] as any).content[0].text).toBe("response3");
+		});
+
+		it("handles compaction keeping from first message", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "response"),
+				compaction("3", "2", "Empty summary", "1"),
+				msg("4", "3", "user", "second"),
+			];
+			const ctx = buildSessionContext(entries);
+
+			// Summary + all messages (1,2,4)
+			expect(ctx.messages).toHaveLength(4);
+			expect((ctx.messages[0] as any).summary).toContain("Empty summary");
+		});
+
+		/**
+		 * Sessions compacted by the removed provider-native remote path still hold
+		 * an opaque `openaiRemoteCompaction` payload on disk, and their `summary`
+		 * is the fixed placeholder that path wrote ("Remote compaction preserved
+		 * provider-native history for this session."). It carries no task content:
+		 * the real history lived in the blob, which only the provider could read
+		 * and which is deliberately never replayed.
+		 *
+		 * So such an entry must not act as a compaction boundary. Honoring its
+		 * `firstKeptEntryId` drops every pre-cut turn from context and substitutes
+		 * that one sentence, permanently, on every rebuild, resume and fork. The
+		 * raw entries are still on the branch, so ignoring the entry re-emits them
+		 * verbatim and the next compaction summarizes them locally, which is the
+		 * same ruling `hasReusableSummary` makes inside `prepareCompaction`.
+		 *
+		 * The keep point here is deliberately NOT the first entry: with
+		 * `firstKeptEntryId: "1"` the cut is degenerate and a rebuild that honors
+		 * it looks identical to one that ignores it, so the test cannot fail.
+		 */
+		it("does not let a legacy provider-native compaction cut history", () => {
+			const legacy: CompactionEntry = {
+				...compaction("5", "4", LEGACY_PLACEHOLDER_SUMMARY, "3"),
+				preserveData: {
+					openaiRemoteCompaction: {
+						provider: "openai",
+						replacementHistory: [
+							{ type: "message", role: "user", content: [{ type: "input_text", text: "Preserved user" }] },
+							{ type: "compaction", encrypted_content: "enc_123" },
+						],
+						compactionItem: { type: "compaction", encrypted_content: "enc_123" },
+					},
+				},
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "original requirement"),
+				msg("2", "1", "assistant", "design decision"),
+				msg("3", "2", "user", "added constraint"),
+				msg("4", "3", "assistant", "plan"),
+				legacy,
+				msg("6", "5", "user", "recent question"),
+			];
+
+			const ctx = buildSessionContext(entries);
+
+			// Every one of the five message entries, in order, with no summary
+			// message standing in for any of them. Honoring the cut would yield 4:
+			// the placeholder plus entries 3, 4 and 6.
+			expect(ctx.messages).toHaveLength(5);
+			expect(ctx.messages.map(message => message.role)).toEqual(["user", "assistant", "user", "assistant", "user"]);
+			expect(ctx.messages.map(messageText)).toEqual([
+				"original requirement",
+				"design decision",
+				"added constraint",
+				"plan",
+				"recent question",
+			]);
+		});
+
+		/**
+		 * The skip is scoped to the legacy entry, not to compaction. A real
+		 * compaction earlier on the same branch keeps its summary and its cut even
+		 * when a legacy entry follows it, so a session that was compacted properly
+		 * and then hit the old remote path once does not suddenly replay its whole
+		 * raw history.
+		 */
+		it("keeps an earlier real compaction's summary and cut when a legacy entry follows it", () => {
+			const legacy: CompactionEntry = {
+				...compaction("5", "4", LEGACY_PLACEHOLDER_SUMMARY, "4"),
+				preserveData: { compactionV2: { usedTokens: 4_000 } },
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "ancient"),
+				msg("2", "1", "assistant", "ancient reply"),
+				compaction("3", "2", "Real local summary", "2"),
+				msg("4", "3", "user", "kept question"),
+				legacy,
+				msg("6", "5", "user", "recent question"),
+			];
+
+			const ctx = buildSessionContext(entries);
+
+			// Real summary + entry 2 onward (its own cut), then 4 and 6. Entry 1 is
+			// summarized away by the real compaction and must stay away.
+			expect(ctx.messages).toHaveLength(4);
+			expect(ctx.messages.map(messageText)).toEqual([
+				"Real local summary",
+				"ancient reply",
+				"kept question",
+				"recent question",
+			]);
+		});
+
+		/**
+		 * The opaque blob itself is never turned back into provider state. This is
+		 * the separate half of the removal: the entry is skipped as a boundary AND
+		 * its payload is not reconstructed anywhere it could be re-sent.
+		 */
+		it("never reconstructs the opaque provider payload", () => {
+			const legacy: CompactionEntry = {
+				...compaction("3", "2", LEGACY_PLACEHOLDER_SUMMARY, "1"),
+				preserveData: {
+					openaiRemoteCompaction: {
+						provider: "openai",
+						compactionItem: { type: "compaction", encrypted_content: "enc_123" },
+					},
+				},
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "response"),
+				legacy,
+				msg("4", "3", "user", "after compact"),
+			];
+
+			const ctx = buildSessionContext(entries, undefined, undefined, { transcript: true });
+			const summary = ctx.messages.find(message => message.role === "compactionSummary");
+			if (summary?.role !== "compactionSummary") throw new Error("Expected the transcript to render the entry");
+			expect(summary.providerPayload).toBeUndefined();
+			expect(JSON.stringify(ctx.messages)).not.toContain("enc_123");
+		});
+
+		// Regression for #4470: a session compacted by the removed image-archive
+		// engine persisted its frames plus the full source under `text`. On rebuild
+		// the session must recover that source as a single text block and NEVER
+		// rehydrate the (potentially multi-MB) image frames into the LLM or transcript
+		// context — the oversized-frame rehydration was the crash that #4470 fixed.
+		it("recovers a legacy frame archive as text and never rehydrates image frames", () => {
+			const archiveText = `Legacy archive source\n${"archived history ".repeat(2_000)}`;
+			const compacted: CompactionEntry = {
+				...compaction("3", "2", "Legacy archive summary", "1"),
+				preserveData: {
+					snapcompact: {
+						frames: Array.from({ length: 17 }, (_, index) => ({
+							data: "A".repeat(100_000),
+							mimeType: "image/png",
+							cols: 64,
+							rows: 40,
+							chars: 1000 + index,
+						})),
+						totalChars: archiveText.length,
+						truncatedChars: 0,
+						text: archiveText,
+						textHead: "oldest edge",
+						textTail: "newest edge",
+					},
+				},
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "before compact"),
+				msg("2", "1", "assistant", "archived response"),
+				compacted,
+				msg("4", "3", "user", "after resume"),
+			];
+
+			for (const options of [undefined, { transcript: true } as const]) {
+				const ctx = buildSessionContext(entries, undefined, undefined, options);
+				const summary = ctx.messages.find(message => message.role === "compactionSummary");
+				if (summary?.role !== "compactionSummary") throw new Error("Expected a compaction summary");
+				// Exactly one recovered text block carrying the full archived source; zero images.
+				expect(summary.blocks?.every(block => block.type === "text")).toBe(true);
+				expect(summary.blocks?.filter(block => block.type === "image")).toHaveLength(0);
+				expect(summary.images ?? []).toHaveLength(0);
+				const recovered = summary.blocks?.map(block => (block.type === "text" ? block.text : "")).join("");
+				expect(recovered).toContain(archiveText);
+			}
+		});
+
+		it("multiple compactions uses latest", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "a"),
+				msg("2", "1", "assistant", "b"),
+				compaction("3", "2", "First summary", "1"),
+				msg("4", "3", "user", "c"),
+				msg("5", "4", "assistant", "d"),
+				compaction("6", "5", "Second summary", "4"),
+				msg("7", "6", "user", "e"),
+			];
+			const ctx = buildSessionContext(entries);
+
+			// Should use second summary, keep from 4
+			expect(ctx.messages).toHaveLength(4);
+			expect((ctx.messages[0] as any).summary).toContain("Second summary");
+		});
+	});
+
+	describe("collapsed transcript ordering", () => {
+		it("display transcript: summary after kept messages, not at top", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Summary of compacted turns", "3"),
+				msg("6", "5", "user", "after compact"),
+			];
+
+			// Display transcript: kept messages → summary → post-compaction
+			const transcript = buildSessionContext(entries, undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+			});
+
+			expect(transcript.messages).toHaveLength(4);
+			expect(transcript.messages[0]?.role).toBe("user");
+			expect(transcript.messages[1]?.role).toBe("assistant");
+			expect(transcript.messages[2]?.role).toBe("compactionSummary");
+			expect(transcript.messages[3]?.role).toBe("user");
+		});
+
+		it("agent context: summary stays at top", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Summary of compacted turns", "3"),
+				msg("6", "5", "user", "after compact"),
+			];
+
+			// Agent context (no transcript): summary first
+			const agentCtx = buildSessionContext(entries);
+
+			expect(agentCtx.messages).toHaveLength(4);
+			expect(agentCtx.messages[0]?.role).toBe("compactionSummary");
+			expect(agentCtx.messages[1]?.role).toBe("user");
+			expect(agentCtx.messages[2]?.role).toBe("assistant");
+			expect(agentCtx.messages[3]?.role).toBe("user");
+		});
+
+		it("display transcript with no post-compaction messages: summary at bottom", () => {
+			// Simulates the moment right after /compact runs — compaction is the
+			// last entry, so the summary should be the last (bottom) message.
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Freshly compacted", "3"),
+			];
+
+			const transcript = buildSessionContext(entries, undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+			});
+
+			expect(transcript.messages).toHaveLength(3);
+			expect(transcript.messages[0]?.role).toBe("user");
+			expect(transcript.messages[1]?.role).toBe("assistant");
+			expect(transcript.messages[2]?.role).toBe("compactionSummary");
+		});
+
+		it("collapsed transcript marks first post-compaction assistant as cache miss", () => {
+			// With kept assistant BEFORE compaction and assistant AFTER compaction,
+			// the cache-miss flag must land on the post-compaction assistant (the
+			// turn that actually follows /compact), not on the kept pre-compaction one.
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "old question"),
+				msg("2", "1", "assistant", "old response"),
+				msg("3", "2", "user", "kept question"),
+				msg("4", "3", "assistant", "kept response"),
+				compaction("5", "4", "Compacted", "3"),
+				msg("6", "5", "user", "after compact"),
+				msg("7", "6", "assistant", "after response"),
+			];
+
+			const transcript = buildSessionContext(entries, undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: true,
+			});
+
+			// Roles: user(3), assistant(4), compactionSummary, user(6), assistant(7)
+			expect(transcript.messages.map(m => m.role)).toEqual([
+				"user",
+				"assistant",
+				"compactionSummary",
+				"user",
+				"assistant",
+			]);
+			// cacheMissExplainedAt: the kept assistant (index 1) should NOT be a miss;
+			// the post-compaction assistant (index 4) SHOULD be a miss.
+			expect(transcript.cacheMissExplainedAt).toEqual([false, false, false, false, true]);
+		});
+	});
+
+	describe("with branches", () => {
+		it("follows path to specified leaf", () => {
+			// Tree:
+			//   1 -> 2 -> 3 (branch A)
+			//         \-> 4 (branch B)
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "start"),
+				msg("2", "1", "assistant", "response"),
+				msg("3", "2", "user", "branch A"),
+				msg("4", "2", "user", "branch B"),
+			];
+
+			const ctxA = buildSessionContext(entries, "3");
+			expect(ctxA.messages).toHaveLength(3);
+			expect((ctxA.messages[2] as any).content).toBe("branch A");
+
+			const ctxB = buildSessionContext(entries, "4");
+			expect(ctxB.messages).toHaveLength(3);
+			expect((ctxB.messages[2] as any).content).toBe("branch B");
+		});
+
+		it("includes branch summary in path", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "start"),
+				msg("2", "1", "assistant", "response"),
+				msg("3", "2", "user", "abandoned path"),
+				branchSummary("4", "2", "Summary of abandoned work", "3"),
+				msg("5", "4", "user", "new direction"),
+			];
+			const ctx = buildSessionContext(entries, "5");
+
+			expect(ctx.messages).toHaveLength(4);
+			expect((ctx.messages[2] as any).summary).toContain("Summary of abandoned work");
+			expect((ctx.messages[3] as any).content).toBe("new direction");
+		});
+
+		it("complex tree with multiple branches and compaction", () => {
+			// Tree:
+			//   1 -> 2 -> 3 -> 4 -> compaction(5) -> 6 -> 7 (main path)
+			//              \-> 8 -> 9 (abandoned branch)
+			//                    \-> branchSummary(10) -> 11 (resumed from 3)
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "start"),
+				msg("2", "1", "assistant", "r1"),
+				msg("3", "2", "user", "q2"),
+				msg("4", "3", "assistant", "r2"),
+				compaction("5", "4", "Compacted history", "3"),
+				msg("6", "5", "user", "q3"),
+				msg("7", "6", "assistant", "r3"),
+				// Abandoned branch from 3
+				msg("8", "3", "user", "wrong path"),
+				msg("9", "8", "assistant", "wrong response"),
+				// Branch summary resuming from 3
+				branchSummary("10", "3", "Tried wrong approach", "9"),
+				msg("11", "10", "user", "better approach"),
+			];
+
+			// Main path to 7: summary + kept(3,4) + after(6,7)
+			const ctxMain = buildSessionContext(entries, "7");
+			expect(ctxMain.messages).toHaveLength(5);
+			expect((ctxMain.messages[0] as any).summary).toContain("Compacted history");
+			expect((ctxMain.messages[1] as any).content).toBe("q2");
+			expect((ctxMain.messages[2] as any).content[0].text).toBe("r2");
+			expect((ctxMain.messages[3] as any).content).toBe("q3");
+			expect((ctxMain.messages[4] as any).content[0].text).toBe("r3");
+
+			// Branch path to 11: 1,2,3 + branch_summary + 11
+			const ctxBranch = buildSessionContext(entries, "11");
+			expect(ctxBranch.messages).toHaveLength(5);
+			expect((ctxBranch.messages[0] as any).content).toBe("start");
+			expect((ctxBranch.messages[1] as any).content[0].text).toBe("r1");
+			expect((ctxBranch.messages[2] as any).content).toBe("q2");
+			expect((ctxBranch.messages[3] as any).summary).toContain("Tried wrong approach");
+			expect((ctxBranch.messages[4] as any).content).toBe("better approach");
+		});
+	});
+
+	describe("edge cases", () => {
+		it("uses last entry when leafId not found", () => {
+			const entries: SessionEntry[] = [msg("1", null, "user", "hello"), msg("2", "1", "assistant", "hi")];
+			const ctx = buildSessionContext(entries, "nonexistent");
+			expect(ctx.messages).toHaveLength(2);
+		});
+
+		it("handles orphaned entries gracefully", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "hello"),
+				msg("2", "missing", "assistant", "orphan"), // parent doesn't exist
+			];
+			const ctx = buildSessionContext(entries, "2");
+			// Should only get the orphan since parent chain is broken
+			expect(ctx.messages).toHaveLength(1);
+		});
+
+		it("strips dangling tool_use when the leaf lands on a mid-batch assistant turn", () => {
+			// Reproduces the rewind/restore loop: leaf = an assistant turn that emitted
+			// tool calls. Its results are off-path children, so without normalization the
+			// turn ends on unpaired tool_use and transformMessages fabricates phantom
+			// "aborted" results, re-injecting the failed batch.
+			const assistantWithCalls: SessionMessageEntry = {
+				type: "message",
+				id: "a1",
+				parentId: "u1",
+				timestamp: "2025-01-01T00:00:00Z",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "deliberating step 1", thinkingSignature: "sig_1" },
+						{ type: "text", text: "Let me finish duel.py now" },
+						{ type: "toolCall", id: "call_1", name: "write", arguments: { path: "duel.py" } },
+						{ type: "thinking", thinking: "deliberating step 2", thinkingSignature: "sig_2" },
+						{ type: "redactedThinking", data: "encrypted" },
+						{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "pytest" } },
+					],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-test",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "aborted",
+					timestamp: 1,
+				},
+			};
+			const entries: SessionEntry[] = [msg("u1", null, "user", "do it"), assistantWithCalls];
+			const ctx = buildSessionContext(entries, "a1");
+			expect(ctx.messages).toHaveLength(2);
+			const last = ctx.messages[1];
+			expect(last.role).toBe("assistant");
+			const content = (last as { content: Array<{ type: string; thinkingSignature?: string }> }).content;
+			// Dangling tool_use stripped.
+			expect(content.some(block => block.type === "toolCall")).toBe(false);
+			// redacted_thinking dropped (encrypted; cannot be downgraded, would trip immutability).
+			expect(content.some(block => block.type === "redactedThinking")).toBe(false);
+			// thinking preserved but de-signed so the encoder downgrades it to plain text on the wire
+			// (a *modified* latest turn carrying signed thinking is rejected by Anthropic).
+			const thinking = content.filter(block => block.type === "thinking");
+			expect(thinking.length).toBeGreaterThan(0);
+			expect(thinking.every(block => block.thinkingSignature === undefined)).toBe(true);
+			// Visible reasoning/text preserved.
+			expect(content.some(block => block.type === "text")).toBe(true);
+		});
+
+		it("drops a trailing assistant turn that is only dangling tool_use", () => {
+			const toolCallOnly: SessionMessageEntry = {
+				type: "message",
+				id: "a1",
+				parentId: "u1",
+				timestamp: "2025-01-01T00:00:00Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-test",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "aborted",
+					timestamp: 1,
+				},
+			};
+			const entries: SessionEntry[] = [msg("u1", null, "user", "do it"), toolCallOnly];
+			const ctx = buildSessionContext(entries, "a1");
+			expect(ctx.messages).toHaveLength(1);
+			expect(ctx.messages[0].role).toBe("user");
+		});
+
+		it("strips a dangling mid-path assistant turn while leaving a paired turn intact", () => {
+			// Branch scenario: a user message was inserted after an assistant turn whose
+			// tool results live on a sibling branch (off this path), so its tool_use is
+			// dangling mid-conversation. An earlier turn whose result IS on-path must be
+			// left untouched.
+			const usage = {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			};
+			const asst = (id: string, parentId: string, content: unknown[], stopReason: string): SessionMessageEntry =>
+				({
+					type: "message",
+					id,
+					parentId,
+					timestamp: "2025-01-01T00:00:00Z",
+					message: {
+						role: "assistant",
+						content,
+						api: "anthropic-messages",
+						provider: "anthropic",
+						model: "claude-test",
+						usage,
+						stopReason,
+						timestamp: 1,
+					},
+				}) as SessionMessageEntry;
+			const toolRes = (id: string, parentId: string, toolCallId: string): SessionMessageEntry =>
+				({
+					type: "message",
+					id,
+					parentId,
+					timestamp: "2025-01-01T00:00:00Z",
+					message: {
+						role: "toolResult",
+						toolCallId,
+						toolName: "bash",
+						content: [{ type: "text", text: "ok" }],
+						details: {},
+						isError: false,
+						timestamp: 1,
+					},
+				}) as SessionMessageEntry;
+
+			const entries: SessionEntry[] = [
+				msg("u1", null, "user", "do it"),
+				asst(
+					"paired",
+					"u1",
+					[
+						{ type: "text", text: "running A" },
+						{ type: "toolCall", id: "call_a", name: "bash", arguments: {} },
+					],
+					"toolUse",
+				),
+				toolRes("r_a", "paired", "call_a"),
+				asst(
+					"dangling",
+					"r_a",
+					[
+						{ type: "text", text: "running B" },
+						{ type: "toolCall", id: "call_b", name: "bash", arguments: {} },
+					],
+					"toolUse",
+				),
+				msg("u2", "dangling", "user", "actually stop"),
+			];
+			const ctx = buildSessionContext(entries, "u2");
+			expect(ctx.messages).toHaveLength(5);
+			const paired = ctx.messages[1] as { content: Array<{ type: string }> };
+			const dangling = ctx.messages[3] as { content: Array<{ type: string }> };
+			// paired turn keeps its tool_use (result is on-path)
+			expect(paired.content.some(block => block.type === "toolCall")).toBe(true);
+			// dangling mid-path turn has its tool_use stripped, text preserved
+			expect(dangling.content.some(block => block.type === "toolCall")).toBe(false);
+			expect(dangling.content.some(block => block.type === "text")).toBe(true);
+		});
+	});
+});

@@ -1,0 +1,502 @@
+import * as logger from "@veyyon/utils/logger";
+import type { OAuthAccess } from "./auth-storage";
+// The owners, not the barrel: this module throws two error classes, and reaching
+// them through `./error` pulled the whole registry and every domain behind it.
+import { RequestAbortError } from "./error/abort";
+import { MissingApiKeyError } from "./error/auth";
+import { isAuthRetryableError } from "./error/auth-classify";
+import { isUsageLimit } from "./error/flags";
+
+/**
+ * Context passed to an {@link ApiKeyResolver} on each resolution attempt.
+ *
+ * The `error`/`lastChance` pair preserves the legacy a/b/c resolver contract
+ * shared by streaming ({@link streamSimple}) and non-streaming ({@link withAuth})
+ * drivers:
+ * - `error === undefined` → **initial resolve** (no force-refresh; cheap, may
+ *   return a locally-cached not-yet-expired token).
+ * - `error !== undefined && !lastChance` → **step (b): refresh the SAME
+ *   account** (force a token re-mint / await an in-flight broker refresh).
+ * - `error !== undefined && lastChance` → **step (c): switch account**
+ *   (invalidate/usage-limit the current credential and rotate to a sibling).
+ *
+ * Current drivers preserve that bounded a/b/c sequence for ordinary 401/auth
+ * failures. Usage/account-limit failures skip refresh and may repeat step (c)
+ * until the resolver returns `undefined`, cycles, or hits
+ * {@link AUTH_RETRY_MAX_ATTEMPTS}.
+ */
+export interface ApiKeyResolveContext {
+	/** True when the resolver should rotate to a sibling credential. */
+	lastChance: boolean;
+	/** The auth error that triggered this re-resolution, or `undefined` on the initial resolve. */
+	error: unknown;
+	/** Bearer used by the failed attempt, when the caller can expose it. */
+	previousKey?: string;
+	/** Caller cancel signal, threaded into any credential refresh / rotation work. */
+	signal?: AbortSignal;
+	/** Request-local callback identifying the stored credential selected for this attempt. */
+	onCredentialSelected?: (credentialId: string) => void;
+}
+
+/**
+ * Resolves the API key to send for a request, retried through the a/b/c policy
+ * described on {@link ApiKeyResolveContext}.
+ */
+export type ApiKeyResolver = (ctx: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
+
+/** A static bearer string, or a {@link ApiKeyResolver} that mints/rotates one. */
+export type ApiKey = string | ApiKeyResolver;
+
+/** Narrows {@link ApiKey} to its resolver form. */
+export function isApiKeyResolver(key: ApiKey | undefined): key is ApiKeyResolver {
+	return typeof key === "function";
+}
+
+function throwIfAuthRetryAborted(signal: AbortSignal | undefined): void {
+	if (signal?.aborted) {
+		throw signal.reason ?? new RequestAbortError("Authentication retry aborted by caller");
+	}
+}
+
+function warnAuthRetry(message: string, fields: Record<string, unknown>): void {
+	try {
+		logger.warn(message, fields);
+	} catch {
+		// Observability cannot change retry control flow or replace the request
+		// error whose recovery failure this warning is describing.
+	}
+}
+
+/**
+ * Performs the initial resolve of an {@link ApiKey} (`error: undefined`,
+ * `lastChance: false`). Static keys pass through unchanged.
+ *
+ * `signal` is forwarded to a resolver so a credential mint can be cancelled; it is
+ * NOT an abort barrier of its own. A single resolve does no retrying, so there is
+ * nothing here for a cancellation check to prevent, and raising one would take the
+ * decision away from the caller that owns the signal. The agent loop calls this
+ * while preparing a request and then renders an abort as a `stopReason: "aborted"`
+ * assistant message; a throw raised here instead unwinds past that and surfaces the
+ * user's own Ctrl-C as a crashed run. The retry driver below is where cancellation
+ * is enforced.
+ */
+export async function resolveApiKeyOnce(
+	key: ApiKey | undefined,
+	signal?: AbortSignal,
+	onCredentialSelected?: (credentialId: string) => void,
+): Promise<string | undefined> {
+	if (key === undefined) return undefined;
+	if (isApiKeyResolver(key))
+		return (await key({ lastChance: false, error: undefined, signal, onCredentialSelected })) || undefined;
+	return key;
+}
+
+/**
+ * Wraps a resolver with a bearer that was already selected for this request.
+ *
+ * The seed's identity travels with its bearer, not with a later selection.
+ */
+export function seedApiKeyResolver(
+	seed: string | undefined,
+	resolver: ApiKeyResolver,
+	credentialId?: string,
+): ApiKeyResolver {
+	let seedPending = seed !== undefined;
+	return ctx => {
+		if (seedPending && ctx.error === undefined) {
+			seedPending = false;
+			if (credentialId !== undefined) ctx.onCredentialSelected?.(credentialId);
+			return seed;
+		}
+		return resolver(ctx);
+	};
+}
+
+// Re-exported from the error module (its new home); see error/auth-classify.ts.
+export { isAuthRetryableError };
+
+/**
+ * Legacy bounded a/b/c retry sequence retained for public compatibility:
+ * `false` → refresh-same, `true` → rotate/switch. Current drivers consume it
+ * once for ordinary 401/auth failures; usage/account-limit failures may repeat
+ * sibling rotation until a termination guard fires.
+ */
+export const AUTH_RETRY_STEPS: readonly boolean[] = [false, true];
+
+export const AUTH_RETRY_MAX_ATTEMPTS = 64;
+
+/** Resolve a single retry step, swallowing resolver failures into `undefined`. */
+export async function resolveRetryKey(
+	resolver: ApiKeyResolver,
+	lastChance: boolean,
+	error: unknown,
+	signal?: AbortSignal,
+	previousKey?: string,
+	onCredentialSelected?: (credentialId: string) => void,
+): Promise<string | undefined> {
+	if (signal?.aborted) return undefined;
+	try {
+		const rotateSibling = lastChance || isUsageLimit(error);
+		const resolved =
+			(await resolver({ lastChance: rotateSibling, error, signal, previousKey, onCredentialSelected })) || undefined;
+		if (signal?.aborted) return undefined;
+		return resolved;
+	} catch (resolveError) {
+		if (signal?.aborted) return undefined;
+		// Returning undefined here abandons the retry, and the caller then reports
+		// the ORIGINAL auth error to the user. So without this line the reason the
+		// retry gave up — a locked store, a broken broker, no sibling credential —
+		// is destroyed, and every one of those presents as the same 401 (Law 10).
+		warnAuthRetry("Auth retry could not resolve a replacement key; reporting the original auth failure instead", {
+			lastChance,
+			originalError: String(error),
+			resolveError: String(resolveError),
+		});
+		return undefined;
+	}
+}
+
+export interface AuthRetryKeyState {
+	/** Bearer strings already sent during this logical operation. */
+	attemptedKeys: Set<string>;
+	/** Bearer used by the most recent failed attempt. */
+	lastKey: string;
+	/** Whether the current credential already consumed its 401 refresh-same retry. */
+	refreshedCurrent: boolean;
+	/** Whether the legacy non-usage auth path already switched to one sibling. */
+	legacyAuthSwitchUsed: boolean;
+	/** Total outbound attempts accepted for this logical operation, including the initial request. */
+	attempts: number;
+}
+
+export function createAuthRetryKeyState(initialKey: string): AuthRetryKeyState {
+	return {
+		attemptedKeys: new Set([initialKey]),
+		lastKey: initialKey,
+		refreshedCurrent: false,
+		legacyAuthSwitchUsed: false,
+		attempts: 1,
+	};
+}
+
+function acceptRetryKey(state: AuthRetryKeyState, key: string, refreshedCurrent: boolean): string | undefined {
+	if (state.attemptedKeys.has(key) || state.attempts >= AUTH_RETRY_MAX_ATTEMPTS) return undefined;
+	state.attemptedKeys.add(key);
+	state.attempts += 1;
+	state.lastKey = key;
+	state.refreshedCurrent = refreshedCurrent;
+	return key;
+}
+
+export async function resolveNextAuthRetryKey(
+	state: AuthRetryKeyState,
+	resolver: ApiKeyResolver,
+	error: unknown,
+	signal?: AbortSignal,
+	onCredentialSelected?: (credentialId: string) => void,
+): Promise<string | undefined> {
+	if (state.attempts >= AUTH_RETRY_MAX_ATTEMPTS) return undefined;
+	const directRotation = isUsageLimit(error);
+	if (!directRotation) {
+		if (state.legacyAuthSwitchUsed) return undefined;
+		const refreshed = await refreshCurrentRetryKey(state, resolver, error, signal, onCredentialSelected);
+		if (refreshed !== undefined) return refreshed;
+	}
+
+	// `resolveRetryKey` returns `undefined` once the caller aborts, which ends both steps here.
+	const rotated = await resolveRetryKey(resolver, true, error, signal, state.lastKey, onCredentialSelected);
+	if (rotated === undefined) return undefined;
+	const accepted = acceptRetryKey(state, rotated, !directRotation);
+	if (accepted !== undefined && !directRotation) state.legacyAuthSwitchUsed = true;
+	return accepted;
+}
+
+/**
+ * Step (b), taken once per credential: re-resolve the current credential. `undefined` when the
+ * step is already spent, the resolver declines, the caller aborted, or the key was already sent.
+ */
+async function refreshCurrentRetryKey(
+	state: AuthRetryKeyState,
+	resolver: ApiKeyResolver,
+	error: unknown,
+	signal: AbortSignal | undefined,
+	onCredentialSelected?: (credentialId: string) => void,
+): Promise<string | undefined> {
+	if (state.refreshedCurrent) return undefined;
+	const refreshed = await resolveRetryKey(resolver, false, error, signal, state.lastKey, onCredentialSelected);
+	if (refreshed === undefined) return undefined;
+	return acceptRetryKey(state, refreshed, true);
+}
+
+function oauthCredentialIdentity(access: OAuthAccess): string {
+	return access.credentialId !== undefined ? `credential:${access.credentialId}` : `bearer:${access.accessToken}`;
+}
+
+/**
+ * Runs an auth-protected operation through the central a/b/c retry policy.
+ *
+ * - A static string key (or any non-resolver) → a single `attempt` with no
+ *   retry (identical to the legacy static-key path).
+ * - A resolver → initial `attempt`, then resolver-driven retries until the
+ *   applicable policy is exhausted, the resolver declines or cycles, or the
+ *   operation reaches {@link AUTH_RETRY_MAX_ATTEMPTS}. Ordinary 401/auth
+ *   failures retain one refresh-same plus one sibling switch; usage/account
+ *   limits rotate directly through distinct siblings.
+ *
+ * Used by non-streaming consumers (image generation, web search, completion
+ * helpers). The streaming driver in `stream.ts` implements the same policy with
+ * its replay-safe buffering machinery.
+ */
+export async function withAuth<T>(
+	key: ApiKey | undefined,
+	attempt: (key: string) => Promise<T>,
+	opts?: { isAuthError?: (error: unknown) => boolean; signal?: AbortSignal; missingKeyMessage?: string },
+): Promise<T> {
+	const isAuthError = opts?.isAuthError ?? isAuthRetryableError;
+	const missingKey = (): Error => new MissingApiKeyError(undefined, opts?.missingKeyMessage);
+	const signal = opts?.signal;
+	throwIfAuthRetryAborted(signal);
+
+	if (!isApiKeyResolver(key)) {
+		if (key === undefined) throw missingKey();
+		return attempt(key);
+	}
+
+	const resolver = key;
+	const initialKey =
+		(await resolver({ lastChance: false, error: undefined, signal, previousKey: undefined })) || undefined;
+	throwIfAuthRetryAborted(signal);
+	if (initialKey === undefined) throw missingKey();
+
+	// The retry state is built on the first auth failure, so a first attempt that succeeds allocates none.
+	let state: AuthRetryKeyState | undefined;
+	let nextKey: string | undefined = initialKey;
+	let lastError: unknown;
+	while (nextKey !== undefined) {
+		try {
+			return await attempt(nextKey);
+		} catch (error) {
+			if (!isAuthError(error)) throw error;
+			lastError = error;
+		}
+		state ??= createAuthRetryKeyState(initialKey);
+		// An aborted signal makes `resolveNextAuthRetryKey` return `undefined` without resolving.
+		nextKey = await resolveNextAuthRetryKey(state, resolver, lastError, signal);
+		throwIfAuthRetryAborted(signal);
+	}
+	throw lastError;
+}
+
+/**
+ * Minimal structural slice of `AuthStorage` consumed by {@link withOAuthAccess}.
+ * Typed structurally (and importing only the `OAuthAccess` type) so this module
+ * never takes a runtime dependency on `./auth-storage`.
+ */
+export interface OAuthAccessSource {
+	getOAuthAccess(
+		provider: string,
+		sessionId?: string,
+		options?: { forceRefresh?: boolean; signal?: AbortSignal },
+	): Promise<OAuthAccess | undefined>;
+	rotateSessionCredential(
+		provider: string,
+		sessionId: string | undefined,
+		options?: { error?: unknown; signal?: AbortSignal; apiKey?: string; credentialId?: number },
+	): Promise<boolean>;
+}
+
+export interface WithOAuthAccessOptions {
+	/** Session id for credential stickiness, threaded into every resolve. */
+	sessionId?: string;
+	signal?: AbortSignal;
+	/** Override the retryable-error classifier (default {@link isAuthRetryableError}). */
+	isAuthError?: (error: unknown) => boolean;
+	/**
+	 * Pre-resolved access used for the initial attempt. Callers that already
+	 * resolved access for an availability gate pass it here so the helper
+	 * doesn't double-resolve (mirrors the gateway resolver's `initialKey`).
+	 */
+	seed?: OAuthAccess;
+	missingAccessMessage?: string;
+}
+
+interface OAuthAccessRetryInput<T> {
+	storage: OAuthAccessSource;
+	provider: string;
+	attempt: (access: OAuthAccess) => Promise<T>;
+	isAuthError: (error: unknown) => boolean;
+	sessionId: string | undefined;
+	signal: AbortSignal | undefined;
+}
+
+/**
+ * One {@link withOAuthAccess} operation from its first auth failure: the accesses already sent and
+ * the a/b/c steps already spent. A refresh-same step admits a new bearer for an attempted
+ * credential identity; a sibling rotation admits neither an attempted identity nor an attempted
+ * bearer.
+ */
+class OAuthAccessRetry<T> {
+	readonly #input: OAuthAccessRetryInput<T>;
+	readonly #attemptedBearers = new Set<string>();
+	readonly #attemptedIdentities = new Set<string>();
+	#attempts = 0;
+	#refreshedCurrent = false;
+	#legacyAuthSwitchUsed = false;
+	#lastAccess: OAuthAccess;
+	#lastError: unknown;
+
+	constructor(input: OAuthAccessRetryInput<T>, first: OAuthAccess, firstError: unknown) {
+		this.#input = input;
+		this.#lastAccess = first;
+		this.#lastError = firstError;
+		this.#record(first);
+	}
+
+	/** Takes the policy's next step after each auth failure until an attempt succeeds or the policy is spent. */
+	async run(): Promise<T> {
+		const { attempt, isAuthError, signal } = this.#input;
+		for (let access = await this.#nextAccess(); access; access = await this.#nextAccess()) {
+			try {
+				return await attempt(access);
+			} catch (error) {
+				if (!isAuthError(error)) throw error;
+				throwIfAuthRetryAborted(signal);
+				this.#lastError = error;
+			}
+		}
+		throw this.#lastError;
+	}
+
+	#record(access: OAuthAccess): void {
+		this.#attemptedIdentities.add(oauthCredentialIdentity(access));
+		this.#attemptedBearers.add(access.accessToken);
+		this.#attempts += 1;
+		this.#lastAccess = access;
+	}
+
+	/** The access for the next attempt, already recorded, or `undefined` when the policy is spent. */
+	async #nextAccess(): Promise<OAuthAccess | undefined> {
+		if (this.#attempts >= AUTH_RETRY_MAX_ATTEMPTS) return undefined;
+		const directRotation = isUsageLimit(this.#lastError);
+		if (!directRotation) {
+			if (this.#legacyAuthSwitchUsed) return undefined;
+			const refreshed = await this.#refreshCurrent();
+			if (refreshed) return refreshed;
+		}
+		const rotated = await this.#rotate();
+		if (
+			!rotated ||
+			this.#attemptedIdentities.has(oauthCredentialIdentity(rotated)) ||
+			this.#attemptedBearers.has(rotated.accessToken)
+		) {
+			return undefined;
+		}
+		this.#record(rotated);
+		this.#refreshedCurrent = !directRotation;
+		if (!directRotation) this.#legacyAuthSwitchUsed = true;
+		return rotated;
+	}
+
+	/** Step (b), taken once per credential: force-refresh the current account. */
+	async #refreshCurrent(): Promise<OAuthAccess | undefined> {
+		if (this.#refreshedCurrent) return undefined;
+		this.#refreshedCurrent = true;
+		const { storage, provider, sessionId, signal } = this.#input;
+		let next: OAuthAccess | undefined;
+		try {
+			next = await storage.getOAuthAccess(provider, sessionId, { forceRefresh: true, signal });
+		} catch (refreshError) {
+			throwIfAuthRetryAborted(signal);
+			// The retry falls through to rotation and the user eventually sees the
+			// original 401, so the refresh's own failure is logged here or it is lost.
+			warnAuthRetry("Auth retry could not force-refresh the current credential; falling through to rotation", {
+				provider,
+				error: String(refreshError),
+			});
+		}
+		throwIfAuthRetryAborted(signal);
+		if (!next || this.#attemptedBearers.has(next.accessToken)) return undefined;
+		this.#record(next);
+		return next;
+	}
+
+	/** Step (c): rotate the session to a sibling credential and read its access. */
+	async #rotate(): Promise<OAuthAccess | undefined> {
+		const { storage, provider, sessionId, signal } = this.#input;
+		let next: OAuthAccess | undefined;
+		try {
+			const rotated = await storage.rotateSessionCredential(provider, sessionId, {
+				error: this.#lastError,
+				signal,
+				apiKey: this.#lastAccess.accessToken,
+				credentialId: this.#lastAccess.credentialId,
+			});
+			throwIfAuthRetryAborted(signal);
+			if (!rotated) return undefined;
+			next = await storage.getOAuthAccess(provider, sessionId, { signal });
+		} catch (rotateError) {
+			throwIfAuthRetryAborted(signal);
+			// A failed rotation ends the retry loop. The caller reports `lastError`, the
+			// original 401, so the rotation failure is logged here or it is lost.
+			warnAuthRetry("Auth retry could not rotate to another credential; giving up and reporting the auth failure", {
+				provider,
+				error: String(rotateError),
+			});
+		}
+		throwIfAuthRetryAborted(signal);
+		return next;
+	}
+}
+
+/**
+ * {@link withAuth} for OAuth-access consumers: runs an auth-protected
+ * operation through the central a/b/c retry policy, handing the attempt the
+ * full {@link OAuthAccess} (bearer + identity metadata: `accountId`,
+ * `projectId`, `enterpriseUrl`) instead of bare API-key bytes.
+ *
+ * - initial → `getOAuthAccess` (or `opts.seed`).
+ * - 401/auth failure → one `getOAuthAccess` with `forceRefresh: true` for the
+ *   current account, then sibling rotation.
+ * - usage-limit failure → `rotateSessionCredential` directly, without a
+ *   force-refresh detour.
+ *
+ * A refresh-same step may retry a new bearer for the same credential identity;
+ * sibling rotation stops when it yields a credential identity
+ * (`credentialId ?? accessToken`) or bearer already attempted in this turn.
+ * All OAuth attempts share the {@link AUTH_RETRY_MAX_ATTEMPTS} ceiling.
+ * Non-auth errors propagate immediately. Use this instead of hand-rolled
+ * `getOAuthAccess` + fetch flows so 401s and usage-limits rotate credentials
+ * instead of failing the call.
+ */
+export async function withOAuthAccess<T>(
+	storage: OAuthAccessSource,
+	provider: string,
+	attempt: (access: OAuthAccess) => Promise<T>,
+	opts?: WithOAuthAccessOptions,
+): Promise<T> {
+	const { sessionId, signal } = opts ?? {};
+	throwIfAuthRetryAborted(signal);
+
+	let first = opts?.seed;
+	if (!first) {
+		first = await storage.getOAuthAccess(provider, sessionId, { signal });
+		throwIfAuthRetryAborted(signal);
+	}
+	if (!first) {
+		throw new MissingApiKeyError(
+			provider,
+			opts?.missingAccessMessage ?? `No OAuth credential available for provider: ${provider}`,
+		);
+	}
+
+	const isAuthError = opts?.isAuthError ?? isAuthRetryableError;
+	// The retry state is built on the first auth failure, so a first attempt that succeeds allocates none.
+	try {
+		return await attempt(first);
+	} catch (error) {
+		if (!isAuthError(error)) throw error;
+		throwIfAuthRetryAborted(signal);
+		const input = { storage, provider, attempt, isAuthError, sessionId, signal };
+		return new OAuthAccessRetry(input, first, error).run();
+	}
+}

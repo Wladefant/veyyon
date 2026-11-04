@@ -1,0 +1,120 @@
+/**
+ * `veyyon agents unpack` e2e: bundled agent definitions land on disk as
+ * frontmatter markdown, re-running skips existing files unless --force, and the
+ * default target is the directory `discoverAgents` reads.
+ *
+ * The target path is the contract, not a detail. Unpack wrote into the active
+ * profile's `agent/agents`, which no loader reads: every unpacked definition was
+ * absent from `/agents` and from `task`, silently. `~/.veyyon/subagents` is the
+ * reader's directory, pinned from the reader's side by
+ * `test/task/user-agents-are-global-and-their-tools-are-checked.test.ts`, so a
+ * writer that drifts from it fails one of the two.
+ */
+import { describe, expect, it } from "bun:test";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import * as path from "node:path";
+import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
+
+const makeTempDir1 = useTrackedTempDirs("veyyon-agents-dir-");
+const makeTempDir2 = useTrackedTempDirs("veyyon-agents-home-");
+
+const cliPath = path.resolve(import.meta.dir, "../../src/cli.ts");
+
+function makeEnv(home: string): Record<string, string | undefined> {
+	const env: Record<string, string | undefined> = { ...process.env, HOME: home, NO_COLOR: "1" };
+	for (const key of ["VEYYON_CODING_AGENT_DIR", "VEYYON_CONFIG_DIR", "VEYYON_PROFILE"]) {
+		delete env[key];
+	}
+	return env;
+}
+
+async function runAgents(
+	env: Record<string, string | undefined>,
+	args: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+	const proc = Bun.spawn(["bun", cliPath, "agents", ...args], {
+		env,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	return { stdout, stderr, exitCode };
+}
+
+describe("veyyon agents unpack", () => {
+	it("writes every bundled agent as frontmatter markdown, then skips on rerun and rewrites with --force", async () => {
+		const home = makeTempDir2();
+		const env = makeEnv(home);
+
+		const first = await runAgents(env, ["unpack", "--json"]);
+		expect(first.exitCode).toBe(0);
+		const result = JSON.parse(first.stdout) as {
+			targetDir: string;
+			total: number;
+			written: string[];
+			skipped: string[];
+		};
+		expect(result.targetDir).toBe(path.join(home, ".veyyon", "subagents"));
+		expect(result.total).toBeGreaterThan(0);
+		expect(result.written.length).toBe(result.total);
+		expect(result.skipped).toEqual([]);
+
+		const files = readdirSync(result.targetDir).filter(name => name.endsWith(".md"));
+		expect(files.length).toBe(result.total);
+		const sample = readFileSync(result.written[0], "utf8");
+		expect(sample.startsWith("---\n")).toBe(true);
+		expect(sample).toContain("name:");
+		expect(sample).toContain("description:");
+
+		// A rerun must not clobber user edits without --force.
+		writeFileSync(result.written[0], "user-edited\n");
+		const second = await runAgents(env, ["unpack", "--json"]);
+		expect(second.exitCode).toBe(0);
+		const rerun = JSON.parse(second.stdout) as { written: string[]; skipped: string[] };
+		expect(rerun.written).toEqual([]);
+		expect(rerun.skipped.length).toBe(result.total);
+		expect(readFileSync(result.written[0], "utf8")).toBe("user-edited\n");
+
+		const forced = await runAgents(env, ["unpack", "--force", "--json"]);
+		expect(forced.exitCode).toBe(0);
+		const forcedResult = JSON.parse(forced.stdout) as { written: string[]; skipped: string[] };
+		expect(forcedResult.written.length).toBe(result.total);
+		expect(readFileSync(result.written[0], "utf8")).not.toBe("user-edited\n");
+	}, 30_000);
+
+	it("unpacks into an explicit --dir relative to the project", async () => {
+		const home = makeTempDir2();
+		const target = makeTempDir1();
+		const { stdout, exitCode } = await runAgents(makeEnv(home), ["unpack", "--dir", target, "--json"]);
+		expect(exitCode).toBe(0);
+		const result = JSON.parse(stdout) as { targetDir: string; written: string[] };
+		expect(result.targetDir).toBe(target);
+		expect(result.written.every(file => file.startsWith(target))).toBe(true);
+	}, 30_000);
+	it("rejects a scope flag that no longer has a reader", async () => {
+		const home = makeTempDir2();
+		const { stderr, exitCode } = await runAgents(makeEnv(home), ["unpack", "--project"]);
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toContain("--project");
+	}, 30_000);
+
+	it("shows the authored definitions directory in command help", async () => {
+		const home = makeTempDir2();
+		const { stdout, exitCode } = await runAgents(makeEnv(home), []);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("~/.veyyon/subagents");
+	}, 30_000);
+
+	it("--user names the same directory as the default", async () => {
+		const home = makeTempDir2();
+		const { stdout, exitCode } = await runAgents(makeEnv(home), ["unpack", "--user", "--json"]);
+		expect(exitCode).toBe(0);
+		const result = JSON.parse(stdout) as { targetDir: string };
+		expect(result.targetDir).toBe(path.join(home, ".veyyon", "subagents"));
+	}, 30_000);
+});

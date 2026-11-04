@@ -1,0 +1,120 @@
+name: "bun install (shared cache)"
+description: >
+   Ensure the root packageManager-pinned bun version is on PATH, run
+   `bun install --frozen-lockfile` with the actions/cache-backed package store,
+   then materialize the gitignored source codegen so the tree is runnable.
+   A missing or mismatched runner bun is installed in a job-local directory.
+
+inputs:
+   shell:
+      description: Shell used to run this action's command steps
+      required: false
+      default: bash
+runs:
+   using: composite
+   steps:
+      - name: Detect bun
+        id: env
+        shell: ${{ inputs.shell }}
+        run: |
+           # Read the only bun version pin from the root package manifest.
+           version="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' package.json | head -n1)"
+           if [ -z "$version" ]; then
+             echo "::error title=bun pin missing::package.json declares no \"packageManager\": \"bun@<version>\"" >&2
+             exit 1
+           fi
+           pin="bun-v${version}"
+           installed=""
+           if command -v bun >/dev/null 2>&1; then
+             installed="$(bun --version)"
+           fi
+           if [ "$installed" = "$version" ]; then
+             echo "setup_bun=false" >> "$GITHUB_OUTPUT"
+             echo "bun present at pinned version: $installed"
+           else
+             bun_install="${RUNNER_TEMP}/bun-${pin}"
+             echo "setup_bun=true" >> "$GITHUB_OUTPUT"
+             echo "BUN_INSTALL=${bun_install}" >> "$GITHUB_ENV"
+             if [ "${RUNNER_OS:-}" = "Windows" ]; then
+               cygpath -w "${bun_install}/bin" >> "$GITHUB_PATH"
+             else
+               echo "${bun_install}/bin" >> "$GITHUB_PATH"
+             fi
+             echo "bun ${installed:-missing}; installing pinned ${version} in job-local storage"
+           fi
+      - name: Install bun when absent or mismatched
+        if: steps.env.outputs.setup_bun == 'true'
+        shell: ${{ inputs.shell }}
+        run: |
+           # The version and install directory are selected by the detection
+           # step from the root packageManager pin and RUNNER_TEMP.
+           version="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' package.json | head -n1)"
+           if [ -z "$version" ]; then
+             echo "::error title=bun pin missing::package.json declares no \"packageManager\": \"bun@<version>\"" >&2
+             exit 1
+           fi
+           pin="bun-v${version}"
+           if [ -z "${BUN_INSTALL:-}" ]; then
+             echo "::error title=bun install directory missing::the detection step did not provide BUN_INSTALL" >&2
+             exit 1
+           fi
+           attempt=1
+           while ! curl -fsSL https://bun.sh/install | bash -s "${pin}"; do
+             if [ "$attempt" -ge 3 ]; then
+               echo "::error title=bun setup failed::failed to install ${pin} after $attempt attempts" >&2
+               exit 1
+             fi
+             echo "::warning title=bun setup retry::${pin} install failed on attempt $attempt; retrying" >&2
+             sleep "$attempt"
+             attempt=$((attempt + 1))
+           done
+           if [ "${RUNNER_OS:-}" = "Windows" ]; then
+             cygpath -w "${BUN_INSTALL}/bin" >> "$GITHUB_PATH"
+           else
+             echo "${BUN_INSTALL}/bin" >> "$GITHUB_PATH"
+           fi
+
+      - name: Cache bun store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+           path: ~/.bun/install/cache
+           # The workspace lockfile, by exact path. A `**/bun.lock` glob also walks
+           # `tests/evals/datasets/repo-cache/`, where a checked-out fixture
+           # repository carries its own lockfile that appears and disappears while a
+           # job runs; the save phase of a native build then fails the whole job with
+           # "hashFiles('**/bun.lock') failed. Fail to hash files under directory".
+           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install dependencies
+        shell: ${{ inputs.shell }}
+        run: |
+           # The shared bun store (actions/cache) can hand a job a corrupt or
+           # partially written tarball when parallel jobs touch the same cache
+           # entry, so `bun install` aborts with `Fail extracting tarball for
+           # "<pkg>"`. That blob is content-hash-named, not derivable from the
+           # package name, so we can't evict just the bad entry — instead retry
+           # the install against a fresh job-local cache dir, forcing a clean
+           # re-download without mutating the shared store other concurrent jobs
+           # rely on. The warm shared cache stays the fast path; the cold retry
+           # only runs on the rare corruption (also covers a transient network
+           # blip on attempt 1).
+           if bun install --frozen-lockfile; then
+             exit 0
+           fi
+           echo "::warning title=bun install retry::shared bun store install failed; retrying with a clean job-local cache"
+           retry_cache="$(mktemp -d "${RUNNER_TEMP:-/tmp}/bun-cache-retry.XXXXXX")"
+           bun install --frozen-lockfile --cache-dir="$retry_cache"
+
+      - name: Generate source codegen
+        shell: ${{ inputs.shell }}
+        run: |
+           # coding-agent's src/export/html/index.ts imports
+           # ./tool-views.generated.js (a gitignored codegen artifact bundled
+           # from collab-web/src/tool-render). `bun install` alone does not
+           # produce it — bun skips the root `prepare` on a no-op frozen install
+           # — so every source-running job (`ci:test:smoke`, the coding-agent
+           # test matrix) died with "Cannot find module './tool-views.generated.js'".
+           # Materialize it here, in the one shared setup step, so the tree is
+           # runnable from source. Fast (~30ms) and deterministic; fail loud if
+           # codegen breaks rather than shipping a stale/missing bundle.
+           bun --cwd=packages/coding-agent run gen:tool-views

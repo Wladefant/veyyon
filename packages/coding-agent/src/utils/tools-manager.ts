@@ -1,0 +1,521 @@
+import { createHash, type Hash } from "node:crypto";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { isCancellation } from "@veyyon/utils/abortable";
+import { APP_NAME, getToolsDir } from "@veyyon/utils/dirs";
+// Owners, not the `@veyyon/utils` barrel: 8 modules against 74.
+import * as logger from "@veyyon/utils/logger";
+import * as ptree from "@veyyon/utils/ptree";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { bareVersion } from "@veyyon/utils/semver";
+import { TempDir } from "@veyyon/utils/temp";
+import { errorMessage } from "@veyyon/utils/type-guards";
+import { $which } from "@veyyon/utils/which";
+import { primarySessionCpuAdoption } from "../session/cpu-limit";
+import { throwIfAborted } from "../tools/core/tool-errors";
+import { extractArchive } from "./zip";
+
+const TOOLS_DIR = getToolsDir();
+const TOOL_DOWNLOAD_TIMEOUT_MS = 120_000;
+const TOOL_METADATA_TIMEOUT_MS = 5000;
+
+type BodyReadResult = Bun.ReadableStreamDefaultReadResult<Uint8Array>;
+type BodyReader = {
+	read(): Promise<BodyReadResult>;
+	cancel(reason?: unknown): Promise<void>;
+};
+
+function isAbortLikeError(error: unknown): boolean {
+	return isCancellation(error);
+}
+
+function abortReason(signal: AbortSignal): unknown {
+	return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+}
+
+async function readBodyChunk(reader: BodyReader, signal: AbortSignal | undefined): Promise<BodyReadResult> {
+	if (!signal) return await reader.read();
+	if (signal.aborted) throw abortReason(signal);
+
+	const abort = Promise.withResolvers<BodyReadResult>();
+	const onAbort = () => abort.reject(abortReason(signal));
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		return await Promise.race([reader.read(), abort.promise]);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
+}
+
+async function writeResponseBody(
+	dest: string,
+	body: NonNullable<Response["body"]>,
+	signal?: AbortSignal,
+	hash?: Hash,
+): Promise<void> {
+	const reader = body.getReader();
+	const sink = Bun.file(dest).writer();
+	let completed = false;
+
+	try {
+		while (true) {
+			const { done, value } = await readBodyChunk(reader, signal);
+			if (done) break;
+			if (value) {
+				hash?.update(value);
+				await sink.write(value);
+			}
+		}
+		await sink.end();
+		completed = true;
+	} finally {
+		if (!completed) {
+			// This branch runs only while an error from the loop above is already propagating, and that error
+			// is the one the caller must see. Each teardown step is attempted independently and its own failure
+			// is discarded so it cannot replace the download failure with a misleading cleanup message.
+			await reader.cancel().catch(() => {});
+			await Promise.resolve(sink.end()).catch(() => {});
+			await fs.promises.rm(dest, { force: true }).catch(() => {});
+		}
+	}
+}
+
+interface ToolConfig {
+	name: string;
+	repo: string; // GitHub repo (e.g., "sharkdp/fd")
+	binaryName: string; // Name of the binary inside the archive
+	tagPrefix: string; // Prefix for tags (e.g., "v" for v1.0.0, "" for 1.0.0)
+	isDirectBinary?: boolean; // If true, asset is a direct binary (not an archive)
+	getAssetName: (version: string, plat: string, architecture: string) => string | null;
+}
+
+// ffmpeg static-binary asset names (eugeneware/ffmpeg-static direct binaries).
+// Maps node arch (arm64|x64) only; everything else is unsupported.
+export function ffmpegAssetName(_version: string, plat: string, architecture: string): string | null {
+	if (architecture !== "arm64" && architecture !== "x64") return null;
+	if (plat === "darwin") return `ffmpeg-darwin-${architecture}`;
+	if (plat === "linux") return `ffmpeg-linux-${architecture}`;
+	if (plat === "win32") return architecture === "x64" ? "ffmpeg-win32-x64" : null;
+	return null;
+}
+
+const TOOLS: Record<string, ToolConfig> = {
+	sd: {
+		name: "sd",
+		repo: "chmln/sd",
+		binaryName: "sd",
+		tagPrefix: "v",
+		getAssetName: (version, plat, architecture) => {
+			if (plat === "darwin") {
+				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+				return `sd-v${version}-${archStr}-apple-darwin.tar.gz`;
+			} else if (plat === "linux") {
+				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+				return `sd-v${version}-${archStr}-unknown-linux-musl.tar.gz`;
+			} else if (plat === "win32") {
+				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+				return `sd-v${version}-${archStr}-pc-windows-msvc.zip`;
+			}
+			return null;
+		},
+	},
+	sg: {
+		name: "ast-grep",
+		repo: "ast-grep/ast-grep",
+		binaryName: "sg",
+		tagPrefix: "",
+		getAssetName: (_version, plat, architecture) => {
+			if (plat === "darwin") {
+				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+				return `ast-grep-${archStr}-apple-darwin.zip`;
+			} else if (plat === "linux") {
+				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+				return `ast-grep-${archStr}-unknown-linux-gnu.zip`;
+			} else if (plat === "win32") {
+				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+				return `ast-grep-${archStr}-pc-windows-msvc.zip`;
+			}
+			return null;
+		},
+	},
+	"yt-dlp": {
+		name: "yt-dlp",
+		repo: "yt-dlp/yt-dlp",
+		binaryName: "yt-dlp",
+		tagPrefix: "",
+		isDirectBinary: true,
+		getAssetName: (_version, plat, architecture) => {
+			if (plat === "darwin") {
+				return "yt-dlp_macos"; // Universal binary
+			} else if (plat === "linux") {
+				return architecture === "arm64" ? "yt-dlp_linux_aarch64" : "yt-dlp_linux";
+			} else if (plat === "win32") {
+				return architecture === "arm64" ? "yt-dlp_arm64.exe" : "yt-dlp.exe";
+			}
+			return null;
+		},
+	},
+	ffmpeg: {
+		name: "ffmpeg",
+		repo: "eugeneware/ffmpeg-static",
+		binaryName: "ffmpeg",
+		tagPrefix: "",
+		isDirectBinary: true,
+		getAssetName: ffmpegAssetName,
+	},
+};
+
+// CLI packages installed via uv/pip
+interface PythonPackageToolConfig {
+	name: string;
+	package: string; // PyPI package name
+	binaryName: string; // CLI command name after install
+}
+
+const PYTHON_TOOLS: Record<string, PythonPackageToolConfig> = {
+	trafilatura: {
+		name: "trafilatura",
+		package: "trafilatura",
+		binaryName: "trafilatura",
+	},
+};
+
+export type ToolName = "sd" | "sg" | "yt-dlp" | "trafilatura" | "ffmpeg";
+
+// Get the path to a tool (system-wide or in our tools dir)
+export function getToolPath(tool: ToolName): string | null {
+	// Check uv/pip-installed CLI packages first
+	const pythonConfig = PYTHON_TOOLS[tool];
+	if (pythonConfig) {
+		return $which(pythonConfig.binaryName);
+	}
+
+	const config = TOOLS[tool];
+	if (!config) return null;
+
+	// Check our tools directory first
+	const localPath = path.join(TOOLS_DIR, config.binaryName + (os.platform() === "win32" ? ".exe" : ""));
+	if (fs.existsSync(localPath)) {
+		return localPath;
+	}
+
+	// Check system PATH
+	return $which(config.binaryName);
+}
+
+/**
+ * The `sha256:<64 hex>` digest GitHub publishes alongside every release asset, keyed by asset
+ * name. Nothing else is accepted: an absent, differently-prefixed or wrong-length digest is
+ * dropped here so {@link downloadTool} refuses rather than downloading an unverifiable binary.
+ */
+const ASSET_DIGEST_RE = /^sha256:([0-9a-f]{64})$/;
+
+interface LatestRelease {
+	version: string;
+	/** Asset name to lowercase hex sha256. An asset with no usable digest is absent. */
+	digests: Record<string, string>;
+}
+
+// Fetch the latest release version and its published asset digests from GitHub
+async function getLatestRelease(repo: string, signal?: AbortSignal): Promise<LatestRelease> {
+	// Scoped so the deadline timer is cleared on settle instead of staying
+	// armed like a bare AbortSignal.timeout; the fence spans the body read.
+	const requestTimeout = scopedTimeoutSignal(TOOL_METADATA_TIMEOUT_MS, signal);
+	try {
+		let response: Response;
+		try {
+			response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+				headers: { "User-Agent": `${APP_NAME}-coding-agent` },
+				signal: requestTimeout.signal,
+			});
+		} catch (err) {
+			// The scoped signal composes the caller's signal with the deadline, so
+			// "the fetch stopped" had two possible causes and only one of them is a
+			// timeout. An operator interrupt used to be reported as "GitHub API
+			// request timed out", which names the wrong cause and invites a retry
+			// of work the operator just stopped.
+			if (isCancellation(err)) {
+				throwIfAborted(signal, "tool metadata");
+				throw new Error("GitHub API request timed out");
+			}
+			throw err;
+		}
+
+		if (!response.ok) {
+			throw new Error(`GitHub API error: ${response.status}`);
+		}
+
+		const data = (await response.json()) as {
+			tag_name: string;
+			assets?: { name?: unknown; digest?: unknown }[];
+		};
+		const digests: Record<string, string> = {};
+		for (const asset of data.assets ?? []) {
+			if (typeof asset?.name !== "string" || typeof asset.digest !== "string") continue;
+			const match = ASSET_DIGEST_RE.exec(asset.digest);
+			if (match) digests[asset.name] = match[1]!;
+		}
+		return { version: bareVersion(data.tag_name), digests };
+	} finally {
+		requestTimeout.cancel();
+	}
+}
+
+/**
+ * Download a tool asset without handing the streaming Response to Bun.write.
+ *
+ * `expectedSha256` is the digest the release publishes for this exact asset. It is hashed as the
+ * body streams, so a tampered or truncated payload is refused before anything makes it
+ * executable, and the partial file is removed. Callers that fetch a binary veyyon will run MUST
+ * pass it; the parameter is optional only for callers downloading data they never execute.
+ */
+export async function downloadFile(
+	url: string,
+	dest: string,
+	signal?: AbortSignal,
+	expectedSha256?: string,
+): Promise<void> {
+	const downloadTimeout = scopedTimeoutSignal(TOOL_DOWNLOAD_TIMEOUT_MS, signal);
+	const downloadSignal = downloadTimeout.signal;
+	const hash = expectedSha256 ? createHash("sha256") : undefined;
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			signal: downloadSignal,
+		});
+		if (!response.ok) {
+			throw new Error(`Failed to download: ${response.status}`);
+		} else if (!response.body) {
+			throw new Error("No response body");
+		}
+		await writeResponseBody(dest, response.body, downloadSignal, hash);
+	} catch (err) {
+		if (isAbortLikeError(err)) {
+			throw new Error(`Download timed out: ${url}`);
+		}
+		throw err;
+	} finally {
+		downloadTimeout.cancel();
+	}
+
+	if (!hash || !expectedSha256) return;
+	const actual = hash.digest("hex");
+	if (actual === expectedSha256) return;
+	await fs.promises.rm(dest, { force: true }).catch(() => {});
+	throw new Error(`Checksum mismatch for ${url}: expected sha256 ${expectedSha256}, got ${actual}`);
+}
+
+/**
+ * Download and install a tool binary from its upstream GitHub release.
+ *
+ * Exported so the refusal below is reachable without a network: it is the gate that decides
+ * whether a binary veyyon is about to chmod 0755 and execute has a published checksum at all.
+ */
+export async function downloadTool(tool: ToolName, signal?: AbortSignal): Promise<string> {
+	const config = TOOLS[tool];
+	if (!config) throw new Error(`Unknown tool: ${tool}`);
+
+	const plat = os.platform();
+	const architecture = os.arch();
+
+	// Get latest version and the digests published with it
+	const { version, digests } = await getLatestRelease(config.repo, signal);
+
+	// Get asset name for this platform
+	const assetName = config.getAssetName(version, plat, architecture);
+	if (!assetName) {
+		throw new Error(`Unsupported platform: ${plat}/${architecture}`);
+	}
+
+	// Fail closed. This binary is chmod'd 0755 and executed as the user, so an asset the release
+	// publishes no sha256 for is not "unverified but probably fine", it is a download nobody can
+	// check. Refusing names the asset so an upstream that stopped publishing digests is legible
+	// rather than looking like a network fault.
+	const expectedSha256 = digests[assetName];
+	if (!expectedSha256) {
+		throw new Error(
+			`Refusing to install ${config.name}: ${config.repo} release ${version} publishes no sha256 digest for ${assetName}`,
+		);
+	}
+
+	// Create tools directory
+	await fs.promises.mkdir(TOOLS_DIR, { recursive: true });
+
+	const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
+	const binaryExt = plat === "win32" ? ".exe" : "";
+	const binaryPath = path.join(TOOLS_DIR, config.binaryName + binaryExt);
+
+	// Handle direct binary downloads (no archive extraction needed)
+	if (config.isDirectBinary) {
+		await downloadFile(downloadUrl, binaryPath, signal, expectedSha256);
+		if (plat !== "win32") {
+			await fs.promises.chmod(binaryPath, 0o755);
+		}
+		return binaryPath;
+	}
+
+	// Download archive
+	const archivePath = path.join(TOOLS_DIR, assetName);
+	await downloadFile(downloadUrl, archivePath, signal, expectedSha256);
+
+	// Extract
+	const tmp = await TempDir.create("@veyyon-tools-extract-");
+
+	try {
+		if (!assetName.endsWith(".tar.gz") && !assetName.endsWith(".zip")) {
+			throw new Error(`Unsupported archive format: ${assetName}`);
+		}
+
+		try {
+			await extractArchive(archivePath, tmp.path());
+		} catch (err) {
+			throw new Error(`Failed to extract ${assetName}: ${errorMessage(err)}`);
+		}
+
+		// Find the binary in extracted files
+		// ast-grep releases the binary directly in the zip, not in a subdirectory
+		let extractedBinary: string;
+		if (tool === "sg") {
+			extractedBinary = path.join(tmp.path(), config.binaryName + binaryExt);
+		} else {
+			const extractedDir = path.join(tmp.path(), assetName.replace(/\.(tar\.gz|zip)$/, ""));
+			extractedBinary = path.join(extractedDir, config.binaryName + binaryExt);
+		}
+
+		if (fs.existsSync(extractedBinary)) {
+			await fs.promises.rename(extractedBinary, binaryPath);
+		} else {
+			throw new Error(`Binary not found in archive: ${extractedBinary}`);
+		}
+
+		// Make executable (Unix only)
+		if (plat !== "win32") {
+			await fs.promises.chmod(binaryPath, 0o755);
+		}
+	} finally {
+		// Cleanup
+		await tmp.remove();
+		await fs.promises.rm(archivePath, { force: true });
+	}
+
+	return binaryPath;
+}
+
+// Install a Python package via uv (preferred) or pip
+async function installPythonPackage(pkg: string, signal?: AbortSignal): Promise<boolean> {
+	try {
+		// Try uv first (faster, better isolation)
+		const uv = $which("uv");
+		if (uv) {
+			const result = await ptree.exec([uv, "tool", "install", pkg], {
+				signal,
+				allowNonZero: true,
+				allowAbort: true,
+				stderr: "full",
+				onSpawnPid: primarySessionCpuAdoption(),
+			});
+			if (result.exitCode === 0) return true;
+		}
+
+		// Fall back to pip
+		const pip = $which("pip3") || $which("pip");
+		if (pip) {
+			const result = await ptree.exec([pip, "install", "--user", pkg], {
+				signal,
+				allowNonZero: true,
+				allowAbort: true,
+				stderr: "full",
+				onSpawnPid: primarySessionCpuAdoption(),
+			});
+			return result.exitCode === 0;
+		}
+
+		return false;
+	} catch (error) {
+		logger.warn(`Failed to install Python package ${pkg}`, {
+			error: errorMessage(error),
+		});
+		return false;
+	}
+}
+
+// Termux package names for tools
+const TERMUX_PACKAGES: Partial<Record<ToolName, string>> = {
+	sd: "sd",
+	sg: "ast-grep",
+};
+
+// Ensure a tool is available, downloading if necessary
+// Returns the path to the tool, or null if unavailable
+type EnsureToolOptions = {
+	signal?: AbortSignal;
+	silent?: boolean;
+	notify?: (message: string) => void;
+};
+
+export async function ensureTool(tool: ToolName, silentOrOptions?: EnsureToolOptions): Promise<string | undefined> {
+	const { signal, silent = false, notify } = silentOrOptions ?? {};
+	const existingPath = getToolPath(tool);
+	if (existingPath) {
+		return existingPath;
+	}
+
+	// On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
+	// Users must install via pkg.
+	if (os.platform() === "android") {
+		const pkgName = TERMUX_PACKAGES[tool] ?? tool;
+		if (!silent) {
+			logger.warn(`${TOOLS[tool]?.name ?? tool} not found. Install with: pkg install ${pkgName}`);
+		}
+		return undefined;
+	}
+
+	// Handle uv/pip-installed CLI packages
+	const pythonConfig = PYTHON_TOOLS[tool];
+	if (pythonConfig) {
+		if (!silent) {
+			logger.debug(`${pythonConfig.name} not found. Installing via uv/pip...`);
+		}
+		notify?.(`Installing ${pythonConfig.name}…`);
+		const success = await installPythonPackage(pythonConfig.package, signal);
+		if (success) {
+			// Re-check for the command after installation
+			const path = $which(pythonConfig.binaryName);
+			if (path) {
+				if (!silent) {
+					logger.debug(`${pythonConfig.name} installed successfully`);
+				}
+				return path;
+			}
+		}
+		if (!silent) {
+			logger.warn(`Failed to install ${pythonConfig.name}`);
+		}
+		return undefined;
+	}
+
+	const config = TOOLS[tool];
+	if (!config) return undefined;
+
+	// Tool not found - download it
+	if (!silent) {
+		logger.debug(`${config.name} not found. Downloading...`);
+	}
+	notify?.(`Downloading ${config.name}…`);
+
+	try {
+		const path = await downloadTool(tool, signal);
+		if (!silent) {
+			logger.debug(`${config.name} installed to ${path}`);
+		}
+		return path;
+	} catch (e) {
+		if (!silent) {
+			logger.warn(`Failed to download ${config.name}`, {
+				error: errorMessage(e),
+			});
+		}
+		return undefined;
+	}
+}

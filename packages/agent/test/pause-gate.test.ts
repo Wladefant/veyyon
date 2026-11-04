@@ -1,0 +1,168 @@
+import { describe, expect, it } from "bun:test";
+import { AgentPauseGate, agentLoop } from "@veyyon/agent-core";
+import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
+import type { Message } from "@veyyon/ai";
+import { createMockModel } from "@veyyon/ai/providers/mock";
+import { type } from "arktype";
+import { createUserMessage } from "./helpers";
+
+function identityConverter(messages: AgentMessage[]): Message[] {
+	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
+}
+
+function makeEchoTool(executed: string[]): AgentTool {
+	const toolSchema = type({ msg: "string" });
+	const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
+		name: "echo",
+		label: "Echo",
+		description: "Echo a message back",
+		parameters: toolSchema,
+		async execute(_toolCallId, params) {
+			executed.push(params.msg);
+			return { content: [{ type: "text", text: `echoed:${params.msg}` }], details: params };
+		},
+	};
+	return echoTool as AgentTool;
+}
+
+// Deterministically wait for an observable condition instead of a fixed sleep that
+// races slow/loaded CI runners. Once the predicate holds, settle briefly so a
+// following "did NOT happen" assertion still has room to catch wrong behavior.
+async function waitFor(predicate: () => boolean, { timeoutMs = 2000, settleMs = 15 } = {}): Promise<void> {
+	const start = performance.now();
+	while (!predicate()) {
+		if (performance.now() - start > timeoutMs) throw new Error("waitFor: predicate not met within timeout");
+		await Bun.sleep(1);
+	}
+	if (settleMs > 0) await Bun.sleep(settleMs);
+}
+
+describe("agentPauseGate", () => {
+	it("holds the next model call while paused and releases it on resume", async () => {
+		const pauseGate = new AgentPauseGate();
+		const mock = createMockModel({ responses: [{ content: ["done"] }] });
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, pauseGate };
+
+		expect(pauseGate.pause()).toBe(true);
+		expect(pauseGate.pause()).toBe(false); // already engaged
+
+		const result = agentLoop([createUserMessage("hi")], context, config, undefined, mock.stream).result();
+		await Bun.sleep(20);
+		expect(mock.calls.length).toBe(0); // parked before the first provider call
+
+		expect(pauseGate.resume()).toBeGreaterThanOrEqual(0);
+		const messages = await result;
+		expect(mock.calls.length).toBe(1);
+		expect(messages[messages.length - 1].role).toBe("assistant");
+	});
+
+	it("holds tool execution at the tool boundary when paused mid-turn", async () => {
+		const pauseGate = new AgentPauseGate();
+		const executed: string[] = [];
+		const mock = createMockModel({
+			responses: [
+				() => {
+					// Engage the gate while the model response is being produced: the
+					// turn's tool batch must park before the tool starts.
+					pauseGate.pause();
+					return { content: [{ type: "toolCall" as const, name: "echo", arguments: { msg: "frozen" } }] };
+				},
+				{ content: ["done"] },
+			],
+		});
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [makeEchoTool(executed)] };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, pauseGate };
+
+		const result = agentLoop([createUserMessage("run echo")], context, config, undefined, mock.stream).result();
+		// Wait for the paused model call to register (deterministic), then the settle
+		// window proves the tool stays parked instead of racing a fixed 20ms sleep.
+		await waitFor(() => mock.calls.length === 1);
+		expect(executed).toEqual([]); // tool parked, not started
+		expect(mock.calls.length).toBe(1); // and no follow-up model call either
+
+		pauseGate.resume();
+		await result;
+		expect(executed).toEqual(["frozen"]);
+		expect(mock.calls.length).toBe(2);
+	});
+
+	it("lets an external abort unwind a parked run without releasing the gate", async () => {
+		const pauseGate = new AgentPauseGate();
+		const mock = createMockModel({ responses: [{ content: ["never sent"] }] });
+		const context: AgentContext = { systemPrompt: ["Test"], messages: [], tools: [] };
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter, pauseGate };
+		const abortController = new AbortController();
+
+		pauseGate.pause();
+		const result = agentLoop(
+			[createUserMessage("hi")],
+			context,
+			config,
+			abortController.signal,
+			mock.stream,
+		).result();
+		await Bun.sleep(20);
+		abortController.abort("user interrupt");
+
+		// The run must terminate as aborted promptly (not stay parked until
+		// resume). The provider request itself carries the aborted signal, so
+		// whether the transport is entered at all is an implementation detail.
+		const messages = await result;
+		const last = messages[messages.length - 1];
+		expect(last.role).toBe("assistant");
+		if (last.role === "assistant") {
+			expect(last.stopReason).toBe("aborted");
+			expect(last.errorMessage).toBe("user interrupt");
+		}
+		expect(pauseGate.paused).toBe(true); // aborting one run never resumes the execution domain
+	});
+
+	it("re-parks a waiter when the gate is re-engaged in the same tick as resume", async () => {
+		const pauseGate = new AgentPauseGate();
+		pauseGate.pause();
+		let released = false;
+		const waiter = pauseGate.waitUntilResumed().then(() => {
+			released = true;
+		});
+
+		pauseGate.resume();
+		pauseGate.pause(); // re-engage before the waiter's microtask runs
+		await Bun.sleep(10);
+		expect(released).toBe(false);
+
+		pauseGate.resume();
+		await waiter;
+		expect(released).toBe(true);
+	});
+
+	it("exposes paused and pausedAt through their getters across a pause cycle", () => {
+		// A fresh instance keeps this off the process-global singleton.
+		const gate = new AgentPauseGate();
+		expect(gate.paused).toBe(false);
+		expect(gate.pausedAt).toBeUndefined();
+
+		const before = Date.now();
+		expect(gate.pause()).toBe(true);
+		expect(gate.paused).toBe(true);
+		const at = gate.pausedAt;
+		expect(typeof at).toBe("number");
+		expect(at).toBeGreaterThanOrEqual(before);
+
+		expect(gate.resume()).toBeGreaterThanOrEqual(0);
+		expect(gate.paused).toBe(false);
+		expect(gate.pausedAt).toBeUndefined();
+	});
+
+	it("reports pause state transitions to onChange subscribers", () => {
+		const pauseGate = new AgentPauseGate();
+		const transitions: boolean[] = [];
+		const unsubscribe = pauseGate.onChange(paused => transitions.push(paused));
+		pauseGate.pause();
+		pauseGate.resume();
+		unsubscribe();
+		pauseGate.pause();
+		pauseGate.resume();
+		expect(transitions).toEqual([true, false]);
+	});
+});

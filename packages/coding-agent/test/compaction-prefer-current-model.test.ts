@@ -1,0 +1,399 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
+import { Agent } from "@veyyon/agent-core";
+import * as compactionModule from "@veyyon/agent-core/compaction";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as AIError from "@veyyon/ai/error";
+import { buildModel } from "@veyyon/catalog/build";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
+import { assistantMsg, userMsg } from "./helpers/e2e-session";
+
+/**
+ * Regression: when `defaultModel` names a model on a different
+ * provider than the current chat, compaction must still pick the active chat's
+ * model first, so an Anthropic chat summarizes on Anthropic rather than billing
+ * and routing through a provider the live conversation never used.
+ */
+describe("compaction prefers the current session model over defaultModel", () => {
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let session: AgentSession;
+	let modelRegistry: ModelRegistry;
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@pi-compact-current-");
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		if (session) {
+			await session.dispose();
+		}
+		authStorage?.close();
+		tempDir.removeSync();
+	});
+
+	it("uses the active Anthropic chat model when defaultModel points at an OpenAI model", async () => {
+		const currentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const configuredDefaultModel = getBundledModel("openai", "gpt-5");
+		if (!currentModel || !configuredDefaultModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" });
+		settings.setDefaultModel(`${configuredDefaultModel.provider}/${configuredDefaultModel.id}`);
+
+		const agent = new Agent({
+			initialState: {
+				model: currentModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		// Both providers have credentials so an "auth failure" wouldn't be the
+		// reason a candidate is skipped — order alone must drive the choice.
+		authStorage.setRuntimeApiKey(currentModel.provider, "anthropic-token");
+		authStorage.setRuntimeApiKey(configuredDefaultModel.provider, "openai-token");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+
+		for (const [userText, assistantText] of [
+			["first question", "first answer"],
+			["second question", "second answer"],
+		] as const) {
+			const user = userMsg(userText);
+			const assistant = assistantMsg(assistantText);
+			session.agent.appendMessage(user);
+			session.sessionManager.appendMessage(user);
+			session.agent.appendMessage(assistant);
+			session.sessionManager.appendMessage(assistant);
+		}
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => ({
+			summary: "ok",
+			shortSummary: "ok short",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 1,
+			details: { provider: model.provider },
+		}));
+
+		await session.compact();
+
+		expect(compactSpy).toHaveBeenCalled();
+		const [, firstCandidate] = compactSpy.mock.calls[0]!;
+		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(`${currentModel.provider}/${currentModel.id}`);
+	});
+
+	it("falls back when the authenticated Bedrock candidate cannot resolve AWS credentials", async () => {
+		const currentModel = getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!currentModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" });
+		settings.setDefaultModel(`${fallbackModel.provider}/${fallbackModel.id}`);
+
+		const agent = new Agent({
+			initialState: {
+				model: currentModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey(currentModel.provider, "bedrock-credentials");
+		authStorage.setRuntimeApiKey(fallbackModel.provider, "anthropic-token");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+
+		for (const [userText, assistantText] of [
+			["first question", "first answer"],
+			["second question", "second answer"],
+		] as const) {
+			const user = userMsg(userText);
+			const assistant = assistantMsg(assistantText);
+			session.agent.appendMessage(user);
+			session.sessionManager.appendMessage(user);
+			session.agent.appendMessage(assistant);
+			session.sessionManager.appendMessage(assistant);
+		}
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => {
+			if (model.provider === currentModel.provider && model.id === currentModel.id) {
+				throw new AIError.AwsCredentialsError("opaque provider setup failure", "resolution");
+			}
+			if (model.provider !== fallbackModel.provider || model.id !== fallbackModel.id) {
+				throw new Error(`Unexpected compaction model ${model.provider}/${model.id}`);
+			}
+			return {
+				summary: "fallback summary",
+				shortSummary: "fallback short summary",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: 42,
+				details: { provider: model.provider },
+			};
+		});
+
+		const result = await session.compact();
+
+		expect(result.summary).toStartWith("fallback summary");
+		expect(compactSpy).toHaveBeenCalledTimes(2);
+		expect(compactSpy.mock.calls.map(([, model]) => `${model.provider}/${model.id}`)).toEqual([
+			`${currentModel.provider}/${currentModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+	});
+
+	it("uses compactionModel only for the summary call and leaves the active model unchanged", async () => {
+		const baseCurrentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const compactionModel = getBundledModel("openai", "gpt-5");
+		if (!baseCurrentModel || !compactionModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+		const currentModel = buildModel({
+			...baseCurrentModel,
+			compactionModel: `${compactionModel.provider}/${compactionModel.id}`,
+			compat: baseCurrentModel.compatConfig,
+		});
+
+		const agent = new Agent({
+			initialState: {
+				model: currentModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey(currentModel.provider, "anthropic-token");
+		authStorage.setRuntimeApiKey(compactionModel.provider, "openai-token");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			// A cross-provider `compactionModel` is only reachable under `any-model`:
+			// `auto` refuses to spend an unrelated provider's credit unattended, which
+			// the last row here asserts from the other side.
+			settings: Settings.isolated({
+				"compaction.keepRecentTokens": 1,
+				"compaction.strategy": "context-full",
+				"compaction.modelFallbackStrategy": "any-model",
+			}),
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+
+		for (const [userText, assistantText] of [
+			["first question", "first answer"],
+			["second question", "second answer"],
+		] as const) {
+			const user = userMsg(userText);
+			const assistant = assistantMsg(assistantText);
+			session.agent.appendMessage(user);
+			session.sessionManager.appendMessage(user);
+			session.agent.appendMessage(assistant);
+			session.sessionManager.appendMessage(assistant);
+		}
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => ({
+			summary: "ok",
+			shortSummary: "ok short",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 1,
+			details: { provider: model.provider },
+		}));
+
+		await session.compact();
+
+		expect(compactSpy).toHaveBeenCalled();
+		const [, firstCandidate] = compactSpy.mock.calls[0]!;
+		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(
+			`${compactionModel.provider}/${compactionModel.id}`,
+		);
+		expect(`${session.model?.provider}/${session.model?.id}`).toBe(`${currentModel.provider}/${currentModel.id}`);
+	});
+
+	/**
+	 * No `/compact` mode may filter the candidate chain by provider.
+	 *
+	 * This replaces a test for the removed `/compact remote` mode, which dropped
+	 * candidates that were not provider-native-remote-capable so an OpenAI model
+	 * would win over a configured Anthropic `compactionModel`. Provider-native
+	 * compaction is gone, so that filtering is gone with it: the configured
+	 * compactionModel is honored for every mode, on every provider. If a mode
+	 * ever starts steering the chain by provider again, this fails.
+	 */
+	it("a mode never overrides the configured compactionModel by provider", async () => {
+		// Active model is OpenAI; compactionModel points at Anthropic. The
+		// configured compaction model must win regardless of the mode.
+		const baseCurrentModel = getBundledModel("openai", "gpt-5");
+		const nonRemoteCompactionModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!baseCurrentModel || !nonRemoteCompactionModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+		const currentModel = buildModel({
+			...baseCurrentModel,
+			compactionModel: `${nonRemoteCompactionModel.provider}/${nonRemoteCompactionModel.id}`,
+			compat: baseCurrentModel.compatConfig,
+		});
+
+		const agent = new Agent({
+			initialState: {
+				model: currentModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey(currentModel.provider, "openai-token");
+		authStorage.setRuntimeApiKey(nonRemoteCompactionModel.provider, "anthropic-token");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"compaction.keepRecentTokens": 1,
+				"compaction.modelFallbackStrategy": "any-model",
+			}),
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+
+		for (const [userText, assistantText] of [
+			["first question", "first answer"],
+			["second question", "second answer"],
+		] as const) {
+			const user = userMsg(userText);
+			const assistant = assistantMsg(assistantText);
+			session.agent.appendMessage(user);
+			session.sessionManager.appendMessage(user);
+			session.agent.appendMessage(assistant);
+			session.sessionManager.appendMessage(assistant);
+		}
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => ({
+			summary: "ok",
+			shortSummary: "ok short",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 1,
+			details: { provider: model.provider },
+		}));
+
+		// A session can only compact once from this state ("Already compacted"),
+		// so the mode-to-strategy mapping itself is covered in compact-modes.test.ts.
+		// What matters here is that the mode does not re-pick the model.
+		await session.compact(undefined, { mode: "summary" });
+
+		expect(compactSpy).toHaveBeenCalled();
+		const [, firstCandidate] = compactSpy.mock.calls[0]!;
+		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(
+			`${nonRemoteCompactionModel.provider}/${nonRemoteCompactionModel.id}`,
+		);
+	});
+
+	/**
+	 * The other arm of the same setting. Under the default `auto` strategy a
+	 * catalog-recommended compaction sibling on ANOTHER provider is not taken:
+	 * compaction fires unattended, and nobody named that provider for this
+	 * session, so the bill would land on an account the operator never chose. The
+	 * recommendation is available and authenticated here, so the only thing
+	 * keeping it out of the chain is the boundary rule.
+	 */
+	it("does not cross a provider boundary for a recommended compaction model under auto", async () => {
+		const baseCurrentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const crossProviderCompactionModel = getBundledModel("openai", "gpt-5");
+		if (!baseCurrentModel || !crossProviderCompactionModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+		const currentModel = buildModel({
+			...baseCurrentModel,
+			compactionModel: `${crossProviderCompactionModel.provider}/${crossProviderCompactionModel.id}`,
+			compat: baseCurrentModel.compatConfig,
+		});
+
+		const agent = new Agent({
+			initialState: { model: currentModel, systemPrompt: ["Test"], tools: [], messages: [] },
+		});
+
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey(currentModel.provider, "anthropic-token");
+		authStorage.setRuntimeApiKey(crossProviderCompactionModel.provider, "openai-token");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" }),
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+
+		for (const [userText, assistantText] of [
+			["first question", "first answer"],
+			["second question", "second answer"],
+		] as const) {
+			const user = userMsg(userText);
+			const assistant = assistantMsg(assistantText);
+			session.agent.appendMessage(user);
+			session.sessionManager.appendMessage(user);
+			session.agent.appendMessage(assistant);
+			session.sessionManager.appendMessage(assistant);
+		}
+
+		// The skipped candidate is genuinely reachable: authenticated, in the
+		// registry, and named by the model's own row. Without this the row would
+		// pass for the wrong reason on any day the registry stopped resolving it.
+		const available = modelRegistry.getAvailable();
+		expect(
+			available.some(
+				candidate =>
+					candidate.provider === crossProviderCompactionModel.provider &&
+					candidate.id === crossProviderCompactionModel.id,
+			),
+		).toBe(true);
+
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, model) => ({
+			summary: "ok",
+			shortSummary: "ok short",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 1,
+			details: { provider: model.provider },
+		}));
+
+		await session.compact();
+
+		expect(compactSpy).toHaveBeenCalled();
+		const [, firstCandidate] = compactSpy.mock.calls[0]!;
+		expect(`${firstCandidate.provider}/${firstCandidate.id}`).toBe(`${currentModel.provider}/${currentModel.id}`);
+	});
+});

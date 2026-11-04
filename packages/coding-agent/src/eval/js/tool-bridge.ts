@@ -1,0 +1,237 @@
+import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
+import { schemaDefinesProperty } from "@veyyon/agent-core/tool-normalization";
+import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
+import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
+import { validateToolArguments } from "@veyyon/ai/utils/validation";
+import { errorMessage, isRecord } from "@veyyon/utils";
+import { INTENT_FIELD } from "@veyyon/wire";
+import type { ToolSession } from "../../tools";
+import { TOOL_EXECUTION_ENTRIES } from "../../tools/core/execution-registry";
+import { ToolError } from "../../tools/core/tool-errors";
+import { EVAL_AGENT_BRIDGE_NAME } from "../agent-bridge-name";
+import { EVAL_BUDGET_BRIDGE_NAME, type EvalBudgetResult, runEvalBudget } from "../budget-bridge";
+import { EVAL_COMPLETION_BRIDGE_NAME, runEvalCompletion } from "../completion-bridge";
+import { EVAL_CONCURRENCY_BRIDGE_NAME, type EvalConcurrencyResult, runEvalConcurrency } from "../concurrency-bridge";
+import type { EvalBridgeOptions } from "../types";
+import type { JsStatusEvent } from "./shared/types";
+
+export type { JsStatusEvent } from "./shared/types";
+
+interface ToolBridgeOptions extends EvalBridgeOptions {
+	entry?: "eval.tool-bridge" | "cli.worker";
+}
+
+type ToolValue =
+	| string
+	| EvalBudgetResult
+	| EvalConcurrencyResult
+	| {
+			text: string;
+			details?: unknown;
+			images?: Array<{ mimeType: string; data: string }>;
+			hasError?: boolean;
+	  };
+function toolResultHasError(result: AgentToolResult): boolean {
+	if ((result as { isError?: unknown }).isError === true) {
+		return true;
+	}
+	if (!(result.details && typeof result.details === "object")) {
+		return false;
+	}
+	return (result.details as { isError?: unknown }).isError === true;
+}
+
+function getTool(session: ToolSession, name: string): AgentTool {
+	const tool = session.getToolByName?.(name);
+	if (!tool) {
+		throw new ToolError(`Unknown tool from js runtime: ${name}`);
+	}
+	return tool;
+}
+
+function normalizeArgs(args: unknown): unknown {
+	if (!isRecord(args)) {
+		return args;
+	}
+	const record = { ...(args as Record<string, unknown>) };
+	if (record[INTENT_FIELD] === undefined) {
+		record[INTENT_FIELD] = "js prelude";
+	}
+	return record;
+}
+
+function executionArgsForTool(tool: AgentTool, args: unknown): unknown {
+	if (!isRecord(args) || schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD) || !Object.hasOwn(args, INTENT_FIELD)) {
+		return args;
+	}
+	const { [INTENT_FIELD]: _intent, ...executionArgs } = args;
+	return executionArgs;
+}
+
+/**
+ * Validate cell-authored tool arguments against the tool's own schema.
+ *
+ * WHY: every other caller of a registered tool passes through
+ * `validateToolArguments`: the agent loop does it before `tool.execute`, so a
+ * model that omits a required field gets a tool result naming the field. This
+ * bridge called `execute` directly, so a cell was the one caller that could
+ * hand a tool a shape its schema rejects. `tool.ask({ questions: [{ id,
+ * options }] })` reached the ask dialog with no question text, and the render
+ * pass threw an uncaught `TypeError` that killed the session and every
+ * spawned agent under it. Cell code is model-authored text with the same failure
+ * modes as a tool call, so it gets the same gate, and the same repairs, so a
+ * numeric string for a number argument keeps working.
+ *
+ * The bridge is the single choke point for all four transports (the JS worker,
+ * the kernel HTTP bridge that serves Python and Ruby, the browser tab worker
+ * and cmux), so validating here covers every one of them.
+ */
+function validateEvalToolArguments(tool: AgentTool, name: string, toolCallId: string, args: unknown): unknown {
+	if (!isRecord(args)) {
+		if (tool.lenientArgValidation) return args;
+		throw new ToolError(
+			`Tool "${name}" expects an object of arguments, received ${args === null ? "null" : typeof args}.`,
+		);
+	}
+	// Intent belongs to the tool contract only when the tool's own schema declares it.
+	// Otherwise it is bridge metadata: keep it for status, but exclude it from validation.
+	const declaresIntent = schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD);
+	const intent = args[INTENT_FIELD];
+	const { [INTENT_FIELD]: _intent, ...argsWithoutIntent } = args;
+	const schemaArgs = declaresIntent ? args : argsWithoutIntent;
+	try {
+		const validated = validateToolArguments(tool, {
+			type: "toolCall",
+			id: toolCallId,
+			name,
+			arguments: schemaArgs,
+		});
+		return declaresIntent || intent === undefined ? validated : { ...validated, [INTENT_FIELD]: intent };
+	} catch (error) {
+		if (tool.lenientArgValidation) return args;
+		throw new ToolError(errorMessage(error));
+	}
+}
+
+function summarizeToolResult(
+	name: string,
+	args: unknown,
+	result: AgentToolResult,
+	text: string,
+	hasError: boolean,
+): JsStatusEvent {
+	const record = (args && typeof args === "object" ? (args as Record<string, unknown>) : {}) as Record<
+		string,
+		unknown
+	>;
+	const details = (
+		result.details && typeof result.details === "object" ? (result.details as Record<string, unknown>) : {}
+	) as Record<string, unknown>;
+	const safePreview = redactUsageText(text, []).slice(0, 500);
+	const withError = (event: JsStatusEvent): JsStatusEvent =>
+		hasError ? { ...event, hasError: true, error: safePreview } : event;
+
+	switch (name) {
+		case "read":
+			return withError({ op: "read", path: record.path, chars: text.length, preview: safePreview });
+		case "write":
+			return withError({
+				op: "write",
+				path: record.path,
+				chars: typeof record.content === "string" ? record.content.length : 0,
+			});
+		case "search": {
+			const searchDetails = isRecord(details.result) ? details.result : {};
+			return withError({
+				op: "search",
+				pattern: record.input,
+				path: record.path,
+				count: searchDetails.matchCount ?? searchDetails.fileCount,
+				matches: Array.isArray(searchDetails.files) ? searchDetails.files.slice(0, 20) : undefined,
+			});
+		}
+		case "bash":
+			return withError({
+				op: "run",
+				cmd: record.command,
+				code: typeof details.exitCode === "number" ? details.exitCode : undefined,
+				output: safePreview,
+			});
+		default:
+			return withError({ op: name, chars: text.length });
+	}
+}
+
+export async function callSessionTool(name: string, args: unknown, options: ToolBridgeOptions): Promise<ToolValue> {
+	if (name === EVAL_COMPLETION_BRIDGE_NAME) {
+		return await runEvalCompletion(args, options);
+	}
+	if (name === EVAL_AGENT_BRIDGE_NAME) {
+		// Loaded on demand. `agent-bridge` runs a real spawned agent and pulls the MCP manager, task
+		// discovery and the prompt registry with it; an eval that never calls `agent()` should not
+		// pay for any of that. This branch already awaited, so deferring costs nothing, and a
+		// failure to load throws here exactly as a missing symbol would have.
+		const { runEvalAgent } = await import("../agent-bridge");
+		return await runEvalAgent(args, options);
+	}
+	if (name === EVAL_BUDGET_BRIDGE_NAME) {
+		return await runEvalBudget(args, options);
+	}
+	if (name === EVAL_CONCURRENCY_BRIDGE_NAME) {
+		return runEvalConcurrency(args, options);
+	}
+	// Worker IPC bridge entry point: worker threads / subprocesses (e.g. JS_EVAL_WORKER, JS_EVAL_PROCESS)
+	// execute tools via IPC calls to callSessionTool. Enforce the refusal fence at entry in case the
+	// target session tool was unwrapped or context was omitted.
+	const tool = getTool(options.session, name);
+	const entry = TOOL_EXECUTION_ENTRIES[options.entry ?? "eval.tool-bridge"];
+	const context = options.session.getToolContext?.() ?? { settings: options.session.settings };
+	entry.assert(tool, context);
+	const normalizedArgs = normalizeArgs(args);
+	const toolCallId = `js-${name}-${crypto.randomUUID()}`;
+	try {
+		// The registered tool is approval-wrapped, and the wrapper reads the whole
+		// policy off this context. Omitting it does not skip a prompt, it decides
+		// there is nothing to prompt about: no settings, so no `tools.approval`
+		// deny; no plan mode; no cwd or secret boundary; no standing session
+		// denial. An eval snippet is model-authored text, which is exactly the
+		// caller those controls exist for.
+		const statusArgs = validateEvalToolArguments(tool, name, toolCallId, normalizedArgs);
+		const executionArgs = executionArgsForTool(tool, statusArgs);
+		const result = await entry.invoke(tool, toolCallId, executionArgs, options.signal, undefined, context);
+		const textBlocks = result.content.filter(
+			(content): content is { type: "text"; text: string } =>
+				content.type === "text" && typeof content.text === "string",
+		);
+		const imageBlocks = result.content.filter(
+			(content): content is { type: "image"; mimeType: string; data: string } =>
+				content.type === "image" && typeof content.mimeType === "string" && typeof content.data === "string",
+		);
+		const text = textBlocks.map(block => block.text).join("");
+		const hasError = toolResultHasError(result);
+		options.emitStatus?.(summarizeToolResult(name, statusArgs, result, text, hasError));
+		if (result.details === undefined && imageBlocks.length === 0 && !hasError) {
+			return text;
+		}
+		const value: Exclude<ToolValue, string> = {
+			text,
+			details: result.details,
+		};
+		if (imageBlocks.length > 0) {
+			value.images = imageBlocks.map(block => ({
+				mimeType: block.mimeType,
+				data: block.data,
+			}));
+		}
+		if (hasError) {
+			value.hasError = true;
+		}
+		return value;
+	} catch (error) {
+		options.emitStatus?.({
+			op: name,
+			error: redactUsageText(errorMessage(error), []),
+		});
+		throw error;
+	}
+}

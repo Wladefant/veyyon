@@ -1,0 +1,22 @@
+# Acknowledgements
+
+Veyyon incorporates ideas and code from upstream and peer projects.
+
+- **oh-my-pi** ([can1357/oh-my-pi](https://github.com/can1357/oh-my-pi)), under the MIT license. Veyyon
+  is a source fork of oh-my-pi: the TypeScript/Bun agent loop and TUI, the Rust natives (search, the
+  shell, the PTY), the hashline edit engine, provider breadth, role routing, session-tree work, and
+  edit ergonomics all come from it. Incorporated MIT code keeps its permission notice; see
+  the repository `LICENSE`.
+- **codex**, by OpenAI, under the Apache 2.0 license. oh-my-pi and Veyyon keep the codex
+  `apply_patch` patch format and parts of the agent-loop shape as an independent TypeScript
+  reimplementation, see `NOTICE` for which files are format-compatible versus which
+  vendor Apache 2.0 code (the OpenAI wire types and the Playwright ARIA-snapshot bundle do; the
+  `apply_patch` parser and the Codex backend client do not).
+- **OpenCode**, under the MIT license. Veyyon studies its plan/build workflow, project memory, compact
+  command, and file-context UI ideas.
+- **Lossless Claw**, under the MIT license. Veyyon studies its summary DAG, fresh-tail compaction, and
+  compacted-history inspection tools.
+- **command-code**, by Langbase. command-code is proprietary. Veyyon only studies observable mechanisms
+  clean-room, copying no code or bundled implementation text.
+
+Legal credits and upstream notices are in the repository `LICENSE`, `NOTICE`, and `UPSTREAM.md`.

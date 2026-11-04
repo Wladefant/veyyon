@@ -1,0 +1,219 @@
+/**
+ * The process entry point loads 34 modules, and nothing may quietly make that 1461.
+ *
+ * `src/cli.ts` is what the `veyyon` binary runs. Everything it imports STATICALLY is parsed and
+ * evaluated before the first argument is even looked at, on every invocation, including
+ * `veyyon --version` and the worker re-entries that spawn dozens of times in a session. Everything
+ * it reaches through `await import(...)` is paid for only by the code path that asks for it.
+ *
+ * That boundary is the whole design of the file, and it is stated in prose in three places: the
+ * NOTE at the top of `tools/index.ts` says the boot path never parses a tool implementation it does
+ * not activate, `cli.ts` explains why `.env` loading and worker dispatch happen inside `runCli`
+ * rather than at module scope, and the 153 `await import(` sites across the package are the design
+ * carried out. Nothing measured it. A single convenience import in `cli.ts`, the kind an editor
+ * offers when you type a symbol name, pulls the settings store, the theme, the session and its
+ * whole graph onto the boot path, and the only symptom is that startup got slower.
+ *
+ * WHAT THE NUMBERS ARE. `cli.ts` reaches 39 modules. `main.ts`, one dynamic import away, reaches
+ * 1468, and `sdk.ts` reaches 1421. So the lazy boundary is not decorative: it holds back more than a
+ * thousand modules the entry never parses, and the assertions below say that in both directions, as
+ * a ceiling on the entry and as a named list of what must stay off it.
+ *
+ * WHY A NAMED LIST AND NOT ONLY A CEILING. A ceiling catches the big regression and says nothing
+ * about which edge caused it. The named absences point at the fix: if `config/settings.ts` appears
+ * on the boot graph, the import to remove is the one that named a setting, whatever the count says.
+ */
+
+import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { PACKAGES, reach, reachedNames } from "../helpers/module-reach-gate";
+
+/**
+ * What `src/cli.ts` costs before it does anything, measured 2026-07-27 with the workspace resolved
+ * to source.
+ *
+ * This is an upper bound, so the floor below is what makes it mean something: a resolution table
+ * that stopped resolving would report a handful of modules and satisfy this while measuring nothing.
+ *
+ * 35 from 2026-07-27, one more than the 34 measured the same day. The module is `@veyyon/utils/json`,
+ * reached through `file-lock.ts`, which used to write `tryParseJson` out by hand as a try/catch around
+ * `JSON.parse`. The lock file it reads is JSON, so the parse is real work on this path either way; what
+ * changed is that the one owner does it. Raised deliberately, and only by the one module the owner
+ * costs: `json.ts` imports `type-guards` and nothing else.
+ *
+ * 36 from 2026-08-04. The module is `@veyyon/utils/cli-exit-codes`, reached through
+ * `cli/exit-codes.ts`, and it exists because the two places that decide what a command-line mistake
+ * exits with had disagreed: the root-flag path returned 2 and the command framework returned 1, so
+ * `veyyon --nope` and `veyyon config --nope` reported the same mistake with different statuses. The
+ * alternative to the edge is a second copy of the literal, which is the one-place violation this tree
+ * fails elsewhere.
+ *
+ * MEASURED, because a raise argued only on merit is how a ceiling stops meaning anything. The
+ * marginal cost of one zero-import leaf on this graph is BELOW THE MEASUREMENT FLOOR of a loaded
+ * machine, in both clocks and in both directions. Two arms, one importing a one-line constant module
+ * and one inlining the same constant, order-balanced so a per-block warmup lands on both equally:
+ * 240 spawns per arm gave 29.59 ms vs 30.06 ms of wall per spawn, and 300 spawns per arm gave
+ * 10.93 ms vs 11.27 ms of user+sys CPU per spawn. The arm WITH the extra module measured faster in
+ * both, which is the honest way of saying the cost is under about 0.35 ms and its sign does not
+ * resolve. An earlier unbalanced run of the same arms reported +5.3 ms; that was block-order bias,
+ * not a cost, and it is recorded here because it is the trap this measurement is easy to fall into.
+ *
+ * So the leaf is admitted on the same terms as `json.ts` above: one module, zero imports of its own,
+ * so the edge cannot grow, and no measurable time. A raise for a module that pulls a graph behind it
+ * is a different question and this precedent does not cover it.
+ *
+ * 37 from 2026-08-31, two modules above the 35 the graph measured just before it and one above the
+ * ceiling that stood over it. The modules are `cli/first-frame-replay-entry.ts` and
+ * `cli/first-frame-replay.ts`, the first-frame replay that writes the previous bare launch's
+ * recorded card to fd 1 during the entry's own evaluation. They are on this path on purpose: the
+ * write only beats the import graph from the first import of `cli.ts`, so moving either behind an
+ * `await import(...)` deletes the feature. The pair reaches `node:fs`, `node:os` and `node:path`
+ * and one type-only import of `@veyyon/tui/tui`, which erases, so the edge cannot grow into the
+ * package the way a value import would.
+ *
+ * 38 from 2026-09-29: `@veyyon/utils/log-file`, the rotating profile log that replaced `winston` and
+ * `winston-daily-rotate-file`. `@veyyon/utils/logger` is on this path and writes through it. Its
+ * imports are `node:fs`, `node:path`, a type-only `node:zlib`, `./app-identity` and `./fs-error`, all
+ * already here, so the edge cannot grow. The count sees one module more; the process loads 29 npm
+ * modules fewer, since the walk never counted `winston`, which the logger imported on this same path.
+ *
+ * 39 from 2026-10-04: `@veyyon/utils/local-time`, the local date and clock time read from the C
+ * library's `localtime_r` (and `GetLocalTime` on Windows). The logger stamps its lines and names its
+ * day file through it instead of through a `Date`, whose first local-time read builds the engine's
+ * ICU time zone cache: 2.2 ms and 1.9 MiB of anonymous memory on the path to the first frame. Its one
+ * import is `bun:ffi`, a runtime builtin the walk does not count, so the edge cannot grow.
+ */
+const BOOT_CEILING = 39;
+
+/** The same measurement as a floor, so a broken walk fails instead of passing quietly. */
+const BOOT_FLOOR = 25;
+
+/**
+ * Modules that must be reached LAZILY or not at all, with what each one costs.
+ *
+ * Every entry is a module a plausible edit would pull onto the boot path. `main.ts` is the obvious
+ * one and the reason `cli.ts` ends with `await import("./main")` rather than a static import.
+ * `config/settings.ts` and `theme/theme.ts` are the two most-imported modules in the package,
+ * so any helper that touches a setting or a colour drags them along. The tool implementations are
+ * the claim `tools/index.ts` makes in prose.
+ */
+const OFF_THE_BOOT_PATH = [
+	"coding-agent/src/main.ts",
+	"coding-agent/src/sdk.ts",
+	"coding-agent/src/index.ts",
+	"coding-agent/src/config/settings.ts",
+	"coding-agent/src/config/settings-schema.ts",
+	"coding-agent/src/theme/theme.ts",
+	"coding-agent/src/session/agent-session.ts",
+	"coding-agent/src/session/session-manager.ts",
+	"coding-agent/src/tools/index.ts",
+	"coding-agent/src/tools/fs/read.ts",
+	"coding-agent/src/tools/shell/bash.ts",
+	"coding-agent/src/tools/search/search.ts",
+	"coding-agent/src/edit/index.ts",
+] as const;
+
+/**
+ * Modules that ARE on the boot path, so a walk that resolved nothing cannot pass the rule above.
+ *
+ * These four are the entry's real job: parse enough argv to find the profile, dispatch a worker
+ * re-entry, and know which subcommand names exist so a typo gets a "did you mean".
+ */
+const ON_THE_BOOT_PATH = [
+	"coding-agent/src/cli/profile-bootstrap.ts",
+	"coding-agent/src/cli/flag-tables.ts",
+	"coding-agent/src/cli-commands.ts",
+	"coding-agent/src/worker-args.ts",
+	"coding-agent/src/cli/first-frame-replay-entry.ts",
+] as const;
+
+/**
+ * The one module under `tools/` the boot path may reach.
+ *
+ * `tools/core/approval-modes.ts` is the approval-mode value list, and `cli/flag-tables.ts` imports it to
+ * validate `--approval`. Its own header says it is kept free of runtime dependencies for exactly
+ * this reason, so it reaches nothing and costs one module. Any OTHER `tools/` module appearing here
+ * means a tool implementation is being parsed at startup.
+ */
+const BOOT_TOOL_MODULES = ["coding-agent/src/tools/core/approval-modes.ts"];
+
+/** A `/`-written path in the shape `reachedNames` produces, so the lists read the same on Windows. */
+function asPath(name: string): string {
+	return name.split("/").join(path.sep);
+}
+
+describe("the boot path stays thin", () => {
+	const boot = reachedNames("cli.ts");
+
+	/**
+	 * The ceiling. A failure means something on `cli.ts`'s static import graph grew; the list the
+	 * next test prints is where to look.
+	 */
+	it(`cli.ts reaches at most ${BOOT_CEILING} modules with the workspace resolved`, () => {
+		expect(reach("cli.ts")).toBeLessThanOrEqual(BOOT_CEILING);
+	});
+
+	/**
+	 * The floor, which is the half that makes the ceiling honest. Every other assertion in this file
+	 * is an upper bound or an absence, and all of them pass against a walk that resolves nothing.
+	 */
+	it("and really walks the graph rather than resolving nothing", () => {
+		expect(reach("cli.ts")).toBeGreaterThanOrEqual(BOOT_FLOOR);
+
+		for (const name of ON_THE_BOOT_PATH) {
+			expect(boot, `${name} is part of the entry's own job and must be reachable`).toContain(asPath(name));
+		}
+	});
+
+	/**
+	 * The named absences. Each one is a module whose arrival would be a real regression, and the
+	 * message says what it costs so the failure explains itself.
+	 */
+	it.each(OFF_THE_BOOT_PATH.map(name => [name] as const))("%s is not on the boot path", name => {
+		expect(
+			boot,
+			`${name} is reached statically from cli.ts. Startup now parses it on every invocation, including --version. Take it through await import() at the point of use.`,
+		).not.toContain(asPath(name));
+	});
+
+	/**
+	 * And no tool implementation at all, stated as a shape rather than a list of names, because a
+	 * new tool would not be in any list written today.
+	 */
+	it("parses no tool implementation at startup", () => {
+		const toolModules = boot.filter(name => name.startsWith(`coding-agent${path.sep}src${path.sep}tools${path.sep}`));
+
+		expect(toolModules).toEqual(BOOT_TOOL_MODULES.map(asPath));
+	});
+
+	/**
+	 * The contrast that makes the boundary worth guarding.
+	 *
+	 * `main.ts` is ONE `await import` away from `cli.ts` and reaches more than a thousand modules
+	 * that `cli.ts` does not. If that count ever collapsed it would mean either that the boot path had
+	 * absorbed the runtime or that the lazy boundary had stopped separating anything, and both are
+	 * worth failing on. It is a count of modules held back rather than a ratio, so a runtime graph
+	 * that sheds modules it never needed at launch does not read as a collapse.
+	 */
+	it("holds back more than a thousand modules behind one dynamic import", () => {
+		const bootNames = new Set(boot);
+		const heldBack = reachedNames("main.ts").filter(name => !bootNames.has(name));
+
+		expect(heldBack.length).toBeGreaterThan(1000);
+	});
+});
+
+describe("the reach measurement is the one the other gates use", () => {
+	/**
+	 * The names this suite compares against are relative to `packages/`, which is the shape the
+	 * shared helper produces. A helper that changed that shape would make every `toContain` above
+	 * miss silently, and an absence assertion that can never match is the failure mode this whole
+	 * file exists to prevent.
+	 */
+	it("names modules relative to the packages directory", () => {
+		const boot = reachedNames("cli.ts");
+
+		expect(boot).toContain(path.join("coding-agent", "src", "cli.ts"));
+		expect(PACKAGES.endsWith(`${path.sep}packages`)).toBe(true);
+	});
+});

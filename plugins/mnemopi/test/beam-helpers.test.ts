@@ -1,0 +1,226 @@
+import { Database } from "bun:sqlite";
+import { describe, expect, it } from "bun:test";
+import {
+	buildFtsQuery,
+	decodeVector,
+	detectLanguage,
+	encodeVector,
+	generateId,
+	generateStableId,
+	inMemoryVecSearch,
+	lexicalRelevance,
+	memoryRowMetadata,
+	metadataJson,
+	normalizeImportance,
+	normalizeMetadata,
+	strictFactMatches,
+	workingMemoryVecSearch,
+} from "@veyyon/mnemopi/core/beam/helpers";
+import { cjkFtsTerms, ftsQueryTerms, hasCjk, recallTokens } from "../src/util/regex";
+import { useMnemopiTestEnv } from "./setup";
+
+useMnemopiTestEnv();
+
+describe("beam helper ids, weights, and metadata", () => {
+	it("generates unique timed ids and deterministic stable ids", () => {
+		const now = new Date("2024-01-02T03:04:05.000Z");
+
+		expect(generateId("hello", now)).toHaveLength(16);
+		expect(generateId("hello", now)).not.toBe(generateId("hello", now));
+		expect(generateId("hello", now)).not.toBe(generateId("hello", new Date("2024-01-02T03:04:06.000Z")));
+		expect(generateStableId("hello", "conversation")).toBe(generateStableId("hello", "conversation"));
+		expect(generateStableId("hello", "conversation")).not.toBe(generateStableId("hello", "other"));
+	});
+
+	// The hybrid-weight normalizer moved to `config.normalizedRecallWeights`, the one owner.
+	// Its coverage moved with it, to `test/recall-weights-have-one-normalizer.test.ts`.
+	it("clamps importance metadata inputs", () => {
+		expect(normalizeImportance(1.5)).toBe(1);
+		expect(normalizeImportance(-0.1)).toBe(0);
+		expect(normalizeMetadata('{"ok":true,"bad":null,"nan":null,"nested":{"n":2}}')).toEqual({
+			ok: true,
+			bad: null,
+			nan: null,
+			nested: { n: 2 },
+		});
+	});
+});
+
+describe("beam lexical and FTS helpers", () => {
+	it("builds stopword-filtered FTS terms with query-side synonyms", () => {
+		expect(recallTokens("What is my branding preference for the professional URL? 123")).toEqual([
+			"branding",
+			"preference",
+			"professional",
+			"url",
+		]);
+		expect(ftsQueryTerms("branding preference")).toEqual([
+			'"branding"',
+			'"brand"',
+			'"positioning"',
+			'"identity"',
+			'"wording"',
+			'"preference"',
+			'"prefer"',
+			'"prefers"',
+			'"want"',
+			'"wants"',
+			'"reject"',
+			'"rejects"',
+			'"avoid"',
+			'"grounded"',
+		]);
+		expect(buildFtsQuery('say "hello"')).toBe('"say" OR "hello"');
+	});
+
+	it("matches lexical, strict fact, and CJK queries conservatively", () => {
+		const tokens = recallTokens("telemetry api latency");
+		expect(lexicalRelevance(tokens, "telemetry_api_latency_ms should stay below 200", "telemetry api latency")).toBe(
+			1,
+		);
+		expect(
+			lexicalRelevance(recallTokens("purple quantum oatmeal"), "telemetry_api_latency_ms", "purple quantum oatmeal"),
+		).toBe(0);
+		expect(strictFactMatches("where is hermes profile", "Hermes profile URL is https://example.test/hermes")).toBe(
+			true,
+		);
+		expect(
+			strictFactMatches("where is the unrelated thing", "Hermes profile URL is https://example.test/hermes"),
+		).toBe(false);
+		expect(hasCjk("東京で会う")).toBe(true);
+		expect(cjkFtsTerms("東京東京")).toEqual(["東", "京", '"東京"', '"京東"']);
+		expect(lexicalRelevance([], "明日は東京で会議", "東京")).toBe(1);
+	});
+
+	it("scores query-synonym partials and fractional CJK overlap", () => {
+		// "preference" is absent but its synonym "prefers" is present -> 0.75 partial.
+		expect(lexicalRelevance(["preference"], "the user prefers dark mode", "")).toBe(0.75);
+		// 2 of the 4 query CJK chars appear in the content -> 0.5 fractional overlap.
+		expect(lexicalRelevance([], "東京", "東京大阪")).toBe(0.5);
+	});
+});
+
+describe("beam language helpers", () => {
+	it("detects supported languages without external dependencies", () => {
+		expect(detectLanguage("Привет, это мой проект и это важно")).toBe("ru");
+		expect(detectLanguage("ich bin sehr gern dabei und das ist gut")).toBe("de");
+		expect(detectLanguage("recuerda que siempre usa este estilo")).toBe("es");
+		expect(detectLanguage("plain English text")).toBe("en");
+	});
+
+	it("detects languages via secondary marker and accent branches", () => {
+		// 2-4 Cyrillic chars alone are inconclusive; two Russian marker words tip it to ru.
+		expect(detectLanguage("code: да не please")).toBe("ru");
+		// A German umlaut short-circuits before the marker scan.
+		expect(detectLanguage("Kaffee über alles")).toBe("de");
+		// A Spanish-only accent (ñ) short-circuits before the Spanish marker scan.
+		expect(detectLanguage("el señor")).toBe("es");
+		// Italian grave accents plus two Italian markers resolve to it.
+		expect(detectLanguage("questo è il caffè")).toBe("it");
+		// A lone Italian accent with fewer than two markers falls through to en.
+		expect(detectLanguage("città")).toBe("en");
+	});
+});
+
+describe("beam metadata normalization", () => {
+	it("coerces malformed, non-object, and non-finite metadata inputs", () => {
+		// Unparseable JSON string and non-object top-level values collapse to {}.
+		expect(normalizeMetadata("not json{")).toEqual({});
+		expect(normalizeMetadata([1, 2])).toEqual({});
+		expect(normalizeMetadata(42)).toEqual({});
+		// Array values are normalized element-by-element, dropping non-finite numbers
+		// while keeping strings and nulls.
+		expect(normalizeMetadata({ tags: [1, Number.POSITIVE_INFINITY, "a", null] })).toEqual({ tags: [1, "a", null] });
+		// metadataJson serializes the normalized object, dropping the NaN key.
+		expect(metadataJson({ a: 1, drop: Number.NaN })).toBe('{"a":1}');
+	});
+
+	it("reads a row's metadata from metadata_json first, then metadata", () => {
+		expect(memoryRowMetadata({ metadata_json: '{"k":"v"}' })).toEqual({ k: "v" });
+		expect(memoryRowMetadata({ metadata: { n: 1 } })).toEqual({ n: 1 });
+	});
+});
+
+describe("beam vector fallback helpers", () => {
+	it("encodes, decodes, and searches episodic fallback vectors", () => {
+		const db = new Database(":memory:");
+		try {
+			db.run("CREATE TABLE episodic_memory (rowid INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, content TEXT)");
+			db.run("CREATE TABLE memory_embeddings (memory_id TEXT PRIMARY KEY, embedding_json TEXT)");
+			db.query("INSERT INTO episodic_memory (id, content) VALUES (?, ?)").run("same", "same vector");
+			db.query("INSERT INTO episodic_memory (id, content) VALUES (?, ?)").run("orthogonal", "orthogonal vector");
+			db.query("INSERT INTO memory_embeddings (memory_id, embedding_json) VALUES (?, ?)").run(
+				"same",
+				encodeVector([1, 0]),
+			);
+			db.query("INSERT INTO memory_embeddings (memory_id, embedding_json) VALUES (?, ?)").run(
+				"orthogonal",
+				encodeVector([0, 1]),
+			);
+
+			expect(decodeVector("[1,0]")).toEqual([1, 0]);
+			expect(decodeVector("[1,null]")).toBeNull();
+			expect(inMemoryVecSearch(db, [1, 0], 2)).toEqual([
+				{ rowid: 1, distance: 0 },
+				{ rowid: 2, distance: 1 },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("searches working-memory fallback vectors and skips expired rows", () => {
+		const db = new Database(":memory:");
+		try {
+			db.run(
+				"CREATE TABLE working_memory (id TEXT PRIMARY KEY, content TEXT, superseded_by TEXT, valid_until TEXT)",
+			);
+			db.run("CREATE TABLE memory_embeddings (memory_id TEXT PRIMARY KEY, embedding_json TEXT)");
+			db.query("INSERT INTO working_memory (id, content, superseded_by, valid_until) VALUES (?, ?, NULL, NULL)").run(
+				"same",
+				"same",
+			);
+			db.query("INSERT INTO working_memory (id, content, superseded_by, valid_until) VALUES (?, ?, NULL, ?)").run(
+				"expired",
+				"expired",
+				"2024-01-01T00:00:00.000Z",
+			);
+			db.query("INSERT INTO memory_embeddings (memory_id, embedding_json) VALUES (?, ?)").run(
+				"same",
+				encodeVector([1, 0]),
+			);
+			db.query("INSERT INTO memory_embeddings (memory_id, embedding_json) VALUES (?, ?)").run(
+				"expired",
+				encodeVector([1, 0]),
+			);
+
+			expect(workingMemoryVecSearch(db, [1, 0], 10, new Date("2024-01-02T00:00:00.000Z"))).toEqual([
+				{ id: "same", sim: 1 },
+			]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("returns empty on a DB without embedding tables instead of masking errors", () => {
+		// Law-10 gate contract: table absence is a checked, loud-by-design empty
+		// result; anything else (broken handle, corrupt schema) must propagate.
+		const db = new Database(":memory:");
+		try {
+			expect(inMemoryVecSearch(db, [1, 0], 2)).toEqual([]);
+			expect(workingMemoryVecSearch(db, [1, 0], 10, new Date())).toEqual([]);
+			expect(inMemoryVecSearch(db, [], 2)).toEqual([]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("propagates real DB failures instead of returning empty", () => {
+		const db = new Database(":memory:");
+		db.close();
+		// A closed handle is a broken DB, not an uninitialized one: the old
+		// blanket catch would have rendered this as "no results".
+		expect(() => inMemoryVecSearch(db, [1, 0], 2)).toThrow();
+		expect(() => workingMemoryVecSearch(db, [1, 0], 10, new Date())).toThrow();
+	});
+});

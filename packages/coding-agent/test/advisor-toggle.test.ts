@@ -1,0 +1,332 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { Agent, type AgentMessage } from "@veyyon/agent-core";
+import type { Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { getProjectAgentDir, TempDir } from "@veyyon/utils";
+
+describe("AgentSession advisor toggle", () => {
+	let sharedDir: TempDir;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
+	let model: Model;
+	let replacementModel: Model;
+
+	beforeAll(async () => {
+		sharedDir = TempDir.createSync("@pi-advisor-toggle-shared-");
+		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.setRuntimeApiKey("openrouter", "test-key");
+		modelRegistry = new ModelRegistry(authStorage);
+		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const replacement = getBundledModel("openai", "gpt-4o-mini");
+		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		if (!replacement) throw new Error("Expected built-in OpenAI model to exist");
+		model = bundled;
+		replacementModel = replacement;
+	});
+
+	afterAll(async () => {
+		authStorage.close();
+		try {
+			await sharedDir.remove();
+		} catch {}
+	});
+
+	let tempDir: TempDir;
+	let session: AgentSession;
+	let sessionManager: SessionManager;
+
+	beforeEach(async () => {
+		tempDir = TempDir.createSync("@pi-advisor-toggle-");
+		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+		});
+	});
+
+	afterEach(async () => {
+		await session.dispose();
+		try {
+			await tempDir.remove();
+		} catch {}
+	});
+
+	it("starts with advisor disabled", () => {
+		expect(session.isAdvisorActive()).toBe(false);
+		expect(session.isAdvisorEnabled()).toBe(false);
+		expect(session.formatAdvisorStatus()).toBe("Advisor is disabled.");
+	});
+
+	it("toggle enables the advisor and runtime", () => {
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
+		const active = session.toggleAdvisorEnabled();
+		expect(active).toBe(true);
+		expect(session.isAdvisorActive()).toBe(true);
+		expect(session.isAdvisorEnabled()).toBe(true);
+		expect(session.formatAdvisorStatus()).toContain("Advisor is enabled (anthropic/claude-sonnet-4-5)");
+	});
+
+	it("explicit enable rebuilds the runtime when the advisor helper's model changes", () => {
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${model.provider}/${model.id}` },
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(model.id);
+
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${replacementModel.provider}/${replacementModel.id}` },
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+	});
+
+	it("refreshes the live advisor when the advisor helper setting changes", () => {
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${model.provider}/${model.id}` },
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(model.id);
+
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${replacementModel.provider}/${replacementModel.id}` },
+		});
+
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+	});
+
+	it("refreshes the live advisor when only the advisor route changes", () => {
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "openrouter/z-ai/glm-4.7@cerebras" },
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe("openrouter");
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("z-ai/glm-4.7");
+		expect(
+			(session.getAdvisorAgent()?.state.model.compat as { openRouterRouting?: { only?: string[] } } | undefined)
+				?.openRouterRouting?.only,
+		).toEqual(["cerebras"]);
+
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "openrouter/z-ai/glm-4.7@fireworks" },
+		});
+
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe("openrouter");
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("z-ai/glm-4.7");
+		expect(
+			(session.getAdvisorAgent()?.state.model.compat as { openRouterRouting?: { only?: string[] } } | undefined)
+				?.openRouterRouting?.only,
+		).toEqual(["fireworks"]);
+	});
+
+	it("keeps the operator's advisor when a project asks for another one", async () => {
+		// Moving between checkouts must not hand the advisor helper to whichever repository
+		// you happen to be standing in. Both projects ask for a model, loudly, and neither
+		// gets it: `agent.helpers` resolves from the operator's own layers, and a working
+		// tree is not one of them.
+		const projectA = path.join(tempDir.path(), "project-a");
+		const projectB = path.join(tempDir.path(), "project-b");
+		const agentDir = path.join(tempDir.path(), "agent");
+		fs.mkdirSync(getProjectAgentDir(projectA), { recursive: true });
+		fs.mkdirSync(getProjectAgentDir(projectB), { recursive: true });
+		fs.mkdirSync(agentDir, { recursive: true });
+		await Bun.write(
+			path.join(getProjectAgentDir(projectA), "settings.json"),
+			JSON.stringify({
+				agent: { helpers: { advisor: { model: `${replacementModel.provider}/${replacementModel.id}` } } },
+			}),
+		);
+		await Bun.write(
+			path.join(getProjectAgentDir(projectB), "settings.json"),
+			JSON.stringify({
+				agent: { helpers: { advisor: { model: `${replacementModel.provider}/${replacementModel.id}` } } },
+			}),
+		);
+
+		const settings = await Settings.loadIsolated({
+			cwd: projectA,
+			agentDir,
+			overrides: { "compaction.enabled": false },
+		});
+		settings.set("agent.helpers", {
+			...settings.get("agent.helpers"),
+			advisor: { model: `${model.provider}/${model.id}` },
+		});
+		const customSession = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings,
+			modelRegistry,
+		});
+
+		try {
+			expect(customSession.setAdvisorEnabled(true)).toBe(true);
+			expect(customSession.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+			expect(customSession.getAdvisorAgent()?.state.model.id).toBe(model.id);
+
+			await settings.reloadForCwd(projectB);
+
+			// The re-scope really happened; it just took nothing from the destination.
+			expect(settings.getCwd()).toBe(path.normalize(projectB));
+			expect(customSession.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+			expect(customSession.getAdvisorAgent()?.state.model.id).toBe(model.id);
+		} finally {
+			await customSession.dispose();
+			AgentStorage.resetInstance();
+		}
+	});
+
+	it("keeps explicit enable idempotent when the advisor config is unchanged", () => {
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: `${model.provider}/${model.id}` },
+		});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+		const historyMessage: AgentMessage = { role: "user", content: "prior advisor context", timestamp: 1 };
+		advisor.state.messages.push(historyMessage);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+
+		expect(session.getAdvisorAgent()).toBe(advisor);
+		expect(session.getAdvisorAgent()?.state.messages).toEqual([historyMessage]);
+	});
+
+	it("explicit enable overrides default-off setting for the session only", () => {
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
+		session.settings.override("advisor.enabled", false);
+		const customSession = new AgentSession({
+			agent: session.agent,
+			sessionManager,
+			settings: session.settings,
+			modelRegistry,
+		});
+		expect(customSession.isAdvisorEnabled()).toBe(false);
+
+		const active = customSession.setAdvisorEnabled(true);
+
+		expect(active).toBe(true);
+		expect(customSession.isAdvisorActive()).toBe(true);
+		expect(customSession.isAdvisorEnabled()).toBe(true);
+		expect(customSession.settings.get("advisor.enabled")).toBe(false);
+	});
+
+	it("toggle disables the advisor and runtime", () => {
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
+		session.toggleAdvisorEnabled();
+		const active = session.toggleAdvisorEnabled();
+		expect(active).toBe(false);
+		expect(session.isAdvisorActive()).toBe(false);
+		expect(session.isAdvisorEnabled()).toBe(false);
+	});
+
+	it("setAdvisorEnabled reports inactive when the advisor helper resolves to no model", () => {
+		// An unset advisor helper runs the session's live model, so the
+		// inactive-but-enabled path is only reached when a CONFIGURED advisor
+		// model cannot be resolved at all — never by leaving the helper unset.
+		session.settings.set("agent.helpers", {
+			...session.settings.get("agent.helpers"),
+			advisor: { model: "nonexistent/advisor-model" },
+		});
+		const active = session.setAdvisorEnabled(true);
+		expect(active).toBe(false);
+		expect(session.isAdvisorActive()).toBe(false);
+		expect(session.isAdvisorEnabled()).toBe(true);
+		expect(session.formatAdvisorStatus()).toBe(
+			"Advisor setting is enabled, but agent.helpers.advisor.model matches no available model.",
+		);
+	});
+
+	it("keeps sessions isolated when sharing a Settings instance", async () => {
+		const sharedSettings = Settings.isolated({ "compaction.enabled": false });
+		sharedSettings.set("agent.helpers", {
+			...sharedSettings.get("agent.helpers"),
+			advisor: { model: "anthropic/claude-sonnet-4-5" },
+		});
+		expect(sharedSettings.get("advisor.enabled")).toBe(false);
+
+		const sessionA = new AgentSession({
+			agent: session.agent,
+			sessionManager,
+			settings: sharedSettings,
+			modelRegistry,
+		});
+		const sessionB = new AgentSession({
+			agent: session.agent,
+			sessionManager,
+			settings: sharedSettings,
+			modelRegistry,
+		});
+
+		expect(sessionA.isAdvisorEnabled()).toBe(false);
+		expect(sessionB.isAdvisorEnabled()).toBe(false);
+
+		const activeA = sessionA.setAdvisorEnabled(true);
+		expect(activeA).toBe(true);
+		expect(sessionA.isAdvisorEnabled()).toBe(true);
+		expect(sessionA.isAdvisorActive()).toBe(true);
+
+		expect(sessionB.isAdvisorEnabled()).toBe(false);
+		expect(sessionB.isAdvisorActive()).toBe(false);
+		expect(sessionB.formatAdvisorStatus()).toBe("Advisor is disabled.");
+
+		const activeB = sessionB.toggleAdvisorEnabled();
+		expect(activeB).toBe(true);
+		expect(sessionB.isAdvisorEnabled()).toBe(true);
+
+		sessionA.setAdvisorEnabled(false);
+		expect(sessionA.isAdvisorEnabled()).toBe(false);
+		expect(sessionA.isAdvisorActive()).toBe(false);
+
+		expect(sessionB.isAdvisorEnabled()).toBe(true);
+		expect(sessionB.isAdvisorActive()).toBe(true);
+	});
+});

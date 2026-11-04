@@ -1,0 +1,684 @@
+/**
+ * Crash-safe file writes.
+ *
+ * A plain `writeFile` (or `Bun.write`) truncates the target and then streams the
+ * new bytes in. If the process dies between those two steps (a self-update that
+ * replaces the binary, a `SIGINT`, a full disk, a power loss) the file is left
+ * truncated or empty. For a config file that holds every profile and setting,
+ * that is silent data loss.
+ *
+ * {@link atomicWriteFile} (and its blocking twin {@link atomicWriteFileSync})
+ * avoid it the standard way: write the new bytes to a unique temp file in the
+ * same directory, flush them to disk, then `rename` the temp over the target.
+ * `rename` within one filesystem is atomic, so a reader or a crash sees either
+ * the whole old file or the whole new file, never a partial one.
+ *
+ * This is the single home for atomic writes. Do not hand-roll temp-file +
+ * rename at a call site; import one of these instead.
+ *
+ * @example
+ * ```ts
+ * import { atomicWriteFile } from "@veyyon/utils";
+ *
+ * await atomicWriteFile(configPath, YAML.stringify(config));
+ * ```
+ */
+
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
+import { isEnoent, isFsError } from "./fs-error";
+
+export interface AtomicWriteOptions {
+	/**
+	 * Permission bits for the created file. Defaults to `0o600` (owner
+	 * read/write only) because config files routinely hold tokens. The final
+	 * file inherits the temp file's permissions, so this also governs the
+	 * replacement even when the previous file was more permissive.
+	 */
+	mode?: number;
+	/**
+	 * Flush the file (and its directory entry) to physical storage before
+	 * returning. Defaults to `true`. `rename` already prevents a *truncated*
+	 * file on a crash; the flush additionally protects the *contents* against
+	 * power loss. Set to `false` only for high-churn caches where durability
+	 * does not matter and the extra `fsync` cost does.
+	 */
+	fsync?: boolean;
+	/**
+	 * Require atomic replacement without fallback. When `true`, if renaming
+	 * the temporary file over the destination fails, the writer rejects
+	 * immediately with the original rename error without displacing,
+	 * backing up, or removing the destination file (bypassing the Windows
+	 * `EPERM`/`EACCES`/`EEXIST` rename-clobber workaround).
+	 *
+	 * Defaults to `false`.
+	 */
+	requireAtomicReplace?: boolean;
+}
+
+// Monotonic per-process counter gives every in-flight writer a distinct name.
+// The temp is then reserved with O_EXCL, so wraparound or debris from a killed
+// process cannot make a later writer truncate a file it does not own.
+let tempCounter = 0;
+
+function nextTempPath(dir: string, targetBasename: string): string {
+	tempCounter = (tempCounter + 1) >>> 0;
+	return path.join(dir, `.${targetBasename}.${process.pid}.${tempCounter}.tmp`);
+}
+
+function removeTempSync(tmpPath: string): void {
+	fs.rmSync(tmpPath, { force: true, recursive: true });
+}
+
+// Temps an async write has reserved and not yet finished with. A process that exits
+// mid-write (SIGTERM, SIGINT, SIGHUP, a fatal error, `process.exit`) would leave each one beside
+// its target for good: its name holds a dead pid, so no later writer reuses or removes it. The
+// exit listener removes them; SIGKILL and power loss still leave one. A name joins the set before
+// its exclusive open is issued, since the exit can land while the open is on the thread pool and
+// file already exists; a name with this pid in it is this process's or a dead one's. Keep a
+// temp tracked until its rename (including the Windows backup-and-restore replace) finishes.
+const pendingTemps = new Set<string>();
+let exitListenerInstalled = false;
+
+function trackPendingTemp(tmpPath: string): void {
+	if (!exitListenerInstalled) {
+		exitListenerInstalled = true;
+		process.on("exit", removePendingTemps);
+	}
+	pendingTemps.add(tmpPath);
+}
+
+function removePendingTemps(): void {
+	for (const tmpPath of pendingTemps) {
+		try {
+			removeTempSync(tmpPath);
+		} catch {}
+	}
+	pendingTemps.clear();
+}
+
+async function reserveTempFile(
+	dir: string,
+	targetBasename: string,
+	mode: number,
+	target: string,
+): Promise<{ handle: fsp.FileHandle; tmpPath: string }> {
+	for (;;) {
+		const tmpPath = nextTempPath(dir, targetBasename);
+		trackPendingTemp(tmpPath);
+		try {
+			return { handle: await fsp.open(tmpPath, "wx", mode), tmpPath };
+		} catch (error) {
+			pendingTemps.delete(tmpPath);
+			if (isFsError(error) && error.code === "EEXIST") continue;
+			throw withTargetInMessage(error, target, tmpPath);
+		}
+	}
+}
+
+function reserveTempFileSync(
+	dir: string,
+	targetBasename: string,
+	mode: number,
+	target: string,
+): { fd: number; tmpPath: string } {
+	for (;;) {
+		const tmpPath = nextTempPath(dir, targetBasename);
+		try {
+			return { fd: fs.openSync(tmpPath, "wx", mode), tmpPath };
+		} catch (error) {
+			if (isFsError(error) && error.code === "EEXIST") continue;
+			throw withTargetInMessage(error, target, tmpPath);
+		}
+	}
+}
+
+// Windows can reject renaming a temp over an existing file. Never apply this
+// destructive compatibility path on POSIX: EACCES/EPERM there describes a real
+// permissions failure and removing the destination would turn it into data loss.
+function isRenameClobberError(error: unknown): boolean {
+	return (
+		process.platform === "win32" &&
+		isFsError(error) &&
+		(error.code === "EPERM" || error.code === "EEXIST" || error.code === "EACCES")
+	);
+}
+
+// The bytes writer and the path writer share the tricky, drift-prone parts of an
+// atomic write — symlink resolution, the rename-clobber fallback, the directory
+// fsync. These three helpers are that single home; both public writers call them
+// so the behavior can only ever be defined once.
+
+// Follow every basename symlink ourselves instead of using realpath. realpath
+// cannot return the resolved prefix of a dangling chain; falling back to a
+// single readlink hop would then rename over the next link and destroy it.
+async function resolveWriteTarget(filePath: string): Promise<{ target: string; viaSymlink: boolean }> {
+	let target = filePath;
+	let viaSymlink = false;
+	const seen = new Set<string>();
+
+	for (;;) {
+		let stats: fs.Stats;
+		try {
+			stats = await fsp.lstat(target);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			return { target, viaSymlink };
+		}
+		if (!stats.isSymbolicLink()) {
+			assertRegularFileTarget(stats, target);
+			return { target, viaSymlink };
+		}
+
+		viaSymlink = true;
+		recordSymlinkHop(seen, target, filePath);
+		target = path.resolve(path.dirname(target), await fsp.readlink(target));
+	}
+}
+
+/**
+ * Records one hop of a symlink chain and fails with `ELOOP` when the chain
+ * revisits a link it already followed, which is what a cyclic chain does
+ * instead of ending in a file or a missing path.
+ */
+function recordSymlinkHop(seen: Set<string>, target: string, filePath: string): void {
+	const absoluteTarget = path.resolve(target);
+	if (seen.has(absoluteTarget)) {
+		const error = new Error(`Too many symbolic links while resolving ${filePath}`) as NodeJS.ErrnoException;
+		error.code = "ELOOP";
+		throw error;
+	}
+	seen.add(absoluteTarget);
+}
+
+/**
+ * Refuse to replace anything that is not a regular file.
+ *
+ * An atomic write finishes with `rename(temp, target)`, and rename does not care
+ * what the target is: pointed at a FIFO it DESTROYS the named pipe and leaves a
+ * regular file with the same name, silently breaking whatever process was
+ * reading the other end. The same goes for a socket or a device node. None of
+ * these can be written atomically by definition, so the only honest outcomes are
+ * to refuse or to destroy, and the refusal names the type so the operator can
+ * see what their path actually pointed at.
+ *
+ * Directories are included: rename would fail there anyway, with an `EISDIR`
+ * that says nothing about which path was wrong.
+ *
+ * A missing target is not an error — creating the file is the normal first write.
+ */
+function assertRegularFileTarget(stats: fs.Stats, target: string): void {
+	if (stats.isFile()) return;
+	throw new Error(
+		`Refusing to write ${target}: it is ${nonRegularKind(stats)}, and an atomic write would replace it with a regular file. ` +
+			`Point the write at a regular file path instead.`,
+	);
+}
+
+/** How {@link assertRegularFileTarget} describes an entry that is not a regular file. */
+function nonRegularKind(stats: fs.Stats): string {
+	if (stats.isDirectory()) return "a directory";
+	if (stats.isSymbolicLink()) return "a symbolic link";
+	if (stats.isFIFO()) return "a named pipe (FIFO)";
+	if (stats.isSocket()) return "a socket";
+	if (stats.isBlockDevice() || stats.isCharacterDevice()) return "a device node";
+	return "not a regular file";
+}
+
+/** Blocking twin of {@link resolveWriteTarget}; see that function for the reasoning. */
+function resolveWriteTargetSync(filePath: string): { target: string; viaSymlink: boolean } {
+	let target = filePath;
+	let viaSymlink = false;
+	const seen = new Set<string>();
+
+	for (;;) {
+		let stats: fs.Stats;
+		try {
+			stats = fs.lstatSync(target);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			return { target, viaSymlink };
+		}
+		if (!stats.isSymbolicLink()) {
+			assertRegularFileTarget(stats, target);
+			return { target, viaSymlink };
+		}
+
+		viaSymlink = true;
+		recordSymlinkHop(seen, target, filePath);
+		target = path.resolve(path.dirname(target), fs.readlinkSync(target));
+	}
+}
+
+/**
+ * Restate a failure in terms of the file the caller asked to write.
+ *
+ * An atomic write does its work on a temp sibling, so the OS error names that
+ * temp: `EACCES: permission denied, open '/etc/veyyon/.config.yml.4711.1.tmp'`.
+ * That path never existed as far as the operator is concerned, it changes on
+ * every attempt, and it sends people looking for a stray temp file instead of at
+ * the read-only directory that actually stopped them. The rewrite keeps the OS
+ * reason and the failing syscall, swaps in the real target, and says why a temp
+ * was involved at all.
+ *
+ * `code` is copied onto the new error and the original travels as `cause`, so
+ * `isEnoent`, `isFsError` and any caller matching on a code keep working.
+ *
+ * Only a message that quotes THE TEMP PATH is rewritten. An error naming the
+ * target already reads correctly and is passed through untouched.
+ */
+function withTargetInMessage(error: unknown, target: string, tmpPath: string): unknown {
+	if (!(error instanceof Error) || !error.message.includes(tmpPath)) return error;
+	const restated = new Error(
+		`${error.message.replaceAll(tmpPath, target)} (the write is staged in a temporary file beside the target, ` +
+			`so it can replace it atomically; the temporary file is what the operating system named)`,
+		{ cause: error },
+	);
+	const code = (error as NodeJS.ErrnoException).code;
+	if (code !== undefined) (restated as NodeJS.ErrnoException).code = code;
+	return restated;
+}
+
+async function assertReplaceableTarget(target: string): Promise<void> {
+	try {
+		assertRegularFileTarget(await fsp.lstat(target), target);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+}
+
+function assertReplaceableTargetSync(target: string): void {
+	try {
+		assertRegularFileTarget(fs.lstatSync(target), target);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+}
+
+/**
+ * Runs `operation`, then `close` whether or not the operation failed. A failed operation is the
+ * primary diagnosis and is thrown over a close failure; a close failure after a successful
+ * operation is thrown on its own.
+ */
+async function closingAfter(operation: () => Promise<void>, close: () => Promise<void>): Promise<void> {
+	let operationError: unknown;
+	try {
+		await operation();
+	} catch (error) {
+		operationError = error;
+	}
+	try {
+		await close();
+	} catch (error) {
+		if (operationError === undefined) operationError = error;
+	}
+	if (operationError !== undefined) throw operationError;
+}
+
+/** Blocking twin of {@link closingAfter}. */
+function closingAfterSync(operation: () => void, close: () => void): void {
+	let operationError: unknown;
+	try {
+		operation();
+	} catch (error) {
+		operationError = error;
+	}
+	try {
+		close();
+	} catch (error) {
+		if (operationError === undefined) operationError = error;
+	}
+	if (operationError !== undefined) throw operationError;
+}
+
+async function renameTempOverTarget(
+	tmpPath: string,
+	target: string,
+	requireAtomicReplace = false,
+): Promise<void> {
+	try {
+		await fsp.rename(tmpPath, target);
+		return;
+	} catch (error) {
+		if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
+	}
+
+	// Windows lacks a consistently atomic replace-existing rename. Preserve the
+	// displaced inode under an owned sibling until the replacement succeeds, so
+	// a failed second rename can restore the caller's original bytes.
+	await assertReplaceableTarget(target);
+	const backupPath = nextTempPath(path.dirname(target), `${path.basename(target)}.previous`);
+	try {
+		await fsp.rename(target, backupPath);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+		// Another writer removed the target after our failed clobber attempt.
+		await fsp.rename(tmpPath, target);
+		return;
+	}
+	try {
+		await fsp.rename(tmpPath, target);
+	} catch (replacementError) {
+		try {
+			await fsp.rename(backupPath, target);
+		} catch (restoreError) {
+			throw new AggregateError(
+				[replacementError, restoreError],
+				`Failed to replace ${target}, then failed to restore its previous contents`,
+			);
+		}
+		throw replacementError;
+	}
+	await fsp.rm(backupPath, { force: true, recursive: true });
+}
+
+const DIRECTORY_FSYNC_UNSUPPORTED: Readonly<Record<string, true>> = {
+	EINVAL: true,
+	EISDIR: true,
+	ENOSYS: true,
+	ENOTSUP: true,
+};
+
+function isDirectoryFsyncUnsupported(error: unknown): boolean {
+	if (!isFsError(error) || error.code === undefined) return false;
+	if (DIRECTORY_FSYNC_UNSUPPORTED[error.code]) return true;
+	// Windows refuses directory handles with either access code depending on
+	// filesystem and Node version. On POSIX those codes are real failures.
+	return process.platform === "win32" && (error.code === "EACCES" || error.code === "EPERM");
+}
+
+async function fsyncDirEntry(dir: string): Promise<void> {
+	let dirHandle: fsp.FileHandle;
+	try {
+		dirHandle = await fsp.open(dir, "r");
+	} catch (error) {
+		if (isDirectoryFsyncUnsupported(error)) return;
+		throw error;
+	}
+	await closingAfter(
+		() => dirHandle.sync().catch(rethrowUnlessDirectoryFsyncUnsupported),
+		() => dirHandle.close(),
+	);
+}
+
+/** Rethrows a directory fsync failure, unless it is one {@link isDirectoryFsyncUnsupported} accepts. */
+function rethrowUnlessDirectoryFsyncUnsupported(error: unknown): void {
+	if (!isDirectoryFsyncUnsupported(error)) throw error;
+}
+
+/**
+ * Write `data` to `filePath` atomically. Creates parent directories as needed.
+ * Either fully succeeds (the target now holds `data`) or throws with the target
+ * left untouched.
+ */
+export async function atomicWriteFile(
+	filePath: string,
+	data: string | NodeJS.ArrayBufferView,
+	options: AtomicWriteOptions = {},
+): Promise<void> {
+	const { mode = 0o600, fsync = true, requireAtomicReplace = false } = options;
+	await atomicWriteBytes(filePath, data, mode, fsync, false, requireAtomicReplace);
+}
+
+async function atomicWriteBytes(
+	filePath: string,
+	data: string | NodeJS.ArrayBufferView,
+	mode: number,
+	fsync: boolean,
+	preserveModeExactly: boolean,
+	requireAtomicReplace = false,
+): Promise<void> {
+	await atomicWriteFileWithImpl(
+		filePath,
+		{
+			kind: "handle",
+			write: async handle => {
+				await handle.writeFile(data);
+				if (preserveModeExactly) await handle.chmod(mode);
+				if (fsync) await handle.sync();
+			},
+		},
+		{ fsync, mode, requireAtomicReplace },
+	);
+}
+
+/**
+ * Atomic write that carries the target's CURRENT permission bits forward.
+ *
+ * {@link atomicWriteFile} replaces the file by renaming a fresh temp over it, so
+ * the result takes the temp's mode — `0o600` by default. That is right for a
+ * secret-bearing config file, but wrong when you are rewriting a file whose mode
+ * matters: an executable script would silently lose its `+x`, a group-readable
+ * file its group bit. Use this when you are overwriting an existing file and must
+ * not change how it is permissioned — source files an editor rewrites, a move
+ * that overwrites a destination, any content update to a pre-existing path.
+ *
+ * The current mode is read with `stat` (which follows a symlink to the file that
+ * will actually be replaced), so a symlinked path preserves its target's mode. A
+ * path that does not exist yet is created with `defaultMode` (0o644 — a normal,
+ * non-secret file default), still subject to the process umask at creation.
+ */
+export async function atomicWriteFilePreservingMode(
+	filePath: string,
+	data: string | NodeJS.ArrayBufferView,
+	options: { fsync?: boolean; defaultMode?: number; requireAtomicReplace?: boolean } = {},
+): Promise<void> {
+	const { fsync = true, defaultMode = 0o644, requireAtomicReplace = false } = options;
+	let mode = defaultMode;
+	let existed = true;
+	try {
+		mode = (await fsp.stat(filePath)).mode & 0o7777;
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+		existed = false;
+	}
+	await atomicWriteBytes(filePath, data, mode, fsync, existed, requireAtomicReplace);
+}
+
+/**
+ * Serialize `data` as pretty-printed JSON (2-space indent, trailing newline)
+ * and write it to `filePath` atomically via {@link atomicWriteFile}. The
+ * trailing newline keeps the file POSIX-clean and diff-friendly. Use this for
+ * any on-disk JSON registry or config so every writer produces byte-identical
+ * formatting instead of each caller hand-rolling `JSON.stringify(...) + "\n"`.
+ */
+export async function atomicWriteJson(
+	filePath: string,
+	data: unknown,
+	options: AtomicWriteOptions = {},
+): Promise<void> {
+	await atomicWriteFile(filePath, `${JSON.stringify(data, null, 2)}\n`, options);
+}
+
+/**
+ * The producer form of {@link atomicWriteFile}: instead of handing over bytes,
+ * you get the temp path and write to it however you like (a streaming writer, a
+ * third-party encoder that only takes a path). The same crash-safety holds — the
+ * temp is renamed over the target only after `write` resolves, so a failure
+ * leaves the target untouched — and the same symlink handling applies.
+ *
+ * Use this only when the payload is produced by something that writes to a path
+ * rather than returning bytes. When you already have the bytes, call
+ * {@link atomicWriteFile}; it routes through here.
+ *
+ * @example
+ * ```ts
+ * await atomicWriteFileWith(archivePath, tmpPath => writeArchive(tmpPath, format, entries));
+ * ```
+ */
+export async function atomicWriteFileWith(
+	filePath: string,
+	write: (tempPath: string) => Promise<void>,
+	options: AtomicWriteOptions & {
+		/**
+		 * Reopen the finished temp file and fsync it before the rename. Defaults
+		 * to `true`, which is what a path writer needs: it closes its own fd, so
+		 * the owner must flush the bytes. {@link atomicWriteFile} passes `false`
+		 * because it already fsyncs its own write handle (the Windows-correct way).
+		 */
+		fsyncTempFile?: boolean;
+	} = {},
+): Promise<void> {
+	await atomicWriteFileWithImpl(filePath, { kind: "path", write }, options);
+}
+
+type AtomicTempWriter =
+	| { kind: "handle"; write: (handle: fsp.FileHandle) => Promise<void> }
+	| { kind: "path"; write: (tempPath: string) => Promise<void> };
+
+interface AtomicWriteInternalOptions extends AtomicWriteOptions {
+	fsyncTempFile?: boolean;
+}
+
+async function atomicWriteFileWithImpl(
+	filePath: string,
+	writer: AtomicTempWriter,
+	options: AtomicWriteInternalOptions,
+): Promise<void> {
+	const { fsync = true, fsyncTempFile = true, mode = 0o600, requireAtomicReplace = false } = options;
+	const { target, viaSymlink } = await resolveWriteTarget(filePath);
+	const dir = path.dirname(target);
+	if (!viaSymlink) await fsp.mkdir(dir, { recursive: true });
+
+	const { handle, tmpPath } = await reserveTempFile(dir, path.basename(target), mode, target);
+	try {
+		if (writer.kind === "handle") {
+			await closingAfter(
+				() => writer.write(handle),
+				() => handle.close(),
+			);
+		} else {
+			await handle.close();
+			await fillTempFromPath(writer.write, tmpPath, mode, fsync && fsyncTempFile);
+		}
+
+		// Recheck both names after user-controlled work and immediately before
+		// rename. This preserves a raced-in special destination and catches a
+		// swapped staging entry.
+		assertRegularFileTarget(await fsp.lstat(tmpPath), tmpPath);
+		await assertReplaceableTarget(target);
+		await renameTempOverTarget(tmpPath, target, requireAtomicReplace);
+		pendingTemps.delete(tmpPath);
+	} catch (error) {
+		pendingTemps.delete(tmpPath);
+		await fsp.rm(tmpPath, { force: true, recursive: true }).catch(() => {});
+		throw withTargetInMessage(error, target, tmpPath);
+	}
+	if (fsync) await fsyncDirEntry(dir);
+}
+
+/**
+ * Lets a path producer write the reserved temp, then takes the entry it left over: it must be a
+ * regular file, and it gets `mode` under the umask and, when `flush` is set, an fsync.
+ */
+async function fillTempFromPath(
+	write: (tempPath: string) => Promise<void>,
+	tmpPath: string,
+	mode: number,
+	flush: boolean,
+): Promise<void> {
+	await write(tmpPath);
+	// The producer owns only the bytes, never the type or permissions of
+	// the staging entry. A directory or link must not become the target.
+	assertRegularFileTarget(await fsp.lstat(tmpPath), tmpPath);
+	const handle = await fsp.open(tmpPath, "r+");
+	await closingAfter(
+		async () => {
+			await handle.chmod(process.platform === "win32" ? mode : mode & ~process.umask());
+			if (flush) await handle.sync();
+		},
+		() => handle.close(),
+	);
+}
+
+/**
+ * Blocking twin of {@link atomicWriteFile} with identical crash-safety and
+ * symlink semantics. Use only where the call site cannot be async (for example
+ * a synchronous config accessor); prefer the async form everywhere else.
+ */
+export function atomicWriteFileSync(
+	filePath: string,
+	data: string | NodeJS.ArrayBufferView,
+	options: AtomicWriteOptions = {},
+): void {
+	const { mode = 0o600, fsync = true, requireAtomicReplace = false } = options;
+	const { target, viaSymlink } = resolveWriteTargetSync(filePath);
+	const dir = path.dirname(target);
+	if (!viaSymlink) fs.mkdirSync(dir, { recursive: true });
+
+	const { fd, tmpPath } = reserveTempFileSync(dir, path.basename(target), mode, target);
+	try {
+		closingAfterSync(
+			() => {
+				fs.writeFileSync(fd, data);
+				if (fsync) fs.fsyncSync(fd);
+			},
+			() => fs.closeSync(fd),
+		);
+		assertRegularFileTarget(fs.lstatSync(tmpPath), tmpPath);
+		assertReplaceableTargetSync(target);
+		renameTempOverTargetSync(tmpPath, target, requireAtomicReplace);
+	} catch (error) {
+		try {
+			removeTempSync(tmpPath);
+		} catch {}
+		throw withTargetInMessage(error, target, tmpPath);
+	}
+	if (fsync) fsyncDirEntrySync(dir);
+}
+
+/** Blocking twin of {@link renameTempOverTarget}; see that function for the reasoning. */
+function renameTempOverTargetSync(tmpPath: string, target: string, requireAtomicReplace = false): void {
+	try {
+		fs.renameSync(tmpPath, target);
+		return;
+	} catch (error) {
+		if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
+	}
+
+	assertReplaceableTargetSync(target);
+	const backupPath = nextTempPath(path.dirname(target), `${path.basename(target)}.previous`);
+	try {
+		fs.renameSync(target, backupPath);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+		// Another writer removed the target after our failed clobber attempt.
+		fs.renameSync(tmpPath, target);
+		return;
+	}
+	try {
+		fs.renameSync(tmpPath, target);
+	} catch (replacementError) {
+		try {
+			fs.renameSync(backupPath, target);
+		} catch (restoreError) {
+			throw new AggregateError(
+				[replacementError, restoreError],
+				`Failed to replace ${target}, then failed to restore its previous contents`,
+			);
+		}
+		throw replacementError;
+	}
+	removeTempSync(backupPath);
+}
+
+function fsyncDirEntrySync(dir: string): void {
+	let dirFd: number;
+	try {
+		dirFd = fs.openSync(dir, "r");
+	} catch (error) {
+		if (isDirectoryFsyncUnsupported(error)) return;
+		throw error;
+	}
+	closingAfterSync(
+		() => {
+			try {
+				fs.fsyncSync(dirFd);
+			} catch (error) {
+				rethrowUnlessDirectoryFsyncUnsupported(error);
+			}
+		},
+		() => fs.closeSync(dirFd),
+	);
+}

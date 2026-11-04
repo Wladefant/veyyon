@@ -1,0 +1,2479 @@
+/**
+ * MCP Server Manager.
+ *
+ * Discovers, connects to, and manages MCP servers.
+ * Handles tool loading and lifecycle.
+ */
+import * as path from "node:path";
+import * as url from "node:url";
+import type { TSchema } from "@veyyon/ai";
+import { type AuthStorage, REMOTE_REFRESH_SENTINEL } from "@veyyon/ai/auth-storage";
+// The owner, not the barrel: classifying an OAuth failure is a string test that
+// belongs to the flag it decides, and `error/flags.ts` is where that flag lives.
+import { isDefinitiveOAuthFailure } from "@veyyon/ai/error/flags";
+import { errorMessage, logger, reportFault, settleWithin } from "@veyyon/utils";
+import { describeConfigEnvReference } from "../config/config-value-resolution";
+import { invalidateConfigValue, resolveConfigValue } from "../config/resolve-config-value";
+import { FOREIGN_PROVIDER_IDS } from "../discovery/capability";
+import type { SourceMeta } from "../discovery/capability/types";
+import type { CustomTool } from "../extensibility/custom-tools/types";
+import {
+	classifyMcpAuthFailure,
+	MCPAuthRequiredError,
+	type MCPAuthResolution,
+	MCPBrokerRedactedRefreshError,
+	MCPUnresolvedEnvReferenceError,
+} from "./auth-failure";
+import {
+	closeTransportDetached,
+	connectToServer,
+	disconnectServer,
+	getPrompt,
+	listEvents,
+	listPrompts,
+	listResources,
+	listResourceTemplates,
+	listTools,
+	pollEvents,
+	readResource,
+	serverSupportsPrompts,
+	serverSupportsResources,
+	subscribeToEvents,
+	subscribeToResources,
+	unsubscribeFromEvents,
+	unsubscribeFromResources,
+} from "./client";
+import {
+	createWebhookReceiver,
+	type MCPWebhookControl,
+	type MCPWebhookMessage,
+	type MCPWebhookRegistration,
+} from "./events-webhook";
+import { startMCPWebhookHost } from "./events-webhook-host";
+import { type LoadMCPConfigsResult, loadAllMCPConfigs, validateServerConfig } from "./config";
+import { hasMcpConfigCommands, mcpConfigCommandValues } from "./config-commands";
+import { mcpManagerInstance, setMcpManagerInstance } from "./manager-instance";
+import {
+	lookupMcpOAuthCredential,
+	type MCPOAuthCredentialLookup,
+	selectMcpOAuthRefreshMaterial,
+} from "./oauth-credentials";
+import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
+import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "./runtime-config";
+import { MCP_CONFIG_STATUS_LABEL, type McpConnectionStatusEvent } from "./startup-events";
+import { DeferredMCPTool, MCPTool, type MCPToolDetails, mcpToolNamePrefix } from "./tool-bridge";
+import type { MCPToolCache } from "./tool-cache";
+import { describeMCPServerTarget } from "./transports/transport-failure";
+import {
+	type MCPEventOccurrence,
+	type MCPGetPromptResult,
+	MCPNotificationMethods,
+	type MCPPrompt,
+	type MCPRequestOptions,
+	type MCPResource,
+	type MCPResourceReadResult,
+	type MCPResourceTemplate,
+	type MCPServerConfig,
+	type MCPServerConnection,
+	type MCPServerEventSubscriptionConfig,
+	type MCPStreamRequest,
+	type MCPToolDefinition,
+	type MCPTransport,
+	isMCPEventsEnabled,
+} from "./types";
+
+type ActiveMCPEventSubscription = {
+	controller: AbortController;
+	serverName: string;
+	key: string;
+	timer?: Timer;
+	stream?: MCPStreamRequest;
+	streamProcessing?: Promise<void>;
+	streamFailed?: boolean;
+	cursor: string | null;
+	lifecycle?: Promise<void>;
+	seen: Set<string>;
+	mode?: MCPServerEventSubscriptionConfig["mode"];
+	connection?: MCPServerConnection;
+	config?: MCPServerEventSubscriptionConfig;
+	webhookId?: string;
+	webhookPath?: string;
+	webhookPort?: number;
+	unsubscribe?: Promise<void>;
+};
+
+const MCP_EVENT_STREAM_HEARTBEAT_TIMEOUT_MS = 60_000;
+
+type ToolLoadResult = {
+	connection: MCPServerConnection;
+	serverTools: MCPToolDefinition[];
+};
+
+interface AuthRefreshableMCPTransport extends MCPTransport {
+	onAuthError?: () => Promise<Record<string, string> | null>;
+}
+
+function isAuthRefreshableMCPTransport(transport: MCPTransport): transport is AuthRefreshableMCPTransport {
+	return "onAuthError" in transport;
+}
+type TrackedPromise<T> = {
+	promise: Promise<T>;
+	status: "pending" | "fulfilled" | "rejected";
+	value?: T;
+	reason?: unknown;
+};
+
+function waitForMCPEventDelay(ms: number, signal: AbortSignal, onTimer: (timer: Timer) => void): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	if (signal.aborted) {
+		resolve();
+		return promise;
+	}
+	const abort = () => {
+		clearTimeout(timer);
+		signal.removeEventListener("abort", abort);
+		resolve();
+	};
+	const timer = setTimeout(() => {
+		signal.removeEventListener("abort", abort);
+		onTimer(timer);
+		resolve();
+	}, ms);
+	signal.addEventListener("abort", abort, { once: true });
+	onTimer(timer);
+	return promise;
+}
+
+function isMCPEventOccurrence(value: unknown): value is MCPEventOccurrence {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const event = value as Partial<MCPEventOccurrence>;
+	return (
+		typeof event.eventId === "string" &&
+		event.eventId.length > 0 &&
+		typeof event.name === "string" &&
+		event.name.length > 0 &&
+		typeof event.timestamp === "string" &&
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(event.timestamp) &&
+		Number.isFinite(Date.parse(event.timestamp)) &&
+		(event.cursor === undefined || event.cursor === null || typeof event.cursor === "string") &&
+		event.data !== undefined
+	);
+}
+
+function mcpErrorCode(error: unknown): number | undefined {
+	if (!error || typeof error !== "object") return undefined;
+	if ("code" in error && typeof error.code === "number") return error.code;
+	const match = error instanceof Error ? /^MCP error (-?\d+):/.exec(error.message) : null;
+	return match ? Number(match[1]) : undefined;
+}
+
+function isWebhookControlMessage(message: MCPWebhookMessage): message is MCPWebhookControl {
+	return "type" in message && (message.type === "gap" || message.type === "terminated");
+}
+
+/**
+ * How long startup waits for MCP connections before serving cached tools.
+ *
+ * This is a grace window, NOT a timeout: connections that have not settled by
+ * the time it elapses keep running, and their real tool lists replace the
+ * cached ones as they arrive. It exists only so a slow server cannot hold the
+ * first prompt hostage. It was called `STARTUP_TIMEOUT_MS`, which read as "an
+ * MCP server gets 250 ms to start or it is dropped" — alarming, wrong, and
+ * indistinguishable by name from the eval kernels' genuine 10 s startup
+ * timeouts, which do abort.
+ */
+const STARTUP_TOOL_WAIT_MS = 250;
+
+/**
+ * Per-server reconnect-storm circuit breaker.
+ *
+ * `transport.onClose` (wired in {@link MCPManager.connectServers} and
+ * {@link MCPManager.#connectAndWireServer}) fires `reconnectServer` on every
+ * clean process exit, so a stdio MCP server that completes the
+ * `initialize` + `tools/list` handshake and then exits will pull the agent
+ * into a fork loop with no rate limit. That pathology shipped in issue #1592
+ * (a `php`-shebang MCP fork-bombing macOS, parented directly to the agent's
+ * `bun` PID via shebang exec).
+ *
+ * We keep the sliding window short — older crashes age out so a single
+ * transient failure stays cheap — but cap the burst tightly enough that the
+ * agent never spawns more than `RECONNECT_BURST_LIMIT * #doReconnect retries`
+ * (≤ 25) processes per stuck server per window. Manual `/mcp reconnect`
+ * resets the window so users can recover after fixing the underlying
+ * misconfiguration.
+ */
+const RECONNECT_BURST_WINDOW_MS = 30_000;
+const RECONNECT_BURST_LIMIT = 5;
+
+function trackPromise<T>(promise: Promise<T>): TrackedPromise<T> {
+	const tracked: TrackedPromise<T> = { promise, status: "pending" };
+	promise.then(
+		value => {
+			tracked.status = "fulfilled";
+			tracked.value = value;
+		},
+		reason => {
+			tracked.status = "rejected";
+			tracked.reason = reason;
+		},
+	);
+	return tracked;
+}
+
+/**
+ * Stable, total ordering on MCP tools by name.
+ *
+ * Anthropic prompt caching keys on byte-identical tool definitions: any reorder
+ * of the tools array invalidates the tools cache breakpoint and forces a full
+ * prefix rebuild on the next request. MCP servers connect/reconnect at arbitrary
+ * times, so the natural "insertion order" of `#tools` is non-deterministic.
+ * Sorting after every mutation makes the array bytes independent of connection
+ * sequence.
+ */
+export function sortMCPToolsByName<T extends { name: string }>(tools: T[]): T[] {
+	tools.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+	return tools;
+}
+
+export function resolveSubscriptionPostAction(
+	notificationsEnabled: boolean,
+	currentEpoch: number,
+	subscriptionEpoch: number,
+): "rollback" | "ignore" | "apply" {
+	if (!notificationsEnabled) return "rollback";
+	if (currentEpoch !== subscriptionEpoch) return "ignore";
+	return "apply";
+}
+/** Result of loading MCP tools */
+export interface MCPLoadResult {
+	/** Loaded tools as CustomTool instances */
+	tools: CustomTool<TSchema, MCPToolDetails>[];
+	/** Connection errors by server name */
+	errors: Map<string, string>;
+	/** Connected server names */
+	connectedServers: string[];
+	/** Extracted Exa API keys from filtered MCP servers */
+	exaApiKeys: string[];
+}
+
+/** Options for discovering and connecting to MCP servers */
+export interface MCPDiscoverOptions {
+	/** Operator-selected run-only servers, added after ordinary profile filters. */
+	runtimeConfig?: RuntimeMCPConfig;
+	/** Whether to filter out Exa MCP servers (default: true) */
+	filterExa?: boolean;
+	/** Whether to filter out browser MCP servers when builtin browser tool is enabled (default: false) */
+	filterBrowser?: boolean;
+	/**
+	 * WHICH profile owns the user-scope `mcp.json`. Default: the process-active
+	 * profile. A session rooted in another agent dir passes that dir so its MCP
+	 * servers come from the same profile as its rules, commands and skills.
+	 */
+	agentDir?: string;
+	/** Called when MCP server connection state changes. */
+	onStatus?: (event: McpConnectionStatusEvent) => void;
+}
+
+/**
+ * MCP Server Manager.
+ *
+ * Manages connections to MCP servers and provides tools to the agent.
+ */
+export class MCPManager {
+	/**
+	 * Process-global instance shared by internal URL protocol handlers and tools.
+	 *
+	 * The slot itself lives in `./manager-instance`, which imports nothing, so a reader that only needs
+	 * to know whether a manager exists does not have to import this class and its 870 modules. These
+	 * three static methods stay as the public API and delegate, so there is one slot and no caller
+	 * changed. See the note at the top of that module.
+	 */
+	static instance(): MCPManager | undefined {
+		return mcpManagerInstance();
+	}
+
+	/** Install or clear the process-global instance. */
+	static setInstance(value: MCPManager | undefined): void {
+		setMcpManagerInstance(value);
+	}
+
+	/** Reset the process-global instance. Test-only. */
+	static resetForTests(): void {
+		setMcpManagerInstance(undefined);
+	}
+
+	#connections = new Map<string, MCPServerConnection>();
+	/** Session CPU budget hook, set by the owning session: spawned stdio server pids join the session's budget group. */
+	#adoptSpawnedPid: ((pid: number) => void) | undefined;
+	/** Session CPU budget gate: refuse a new stdio server while the group is saturated or uncreated. */
+	#gateSpawn: ((what: string) => Promise<void>) | undefined;
+	/**
+	 * Subscribers that need connection-status transitions observed AFTER startup
+	 * has settled: a transport that drops, the reconnect that follows it, a
+	 * reconnect that runs out of attempts, and the crash breaker suspending a
+	 * server.
+	 *
+	 * Startup's own connecting/connected/failed sequence stays on the `onStatus`
+	 * option of {@link connectServers}: the caller awaiting that load receives it
+	 * directly, and it is the only party that exists before the manager does. A
+	 * surface that subscribes later holds no such result, so without this set it
+	 * kept painting whatever startup said — a dropped transport left the boot
+	 * health reading "mcp 3/3" while the server was gone and its tools failed.
+	 * `/mcp list` escaped that only because it pulls {@link getConnectionStatus}
+	 * at paint time (upstream `be76c2939d56`, the reconnect half).
+	 */
+	#connectionStatusListeners = new Set<(event: McpConnectionStatusEvent) => void>();
+
+	/** Wire the session CPU budget hook for stdio server spawns. */
+	setSpawnAdoption(adopt: ((pid: number) => void) | undefined): void {
+		this.#adoptSpawnedPid = adopt;
+	}
+
+	/** Wire the session CPU budget gate for stdio server spawns. */
+	setSpawnGate(gate: ((what: string) => Promise<void>) | undefined): void {
+		this.#gateSpawn = gate;
+	}
+
+	/**
+	 * Subscribe to the live transitions described on
+	 * `#connectionStatusListeners`. Returns the unsubscribe, so a subscriber that
+	 * outlives one session detaches on dispose. A listener that throws is logged
+	 * and does not stop the others: one broken surface must not silence MCP
+	 * health for the rest.
+	 */
+	addConnectionStatusListener(listener: (event: McpConnectionStatusEvent) => void): () => void {
+		this.#connectionStatusListeners.add(listener);
+		return () => {
+			this.#connectionStatusListeners.delete(listener);
+		};
+	}
+
+	#emitConnectionStatus(event: McpConnectionStatusEvent): void {
+		for (const listener of this.#connectionStatusListeners) {
+			try {
+				listener(event);
+			} catch (error) {
+				logger.debug("MCP connection status listener threw", { error });
+			}
+		}
+	}
+
+	/**
+	 * Read both hooks once. A connection attempt outlives the read, and
+	 * `setSpawnGate(undefined)` between the two would leave a closure calling a
+	 * field that is no longer a function.
+	 */
+	#stdioSpawnHooks(): {
+		onSpawnPid?: (pid: number) => void;
+		beforeSpawn?: () => Promise<void>;
+	} {
+		const adopt = this.#adoptSpawnedPid;
+		const gate = this.#gateSpawn;
+		return {
+			...(adopt ? { onSpawnPid: adopt } : {}),
+			...(gate ? { beforeSpawn: () => gate("an MCP stdio server") } : {}),
+		};
+	}
+	#onEventControl?: (serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
+	#webhookRegistrations = new Map<string, MCPWebhookRegistration>();
+	#webhookVerificationRoutes = new Map<string, { secret: string }>();
+	#webhookSubscriptions = new Map<string, { serverName: string; key: string }>();
+	#webhookHosts = new Map<number, { close(): void | Promise<void> }>();
+	#webhookPortById = new Map<string, number>();
+	#webhookReceiver = createWebhookReceiver({
+		registrations: this.#webhookRegistrations,
+		verificationRoutes: this.#webhookVerificationRoutes,
+		accept: async (subscriptionId, message) => {
+			const target = this.#webhookSubscriptions.get(subscriptionId);
+			const subscription = target ? this.#activeEvents.get(target.key) : undefined;
+			if (!target || !subscription) throw new Error("MCP webhook subscription is not active");
+			if (isWebhookControlMessage(message)) {
+				const outcome = await this.#recordEventControl(target.serverName, target.key, message);
+				if (message.type === "gap") {
+					await this.#recordEventCursor(subscription, message.cursor ?? null);
+				} else if (message.error.code === -32024) {
+					this.#stopEvent(target.key, subscription, false);
+				} else if ([-32023, -32026, -32011, -32012, -32015].includes(message.error.code)) {
+					this.#stopEvent(target.key, subscription, false);
+					void this.#refreshEventDescriptors(target.serverName);
+				}
+				return outcome === "duplicate" ? "duplicate" : "queued";
+			}
+			return (await this.#deliverEvent(target.serverName, target.key, subscription, message)) ? "queued" : "duplicate";
+		},
+	});
+	#onEventCursor?: (serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>;
+	#eventCursorProvider?: (serverName: string, subscriptionKey: string) => string | null | undefined;
+	#onEvent?: (serverName: string, event: MCPEventOccurrence, subscriptionKey: string) =>
+		| void
+		| "queued"
+		| "duplicate"
+		| Promise<void | "queued" | "duplicate">;
+	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
+	#eventStartupControllers = new Map<string, AbortController>();
+	#eventStartupPromises = new Map<string, Promise<void>>();
+
+	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
+	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();
+	#pendingToolLoads = new Map<string, Promise<ToolLoadResult>>();
+	#sources = new Map<string, SourceMeta>();
+	// Last connection failure per server, retained so `/mcp list` can show *why*
+	// a server is not connected instead of a bare "not connected". Cleared when
+	// the server later connects. This is what lets the noisy startup banner shrink
+	// to a count without hiding the error (the detail lives in `/mcp list`).
+	#lastErrors = new Map<string, string>();
+	#eventSubscriptionFailures = new Map<string, string>();
+
+	#authStorage: AuthStorage | null = null;
+	#onNotification?: (serverName: string, method: string, params: unknown) => void;
+	#onToolsChanged?: (tools: CustomTool<TSchema, MCPToolDetails>[]) => void;
+	#onResourcesChanged?: (serverName: string, uri: string) => void;
+	#onPromptsChanged?: (serverName: string) => void;
+	#notificationsEnabled = false;
+	#notificationsEpoch = 0;
+	#subscribedResources = new Map<string, Set<string>>();
+	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
+	#pendingReconnections = new Map<string, Promise<MCPServerConnection | null>>();
+	#serverConfigs = new Map<string, MCPServerConfig>();
+	/**
+	 * Timestamps of recent `reconnectServer` invocations per server, used by the
+	 * crash-storm circuit breaker.
+	 */
+	#reconnectHistory = new Map<string, number[]>();
+	/** Monotonic epoch incremented on disconnectAll to invalidate stale reconnections. */
+	#epoch = 0;
+
+	constructor(
+		private cwd: string,
+		private toolCache: MCPToolCache | null = null,
+	) {}
+
+	/**
+	 * Set a callback to receive all server notifications.
+	 */
+	setOnNotification(handler: (serverName: string, method: string, params: unknown) => void): void {
+		this.#onNotification = handler;
+	}
+
+
+	setOnEvent(
+		handler:
+			| ((
+					serverName: string,
+					event: MCPEventOccurrence,
+					subscriptionKey: string,
+				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
+			| undefined,
+	): void {
+		this.#onEvent = handler;
+		if (handler) {
+			for (const [serverName, connection] of this.#connections) {
+				const config = this.#serverConfigs.get(serverName);
+				if (config?.events) void this.#startConfiguredEvents(serverName, connection, config.events);
+			}
+		} else {
+			for (const controller of this.#eventStartupControllers.values()) controller.abort();
+			this.#eventStartupControllers.clear();
+		}
+	}
+
+	setOnEventCursor(
+		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
+	): void {
+		this.#onEventCursor = handler;
+	}
+	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
+		this.#eventCursorProvider = provider;
+	}
+
+
+	setOnEventControl(
+		handler: ((serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">) | undefined,
+	): void {
+		this.#onEventControl = handler;
+	}
+
+	/** Promise of the current background event startup for this server, if in flight. */
+	getEventStartupPromise(serverName: string): Promise<void> | undefined {
+		return this.#eventStartupPromises.get(serverName);
+	}
+
+	/** Number of active event subscriptions for this server, or across all servers if omitted. */
+	getActiveEventSubscriptionCount(serverName?: string): number {
+		if (serverName === undefined) return this.#activeEvents.size;
+		let count = 0;
+		for (const key of this.#activeEvents.keys()) {
+			if (key.startsWith(`${serverName}\0`)) count++;
+		}
+		return count;
+	}
+
+	async #stopServerEvents(serverName: string): Promise<void> {
+		this.#eventStartupControllers.get(serverName)?.abort();
+		this.#eventStartupControllers.delete(serverName);
+		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
+		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
+		await Promise.allSettled(
+			matching.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+		);
+	}
+
+	async stopEvents(): Promise<void> {
+		for (const controller of this.#eventStartupControllers.values()) controller.abort();
+		this.#eventStartupControllers.clear();
+		const active = [...this.#activeEvents.entries()];
+		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
+		await Promise.allSettled(
+			active.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+		);
+		for (const [port, host] of this.#webhookHosts) {
+			this.#webhookHosts.delete(port);
+			await host.close();
+		}
+	}
+
+	async #startConfiguredEvents(
+		serverName: string,
+		connection: MCPServerConnection,
+		config: MCPServerConfig["events"],
+	): Promise<void> {
+		if (!this.#onEvent || !isMCPEventsEnabled(config) || !connection.capabilities.events) return;
+		const eventsConfig = config;
+		this.#eventStartupControllers.get(serverName)?.abort();
+		const controller = new AbortController();
+		this.#eventStartupControllers.set(serverName, controller);
+		const promise = (async () => {
+			let descriptors;
+			try {
+				descriptors = await listEvents(connection, { signal: controller.signal });
+			} catch (error) {
+				if (controller.signal.aborted) return;
+				logger.warn("Failed to list MCP event types", { path: `mcp:${serverName}`, error: errorMessage(error) });
+				return;
+			} finally {
+				if (this.#eventStartupControllers.get(serverName) === controller) {
+					this.#eventStartupControllers.delete(serverName);
+				}
+			}
+			if (
+				controller.signal.aborted ||
+				!this.#onEvent ||
+				this.#connections.get(serverName) !== connection
+			) {
+				return;
+			}
+			const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
+			for (const requested of eventsConfig.subscriptions) {
+				if (
+					controller.signal.aborted ||
+					!this.#onEvent ||
+					this.#connections.get(serverName) !== connection
+				) {
+					return;
+				}
+				const descriptor = byName.get(requested.name);
+				if (!descriptor || !descriptor.delivery.includes(requested.mode)) {
+					const key = this.#eventKey(serverName, requested);
+					const active = this.#activeEvents.get(key);
+					if (active) this.#stopEvent(key, active);
+					continue;
+				}
+				if (requested.mode === "push" && !connection.transport.streamRequest) {
+					logger.warn("Configured MCP event push mode is unsupported by this transport", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+					});
+					continue;
+				}
+				const key = this.#eventKey(serverName, requested);
+				if (this.#activeEvents.has(key)) continue;
+				const subscription: ActiveMCPEventSubscription = {
+					controller: new AbortController(),
+					serverName,
+					key,
+					seen: new Set(),
+					mode: requested.mode,
+					connection,
+					config: requested,
+					cursor: this.#eventCursorProvider?.(serverName, key) ?? null,
+				};
+				this.#activeEvents.set(key, subscription);
+				if (requested.mode === "poll") {
+					subscription.lifecycle = this.#pollEventLoop(serverName, connection, requested, key, subscription);
+				} else if (requested.mode === "push") {
+					this.#startEventStream(serverName, connection, requested, key, subscription);
+				} else {
+					subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+				}
+			}
+		})();
+		this.#eventStartupPromises.set(serverName, promise);
+		try {
+			await promise;
+		} finally {
+			if (this.#eventStartupPromises.get(serverName) === promise) {
+				this.#eventStartupPromises.delete(serverName);
+			}
+		}
+	}
+
+	async #subscribeWebhook(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): Promise<void> {
+		const webhook = requested.webhook;
+		if (!webhook || subscription.controller.signal.aborted) return;
+		const reference = webhook.secretRef;
+		if (!/^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(reference)) {
+			logger.error("MCP webhook secretRef must be an explicit environment reference", { path: `mcp:${serverName}` });
+			this.#stopEvent(key, subscription, false);
+			return;
+		}
+		let secret: string | undefined;
+		try {
+			secret = await resolveConfigValue(reference, `MCP webhook signing secret for ${serverName}`);
+		} catch (error) {
+			logger.warn("Failed to resolve MCP webhook secret reference", {
+				path: `mcp:${serverName}`,
+				error: errorMessage(error),
+			});
+			this.#stopEvent(key, subscription, false);
+			return;
+		}
+		if (
+			subscription.controller.signal.aborted ||
+			!this.#activeEvents.has(key) ||
+			this.#connections.get(serverName) !== connection
+		) {
+			return;
+		}
+		if (!secret) {
+			const variable = describeConfigEnvReference(reference)?.variable ?? reference;
+			const reason = `Environment variable "${variable}" for MCP event "${requested.name}" on server "${serverName}" is unset or empty.`;
+			this.#eventSubscriptionFailures.set(key, reason);
+			logger.warn("MCP event subscription failed", {
+				path: `mcp:${serverName}`,
+				event: requested.name,
+				environmentVariable: variable,
+				reason,
+			});
+			this.#stopEvent(key, subscription, false);
+			return;
+		}
+		this.#eventSubscriptionFailures.delete(key);
+		let callback: URL;
+		try {
+			callback = new URL(webhook.callbackUrl);
+		} catch {
+			logger.error("MCP webhook callback URL is invalid", { path: `mcp:${serverName}` });
+			return;
+		}
+		if (callback.protocol !== "https:" || callback.username !== "" || callback.password !== "" || callback.hash !== "") {
+			logger.error("MCP webhook callback must use HTTPS without embedded credentials or a fragment", { path: `mcp:${serverName}` });
+			return;
+		}
+		const path = callback.pathname;
+		if (
+			[...this.#webhookRegistrations].some(
+				([id, registration]) => id !== subscription.webhookId && registration.callbackPath === path,
+			) ||
+			this.#webhookVerificationRoutes.has(path)
+		) {
+			logger.error("MCP webhook callback path must be unique within this session", { path: `mcp:${serverName}` });
+			return;
+		}
+		const port = webhook.listenPort;
+		subscription.webhookPath = path;
+		subscription.webhookPort = port;
+		this.#webhookVerificationRoutes.set(path, { secret });
+		try {
+			if (!this.#webhookHosts.has(port)) {
+				this.#webhookHosts.set(port, startMCPWebhookHost(this.#webhookReceiver, port));
+			}
+			const result = await subscribeToEvents(
+				connection,
+				requested.name,
+				requested.arguments ?? {},
+				{ url: webhook.callbackUrl, secret },
+				subscription.cursor,
+				1_800_000,
+				{ signal: subscription.controller.signal },
+			);
+			if (
+				subscription.controller.signal.aborted ||
+				!this.#activeEvents.has(key) ||
+				this.#connections.get(serverName) !== connection
+			) {
+				this.#webhookVerificationRoutes.delete(path);
+				subscription.unsubscribe = unsubscribeFromEvents(
+					connection,
+					requested.name,
+					requested.arguments ?? {},
+					webhook.callbackUrl,
+				).catch(error => {
+					logger.warn("Failed to clean up canceled MCP webhook subscription", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+						error: errorMessage(error),
+					});
+				}).then(() => this.#closeUnusedWebhookHost(port));
+				await subscription.unsubscribe;
+				return;
+			}
+			if (subscription.webhookId) {
+				this.#webhookRegistrations.delete(subscription.webhookId);
+				this.#webhookSubscriptions.delete(subscription.webhookId);
+				this.#webhookPortById.delete(subscription.webhookId);
+			}
+			subscription.webhookId = result.id;
+			this.#webhookRegistrations.set(result.id, { secret, name: requested.name, callbackPath: path });
+			this.#webhookSubscriptions.set(result.id, { serverName, key });
+			this.#webhookPortById.set(result.id, port);
+			this.#webhookVerificationRoutes.delete(path);
+			if (result.truncated) {
+				await this.#recordEventControl(serverName, key, {
+					type: "gap",
+					messageId: `subscribe:${key}:${result.cursor ?? "null"}`,
+					cursor: result.cursor ?? null,
+				});
+			}
+			await this.#recordEventCursor(subscription, result.cursor ?? null);
+			if (
+				subscription.controller.signal.aborted ||
+				!this.#activeEvents.has(key) ||
+				this.#connections.get(serverName) !== connection
+			) {
+				return;
+			}
+			if (result.refreshBefore !== null) {
+				const refreshAt = Date.parse(result.refreshBefore) - Date.now() - 60_000;
+				subscription.timer = setTimeout(() => {
+					if (
+						!subscription.controller.signal.aborted &&
+						this.#activeEvents.get(key) === subscription &&
+						this.#connections.get(serverName) === connection
+					) {
+						subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+					}
+				}, Math.max(1_000, refreshAt));
+			}
+		} catch (error) {
+			this.#webhookVerificationRoutes.delete(path);
+			this.#closeUnusedWebhookHost(port);
+			logger.warn("MCP webhook subscription failed", {
+				path: `mcp:${serverName}`,
+				event: requested.name,
+				error: errorMessage(error),
+			});
+			if (
+				!subscription.controller.signal.aborted &&
+				this.#activeEvents.has(key) &&
+				this.#connections.get(serverName) === connection &&
+				subscription.webhookId
+			) {
+				this.#scheduleWebhookRetry(serverName, connection, requested, key, subscription);
+			} else {
+				this.#stopEvent(key, subscription);
+			}
+		}
+	}
+	#scheduleWebhookRetry(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): void {
+		if (
+			subscription.controller.signal.aborted ||
+			!this.#activeEvents.has(key) ||
+			this.#connections.get(serverName) !== connection
+		) return;
+		subscription.timer = setTimeout(() => {
+			if (
+				!subscription.controller.signal.aborted &&
+				this.#activeEvents.get(key) === subscription &&
+				this.#connections.get(serverName) === connection
+			) {
+				subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
+			}
+		}, 5_000);
+	}
+
+	async #refreshEventDescriptors(serverName: string): Promise<void> {
+		const connection = this.#connections.get(serverName);
+		const config = this.#serverConfigs.get(serverName);
+		if (!connection || !config?.events || !this.#onEvent) return;
+		await this.#startConfiguredEvents(serverName, connection, config.events);
+	}
+
+	async #recordEventCursor(subscription: ActiveMCPEventSubscription, cursor: string | null): Promise<void> {
+		const handler = this.#onEventCursor;
+		if (!handler) throw new Error("MCP event cursor callback is not configured");
+		await handler(subscription.serverName, subscription.key, cursor);
+		subscription.cursor = cursor;
+	}
+
+	async #recordEventControl(
+		serverName: string,
+		key: string,
+		control: MCPWebhookControl,
+	): Promise<void | "queued" | "duplicate"> {
+		const handler = this.#onEventControl;
+		if (!handler) throw new Error("MCP event control callback is not configured");
+		return await handler(serverName, key, control);
+	}
+
+	#eventKey(serverName: string, subscription: MCPServerEventSubscriptionConfig): string {
+		return `${serverName}\0${subscription.name}\0${JSON.stringify(subscription.arguments ?? {})}`;
+	}
+	async #deliverEvent(
+		serverName: string,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+		event: MCPEventOccurrence,
+		cursor?: string | null,
+		commitOccurrenceCursor = true,
+	): Promise<boolean> {
+		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return false;
+		if (!isMCPEventOccurrence(event) || event.name !== subscription.config?.name) {
+			logger.warn("Skipping invalid MCP event occurrence", {
+				path: `mcp:${serverName}`,
+				event: (event as unknown as Record<string, unknown>)?.name,
+			});
+			return false;
+		}
+		if (!this.#onEvent) throw new Error("MCP event callback is not configured");
+		const hasEventCursor = event.cursor !== undefined || cursor !== undefined;
+		const eventCursor = event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
+		if (subscription.seen.has(event.eventId)) return false;
+		const deliveryEvent = { ...event, cursor: eventCursor };
+		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
+		if (commitOccurrenceCursor && hasEventCursor) await this.#recordEventCursor(subscription, eventCursor);
+		subscription.seen.add(event.eventId);
+		if (subscription.seen.size > 10_000) subscription.seen.delete(subscription.seen.values().next().value!);
+		return outcome !== "duplicate";
+	}
+	async #pollEventLoop(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): Promise<void> {
+		while (!subscription.controller.signal.aborted && this.#activeEvents.has(key)) {
+			const previousCursor = subscription.cursor;
+			try {
+				const result = await pollEvents(
+					connection,
+					requested.name,
+					requested.arguments ?? {},
+					previousCursor,
+					{ signal: subscription.controller.signal },
+				);
+				for (const event of result.events) {
+					await this.#deliverEvent(serverName, key, subscription, event, undefined, false);
+				}
+				if (result.truncated) {
+					await this.#recordEventControl(serverName, key, {
+						type: "gap",
+						messageId: `poll:${key}:${result.cursor ?? "null"}`,
+						cursor: result.cursor ?? null,
+					});
+				}
+				await this.#recordEventCursor(subscription, result.cursor ?? null);
+				if (result.hasMore) continue;
+				const delay = Math.max(1_000, Number.isFinite(result.nextPollMs) ? result.nextPollMs! : 30_000);
+				await waitForMCPEventDelay(delay, subscription.controller.signal, timer => {
+					subscription.timer = timer;
+				});
+				subscription.timer = undefined;
+			} catch (error) {
+				if (subscription.controller.signal.aborted) continue;
+				const code = mcpErrorCode(error);
+				if (code === -32024) {
+					this.#stopEvent(key, subscription);
+				} else if ([-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
+					this.#stopEvent(key, subscription);
+					void this.#refreshEventDescriptors(serverName);
+				} else {
+					logger.warn("MCP event poll failed", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+						error: errorMessage(error),
+					});
+					await waitForMCPEventDelay(5_000, subscription.controller.signal, timer => {
+						subscription.timer = timer;
+					});
+					subscription.timer = undefined;
+				}
+			}
+		}
+	}
+
+	#startEventStream(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): void {
+		const streamRequest = connection.transport.streamRequest;
+		if (!streamRequest) {
+			this.#stopEvent(key, subscription, false);
+			logger.warn("Configured MCP event push mode is unsupported by this transport", {
+				path: `mcp:${serverName}`,
+				event: requested.name,
+			});
+			return;
+		}
+		let streamId: string | number | undefined;
+		subscription.streamProcessing = Promise.resolve();
+		subscription.streamFailed = false;
+		const stream = streamRequest.call(
+			connection.transport,
+			"events/stream",
+			{ name: requested.name, arguments: requested.arguments ?? {}, cursor: subscription.cursor },
+			notification => {
+				if (!("method" in notification)) return;
+				const params = notification.params;
+				const value = params && typeof params === "object" ? params as Record<string, unknown> : undefined;
+				const metadata = value?._meta as Record<string, unknown> | undefined;
+				const notificationId = metadata?.["io.modelcontextprotocol/subscriptionId"];
+				if (streamId === undefined || notificationId !== streamId) {
+					if (notification.method === "notifications/events/list_changed" && notificationId === undefined) {
+						this.#handleServerNotification(serverName, notification.method, params);
+					}
+					return;
+				}
+				if (!notification.method.startsWith("notifications/events/")) return;
+				this.#armStreamHeartbeat(subscription);
+				subscription.streamProcessing = subscription.streamProcessing!.then(async () => {
+					if (subscription.streamFailed || subscription.controller.signal.aborted) return;
+					if (!value) throw new Error("MCP event stream frame has no params");
+					const rawCursor = value.cursor;
+					if (rawCursor !== undefined && rawCursor !== null && typeof rawCursor !== "string") {
+						throw new Error("MCP event stream frame has an invalid cursor");
+					}
+					const cursor = rawCursor === undefined ? undefined : rawCursor;
+					const controlMessageId =
+						`push:${key}:${notification.method}:${cursor ?? "null"}:${String((value.error as { code?: unknown } | undefined)?.code ?? "")}`;
+					if (notification.method === "notifications/events/event") {
+						if (!isMCPEventOccurrence(value) || value.name !== requested.name) {
+							// Throwing here would cancel the stream and reopen it at the same cursor; the server would
+							// resend this frame and the subscription would never move past it. Drop it as poll mode does.
+							logger.warn("Skipping invalid MCP event occurrence", {
+								path: `mcp:${serverName}`,
+								event: value.name,
+							});
+							if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+							return;
+						}
+						await this.#deliverEvent(serverName, key, subscription, value, cursor);
+					} else if (
+						notification.method === "notifications/events/active" ||
+						notification.method === "notifications/events/heartbeat"
+					) {
+						if (notification.method === "notifications/events/active" && value.truncated === true) {
+							await this.#recordEventControl(serverName, key, {
+								type: "gap",
+								messageId: controlMessageId,
+								...(cursor !== undefined ? { cursor } : {}),
+							});
+						}
+						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+					} else if (notification.method === "notifications/events/gap") {
+						await this.#recordEventControl(serverName, key, {
+							type: "gap",
+							messageId: controlMessageId,
+							...(cursor !== undefined ? { cursor } : {}),
+						});
+						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+					} else if (notification.method === "notifications/events/error") {
+						const error = value.error as { code?: unknown } | undefined;
+						logger.warn("MCP event stream reported a transient error", {
+							path: `mcp:${serverName}`,
+							event: requested.name,
+							code: typeof error?.code === "number" ? error.code : undefined,
+						});
+					} else if (notification.method === "notifications/events/list_changed") {
+						await this.#refreshEventDescriptors(serverName);
+					} else if (notification.method === "notifications/events/terminated") {
+						const error = value.error as { code?: number; message?: string; data?: Record<string, unknown> } | undefined;
+						const code = error?.code;
+						await this.#recordEventControl(serverName, key, {
+							type: "terminated",
+							messageId: controlMessageId,
+							error: {
+								code: typeof code === "number" ? code : 0,
+								message: typeof error?.message === "string" ? error.message : "MCP event stream terminated",
+								...(error?.data ? { data: error.data } : {}),
+							},
+						});
+						this.#stopEvent(key, subscription, false);
+						if (code !== -32024 && [-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
+							void this.#refreshEventDescriptors(serverName);
+						}
+					}
+				}).catch(error => {
+					subscription.streamFailed = true;
+					logger.warn("Failed to persist MCP event stream frame", {
+						path: `mcp:${serverName}`,
+						event: requested.name,
+						error: errorMessage(error),
+					});
+					subscription.stream?.cancel();
+				});
+			},
+			{
+				signal: subscription.controller.signal,
+				timeoutMs: 0,
+				onRequestId: id => {
+					streamId = id;
+				},
+			},
+		);
+		subscription.stream = stream;
+		this.#armStreamHeartbeat(subscription);
+		const finish = async (error?: unknown): Promise<void> => {
+			await subscription.streamProcessing;
+			if (subscription.controller.signal.aborted) return;
+			const code = error === undefined ? undefined : mcpErrorCode(error);
+			if (code === -32024) {
+				this.#stopEvent(key, subscription);
+				return;
+			}
+			if (code !== undefined && [-32023, -32026, -32011, -32012, -32015].includes(code)) {
+				this.#stopEvent(key, subscription, false);
+				void this.#refreshEventDescriptors(serverName);
+				return;
+			}
+			if (error !== undefined) {
+				logger.warn("MCP event stream ended", {
+					path: `mcp:${serverName}`,
+					event: requested.name,
+					error: errorMessage(error),
+				});
+			}
+			this.#scheduleStreamRestart(serverName, connection, requested, key, subscription);
+		};
+		void stream.done.then(() => finish(), error => finish(error));
+	}
+	#armStreamHeartbeat(subscription: ActiveMCPEventSubscription): void {
+		clearTimeout(subscription.timer);
+		subscription.timer = setTimeout(() => {
+			if (!subscription.controller.signal.aborted) subscription.stream?.cancel();
+		}, MCP_EVENT_STREAM_HEARTBEAT_TIMEOUT_MS);
+	}
+
+	#scheduleStreamRestart(
+		serverName: string,
+		connection: MCPServerConnection,
+		requested: MCPServerEventSubscriptionConfig,
+		key: string,
+		subscription: ActiveMCPEventSubscription,
+	): void {
+		if (subscription.controller.signal.aborted || !this.#activeEvents.has(key)) return;
+		clearTimeout(subscription.timer);
+		subscription.timer = setTimeout(() => {
+			if (!subscription.controller.signal.aborted && this.#activeEvents.has(key)) {
+				this.#startEventStream(serverName, connection, requested, key, subscription);
+			}
+		}, 5_000);
+	}
+	#stopEvent(key: string, subscription: ActiveMCPEventSubscription, unsubscribeWebhook = true): void {
+		if (this.#activeEvents.get(key) !== subscription) return;
+		this.#activeEvents.delete(key);
+		clearTimeout(subscription.timer);
+		subscription.controller.abort();
+		subscription.stream?.cancel();
+		const id = subscription.webhookId;
+		const port = subscription.webhookPort;
+		if (subscription.webhookPath) this.#webhookVerificationRoutes.delete(subscription.webhookPath);
+		if (id) {
+			this.#webhookRegistrations.delete(id);
+			this.#webhookSubscriptions.delete(id);
+			this.#webhookPortById.delete(id);
+		}
+		const closeHost = port === undefined ? undefined : () => this.#closeUnusedWebhookHost(port);
+		if (id && unsubscribeWebhook && subscription.connection && subscription.config?.webhook) {
+			subscription.unsubscribe = unsubscribeFromEvents(
+				subscription.connection,
+				subscription.config.name,
+				subscription.config.arguments ?? {},
+				subscription.config.webhook.callbackUrl,
+			).catch(error => {
+				logger.warn("Failed to unsubscribe MCP webhook", {
+					path: `mcp:${subscription.connection?.name ?? "unknown"}`,
+					event: subscription.config?.name,
+					error: errorMessage(error),
+				});
+			}).then(closeHost);
+		} else if (closeHost) {
+			subscription.unsubscribe = closeHost();
+		}
+	}
+
+	async #closeUnusedWebhookHost(port: number): Promise<void> {
+		if (
+			[...this.#webhookPortById.values()].includes(port) ||
+			[...this.#activeEvents.values()].some(subscription => subscription.webhookPort === port)
+		) return;
+		const host = this.#webhookHosts.get(port);
+		if (!host) return;
+		this.#webhookHosts.delete(port);
+		await host.close();
+	}
+
+	/**
+	 * Set a callback to fire when any server's tools change.
+	 */
+	setOnToolsChanged(handler: (tools: CustomTool<TSchema, MCPToolDetails>[]) => void): void {
+		this.#onToolsChanged = handler;
+	}
+
+	/**
+	 * Set a callback to fire when any server's resources change.
+	 */
+	setOnResourcesChanged(handler: (serverName: string, uri: string) => void): void {
+		this.#onResourcesChanged = handler;
+	}
+
+	/**
+	 * Set a callback to fire when any server's prompts change.
+	 */
+	setOnPromptsChanged(handler: (serverName: string) => void): void {
+		this.#onPromptsChanged = handler;
+		// Fire immediately for servers that already have prompts loaded
+		for (const [name, connection] of this.#connections) {
+			if (connection.prompts?.length) {
+				handler(name);
+			}
+		}
+	}
+
+	#subscribeAndTrack(name: string, connection: MCPServerConnection, uris: string[], notificationEpoch: number): void {
+		void subscribeToResources(connection, uris)
+			.then(() => {
+				const action = resolveSubscriptionPostAction(
+					this.#notificationsEnabled,
+					this.#notificationsEpoch,
+					notificationEpoch,
+				);
+				if (action === "rollback") {
+					void unsubscribeFromResources(connection, uris).catch(error => {
+						logger.debug("Failed to rollback stale MCP resource subscription", {
+							path: `mcp:${name}`,
+							error,
+						});
+					});
+					return;
+				}
+				if (action === "ignore") {
+					return;
+				}
+				this.#subscribedResources.set(name, new Set(uris));
+			})
+			.catch(error => {
+				logger.debug("Failed to subscribe to MCP resources", { path: `mcp:${name}`, error });
+			});
+	}
+
+	setNotificationsEnabled(enabled: boolean): void {
+		const wasEnabled = this.#notificationsEnabled;
+		this.#notificationsEnabled = enabled;
+		if (enabled === wasEnabled) return;
+
+		this.#notificationsEpoch += 1;
+		const notificationEpoch = this.#notificationsEpoch;
+
+		if (enabled) {
+			// Subscribe to all connected servers that support it
+			for (const [name, connection] of this.#connections) {
+				if (connection.capabilities.resources?.subscribe && connection.resources) {
+					const uris = connection.resources.map(r => r.uri);
+					this.#subscribeAndTrack(name, connection, uris, notificationEpoch);
+				}
+			}
+			return;
+		}
+
+		// Unsubscribe from all servers
+		for (const [name, connection] of this.#connections) {
+			const uris = this.#subscribedResources.get(name);
+			if (uris && uris.size > 0) {
+				void unsubscribeFromResources(connection, Array.from(uris)).catch(error => {
+					logger.debug("Failed to unsubscribe MCP resources", { path: `mcp:${name}`, error });
+				});
+			}
+		}
+		this.#subscribedResources.clear();
+	}
+
+	/**
+	 * Set the auth storage for resolving OAuth credentials.
+	 */
+	setAuthStorage(authStorage: AuthStorage): void {
+		this.#authStorage = authStorage;
+	}
+
+	/**
+	 * Discover and connect to every MCP server the capability system reports.
+	 * Returns tools and any connection errors.
+	 */
+	async discoverAndConnect(options?: MCPDiscoverOptions): Promise<MCPLoadResult> {
+		let loadedConfigs: LoadMCPConfigsResult;
+		try {
+			loadedConfigs = await loadAllMCPConfigs(this.cwd, {
+				filterExa: options?.filterExa,
+				filterBrowser: options?.filterBrowser,
+				agentDir: options?.agentDir,
+			});
+		} catch (error) {
+			const message = errorMessage(error);
+			options?.onStatus?.({ type: "failed", serverName: MCP_CONFIG_STATUS_LABEL, error: message });
+			throw error;
+		}
+		const { exaApiKeys, warnings } = loadedConfigs;
+		const { configs, sources } = mergeRuntimeMCPConfig(
+			loadedConfigs.configs,
+			loadedConfigs.sources,
+			options?.runtimeConfig,
+		);
+		const result = await this.connectServers(configs, sources, options?.onStatus);
+		result.exaApiKeys = exaApiKeys;
+		// AFTER `connectServers`, not before: its `connecting` event resets the
+		// subscriber's failed-server map, so a warning emitted first is wiped
+		// before anyone renders it.
+		//
+		// A config the loader could not read produces no server name at all, so
+		// the per-server failure path above can never speak for it and the boot
+		// health zone would report a clean start with the user's servers simply
+		// gone. Reported under the same pseudo-server label the whole-load
+		// failure already uses.
+		for (const warning of warnings) {
+			this.#lastErrors.set(MCP_CONFIG_STATUS_LABEL, warning);
+			options?.onStatus?.({ type: "failed", serverName: MCP_CONFIG_STATUS_LABEL, error: warning });
+		}
+		return result;
+	}
+
+	/**
+	 * Connect to specific MCP servers.
+	 * Connections are made in parallel for faster startup.
+	 */
+	async connectServers(
+		configs: Record<string, MCPServerConfig>,
+		sources: Record<string, SourceMeta>,
+		onStatus?: (event: McpConnectionStatusEvent) => void,
+	): Promise<MCPLoadResult> {
+		type ConnectionTask = {
+			name: string;
+			config: MCPServerConfig;
+			tracked: TrackedPromise<ToolLoadResult>;
+			toolsPromise: Promise<ToolLoadResult>;
+		};
+
+		const errors = new Map<string, string>();
+		const connectedServers = new Set<string>();
+		const allTools: CustomTool<TSchema, MCPToolDetails>[] = [];
+		const reportedErrors = new Set<string>();
+		let allowBackgroundLogging = false;
+		const statusServerNames: string[] = [];
+		const validationFailures: Array<{ name: string; message: string }> = [];
+
+		// Prepare connection tasks
+		const connectionTasks: ConnectionTask[] = [];
+
+		for (const [name, config] of Object.entries(configs)) {
+			if (sources[name]) {
+				this.#sources.set(name, sources[name]);
+				const existing = this.#connections.get(name);
+				if (existing) {
+					existing._source = sources[name];
+				}
+			}
+
+			// Skip if already connected
+			if (this.#connections.has(name)) {
+				connectedServers.add(name);
+				continue;
+			}
+
+			if (
+				this.#pendingConnections.has(name) ||
+				this.#pendingToolLoads.has(name) ||
+				this.#pendingReconnections.has(name)
+			) {
+				continue;
+			}
+
+			statusServerNames.push(name);
+
+			// Validate config
+			const validationErrors = validateServerConfig(name, config);
+			if (validationErrors.length > 0) {
+				const message = validationErrors.join("; ");
+				errors.set(name, message);
+				validationFailures.push({ name, message });
+				reportedErrors.add(name);
+				continue;
+			}
+
+			// Save config early so reconnection works even if the initial connect times out
+			// and falls back to cached/deferred tools.
+			this.#serverConfigs.set(name, config);
+
+			// Resolve auth config before connecting, but do so per-server in parallel.
+			const connectionPromise = (async () => {
+				const resolvedConfig = await this.#resolveAuthConfig(config);
+				return connectToServer(name, resolvedConfig, {
+					onNotification: (method, params) => {
+						this.#handleServerNotification(name, method, params);
+					},
+					onRequest: (method, params) => {
+						return this.#handleServerRequest(method, params);
+					},
+					...this.#stdioSpawnHooks(),
+				});
+			})().then(
+				connection => {
+					// Store original config (without resolved tokens) to keep
+					// cache keys stable and avoid leaking rotating credentials.
+					connection.config = config;
+					this.#serverConfigs.set(name, config);
+					if (config.events) void this.#startConfiguredEvents(name, connection, config.events);
+					if (sources[name]) {
+						connection._source = sources[name];
+					}
+					if (this.#pendingConnections.get(name) === connectionPromise) {
+						this.#pendingConnections.delete(name);
+						this.#connections.set(name, connection);
+					}
+
+					// Wire auth refresh for HTTP-like transports so 401s trigger a fresh credential.
+					// Two kinds qualify, and the second used to be missed entirely: a resolvable
+					// managed OAuth credential (definition-only configs get Bearer injection too and
+					// need the same mid-session refresh), and a `!command` header, which is a server
+					// whose token is minted or read on demand. Without the hook, a rotated token
+					// meant 401s until the process restarted, because nothing ever re-ran the
+					// command.
+					if (
+						isAuthRefreshableMCPTransport(connection.transport) &&
+						(lookupMcpOAuthCredential(this.#authStorage, config) || hasMcpConfigCommands(config))
+					) {
+						connection.transport.onAuthError = async () => {
+							const refreshed = await this.#resolveAuthConfig(config, {
+								forceRefresh: true,
+								refreshCommands: true,
+							});
+							if (refreshed.type === "http" || refreshed.type === "sse") {
+								return refreshed.headers ?? null;
+							}
+							return null;
+						};
+					}
+
+					// Re-establish connection if the transport closes (server restart,
+					// network interruption).
+					connection.transport.onClose = () => {
+						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
+						this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
+						void this.#stopServerEvents(name).then(() => this.reconnectServer(name));
+					};
+
+					return connection;
+				},
+				error => {
+					if (this.#pendingConnections.get(name) === connectionPromise) {
+						this.#pendingConnections.delete(name);
+					}
+					throw error;
+				},
+			);
+			this.#pendingConnections.set(name, connectionPromise);
+
+			const toolsPromise = connectionPromise.then(async connection => {
+				const serverTools = await listTools(connection);
+				return { connection, serverTools };
+			});
+			this.#pendingToolLoads.set(name, toolsPromise);
+
+			const tracked = trackPromise(toolsPromise);
+			connectionTasks.push({ name, config, tracked, toolsPromise });
+
+			void toolsPromise
+				.then(async ({ connection, serverTools }) => {
+					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
+					this.#pendingToolLoads.delete(name);
+					const reconnect = () => this.reconnectServer(name);
+					const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
+					this.#replaceServerTools(name, customTools);
+					this.#onToolsChanged?.(this.#tools);
+					void this.toolCache?.set(name, config, serverTools);
+
+					this.#lastErrors.delete(name);
+					onStatus?.({ type: "connected", serverName: name });
+					await this.#loadServerResourcesAndPrompts(name, connection);
+				})
+				.catch(error => {
+					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
+					this.#pendingToolLoads.delete(name);
+					const message = errorMessage(error);
+					this.#lastErrors.set(name, message);
+					onStatus?.({ type: "failed", serverName: name, error: message, foreign: this.#isForeignServer(name) });
+					if (!allowBackgroundLogging || reportedErrors.has(name)) return;
+					logger.error("MCP tool load failed", { path: `mcp:${name}`, error: message });
+				});
+		}
+
+		// Notify about servers we're connecting to, including configs that fail fast.
+		if (statusServerNames.length > 0 && onStatus) {
+			onStatus({ type: "connecting", serverNames: statusServerNames });
+			for (const { name, message } of validationFailures) {
+				this.#lastErrors.set(name, message);
+				onStatus({ type: "failed", serverName: name, error: message, foreign: this.#isForeignServer(name) });
+			}
+		}
+
+		if (connectionTasks.length > 0) {
+			await settleWithin(
+				Promise.allSettled(connectionTasks.map(task => task.tracked.promise)),
+				STARTUP_TOOL_WAIT_MS,
+				undefined,
+			);
+
+			const cachedTools = new Map<string, MCPToolDefinition[]>();
+			const pendingTasks = connectionTasks.filter(task => task.tracked.status === "pending");
+
+			if (pendingTasks.length > 0 && this.toolCache) {
+				await Promise.all(
+					pendingTasks.map(async task => {
+						const cached = await this.toolCache?.get(task.name, task.config);
+						if (cached) {
+							cachedTools.set(task.name, cached);
+						}
+					}),
+				);
+			}
+
+			// Pending tasks without cached tools used to be awaited synchronously here,
+			// which gated the entire UI on the slowest server's per-request timeout
+			// (issue #2100: a single unresponsive MCP server blocked startup for the
+			// full 30 s `VEYYON_MCP_TIMEOUT_MS`). Leave them in flight — the background
+			// `void toolsPromise.then(...)` chain above registers their tools and
+			// fires `#onToolsChanged` once the connect finishes, or logs the failure
+			// after `allowBackgroundLogging` flips below.
+
+			for (const task of connectionTasks) {
+				const { name } = task;
+				if (task.tracked.status === "fulfilled") {
+					const value = task.tracked.value;
+					if (!value) continue;
+					const { connection, serverTools } = value;
+					connectedServers.add(name);
+					const reconnect = () => this.reconnectServer(name);
+					const mcpTools = MCPTool.fromTools(connection, serverTools, reconnect);
+					for (let ti = 0; ti < mcpTools.length; ti++) allTools.push(mcpTools[ti]!);
+				} else if (task.tracked.status === "rejected") {
+					const message = errorMessage(task.tracked.reason);
+					errors.set(name, message);
+					reportedErrors.add(name);
+				} else {
+					const cached = cachedTools.get(name);
+					if (cached) {
+						const source = this.#sources.get(name);
+						const reconnect = () => this.reconnectServer(name);
+						const deferred = DeferredMCPTool.fromTools(
+							name,
+							cached,
+							() => this.waitForConnection(name),
+							source,
+							reconnect,
+						);
+						for (let ti = 0; ti < deferred.length; ti++) allTools.push(deferred[ti]!);
+					}
+				}
+			}
+		}
+
+		// Stable sort by name so the order is independent of connection completion.
+		// See `sortMCPToolsByName` for the cache-stability rationale.
+		sortMCPToolsByName(allTools);
+
+		// Update cached tools
+		this.#tools = allTools;
+		allowBackgroundLogging = true;
+
+		return {
+			tools: allTools,
+			errors,
+			connectedServers: Array.from(connectedServers),
+			exaApiKeys: [], // Will be populated by discoverAndConnect
+		};
+	}
+
+	#replaceServerTools(name: string, tools: CustomTool<TSchema, MCPToolDetails>[]): void {
+		// The prefix must be derived the same way the tool names were, or a server
+		// whose name needed sanitizing keeps its stale tools AND gains a second
+		// copy on every reconnect. See `mcpToolNamePrefix`.
+		const prefix = mcpToolNamePrefix(name);
+		this.#tools = this.#tools.filter(t => !t.name.startsWith(prefix));
+		for (let ti = 0; ti < tools.length; ti++) this.#tools.push(tools[ti]!);
+		// Stable sort by name so reconnect order does not perturb the array.
+		// See `sortMCPToolsByName` for the cache-stability rationale.
+		sortMCPToolsByName(this.#tools);
+	}
+
+	#triggerNotificationRefresh(serverName: string, kind: "tools" | "resources" | "prompts"): void {
+		const refresh = (() => {
+			switch (kind) {
+				case "tools":
+					return this.refreshServerTools(serverName);
+				case "resources":
+					return this.refreshServerResources(serverName);
+				case "prompts":
+					return this.refreshServerPrompts(serverName);
+			}
+		})();
+		void refresh.catch(error => {
+			logger.debug("Failed MCP notification refresh", { path: `mcp:${serverName}`, kind, error });
+		});
+	}
+	#handleServerNotification(serverName: string, method: string, params: unknown): void {
+		logger.debug("MCP notification received", { path: `mcp:${serverName}`, method });
+		switch (method) {
+			case MCPNotificationMethods.TOOLS_LIST_CHANGED:
+				this.#triggerNotificationRefresh(serverName, "tools");
+				break;
+			case MCPNotificationMethods.RESOURCES_LIST_CHANGED:
+				this.#triggerNotificationRefresh(serverName, "resources");
+				break;
+			case MCPNotificationMethods.RESOURCES_UPDATED: {
+				const uri = (params as { uri?: string })?.uri;
+				const subscribed = this.#subscribedResources.get(serverName);
+				if (uri && subscribed?.has(uri)) {
+					this.#onResourcesChanged?.(serverName, uri);
+				}
+				break;
+			}
+			case MCPNotificationMethods.PROMPTS_LIST_CHANGED:
+				this.#triggerNotificationRefresh(serverName, "prompts");
+				break;
+			case "notifications/events/list_changed":
+				void this.#refreshEventDescriptors(serverName);
+				break;
+			default:
+				break;
+		}
+
+		this.#onNotification?.(serverName, method, params);
+	}
+
+	/** Handle server-to-client JSON-RPC requests (e.g. ping, roots/list). */
+	async #handleServerRequest(method: string, _params: unknown): Promise<unknown> {
+		switch (method) {
+			case "ping":
+				return {};
+			case "roots/list":
+				return this.#getRoots();
+			default:
+				throw Object.assign(
+					new Error(
+						`This MCP client does not implement the server-to-client request "${method}". It answers "ping" and "roots/list" only. Fix: nothing for the operator to do; the server should treat -32601 as "unsupported" and continue. If it does not, report the method name to the server's maintainer.`,
+					),
+					{ code: -32601 },
+				);
+		}
+	}
+
+	#getRoots(): { roots: Array<{ uri: string; name: string }> } {
+		return {
+			roots: [
+				{
+					uri: url.pathToFileURL(this.cwd).href,
+					name: path.basename(this.cwd),
+				},
+			],
+		};
+	}
+
+	/**
+	 * Get all loaded tools.
+	 */
+	getTools(): CustomTool<TSchema, MCPToolDetails>[] {
+		return this.#tools;
+	}
+
+	/**
+	 * Get a specific connection.
+	 */
+	getConnection(name: string): MCPServerConnection | undefined {
+		return this.#connections.get(name);
+	}
+
+	/**
+	 * Get current connection status for a server.
+	 */
+	getConnectionStatus(name: string): "connected" | "connecting" | "disconnected" {
+		if (this.#connections.has(name)) return "connected";
+		if (
+			this.#pendingConnections.has(name) ||
+			this.#pendingToolLoads.has(name) ||
+			this.#pendingReconnections.has(name)
+		)
+			return "connecting";
+		return "disconnected";
+	}
+
+	/**
+	 * The last connection failure for a server, if it failed and has not since
+	 * reconnected. Lets `/mcp list` explain a "not connected" server instead of
+	 * leaving the operator to guess — the detail the compact startup banner omits.
+	 */
+	getLastError(name: string): string | undefined {
+		if (this.#connections.has(name)) return undefined;
+		return this.#lastErrors.get(name);
+	}
+
+	/** The failure state for one configured event subscription, independent of transport health. */
+	getEventSubscriptionStatus(
+		serverName: string,
+		subscription: MCPServerEventSubscriptionConfig,
+	): Readonly<{ status: "failed"; reason: string }> | undefined {
+		const reason = this.#eventSubscriptionFailures.get(this.#eventKey(serverName, subscription));
+		return reason === undefined ? undefined : { status: "failed", reason };
+	}
+
+	/**
+	 * Get the source metadata for a server.
+	 */
+	getSource(name: string): SourceMeta | undefined {
+		return this.#sources.get(name) ?? this.#connections.get(name)?._source;
+	}
+
+	/** True when the server was imported from another tool's config (Claude Code, Codex, …). */
+	#isForeignServer(name: string): boolean {
+		const provider = this.getSource(name)?.provider;
+		return provider !== undefined && FOREIGN_PROVIDER_IDS.has(provider);
+	}
+
+	/**
+	 * Get the preserved (pre-auth) config for a known server — whether currently
+	 * connected or merely discovered (a connect was attempted but may have failed,
+	 * e.g. an OAuth server that has not been authorized yet). Mirrors the
+	 * reconnect lookup at {@link reconnectServer} so callers like `/mcp reauth`
+	 * can recover a discovered server's config without re-reading config files.
+	 */
+	getServerConfig(name: string): MCPServerConfig | undefined {
+		return this.#connections.get(name)?.config ?? this.#serverConfigs.get(name);
+	}
+
+	/**
+	 * Wait for a connection to complete (or fail).
+	 */
+	async waitForConnection(name: string): Promise<MCPServerConnection> {
+		const connection = this.#connections.get(name);
+		if (connection) return connection;
+		const pending = this.#pendingConnections.get(name);
+		if (pending) return pending;
+		// If a reconnection is in flight, wait for it to complete
+		const reconnecting = this.#pendingReconnections.get(name);
+		if (reconnecting) {
+			const result = await reconnecting;
+			if (result) return result;
+		}
+		throw new Error(
+			`MCP server "${name}" is not connected, and no connection or reconnection to it is in flight. Fix: run \`/mcp list\` to check the name and whether the server is enabled, then \`/mcp reconnect ${name}\`. \`/mcp test ${name}\` reports why the connection fails.`,
+		);
+	}
+
+	/**
+	 * Resolve auth and shell-command substitutions in config before connecting.
+	 * Pass `oauth: false` to skip OAuth credential injection (used by reauth's
+	 * unauthenticated probe, which must observe the server's bare 401).
+	 */
+	async prepareConfig(config: MCPServerConfig, options?: { oauth?: boolean }): Promise<MCPServerConfig> {
+		return this.#resolveAuthConfig(config, options);
+	}
+
+	/**
+	 * Get all connected server names.
+	 */
+	getConnectedServers(): string[] {
+		return Array.from(this.#connections.keys());
+	}
+
+	/**
+	 * Get all known server names (connected, connecting, or discovered).
+	 */
+	getAllServerNames(): string[] {
+		const names = new Set<string>(this.#sources.keys());
+		for (const name of this.#connections.keys()) names.add(name);
+		for (const name of this.#pendingConnections.keys()) names.add(name);
+		return Array.from(names);
+	}
+
+	/**
+	 * Disconnect from a specific server.
+	 */
+	async disconnectServer(name: string): Promise<void> {
+		await this.#stopServerEvents(name);
+		this.#pendingConnections.delete(name);
+		this.#pendingToolLoads.delete(name);
+		this.#pendingReconnections.delete(name);
+		this.#sources.delete(name);
+		this.#serverConfigs.delete(name);
+		this.#pendingResourceRefresh.delete(name);
+		this.#reconnectHistory.delete(name);
+
+		const connection = this.#connections.get(name);
+
+		const subscribedUris = this.#subscribedResources.get(name);
+		if (subscribedUris && subscribedUris.size > 0 && connection) {
+			// The connection is disconnected a few lines below, which drops every subscription with it, so an
+			// unsubscribe that fails costs nothing: it is a courtesy to the server, not state we still need.
+			void unsubscribeFromResources(connection, Array.from(subscribedUris)).catch(() => {});
+		}
+		this.#subscribedResources.delete(name);
+
+		if (connection) {
+			// Detach onClose to prevent spurious reconnect from close()
+			connection.transport.onClose = undefined;
+			await disconnectServer(connection);
+			this.#connections.delete(name);
+		}
+
+		// Remove tools from this server and notify consumers
+		const hadTools = this.#tools.some(t => t.name.startsWith(`mcp__${name}_`));
+		// The prefix must be derived the same way the tool names were, or a server
+		// whose name needed sanitizing keeps its stale tools AND gains a second
+		// copy on every reconnect. See `mcpToolNamePrefix`.
+		const prefix = mcpToolNamePrefix(name);
+		this.#tools = this.#tools.filter(t => !t.name.startsWith(prefix));
+		if (hadTools) this.#onToolsChanged?.(this.#tools);
+
+		// Notify prompt consumers so stale commands are cleared
+		if (connection?.prompts?.length) this.#onPromptsChanged?.(name);
+	}
+
+	/**
+	 * Disconnect from all servers.
+	 */
+	async disconnectAll(): Promise<void> {
+		// Invalidate any in-flight reconnection attempts that outlive this call.
+		// They captured the old epoch; after increment they'll detect staleness.
+		this.#epoch++;
+		await this.stopEvents();
+		// Detach onClose before closing to prevent spurious reconnect attempts
+		for (const conn of this.#connections.values()) {
+			conn.transport.onClose = undefined;
+		}
+		const promises = Array.from(this.#connections.values()).map(conn => disconnectServer(conn));
+		await Promise.allSettled(promises);
+
+		this.#pendingConnections.clear();
+		this.#pendingToolLoads.clear();
+		this.#pendingReconnections.clear();
+		this.#pendingResourceRefresh.clear();
+		this.#sources.clear();
+		this.#serverConfigs.clear();
+		this.#connections.clear();
+		this.#tools = [];
+		this.#subscribedResources.clear();
+		this.#reconnectHistory.clear();
+	}
+
+	/**
+	 * Reconnect to a server after a connection failure.
+	 *
+	 * Tears down the stale connection, re-resolves auth, establishes a new
+	 * connection, reloads tools, and notifies consumers. Concurrent calls for
+	 * the same server share one reconnection attempt. Returns the new
+	 * connection, or `null` if reconnection failed or the per-server crash
+	 * burst limit (see {@link RECONNECT_BURST_LIMIT}) is exceeded.
+	 *
+	 * @param options.manual - When `true`, resets the crash-burst window so a
+	 *   user-driven retry (e.g. `/mcp reconnect`) is never blocked by an
+	 *   earlier storm. Defaults to `false`; the transport `onClose` callback
+	 *   and the per-tool-call retry path in `tool-bridge` MUST NOT set it.
+	 */
+	async reconnectServer(name: string, options?: { manual?: boolean }): Promise<MCPServerConnection | null> {
+		if (options?.manual) {
+			this.#reconnectHistory.delete(name);
+			// An operator-driven reconnect is the recovery step after rotating a secret, so this
+			// server's `!command` credentials are re-read rather than re-sent. An automatic
+			// reconnect deliberately does not: a dropped transport says nothing about the
+			// credential, and re-running a password-manager command per reconnect turns a
+			// restarting server into a stream of unlock prompts.
+			this.invalidateCommandCredentials(name);
+		}
+
+		const pending = this.#pendingReconnections.get(name);
+		if (pending) return pending;
+
+		if (this.#tripReconnectBreaker(name)) {
+			return null;
+		}
+
+		const attempt = this.#doReconnect(name);
+		this.#pendingReconnections.set(name, attempt);
+		return attempt.finally(() => this.#pendingReconnections.delete(name));
+	}
+
+	/**
+	 * Drop the cached output of the `!command` credentials of one server, or of every configured
+	 * server when no name is given, and report how many commands were dropped.
+	 *
+	 * The whole-manager form is what `/mcp reload` needs: the operator re-read the config files
+	 * precisely because something about them changed, and a credential minted by a command is
+	 * exactly what a reload cannot see has rotated. It is scoped to MCP configs, so a `!command`
+	 * that resolves a provider API key elsewhere keeps its cached value.
+	 */
+	invalidateCommandCredentials(name?: string): number {
+		const configs =
+			name === undefined
+				? Array.from(this.#serverConfigs.values())
+				: [this.#connections.get(name)?.config ?? this.#serverConfigs.get(name)].filter(
+						(config): config is MCPServerConfig => config !== undefined,
+					);
+		const commands = new Set<string>();
+		for (const config of configs) {
+			for (const value of mcpConfigCommandValues(config)) commands.add(value);
+		}
+		for (const command of commands) invalidateConfigValue(command);
+		return commands.size;
+	}
+
+	/**
+	 * Record a reconnect attempt against the per-server crash window and report
+	 * whether the circuit breaker is now open. Sliding window: entries older
+	 * than {@link RECONNECT_BURST_WINDOW_MS} are pruned before the new
+	 * timestamp is appended, so a single transient failure ages out cheaply
+	 * but repeated rapid crashes accumulate until the limit is hit.
+	 */
+	#tripReconnectBreaker(name: string): boolean {
+		const now = Date.now();
+		const previous = this.#reconnectHistory.get(name) ?? [];
+		const recent = previous.filter(ts => now - ts < RECONNECT_BURST_WINDOW_MS);
+		recent.push(now);
+		this.#reconnectHistory.set(name, recent);
+
+		if (recent.length > RECONNECT_BURST_LIMIT) {
+			logger.error("MCP server crashed too many times; suspending automatic reconnects", {
+				path: `mcp:${name}`,
+				crashes: recent.length,
+				windowMs: RECONNECT_BURST_WINDOW_MS,
+			});
+			// The file log was the only record: the server's tools stayed listed, every
+			// call to them failed, and nothing on the surface said the server was gone.
+			reportFault({
+				source: "mcp",
+				text:
+					`MCP server "${name}" exited ${recent.length} times in ${RECONNECT_BURST_WINDOW_MS / 1000}s, so automatic ` +
+					"reconnects are suspended and its tools fail until it is reconnected. " +
+					`Fix: check the server's own output, then run /mcp reconnect ${name}.`,
+				context: { server: name, crashes: recent.length, windowMs: RECONNECT_BURST_WINDOW_MS },
+			});
+			// `getLastError` is what `/mcp list` shows beside a server that is not
+			// connected, so the suspension is recorded there as well: the boot-health
+			// zone counts failures and points at that list for the reason.
+			const suspension =
+				`suspended after ${recent.length} crashes in ${RECONNECT_BURST_WINDOW_MS / 1000}s; ` +
+				`run /mcp reconnect ${name} once the server is fixed`;
+			this.#lastErrors.set(name, suspension);
+			this.#emitConnectionStatus({
+				type: "failed",
+				serverName: name,
+				error: suspension,
+				foreign: this.#isForeignServer(name),
+			});
+			// Tear down the stale connection so `getConnectionStatus()` no
+			// longer reports it as "connected" and `waitForConnection()` does
+			// not hand a closed transport to callers. Tools stay registered
+			// in `#tools` — the user can recover with `/mcp reconnect <name>`
+			// once they've fixed the underlying misconfiguration. Mirrors the
+			// teardown in `#doReconnect`: detach `onClose` first so the
+			// transport's own `close()` cannot re-arm this path.
+			const stale = this.#connections.get(name);
+			if (stale) {
+				stale.transport.onClose = undefined;
+				void stale.transport.close().catch(() => {});
+				this.#connections.delete(name);
+			}
+			this.#pendingConnections.delete(name);
+			this.#pendingToolLoads.delete(name);
+			return true;
+		}
+		return false;
+	}
+
+	async #doReconnect(name: string): Promise<MCPServerConnection | null> {
+		const oldConnection = this.#connections.get(name);
+		const config = oldConnection?.config ?? this.#serverConfigs.get(name);
+		const source = this.#sources.get(name) ?? oldConnection?._source;
+		if (!config) return null;
+
+		logger.debug("MCP reconnecting", { path: `mcp:${name}` });
+
+		// Close the old transport without removing tools or notifying consumers.
+		// Tools stay available (stale) while we establish the new connection.
+		// Fire-and-forget: don't await the close — HttpTransport.close() sends a
+		// DELETE with config.timeout (30s default), and blocking here delays the
+		// reconnect loop by that amount on every server restart.
+		const reconnectEpoch = this.#epoch;
+		if (oldConnection) {
+			// Detach onClose to prevent re-entrant reconnect from the close itself
+			oldConnection.transport.onClose = undefined;
+			closeTransportDetached(oldConnection.transport, name, "reconnect-replaced");
+			this.#connections.delete(name);
+		}
+		this.#pendingConnections.delete(name);
+		this.#pendingToolLoads.delete(name);
+
+		// Retry with backoff — the server may still be starting up.
+		const delays = [500, 1000, 2000, 4000];
+		for (let attempt = 0; attempt <= delays.length; attempt++) {
+			if (this.#epoch !== reconnectEpoch) {
+				logger.debug("MCP reconnect aborted before attempt after configuration changed", {
+					path: `mcp:${name}`,
+					storedEpoch: reconnectEpoch,
+					currentEpoch: this.#epoch,
+				});
+				return null;
+			}
+			try {
+				const connection = await this.#connectAndWireServer(name, config, source, reconnectEpoch);
+				logger.debug("MCP reconnected", { path: `mcp:${name}`, tools: connection.tools?.length ?? 0 });
+				this.#emitConnectionStatus({ type: "connected", serverName: name });
+				return connection;
+			} catch (error) {
+				if (this.#epoch !== reconnectEpoch) {
+					logger.debug("MCP reconnect aborted after configuration changed", {
+						path: `mcp:${name}`,
+						storedEpoch: reconnectEpoch,
+						currentEpoch: this.#epoch,
+					});
+					return null;
+				}
+
+				const msg = errorMessage(error);
+				if (attempt < delays.length) {
+					logger.debug("MCP reconnect attempt failed, retrying", {
+						path: `mcp:${name}`,
+						attempt: attempt + 1,
+						error: msg,
+					});
+					await Bun.sleep(delays[attempt]);
+				} else {
+					logger.error("MCP reconnect failed after retries", { path: `mcp:${name}`, error: msg });
+					this.#lastErrors.set(name, msg);
+					this.#emitConnectionStatus({
+						type: "failed",
+						serverName: name,
+						error: msg,
+						foreign: this.#isForeignServer(name),
+					});
+					// Don't remove stale tools — keep them in the registry so they
+					// remain selected. Calls will fail with MCP errors, which
+					// triggers the tool-level reconnect, or the user can run
+					// /mcp reconnect <name> manually.
+					reportFault({
+						source: "mcp",
+						text:
+							`MCP server "${name}" closed its connection and could not be reconnected after ${delays.length + 1} attempts: ` +
+							`${msg} Its tools stay listed and fail until it is back. Fix: run /mcp reconnect ${name} once the server starts again.`,
+						context: { server: name, attempts: delays.length + 1, error: msg },
+					});
+				}
+			}
+		}
+		return null;
+	}
+
+	/** Establish a new connection to a server, wire handlers, load tools. */
+	async #connectAndWireServer(
+		name: string,
+		config: MCPServerConfig,
+		source: SourceMeta | undefined,
+		reconnectEpoch: number,
+	): Promise<MCPServerConnection> {
+		const resolvedConfig = await this.#resolveAuthConfig(config);
+		const connection = await connectToServer(name, resolvedConfig, {
+			onNotification: (method, params) => {
+				this.#handleServerNotification(name, method, params);
+			},
+			onRequest: (method, params) => {
+				return this.#handleServerRequest(method, params);
+			},
+			...this.#stdioSpawnHooks(),
+		});
+
+		connection.config = config;
+		if (source) connection._source = source;
+
+		// Bail out if the server was disconnected or the manager was reset
+		// while we were connecting (e.g. /mcp reload called disconnectAll).
+		if (!this.#serverConfigs.has(name) || this.#epoch !== reconnectEpoch) {
+			closeTransportDetached(connection.transport, name, "reconnect-superseded");
+			throw new Error(
+				`MCP server "${name}" was removed or disabled while it was reconnecting, so the new connection was dropped rather than left orphaned. Fix: if you did not intend that, run \`/mcp enable ${name}\` and then \`/mcp reconnect ${name}\`; \`/mcp list\` shows the current state.`,
+			);
+		}
+
+		this.#connections.set(name, connection);
+
+		// Wire auth refresh for HTTP-like transports, and reconnect for any transport.
+		// Same gate as connectServers: a resolvable managed credential, or a `!command` this
+		// path can re-run.
+		if (
+			isAuthRefreshableMCPTransport(connection.transport) &&
+			(lookupMcpOAuthCredential(this.#authStorage, config) || hasMcpConfigCommands(config))
+		) {
+			connection.transport.onAuthError = async () => {
+				const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true, refreshCommands: true });
+				if (refreshed.type === "http" || refreshed.type === "sse") {
+					return refreshed.headers ?? null;
+				}
+				return null;
+			};
+		}
+		connection.transport.onClose = () => {
+			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
+			this.#emitConnectionStatus({ type: "reconnecting", serverName: name });
+			void this.#stopServerEvents(name).then(() => this.reconnectServer(name));
+		};
+		try {
+			const serverTools = await listTools(connection);
+			const reconnect = () => this.reconnectServer(name);
+			const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
+			void this.toolCache?.set(name, config, serverTools);
+			this.#replaceServerTools(name, customTools);
+			this.#onToolsChanged?.(this.#tools);
+			void this.#loadServerResourcesAndPrompts(name, connection);
+			if (config.events) void this.#startConfiguredEvents(name, connection, config.events);
+			return connection;
+		} catch (error) {
+			// Clean up the connection to avoid zombie transports
+			connection.transport.onClose = undefined;
+			closeTransportDetached(connection.transport, name, "reconnect-tool-list-failed");
+			this.#connections.delete(name);
+			throw error;
+		}
+	}
+
+	/**
+	 * Best-effort loading of resources, resource subscriptions, and prompts.
+	 * Shared between initial connection and reconnection.
+	 */
+	async #loadServerResourcesAndPrompts(name: string, connection: MCPServerConnection): Promise<void> {
+		if (serverSupportsResources(connection.capabilities)) {
+			try {
+				const [resources] = await Promise.all([listResources(connection), listResourceTemplates(connection)]);
+
+				if (this.#notificationsEnabled && connection.capabilities.resources?.subscribe) {
+					const uris = resources.map(r => r.uri);
+					const notificationEpoch = this.#notificationsEpoch;
+					this.#subscribeAndTrack(name, connection, uris, notificationEpoch);
+				}
+			} catch (error) {
+				logger.debug("Failed to load MCP resources", { path: `mcp:${name}`, error });
+			}
+		}
+
+		if (serverSupportsPrompts(connection.capabilities)) {
+			try {
+				await listPrompts(connection);
+				this.#onPromptsChanged?.(name);
+			} catch (error) {
+				logger.debug("Failed to load MCP prompts", { path: `mcp:${name}`, error });
+			}
+		}
+	}
+
+	/**
+	 * Refresh tools from a specific server.
+	 */
+	async refreshServerTools(name: string): Promise<void> {
+		const connection = this.#connections.get(name);
+		if (!connection) return;
+
+		// Clear cached tools
+		connection.tools = undefined;
+
+		// Reload tools
+		const serverTools = await listTools(connection);
+		const reconnect = () => this.reconnectServer(name);
+		const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
+		void this.toolCache?.set(name, connection.config, serverTools);
+
+		// Replace tools from this server
+		this.#replaceServerTools(name, customTools);
+		this.#onToolsChanged?.(this.#tools);
+	}
+
+	/**
+	 * Refresh tools from all servers.
+	 */
+	async refreshAllTools(): Promise<void> {
+		const promises = Array.from(this.#connections.keys()).map(name => this.refreshServerTools(name));
+		await Promise.allSettled(promises);
+	}
+
+	/**
+	 * Refresh resources from a specific server.
+	 */
+	async refreshServerResources(name: string): Promise<void> {
+		const connection = this.#connections.get(name);
+		if (!connection || !serverSupportsResources(connection.capabilities)) return;
+
+		const existing = this.#pendingResourceRefresh.get(name);
+		if (existing && existing.connection === connection) return existing.promise;
+
+		const doRefresh = async (): Promise<void> => {
+			// Clear cached resources
+			connection.resources = undefined;
+			connection.resourceTemplates = undefined;
+
+			// Reload
+			const [resources] = await Promise.all([listResources(connection), listResourceTemplates(connection)]);
+			if (this.#notificationsEnabled && connection.capabilities.resources?.subscribe) {
+				const newUris = new Set(resources.map(r => r.uri));
+				const oldUris = this.#subscribedResources.get(name);
+				const notificationEpoch = this.#notificationsEpoch;
+
+				// Unsubscribe URIs that were removed
+				if (oldUris) {
+					const removed = Array.from(oldUris).filter(uri => !newUris.has(uri));
+					if (removed.length > 0) {
+						try {
+							await unsubscribeFromResources(connection, removed);
+						} catch (error) {
+							logger.debug("Failed to unsubscribe stale MCP resources", { path: `mcp:${name}`, error });
+						}
+					}
+				}
+
+				// Subscribe to the current set and update tracking atomically
+				try {
+					const allUris = Array.from(newUris);
+					await subscribeToResources(connection, allUris);
+					const action = resolveSubscriptionPostAction(
+						this.#notificationsEnabled,
+						this.#notificationsEpoch,
+						notificationEpoch,
+					);
+					if (action === "rollback") {
+						await unsubscribeFromResources(connection, allUris).catch(error => {
+							logger.debug("Failed to rollback stale MCP resource subscription", { path: `mcp:${name}`, error });
+						});
+						return;
+					}
+					if (action === "ignore") {
+						return;
+					}
+					this.#subscribedResources.set(name, newUris);
+				} catch (error) {
+					logger.debug("Failed to re-subscribe to MCP resources", { path: `mcp:${name}`, error });
+				}
+			}
+		};
+
+		const promise = doRefresh().finally(() => {
+			const pending = this.#pendingResourceRefresh.get(name);
+			if (pending?.promise === promise) {
+				this.#pendingResourceRefresh.delete(name);
+			}
+		});
+		this.#pendingResourceRefresh.set(name, { connection, promise });
+		return promise;
+	}
+
+	/**
+	 * Refresh prompts from a specific server.
+	 */
+	async refreshServerPrompts(name: string): Promise<void> {
+		const connection = this.#connections.get(name);
+		if (!connection || !serverSupportsPrompts(connection.capabilities)) return;
+
+		connection.prompts = undefined;
+		await listPrompts(connection);
+
+		this.#onPromptsChanged?.(name);
+	}
+
+	/**
+	 * Get resources and templates for a specific server.
+	 */
+	getServerResources(name: string): { resources: MCPResource[]; templates: MCPResourceTemplate[] } | undefined {
+		const connection = this.#connections.get(name);
+		if (!connection) return undefined;
+		return {
+			resources: connection.resources ?? [],
+			templates: connection.resourceTemplates ?? [],
+		};
+	}
+
+	/**
+	 * Read a specific resource from a server.
+	 */
+	async readServerResource(
+		name: string,
+		uri: string,
+		options?: MCPRequestOptions,
+	): Promise<MCPResourceReadResult | undefined> {
+		const connection = this.#connections.get(name);
+		if (!connection) return undefined;
+		return readResource(connection, uri, options);
+	}
+
+	/**
+	 * Get prompts for a specific server.
+	 */
+	getServerPrompts(name: string): MCPPrompt[] | undefined {
+		const connection = this.#connections.get(name);
+		if (!connection) return undefined;
+		return connection.prompts ?? [];
+	}
+
+	/**
+	 * Get a specific prompt from a server.
+	 */
+	async executePrompt(
+		name: string,
+		promptName: string,
+		args?: Record<string, string>,
+		options?: MCPRequestOptions,
+	): Promise<MCPGetPromptResult | undefined> {
+		const connection = this.#connections.get(name);
+		if (!connection) return undefined;
+		return getPrompt(connection, promptName, args, options);
+	}
+
+	/**
+	 * Get all server instructions (for system prompt injection).
+	 */
+	getServerInstructions(): Map<string, string> {
+		const instructions = new Map<string, string>();
+		for (const [name, connection] of this.#connections) {
+			if (connection.instructions) {
+				instructions.set(name, connection.instructions);
+			}
+		}
+		return instructions;
+	}
+
+	/**
+	 * Get notification state for display.
+	 */
+	getNotificationState(): { enabled: boolean; subscriptions: Map<string, ReadonlySet<string>> } {
+		return {
+			enabled: this.#notificationsEnabled,
+			subscriptions: this.#subscribedResources as Map<string, ReadonlySet<string>>,
+		};
+	}
+
+	/**
+	 * Resolve OAuth credentials and shell commands in config.
+	 * `oauth: false` skips credential injection (reauth's unauthenticated probe);
+	 * `forceRefresh` bypasses the expiry buffer (401/403 auth-error hook);
+	 * `refreshCommands` drops the cached output of this server's `!command` values first, so a
+	 * rotated or revoked credential is re-read instead of re-sent. That is the difference between
+	 * a 401 the operator can recover from without restarting and one that repeats forever: the
+	 * cache key is the command text, which does not change when the secret behind it does.
+	 *
+	 * Throws `MCPAuthRequiredError` when a stored credential was found and could not be
+	 * presented — revoked, broker-held and expired, or unreadable. The connection is not
+	 * attempted at all in that state: an anonymous request earns the server's 401 instead
+	 * of the credential's own diagnosis, and enough of them earn a lockout. See
+	 * `auth-failure.ts`.
+	 */
+	async #resolveAuthConfig(
+		config: MCPServerConfig,
+		opts?: { forceRefresh?: boolean; oauth?: boolean; refreshCommands?: boolean },
+	): Promise<MCPServerConfig> {
+		if (opts?.refreshCommands) {
+			for (const value of mcpConfigCommandValues(config)) invalidateConfigValue(value);
+		}
+		let resolved: MCPServerConfig = { ...config };
+
+		const auth = config.auth;
+		const lookup: MCPOAuthCredentialLookup | undefined =
+			opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
+		if (lookup && this.#authStorage) {
+			const { credentialId } = lookup;
+			const observed: MCPStoredOAuthCredential = lookup.credential;
+			// A credential that cannot be presented is not a reason to send an anonymous
+			// request. `outcome` carries either the credential to inject or the reason the
+			// connection is refused; see `auth-failure.ts` for why each reason differs.
+			let outcome: MCPAuthResolution;
+			try {
+				const REFRESH_BUFFER_MS = 5 * 60_000;
+				const refreshResult = await this.#authStorage.refreshStoredOAuthCredential<MCPStoredOAuthCredential>(
+					credentialId,
+					{
+						observedCredential: observed,
+						credentialFromRow: row => row,
+						forceRefresh: opts?.forceRefresh,
+						refreshSkewMs: REFRESH_BUFFER_MS,
+						canRefresh: current => {
+							const material = selectMcpOAuthRefreshMaterial(current, auth);
+							return Boolean(current.refresh && material?.tokenUrl);
+						},
+						refresh: (current, signal) => {
+							if (current.refresh === REMOTE_REFRESH_SENTINEL) {
+								throw new MCPBrokerRedactedRefreshError(describeMCPServerTarget(config));
+							}
+							const material = selectMcpOAuthRefreshMaterial(current, auth);
+							const tokenUrl = material?.tokenUrl;
+							if (!current.refresh || !tokenUrl) {
+								throw new Error(
+									`The stored OAuth credential for ${describeMCPServerTarget(config)} has no refresh token or no token endpoint, so it cannot be refreshed and will stay expired. Fix: run \`/mcp reauth <name>\` to authorize again; \`/mcp list\` gives the server's name.`,
+								);
+							}
+							const clientId = material?.clientId;
+							const clientSecret = material?.clientSecret;
+							const authorizationUrl =
+								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
+							const resourceIsFallback =
+								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
+							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
+							return refreshMCPOAuthToken(tokenUrl, current.refresh, clientId, clientSecret, resource, {
+								authorizationUrl,
+								stripSameOriginResource: resourceIsFallback,
+								signal,
+							});
+						},
+						mergeRefreshedCredential: (current, refreshed) => {
+							const material = selectMcpOAuthRefreshMaterial(current, auth);
+							const tokenUrl = material?.tokenUrl;
+							const clientId = material?.clientId;
+							const clientSecret = material?.clientSecret;
+							const authorizationUrl =
+								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
+							const resourceIsFallback =
+								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
+							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
+							return {
+								...current,
+								...refreshed,
+								tokenUrl,
+								clientId,
+								clientSecret,
+								resource: resourceIsFallback ? undefined : resource,
+								authorizationUrl,
+							};
+						},
+						isDefinitiveFailure: error => isDefinitiveOAuthFailure(errorMessage(error)),
+						disabledCause: error => `oauth refresh failed: ${errorMessage(error)}`,
+						keepCredentialOnRefreshFailure: error => !(error instanceof MCPBrokerRedactedRefreshError),
+						onRefreshFailure: refreshError => {
+							if (refreshError instanceof MCPBrokerRedactedRefreshError) return;
+							logger.warn("MCP OAuth refresh failed, using existing token", {
+								credentialId,
+								error: refreshError,
+							});
+						},
+					},
+				);
+				if (refreshResult.removed) {
+					logger.warn("MCP OAuth refresh failed definitively; cleared credential", { credentialId });
+				}
+				outcome = refreshResult.credential
+					? { kind: "credential", credential: refreshResult.credential, brokerRedacted: false }
+					: { kind: "failure", reason: "revoked" };
+			} catch (error) {
+				logger.warn("Failed to resolve OAuth credential", { credentialId, error });
+				outcome = classifyMcpAuthFailure(error, observed, Date.now());
+			}
+
+			if (outcome.kind === "failure") {
+				throw new MCPAuthRequiredError(outcome.reason, describeMCPServerTarget(config), {
+					cause: outcome.cause,
+				});
+			}
+			if (outcome.brokerRedacted) {
+				// The access token still works, so the session continues; the operator is
+				// told once, here, rather than at the 401 this will become when it expires.
+				logger.warn("MCP OAuth refresh token is broker-held; using the unexpired access token", {
+					credentialId,
+				});
+			}
+			const credential = outcome.credential;
+			if (resolved.type === "http" || resolved.type === "sse") {
+				resolved = {
+					...resolved,
+					headers: {
+						...resolved.headers,
+						Authorization: `Bearer ${credential.access}`,
+					},
+				};
+			} else {
+				resolved = {
+					...resolved,
+					env: {
+						...resolved.env,
+						OAUTH_ACCESS_TOKEN: credential.access,
+					},
+				};
+			}
+		}
+
+		const requireResolved = async (key: string, value: string, describedAs: string): Promise<string | undefined> => {
+			const present = await resolveConfigValue(value, `${describedAs} "${key}"`);
+			if (present) return present;
+			const reference = describeConfigEnvReference(value);
+			if (!reference) return undefined;
+			// An unresolved REFERENCE is fatal: proceeding means dialling the server with
+			// the variable's own name as the credential. A failed `!command` is not
+			// handled here — it has its own back-off and report, and its key is skipped.
+			throw new MCPUnresolvedEnvReferenceError({
+				variable: reference.variable,
+				empty: process.env[reference.variable] !== undefined,
+				describedAs: `${describedAs} "${key}"`,
+				target: describeMCPServerTarget(config),
+			});
+		};
+
+		if (resolved.type !== "http" && resolved.type !== "sse") {
+			if (resolved.env) {
+				const nextEnv: Record<string, string> = {};
+				for (const [key, value] of Object.entries(resolved.env)) {
+					const resolvedValue = await requireResolved(key, value, "environment variable");
+					if (resolvedValue) nextEnv[key] = resolvedValue;
+				}
+				resolved = { ...resolved, env: nextEnv };
+			}
+		} else {
+			if (resolved.headers) {
+				const nextHeaders: Record<string, string> = {};
+				for (const [key, value] of Object.entries(resolved.headers)) {
+					const resolvedValue = await requireResolved(key, value, "header");
+					if (resolvedValue) nextHeaders[key] = resolvedValue;
+				}
+				resolved = { ...resolved, headers: nextHeaders };
+			}
+		}
+
+		return resolved;
+	}
+}
+
+/**
+ * Create an MCP manager and discover servers.
+ * Convenience function for quick setup.
+ */
+export async function createMCPManager(
+	cwd: string,
+	options?: MCPDiscoverOptions,
+): Promise<{
+	manager: MCPManager;
+	result: MCPLoadResult;
+}> {
+	const manager = new MCPManager(cwd);
+	const result = await manager.discoverAndConnect(options);
+	return { manager, result };
+}

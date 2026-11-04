@@ -1,0 +1,368 @@
+/**
+ * Custom tool loader - loads TypeScript tool modules using native Bun import.
+ *
+ * Dependencies (the self-contained typebox shim and pi-coding-agent) are injected via the
+ * CustomToolAPI to avoid import resolution issues with custom tools loaded from user directories.
+ */
+import * as path from "node:path";
+import type { AgentToolResult } from "@veyyon/agent-core";
+import { type } from "@veyyon/ai/utils/schema/arktype";
+import {
+	factoryExportMissingMessage,
+	moduleImportFailedMessage,
+	nameConflictMessage,
+} from "@veyyon/kernel/loader/load-failure";
+import * as typebox from "@veyyon/kernel/registry/typebox";
+import { errorMessage, logger } from "@veyyon/utils";
+import { type DiscoveredCustomTool, loadCapability } from "../../discovery";
+import { toolCapability } from "../../discovery/capability/tool";
+import { pluginsRootFor } from "../../discovery/helpers";
+import { type ExecOptions, execCommand, withSessionCpuExec } from "../../exec/exec";
+// Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
+import { type CodingAgentApi, loadCodingAgentApi } from "../coding-agent-api";
+import type { HookUIContext } from "../hooks/types";
+import { getAllPluginToolPaths } from "../plugins/loader";
+import { createNoOpUIContext, resolvePath, withExitGuard } from "../utils";
+import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
+
+interface LoadToolResult {
+	tools: LoadedCustomTool[];
+	errors: ToolLoadError[];
+}
+
+function isLoadableCustomTool(value: unknown): value is LoadedCustomTool["tool"] {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"name" in value &&
+		typeof value.name === "string" &&
+		value.name.length > 0 &&
+		"description" in value &&
+		typeof value.description === "string" &&
+		"parameters" in value &&
+		"execute" in value &&
+		typeof value.execute === "function"
+	);
+}
+
+function invalidToolError(path: string, index: number, source: ToolLoadError["source"]): ToolLoadError {
+	// Not `invalidArtifactFieldMessage`: the factory may return an array, so the
+	// reader needs to know WHICH element failed, and any of four fields may be
+	// the missing one. The index is meaningless for a single-tool factory, so it
+	// is only stated when there is more than one position to choose between.
+	const which = index === 0 ? "The tool" : `Tool #${index + 1} in the array`;
+	return {
+		path,
+		error:
+			`${which} this custom tool's default export returned is not usable, so it is not active in this run. ` +
+			"Fix: return an object with a non-empty string `name`, a string `description`, a `parameters` schema " +
+			"and an `execute` function, then start a new veyyon session.",
+		source,
+	};
+}
+
+/**
+ * Load a single tool module using native Bun import.
+ */
+async function loadTool(
+	toolPath: string,
+	cwd: string,
+	sharedApi: CustomToolAPI,
+	source?: { provider: string; providerName: string; level: "user" | "project" },
+): Promise<LoadToolResult> {
+	const resolvedPath = resolvePath(toolPath, cwd);
+
+	// Skip declarative tool files (.md, .json) - these are metadata only, not executable modules
+	if (resolvedPath.endsWith(".md") || resolvedPath.endsWith(".json")) {
+		return {
+			tools: [],
+			errors: [
+				{
+					path: toolPath,
+					error:
+						"Veyyon runs custom tools as JS/TS modules, and a declarative .md or .json tool file cannot be " +
+						"imported, so it is not active in this run. Fix: rewrite it as a .ts file whose default export " +
+						"returns the tool, or delete it from the tools directory so it stops being reported.",
+					source,
+				},
+			],
+		};
+	}
+
+	try {
+		const module = await withExitGuard(() => import(resolvedPath));
+		const factory = (module.default ?? module) as CustomToolFactory;
+
+		if (typeof factory !== "function") {
+			return { tools: [], errors: [{ path: toolPath, error: factoryExportMissingMessage("custom tool"), source }] };
+		}
+
+		const toolResult: unknown = await withExitGuard(async () => factory(sharedApi));
+		const toolsArray = Array.isArray(toolResult) ? toolResult : [toolResult];
+
+		const loadedTools: LoadedCustomTool[] = [];
+		const errors: ToolLoadError[] = [];
+		for (const [index, tool] of toolsArray.entries()) {
+			if (!isLoadableCustomTool(tool)) {
+				errors.push(invalidToolError(toolPath, index, source));
+				continue;
+			}
+
+			loadedTools.push({
+				path: toolPath,
+				resolvedPath,
+				tool,
+				source,
+			});
+		}
+
+		return { tools: loadedTools, errors };
+	} catch (err) {
+		return {
+			tools: [],
+			errors: [{ path: toolPath, error: moduleImportFailedMessage("custom tool", errorMessage(err)), source }],
+		};
+	}
+}
+
+/** Tool path with optional source metadata, suitable for forwarding from a
+ * parent session to an agent so the agent can re-bind tools to its own
+ * `CustomToolAPI` without redoing the filesystem scan. */
+export interface ToolPathWithSource {
+	path: string;
+	source?: { provider: string; providerName: string; level: "user" | "project" };
+}
+
+/**
+ * Loads custom tools from paths with conflict detection and error handling.
+ *
+ * Manages a shared API instance passed to all tool factories, providing access to
+ * execution context, UI, logger, and injected dependencies. The UI context can be
+ * updated after loading via setUIContext().
+ */
+export class CustomToolLoader {
+	tools: LoadedCustomTool[] = [];
+	errors: ToolLoadError[] = [];
+	#sharedApi: CustomToolAPI;
+	#seenNames: Set<string>;
+	/** Separate from `#seenNames`, which grows: this is only the built-ins, so a
+	 * conflict can say whether the operator is fighting veyyon or their own copy. */
+	#builtInNames: ReadonlySet<string>;
+
+	constructor(
+		pi: CodingAgentApi,
+		cwd: string,
+		builtInToolNames: string[],
+		pushPendingAction?: (action: {
+			label: string;
+			sourceToolName: string;
+			apply(reason: string): Promise<AgentToolResult<unknown>>;
+			reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
+		}) => void,
+		adoptSpawnedPid?: (pid: number) => void,
+		gateSpawn?: (what: string) => Promise<void>,
+	) {
+		this.#sharedApi = {
+			cwd,
+			exec: (command: string, args: string[], options?: ExecOptions) =>
+				execCommand(
+					command,
+					args,
+					options?.cwd ?? cwd,
+					withSessionCpuExec(options, adoptSpawnedPid, gateSpawn, "a custom tool command"),
+				),
+			ui: createNoOpUIContext(),
+			hasUI: false,
+			logger,
+			typebox,
+			arktype: type,
+			zod: pi.zod,
+			pi,
+			pushPendingAction: action => {
+				if (!pushPendingAction) {
+					throw new Error("Pending action store unavailable for custom tools in this runtime.");
+				}
+				pushPendingAction({
+					label: action.label,
+					sourceToolName: action.sourceToolName ?? "custom_tool",
+					apply: action.apply,
+					reject: action.reject,
+				});
+			},
+		};
+		this.#builtInNames = new Set<string>(builtInToolNames);
+		this.#seenNames = new Set<string>(builtInToolNames);
+	}
+
+	async load(pathsWithSources: ToolPathWithSource[]): Promise<void> {
+		for (const { path: toolPath, source } of pathsWithSources) {
+			const { tools: loadedTools, errors } = await loadTool(toolPath, this.#sharedApi.cwd, this.#sharedApi, source);
+			for (let ei = 0; ei < errors.length; ei++) this.errors.push(errors[ei]!);
+
+			for (const loadedTool of loadedTools) {
+				// Check for name conflicts
+				if (this.#seenNames.has(loadedTool.tool.name)) {
+					// WHICH owner decides the remedy. Against a built-in the operator
+					// must rename their own tool, because the built-in is not going
+					// anywhere; against an earlier custom tool either copy can go.
+					const owner = this.#builtInNames.has(loadedTool.tool.name)
+						? "a built-in veyyon tool"
+						: "a custom tool that loaded earlier";
+					this.errors.push({
+						path: toolPath,
+						error: nameConflictMessage("custom tool", loadedTool.tool.name, owner),
+						source,
+					});
+					continue;
+				}
+
+				this.#seenNames.add(loadedTool.tool.name);
+				this.tools.push(loadedTool);
+			}
+		}
+	}
+
+	setUIContext(uiContext: HookUIContext, hasUI: boolean): void {
+		this.#sharedApi.ui = uiContext;
+		this.#sharedApi.hasUI = hasUI;
+	}
+}
+
+/**
+ * Load all tools from configuration.
+ * @param pathsWithSources - Array of tool paths with optional source metadata
+ * @param cwd - Current working directory for resolving relative paths
+ * @param builtInToolNames - Names of built-in tools to check for conflicts
+ */
+export async function loadCustomTools(
+	pathsWithSources: ToolPathWithSource[],
+	cwd: string,
+	builtInToolNames: string[],
+	pushPendingAction?: (action: {
+		label: string;
+		sourceToolName: string;
+		apply(reason: string): Promise<AgentToolResult<unknown>>;
+		reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
+	}) => void,
+	adoptSpawnedPid?: (pid: number) => void,
+	gateSpawn?: (what: string) => Promise<void>,
+) {
+	// No paths means no author code will ever see the API object, and building one costs the whole
+	// package barrel (see `../coding-agent-api`). Every launch calls this from `createAgentSession`,
+	// and almost every launch has no custom tools, so the common case must not pay for it. The
+	// returned `setUIContext` is a no-op because there is genuinely nothing to inform: it exists so
+	// callers need no branch of their own, and a tool that appears later comes with a fresh call here.
+	if (pathsWithSources.length === 0) {
+		return { tools: [] as LoadedCustomTool[], errors: [] as ToolLoadError[], setUIContext: () => {} };
+	}
+
+	const loader = new CustomToolLoader(
+		await loadCodingAgentApi(),
+		cwd,
+		builtInToolNames,
+		pushPendingAction,
+		adoptSpawnedPid,
+		gateSpawn,
+	);
+	await loader.load(pathsWithSources);
+	return {
+		tools: loader.tools,
+		errors: loader.errors,
+		setUIContext: (uiContext: HookUIContext, hasUI: boolean) => {
+			loader.setUIContext(uiContext, hasUI);
+		},
+	};
+}
+
+/**
+ * Collect the absolute tool-source paths to load, without importing or
+ * binding factories. Hot path on session startup — the scan walks
+ * `.veyyon/tools/`, `.claude/tools/`, the plugin tree, and any configured paths.
+ *
+ * Agents reuse the parent's collected paths via the SDK's
+ * `preloadedCustomToolPaths` option, then call `loadCustomTools` themselves
+ * so each session re-binds factories with its own session-scoped
+ * `CustomToolAPI` (cwd, exec, pushPendingAction, UI).
+ *
+ * @param configuredPaths - Explicit paths from settings.json and CLI --tool flags
+ * @param cwd - Current working directory
+ * @param agentDir - WHICH profile supplies the user scope: `<agentDir>/tools`
+ *   through the capability layer, and that profile's installed plugins through
+ *   {@link pluginsRootFor}. Defaults to the process-active profile in both
+ *   places (`loadCapability` applies `?? getAgentDir()`, and `pluginsRootFor`
+ *   returns undefined for the active dir so the plugin scan keeps its own
+ *   default), so omitting it is unchanged behavior. Pass it whenever you have
+ *   one: dropping it handed a session rooted in another agent dir the booted
+ *   profile's custom tools.
+ */
+export async function discoverCustomToolPaths(
+	configuredPaths: string[],
+	cwd: string,
+	agentDir?: string,
+): Promise<ToolPathWithSource[]> {
+	const allPathsWithSources: ToolPathWithSource[] = [];
+	const seen = new Set<string>();
+
+	// Helper to add paths without duplicates
+	const addPath = (p: string, source?: { provider: string; providerName: string; level: "user" | "project" }) => {
+		const resolved = path.resolve(p);
+		if (!seen.has(resolved)) {
+			seen.add(resolved);
+			allPathsWithSources.push({ path: p, source });
+		}
+	};
+
+	// 1. Discover tools via capability system (user + project from all providers)
+	const discoveredTools = await loadCapability<DiscoveredCustomTool>(toolCapability.id, { cwd, agentDir });
+	for (const tool of discoveredTools.items) {
+		addPath(tool.path, {
+			provider: tool._source.provider,
+			providerName: tool._source.providerName,
+			level: tool.level,
+		});
+	}
+
+	// 2. Plugin tools: profile plugins/node_modules/*/
+	for (const pluginPath of await getAllPluginToolPaths(cwd, { pluginsRoot: agentDir ? pluginsRootFor(agentDir) : undefined, agentDir })) {
+		addPath(pluginPath, { provider: "plugin", providerName: "Plugin", level: "user" });
+	}
+
+	// 3. Explicitly configured paths (can override/add)
+	for (const configPath of configuredPaths) {
+		addPath(resolvePath(configPath, cwd), { provider: "config", providerName: "Config", level: "project" });
+	}
+
+	return allPathsWithSources;
+}
+
+/**
+ * Discover and load tools from standard locations via capability system:
+ * 1. User and project tools discovered by capability providers
+ * 2. Installed plugins (profile plugins/node_modules/*)
+ * 3. Explicitly configured paths from settings or CLI
+ *
+ * Composed of {@link discoverCustomToolPaths} (FS scan) + {@link loadCustomTools}
+ * (per-session binding). Agents skip the first step and just call
+ * `loadCustomTools` against the parent's collected paths.
+ *
+ * @param configuredPaths - Explicit paths from settings.json and CLI --tool flags
+ * @param cwd - Current working directory
+ * @param builtInToolNames - Names of built-in tools to check for conflicts
+ * @param agentDir - WHICH profile supplies the user scope; see
+ *   {@link discoverCustomToolPaths}.
+ */
+export async function discoverAndLoadCustomTools(
+	configuredPaths: string[],
+	cwd: string,
+	builtInToolNames: string[],
+	pushPendingAction?: (action: {
+		label: string;
+		sourceToolName: string;
+		apply(reason: string): Promise<AgentToolResult<unknown>>;
+		reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
+	}) => void,
+	agentDir?: string,
+) {
+	const pathsWithSources = await discoverCustomToolPaths(configuredPaths, cwd, agentDir);
+	return loadCustomTools(pathsWithSources, cwd, builtInToolNames, pushPendingAction);
+}

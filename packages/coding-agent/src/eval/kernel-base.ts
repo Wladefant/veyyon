@@ -1,0 +1,1154 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { Process } from "@veyyon/natives";
+import { $flag, errorMessage, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
+import { processHandle } from "@veyyon/utils/native-process";
+import type { Subprocess } from "bun";
+import { Settings } from "../config/settings";
+import { type BackendProbeOptions, DEFAULT_PROBE_TIMEOUT_MS } from "./probe";
+import { type KernelDisplayOutput, renderKernelDisplay } from "./py/display";
+import { hostHasInheritableConsole, shouldDetachKernel, shouldHideKernelWindow } from "./py/spawn-options";
+
+export type KernelRuntimeEnv = Record<string, string | null>;
+
+/**
+ * A per-execution environment patch: a string sets the variable, `null` CLEARS it, and
+ * `undefined` leaves it alone. The runner honours exactly that (`os.environ.pop` on null),
+ * so this is the one spelling of the type — `KernelExecuteOptions.env` used to be
+ * `Record<string, string | undefined> | Record<string, string | null>`, a union that could
+ * not express a patch doing both in one call and forced every caller building one to pick
+ * a half.
+ */
+export type KernelEnvPatch = Record<string, string | null | undefined>;
+
+/**
+ * One request to a language kernel, shared by every kernel in `eval/`.
+ *
+ * THE one declaration. Ruby and Julia each carried their own copy and the three had
+ * drifted: the base grew `onDisplay`, Ruby's copy narrowed `env` to
+ * `KernelRuntimeEnv` (no `undefined`, so no "leave this one alone"), and Julia's
+ * widened it to `Record<string, string | undefined>` (no `null`, so no "clear this
+ * one"). Each kernel silently supported a different set of options, and a caller
+ * reading any one declaration learned the wrong contract for the other two.
+ */
+export interface KernelExecuteOptions {
+	id?: string;
+	/** Runtime working directory applied immediately before this request executes. */
+	cwd?: string;
+	/** Managed runtime environment variables applied immediately before this request executes. */
+	env?: KernelEnvPatch;
+	signal?: AbortSignal;
+	onChunk?: (text: string) => Promise<void> | void;
+	onDisplay?: (output: KernelDisplayOutput) => Promise<void> | void;
+	timeoutMs?: number;
+	silent?: boolean;
+	storeHistory?: boolean;
+}
+
+export interface KernelExecuteResult {
+	status: "ok" | "error";
+	executionCount?: number;
+	error?: { name: string; value: string; traceback: string[] };
+	cancelled: boolean;
+	timedOut: boolean;
+	stdinRequested: boolean;
+	/**
+	 * True when the kernel subprocess was killed as part of settling this
+	 * execution (e.g. SIGINT was ignored and we escalated to shutdown, or the
+	 * kernel died unexpectedly). When false, the kernel remains reusable.
+	 */
+	kernelKilled?: boolean;
+}
+
+export interface KernelShutdownResult {
+	confirmed: boolean;
+}
+
+/**
+ * A completed subprocess exit, as distinct from "not exited yet". Presence of the
+ * object (not the value of `code`) is what signals the exit: a clean exit reports
+ * `code: 0` and a signal-terminated process reports `code: null`, both of which
+ * are truthy observations, whereas a shutdown timeout resolves to `null` instead.
+ */
+interface KernelExitObservation {
+	/** Exit code, or `null` when the process was terminated by a signal. */
+	code: number | null;
+}
+
+export interface KernelShutdownOptions {
+	signal?: AbortSignal;
+	timeoutMs?: number;
+}
+
+/** Per-language lifecycle configuration consumed by each kernel's `start()`. */
+export interface KernelStartOptions {
+	cwd: string;
+	env?: Record<string, string | undefined>;
+	/** Explicit interpreter path; skips discovery when set. */
+	interpreter?: string;
+	signal?: AbortSignal;
+	deadlineMs?: number;
+	/** Diagnostic ownership only; runtime sharing remains controlled by the session pool. */
+	sessionId?: string;
+	kernelOwnerId?: string;
+	/** Session CPU budget hook: the kernel subprocess joins the session's budget group. */
+	adoptPid?: (pid: number) => void;
+}
+
+/** Standard JSON-encoded exit payload for NDJSON runner IPC. */
+export const JSON_KERNEL_EXIT_PAYLOAD = JSON.stringify({ type: "exit" });
+
+/** Standard JSON payload builder for NDJSON runner execution requests. */
+export function buildJsonKernelPayload(code: string, msgId: string, opts?: KernelExecuteOptions): string {
+	return JSON.stringify({
+		id: msgId,
+		code,
+		cwd: opts?.cwd,
+		env: opts?.env,
+		silent: opts?.silent ?? false,
+		storeHistory: opts?.storeHistory ?? !(opts?.silent ?? false),
+	});
+}
+
+/** Per-language configuration handed to {@link BaseKernel} by each subclass. */
+export interface BaseKernelOptions<TExecuteOptions extends KernelExecuteOptions = KernelExecuteOptions> {
+	/** Human-readable language label used in log messages and errors. */
+	languageName: string;
+	/** When true, every IPC frame is logged at debug level. */
+	traceIpc?: boolean;
+	/** Wire payload asking the runner to exit cleanly. */
+	exitPayload?: string;
+	/** How long to wait after SIGINT before escalating to subprocess termination. */
+	interruptEscalationMs?: number;
+	/** Default grace period applied by {@link BaseKernel.shutdown}. */
+	shutdownGraceMs?: number;
+	/** Serializes an execution request into the runner's wire protocol. */
+	buildPayload?: (code: string, msgId: string, options?: TExecuteOptions) => string;
+}
+export type FrameType = "started" | "stdout" | "stderr" | "display" | "result" | "error" | "done";
+
+export interface Frame {
+	type: FrameType;
+	id?: string;
+	data?: string;
+	bundle?: Record<string, unknown>;
+	ename?: string;
+	evalue?: string;
+	traceback?: string[];
+	status?: "ok" | "error";
+	executionCount?: number;
+	cancelled?: boolean;
+}
+
+interface PendingExecution {
+	resolve: (result: KernelExecuteResult) => void;
+	options?: KernelExecuteOptions;
+	status: "ok" | "error";
+	executionCount?: number;
+	error?: { name: string; value: string; traceback: string[] };
+	cancelled: boolean;
+	timedOut: boolean;
+	stdinRequested: boolean;
+	kernelKilled: boolean;
+	settled: boolean;
+	escalationTimer?: NodeJS.Timeout;
+	finalize?: () => void;
+}
+
+/**
+ * How long a kernel subprocess gets to report `started` before start-up aborts.
+ *
+ * Unlike the MCP startup grace window, this one really does give up: the
+ * subprocess is killed and the start fails. Ten seconds is generous for an
+ * interpreter that only has to boot and write one line, and tight enough that a
+ * wedged runner surfaces as an error rather than a hang.
+ *
+ * A runtime whose interpreter needs longer overrides it locally and says why
+ * (Julia compiles on first load). The shared value lives here so raising the
+ * floor is one edit rather than one edit per language.
+ */
+export const DEFAULT_KERNEL_STARTUP_TIMEOUT_MS = 10_000;
+
+/**
+ * How long a kernel subprocess gets to exit on its own after being asked to shut down, before it is killed.
+ *
+ * One second is the whole budget an interpreter gets to flush and unwind. It was declared four times, once
+ * in each of the three language kernels and again in the Julia executor's session reset, so a language whose
+ * shutdown needed longer would have been given it in one place and killed at one second in another.
+ */
+export const KERNEL_SHUTDOWN_GRACE_MS = 1_000;
+
+/**
+ * How long an interrupt is given to land before the kernel is terminated instead.
+ *
+ * This is the budget behind Ctrl-C in an eval cell: send the interrupt, and if the interpreter is still
+ * running after this, stop being polite. Five seconds across every language, because the number describes a
+ * user's patience rather than anything about the interpreter, and it was written out once per language.
+ */
+export const KERNEL_INTERRUPT_ESCALATION_MS = 5_000;
+
+/**
+ * The environment variable that turns on IPC tracing for one language's kernel, `VEYYON_<LANG>_IPC_TRACE`.
+ *
+ * A user types this name, so the convention is part of the product and not an implementation detail. Each
+ * kernel built the string itself, which left nothing stating the convention and no reason a fourth language
+ * would follow it. `language` is the uppercase name used in the variable (`PYTHON`, `RUBY`, `JULIA`), which
+ * is not always the directory name: the directories are `py`, `rb` and `jl`.
+ */
+export function kernelIpcTraceEnvVar(language: string): string {
+	return `VEYYON_${language}_IPC_TRACE`;
+}
+
+/**
+ * Where one language's kernel caches its generated runner script, `<tmpdir>/veyyon-<language>-runner`.
+ *
+ * Same reasoning as {@link kernelIpcTraceEnvVar}: three kernels each joined this path themselves, so the
+ * layout under the temp directory was a coincidence rather than a rule, and a stale-runner cleanup that
+ * wanted to find all of them had nothing to ask. `language` is the lowercase name in the directory
+ * (`python`, `ruby`, `julia`).
+ */
+export function kernelRunnerCacheDir(tmpDir: string, language: string): string {
+	return path.join(tmpDir, `veyyon-${language}-runner`);
+}
+
+/**
+ * Creates a cached runner-script publisher for a language kernel.
+ * Writes the runner script once to `<tmpdir>/veyyon-<language>-runner/runner-<hash>.<extension>`.
+ */
+export function createRunnerScriptPublisher(
+	language: string,
+	script: string,
+	extension: string,
+): () => Promise<string> {
+	let cachedPath: string | null = null;
+	const cacheDir = kernelRunnerCacheDir(os.tmpdir(), language);
+	return async () => {
+		if (cachedPath) return cachedPath;
+		await fs.promises.mkdir(cacheDir, { recursive: true });
+		const hash = Bun.hash(script).toString(36);
+		const target = path.join(cacheDir, `runner-${hash}.${extension}`);
+		if (!fs.existsSync(target)) {
+			await Bun.write(target, script);
+		}
+		cachedPath = target;
+		return target;
+	};
+}
+
+export interface KernelAvailabilityResult<TRuntime = unknown> {
+	ok: boolean;
+	reason?: string;
+	runtime?: TRuntime;
+	executablePath?: string;
+}
+
+export interface KernelAvailabilityCheckerOptions<TRuntime> {
+	skipFlag: string;
+	filterEnv: (env: Record<string, string | undefined>) => Record<string, string | undefined>;
+	enumerateRuntimes: (cwd: string, baseEnv: Record<string, string | undefined>, interpreter?: string) => TRuntime[];
+	missingReason: string;
+	probeRuntime: (
+		runtime: TRuntime,
+		cwd: string,
+		probeOptions?: BackendProbeOptions,
+	) => Promise<{ exitCode: number | null; timedOut?: boolean; aborted?: boolean }>;
+	getExecutablePath: (runtime: TRuntime) => string;
+	includeFailedExecutablePath?: boolean;
+	formatFailureReason: (failures: string[], runtimes: TRuntime[]) => string;
+}
+
+export function createKernelAvailabilityChecker<TRuntime>(
+	options: KernelAvailabilityCheckerOptions<TRuntime>,
+): (
+	cwd: string,
+	interpreter?: string,
+	probeOptions?: BackendProbeOptions,
+) => Promise<KernelAvailabilityResult<TRuntime>> {
+	const cache = new Map<string, Promise<KernelAvailabilityResult<TRuntime>>>();
+	return async (cwd, interpreter, probeOptions): Promise<KernelAvailabilityResult<TRuntime>> => {
+		if (probeOptions?.signal?.aborted) return { ok: false, reason: "Runtime availability probe was cancelled." };
+		if (!probeOptions?.forceProbe && (isBunTestRuntime() || $flag(options.skipFlag))) return { ok: true };
+		const resolvedCwd = path.resolve(cwd);
+		const key = `${resolvedCwd}\0${interpreter ?? ""}`;
+		// A caller's cancellation or deadline must not own another caller's probe.
+		const shareProbe = !probeOptions?.signal && probeOptions?.timeoutMs === undefined && !probeOptions?.forceProbe;
+		const cached = shareProbe ? cache.get(key) : undefined;
+		if (cached) return await cached;
+		const budget = Math.min(
+			probeOptions?.timeoutMs && probeOptions.timeoutMs > 0 ? probeOptions.timeoutMs : DEFAULT_PROBE_TIMEOUT_MS,
+			DEFAULT_PROBE_TIMEOUT_MS,
+		);
+		const deadline = Date.now() + budget;
+		const probePromise = (async (): Promise<KernelAvailabilityResult<TRuntime>> => {
+			try {
+				const settings = await Settings.init();
+				const { env } = settings.getShellConfig();
+				const baseEnv = options.filterEnv(env);
+				const runtimes = options.enumerateRuntimes(resolvedCwd, baseEnv, interpreter);
+				if (runtimes.length === 0) return { ok: false, reason: options.missingReason };
+				const failures: string[] = [];
+				for (const runtime of runtimes) {
+					const execPath = options.getExecutablePath(runtime);
+					try {
+						if (probeOptions?.signal?.aborted)
+							return { ok: false, reason: "Runtime availability probe was cancelled." };
+						const remaining = deadline - Date.now();
+						if (remaining <= 0) {
+							failures.push(`${execPath} (probe timed out)`);
+							break;
+						}
+						const probe = await options.probeRuntime(runtime, resolvedCwd, {
+							...probeOptions,
+							timeoutMs: remaining,
+						});
+						if (probe.aborted) return { ok: false, reason: "Runtime availability probe was cancelled." };
+						if (probe.exitCode === 0) return { ok: true, executablePath: execPath, runtime };
+						failures.push(
+							probe.timedOut ? `${execPath} (probe timed out)` : `${execPath} (exit code ${probe.exitCode})`,
+						);
+					} catch (err) {
+						failures.push(`${execPath} (${errorMessage(err)})`);
+					}
+				}
+				return {
+					ok: false,
+					executablePath: options.includeFailedExecutablePath ? options.getExecutablePath(runtimes[0]) : undefined,
+					reason: options.formatFailureReason(failures, runtimes),
+				};
+			} catch (err) {
+				return { ok: false, reason: errorMessage(err) };
+			}
+		})();
+		if (shareProbe) cache.set(key, probePromise);
+		const result = await probePromise;
+		if (!result.ok && cache.get(key) === probePromise) cache.delete(key);
+		return result;
+	};
+}
+
+export function adaptAvailabilityResult<TRuntime, TKey extends string>(
+	result: KernelAvailabilityResult<TRuntime>,
+	pathKey: TKey,
+): { ok: boolean; reason?: string; runtime?: TRuntime } & { [K in TKey]?: string } {
+	const availability: Record<string, unknown> = { ok: result.ok };
+	if (result.reason !== undefined) availability.reason = result.reason;
+	if (result.runtime !== undefined) availability.runtime = result.runtime;
+	if (result.executablePath !== undefined) availability[pathKey] = result.executablePath;
+	return availability as { ok: boolean; reason?: string; runtime?: TRuntime } & { [K in TKey]?: string };
+}
+
+export function createLanguageAvailabilityChecker<TRuntime, TKey extends string>(
+	options: KernelAvailabilityCheckerOptions<TRuntime>,
+	pathKey: TKey,
+): (
+	cwd: string,
+	interpreter?: string,
+	probeOptions?: BackendProbeOptions,
+) => Promise<{ ok: boolean; reason?: string; runtime?: TRuntime } & { [K in TKey]?: string }> {
+	const checker = createKernelAvailabilityChecker<TRuntime>(options);
+	return async (cwd, interpreter, probeOptions) =>
+		adaptAvailabilityResult(await checker(cwd, interpreter, probeOptions), pathKey);
+}
+
+export function assembleSpawnEnv(
+	runtimeEnv: Record<string, string | undefined>,
+	optionsEnv?: Record<string, string | undefined>,
+	extraEnv?: Record<string, string>,
+	options?: { ownPropertiesOnly?: boolean },
+): Record<string, string> {
+	const spawnEnv: Record<string, string> = {};
+	if (options?.ownPropertiesOnly) {
+		for (const [key, value] of Object.entries(runtimeEnv)) {
+			if (typeof value === "string") spawnEnv[key] = value;
+		}
+		for (const [key, value] of Object.entries(optionsEnv ?? {})) {
+			if (typeof value === "string") spawnEnv[key] = value;
+		}
+		if (extraEnv) {
+			for (const [key, value] of Object.entries(extraEnv)) {
+				spawnEnv[key] = value;
+			}
+		}
+	} else {
+		for (const key in runtimeEnv) {
+			const value = runtimeEnv[key];
+			if (typeof value === "string") spawnEnv[key] = value;
+		}
+		for (const key in optionsEnv) {
+			const value = optionsEnv[key];
+			if (typeof value === "string") spawnEnv[key] = value;
+		}
+		if (extraEnv) {
+			for (const key in extraEnv) {
+				spawnEnv[key] = extraEnv[key];
+			}
+		}
+	}
+	return spawnEnv;
+}
+
+export function spawnKernelProcess(
+	cmd: string[],
+	options: {
+		cwd: string;
+		env: Record<string, string>;
+	},
+): Subprocess {
+	return Bun.spawn(cmd, {
+		cwd: options.cwd,
+		detached: shouldDetachKernel(process.platform),
+		env: options.env,
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: shouldHideKernelWindow({
+			platform: process.platform,
+			hostHasInheritableConsole: hostHasInheritableConsole(),
+		}),
+	});
+}
+
+/** A failed initializer still owns this runner until shutdown confirms its exit. */
+export class UnconfirmedKernelStartupError extends Error {
+	constructor(readonly kernel: SessionKernel, cause: unknown) {
+		super(errorMessage(cause), { cause });
+		this.name = cause instanceof Error ? cause.name : "Error";
+	}
+}
+
+export async function initializeKernelSubprocess<TKernel extends BaseKernel>(
+	kernel: TKernel,
+	options: {
+		signal?: AbortSignal;
+		deadlineMs?: number;
+		startupTimeoutMs?: number;
+		initScript: string;
+		preludeScript: string;
+		languageName: string;
+		releaseReason: string;
+	},
+): Promise<TKernel> {
+	const startupTimeout = options.startupTimeoutMs ?? DEFAULT_KERNEL_STARTUP_TIMEOUT_MS;
+	const startupBudget = Math.min(getRemainingTimeMs(options.deadlineMs) ?? startupTimeout, startupTimeout);
+	try {
+		await kernel.executeWithBudget(
+			options.initScript,
+			options.signal,
+			startupBudget,
+			`${options.languageName} kernel init`,
+		);
+		await kernel.executeWithBudget(
+			options.preludeScript,
+			options.signal,
+			startupBudget,
+			`${options.languageName} kernel prelude`,
+		);
+		return kernel;
+	} catch (err) {
+		const result = await releaseKernel(kernel, options.releaseReason, { timeoutMs: KERNEL_SHUTDOWN_GRACE_MS });
+		if (!result.confirmed) throw new UnconfirmedKernelStartupError(kernel, err);
+		throw err;
+	}
+}
+
+export interface KernelSubprocessRuntime {
+	env: Record<string, string | undefined>;
+}
+
+export interface LaunchKernelSubprocessOptions<
+	TKernel extends BaseKernel,
+	TRuntime extends KernelSubprocessRuntime = KernelSubprocessRuntime,
+> {
+	languageName: string;
+	options: KernelStartOptions;
+	checkAvailability: (
+		cwd: string,
+		interpreter?: string,
+	) => Promise<{ ok: boolean; reason?: string; runtime?: TRuntime }>;
+	resolveRuntimeFallback: (
+		cwd: string,
+		interpreter: string | undefined,
+		shellEnv: Record<string, string | undefined>,
+	) => TRuntime;
+	ensureRunnerScript: () => Promise<string>;
+	createKernel: (id: string) => TKernel;
+	getExecutableCommand: (runtime: TRuntime, scriptPath: string) => string[];
+	getSpawnEnv?: (runtime: TRuntime, optionsEnv?: Record<string, string | undefined>) => Record<string, string>;
+	startupTimeoutMs?: number;
+	initScript: string;
+	preludeScript: string;
+	releaseReason: string;
+}
+
+export async function launchKernelSubprocess<
+	TKernel extends BaseKernel,
+	TRuntime extends KernelSubprocessRuntime = KernelSubprocessRuntime,
+>(config: LaunchKernelSubprocessOptions<TKernel, TRuntime>): Promise<TKernel> {
+	const { options, languageName } = config;
+	const availability = await logger.time(
+		`${languageName}Kernel.start:availabilityCheck`,
+		config.checkAvailability,
+		options.cwd,
+		options.interpreter,
+	);
+	if (!availability.ok) {
+		throw new Error(availability.reason ?? `${languageName} kernel unavailable`);
+	}
+
+	let runtime = availability.runtime;
+	if (!runtime) {
+		const { env: shellEnv } = (await Settings.init()).getShellConfig();
+		runtime = config.resolveRuntimeFallback(options.cwd, options.interpreter, shellEnv);
+	}
+
+	const scriptPath = await config.ensureRunnerScript();
+	const kernel = config.createKernel(Snowflake.next());
+	const spawnEnv = config.getSpawnEnv
+		? config.getSpawnEnv(runtime, options.env)
+		: assembleSpawnEnv(runtime.env, options.env);
+	const proc = spawnKernelProcess(config.getExecutableCommand(runtime, scriptPath), {
+		cwd: options.cwd,
+		env: spawnEnv,
+	});
+	// Only this real spawn site opens an OS handle. Test process seams never
+	// turn an arbitrary numeric fixture PID into permission to kill a process.
+	kernel.setProcess(proc, process.platform === "win32" ? processHandle(proc.pid) : undefined);
+	options.adoptPid?.(proc.pid);
+	logger.info("eval kernel subprocess started", {
+		language: languageName,
+		kernelId: kernel.id,
+		pid: proc.pid,
+		sessionId: options.sessionId,
+		ownerId: options.kernelOwnerId,
+	});
+
+	return await initializeKernelSubprocess(kernel, {
+		signal: options.signal,
+		deadlineMs: options.deadlineMs,
+		startupTimeoutMs: config.startupTimeoutMs ?? DEFAULT_KERNEL_STARTUP_TIMEOUT_MS,
+		initScript: config.initScript,
+		preludeScript: config.preludeScript,
+		languageName,
+		releaseReason: config.releaseReason,
+	});
+}
+
+export function getRemainingTimeMs(deadlineMs?: number): number | undefined {
+	if (deadlineMs === undefined) return undefined;
+	return Math.max(0, deadlineMs - Date.now());
+}
+
+export function createAbortError(name: "AbortError" | "TimeoutError", message: string): Error {
+	const err = new Error(message);
+	err.name = name;
+	return err;
+}
+
+/**
+ * Throw because a kernel operation's signal is already aborted, PRESERVING the
+ * identity of the reason.
+ *
+ * This is deliberately not `tools/core/tool-errors.ts`'s `throwIfAborted`, and the
+ * name says so. That one normalizes every abort to a single `ToolAbortError`
+ * because its callers catch one type. A kernel cannot: the timer at
+ * `runWithDeadline` aborts with a `TimeoutError` and the caller has to be able
+ * to tell a deadline from a cancellation, which is the same distinction
+ * `result.timedOut` carries a few lines below. Rethrowing the reason unchanged
+ * is what keeps that distinction alive.
+ *
+ * Both spellings answered to `throwIfAborted` before, in the same package, with
+ * different types and different handling of the reason. A reader who found one
+ * had no way to know the other existed.
+ */
+export function throwIfKernelAborted(signal: AbortSignal | undefined, fallbackReason: string): void {
+	if (!signal?.aborted) return;
+	const reason = signal.reason;
+	if (reason instanceof Error) throw reason;
+	throw createAbortError("AbortError", typeof reason === "string" ? reason : fallbackReason);
+}
+
+/**
+ * Run code and settle. The one execute-only kernel contract in the codebase.
+ *
+ * There used to be three overlapping spellings of "something I can hand code to":
+ * `PythonKernelExecutor` in py/executor.ts, `GenericKernel<TEnv>` in executor-base.ts,
+ * and the `execute` member of {@link SessionKernel}. All three described the same call
+ * with different amounts of precision, and only one of them could be right about the
+ * result type: `GenericKernel` declared `stdinRequested` optional while every real kernel
+ * always sets it, so a caller written against `GenericKernel` had to handle a case that
+ * cannot happen. One name, one shape, and every kernel-shaped thing (including every test
+ * fake) is checked against it.
+ *
+ * `TExecuteOptions` is the language's own options type, so a runner that accepts a wider
+ * option shape stays typed as such instead of widening this contract for everyone.
+ */
+export interface KernelExecutor<TExecuteOptions extends KernelExecuteOptions = KernelExecuteOptions> {
+	execute(code: string, options?: TExecuteOptions): Promise<KernelExecuteResult>;
+}
+
+/**
+ * The kernel surface a SESSION executor depends on: run a cell, ask whether the process is
+ * still there, and shut it down.
+ *
+ * Exported as a contract rather than left implicit in the concrete class because the
+ * session bookkeeping only ever needs these four members, and because every test fake used
+ * to be cast with `as unknown as PythonKernel` to stand in for the class. Under a cast
+ * nothing checks a fake against reality: four fakes across four suites each implemented a
+ * `ping()` method that no production code has ever called, and nobody could tell. A fake
+ * that declares `implements SessionKernel` fails to typecheck the day this contract moves.
+ */
+export interface SessionKernel<TExecuteOptions extends KernelExecuteOptions = KernelExecuteOptions>
+	extends KernelExecutor<TExecuteOptions> {
+	// No `id` here on purpose: `BaseKernel` has one, but no session code reads it, and a
+	// contract that demands members its consumers never touch pushes busywork into every
+	// implementation (including every fake) without checking anything.
+	readonly processId?: number;
+	isAlive(): boolean;
+	shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult>;
+}
+
+/**
+ * Best-effort release after a failed startup or a per-call execution.
+ *
+ * Preserve the original execution error and log shutdown failures. Retained
+ * sessions use the pool's strict shutdown fence instead: they cannot replace
+ * or forget a runner until shutdown confirms its exit.
+ */
+export async function releaseKernel(
+	kernel: Pick<SessionKernel, "shutdown">,
+	context: string,
+	options?: KernelShutdownOptions,
+): Promise<KernelShutdownResult> {
+	try {
+		const result = await kernel.shutdown(options);
+		if (!result.confirmed) {
+			logger.warn("kernel shutdown was not confirmed", { context });
+		}
+		return result;
+	} catch (error) {
+		logger.warn("kernel shutdown failed", { context, error: errorMessage(error) });
+		return { confirmed: false };
+	}
+}
+
+/**
+ * Shared subprocess-backed kernel machinery for the language runners. Each
+ * language subclasses this, supplying its binary/runner via a static `start()`
+ * and its wire protocol via {@link BaseKernelOptions.buildPayload}. The IPC loop
+ * speaks NDJSON: the runner emits one JSON {@link Frame} per line; outbound
+ * requests are serialized by `buildPayload` (which may itself be NDJSON or any
+ * other line-delimited encoding).
+ *
+ * `TExecuteOptions` is the language's own execute-options type so each runner's
+ * `buildPayload` sees its precise option shape (e.g. environment-map variants).
+ */
+export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = KernelExecuteOptions>
+	implements SessionKernel<TExecuteOptions>
+{
+	readonly id: string;
+	#proc: Subprocess | null = null;
+	#stdin: Bun.FileSink | null = null;
+	#alive = true;
+	#disposed = false;
+	#shutdownConfirmed = false;
+	#exitedPromise: Promise<number> | null = null;
+	#shutdownPromise: Promise<KernelShutdownResult> | null = null;
+	#ownedProcess: Process | null | undefined;
+	readonly #ownedTree = new Map<number, Process>();
+	#pending = new Map<string, PendingExecution>();
+	readonly #options: Required<BaseKernelOptions<TExecuteOptions>>;
+
+	constructor(id: string, options: BaseKernelOptions<TExecuteOptions>) {
+		this.id = id;
+		this.#options = {
+			languageName: options.languageName,
+			traceIpc: options.traceIpc ?? false,
+			exitPayload: options.exitPayload ?? JSON_KERNEL_EXIT_PAYLOAD,
+			interruptEscalationMs: options.interruptEscalationMs ?? KERNEL_INTERRUPT_ESCALATION_MS,
+			shutdownGraceMs: options.shutdownGraceMs ?? KERNEL_SHUTDOWN_GRACE_MS,
+			buildPayload: options.buildPayload ?? buildJsonKernelPayload,
+		};
+	}
+
+	setProcess(proc: Subprocess<"pipe", "pipe", "pipe">, ownedProcess?: Process | null) {
+		this.#proc = proc;
+		this.#stdin = proc.stdin;
+		this.#exitedPromise = proc.exited;
+		this.#ownedProcess = ownedProcess;
+		if (ownedProcess) this.#ownedTree.set(ownedProcess.pid, ownedProcess);
+		void this.#exitedPromise.then(code => {
+			this.#alive = false;
+			this.#abortPendingExecutions(`${this.#options.languageName} kernel exited with code ${code}`, {
+				kernelKilled: true,
+			});
+		});
+
+		this.#startReader(proc.stdout as ReadableStream<Uint8Array>);
+		this.#startStderrDrain(proc.stderr as ReadableStream<Uint8Array>);
+	}
+
+	get processId(): number | undefined {
+		return this.#proc?.pid;
+	}
+
+	isAlive(): boolean {
+		return this.#alive && !this.#disposed;
+	}
+
+	async execute(code: string, options?: TExecuteOptions): Promise<KernelExecuteResult> {
+		if (!this.isAlive()) {
+			throw new Error(`${this.#options.languageName} kernel is not running`);
+		}
+
+		const msgId = options?.id ?? Snowflake.next();
+		const { promise, resolve } = Promise.withResolvers<KernelExecuteResult>();
+		const pending: PendingExecution = {
+			resolve,
+			options,
+			status: "ok",
+			cancelled: false,
+			timedOut: false,
+			stdinRequested: false,
+			settled: false,
+			kernelKilled: false,
+		};
+		this.#pending.set(msgId, pending);
+
+		const finalize = () => {
+			if (pending.settled) return;
+			pending.settled = true;
+			this.#pending.delete(msgId);
+			cleanup();
+			resolve({
+				status: pending.status,
+				executionCount: pending.executionCount,
+				error: pending.error,
+				cancelled: pending.cancelled,
+				timedOut: pending.timedOut,
+				stdinRequested: pending.stdinRequested,
+				kernelKilled: pending.kernelKilled,
+			});
+		};
+
+		let requestWritten = false;
+		const requestCancel = () => {
+			if (pending.settled || pending.escalationTimer) return;
+			if (!requestWritten) {
+				finalize();
+				return;
+			}
+			void this.interrupt();
+			const escalation = setTimeout(() => {
+				if (pending.settled) return;
+				logger.warn(`${this.#options.languageName} runner did not respond to SIGINT; terminating subprocess`, {
+					kernelId: this.id,
+				});
+				pending.kernelKilled = true;
+				void this.shutdown();
+			}, this.#options.interruptEscalationMs);
+			escalation.unref?.();
+			pending.escalationTimer = escalation;
+		};
+
+		const onAbort = () => {
+			pending.cancelled = true;
+			pending.timedOut = pending.timedOut || isTimeoutError(options?.signal?.reason);
+			requestCancel();
+		};
+		const timeoutId =
+			typeof options?.timeoutMs === "number" && options.timeoutMs > 0
+				? setTimeout(() => {
+						pending.timedOut = true;
+						pending.cancelled = true;
+						requestCancel();
+					}, options.timeoutMs)
+				: undefined;
+
+		const cleanup = () => {
+			clearTimeout(timeoutId);
+			clearTimeout(pending.escalationTimer);
+			pending.escalationTimer = undefined;
+			options?.signal?.removeEventListener("abort", onAbort);
+		};
+
+		if (options?.signal) {
+			if (options.signal.aborted) {
+				onAbort();
+			} else {
+				options.signal.addEventListener("abort", onAbort, { once: true });
+				if (options.signal.aborted) {
+					options.signal.removeEventListener("abort", onAbort);
+					onAbort();
+				}
+			}
+		}
+
+		pending.finalize = finalize;
+
+		const payload = this.#options.buildPayload(code, msgId, options);
+
+		if (pending.settled) {
+			return promise;
+		}
+
+		requestWritten = true;
+		try {
+			await this.#writeLine(payload);
+		} catch (err) {
+			pending.cancelled = true;
+			pending.error = {
+				name: "TransportError",
+				value: errorMessage(err),
+				traceback: [],
+			};
+			finalize();
+		}
+
+		return promise;
+	}
+
+	async interrupt(): Promise<void> {
+		if (!this.#proc || this.#disposed) return;
+		try {
+			this.#proc.kill("SIGINT");
+		} catch (err) {
+			logger.warn(`Failed to interrupt ${this.#options.languageName.toLowerCase()} runner`, {
+				error: errorMessage(err),
+			});
+		}
+	}
+
+	shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult> {
+		if (this.#shutdownPromise) return this.#shutdownPromise;
+		const shuttingDown = this.#shutdown(options);
+		this.#shutdownPromise = shuttingDown;
+		void shuttingDown.finally(() => {
+			if (!this.#shutdownConfirmed) this.#shutdownPromise = null;
+		}).catch(() => {});
+		return shuttingDown;
+	}
+
+	async #shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult> {
+		if (this.#shutdownConfirmed) return { confirmed: true };
+
+		this.#alive = false;
+		this.#abortPendingExecutions(`${this.#options.languageName} kernel shutdown`, { kernelKilled: true });
+
+		const timeoutMs = options?.timeoutMs ?? this.#options.shutdownGraceMs;
+		const proc = this.#proc;
+		if (!proc) {
+			this.#shutdownConfirmed = true;
+			this.#disposed = true;
+			return { confirmed: true };
+		}
+		let treeObserved = this.#ownedProcess !== null;
+		try {
+			// Retain stable child identities before requesting exit. A child may
+			// otherwise be reparented before a later walk can discover it.
+			for (const owned of this.#ownedTree.values()) {
+				for (const child of owned.children()) {
+					if (!this.#ownedTree.has(child.pid)) this.#ownedTree.set(child.pid, child);
+				}
+			}
+		} catch (error) {
+			treeObserved = false;
+			logger.warn("eval kernel tree could not be observed", { pid: proc.pid, error: errorMessage(error) });
+		}
+
+		// A runner blocked in user code may never drain stdin. Request graceful
+		// exit without letting a pending pipe flush prevent signal escalation.
+		void (async () => {
+			try {
+				await this.#writeLine(this.#options.exitPayload);
+			} catch {
+				/* writer may already be closed */
+			}
+			try {
+				await this.#stdin?.end();
+			} catch {
+				/* writer may already be closed */
+			}
+		})();
+
+		// `result === null` means the wait TIMED OUT (process still running) and we
+		// escalate. A truthy result means the process actually exited — including a
+		// clean `code: 0` and a signal's `code: null` — so we must NOT escalate on
+		// those. Branching on code truthiness here (the old `number | null` return)
+		// treated a graceful exit-0 as still-running and hard-killed every kernel.
+		const exited = this.#waitForExitWithTimeout(timeoutMs);
+		let result = await exited;
+		if (!result) {
+			try {
+				for (const owned of this.#ownedTree.values()) owned.killTree();
+			} catch (error) {
+				treeObserved = false;
+				logger.warn("eval kernel tree termination failed", { pid: proc.pid, error: errorMessage(error) });
+			}
+			try {
+				proc.kill("SIGTERM");
+			} catch {
+				/* ignore */
+			}
+			result = await this.#waitForExitWithTimeout(timeoutMs);
+		}
+		if (!result) {
+			try {
+				proc.kill("SIGKILL");
+			} catch {
+				/* ignore */
+			}
+			result = await this.#waitForExitWithTimeout(timeoutMs);
+		}
+
+		// A root exit is not evidence that its descendants finished terminating.
+		// The runner's Windows job remains the creation-time ownership guard.
+		let treeExited = false;
+		if (treeObserved) {
+			try {
+				const exits = await Promise.all(
+					[...this.#ownedTree.values()].map(owned => owned.waitForExit({ timeoutMs })),
+				);
+				treeExited = exits.every(Boolean);
+			} catch (error) {
+				logger.warn("eval kernel tree exit was not confirmed", { pid: proc.pid, error: errorMessage(error) });
+			}
+		}
+		const confirmed = !!result && treeExited;
+		this.#shutdownConfirmed = confirmed;
+		this.#disposed = true;
+		logger.info("eval kernel subprocess shutdown", { pid: proc.pid, confirmed });
+		return { confirmed };
+	}
+
+	#abortPendingExecutions(reason: string, options?: { kernelKilled?: boolean }): void {
+		if (this.#pending.size === 0) return;
+		const pending = Array.from(this.#pending.values());
+		this.#pending.clear();
+		const kernelKilledDefault = options?.kernelKilled ?? false;
+		for (const entry of pending) {
+			if (entry.settled) continue;
+			entry.settled = true;
+			void entry.options?.onChunk?.(`[kernel] ${reason}\n`);
+			entry.resolve({
+				status: "error",
+				cancelled: true,
+				timedOut: entry.timedOut,
+				stdinRequested: entry.stdinRequested,
+				executionCount: entry.executionCount,
+				error: entry.error,
+				kernelKilled: entry.kernelKilled || kernelKilledDefault,
+			});
+		}
+	}
+
+	async #writeLine(line: string): Promise<void> {
+		if (!this.#stdin) {
+			throw new Error(`${this.#options.languageName} kernel stdin is not open`);
+		}
+		if (this.#options.traceIpc) {
+			logger.debug(`${this.#options.languageName}Kernel send`, { preview: line.slice(0, 120) });
+		}
+		this.#stdin.write(`${line}\n`);
+		// Execution cancellation must not wait for pipe backpressure to clear.
+		// The process exit reader settles pending runs when the pipe breaks.
+		void Promise.resolve(this.#stdin.flush()).catch(error => {
+			logger.debug(`${this.#options.languageName} kernel stdin flush failed`, { error: errorMessage(error) });
+		});
+	}
+
+	#startReader(stream: ReadableStream<Uint8Array>): void {
+		const decoder = new TextDecoder();
+		const loop = async () => {
+			try {
+				// Each chunk is scanned once for its newline, so a frame that arrives in a thousand
+				// chunks costs one pass rather than one pass over everything received so far per chunk.
+				for await (const line of readLines(stream)) {
+					await this.#handleLine(decoder.decode(line));
+				}
+			} catch (err) {
+				const reason = `${this.#options.languageName} kernel output could not be read: ${errorMessage(err)}`;
+				logger.warn(reason);
+				// No later frame can arrive, so nothing pending can finish and nothing new can run.
+				this.#abortPendingExecutions(reason, { kernelKilled: true });
+				void this.shutdown();
+			}
+		};
+		void loop();
+	}
+
+	#startStderrDrain(stream: ReadableStream<Uint8Array>): void {
+		const reader = stream.getReader();
+		const decoder = new TextDecoder();
+		const loop = async () => {
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					const text = decoder.decode(value, { stream: true });
+					if (text.trim()) {
+						logger.warn(`${this.#options.languageName} runner stderr`, { text });
+					}
+				}
+			} catch {
+				/* ignore */
+			} finally {
+				try {
+					reader.releaseLock();
+				} catch {
+					/* ignore */
+				}
+			}
+		};
+		void loop();
+	}
+
+	async #handleLine(line: string): Promise<void> {
+		if (!line.trim()) return;
+		let frame: Frame;
+		try {
+			frame = JSON.parse(line) as Frame;
+		} catch (err) {
+			logger.warn(`${this.#options.languageName} runner emitted invalid JSON`, {
+				line: line.slice(0, 200),
+				error: errorMessage(err),
+			});
+			return;
+		}
+		if (this.#options.traceIpc) {
+			logger.debug(`${this.#options.languageName}Kernel recv`, { type: frame.type, id: frame.id });
+		}
+		await this.#handleFrame(frame);
+	}
+
+	async #handleFrame(frame: Frame): Promise<void> {
+		const rid = frame.id;
+		if (!rid) return;
+		const pending = this.#pending.get(rid);
+		if (!pending) return;
+
+		switch (frame.type) {
+			case "started":
+				return;
+			case "stdout":
+			case "stderr": {
+				const text = frame.data ?? "";
+				if (text && pending.options?.onChunk) {
+					await pending.options.onChunk(text);
+				}
+				return;
+			}
+			case "display":
+			case "result": {
+				const bundle = frame.bundle ?? {};
+				const { text, outputs } = await renderKernelDisplay(bundle);
+				if (text && pending.options?.onChunk) {
+					await pending.options.onChunk(text);
+				}
+				if (outputs.length > 0 && pending.options?.onDisplay) {
+					for (const output of outputs) {
+						await pending.options.onDisplay(output);
+					}
+				}
+				return;
+			}
+			case "error": {
+				const traceback = Array.isArray(frame.traceback) ? frame.traceback.map(String) : [];
+				pending.status = "error";
+				pending.error = {
+					name: String(frame.ename ?? "Error"),
+					value: String(frame.evalue ?? ""),
+					traceback,
+				};
+				const message =
+					traceback.length > 0 ? `${traceback.join("\n")}\n` : `${pending.error.name}: ${pending.error.value}\n`;
+				if (pending.options?.onChunk) {
+					await pending.options.onChunk(message);
+				}
+				return;
+			}
+			case "done": {
+				if (typeof frame.executionCount === "number") {
+					pending.executionCount = frame.executionCount;
+				}
+				if (frame.status === "error" && pending.status === "ok") {
+					pending.status = "error";
+				}
+				if (frame.cancelled) {
+					pending.cancelled = true;
+				}
+				pending.finalize?.();
+				return;
+			}
+		}
+	}
+
+	async executeWithBudget(
+		code: string,
+		signal: AbortSignal | undefined,
+		timeoutMs: number,
+		label: string,
+	): Promise<void> {
+		const controller = new AbortController();
+		const cleanups: Array<() => void> = [];
+		if (signal) {
+			if (signal.aborted) {
+				controller.abort(signal.reason);
+			} else {
+				const onAbort = () => controller.abort(signal.reason);
+				signal.addEventListener("abort", onAbort, { once: true });
+				cleanups.push(() => signal.removeEventListener("abort", onAbort));
+			}
+		}
+		const timer =
+			timeoutMs > 0
+				? setTimeout(() => controller.abort(createAbortError("TimeoutError", `${label} timed out`)), timeoutMs)
+				: undefined;
+		if (timer) cleanups.push(() => clearTimeout(timer));
+		try {
+			throwIfKernelAborted(controller.signal, label);
+			const result = await this.execute(code, {
+				signal: controller.signal,
+				silent: true,
+				storeHistory: false,
+			} as TExecuteOptions);
+			if (result.cancelled) {
+				throw createAbortError(result.timedOut ? "TimeoutError" : "AbortError", `${label} cancelled`);
+			}
+			if (result.status === "error") {
+				const reason = result.error?.value ?? `${this.#options.languageName} kernel init failed`;
+				throw new Error(`${label} failed: ${reason}`);
+			}
+		} finally {
+			for (const cleanup of cleanups) cleanup();
+		}
+	}
+
+	/**
+	 * Wait for the subprocess to exit, or resolve `null` if `timeoutMs` elapses
+	 * first. The exit result is an OBJECT ({@link KernelExitObservation}) so it is
+	 * always truthy — even when the process exited with code `0` (clean success)
+	 * or was terminated by a signal (which yields a null code). Only a genuine
+	 * timeout resolves to `null`. Callers MUST branch on `=== null` / truthiness,
+	 * never on the code value: a `number | null` return would make code `0` falsy
+	 * and a signal's null code indistinguishable from the timeout sentinel, which
+	 * caused a clean exit to be misread as "still running" and every shutdown to
+	 * escalate to SIGKILL while reporting `confirmed: false` (BACKLOG
+	 * KERNEL-EXIT-CONFIRM).
+	 */
+	async #waitForExitWithTimeout(timeoutMs: number): Promise<KernelExitObservation | null> {
+		if (!this.#exitedPromise) return { code: 0 };
+		const exitedPromise = this.#exitedPromise;
+		const { promise: timeoutPromise, resolve: resolveTimeout } = Promise.withResolvers<null>();
+		const timer = setTimeout(() => resolveTimeout(null), Math.max(0, timeoutMs));
+		timer.unref?.();
+		try {
+			return await Promise.race([
+				exitedPromise.then(code => ({ code: (code as number | null) ?? null })),
+				timeoutPromise,
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+}

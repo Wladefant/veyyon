@@ -1,0 +1,110 @@
+import { type } from "@veyyon/ai/utils/schema/arktype";
+import { lazy } from "@veyyon/utils/abortable";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
+import type { ToolDefinition } from "../../extensibility/extensions";
+import { resolveActiveBranchSession } from "../helpers";
+import { buildExperimentState } from "../state";
+import type { AutoresearchToolFactoryOptions } from "../types";
+
+const updateNotesSchema = lazy(() =>
+	type({
+		"body?": type("string").describe("replacement notes body"),
+		"append_idea?": type("string").describe("append as bullet under Ideas instead of replacing body"),
+	}),
+);
+
+interface UpdateNotesDetails {
+	notes: string;
+}
+
+export function createUpdateNotesTool(
+	options: AutoresearchToolFactoryOptions,
+): ToolDefinition<typeof updateNotesSchema.value, UpdateNotesDetails> {
+	return {
+		name: "update_notes",
+		label: "Update Notes",
+		description:
+			"Persist the durable autoresearch playbook (goal, scope notes, hypotheses, ideas backlog) on the active session. Pass `body` to replace the entire notes blob, or `append_idea` to append a single bullet under an `## Ideas` section.",
+		get parameters() {
+			return updateNotesSchema.value;
+		},
+		defaultInactive: true,
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
+			if (!sessionResult.ok) return sessionResult.result;
+			const { storage, session } = sessionResult;
+
+			const nextNotes =
+				params.append_idea !== undefined && params.append_idea.trim().length > 0
+					? appendIdea(session.notes, params.append_idea.trim())
+					: (params.body ?? session.notes);
+
+			storage.updateSession(session.id, { notes: nextNotes });
+			const refreshed = storage.getSessionById(session.id);
+			const loggedRuns = storage.listLoggedRuns(session.id);
+			const runtime = options.getRuntime(ctx);
+			if (refreshed) {
+				runtime.state = buildExperimentState(refreshed, loggedRuns);
+			}
+			options.dashboard.update(ctx, runtime);
+			options.dashboard.requestRender();
+
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							params.append_idea !== undefined
+								? `Appended idea (${nextNotes.length} chars total).`
+								: `Notes updated (${nextNotes.length} chars).`,
+					},
+				],
+				details: { notes: nextNotes },
+			};
+		},
+		view: {
+			renderCall: args => {
+				const preview = args.append_idea ?? args.body?.slice(0, 100) ?? "";
+				return {
+					kind: "textBlock",
+					spans: [
+						{ text: "update_notes", tone: "title", bold: true },
+						{ text: " " },
+						{ text: truncateToWidth(replaceTabs(preview), 100), tone: "muted" },
+					],
+				};
+			},
+			renderResult: result => ({
+				kind: "textBlock",
+				spans: [
+					{ text: replaceTabs(result.content.find(part => part.type === "text")?.text ?? ""), tone: "muted" },
+				],
+			}),
+		},
+	};
+}
+
+const IDEAS_HEADING = "## Ideas";
+
+function appendIdea(currentNotes: string, idea: string): string {
+	const trimmed = currentNotes.trimEnd();
+	if (trimmed.length === 0) {
+		return `${IDEAS_HEADING}\n- ${idea}\n`;
+	}
+	if (trimmed.includes(IDEAS_HEADING)) {
+		const lines = trimmed.split("\n");
+		const ideasIndex = lines.findIndex(line => line.trim() === IDEAS_HEADING);
+		// find end of ideas section (next heading or end of file)
+		let insertAt = lines.length;
+		for (let i = ideasIndex + 1; i < lines.length; i += 1) {
+			if (/^#{1,6}\s/.test(lines[i] ?? "")) {
+				insertAt = i;
+				break;
+			}
+		}
+		lines.splice(insertAt, 0, `- ${idea}`);
+		return `${lines.join("\n")}\n`;
+	}
+	return `${trimmed}\n\n${IDEAS_HEADING}\n- ${idea}\n`;
+}

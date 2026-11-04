@@ -1,0 +1,82 @@
+{
+	"cases": [
+		{
+			"id": "normalize-roots-empty",
+			"contract": "An empty root string normalizes to an empty array",
+			"surface": "normalize-roots",
+			"tags": ["boundary"],
+			"input": { "root": "" },
+			"expect": { "roots": [] }
+		},
+		{
+			"id": "normalize-roots-trailing-slash",
+			"contract": "Trailing slashes are stripped from an absolute root",
+			"surface": "normalize-roots",
+			"tags": ["positive", "boundary"],
+			"input": { "root": "/proj/" },
+			"expect": { "roots": ["/proj"] }
+		},
+		{
+			"id": "normalize-roots-whitespace",
+			"contract": "Surrounding whitespace is trimmed from an absolute root",
+			"surface": "normalize-roots",
+			"tags": ["positive", "boundary"],
+			"input": { "root": " /proj " },
+			"expect": { "roots": ["/proj"] }
+		},
+		{
+			"id": "normalize-roots-drops-relative",
+			"contract": "Relative roots are dropped",
+			"surface": "normalize-roots",
+			"tags": ["adversarial", "negative"],
+			"input": { "root": "relative/path" },
+			"expect": { "roots": [] }
+		},
+		{
+			"id": "normalize-roots-drops-root-only",
+			"contract": "Bare filesystem root is dropped",
+			"surface": "normalize-roots",
+			"tags": ["adversarial", "negative"],
+			"input": { "root": "/" },
+			"expect": { "roots": [] }
+		},
+		{
+			"id": "normalize-roots-absolute-path",
+			"contract": "Valid absolute directory paths survive normalization as a single root",
+			"surface": "normalize-roots",
+			"tags": ["positive"],
+			"input": { "root": "/tmp/x" },
+			"expect": { "roots": ["/tmp/x"] }
+		},
+		{
+			"id": "cwd-reason-single-escape",
+			"contract": "A single escaping target is named in the cwd-boundary approval reason",
+			"surface": "cwd-boundary-reason",
+			"tags": ["positive"],
+			"input": { "cwd": "/home/u/p", "escaping": ["/etc/passwd"] },
+			"expect": {
+				"text": "Path is outside the session working directory (/home/u/p): /etc/passwd. Approve to allow this call, move the session with set_cwd if you will keep working there, or set tools.approvalMode: yolo to stop being asked at all. Raising the rung to ask-command or auto does not lift this boundary."
+			}
+		},
+		{
+			"id": "cwd-reason-multiple-escapes",
+			"contract": "Multiple escaping targets are comma-joined in the cwd-boundary reason",
+			"surface": "cwd-boundary-reason",
+			"tags": ["positive", "boundary"],
+			"input": { "cwd": "/cwd", "escaping": ["/a", "/b"] },
+			"expect": {
+				"text": "Path is outside the session working directory (/cwd): /a, /b. Approve to allow this call, move the session with set_cwd if you will keep working there, or set tools.approvalMode: yolo to stop being asked at all. Raising the rung to ask-command or auto does not lift this boundary."
+			}
+		},
+		{
+			"id": "cwd-reason-empty-escaping",
+			"contract": "An empty escaping list still emits the reason shell with an empty target list",
+			"surface": "cwd-boundary-reason",
+			"tags": ["boundary", "adversarial"],
+			"input": { "cwd": "/cwd", "escaping": [] },
+			"expect": {
+				"text": "Path is outside the session working directory (/cwd): . Approve to allow this call, move the session with set_cwd if you will keep working there, or set tools.approvalMode: yolo to stop being asked at all. Raising the rung to ask-command or auto does not lift this boundary."
+			}
+		}
+	]
+}

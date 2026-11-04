@@ -1,0 +1,864 @@
+# Secrets
+
+You often need the agent to run a command that requires a credential. A deploy needs a token. A database query needs a password. If you paste the value into chat without protection, it can reach the model provider and any session export you create.
+
+Veyyon can keep the value away from the provider while the command still works. Some local surfaces can still contain it; those are named below.
+
+## Turning it on
+
+Secret protection is off by default. The quickest way to turn it on is to store a credential: storing one switches protection on and reports that it did, because a stored credential is only useful once the protection that substitutes it is running.
+
+To turn it on without storing anything, use `/settings`, or write it into `config.yml`:
+
+```yaml
+secrets:
+  enabled: true
+```
+
+The setting takes effect in the current session. Veyyon reloads environment variables, `secrets.yml`, and the vault when you toggle protection or run a `/secret` command. Moving to another working directory loads that project's scope and drops the source project's mappings.
+
+### Protecting files named by a credential metadata index
+
+An external credential producer can publish a metadata index that classifies credential files without exposing their contents. Add its index path to the active profile's `config.yml`:
+
+```yaml
+secrets:
+  protectedCredentialMetadataIndexes:
+    - /path/to/credential-index.json
+```
+
+At startup, Veyyon reads the configured index and blocks ordinary agent `read` calls for files it classifies as credentials. Relative index paths resolve from the session working directory. The index itself, documentation, and source files remain readable. Trusted direct filesystem consumers are unchanged. Veyyon snapshots this policy for each working directory when the session starts or first enters that directory; restart the session after changing the index or this setting. This protects only files named by the configured index. It does not scan for other credentials or make the working copy itself unreadable.
+
+## Your first secret
+
+If the credential is already an environment variable, you have nothing to declare to keep its value out of provider requests. Veyyon treats an environment variable as secret when its value is 8 characters or longer and its name ends with, or has an underscore after, one of `KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `PASSPHRASE`, `AUTH`, `CREDENTIAL`, `PRIVATE`, or `OAUTH`.
+
+Each keyword matches as a whole word, not as a substring:
+
+| Detected | Not detected |
+| -------- | ------------ |
+| `DEPLOY_TOKEN` | `TOKENIZER` |
+| `API_KEY` | `SECRETIVE_THING` |
+| `KEY_FILE` | `AUTHORIZED_USER` |
+| `GPG_PASSPHRASE` | `PASSTHROUGH` |
+| `APIKEY`, `PRIVKEY` | `PWD` |
+
+The exclusions are the point of the rule, not a gap in it. Obfuscation replaces every occurrence of a value, so detecting `AUTHORIZED_USER` would blank out that username wherever it appeared in your transcript. `PWD` is excluded for the same reason and more sharply: it is your current working directory, it exists in every shell, and detecting it would replace your paths with a placeholder in every message that mentions one.
+
+`APIKEY` and `PRIVKEY` need no keyword of their own, because `KEY` at the end of a name already matches them.
+
+### Adding your own keywords
+
+The keyword list is data, not code. Drop a file at either location and its keywords are added to the built-in ones:
+
+| Level | Path |
+| ----- | ---- |
+| Profile | `<agent dir>/secret-env-keywords.yml` |
+| Project | `<project>/.veyyon/secret-env-keywords.yml` |
+
+```yaml
+keywords:
+  - VAULTPASS
+  - SCANSEED
+```
+
+Your keywords follow the same boundary rule, so `VAULTPASS` matches `VAULTPASS` and `MY_VAULTPASS` and not `VAULTPASSWORDLESS`.
+
+A user file can only **add**. It cannot remove a built-in keyword, so a repository you clone cannot turn off detection of `TOKEN` for you. A file that exists but cannot be read or parsed stops startup, because carrying on would cover fewer variables than you wrote down.
+
+If a variable of yours is still not detected, do not assume it is covered: declare it in `secrets.yml` as shown below, or store it with `/secret`.
+
+So a shell that already has this:
+
+```bash
+export DEPLOY_TOKEN=ghp_R2d2c3poIHRva2VuIGV4YW1wbGU
+```
+
+needs no configuration for defensive protection. Start Veyyon and that value is
+replaced whenever it appears in provider-bound text. Environment detection does
+not give the agent a readable inventory name. When the agent must select the
+credential by name and use it, store the same value in the vault:
+
+```text
+/secret from-env DEPLOY_TOKEN
+```
+
+That is the form you type in a terminal. Veyyon prompts for a name afterwards and generates one if you skip it. A client with no terminal, such as `--print` mode or an ACP editor, writes the name on the line as `/secret from-env DEPLOY_TOKEN DEPLOY_KEY`, because nothing there can prompt; see [On a client with no terminal](#on-a-client-with-no-terminal).
+
+## What the model receives
+
+Every occurrence of a known value is replaced before provider dispatch. This boundary covers messages, dynamic system prompts, tool descriptions and schemas, resumed assistant text, replay payloads, and nested model calls such as title generation, image analysis, memory summaries, and speech rewriting.
+
+The replacement happens from raw text before trimming, truncation, JSON serialization, or other lossy preparation. Veyyon resolves the live profile, project, environment, and vault runtime again for each physical provider attempt. This includes authentication retries, fallback models, delayed queues, compaction, commit analysis, evaluation, benchmarks, memory services, TTS, and image tools. A refresh cannot leave a retry using an old set of secret values.
+
+Provider fields that are authenticated or signed cannot be rewritten safely. If a live value appears in a signature, provider item id, encrypted reasoning block, or other opaque replay payload, the request is rejected with a value-free error. Structured fields are rewritten recursively, including JSON object keys. A rewrite that would collapse two keys into one is also rejected.
+
+Suppose a file you read contains this token:
+
+```text
+DEPLOY_TOKEN=ghp_R2d2c3poIHRva2VuIGV4YW1wbGU
+```
+
+The provider receives a machine-keyed placeholder:
+
+```text
+DEPLOY_TOKEN=#0A1B2C3D4E5F678901234567#
+```
+
+The placeholder is stable across restarts on the same machine. It contains a keyed HMAC rather than a load-order index, so a provider that receives it has no offline dictionary test for the value. A named vault entry instead uses its readable name, such as `#GITHUB_TOKEN#`, so the model can choose the right credential.
+
+The model is told two things about a placeholder: that putting one where a credential belongs is expected and works, and that it is opaque otherwise. It does not have the value and cannot request it. For named vault entries it is told one more thing, which credentials it currently has, covered under [What the agent receives, and when](#what-the-agent-receives-and-when).
+
+## Using a secret in a command
+
+The model can put a placeholder into a command, and veyyon substitutes the real value before the command runs.
+
+The model writes:
+
+```bash
+curl -H "Authorization: Bearer #0A1B2C3D4E5F678901234567#" https://api.example.com/deploy
+```
+
+The executed command contains the real token. The substitution happens locally, after the model has produced the command and before the shell receives it. The model never receives the value, and the request still authenticates.
+
+The substituted command is not written to the session. Veyyon records one diagnostic entry per tool call so that a resumed session reports what was running when a call was interrupted. `/share` uploads the session file and backups copy it, so that entry stores the placeholder form, not the substituted one. What the command prints is a separate question, covered under [What this does not protect](#what-this-does-not-protect).
+
+## What the agent receives, and when
+
+Store `GITHUB_TOKEN` today, quit, and start a new session tomorrow. Ask for your open pull requests, and the agent writes `#GITHUB_TOKEN#` into the `curl` command without you mentioning the credential again.
+
+It can do that because the system prompt contains an **inventory**: the placeholders the agent is able to spend at that moment, listed by name and sorted. The inventory is built from the live secret runtime rather than from the conversation, so it survives a restart. The vault is stored on disk; a conversation is not.
+
+The inventory holds names, and nothing else. No value appears in it in any state, and the agent has no way to request one. The text around the list states what the list is for: write the placeholder where the credential belongs, the real value is substituted locally immediately before the tool runs, and a name that is not listed is not available.
+
+Only vault entries are listed, because only they have readable names. A value detected in your environment, or declared in `secrets.yml`, becomes a machine-keyed placeholder instead, which the agent meets where the value would have appeared rather than in a list.
+
+When protection is off, or when nothing is stored, the section is absent rather than empty. An empty heading reads as "you have no credentials", and that is a different statement from "this session cannot spend any". Removing the last credential takes the whole section away again, heading included.
+
+The agent receives the inventory, or a notice, at four points:
+
+**At session start, or on resume.** The inventory, rebuilt from whatever the vault holds right then. Nothing else is needed. A credential you stored last week does not have to be introduced again.
+
+**When you add one.** The inventory is rebuilt so the new name is in it, and the agent is told directly, in that turn, that the credential now exists and where its placeholder goes.
+
+**When you remove or extend one.** Both again: the inventory is rebuilt, and the agent is told what changed. A revocation states the placeholder is revoked and must not be used. A fresh lifetime states the credential is still available under the same placeholder. Neither notice quotes a lifetime, because a duration written into the history is wrong a minute later, and your terminal already shows you the exact time left.
+
+**When a lifetime runs out on its own.** Substitution stops at the deadline itself, not a moment after, and the name leaves the inventory on the next rebuild. There is no notice on this path, because no command ran and so there is no turn to put one in. You are warned twice before it happens, which is covered under [Lifetimes](#lifetimes).
+
+None of these gives the agent a value.
+
+### Why a removal is stated rather than left to the list
+
+Removing the name from the inventory alone does not stop the agent from using it. A model does not reliably detect that a name has disappeared from a long prompt, so it continues to write a placeholder that worked ten minutes earlier.
+
+A revoked placeholder cannot reach a tool during the running process. Veyyon records each retired name and rejects a call that contains one before execution:
+
+```text
+Stored secret #STRIPE_TEST_KEY# is no longer available. Store the credential again and update the command.
+```
+
+Text that was never a live credential, such as `#TODO#`, remains ordinary input. The revocation notice gives the agent the same fact before it tries the call; the rejection applies when the agent reuses a stale placeholder from its history.
+
+For the same reason, the removal notice is delivered even when secret protection is off. The add and extend notices are not: with protection off there is no working placeholder to advertise. A revoked one is different, because it is already sitting in the agent's history, and the agent needs to hear that it stopped working whatever the setting is.
+
+Turning secret protection off also marks every name advertised in the running
+process as retired for tool execution. Redaction keeps using the same readable
+placeholders in provider-bound text, but a stale tool call cannot spend or send
+them after expansion has been disabled.
+
+## The vault: storing a credential with `/secret`
+
+Environment detection covers credentials that are already in your shell. For anything else, hand it to the vault. A vault entry is encrypted on disk, has a name, and expires.
+
+### Storing a credential
+
+In a terminal, everything you type after `/secret add` is the credential. There is no name to invent first:
+
+```text
+/secret add ghp_R2d2c3poIHRva2VuIGV4YW1wbGU
+```
+
+Veyyon takes the value off the line and prompts for what to call it, in a field that shows what you type, because a label is not a secret:
+
+```text
+Name this secret (optional). The model spends it by writing #NAME#. Leave empty to have one generated.
+>
+  enter submit  esc cancel
+```
+
+Press Enter on the empty field and veyyon generates a name, `SECRET_1` and upwards. Type one and it is cleaned up and uppercased for you, so `github token` becomes `GITHUB_TOKEN`. Press escape and nothing is stored at all:
+
+```text
+Cancelled. Nothing was stored.
+```
+
+The value is taken first, and the name prompt that follows can be skipped.
+
+#### Pasting into a hidden field
+
+`/secret add` with nothing after it opens a field that shows nothing as you type:
+
+```text
+/secret add
+```
+
+```text
+Paste the secret value here. You can name it afterwards.
+> ••••••••••••••••••••
+  the value, not a name · hidden as you type, stored encrypted  ·  enter submit  esc cancel
+```
+
+Your composer is cleared before the field opens, so the value never enters the input buffer and never reaches your scrollback. Press escape and nothing is stored. Submit an empty field and nothing is stored either, and veyyon reports it rather than storing an empty credential. The name field follows, the same one as above.
+
+#### Reading it out of the environment
+
+If the credential is already an environment variable, read it from there and type nothing:
+
+```text
+/secret from-env GITHUB_PAT
+```
+
+This is the recommended form, because the value never enters the input buffer and never reaches your scrollback. `from-env` is a command of its own, alongside `add`, and its first word is the name of the variable. The name field follows here too, so a bare `from-env GITHUB_PAT` is the whole line you need.
+
+You may write the name on the line instead, and a lifetime and a vault after it:
+
+```text
+/secret from-env GITHUB_PAT DEPLOY_KEY 7d project
+```
+
+The variable comes first and the name second, both by position, which is what lets a secret be called `PROFILE` or `NEVER`. The lifetime and the vault come after in either order, because no word is both: a vault is one of `profile`, `project` and `global`, and a lifetime is `30m`, `12h`, `7d`, `2w`, `never`, or anything else beginning with a digit. `env` is the second spelling of `from-env`.
+
+#### A value on the command line stays in your scrollback
+
+The one-paste form is on screen until you clear the terminal. Veyyon reports it rather than leaving you to work it out:
+
+```text
+The value was typed on screen, so it is in your scrollback. Use /secret from-env next time to avoid that.
+```
+
+Every exact `/secret` command shape, including malformed input, is excluded from persistent editor history. This prevents the command from being recovered with the Up key or written to `history.db`. It cannot erase terminal scrollback that was already rendered.
+
+The line is kept byte for byte from its first non-space character to its last, so a passphrase may contain spaces and no part of the value is trimmed away. Use the hidden field or `from-env` when you would rather the value were never on screen at all.
+
+#### A command comes first
+
+The first word of a `/secret` line is a command or it is nothing. The commands are `add`, `from-env`, `list`, `rm`, `clear`, `rename`, `value`, `scope`, `copy`, `extend`, `log`, `discard` and `help`, plus the second spellings `env`, `remove`, `delete`, `wipe`, `purge`, `empty`, `reset`, `name`, `replace`, `move`, `renew` and `audit`.
+
+A line that begins with anything else is rejected, and nothing is stored:
+
+```text
+Unknown /secret command. Nothing was stored. If what followed /secret was a credential, it is now in
+your scrollback and was never protected, so rotate it and store the new one with /secret add.
+```
+
+The error never repeats the word it rejected, because that word is often the credential itself.
+
+`/secret add` is the one place a value is read. `/secret add list of words that is really a passphrase` stores that line byte for byte, first word included.
+
+A command stays a command however much follows it, so a malformed one is rejected rather than quietly stored: `/secret log 50` is a `log` with an unreadable argument, not a new secret called `SECRET_1`.
+
+#### Every argument is a plain word
+
+There are no options anywhere in `/secret`. Nothing is spelled with a dash, so there is nothing to look up and nothing to get in the wrong order. A word means something because of where it sits, or because it belongs to a set that cannot be anything else:
+
+| How a word is read | Where |
+| ------------------ | ----- |
+| its position | `rm <name>`, `rename <name> <new-name>`, `scope <name> <vault>`, `extend <name> <lifetime>`, `from-env <VAR> <name>` |
+| a set of three words | a vault: `profile`, `project`, `global` |
+| a lifetime shape | `30m`, `12h`, `7d`, `2w`, `never`, or any word beginning with a digit |
+| a whole number | the record count on `log` |
+
+Position wins wherever the two could disagree, so a secret really called `PROFILE` is removed by `/secret rm PROFILE` and one called `NEVER` has its lifetime extended by `/secret extend NEVER 7d`. Where meaning is taken from a word's shape instead, the sets provably cannot overlap: a secret name may not begin with a digit, so `/secret log 50` is fifty records and `/secret log GITHUB_TOKEN` is one credential's uses; and a name may not contain a hyphen, so the `from-env` in `/secret value <name> from-env <VAR>` is never a name.
+
+The spellings `--`, `--from-env`, `--ttl`, `--scope`, `--limit` and `--name` are rejected, and the error states the plain word that replaces each one. They are rejected only as the first word after `add`, so a credential that begins with dashes is still stored byte for byte:
+
+```text
+/secret add -----BEGIN OPENSSH PRIVATE KEY-----
+```
+
+### What you are told when it is stored
+
+Whichever form you used, veyyon confirms with the name it filed the credential under and the placeholder the model will write:
+
+```text
+Stored GITHUB_TOKEN in the profile vault, 1d left.
+The model sees #GITHUB_TOKEN# and never the value. Write that placeholder where the credential goes.
+```
+
+Storing over a name that already exists is called a replacement rather than a store. That write is how you rotate a credential, and it is also what a fumbled name does, so it is never reported as if nothing had been overwritten:
+
+```text
+Replaced GITHUB_TOKEN in the profile vault, 1d left.
+The previous value is gone. #GITHUB_TOKEN# now spends the credential you just stored.
+```
+
+The agent is told at once that a credential exists and that it should write `#GITHUB_TOKEN#` where the value belongs. It is never given the value and cannot request it. The name stays available to the agent after this session ends, because the inventory in the system prompt is rebuilt from the vault rather than read from the conversation. See [What the agent receives, and when](#what-the-agent-receives-and-when).
+
+### Managing what you stored
+
+Every verb below works in a terminal and on a client that has none. The value forms above are the only part of `/secret` that depends on where you are typing.
+
+| Command | What it does |
+| ------- | ------------ |
+| `/secret list` | one row per credential: placeholder, scope, time left |
+| `/secret rename <name> <new-name>` | relabel it, keeping the value, the creation time and the deadline |
+| `/secret value <name>` | replace the value, keeping the name and the deadline |
+| `/secret scope <name> project` | move it to another vault |
+| `/secret copy <name>` | put `#NAME#` on the clipboard, never the value |
+| `/secret extend <name> 7d` | give it a fresh lifetime, measured from now |
+| `/secret rm <name> [global]` | revoke it |
+| `/secret clear profile` | remove every credential in one vault, stating what it removed |
+| `/secret clear everywhere` | remove every credential in all three vaults |
+| `/secret log [<name>] [50]` | which credentials were spent, and where |
+| `/secret discard project` | move aside a vault file that cannot be read |
+| `/secret help` | every form, on the surface you are on |
+
+`value` is how you correct a credential. It keeps the name, the scope, the creation time and the expiry, so a token pasted with one character missing does not have to be revoked and stored again: storing it again mints a new name while every prompt in the session still spends the old placeholder, and it re-dates the entry, so a secret with two days left would come back with the default lifetime. The field it opens is hidden as you type, and `/secret value <name> from-env <VAR>` reads the replacement out of the environment instead.
+
+`copy` copies the placeholder and only the placeholder. `#GITHUB_TOKEN#` is the thing you paste into a prompt; copying the value would be the disclosure you stored the credential to avoid.
+
+`clear` empties one vault. It requires the scope because there is no default: the vault is three files, project overriding profile overriding global, and the copy you can reach is the one that gets spent, so a guess would empty whichever happened to be in front and leave the other two full. It reports the placeholders it dropped. A name that a wider vault still holds is reported as removed but not as revoked, because `#NAME#` goes on expanding to that copy. `wipe`, `purge`, `empty` and `reset` are the same command.
+
+`clear everywhere` empties all three. It reports every scope in one report, including a scope that held nothing, because the question it answers is whether anything is still stored. `all`, `everything` and `every` are the same word. No other verb takes it: "all of them" is not a place to store a secret, not a destination to move one to, and not a vault file to set aside.
+
+`scope` rejects a move onto a name the destination vault already holds, rather than overwriting it. It moves the time REMAINING rather than the original lifetime, so moving a secret cannot lengthen its life. The copy is written to the destination before the source is removed, so an interrupted move leaves two copies you can see rather than none.
+
+No verb prints a value: not on a row, not truncated onto one, not behind a key. A value stored in the vault is never displayed again.
+
+Every change reloads the live secret runtime, so a credential you revoke stops being spendable in the current session rather than at the next restart. A reload that fails is reported, not discarded: the vault write is already durable, and the gap between the file and the running session needs your action.
+
+**Names are never completed.** The dropdown after `/secret ` offers verbs and nothing else. Completing a stored name would put part of your vault on screen on a keystroke, and accepting one would type a name onto a line whose first word distinguishes between a command and a credential. `/secret list` prints the names.
+
+### Finding what is masked and not stored
+
+`/secret list` ends with what the session is masking that no name can reach. This is the counterpart to the composer's `N masked` chip: both read one counter, so the number below the table and the number above the prompt are the same number.
+
+```text
+  2 values masked in what is sent, detected rather than declared.
+  The agent cannot spend them: only a stored secret has a placeholder.
+  From: /home/dev/project/.veyyon/secrets.yml, DEPLOY_TOKEN.
+  To stop masking one, unset the variable or narrow the keywords in env-keywords.yml.
+```
+
+Each of these values reached the session through the environment or through `secrets.yml`, so it has no name and no placeholder the agent can write. What it has is a place it came from: the variable name, or the path of the file that declared it. That label is not a name. It makes the value findable and grants no `#NAME#` expansion.
+
+One credential exported into the environment and also declared in a file is one masked value with two places to look, and both are named. A value handed in by an SDK caller with no label at all is counted, and the count of those is stated rather than left as the difference between two numbers.
+
+### On a client with no terminal
+
+`--print` mode and an ACP editor have no field that can hide what you type, so they cannot accept a credential you type at all. Every command is the same there, and `from-env` is the way in:
+
+```text
+/secret from-env GITHUB_PAT GITHUB_TOKEN
+```
+
+The name is required on the line here, because nothing on that surface can prompt for it afterwards. `add` is still listed, with the reason it does not work and the command that does, rather than being hidden and answering only with an error:
+
+```text
+/secret from-env <VAR> <name>         store the value of an environment variable
+/secret add                           not here: a client cannot hide typing, so use from-env
+```
+
+An inline value is rejected, because that surface keeps its requests in a history you cannot clear:
+
+```text
+This client rejects an inline credential, because the line containing it is retained in the client's own
+request history. Nothing was stored. Read the value out of the environment instead:
+/secret from-env MY_TOKEN <name>.
+```
+
+The error repeats neither word after `add`. Nothing distinguishes a name followed by a credential from a credential whose first word looks like a name, so a message that quoted the part it took for the name could quote the credential.
+
+`list` prints a table:
+
+```text
+2 active secrets. The agent spends one by writing its placeholder; the value is never shown.
+  PLACEHOLDER         SCOPE    EXPIRES  STATUS
+  #GITHUB_TOKEN#      profile  6d left
+  #PROD_DB_PASSWORD#  project  1d left  expires soon
+Extend one before it lapses: /secret extend <name> 7d.
+```
+
+No part of any value appears there. A prefix of a credential is still a disclosure, and one on screen is one in a screenshot.
+
+The `STATUS` column and the closing line appear only when at least one entry has crossed a warning threshold, so a table of healthy entries is one column narrower. A cell reads `past halfway` or `expires soon`, and those are the same two thresholds that raise the warnings described under [Lifetimes](#lifetimes). The table and the warnings cannot disagree about which entry is in trouble.
+
+With nothing stored, `list` reports it and shows the one entry form that surface has, rather than printing an empty table.
+
+Removing and extending each notify the agent of what changed, whichever surface you did it from, so a placeholder you revoked stops being used instead of arriving at a command as literal text. See [What the agent receives, and when](#what-the-agent-receives-and-when).
+
+### When a vault file cannot be read
+
+Sometimes a vault file survives on disk and stops being readable: a disk filled up mid-write, a
+backup tool restored half of it, a sync client merged two copies. Veyyon reports which scope, what
+it means, and what to run:
+
+```text
+Your profile vault at /home/you/.veyyon/profiles/work/agent/vault.json exists but could not be
+read, so it was skipped and the secrets stored in it are unavailable for the rest of this session:
+their placeholders will NOT expand. Every OTHER scope loaded normally, and masking of known secret
+values is unaffected. The vault is encrypted, so a hand edit cannot repair it: run /secret discard
+profile to move the unreadable file aside. Then store the secrets it held again. The reason it
+could not be read was <what the parser complained about>
+```
+
+A vault can also fail in a way Veyyon cannot step around, where nothing in it can be read: the key
+is gone, the key is not the one the vault was sealed with, or the file is truncated. The session
+still starts, and reports it:
+
+```text
+Your vault could not be read, so this session started WITHOUT it: nothing you have stored is
+available, and every #NAME# placeholder it held will be rejected rather than sent as literal text.
+Masking of secrets from your environment and secrets.yml is unaffected and still running.
+Affected: project (/home/you/work/repo/.veyyon/vault.json). Run /secret discard project to move
+the unreadable file aside. Then store the secrets it held again. The reason it could not be read
+was <what the parser complained about>
+```
+
+Both notices state one command, because a notice raised by the vault loader cannot determine which client
+prints it, and `discard` runs on all of them. It moves the file aside rather than deleting
+it: the bytes still hold a real credential under a live key.
+
+The second sentence of the second notice describes what keeps a broken vault from becoming a leak.
+A scope Veyyon could not read is treated as unreadable, never as empty. `#NAME#` in a prompt is
+rejected rather than passed through as the literal text `#NAME#`, and Veyyon does not act as though
+you had stored nothing.
+
+The session starts because the repair is a command inside it. A vault that could not be opened does
+not stop Veyyon from launching, so the file does not have to be deleted by hand.
+
+Either route runs the same repair, and prints the same result:
+
+```text
+Moved the unreadable profile vault to
+/home/you/.veyyon/profiles/work/agent/vault.json.unreadable-1753660800000-8e3a8d58, so that scope
+works again. The file still holds your sealed entries, so re-add the secrets it held rather than
+assuming they are gone.
+```
+
+The scope keeps working from there. You can store secrets in it again immediately, and the other two
+scopes were never affected: only the file you named moved.
+
+**Your file is moved, not deleted.** The message states the new name because that file is the only
+route back to what it held. It is still encrypted with a key that is still on disk, so if the
+damage is a truncated tail, the entries before the damage are still in there. Veyyon does not delete
+a credential store to make itself usable again. Delete the moved file yourself once you no longer
+need it.
+
+**You have to name the vault.** Every other command that takes one defaults to `profile`, because
+there it selects where to put something and `/secret list` shows you the result. Here it selects a
+file to move aside, so a default would let a bare `/secret discard` move a working vault out from
+under the current session. A bare invocation is rejected and states the word to add.
+
+The repair rejects two cases:
+
+- **A scope that reads normally.** This is not a second way to delete secrets. Revoke the entry
+  instead with `/secret rm <name>`, which reports what it removed. The check happens at the moment
+  you run the repair rather than from the earlier warning, so a file that was fixed in between is
+  left alone.
+- **A scope that shares its file with another scope.** If your profile directory is your config
+  root, the profile and global vaults are one file, and moving it aside as one would take the other
+  with it. The refusal states the other scope so you can decide which you meant.
+
+The repair is reachable from every client, not only the terminal, because a broken vault is most
+likely to turn up in a headless run.
+
+### Lifetimes
+
+Every entry expires. The default is one day, which you can change in `/settings` under Secret Lifetime.
+
+That setting is the whole answer for `/secret add`, because the line after `add` is the credential
+and there is no room on it for anything else. To give such an entry a different lifetime, store it,
+then run `/secret extend <name> 30m`. The lifetime you name there is measured from now, not from
+when the credential was stored.
+
+`from-env` takes one on the line, after the variable and the name:
+
+```text
+/secret from-env DEPLOY_KEY DEPLOY_TOKEN 30m
+/secret from-env SIGNING_KEY SIGNING_TOKEN never project
+```
+
+Lifetimes are written the same way everywhere: `30m`, `12h`, `7d`, `2w`, or `never`. Weeks are accepted and reported back in days. A lifetime and a vault may be given in either order, because no word is both.
+
+You are warned before a lifetime runs out, once at the halfway point and again near the end:
+
+```text
+Warning: secrets: #DEPLOY_KEY# expires soon, 2h left. Extend it with
+/secret extend DEPLOY_KEY 7d, or it will be deleted.
+```
+
+The remedy is one command, and it runs wherever the warning is read: a notice raised while the vault
+is loading cannot determine which client is about to print it.
+
+The thresholds are fractions of the lifetime rather than fixed times, so one rule fits every entry. A one-day secret is mentioned after twelve hours; a ninety-day secret is mentioned on day forty-five, not on day eighty-nine. Each warning states the command that prevents expansion from being revoked.
+
+**Expiry revokes substitution immediately.** If an expired secret merely stopped being obfuscated, its value could flow to the model provider when protection lapsed. Veyyon instead removes the in-memory expansion mapping and keeps a forward-only redaction tombstone.
+
+The deadline is enforced when the credential is used, not only when a session starts. A session left open over a weekend stops substituting a one-day secret on the day it expires and reports both the runtime and persisted state:
+
+```text
+Warning: secrets: #GITHUB_TOKEN# has expired and its in-memory expansion has been
+revoked. Its encrypted value has not yet been deleted from the vault; a successful
+vault refresh will prune it. Store it again with /secret from-env <VAR> if you still
+need it, or /secret from-env <VAR> GITHUB_TOKEN in a client with no terminal.
+```
+
+In a terminal the name field that follows is where you type `GITHUB_TOKEN` to get the same
+placeholder back.
+
+The hot-path expiry check does not write to the vault. The encrypted entry remains on disk until the next successful vault refresh prunes it. It remains encrypted and cannot be expanded after the deadline.
+
+If a command still refers to an expired secret, Veyyon rejects it before the tool starts and reports only the retired placeholder. It does not send an empty header or the literal placeholder to a remote service. Old transcript text containing the raw value remains covered by the forward-only redaction tombstone for the life of the same working-directory runtime.
+
+### Scope
+
+An entry belongs to one scope and is invisible from the others:
+
+| Scope | Where it lives | Use it for |
+| ----- | -------------- | ---------- |
+| `profile` (default) | the active profile's agent directory | credentials for one line of work |
+| `project` | `<project>/.veyyon/vault.json`, kept out of your commits | credentials for one repository |
+| `global` | `~/.veyyon/vault.json` | credentials you want everywhere |
+
+A credential you store in a terminal goes to the profile vault. Scope is an option, the argument line there is the credential, so there is no place on it to put one. Profile is the default because that is usually the boundary you want: a credential you use for one kind of work should not be reachable from a session you opened in another profile.
+
+A credential already stored can be moved with `/secret scope <name> project`. To file one somewhere else as you store it, name the scope on a client that takes a verb and a value on one line:
+
+```text
+/secret from-env SCAN_TOKEN SCAN_TOKEN project
+```
+
+When the same name exists in more than one scope, `/secret list` reports it. The table stays one row
+per name, because one row per name is what the agent can spend, and a sentence underneath states the
+copies it is not spending:
+
+```text
+2 active secrets. The agent spends one by writing its placeholder; the value is never shown.
+  PLACEHOLDER     SCOPE    EXPIRES
+  #SHARED_TOKEN#  project  24h left
+  #SOLO_TOKEN#    profile  24h left
+  #SHARED_TOKEN# is also stored in the global vault, shadowed by the project one. Only the project
+  copy is spent. Remove it with /secret rm SHARED_TOKEN global.
+```
+
+That copy is inert, not gone. It is still on disk, still decryptable, and it becomes the live one
+the moment the copy in front of it is removed. Before the list mentioned it, the only way to find
+out was to remove the copy in effect and read what the removal told you, which is late: you learn
+about a credential at the moment it starts being spent.
+
+The narrowest copy is the one that wins, and a removal that specifies no vault takes it. Removing that
+copy uncovers the next one out, and the command reports that too:
+
+```text
+/secret rm shared-token
+
+Removed SHARED_TOKEN from the project vault. A profile secret of the same name was underneath it,
+so #SHARED_TOKEN# still spends a credential, now that one. Run /secret rm SHARED_TOKEN profile to
+remove that one too.
+```
+
+The second sentence states that the placeholder still works. Without it you would read a removal,
+assume the name was dead, and leave a live credential reachable under a name you believe you
+revoked. The agent receives the same notice, so it does not treat the name as revoked either.
+
+To take a particular copy rather than the one in effect, name its scope:
+
+```text
+/secret rm SHARED_TOKEN profile
+```
+
+Naming the scope of a copy that is already shadowed removes it without changing what the
+placeholder spends, and the command reports that rather than implying something changed.
+
+A vault word belongs to `from-env`, `rm`, `clear`, `scope` and `discard`. On a command that does
+not read one it is a word that fits no slot, and it is rejected rather than ignored:
+
+```text
+/secret extend GITHUB_TOKEN global
+
+/secret extend cannot read the word in position 2, and a word that would be ignored is rejected
+rather than dropped silently.
+```
+
+An accepted-and-ignored vault word on `extend` would read as "the global copy was given a fresh
+lifetime" when the copy in effect was re-dated and the others were left alone. The same rule covers
+a lifetime passed to `rm` and a number passed to `list`.
+
+The error states the position and never repeats the word, because the realistic slip is muscle
+memory for `add` under a different command, which puts the credential itself in that position.
+
+### Encryption, and what it does not do
+
+Vault files use AES-256-GCM. Each write uses a fresh 12 byte nonce and the full 16 byte authentication tag. The key is a 32 byte file at `~/.veyyon/vault.key`, created on first use. It is never stored inside a project directory.
+
+On POSIX, the key is mode 0600. Its directory must be owned by you and not writable by another user. On Windows, Veyyon applies and verifies a protected owner-only ACL. Existing vault files receive the same platform permission checks before they are read.
+
+A project-scoped vault is stored inside the repository you are working in, so Veyyon keeps it out of your commits. The first time it stores a project secret, it writes `.veyyon/.gitignore` covering `vault.json` and the `vault.json.unreadable-*` file that a discarded vault is renamed to. If that file already exists, Veyyon adds the two rules and leaves your own lines alone. Only the vault is ignored, so anything else you keep in `.veyyon/`, such as prompt templates, stays trackable. Commit the generated `.veyyon/.gitignore` along with the rest of your project.
+
+Committing a vault would not expose the credentials directly, because the ciphertext is unusable without the machine key. It would still put a credential store in your history, and nobody who clones the repository can open it, including you on another machine. A vault is not a portable backup. The authenticated location includes the semantic scope, canonical path, and physical scope-directory identity. If you move or recreate that directory, store those entries again.
+
+Updates use a synchronized owner-only temporary file. Kernel no-replace and exchange operations publish the synced inode without overwriting a destination that appeared after the last check. Veyyon holds the scope directory open during the transaction, so replacing the lexical parent cannot redirect the read or write.
+
+Veyyon rejects symlinks, hard-linked files, directories, devices, insecure permissions, and paths whose resolved parent crosses the requested scope. It also rejects ciphertext copied to a different scope or physical directory.
+
+The sealed descriptor is limited to 8 MiB before it is read into memory. Writes enforce a separate 6,291,402-byte encoded plaintext limit before serialization, encryption, or Base64 expansion. A legacy version 1 envelope is rejected because it is not bound to its scope and path. Store those entries again so they use the current authenticated format.
+
+These failures fail fast:
+
+- A vault file present with no readable key stops the session. It is never treated as empty.
+- A vault whose nonce, ciphertext, authentication tag, or bound location changed is rejected.
+- An unsafe directory, symlink, non-regular path, hard link, or insecure permission is rejected with the path and fix.
+
+This encryption does not protect against someone who is already running as you. The key is readable by your own account by design. To protect against a compromised account, use a hardware token or an external secret manager.
+
+### Seeing which credential was used where
+
+Hiding a value from the provider bounds what the agent could read. It does not show what the agent did with it. The expansion log records that, and `/secret log` prints it:
+
+```text
+3 most recent use(s), oldest first:
+  12m ago  bash  #GITHUB_TOKEN#
+    {"command":"curl -H 'Authorization: Bearer #GITHUB_TOKEN#' https://api.github.com/user"}
+  4m ago  bash  #DEPLOY_KEY#
+    {"command":"scp -i #DEPLOY_KEY# build.tar deploy@host:/srv"}
+  just now  bash  #GITHUB_TOKEN# #DEPLOY_KEY#
+    {"command":"./release.sh --token #GITHUB_TOKEN# --key #DEPLOY_KEY#"}
+```
+
+One use is when it happened, which tool received it, which placeholders were substituted, and the command as the model wrote it. The last twenty are shown; `/secret log 50` requests more.
+
+#### Narrowing it to one credential
+
+A name filter shows, before a revoke, which uses stop working:
+
+```text
+/secret log GITHUB_TOKEN
+
+Uses of #GITHUB_TOKEN#:
+2 most recent use(s), oldest first:
+  12m ago  bash  #GITHUB_TOKEN#
+    {"command":"curl -H 'Authorization: Bearer #GITHUB_TOKEN#' https://api.github.com/user"}
+  just now  bash  #GITHUB_TOKEN# #DEPLOY_KEY#
+    {"command":"./release.sh --token #GITHUB_TOKEN# --key #DEPLOY_KEY#"}
+```
+
+The whole log is read, then narrowed to that credential, and only then cut to the limit. So `/secret log GITHUB_TOKEN 20` means the last twenty uses OF that credential, not the last twenty records of which some happened to be it. The two words are told apart by shape rather than by position, and may be given in either order: a limit is a whole number and a secret name may never begin with a digit, so no word is both. The heading states the credential even when nothing follows it, because an empty log for one secret and an empty log altogether support opposite conclusions: the first states this credential has never been spent, the second that nothing has.
+
+#### An empty log, and a log that is off
+
+An empty log prints the file it is empty at, so it reads as "nothing has happened here" rather than "something failed to load":
+
+```text
+No secret has been used yet. The log is ~/.veyyon/profiles/work/secret-audit.jsonl.
+```
+
+A log that is switched off prints the setting instead:
+
+```text
+Secret use is not being recorded, so there is no log to show. Turn on "Record Secret Use" in
+/settings (secrets.auditLog) to start recording.
+```
+
+Nothing recorded and nothing being recorded support opposite conclusions about whether a credential was spent, and as an empty list they are the same picture.
+
+The log belongs to the profile rather than to one session, so two veyyon windows in the same profile append to the same file. When the records you are shown come from more than one, the output reports it:
+
+```text
+These records come from 2 sessions sharing this profile's log.
+```
+
+Without that line the rows read as one session's history, and you would count uses another window made.
+
+The recorded command holds the **placeholder**, not the value, and that is a property of how the record is built rather than a promise about care taken. Veyyon writes the arguments as they were before substitution, which is the form in which every secret is still a placeholder, so there is no redaction step that could be got wrong and no way for a value to reach the file.
+
+Placeholder discovery follows the same recursive string and object-key walk as command expansion. The reader escapes terminal control characters in records, paths, and notices before display. Hard-linked log files are rejected, and generation reads check the 2 MiB bound before allocating a buffer.
+
+Recording is on by default and writes to `secret-audit.jsonl` in your active profile's directory. Turn it off under Record Secret Use in `/settings`:
+
+```yaml
+secrets:
+  auditLog: false
+```
+
+The file is mode 0600 and is stored in the profile rather than the project. If veyyon cannot append to it, it reports it and the command still runs. The value is still protected either way.
+
+At two megabytes, roughly ten thousand uses, the log is atomically moved to `secret-audit.jsonl.1` and a fresh one is started. A cross-process lock covers the size check, rotation, append, and read snapshot, so two sessions cannot overwrite a generation or exceed the record cap at the boundary. Oversized rows bound every field and report how many placeholder references were omitted. Both generations are read, so a report requested right after a rotation still fills up.
+
+## Declaring secrets yourself
+
+Environment variable detection covers the common case. For anything else, list entries in a `secrets.yml` file. Two locations are read:
+
+| Level   | Path                          | Use for                    |
+| ------- | ----------------------------- | -------------------------- |
+| Profile | `<agent dir>/secrets.yml`     | Credentials for one line of work |
+| Project | `<project>/.veyyon/secrets.yml` | Credentials specific to one repository |
+
+Both levels are read and merged. A project entry with the same `content` as a profile entry replaces it, so a repository can override a declaration without duplicating the rest of the file.
+
+A minimal file protects one literal value:
+
+```yaml
+- type: plain
+  content: sk-proj-abc123def456
+```
+
+A `regex` entry protects anything matching a pattern, which is how you cover credentials you have not seen yet:
+
+```yaml
+- type: regex
+  content: "AKIA[0-9A-Z]{16}"
+```
+
+Patterns always scan globally. You do not need the `g` flag.
+
+Veyyon rejects regexes that can make no progress, use sticky matching, or contain a form that cannot be proven safe from catastrophic backtracking: nested or concatenated variable quantifiers, repeated alternations, and backreferences. Replacement changes only the matched span. Equal text outside the regex context is left alone.
+
+## The two modes
+
+Each entry chooses what happens to the value.
+
+`obfuscate`, the default, is **reversible**. The value becomes a placeholder on the way out and the placeholder becomes the value again on the way back in. Use it when the agent needs to work with the credential.
+
+`replace` is **one way**. The value is swapped for a fixed or generated string and nothing restores it. Use it when the agent has no business using the credential at all and you only want it out of the context:
+
+```yaml
+- type: plain
+  content: hunter2
+  mode: replace
+  replacement: "********"
+```
+
+A generated replacement is derived with the machine placeholder key, so it does not expose a cross-machine dictionary oracle. A custom replacement cannot look like a named or machine-keyed placeholder. That restriction prevents one-way text from becoming a request to expand a live credential.
+
+## The 8-character minimum
+
+`obfuscate` mode replaces every occurrence of the value. A three-character secret would blank out fragments of unrelated words, so short values are not obfuscated.
+
+Veyyon rejects them rather than ignoring them. A plain `obfuscate` entry under 8 characters stops startup with an error stating the entry and the fix, so a session never starts while sending a declared secret to the provider in plain text.
+
+The fix is `mode: replace`, which is one way and has no minimum.
+
+The same floor applies to a credential you store in the vault, and the field that takes the value applies it there. Type something shorter than 8 characters into the hidden field and it is rejected as you leave it, while the value is still in front of you, rather than after you have also named the secret.
+
+A regex match under the floor behaves differently. A short match usually means the pattern reached into ordinary prose, so the match is skipped and the over-matching pattern is reported once. If short matches really are secret, declare it on the entry:
+
+```yaml
+- type: regex
+  content: "\\b[0-9]{6}\\b"
+  minLength: 6
+```
+
+A malformed or unreadable `secrets.yml` also stops startup, and so does a single entry inside it that is not a valid declaration. A mistyped `type:`, a missing `content:`, or `minLength` on a plain entry each name the entry number and the fix:
+
+```text
+Refusing to start: 2 entries in /home/you/.veyyon/secrets.yml are not valid secret
+declarations, and skipping them would leave the values they declare unprotected.
+  - entry 0 has type "plaintext", which must be "plain" (an exact value) or "regex" (a pattern).
+  - entry 3 sets minLength, which applies to regex entries only. A short plain secret needs
+    "mode: replace", which is one-way and has no minimum.
+```
+
+Every problem in the file is listed at once, so you fix them in one pass rather than finding the next one on each restart. A missing file does not stop startup, because nothing was declared.
+
+Unknown fields are errors too. A misspelled `replacement`, a plain-only field on a regex entry, duplicate flags, or an option that conflicts with the entry type cannot be silently ignored.
+
+## When something cannot be protected
+
+Veyyon handles two kinds of problem differently.
+
+A problem that would mean a credential reaches the provider **stops the session**. A declared `obfuscate` entry under the minimum, a vault file whose key is missing, a `secrets.yml` that cannot be parsed: each of these stops the session with an error stating the entry and the fix.
+
+A problem that leaves protection intact but degrades something appears **in your session as a warning**, prefixed with the subsystem that raised it:
+
+```text
+Warning: secrets: pattern matched a 3-character value, under this entry's 8-character floor.
+Set "minLength" on the entry if short matches are real secrets, or tighten the pattern.
+```
+
+An over-matching pattern is the usual example. It is discovered while obfuscating a message rather than at startup, so it cannot stop the session. The warning is shown because a working pattern and one that matches ordinary prose are otherwise indistinguishable.
+
+In `--print` mode and other non-interactive clients the same warnings go to stderr, so a scripted run does not lose them.
+
+No error or warning goes only to the log file. The log has no console output by default.
+
+## Where the value goes
+
+| Destination | Receives the real value? |
+| ----------- | -------------------- |
+| Model provider | No, a placeholder |
+| Local session transcript | It can. User and tool text is kept locally as written. |
+| A session you `/share` | No, a placeholder |
+| The vault file on disk | No, encrypted |
+| The secret-use log | No, a placeholder |
+| `secrets.yml` on disk | Yes, it is a plain file you wrote |
+| Your terminal | Only a `type: regex` pattern you declared in `secrets.yml`. A vault entry, a detected environment variable, and a plain declaration stay masked on screen. |
+| A command the agent runs | Yes, substituted before execution |
+
+The provider boundary is applied again whenever a local transcript is sent. Resuming a session can restore placeholders for display without giving the resumed raw text a path back to the provider.
+
+Changing the working directory is transactional. Veyyon loads the destination runtime before committing the move, and restores both the old directory and old runtime if loading fails. A resumed session or persisted agent starts from its recorded directory before loading project-scoped secrets.
+
+## Protecting credentials read by tools
+
+Secret protection also covers configured credential resources before producer
+output is retained. A host SDK can pass resource paths through
+`protectedCredentialResources` and metadata index paths through
+`protectedCredentialMetadataIndexes`. The SDK protects its existing vault, key,
+and `secrets.yml` paths through their existing path owners. An external
+working-copy integration must provide a metadata adapter; Veyyon does not guess
+resource names from filenames.
+
+The same-job immutable secret lease is available while output is produced.
+Veyyon reuses its existing obfuscator to redact `OutputSink` output before
+retention, including artifacts, result details, progress, and asynchronous
+replay. Multiline literals use prefix holdback so a chunk boundary does not
+retain a partial secret before the rest of the value arrives.
+
+Metadata indexes, their source files, and documentation remain readable.
+Trusted direct filesystem consumers also remain unaffected. This is a bounded
+producer-output safeguard, not a general sandbox: it cannot guarantee
+protection for unknown or transformed values, network exfiltration by a host
+shell, images or opaque bytes, or arbitrary host side effects. This documents
+the configured SDK boundary; it does not claim that an installed host has
+configured or deployed it, or that the host shell was exercised end to end.
+
+Trusted host code may also register one unnamed value with
+`SessionSecretRuntime.registerPrivateSecret(value: string)`. Registration
+returns a `ProducerSecretOwner` pinned to the new immutable lease and installs
+that lease as current. Later leases retain the known value for redaction.
+Registration grants no expansion name or right. The value does not enter the
+model's named inventory or tool arguments. The pinned owner scopes redaction
+to trusted producer execution.
+
+Registration refuses a value when obfuscation leaves the full exact value
+unchanged. This rejects values of one through five characters, but it is not
+a fixed-length guarantee. The result depends on whether obfuscation changes
+the exact value. This protection covers known literal values, not arbitrary
+encodings or transformed values.
+
+The runtime contract is tested in
+[`private-values-stay-redacted-across-leases.test.ts`](../../../packages/coding-agent/test/secrets/private-values-stay-redacted-across-leases.test.ts).
+Owner scoping is tested in
+[`producer-secret-owner.test.ts`](../../../packages/coding-agent/test/secrets/producer-secret-owner.test.ts).
+These tests do not prove installed-host configuration or shell end-to-end behavior.
+
+## What this does not protect
+
+Be clear about the boundary.
+
+**The two stores differ on disk.** Vault entries added with `/secret` are encrypted. `secrets.yml` is a plain file: it holds declarations you wrote, in the clear, and anyone who can read it has those credentials. If a value needs to be encrypted at rest, put it in the vault rather than in `secrets.yml`.
+
+**A command the agent runs receives the real value.** A command can print it or pass it elsewhere. Configured producer-output resources are redacted before retention as described above. This does not guarantee protection for unknown or transformed values, host-shell network exfiltration, images or opaque bytes, or arbitrary host side effects.
+
+**Protection begins when the value is known.** Once you enable protection or store a value, old local transcript text containing that value is sanitized on subsequent provider requests. The local transcript is not rewritten in place.
+
+**A value you type on the command line is visible on screen.** `/secret add <value>` puts the credential in your scrollback, and the confirmation reports it. It is excluded from persistent editor history, but the obfuscator cannot scrub a terminal after the fact. Use `/secret add` on its own, which opens a field that hides what you type, or `/secret from-env <VAR>`, which types nothing at all.
+
+**The secret-use log records use, not intent.** It records which credential went into which command. It cannot show what the command did with it once the process had it.
+
+## Reference
+
+The field-by-field schema, the merge rules between the two files, and the interaction with environment detection are in `docs/handbook/src/architecture/secrets.md`.
+
+For provider credentials specifically, `veyyon` keeps OAuth tokens and API keys in its own credential store rather than in your context. See [Signing in](../using/authentication.md).

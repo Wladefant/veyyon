@@ -1,0 +1,565 @@
+/**
+ * CLI argument parsing and help display
+ */
+// Subpath imports, never the `@veyyon/utils` barrel: the barrel re-exports `env.ts`, which parses the agent
+// `.env` AT IMPORT TIME. This module is in `cli.ts`'s static graph, so pulling the barrel here would load the
+// DEFAULT profile's `.env` before `--profile` has even been parsed (pinned by profile-cli.test.ts).
+import { renderHelpParagraph, renderHelpTable } from "@veyyon/utils/cli";
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
+import { APP_NAME, CONFIG_DIR_NAME } from "@veyyon/utils/dirs";
+import { pluralize } from "@veyyon/utils/format";
+import { nearestNames } from "@veyyon/utils/levenshtein";
+import { isUuid } from "@veyyon/utils/regex";
+import { isSessionFileName } from "@veyyon/utils/session-file";
+import chalk from "chalk";
+import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel, parseCliThinkingLevel } from "../thinking";
+import {
+	BUILTIN_TOOL_NAMES,
+	BUILTIN_TOOL_SUMMARIES,
+	type BuiltinToolName,
+	normalizeToolNames,
+} from "../tools/core/builtin-names";
+import {
+	BOOLEAN_FLAGS,
+	OPTIONAL_FLAGS,
+	OPTIONAL_VALUE_FLAGS,
+	type ParseDeps,
+	PROFILE_BOOTSTRAP_BOUNDARY_ARG,
+	STRING_SETTERS,
+	STRING_VALUE_FLAGS,
+	VALUELESS_FLAGS,
+} from "./flag-tables";
+
+export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
+
+export interface Args {
+	cwd?: string;
+	profile?: string;
+	alias?: string;
+	allowHome?: boolean;
+	provider?: string;
+	model?: string;
+	config?: string[];
+	mcpConfig?: string;
+	plan?: string;
+	compactionModel?: string;
+	prewalk?: boolean;
+	noPrewalk?: boolean;
+	prewalkInto?: string;
+	planYolo?: boolean;
+	planYoloInto?: string;
+	maxTime?: number;
+	apiKey?: string;
+	systemPrompt?: string;
+	appendSystemPrompt?: string;
+	thinking?: ConfiguredThinkingLevel;
+	hideThinking?: boolean;
+	advisor?: boolean;
+	continue?: boolean;
+	resume?: string | true;
+	help?: boolean;
+	version?: boolean;
+	mode?: Mode;
+	noSession?: boolean;
+	sessionDir?: string;
+	providerSessionId?: string;
+	providerPromptCacheKey?: string;
+	fork?: string;
+	/** Collab link to join at startup (set by the `join` subcommand; no CLI flag). */
+	join?: string;
+	models?: string[];
+	tools?: string[];
+	noTools?: boolean;
+	noLsp?: boolean;
+	noPty?: boolean;
+	hooks?: string[];
+	extensions?: string[];
+	noExtensions?: boolean;
+	pluginDirs?: string[];
+	print?: boolean;
+	printThoughts?: boolean;
+	export?: string;
+	noSkills?: boolean;
+	skills?: string[];
+	noRules?: boolean;
+	noTitle?: boolean;
+	autoApprove?: boolean;
+	/** `--dangerously-skip-permissions`: start with the full `/yolo` bypass on. */
+	dangerouslySkipPermissions?: boolean;
+	approvalMode?: "plan" | "ask" | "ask-command" | "auto" | "yolo" | "always-ask" | "write" | "auto-edit";
+	messages: string[];
+	fileArgs: string[];
+	/** Extension-registered flags this parse recognized — name to value. */
+	unknownFlags: Map<string, boolean | string>;
+	/**
+	 * `--`/`-` prefixed tokens this parse could not match against any built-in
+	 * or {@link extensionFlags} entry. The startup parse runs *before*
+	 * extensions load, so it always lists every extension-registered flag here;
+	 * the post-extension reparse in {@link applyExtensionFlags} clears those
+	 * once the real flag set is known. Anything still present after that
+	 * reparse is a genuine typo or stale flag and {@link reportUnrecognizedFlags}
+	 * surfaces it as a hard error so the agent does not silently start a
+	 * session with the misparsed positionals as a prompt (issue #2459).
+	 */
+	unrecognizedFlags: string[];
+}
+
+/**
+ * Runtime dependencies the data-driven setters need. Constructed once at
+ * module load and passed to every {@link STRING_SETTERS} call so the
+ * setter table itself can stay free of `@veyyon/utils` runtime imports
+ * (which would otherwise trip the profile bootstrap's env-init ordering).
+ */
+const PARSE_DEPS: ParseDeps = {
+	parseThinking: parseCliThinkingLevel,
+	builtinToolNames: BUILTIN_TOOL_NAMES,
+	normalizeToolNames,
+	thinkingEfforts: CLI_THINKING_LEVELS,
+};
+
+const WINDOWS_PATH_VALUE_FLAGS: ReadonlySet<string> = new Set(["--extension", "-e", "--hook"]);
+const WINDOWS_PATH_START_RE =
+	/^(?:[A-Za-z]:[\\/]|\\\\[?]\\(?:[A-Za-z]:[\\/]|UNC[\\/])|\\\\[^\\/]+[\\/][^\\/]+[\\/]|\/\/[?]\/(?:[A-Za-z]:\/|UNC\/)|\/\/[^/]+\/[^/]+\/)/;
+const WINDOWS_MODULE_PATH_SUFFIX_RE = /\.(?:[cm]?[jt]sx?)$/i;
+
+function consumeBuiltInStringValue(flag: string, args: string[], valueIndex: number): { value: string; index: number } {
+	const value = args[valueIndex];
+	if (
+		value === undefined ||
+		!WINDOWS_PATH_VALUE_FLAGS.has(flag) ||
+		!WINDOWS_PATH_START_RE.test(value) ||
+		WINDOWS_MODULE_PATH_SUFFIX_RE.test(value)
+	) {
+		return { value: value ?? "", index: valueIndex };
+	}
+
+	let candidate = value;
+	for (let index = valueIndex + 1; index < args.length; index++) {
+		const next = args[index];
+		if (next === PROFILE_BOOTSTRAP_BOUNDARY_ARG || next.startsWith("-")) break;
+		candidate += ` ${next}`;
+		if (WINDOWS_MODULE_PATH_SUFFIX_RE.test(candidate)) {
+			return { value: candidate, index };
+		}
+	}
+
+	return { value, index: valueIndex };
+}
+
+/** Extension-registered flags, keyed by name without the leading `--`. */
+type ExtensionFlags = Map<string, { type: "boolean" | "string" }>;
+
+export function parseArgs(inputArgs: string[], extensionFlags?: ExtensionFlags): Args {
+	// Work on a copy: the `--option=value` handling below splices the value
+	// into the array, and callers reuse the same argv (the post-extension
+	// reparse in `runRootCommand` parses it a second time). Mutating the input
+	// would corrupt that later parse, so never touch the caller's array.
+	const args = inputArgs.slice();
+	const result: Args = {
+		messages: [],
+		fileArgs: [],
+		unknownFlags: new Map(),
+		unrecognizedFlags: [],
+	};
+
+	for (let i = 0; i < args.length; i++) {
+		const token = args[i];
+		if (token === PROFILE_BOOTSTRAP_BOUNDARY_ARG) continue;
+		const eqIdx = token.startsWith("--") ? token.indexOf("=") : -1;
+		const arg = eqIdx === -1 ? token : token.slice(0, eqIdx);
+		// `--` ends option parsing (POSIX end-of-options). Everything after it is
+		// literal positional text, so flag-shaped messages are not parsed or rejected.
+		// `--=x` ends it too, and `x` is dropped with it.
+		if (arg === "--") {
+			for (let rest = i + 1; rest < args.length; rest++) result.messages.push(args[rest]);
+			break;
+		}
+		if (eqIdx === -1) {
+			i = parseToken(result, arg, args, i, false, extensionFlags);
+			continue;
+		}
+		// Support --flag=value syntax (e.g. --tools=ask,read). The value is
+		// spliced in as the next token so value-consuming flags pick it up as
+		// `args[i + 1]`. A flag that consumes nothing (e.g. a boolean) leaves it
+		// behind, and it is dropped here so it is not mistaken for a message.
+		args.splice(i + 1, 0, token.slice(eqIdx + 1));
+		const last = parseToken(result, arg, args, i, true, extensionFlags);
+		if (last === i) args.splice(i + 1, 1);
+		i = last;
+	}
+
+	return result;
+}
+
+/**
+ * Apply the flag or positional `arg` at `args[i]` to `result` and return the index of the last token
+ * it consumed. `inlineValue` is set when `arg` came from `--flag=value`, whose value sits at `args[i + 1]`.
+ */
+function parseToken(
+	result: Args,
+	arg: string,
+	args: string[],
+	i: number,
+	inlineValue: boolean,
+	extensionFlags: ExtensionFlags | undefined,
+): number {
+	// Extension-registered flags take precedence over built-ins: a flag an
+	// extension owns (e.g. plan-mode's boolean `--plan`) is parsed with the
+	// extension's semantics rather than falling into a built-in branch. For a
+	// value-taking built-in (`--plan`, `--model`, …) that branch would consume
+	// the following token — eating the user's message and setting the wrong
+	// built-in field — so registered flags shadow same-named built-ins here.
+	const extFlag = arg.startsWith("--") ? extensionFlags?.get(arg.slice(2)) : undefined;
+	if (extFlag) return parseExtensionFlag(result, arg.slice(2), extFlag.type, args, i, inlineValue);
+	if (STRING_VALUE_FLAGS.has(arg)) return parseStringFlag(result, arg, args, i);
+	if (OPTIONAL_VALUE_FLAGS.has(arg)) return parseOptionalFlag(result, arg, args, i);
+	const field = BOOLEAN_FLAGS.get(arg);
+	if (field !== undefined) {
+		result[field] = true;
+		return i;
+	}
+	if (arg === "--profile") return parseBootstrapFlag(result, "profile", "name", args, i);
+	if (arg === "--alias") return parseBootstrapFlag(result, "alias", "command", args, i);
+	if (arg.startsWith("@")) {
+		result.fileArgs.push(unquoteFileArg(arg.slice(1)));
+	} else if (!arg.startsWith("-") || arg === "-") {
+		// Plain positional or lone `-` (stdin marker) — pass through as a
+		// message rather than flagging it.
+		result.messages.push(arg);
+	} else {
+		// Flag-shaped (`-x`, `--name`) but unrecognized at this parse. Record
+		// it so the post-extension reparse can decide whether to surface it
+		// as a hard error. `--flag=value` already split `value` into the next
+		// slot, and `parseArgs` drops it so it does not leak into messages
+		// (issue #2459).
+		result.unrecognizedFlags.push(arg);
+	}
+	return i;
+}
+
+function parseExtensionFlag(
+	result: Args,
+	name: string,
+	type: "boolean" | "string",
+	args: string[],
+	i: number,
+	inlineValue: boolean,
+): number {
+	if (type === "boolean") {
+		result.unknownFlags.set(name, true);
+		return i;
+	}
+	// Consume the value in `--flag=value` form or when the next token is not
+	// flag-looking. A standalone `--` remains the end-of-options marker; use
+	// `--flag=--` when an extension needs a literal "--" string value.
+	const next = args[i + 1];
+	if (next === undefined || (!inlineValue && next.startsWith("-"))) return i;
+	result.unknownFlags.set(name, next);
+	return i + 1;
+}
+
+function parseStringFlag(result: Args, flag: string, args: string[], i: number): number {
+	// A VALUE-TAKING FLAG WITH NO VALUE IS REFUSED, never dropped. A flag in the last position used
+	// to fall through every branch and vanish: `veyyon -p "..." --approval-mode` exited 0, answered
+	// normally, and ran on the DEFAULT approval mode, with nothing printed to show the safety-relevant
+	// flag had not taken effect. The `=` form splices its value in first, so an empty `--model=` still
+	// arrives with a value here and is a different question; this is only the case where none was given.
+	const next = args[i + 1];
+	if (next === undefined) {
+		throw new CliUsageError(`${flag} needs a value. Write \`${flag} <value>\` or \`${flag}=<value>\`.`);
+	}
+	// The boundary sentinel is NOT folded into that refusal. It means the user wrote
+	// `--plan --profile work "message"` without the plan-mode extension loaded, where `--plan` is the
+	// built-in string flag; the bootstrap stripped `--profile work` and left the marker. Skipping the
+	// flag there keeps the trailing message, which refusing would drop to report the flag.
+	if (next === PROFILE_BOOTSTRAP_BOUNDARY_ARG) return i;
+	// Built-in string flags consume the next token even when it is flag-looking
+	// (`--system-prompt --profile foo` ⇒ the prompt is the literal "--profile").
+	// The one token they must never absorb is the boundary sentinel above.
+	const consumed = consumeBuiltInStringValue(flag, args, i + 1);
+	STRING_SETTERS[flag](result, consumed.value, PARSE_DEPS);
+	return consumed.index;
+}
+
+function parseOptionalFlag(result: Args, flag: string, args: string[], i: number): number {
+	const config = OPTIONAL_FLAGS[flag];
+	const next = args[i + 1];
+	const consume = next !== undefined && !next.startsWith("-") && !(config.rejectEmpty === true && next.length === 0);
+	config.set(result, consume ? next : undefined);
+	return consume ? i + 1 : i;
+}
+
+/**
+ * `--profile <name>` or `--alias <command>`. `extractProfileFlags` normally strips both before
+ * parseArgs sees them; this is the fallback for direct parseArgs callers. The `--profile=work`
+ * spelling arrives here split, with `work` in the next slot.
+ */
+function parseBootstrapFlag(
+	result: Args,
+	field: "profile" | "alias",
+	placeholder: string,
+	args: string[],
+	i: number,
+): number {
+	const value = args[i + 1];
+	if (value === undefined) throw new CliUsageError(`--${field} needs a value. Write \`--${field} <${placeholder}>\`.`);
+	result[field] = value;
+	return i + 1;
+}
+
+/** An `@file` path with one pair of matching surrounding quotes removed. */
+function unquoteFileArg(path: string): string {
+	const quote = path[0];
+	if (path.length > 1 && (quote === '"' || quote === "'") && path.endsWith(quote)) return path.slice(1, -1);
+	return path;
+}
+
+/**
+ * Read `--continue <session-id>` as `--resume <session-id>`.
+ *
+ * The id is the sole message when nothing else is unrecognized, or otherwise the token right after the
+ * first `--continue`/`-c` in `rawArgs`. Anything that is not a UUID stays a message for `--continue`.
+ */
+export function normalizeContinueSessionArgs(parsed: Args, rawArgs?: readonly string[]): void {
+	if (!parsed.continue || parsed.resume || parsed.fork) return;
+
+	let message: string | undefined;
+	if (parsed.unrecognizedFlags.length === 0 && parsed.messages.length === 1) {
+		message = parsed.messages[0]?.trim();
+	} else if (rawArgs) {
+		const continueIndex = rawArgs.findIndex(arg => arg === "--continue" || arg === "-c");
+		message = rawArgs[continueIndex + 1]?.trim();
+	}
+	if (!message || !isUuid(message)) return;
+
+	const messageIndex = parsed.messages.indexOf(message);
+	if (messageIndex === -1) return;
+	parsed.resume = message;
+	parsed.continue = false;
+	parsed.messages.splice(messageIndex, 1);
+}
+
+/** Whether a `--fork` or `--resume` argument names a session file rather than an id to look up. */
+export function namesSessionFile(sessionArg: string): boolean {
+	return sessionArg.includes("/") || sessionArg.includes("\\") || isSessionFileName(sessionArg);
+}
+
+/**
+ * Every flag the launch parser knows, keyed by its name without dashes, for typo suggestion.
+ *
+ * The three tables are the parser's own source of truth, so a suggestion can never name a flag that
+ * does not exist. `--profile` and `--alias`, handled inline in the parse loop, are not offered.
+ * Matching runs on the bare name; the suggestion prints the spelling the parser accepts, so a short
+ * flag is offered as `-c`, never as `--c`.
+ */
+function knownFlagsByBareName(): Map<string, string> {
+	const known = new Map<string, string>();
+	for (const table of [STRING_VALUE_FLAGS, OPTIONAL_VALUE_FLAGS, VALUELESS_FLAGS]) {
+		for (const flag of table) {
+			const bare = flag.replace(/^-+/, "");
+			if (!known.has(bare)) known.set(bare, flag);
+		}
+	}
+	return known;
+}
+
+/**
+ * Emit a stderr error listing the unrecognized flags and return `true` when
+ * there were any. Caller is expected to exit with a non-zero status. Splitting
+ * the print from the exit keeps the helper unit-testable without forking a
+ * process (issue #2459).
+ *
+ * A MISTYPED FLAG GETS THE SAME HELP A MISTYPED SUBCOMMAND ALREADY GOT. `veyyon confg` answered
+ * "Did you mean `veyyon config`?" while `veyyon --modle=x` answered "unknown flag: --modle" and left
+ * the reader to find the difference between what they typed and what exists, in a list of 57. The
+ * two surfaces reject the same kind of mistake one keystroke apart, so they should answer alike.
+ * `nearestNames` is the repo's one owner of "what did they probably mean", which is what keeps the
+ * threshold here from disagreeing with the subcommand one for no reason anybody chose.
+ */
+export function reportUnrecognizedFlags(
+	args: Pick<Args, "unrecognizedFlags">,
+	write: (text: string) => void = text => process.stderr.write(text),
+): boolean {
+	if (args.unrecognizedFlags.length === 0) return false;
+	const flags = args.unrecognizedFlags;
+	write(`${chalk.red(`Error: unknown ${pluralize("flag", flags.length)}: ${flags.join(", ")}`)}\n`);
+	const known = knownFlagsByBareName();
+	for (const flag of flags) {
+		// Compared without the dashes: every candidate starts with them, so leaving them on adds a
+		// constant two characters to every distance and pushes a real typo outside the budget.
+		const suggestions = nearestNames(flag.replace(/^-+/, ""), known.keys(), 3);
+		if (suggestions.length > 0) {
+			write(`Did you mean ${suggestions.map(name => `\`${known.get(name)}\``).join(" or ")}?\n`);
+		}
+	}
+	write(`Run \`${APP_NAME} --help\` for available flags.\n`);
+	return true;
+}
+
+/** Emit a clean CLI usage error without an internal stack trace. */
+export function reportCliUsageError(
+	error: unknown,
+	write: (text: string) => void = text => process.stderr.write(text),
+): boolean {
+	if (!(error instanceof CliUsageError)) return false;
+	write(`${chalk.red(`Error: ${error.message}`)}\n`);
+	write(`Run \`${APP_NAME} --help\` for available flags.\n`);
+	return true;
+}
+
+/**
+ * The extra help block: environment variables, tools, and a few commands.
+ *
+ * ROWS, NOT A PADDED STRING. This was eighty-five lines of literal text whose gutter was typed into
+ * every row as spaces, with three different gutters across its sections and no wrapping, so its
+ * widest row ran to 129 columns and any terminal narrower than that re-broke it at an arbitrary
+ * point with no indent. Rows can be laid out for the terminal in front of the user; a padded string
+ * can only be laid out for the terminal the author happened to have.
+ *
+ * Prose is a paragraph rather than a row, which is the other half of the same defect: three
+ * sentences about profile resolution were sitting between two variable rows, indented like rows, so
+ * they read as a variable with an absurdly long name.
+ */
+function envSection(title: string, rows: ReadonlyArray<readonly [string, string]>): string[] {
+	return [`  ${chalk.dim(`# ${title}`)}`, ...renderHelpTable(rows, { indent: "  " }), ""];
+}
+
+/**
+ * One line per built-in tool, for the AVAILABLE TOOLS block in `--help`.
+ *
+ * WHY THIS IS A `Record<BuiltinToolName, string>` AND NOT A HAND-WRITTEN LIST.
+ * The list it replaces was fifteen literal rows that had stopped describing this
+ * build. It named `python` and `notebook`, neither of which is a tool: both are
+ * refused by the very flag the same help text points at, so `veyyon --tools
+ * python` exits 2 with `Unknown tool passed to --tools`. It also omitted twenty
+ * tools that do exist, among them `task`'s siblings `job` and `irc`, the whole
+ * memory set, `eval`, `ssh`, `github` and the AST pair. A reader could neither
+ * trust what it listed nor discover what it left out.
+ *
+ * Keying the record by {@link BuiltinToolName} makes the compiler the check:
+ * adding a tool to `BUILTIN_TOOL_NAMES` without describing it here does not
+ * build, and describing a tool that no longer exists does not build either.
+ * That is the property the literal list could not have.
+ */
+const BUILTIN_TOOL_HELP: Record<BuiltinToolName, string> = {
+	...BUILTIN_TOOL_SUMMARIES,
+	eval: `Run code in a persistent Python or JavaScript kernel (Python needs: ${APP_NAME} setup python)`,
+};
+
+export function getExtraHelpText(): string {
+	const lines: string[] = [chalk.bold("ENVIRONMENT VARIABLES")];
+
+	lines.push(
+		...envSection("Core Providers", [
+			["ANTHROPIC_API_KEY", "Anthropic Claude models"],
+			["ANTHROPIC_OAUTH_TOKEN", "Anthropic OAuth (takes precedence over API key)"],
+			["CLAUDE_CODE_USE_FOUNDRY", "Enable Anthropic Foundry mode (uses Foundry endpoint + mTLS)"],
+			["FOUNDRY_BASE_URL", "Anthropic Foundry base URL (e.g., https://<foundry-host>)"],
+			["ANTHROPIC_FOUNDRY_API_KEY", "Anthropic token used as Authorization: Bearer <token> in Foundry mode"],
+			[
+				"ANTHROPIC_CUSTOM_HEADERS",
+				'Extra headers for Foundry or any custom ANTHROPIC_BASE_URL gateway (e.g., "user-id: USERNAME")',
+			],
+			["CLAUDE_CODE_CLIENT_CERT", "Client certificate (PEM path or inline PEM) for mTLS"],
+			["CLAUDE_CODE_CLIENT_KEY", "Client private key (PEM path or inline PEM) for mTLS"],
+			["NODE_EXTRA_CA_CERTS", "CA bundle path (or inline PEM) for server certificate validation"],
+			["OPENAI_API_KEY", "OpenAI GPT models"],
+			["GEMINI_API_KEY", "Google Gemini models"],
+			["COPILOT_GITHUB_TOKEN", "GitHub Copilot"],
+		]),
+		...envSection("Additional LLM Providers", [
+			["AZURE_OPENAI_API_KEY", "Azure OpenAI models"],
+			["GROQ_API_KEY", "Groq models"],
+			["CEREBRAS_API_KEY", "Cerebras models"],
+			["XAI_API_KEY", "xAI Grok models"],
+			["OPENROUTER_API_KEY", "OpenRouter aggregated models"],
+			["KILO_API_KEY", "Kilo Gateway models"],
+			["MISTRAL_API_KEY", "Mistral models"],
+			["ZAI_API_KEY", "z.ai models (ZhipuAI/GLM)"],
+			["UMANS_AI_CODING_PLAN_API_KEY", "Umans AI Coding Plan models"],
+			["UMANS_WEBSEARCH_PROVIDER", "Umans gateway web search backend (native or exa)"],
+			["MINIMAX_API_KEY", "MiniMax models"],
+			["OPENCODE_API_KEY", "OpenCode Zen/OpenCode Go models"],
+			["CURSOR_ACCESS_TOKEN", "Cursor AI models"],
+			["AI_GATEWAY_API_KEY", "Vercel AI Gateway"],
+			["STEPFUN_API_KEY", "StepFun Step models"],
+			["WAFER_SERVERLESS_API_KEY", "Wafer Serverless (pay-as-you-go)"],
+			["ABLITERATION_API_KEY", "Abliteration uncensored GLM models"],
+			["MODEL_API_KEY", "Meta Model API models"],
+		]),
+		...envSection("Cloud Providers", [
+			["AWS_PROFILE", "AWS Bedrock (or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)"],
+			["GOOGLE_CLOUD_PROJECT", "Google Vertex AI (requires GOOGLE_CLOUD_LOCATION)"],
+			["GOOGLE_APPLICATION_CREDENTIALS", "Service account for Vertex AI"],
+		]),
+		...envSection("Search & Tools", [
+			["EXA_API_KEY", "Exa web search"],
+			["BRAVE_API_KEY", "Brave web search"],
+			["PERPLEXITY_API_KEY", "Perplexity web search API key (optional; anonymous fallback)"],
+			["PERPLEXITY_COOKIES", "Perplexity web search (session cookie)"],
+			["TAVILY_API_KEY", "Tavily web search"],
+			["TINYFISH_API_KEY", "TinyFish web search"],
+			["FIRECRAWL_API_KEY", "Firecrawl web search"],
+			["DEEPSEEK_API_KEY", "DeepSeek web search and fetch (also the DeepSeek model provider key)"],
+			["ANTHROPIC_SEARCH_API_KEY", "Anthropic web search (override; isolates search from main ANTHROPIC_API_KEY)"],
+			["ANTHROPIC_SEARCH_BASE_URL", "Anthropic web search base URL (override; pairs with ANTHROPIC_SEARCH_API_KEY)"],
+		]),
+	);
+
+	lines.push(
+		`  ${chalk.dim("# Configuration")}`,
+		...renderHelpTable(
+			[
+				["VEYYON_PROFILE", "Named profile for isolated agent state (same as --profile)"],
+				[
+					"VEYYON_CODING_AGENT_DIR",
+					`Agent directory, default profile only (default: ~/${CONFIG_DIR_NAME}/profiles/default/agent; a named profile derives ~/${CONFIG_DIR_NAME}/profiles/<name>/agent and ignores this)`,
+				],
+				["VEYYON_PACKAGE_DIR", "Override package directory (for Nix/Guix store paths)"],
+				["VEYYON_NO_PTY", "Disable PTY-based interactive bash execution"],
+			],
+			{ indent: "  " },
+		),
+		"",
+		...renderHelpParagraph(
+			`Without --profile or a profile env var, \`defaultProfile\` in the global ~/${CONFIG_DIR_NAME}/config.yml decides which profile launches (set it with \`veyyon profile default <name>\`); otherwise the default profile. Use \`veyyon --profile <name> --alias <command>\` to create a shell shortcut for a profile.`,
+		),
+		"",
+		...renderHelpParagraph("For the complete environment variable reference, see:"),
+		`  ${chalk.dim("https://veyyon.dev/docs/reference/environment.html")}`,
+		"",
+		chalk.bold("BUILT-IN TOOLS"),
+		...renderHelpParagraph(
+			"These are the names `--tools` and `--no-tools` accept. A tool that needs something this machine does not have (a language server, a GitHub token, a memory backend) is absent from the session rather than failing when called.",
+			{ indent: "  " },
+		),
+		"",
+		...renderHelpTable(
+			BUILTIN_TOOL_NAMES.map(name => [name, BUILTIN_TOOL_HELP[name]] as const),
+			{ indent: "  " },
+		),
+		"",
+		chalk.bold("PLUGIN OPTIONS"),
+		...renderHelpTable([["--plugin-dir <path>", "Load plugin from directory (repeatable)"]], { indent: "  " }),
+		"",
+		chalk.bold("USEFUL COMMANDS"),
+		...renderHelpTable(
+			[
+				["veyyon agents unpack", `Export bundled agents to ~/${CONFIG_DIR_NAME}/agents, which every profile reads`],
+				["veyyon agents unpack --dir <path>", "Export bundled agents to a directory of your own"],
+			],
+			{ indent: "  " },
+		),
+	);
+
+	return lines.join("\n");
+}
+
+export function printHelp(): void {
+	process.stdout.write(
+		`${chalk.bold(APP_NAME)} - AI coding assistant\n\n` +
+			`Run ${APP_NAME} --help for full command and option details.\n` +
+			`Run ${APP_NAME} <command> --help for command-specific help.\n\n` +
+			`${getExtraHelpText()}\n`,
+	);
+}

@@ -1,0 +1,75 @@
+import { errorMessage, logger } from "@veyyon/utils";
+import { type ProducerSecretOwner } from "../secrets/producer-owner";
+import { truncateMiddle } from "../session/streaming-output";
+import { formatArtifactErrorNotice, type OutputMeta, stripOutputNotice } from "../tools/core/output-meta";
+
+export const ASYNC_INLINE_RESULT_MAX_CHARS = 12_000;
+export const ASYNC_PREVIEW_MAX_CHARS = 4_000;
+/**
+ * Tail share of the preview when the link points at a raw capture: tools append
+ * notices (wall time, exit code, timeout) after the captured stream.
+ */
+export const ASYNC_PREVIEW_TAIL_CHARS = 1_000;
+
+export interface ArtifactAllocator {
+	allocateArtifactPath(toolType: string): Promise<{ id?: string; path?: string }>;
+}
+
+export async function formatAsyncResultForFollowUp(
+	result: string,
+	meta?: OutputMeta,
+	allocator?: ArtifactAllocator,
+	producerSecretOwner?: ProducerSecretOwner,
+): Promise<string> {
+	const safeResult = producerSecretOwner?.redact(result) ?? result;
+	// Strip the already-rendered source notice before taking the smaller preview,
+	// then retain its capture warning once even when the result is short or the original footer is elided.
+	if (meta?.artifactError) {
+		const body = stripOutputNotice(safeResult, meta).trimEnd();
+		const notice = `[${formatArtifactErrorNotice(meta.artifactError)}]`;
+		if (body.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
+			return body ? `${body}\n\n${notice}` : notice;
+		}
+		const preview = `${body.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
+		return `${preview}\n${notice}`;
+	}
+
+	if (safeResult.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
+		return safeResult;
+	}
+
+	// The producing tool's output sink already mirrored the raw stream to an
+	// artifact; `result` is its elided inline body, so link the raw capture.
+	// The capture lacks notices the tool appended after the stream (exit code,
+	// wall time, timeout), so the preview keeps `result`'s tail as well.
+	const rawArtifactId = meta?.truncation?.artifactId ?? meta?.limits?.columnTruncated?.artifactId;
+	if (rawArtifactId) {
+		const headTail = truncateMiddle(safeResult, {
+			maxBytes: ASYNC_PREVIEW_MAX_CHARS,
+			maxHeadBytes: ASYNC_PREVIEW_MAX_CHARS - ASYNC_PREVIEW_TAIL_CHARS,
+		}).content;
+		const isCapped = Boolean(
+			(meta?.artifactElidedBytes && meta.artifactElidedBytes > 0) ||
+				(meta?.truncation?.artifactElidedBytes && meta.truncation.artifactElidedBytes > 0),
+		);
+		const label = isCapped ? "Output" : "Full output";
+		return `${headTail}\n${label}: artifact://${rawArtifactId}`;
+	}
+
+	const preview = `${safeResult.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
+	if (allocator) {
+		try {
+			const { path: artifactPath, id: artifactId } = await allocator.allocateArtifactPath("async");
+			if (artifactPath && artifactId) {
+				await Bun.write(artifactPath, safeResult);
+				return `${preview}\nFull output: artifact://${artifactId}`;
+			}
+		} catch (error) {
+			logger.warn("Failed to persist async follow-up artifact", {
+				error: errorMessage(error),
+			});
+		}
+	}
+
+	return preview;
+}

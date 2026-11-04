@@ -1,0 +1,889 @@
+import { errorMessage, exponentialBackoffDelay, logger, settleWithin } from "@veyyon/utils";
+import { currentProducerSecretOwner, runWithProducerSecretOwner, type ProducerSecretOwner } from "../secrets/producer-owner";
+
+const DELIVERY_RETRY_BASE_MS = 500;
+const DELIVERY_RETRY_MAX_MS = 30_000;
+const DELIVERY_RETRY_JITTER_MS = 200;
+const DEFAULT_RETENTION_MS = 5 * 60 * 1000;
+const DEFAULT_MAX_RUNNING_JOBS = 15;
+
+/**
+ * Adaptive ("smart") `job` poll-wait ladder (ms). A tight poll loop climbs
+ * these rungs so each immediate re-poll backs off and stops spending turns on
+ * "still running" frames. The four-minute ceiling leaves a full minute before
+ * the five-minute prompt-cache boundary, so timer and request-preparation
+ * latency cannot turn the next heartbeat into a full uncached prompt.
+ *
+ * Only used when `async.pollWaitDuration` is set to `smart`; fixed durations
+ * wait verbatim.
+ */
+const POLL_WAIT_LADDER_MS = [30_000, 4 * 60_000] as const;
+/**
+ * Going at least this long between poll calls means the agent stepped out of
+ * the poll loop to do real work — the next poll drops back to the ladder floor.
+ */
+const POLL_ESCALATION_RESET_MS = 60_000;
+
+interface PollEscalationState {
+	/** Index into POLL_WAIT_LADDER_MS used for the most recent poll wait. */
+	level: number;
+	/** Timestamp (ms) when the most recent poll wait returned. */
+	lastPollEndAt: number;
+}
+
+/**
+ * What produced a background job: a backgrounded `bash` command, a `task`
+ * agent, or a supervised process from `launch` whose exit is reported when
+ * it happens.
+ */
+export type AsyncJobType = "bash" | "task" | "launch";
+
+export interface AsyncJob {
+	id: string;
+	type: AsyncJobType;
+	status: "running" | "completed" | "failed" | "cancelled";
+	startTime: number;
+	label: string;
+	abortController: AbortController;
+	promise: Promise<void>;
+	/** Redaction authority captured when the job is registered. */
+	producerSecretOwner?: ProducerSecretOwner;
+	resultText?: string;
+	errorText?: string;
+	/**
+	 * Registry id of the agent that registered the job (e.g. "Main",
+	 * "AuthLoader"). Used by scoped cancel/list APIs so an agent's teardown
+	 * does not cancel its parent's jobs. Undefined for callers that don't
+	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
+	 */
+	ownerId?: string;
+	/**
+	 * Registry id of the agent this job runs (task/tan/vibe jobs). Lets
+	 * job-view code link a job row to its AgentRegistry ref even when the job
+	 * id differs from the agent id (vibe turn jobs, tan clones).
+	 */
+	agentId?: string;
+	/**
+	 * Tool call that started this job, when the registering tool supplied one.
+	 * Lets a late completion attach to its original call when that call is
+	 * still pending in the resumed session instead of forcing a new turn.
+	 */
+	toolCallId?: string;
+	/**
+	 * Job is registered but parked behind a caller-managed gate (e.g. a task
+	 * batch semaphore). Queued jobs do not count toward the running-job limit
+	 * until the caller invokes `markRunning()` from the run context.
+	 */
+	queued?: boolean;
+	/**
+	 * Latest progress / result details reported by the job runner.
+	 */
+	latestDetails?: Record<string, unknown>;
+}
+
+export interface AsyncJobManagerOptions {
+	onJobComplete: (jobId: string, text: string, job?: AsyncJob) => void | Promise<void>;
+	maxRunningJobs?: number;
+	retentionMs?: number;
+}
+
+interface AsyncJobDelivery {
+	jobId: string;
+	text: string;
+	attempt: number;
+	nextAttemptAt: number;
+	lastError?: string;
+	ownerId?: string;
+	producerSecretOwner?: ProducerSecretOwner;
+	/** Keep routing identity alive after the inspection entry expires. */
+	job?: AsyncJob;
+	promise?: Promise<void>;
+}
+
+export interface AsyncJobDeliveryState {
+	queued: number;
+	delivering: boolean;
+	nextRetryAt?: number;
+	pendingJobIds: string[];
+}
+
+export interface AsyncJobRegisterOptions {
+	id?: string;
+	/** Registry id of the agent that owns this job; used to scope cancelAll. */
+	ownerId?: string;
+	/** Registry id of the agent this job runs; see {@link AsyncJob.agentId}. */
+	agentId?: string;
+	/** Tool call that started this job; see {@link AsyncJob.toolCallId}. */
+	toolCallId?: string;
+	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
+	/** Register the job in queued state; see {@link AsyncJob.queued}. */
+	queued?: boolean;
+}
+
+/**
+ * Filter applied to job query/cancel APIs. With `ownerId`, results are
+ * restricted to jobs registered by that agent (registry id from
+ * `AgentRegistry`, e.g. "Main", "AuthLoader").
+ */
+export interface AsyncJobFilter {
+	ownerId?: string;
+}
+
+export class AsyncJobManager {
+	static #instance: AsyncJobManager | undefined;
+
+	/** Process-global instance shared by internal URL protocol handlers and tools. */
+	static instance(): AsyncJobManager | undefined {
+		return AsyncJobManager.#instance;
+	}
+
+	/** Install or clear the process-global instance. */
+	static setInstance(value: AsyncJobManager | undefined): void {
+		AsyncJobManager.#instance = value;
+	}
+
+	/** Reset the process-global instance. Test-only. */
+	static resetForTests(): void {
+		AsyncJobManager.#instance = undefined;
+	}
+
+	readonly #jobs = new Map<string, AsyncJob>();
+	readonly #deliveries: AsyncJobDelivery[] = [];
+	readonly #inFlightDeliveries: AsyncJobDelivery[] = [];
+	readonly #suppressedDeliveries = new Set<string>();
+	readonly #watchedJobs = new Set<string>();
+	readonly #evictionTimers = new Map<string, NodeJS.Timeout>();
+	/** Jobs whose caller consumed the result itself, evicted as they settle rather than retained. */
+	readonly #released = new Set<string>();
+	readonly #pollEscalation = new Map<string | undefined, PollEscalationState>();
+	readonly #onJobComplete: AsyncJobManagerOptions["onJobComplete"];
+	readonly #maxRunningJobs: number;
+	readonly #retentionMs: number;
+	#deliveryLoop: Promise<void> | undefined;
+	#disposed = false;
+	/** Owners whose session was torn down and not parked; their completions are orphans, not retries. */
+	readonly #disposedOwners = new Set<string>();
+
+	constructor(options: AsyncJobManagerOptions) {
+		this.#onJobComplete = options.onJobComplete;
+		this.#maxRunningJobs = Math.max(1, Math.floor(options.maxRunningJobs ?? DEFAULT_MAX_RUNNING_JOBS));
+		this.#retentionMs = Math.max(0, Math.floor(options.retentionMs ?? DEFAULT_RETENTION_MS));
+	}
+
+	/** True when the running-job count has reached the configured cap. */
+	get atCapacity(): boolean {
+		if (this.#disposed) return true;
+		// Mirror register(): queued jobs hold no execution slot.
+		let activeCount = 0;
+		for (const job of this.#jobs.values()) {
+			if (job.status === "running" && !job.queued) activeCount++;
+		}
+		return activeCount >= this.#maxRunningJobs;
+	}
+
+	register(
+		type: AsyncJobType,
+		label: string,
+		run: (ctx: {
+			jobId: string;
+			signal: AbortSignal;
+			reportProgress: (text: string, details?: Record<string, unknown>) => Promise<void>;
+			/** Clear the queued flag once the job actually starts executing. */
+			markRunning: () => void;
+		}) => Promise<string>,
+		options?: AsyncJobRegisterOptions,
+	): string {
+		if (this.#disposed) {
+			throw new Error("Async job manager is disposed");
+		}
+		// Queued jobs hold no execution slot yet — only count jobs that are
+		// actually running so a large parked batch cannot starve registration.
+		let activeCount = 0;
+		for (const existing of this.#jobs.values()) {
+			if (existing.status === "running" && !existing.queued) activeCount++;
+		}
+		if (activeCount >= this.#maxRunningJobs) {
+			throw new Error(
+				`Background job limit reached (${this.#maxRunningJobs}). Wait for running jobs to finish or cancel one.`,
+			);
+		}
+
+		const producerSecretOwner = currentProducerSecretOwner();
+		const id = this.#resolveJobId(options?.id);
+		this.#suppressedDeliveries.delete(id);
+		const abortController = new AbortController();
+		const startTime = Date.now();
+		const job: AsyncJob = {
+			id,
+			type,
+			status: "running",
+			startTime,
+			label: producerSecretOwner?.redact(label) ?? label,
+			abortController,
+			promise: Promise.resolve(),
+			ownerId: options?.ownerId,
+			agentId: options?.agentId,
+			toolCallId: options?.toolCallId,
+			queued: options?.queued === true,
+			producerSecretOwner,
+		};
+
+		const reportProgress = async (text: string, details?: Record<string, unknown>): Promise<void> => {
+			const safeText = producerSecretOwner?.redact(text) ?? text;
+			const safeDetails = producerSecretOwner ? redactDetails(details, producerSecretOwner) : details;
+			if (safeDetails) job.latestDetails = safeDetails;
+			if (!options?.onProgress) return;
+			try {
+				await options.onProgress(safeText, safeDetails);
+			} catch (error) {
+				logger.warn("Async job progress callback failed", {
+					jobId: id,
+					error: errorMessage(error),
+				});
+			}
+		};
+		job.promise = (async () => {
+			try {
+				const text = await (producerSecretOwner
+					? runWithProducerSecretOwner(producerSecretOwner, () =>
+							run({
+								jobId: id,
+								signal: abortController.signal,
+								reportProgress,
+								markRunning: () => {
+									job.queued = false;
+								},
+							}),
+						)
+					: run({
+							jobId: id,
+							signal: abortController.signal,
+							reportProgress,
+							markRunning: () => {
+								job.queued = false;
+							},
+						}));
+				const safeText = producerSecretOwner?.redact(text) ?? text;
+				if (job.status === "cancelled") {
+					job.resultText = safeText;
+					this.#scheduleEviction(id);
+					return;
+				}
+				job.status = "completed";
+				job.resultText = safeText;
+				this.#enqueueDelivery(id, safeText);
+				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0 || this.#released.has(id)) {
+					this.#scheduleEviction(id);
+				}
+			} catch (error) {
+				const errorText = producerSecretOwner?.redact(errorMessage(error)) ?? errorMessage(error);
+				if (job.status === "cancelled") {
+					job.errorText = errorText;
+					this.#scheduleEviction(id);
+					return;
+				}
+				job.status = "failed";
+				job.errorText = errorText;
+				this.#enqueueDelivery(id, errorText);
+				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0 || this.#released.has(id)) {
+					this.#scheduleEviction(id);
+				}
+			}
+		})();
+
+		this.#jobs.set(id, job);
+		return id;
+	}
+
+
+	/**
+	 * Cancel a single job by id. When `filter.ownerId` is set and does not
+	 * match the job's owner, the call is treated as not-found (returns false)
+	 * so cross-agent cancellation is rejected at the manager level.
+	 */
+	cancel(id: string, filter?: AsyncJobFilter): boolean {
+		const job = this.#jobs.get(id);
+		if (!job) return false;
+		if (filter?.ownerId && job.ownerId !== filter.ownerId) return false;
+		if (job.status !== "running") return false;
+		job.status = "cancelled";
+		job.abortController.abort();
+		this.#scheduleEviction(id);
+		return true;
+	}
+
+	getJob(id: string): AsyncJob | undefined {
+		return this.#jobs.get(id);
+	}
+
+	getRunningJobs(filter?: AsyncJobFilter): AsyncJob[] {
+		return filterJobs(this.#jobs.values(), filter).filter(job => job.status === "running");
+	}
+
+	getRecentJobs(limit = 10, filter?: AsyncJobFilter): AsyncJob[] {
+		return filterJobs(this.#jobs.values(), filter)
+			.filter(job => job.status !== "running")
+			.sort((a, b) => b.startTime - a.startTime)
+			.slice(0, limit);
+	}
+
+	getAllJobs(filter?: AsyncJobFilter): AsyncJob[] {
+		return filterJobs(this.#jobs.values(), filter);
+	}
+
+	getDeliveryState(filter?: AsyncJobFilter): AsyncJobDeliveryState {
+		const deliveries = this.#filterDeliveries(filter);
+		const inFlightDeliveries = this.#filterInFlightDeliveries(filter);
+		const nextRetryAt = deliveries.reduce<number | undefined>((next, delivery) => {
+			if (next === undefined) return delivery.nextAttemptAt;
+			return Math.min(next, delivery.nextAttemptAt);
+		}, undefined);
+
+		return {
+			queued: deliveries.length + inFlightDeliveries.length,
+			delivering: inFlightDeliveries.length > 0 || (this.#deliveryLoop !== undefined && deliveries.length > 0),
+			nextRetryAt,
+			pendingJobIds: deliveries.concat(inFlightDeliveries).map(delivery => delivery.jobId),
+		};
+	}
+
+	hasPendingDeliveries(filter?: AsyncJobFilter): boolean {
+		return this.getDeliveryState(filter).queued > 0;
+	}
+
+	watchJobs(jobIds: string[]): number {
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
+		for (const jobId of uniqueJobIds) {
+			this.#watchedJobs.add(jobId);
+		}
+		return uniqueJobIds.length;
+	}
+
+	/**
+	 * Lift a watch installed by {@link watchJobs}, re-arming the delivery of anything
+	 * that finished inside the window.
+	 *
+	 * The re-arm is the point. A watch suppresses `#enqueueDelivery` outright, so a
+	 * job that completes while watched has no delivery anywhere: not queued, not
+	 * in-flight, not retained for later. Before this, lifting the watch simply
+	 * forgot about it, and the child's report survived only inside the return value
+	 * of whatever call installed the watch. Any path that dropped that return value
+	 * dropped the agent's entire output, permanently and silently, and nothing
+	 * could recover it: `resumeDeliveries` lifts `#suppressedDeliveries` and has
+	 * never been able to see a watch.
+	 *
+	 * CALLERS MUST `acknowledgeDeliveries` BEFORE UNWATCHING when they are returning
+	 * the results themselves. That is what keeps delivery exactly-once: the
+	 * acknowledgement is permanent, so the re-arm here sees it and stays quiet. Get
+	 * the order backwards and the operator sees the same report twice.
+	 */
+	unwatchJobs(jobIds: string[]): number {
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
+		let removed = 0;
+		for (const jobId of uniqueJobIds) {
+			if (!this.#watchedJobs.delete(jobId)) continue;
+			removed += 1;
+			this.#requeueSettledDelivery(jobId);
+			if (this.#evictsOnSettle(jobId)) {
+				this.#scheduleEviction(jobId);
+			}
+		}
+		return removed;
+	}
+
+	/**
+	 * Re-enqueue the completion of a job whose delivery `#enqueueDelivery` skipped
+	 * while it was suppressed. No-op unless the job has actually settled and is not
+	 * already queued or in flight; `#enqueueDelivery` is the single place that
+	 * decides suppression, so an acknowledged job is dropped there rather than
+	 * pre-checked here.
+	 */
+	#requeueSettledDelivery(jobId: string): void {
+		const job = this.#jobs.get(jobId);
+		if (!job || (job.status !== "completed" && job.status !== "failed")) return;
+		if (
+			this.#deliveries.some(delivery => delivery.jobId === jobId) ||
+			this.#inFlightDeliveries.some(delivery => delivery.jobId === jobId)
+		) {
+			return;
+		}
+		this.#enqueueDelivery(jobId, job.status === "completed" ? (job.resultText ?? "") : (job.errorText ?? ""));
+	}
+
+	/**
+	 * Compute the next adaptive ("smart") wait (ms) for a blocking `job` poll by
+	 * the given owner. Consecutive polls — those starting within
+	 * POLL_ESCALATION_RESET_MS of the previous poll returning — climb
+	 * POLL_WAIT_LADDER_MS so a tight wait loop backs off; a longer gap means the
+	 * agent left to do real work, so the wait resets to the floor. Pair each call
+	 * with `recordPollWaitEnd()` once the wait returns.
+	 */
+	nextPollWaitMs(ownerId: string | undefined, now: number = Date.now()): number {
+		const prev = this.#pollEscalation.get(ownerId);
+		const reset = !prev || now - prev.lastPollEndAt >= POLL_ESCALATION_RESET_MS;
+		const level = reset ? 0 : Math.min(prev.level + 1, POLL_WAIT_LADDER_MS.length - 1);
+		this.#pollEscalation.set(ownerId, { level, lastPollEndAt: prev?.lastPollEndAt ?? now });
+		return POLL_WAIT_LADDER_MS[level];
+	}
+
+	/**
+	 * Mark a blocking poll wait as finished so the idle-reset window is measured
+	 * from now. Polling again before POLL_ESCALATION_RESET_MS elapses keeps
+	 * climbing the ladder; waiting longer resets it to the floor.
+	 */
+	recordPollWaitEnd(ownerId: string | undefined, now: number = Date.now()): void {
+		const prev = this.#pollEscalation.get(ownerId);
+		this.#pollEscalation.set(ownerId, { level: prev?.level ?? 0, lastPollEndAt: now });
+	}
+
+	acknowledgeDeliveries(jobIds: string[]): number {
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
+		if (uniqueJobIds.length === 0) return 0;
+
+		for (const jobId of uniqueJobIds) {
+			this.#suppressedDeliveries.add(jobId);
+		}
+
+		const before = this.#deliveries.length;
+		this.#deliveries.splice(
+			0,
+			this.#deliveries.length,
+			...this.#deliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId)),
+		);
+		if (this.#retentionMs <= 0) {
+			for (const jobId of uniqueJobIds) {
+				const job = this.#jobs.get(jobId);
+				if (job && job.status !== "running" && !this.#watchedJobs.has(jobId)) {
+					this.#scheduleEviction(jobId);
+				}
+			}
+		}
+		return before - this.#deliveries.length;
+	}
+
+	/**
+	 * Drop a job whose caller consumed its result itself, such as a foreground `bash` call that
+	 * finished before it moved to the background. The job is acknowledged and evicted as soon as it
+	 * settles instead of being retained for `retentionMs` with its output, abort controller and
+	 * eviction timer.
+	 */
+	release(jobId: string): void {
+		if (!this.#jobs.has(jobId)) return;
+		this.#released.add(jobId);
+		this.acknowledgeDeliveries([jobId]);
+		if (this.#jobs.has(jobId)) this.#scheduleEviction(jobId);
+	}
+
+	/**
+	 * Lift a foreground-wait suppression set via `acknowledgeDeliveries`. If the
+	 * job already finished while suppressed (its delivery enqueue was skipped),
+	 * re-enqueue the completion so the result is still delivered exactly once.
+	 */
+	resumeDeliveries(jobIds: string[]): void {
+		for (const rawId of jobIds) {
+			const jobId = rawId.trim();
+			if (!jobId) continue;
+			if (!this.#suppressedDeliveries.delete(jobId)) continue;
+			this.#requeueSettledDelivery(jobId);
+			if (this.#evictsOnSettle(jobId)) {
+				this.#scheduleEviction(jobId);
+			}
+		}
+	}
+
+	/**
+	 * Cancel running jobs. With `filter.ownerId` set, cancels only jobs the
+	 * matching agent registered; with no filter, cancels every running job
+	 * (used by `dispose()` to nuke the manager's state).
+	 */
+	cancelAll(filter?: AsyncJobFilter): void {
+		for (const job of this.getRunningJobs(filter)) {
+			job.status = "cancelled";
+			job.abortController.abort();
+			this.#scheduleEviction(job.id);
+		}
+	}
+
+	async waitForAll(): Promise<void> {
+		await Promise.all(Array.from(this.#jobs.values()).map(job => job.promise));
+	}
+
+	async #waitForAllUntil(deadline: number): Promise<boolean> {
+		const promises = Array.from(this.#jobs.values()).map(job => job.promise);
+		if (promises.length === 0) return true;
+		if (deadline === Number.POSITIVE_INFINITY) {
+			await Promise.all(promises);
+			return true;
+		}
+		const remainingMs = deadline - Date.now();
+		if (remainingMs <= 0) return false;
+
+		const timeout = Promise.withResolvers<"timeout">();
+		const timer = setTimeout(() => timeout.resolve("timeout"), remainingMs);
+		timer.unref();
+		try {
+			const result = await Promise.race([Promise.all(promises).then(() => "settled" as const), timeout.promise]);
+			return result === "settled";
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	async drainDeliveries(options?: { timeoutMs?: number; filter?: AsyncJobFilter }): Promise<boolean> {
+		const timeoutMs = options?.timeoutMs;
+		const filter = options?.filter;
+		const hasDeadline = timeoutMs !== undefined;
+		const deadline = hasDeadline ? Date.now() + Math.max(timeoutMs, 0) : Number.POSITIVE_INFINITY;
+
+		while (this.hasPendingDeliveries(filter)) {
+			if (filter?.ownerId) {
+				const delivered = await this.#deliverNextFiltered(filter, deadline);
+				if (delivered) continue;
+				return false;
+			}
+			const inFlightDeliveries = this.#filterInFlightDeliveries();
+			if (inFlightDeliveries.length > 0 && this.#filterDeliveries().length === 0) {
+				const delivered = await waitForDeliveryPromise(inFlightDeliveries[0]?.promise, deadline);
+				if (delivered) continue;
+				return false;
+			}
+
+			this.#ensureDeliveryLoop();
+			const loop = this.#deliveryLoop;
+			if (!loop) {
+				continue;
+			}
+
+			if (!hasDeadline) {
+				await loop;
+				continue;
+			}
+
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) {
+				return false;
+			}
+
+			await settleWithin(loop, remainingMs, undefined);
+			if (Date.now() >= deadline && this.hasPendingDeliveries(filter)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	async dispose(options?: { timeoutMs?: number }): Promise<boolean> {
+		this.#disposed = true;
+		this.#clearEvictionTimers();
+		this.cancelAll();
+		const timeoutMs = Math.max(options?.timeoutMs ?? 3_000, 0);
+		const deadline = Date.now() + timeoutMs;
+		const jobsSettled = await this.#waitForAllUntil(deadline);
+		const drained = await this.drainDeliveries({ timeoutMs: Math.max(deadline - Date.now(), 0) });
+		this.#clearEvictionTimers();
+		this.#jobs.clear();
+		this.#deliveries.length = 0;
+		this.#inFlightDeliveries.length = 0;
+		this.#suppressedDeliveries.clear();
+		this.#watchedJobs.clear();
+		this.#released.clear();
+		this.#pollEscalation.clear();
+		return jobsSettled && drained;
+	}
+
+	#resolveJobId(preferredId?: string): string {
+		preferredId = preferredId?.trim();
+		if (!preferredId) {
+			let candidate = 1;
+			while (true) {
+				const id = `bg_${candidate}`;
+				if (!this.#jobs.has(id)) {
+					return id;
+				}
+				candidate += 1;
+			}
+		}
+
+		const base = preferredId.trim();
+		if (!this.#jobs.has(base)) return base;
+
+		let suffix = 2;
+		let candidate = `${base}-${suffix}`;
+		while (this.#jobs.has(candidate)) {
+			suffix += 1;
+			candidate = `${base}-${suffix}`;
+		}
+		return candidate;
+	}
+
+	#purgeJob(jobId: string): void {
+		this.#jobs.delete(jobId);
+		this.#suppressedDeliveries.delete(jobId);
+		this.#watchedJobs.delete(jobId);
+		this.#released.delete(jobId);
+	}
+
+	/** Whether `jobId` is evicted once it settles and nothing holds it, rather than retained. */
+	#evictsOnSettle(jobId: string): boolean {
+		return this.#retentionMs <= 0 || this.#released.has(jobId);
+	}
+
+	#scheduleEviction(jobId: string): void {
+		if (this.#disposed) return;
+		const job = this.#jobs.get(jobId);
+		if (job?.status === "running") return;
+		if (this.#evictsOnSettle(jobId)) {
+			if (
+				this.#watchedJobs.has(jobId) ||
+				this.#deliveries.some(delivery => delivery.jobId === jobId) ||
+				this.#inFlightDeliveries.some(delivery => delivery.jobId === jobId)
+			) {
+				return;
+			}
+			clearTimeout(this.#evictionTimers.get(jobId));
+			this.#evictionTimers.delete(jobId);
+			this.#purgeJob(jobId);
+			return;
+		}
+		clearTimeout(this.#evictionTimers.get(jobId));
+		const timer = setTimeout(() => {
+			this.#evictionTimers.delete(jobId);
+			this.#purgeJob(jobId);
+		}, this.#retentionMs);
+		timer.unref();
+		this.#evictionTimers.set(jobId, timer);
+	}
+
+	#clearEvictionTimers(): void {
+		for (const timer of this.#evictionTimers.values()) {
+			clearTimeout(timer);
+		}
+		this.#evictionTimers.clear();
+	}
+
+	#filterDeliveries(filter?: AsyncJobFilter): AsyncJobDelivery[] {
+		return this.#unsuppressedDeliveries(this.#deliveries, filter);
+	}
+
+	#filterInFlightDeliveries(filter?: AsyncJobFilter): AsyncJobDelivery[] {
+		return this.#unsuppressedDeliveries(this.#inFlightDeliveries, filter);
+	}
+
+	/** The deliveries in `list` that are not suppressed, narrowed to `filter.ownerId` when one is given. */
+	#unsuppressedDeliveries(list: readonly AsyncJobDelivery[], filter?: AsyncJobFilter): AsyncJobDelivery[] {
+		const ownerId = filter?.ownerId;
+		return list.filter(
+			delivery => (!ownerId || delivery.ownerId === ownerId) && !this.isDeliverySuppressed(delivery.jobId),
+		);
+	}
+
+	async #deliverNextFiltered(filter: AsyncJobFilter, deadline: number): Promise<boolean> {
+		while (true) {
+			let selected: AsyncJobDelivery | undefined;
+			for (const delivery of this.#deliveries) {
+				if (delivery.ownerId !== filter.ownerId) continue;
+				if (this.isDeliverySuppressed(delivery.jobId)) continue;
+				if (!selected || delivery.nextAttemptAt < selected.nextAttemptAt) {
+					selected = delivery;
+				}
+			}
+
+			if (!selected) {
+				const inFlight = this.#filterInFlightDeliveries(filter);
+				if (inFlight.length === 0) return true;
+				return waitForDeliveryPromise(inFlight[0]?.promise, deadline);
+			}
+
+			const now = Date.now();
+			if (selected.nextAttemptAt > now) {
+				if (selected.nextAttemptAt > deadline) return false;
+				await Bun.sleep(selected.nextAttemptAt - now);
+				continue;
+			}
+
+			const index = this.#deliveries.indexOf(selected);
+			if (index === -1) continue;
+			this.#deliveries.splice(index, 1);
+			if (this.isDeliverySuppressed(selected.jobId)) continue;
+
+			return waitForDeliveryPromise(this.#deliverDelivery(selected), deadline);
+		}
+	}
+
+	isDeliverySuppressed(jobId: string): boolean {
+		return this.#suppressedDeliveries.has(jobId) || this.#watchedJobs.has(jobId);
+	}
+
+	/**
+	 * Record that an owner's session was disposed without parking. Its completions route to Main as one
+	 * batched orphan note; an owner that is merely absent keeps retrying its retained completion.
+	 */
+	markOwnerDisposed(ownerId: string): void {
+		this.#disposedOwners.add(ownerId);
+	}
+
+	isOwnerDisposed(ownerId: string | undefined): boolean {
+		return ownerId !== undefined && this.#disposedOwners.has(ownerId);
+	}
+
+	#enqueueDelivery(jobId: string, text: string): void {
+		// Skip delivery if already acknowledged
+		if (this.isDeliverySuppressed(jobId)) {
+			return;
+		}
+		this.#deliveries.push({
+			jobId,
+			text,
+			attempt: 0,
+			nextAttemptAt: Date.now(),
+			ownerId: this.#jobs.get(jobId)?.ownerId,
+			producerSecretOwner: this.#jobs.get(jobId)?.producerSecretOwner,
+			job: this.#jobs.get(jobId),
+		});
+		this.#ensureDeliveryLoop();
+	}
+
+	#ensureDeliveryLoop(): void {
+		if (this.#deliveryLoop) {
+			return;
+		}
+
+		this.#deliveryLoop = this.#runDeliveryLoop()
+			.catch(error => {
+				logger.error("Async job delivery loop crashed", { error: String(error) });
+			})
+			.finally(() => {
+				this.#deliveryLoop = undefined;
+				if (this.#deliveries.length > 0) {
+					this.#ensureDeliveryLoop();
+				}
+			});
+	}
+
+	async #runDeliveryLoop(): Promise<void> {
+		while (this.#deliveries.length > 0) {
+			const delivery = this.#deliveries[0];
+			if (this.isDeliverySuppressed(delivery.jobId)) {
+				this.#deliveries.shift();
+				continue;
+			}
+			const waitMs = delivery.nextAttemptAt - Date.now();
+			if (waitMs > 0) {
+				await Bun.sleep(waitMs);
+			}
+			if (this.#deliveries[0] !== delivery) {
+				continue;
+			}
+			if (this.isDeliverySuppressed(delivery.jobId)) {
+				this.#deliveries.shift();
+				continue;
+			}
+
+			this.#deliveries.shift();
+			await this.#deliverDelivery(delivery);
+		}
+	}
+
+	#deliverDelivery(delivery: AsyncJobDelivery): Promise<void> {
+		const promise = (async () => {
+			this.#inFlightDeliveries.push(delivery);
+			try {
+				const operation = () => this.#onJobComplete(delivery.jobId, delivery.text, delivery.job);
+				await (delivery.producerSecretOwner
+					? runWithProducerSecretOwner(delivery.producerSecretOwner, operation)
+					: operation());
+			} catch (error) {
+				delivery.attempt += 1;
+				delivery.lastError = errorMessage(error);
+				delivery.nextAttemptAt = Date.now() + getRetryDelay(delivery.attempt);
+				if (!this.isDeliverySuppressed(delivery.jobId)) {
+					this.#deliveries.push(delivery);
+				}
+				logger.warn("Async job completion delivery failed", {
+					jobId: delivery.jobId,
+					attempt: delivery.attempt,
+					nextRetryAt: delivery.nextAttemptAt,
+					error: delivery.lastError,
+				});
+			} finally {
+				const index = this.#inFlightDeliveries.indexOf(delivery);
+				if (index !== -1) this.#inFlightDeliveries.splice(index, 1);
+				if (this.#evictsOnSettle(delivery.jobId)) {
+					this.#scheduleEviction(delivery.jobId);
+				}
+				if (this.#deliveries.length > 0) this.#ensureDeliveryLoop();
+			}
+		})();
+		delivery.promise = promise;
+		return promise;
+	}
+}
+
+function filterJobs(jobs: Iterable<AsyncJob>, filter?: AsyncJobFilter): AsyncJob[] {
+	const ownerId = filter?.ownerId;
+	if (!ownerId) return Array.from(jobs);
+	const out: AsyncJob[] = [];
+	for (const job of jobs) {
+		if (job.ownerId === ownerId) out.push(job);
+	}
+	return out;
+}
+
+async function waitForDeliveryPromise(promise: Promise<void> | undefined, deadline: number): Promise<boolean> {
+	if (!promise) return true;
+	if (deadline === Number.POSITIVE_INFINITY) {
+		await promise;
+		return true;
+	}
+	const remainingMs = deadline - Date.now();
+	if (remainingMs <= 0) return false;
+	const TIMED_OUT = Symbol("delivery-wait-timed-out");
+	return (await settleWithin(promise, remainingMs, TIMED_OUT)) !== TIMED_OUT;
+}
+
+function getRetryDelay(attempt: number): number {
+	const backoffMs = exponentialBackoffDelay(attempt - 1, {
+		baseMs: DELIVERY_RETRY_BASE_MS,
+		maxMs: DELIVERY_RETRY_MAX_MS,
+		jitter: 0,
+	});
+	const jitterMs = Math.floor(Math.random() * DELIVERY_RETRY_JITTER_MS);
+	return Math.min(DELIVERY_RETRY_MAX_MS, backoffMs + jitterMs);
+}
+function redactDetails(
+	details: Record<string, unknown> | undefined,
+	owner: ProducerSecretOwner,
+): Record<string, unknown> | undefined {
+	if (!details) return details;
+	return redactValue(details, owner, new WeakMap()) as Record<string, unknown>;
+}
+
+function redactValue(value: unknown, owner: ProducerSecretOwner, seen: WeakMap<object, object>): unknown {
+	if (typeof value === "string") return owner.redact(value);
+	if (!value || typeof value !== "object") return value;
+	const prototype = Object.getPrototypeOf(value);
+	if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
+	const prior = seen.get(value);
+	if (prior) return prior;
+	if (Array.isArray(value)) {
+		const result: unknown[] = [];
+		seen.set(value, result);
+		let changed = false;
+		for (const item of value) {
+			const safeItem = redactValue(item, owner, seen);
+			result.push(safeItem);
+			if (safeItem !== item) changed = true;
+		}
+		return changed ? result : value;
+	}
+	const result: Record<string, unknown> = {};
+	seen.set(value, result);
+	let changed = false;
+	for (const [key, item] of Object.entries(value)) {
+		const safeItem = redactValue(item, owner, seen);
+		result[key] = safeItem;
+		if (safeItem !== item) changed = true;
+	}
+	return changed ? result : value;
+}

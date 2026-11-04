@@ -1,0 +1,513 @@
+import { lazy } from "@veyyon/utils/abortable";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
+import type { DevinModelDiscoveryOptions } from "../discovery/devin";
+import type { ModelManagerOptions } from "../model-manager";
+import { GITLAB_SAAS_URL, TYPESAFE_DEFAULT_BASE_URL } from "../provider-endpoints";
+import type { FetchImpl, ModelSpec } from "../types";
+
+export function buildGitLabDuoWorkflowFallbackModel(
+	id = "claude_sonnet_4_6_vertex",
+	name = "Claude Sonnet 4.6 - Vertex",
+	baseUrl = GITLAB_SAAS_URL,
+): ModelSpec<"gitlab-duo-agent"> {
+	const normalizedBaseUrl = trimTrailingSlashes(baseUrl?.trim() || GITLAB_SAAS_URL);
+	return {
+		id,
+		name,
+		api: "gitlab-duo-agent",
+		provider: "gitlab-duo-agent",
+		baseUrl: normalizedBaseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		pricing: "unknown",
+		contextWindow: 1_000_000,
+		maxTokens: null,
+		supportsTools: true,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Codex
+// ---------------------------------------------------------------------------
+
+/** One Codex OAuth account to fetch a catalog for. */
+export interface OpenAICodexAccount {
+	/** OAuth access token used for `Authorization: Bearer ...`. */
+	accessToken: string;
+	/** ChatGPT account id sent as the `chatgpt-account-id` header. */
+	accountId?: string;
+}
+
+export function openAICodexModelCacheProviderId(accountFingerprint?: string): string {
+	return accountFingerprint ? `openai-codex:union-v2:${accountFingerprint}` : "openai-codex:union-v2";
+}
+
+export interface OpenAICodexModelManagerConfig {
+	/** Access token of the account discovery lists when `accounts` resolves none. Discovery runs only with one. */
+	accessToken?: string;
+	/** `chatgpt-account-id` of `accessToken`'s account. */
+	accountId?: string;
+	clientVersion?: string;
+	fetch?: FetchImpl;
+	cacheProviderId?: string;
+	accountFingerprint?: string;
+	/**
+	 * Resolves configured Codex OAuth accounts. Fetches each account and
+	 * unions results by id. Returns null on failure to keep previous models.
+	 */
+	resolveAccounts?: () => Promise<readonly OpenAICodexAccount[] | null>;
+}
+
+export function openaiCodexModelManagerOptions(
+	config: OpenAICodexModelManagerConfig = {},
+): ModelManagerOptions<"openai-codex-responses"> {
+	const { resolveAccounts, accessToken, accountId, clientVersion, fetch, cacheProviderId, accountFingerprint } =
+		config;
+	return {
+		providerId: "openai-codex",
+		cacheProviderId: cacheProviderId ?? openAICodexModelCacheProviderId(accountFingerprint),
+		dynamicModelsAuthoritative: true,
+		...(resolveAccounts || accessToken
+			? {
+					fetchDynamicModels: async hooks => {
+						const resolved = resolveAccounts
+							? await resolveAccounts()
+							: [{ accessToken: accessToken!, accountId }];
+						if (!resolved || resolved.length === 0) return null;
+						const { fetchCodexAccountModels } = await import("../discovery/codex");
+						return fetchCodexAccountModels({
+							accounts: resolved,
+							clientVersion,
+							fetchFn: fetch,
+							onFailure: hooks?.onFailure,
+						});
+					},
+				}
+			: undefined),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Cursor
+// ---------------------------------------------------------------------------
+
+export interface CursorModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	clientVersion?: string;
+}
+
+// Bumped from `max-mode-v2` when the gateway-name prefix rewrite landed: every
+// `cursor-<vendor model>` row in an existing cache carries the 200k assumption for a
+// model whose real window is up to 1.05M, and a cached row is served for the full TTL.
+// A stale window is not cosmetic here, it decides when compaction fires.
+const CURSOR_CACHE_PROVIDER_ID = "cursor:max-mode-v3";
+
+export function resolveCursorCacheProviderId(_config?: CursorModelManagerConfig): string {
+	return CURSOR_CACHE_PROVIDER_ID;
+}
+
+export function cursorModelManagerOptions(config: CursorModelManagerConfig = {}): ModelManagerOptions<"cursor-agent"> {
+	const { apiKey, baseUrl, clientVersion } = config;
+	return {
+		providerId: "cursor",
+		cacheProviderId: CURSOR_CACHE_PROVIDER_ID,
+		...(apiKey
+			? {
+					fetchDynamicModels: async hooks => {
+						const { fetchCursorUsableModels } = await cursorDiscovery.value;
+						return fetchCursorUsableModels({ apiKey, baseUrl, clientVersion, onFailure: hooks?.onFailure });
+					},
+				}
+			: undefined),
+	};
+}
+
+const cursorDiscovery = lazy(() => import("../discovery/cursor"));
+
+// ---------------------------------------------------------------------------
+// GitLab Duo Workflow
+// ---------------------------------------------------------------------------
+
+export interface GitLabDuoWorkflowModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+	namespaceId?: string;
+	projectId?: string;
+	cwd?: string;
+}
+
+export function gitLabDuoWorkflowModelManagerOptions(
+	config: GitLabDuoWorkflowModelManagerConfig = {},
+): ModelManagerOptions<"gitlab-duo-agent"> {
+	const apiKey = config.apiKey;
+	return {
+		providerId: "gitlab-duo-agent",
+		// GitLab Duo discovery is credential- and namespace-specific
+		// (`aiChatAvailableModels(rootNamespaceId:)` also surfaces namespace-pinned
+		// models), so the default provider-id cache namespace would let a second
+		// account/namespace load the first one's authoritative model list at startup
+		// and skip refetching. Partition the cache by a non-reversible fingerprint of
+		// the exact inputs `fetchGitLabDuoWorkflowModels` resolves the namespace from
+		// (credential + base URL + namespace/project config + the same env vars + the
+		// effective workspace cwd whose git remote drives auto-discovery). Built-in
+		// discovery only passes apiKey/baseUrl/fetch, so the cwd/env terms — not the
+		// empty config fields — are what actually separate workspace A from B here.
+		// Falls back to the bare provider id when no credential is present.
+		...(apiKey ? { cacheProviderId: gitLabDuoWorkflowModelCacheProviderId(apiKey, config) } : undefined),
+		dynamicModelsAuthoritative: true,
+		staticModels: [
+			buildGitLabDuoWorkflowFallbackModel("claude_sonnet_4_6_vertex", "Claude Sonnet 4.6 - Vertex", config.baseUrl),
+		],
+		...(apiKey
+			? {
+					fetchDynamicModels: async hooks => {
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchGitLabDuoWorkflowModels } = await import("../discovery/gitlab-duo-workflow");
+						return fetchGitLabDuoWorkflowModels({
+							apiKey,
+							baseUrl: config.baseUrl,
+							fetch: config.fetch,
+							namespaceId: config.namespaceId,
+							projectId: config.projectId,
+							cwd: config.cwd,
+							onFailure: hooks?.onFailure,
+						});
+					},
+				}
+			: undefined),
+	};
+}
+
+function gitLabDuoWorkflowModelCacheProviderId(apiKey: string, config: GitLabDuoWorkflowModelManagerConfig): string {
+	// Mirror the exact inputs `discoverGitLabDuoWorkflowNamespace` keys off: explicit
+	// namespace/project config OR the same env vars, then the git remote at the
+	// effective cwd. Built-in discovery leaves the config fields empty, so the env +
+	// resolved cwd terms are what actually distinguish two workspaces sharing a token.
+	const namespaceId = config.namespaceId ?? Bun.env.GITLAB_DUO_NAMESPACE_ID ?? "";
+	const projectId = config.projectId ?? Bun.env.GITLAB_DUO_PROJECT_ID ?? Bun.env.GITLAB_DUO_PROJECT_PATH ?? "";
+	const cwd = config.cwd ?? process.cwd();
+	const scope = [config.baseUrl ?? "", namespaceId, projectId, cwd].join("\u0000");
+	return `gitlab-duo-agent:${Bun.hash(`${apiKey}\u0000${scope}`).toString(36)}`;
+}
+
+export function resolveGitLabDuoWorkflowCacheProviderId(config?: GitLabDuoWorkflowModelManagerConfig): string {
+	const apiKey = config?.apiKey;
+	return apiKey ? gitLabDuoWorkflowModelCacheProviderId(apiKey, config ?? {}) : "gitlab-duo-agent";
+}
+
+// Devin (Codeium Cascade)
+// ---------------------------------------------------------------------------
+
+export interface DevinModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: DevinModelDiscoveryOptions["fetch"];
+}
+
+export function devinModelManagerOptions(config: DevinModelManagerConfig = {}): ModelManagerOptions<"devin-agent"> {
+	const { apiKey, baseUrl, fetch } = config;
+	return {
+		providerId: "devin",
+		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
+		...(apiKey
+			? {
+					fetchDynamicModels: async hooks => {
+						const { fetchDevinModels } = await devinDiscovery.value;
+						return fetchDevinModels({ apiKey, baseUrl, fetch, onFailure: hooks?.onFailure });
+					},
+				}
+			: undefined),
+	};
+}
+
+const devinDiscovery = lazy(() => import("../discovery/devin"));
+// ---------------------------------------------------------------------------
+// Zai
+// ---------------------------------------------------------------------------
+
+export interface ZaiModelManagerConfig {}
+
+export function zaiModelManagerOptions(_config: ZaiModelManagerConfig = {}): ModelManagerOptions<"anthropic-messages"> {
+	return { providerId: "zai" };
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic role providers
+// ---------------------------------------------------------------------------
+
+export const LOCAL_STATIC_MODELS: readonly ModelSpec<"local-inference">[] = [
+	{
+		id: "kokoro",
+		name: "Kokoro-82M",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tts",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "parakeet-tdt-0.6b-v3",
+		name: "Parakeet TDT 0.6B v3",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "stt",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "whisper-base",
+		name: "Whisper Base",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "stt",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "whisper-small",
+		name: "Whisper Small",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "stt",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "whisper-large-v3-turbo",
+		name: "Whisper Large v3 Turbo",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "stt",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "lfm2.5-230m",
+		name: "LFM2.5 230M",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "lfm2.5-350m",
+		name: "LFM2.5 350M",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "falcon-h1-90m",
+		name: "Falcon H1 Tiny 90M",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "qwen3-1.7b",
+		name: "Qwen3 1.7B",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "llama3.2:3b",
+		name: "Llama 3.2 3B",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "gemma-3-1b",
+		name: "Gemma 3 1B",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "qwen2.5-1.5b",
+		name: "Qwen2.5 1.5B",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+	{
+		id: "lfm2-1.2b",
+		name: "LFM2 1.2B",
+		api: "local-inference",
+		provider: "local",
+		baseUrl: "local://inference",
+		kind: "tiny",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+];
+
+export function localModelManagerOptions(): ModelManagerOptions<"local-inference"> {
+	return {
+		providerId: "local",
+		staticModels: LOCAL_STATIC_MODELS,
+	};
+}
+
+export const WEB_STATIC_MODELS: readonly ModelSpec<"web-search">[] = [
+	"parallel",
+	"perplexity",
+	"zai",
+	"exa",
+	"tinyfish",
+	"jina",
+	"kagi",
+	"tavily",
+	"firecrawl",
+	"brave",
+	"kimi",
+	"synthetic",
+	"ollama",
+	"searxng",
+	"startpage",
+	"duckduckgo",
+	"ecosia",
+	"google",
+	"mojeek",
+	"public",
+].map(id => ({
+	id,
+	name: id === "public" ? "Public Web" : id === "zai" ? "Z.AI" : id.charAt(0).toUpperCase() + id.slice(1),
+	api: "web-search" as const,
+	provider: "web" as const,
+	baseUrl: "web://search",
+	kind: "search" as const,
+	reasoning: false,
+	input: ["text" as const],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: null,
+	maxTokens: null,
+}));
+
+export function webModelManagerOptions(): ModelManagerOptions<"web-search"> {
+	return {
+		providerId: "web",
+		staticModels: WEB_STATIC_MODELS,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// TypeSafe
+// ---------------------------------------------------------------------------
+
+export const TYPESAFE_STATIC_MODELS: readonly ModelSpec<"typesafe">[] = [
+	{
+		id: "jev-latest",
+		name: "TypeSafe jev",
+		api: "typesafe",
+		provider: "typesafe",
+		baseUrl: TYPESAFE_DEFAULT_BASE_URL,
+		kind: "judge",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	},
+];
+
+/** Credentials and endpoint overrides for the TypeSafe catalog manager. */
+export interface TypeSafeModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/** Discover account-visible judge models while keeping the bundled offline seed. */
+export function typesafeModelManagerOptions(config: TypeSafeModelManagerConfig = {}): ModelManagerOptions<"typesafe"> {
+	const { apiKey } = config;
+	const envBaseUrl = Bun.env.TYPESAFE_BASE_URL?.trim();
+	const baseUrl = trimTrailingSlashes(config.baseUrl ?? (envBaseUrl || TYPESAFE_DEFAULT_BASE_URL));
+	const staticModels = TYPESAFE_STATIC_MODELS.map(model => ({ ...model, baseUrl }));
+	return {
+		providerId: "typesafe",
+		staticModels,
+		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
+		...(apiKey
+			? {
+					fetchDynamicModels: async () => {
+						// Deferred import: static import pulls discovery into @veyyon/catalog/provider-models and inflates the reach graph.
+						const { fetchTypeSafeModels } = await import("../discovery/typesafe");
+						return fetchTypeSafeModels({
+							apiKey,
+							baseUrl,
+							fetch: config.fetch,
+						});
+					},
+				}
+			: undefined),
+	};
+}

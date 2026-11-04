@@ -1,0 +1,258 @@
+import { scheduler } from "node:timers/promises";
+import type { ApiKey, FetchImpl } from "@veyyon/ai";
+// The owner, not the barrel: `withAuth` is the only runtime name this file wants
+// from `@veyyon/ai`, and the barrel brings the streaming engine, the provider
+// registry and the model catalogue with it for a retry wrapper.
+import { withAuth } from "@veyyon/ai/auth-retry";
+import * as AIError from "@veyyon/ai/error";
+import { OPENROUTER_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { isRecord } from "@veyyon/utils/type-guards";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
+import { extractionModel } from "../../config";
+import { getMnemopiRuntimeOptions, type MnemopiProviderTextSanitizer } from "../runtime-options";
+import { extractionDiagnostics } from "./diagnostics";
+import { EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_TEMPLATE } from "./prompts";
+
+export const DEFAULT_EXTRACTION_MODEL = extractionModel();
+export const OPENROUTER_BASE_URL = trimTrailingSlashes(process.env.OPENROUTER_BASE_URL || OPENROUTER_API_ENDPOINT);
+export const FALLBACK_MODELS = ["google/gemini-flash-latest"] as const;
+const RATE_LIMIT_BACKOFF_BASE_MS = 1_000;
+const RATE_LIMIT_BACKOFF_MAX_MS = 30_000;
+const FALLBACK_MODEL_DELAY_MS = 1_000;
+
+export interface ChatMessage {
+	role: string;
+	content: string;
+}
+
+export interface ExtractedFact {
+	subject?: string;
+	predicate?: string;
+	object?: string;
+	timestamp?: string;
+	source?: number;
+	confidence?: number;
+	[key: string]: unknown;
+}
+
+export interface ExtractionClientOptions {
+	model?: string | null;
+	apiKey?: ApiKey | null;
+	baseUrl?: string | null;
+	fetch?: FetchImpl;
+	sanitizeProviderText?: MnemopiProviderTextSanitizer;
+}
+
+function authHeader(apiKey: string): Record<string, string> {
+	const headers: Record<string, string> = { "Content-Type": "application/json" };
+	if (apiKey !== "") {
+		headers.Authorization = `Bearer ${apiKey}`;
+	}
+	return headers;
+}
+
+function sanitizeBody(value: unknown, sanitize: MnemopiProviderTextSanitizer): unknown {
+	if (typeof value === "string") {
+		try {
+			return sanitize(value);
+		} catch {
+			throw new Error("Mnemopi provider text sanitization failed.");
+		}
+	}
+	if (Array.isArray(value)) return value.map(item => sanitizeBody(item, sanitize));
+	if (value === null || typeof value !== "object") return value;
+	const copy: Record<string, unknown> = {};
+	for (const [rawKey, child] of Object.entries(value)) {
+		let key: string;
+		try {
+			key = sanitize(rawKey);
+		} catch {
+			throw new Error("Mnemopi provider text sanitization failed.");
+		}
+		copy[key] = sanitizeBody(child, sanitize);
+	}
+	return copy;
+}
+
+export class ExtractionClient {
+	model: string;
+	apiKey: ApiKey;
+	baseUrl: string;
+	callCount = 0;
+	readonly #fetchImpl: FetchImpl;
+	sanitizeProviderText: MnemopiProviderTextSanitizer | undefined;
+
+	constructor(opts: ExtractionClientOptions = {}) {
+		this.model = opts.model || DEFAULT_EXTRACTION_MODEL;
+		this.apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
+		this.baseUrl = trimTrailingSlashes(opts.baseUrl || OPENROUTER_BASE_URL);
+		this.#fetchImpl = opts.fetch ?? fetch;
+		this.sanitizeProviderText = opts.sanitizeProviderText;
+	}
+
+	async chat(messages: readonly ChatMessage[], temperature = 0, maxTokens = 4096): Promise<string> {
+		const diag = extractionDiagnostics();
+		diag.recordAttempt("cloud");
+		const models = [this.model, ...FALLBACK_MODELS.filter(m => m !== this.model)];
+		let lastError: unknown = null;
+
+		for (const [modelIndex, model] of models.entries()) {
+			try {
+				// withAuth re-resolves the key on 401/usage-limit (force-refresh,
+				// then sibling rotation) when `apiKey` is a resolver; the 429
+				// backoff loop stays inside the attempt so rate-limit retries
+				// reuse the already-resolved key.
+				const result = await withAuth(this.apiKey, key =>
+					this.#callWithBackoff(model, messages, temperature, maxTokens, key),
+				);
+				if (result === "") {
+					diag.recordNoOutput("cloud");
+				}
+				return result;
+			} catch (exc) {
+				lastError = exc;
+			}
+			if (modelIndex + 1 < models.length) await scheduler.wait(FALLBACK_MODEL_DELAY_MS);
+		}
+
+		diag.recordFailure("cloud", lastError, "all_models_failed");
+		return "";
+	}
+
+	/** Call one model, retrying a usage-limit or transient failure for up to three attempts with exponential backoff. */
+	async #callWithBackoff(
+		model: string,
+		messages: readonly ChatMessage[],
+		temperature: number,
+		maxTokens: number,
+		key: string,
+	): Promise<string> {
+		let rateLimitError: unknown = null;
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			try {
+				return await this.callApi(model, messages, temperature, maxTokens, key);
+			} catch (exc) {
+				const flags = AIError.classify(exc);
+				if (!AIError.is(flags, AIError.Flag.UsageLimit) && !AIError.is(flags, AIError.Flag.Transient)) throw exc;
+				rateLimitError = exc;
+				if (attempt + 1 < 3) {
+					await scheduler.wait(
+						exponentialBackoffDelay(attempt, {
+							baseMs: RATE_LIMIT_BACKOFF_BASE_MS,
+							maxMs: RATE_LIMIT_BACKOFF_MAX_MS,
+							jitter: 0,
+						}),
+					);
+				}
+			}
+		}
+		throw rateLimitError;
+	}
+
+	async callApi(
+		model: string,
+		messages: readonly ChatMessage[],
+		temperature: number,
+		maxTokens: number,
+		apiKey = "",
+	): Promise<string> {
+		// The fence spans the body read too: a stalled response stream is only
+		// interrupted by the armed signal, and the timer is cleared on settle.
+		const data = await withScopedTimeoutSignal(60000, async signal => {
+			const rawBody = { model, messages, temperature, max_tokens: maxTokens };
+			const sanitize = this.sanitizeProviderText ?? getMnemopiRuntimeOptions()?.llm?.sanitizeProviderText;
+			const body = sanitize === undefined ? rawBody : sanitizeBody(rawBody, sanitize);
+			const response = await this.#fetchImpl(`${this.baseUrl}/chat/completions`, {
+				method: "POST",
+				headers: authHeader(apiKey),
+				body: JSON.stringify(body),
+				signal,
+			});
+			if (!response.ok) {
+				throw new Error(`${response.status} ${response.statusText}`.trim());
+			}
+			return (await response.json()) as {
+				choices?: Array<{ message?: { content?: unknown } }>;
+			};
+		});
+		this.callCount += 1;
+		const content = data.choices?.[0]?.message?.content;
+		return typeof content === "string" ? content : "";
+	}
+
+	async extractFacts(messages: readonly ChatMessage[]): Promise<ExtractedFact[]> {
+		const conversationText = conversationTranscript(messages);
+		if (conversationText.trim() === "") {
+			return [];
+		}
+
+		// Use a replacement function, not a string: a string replacement makes
+		// String.prototype.replace interpret `$$`, `$&`, `` $` ``, `$'`, and `$n`
+		// in the conversation text as special patterns. Conversation content
+		// routinely contains `$` (shell snippets, regex, prices), which would
+		// otherwise corrupt the prompt by splicing the match or template prefix.
+		const userPrompt = EXTRACTION_USER_TEMPLATE.replace("{conversation_text}", () => conversationText);
+		const response = await this.chat(
+			[
+				{ role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+				{ role: "user", content: userPrompt },
+			],
+			0,
+			4096,
+		);
+
+		const diag = extractionDiagnostics();
+		if (response === "") {
+			diag.recordCall({ succeeded: false, allEmpty: true });
+			return [];
+		}
+
+		let facts: ExtractedFact[] | "no_facts_in_response" | "invalid_facts_response";
+		try {
+			facts = factsInResponse(response);
+		} catch (exc) {
+			diag.recordFailure("cloud", exc, "json_parse_failed");
+			diag.recordCall({ succeeded: false });
+			return [];
+		}
+		if (typeof facts === "string") {
+			diag.recordFailure("cloud", undefined, facts);
+			diag.recordCall({ succeeded: false, allEmpty: true });
+			return [];
+		}
+		diag.recordSuccess("cloud", facts.length);
+		diag.recordCall({ succeeded: true });
+		return facts;
+	}
+}
+
+function conversationTranscript(messages: readonly ChatMessage[]): string {
+	let text = "";
+	for (let i = 0; i < messages.length; i += 1) {
+		const msg = messages[i];
+		if (msg === undefined) continue;
+		const content = msg.content.trim();
+		if (content !== "") text += `[${i}] [${msg.role || "unknown"}]: ${content}\n`;
+	}
+	return text;
+}
+
+/**
+ * The facts array between the response's first `[` and last `]`; throws when that span is not JSON.
+ *
+ * Every entry has to be an object, and the array being an array is not enough. A model that
+ * returns `[{"subject":"Ada"},null,"not a fact",[]]` produced valid JSON and invalid facts; without
+ * the check the nulls and strings reached storage and failed there, a decoding fault reported as a
+ * database fault. The response is rejected as a whole rather than filtered, because a response
+ * this malformed is not one whose remaining facts can be trusted.
+ */
+function factsInResponse(response: string): ExtractedFact[] | "no_facts_in_response" | "invalid_facts_response" {
+	const jsonStart = response.indexOf("[");
+	const jsonEnd = response.lastIndexOf("]") + 1;
+	if (jsonStart < 0 || jsonEnd <= jsonStart) return "no_facts_in_response";
+	const facts = JSON.parse(response.slice(jsonStart, jsonEnd)) as unknown;
+	if (!Array.isArray(facts)) return "no_facts_in_response";
+	return facts.every(fact => isRecord(fact)) ? (facts as ExtractedFact[]) : "invalid_facts_response";
+}

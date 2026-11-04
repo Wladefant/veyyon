@@ -1,0 +1,73 @@
+import { describe, expect, it } from "bun:test";
+import { shouldSkipHistory } from "@veyyon/coding-agent/modes/terminal/controllers/prompt-submission";
+
+describe("shouldSkipHistory — security filter for slash command history", () => {
+	it("skips /login with a redirect URL argument (contains OAuth code/state)", () => {
+		expect(shouldSkipHistory("/login http://localhost:1455/auth/callback?code=abc&state=xyz")).toBe(true);
+	});
+
+	it("does not skip /login without arguments (triggers provider selector)", () => {
+		expect(shouldSkipHistory("/login")).toBe(false);
+	});
+
+	it("skips /login with any argument (provider name or callback — all forms can carry secrets)", () => {
+		// parseCallbackInput() accepts redirect URLs, query strings, and raw auth codes.
+		// All /login-with-args are skipped to prevent any OAuth secret leakage.
+		expect(shouldSkipHistory("/login anthropic")).toBe(true);
+		expect(shouldSkipHistory("/login ?code=abc&state=xyz")).toBe(true);
+		expect(shouldSkipHistory("/login raw-auth-code-xyz")).toBe(true);
+	});
+
+	it("skips /login when colon-separated (parseSlashCommand treats : as separator)", () => {
+		// /login:?code=abc&state=xyz — the colon is a valid separator, so the
+		// command name is "login" and the args carry the OAuth secret.
+		expect(shouldSkipHistory("/login:?code=abc&state=xyz")).toBe(true);
+		expect(shouldSkipHistory("/login:auth-code-xyz")).toBe(true);
+	});
+
+	it("skips /join with a link argument (carries 32-byte room key and write token)", () => {
+		expect(shouldSkipHistory("/join veyyon://share/abc123def456...")).toBe(true);
+		expect(shouldSkipHistory("/join veyyon:abc123def456...")).toBe(true);
+	});
+
+	it("does not skip /join without arguments", () => {
+		expect(shouldSkipHistory("/join")).toBe(false);
+	});
+
+	it("skips /mcp add carrying a token, in the plain-word grammar and the removed dashed one", () => {
+		expect(shouldSkipHistory("/mcp add myserver url http://x token sk-secret123")).toBe(true);
+		expect(shouldSkipHistory("/mcp add myserver --url http://x --token sk-secret123")).toBe(true);
+	});
+
+	it("does not skip a /mcp add that carries no credential", () => {
+		expect(shouldSkipHistory("/mcp add myserver url http://x")).toBe(false);
+	});
+
+	/**
+	 * The tail of a credential-bearing command is read against that command's own
+	 * word vocabulary, and anything else is treated as a secret. A typo is the case
+	 * a name-matching allowlist cannot see: `tokn sk-secret123` names no credential
+	 * option, so only failing closed keeps it out of history.
+	 */
+	it("skips a /mcp add whose tail is not a shape the grammar reads", () => {
+		expect(shouldSkipHistory("/mcp add myserver url http://x tokn sk-secret123")).toBe(true);
+		expect(shouldSkipHistory("/mcp add myserver --url http://x")).toBe(true);
+	});
+
+	it("does not skip /mcp without add subcommand", () => {
+		expect(shouldSkipHistory("/mcp list")).toBe(false);
+		expect(shouldSkipHistory("/mcp reload")).toBe(false);
+	});
+
+	it("does not skip ordinary slash commands", () => {
+		expect(shouldSkipHistory("/plan do something")).toBe(false);
+		expect(shouldSkipHistory("/settings")).toBe(false);
+		expect(shouldSkipHistory("/btw what is this")).toBe(false);
+		expect(shouldSkipHistory("/model claude")).toBe(false);
+	});
+
+	it("returns false for non-slash text", () => {
+		expect(shouldSkipHistory("just a prompt")).toBe(false);
+		expect(shouldSkipHistory("")).toBe(false);
+	});
+});

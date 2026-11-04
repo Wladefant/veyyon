@@ -1,0 +1,257 @@
+# Extension Loading (TypeScript/JavaScript Modules)
+
+This document covers how the coding agent discovers and loads **extension modules** (`.ts`/`.js`) at startup.
+
+It does **not** cover `gemini-extension.json` manifest extensions (documented separately).
+
+## What this subsystem does
+
+Extension loading builds a list of module entry files, imports each module with Bun, executes its factory, and returns:
+
+- loaded extension definitions
+- per-path load errors (without aborting the whole load)
+- a shared extension runtime object used later by `ExtensionRunner`
+
+## Primary implementation files
+
+- `src/extensibility/extensions/loader.ts`: path discovery + import/execution
+- `src/extensibility/extensions/index.ts`: public exports
+- `src/extensibility/extensions/runner.ts`: runtime/event execution after load
+- `src/discovery/builtin.ts`: native auto-discovery provider for extension modules
+- `src/config/settings.ts`: loads merged `extensions` / `disabledExtensions` settings
+
+---
+
+## Inputs to extension loading
+
+### 1) Auto-discovered native extension modules
+
+`discoverAndLoadExtensions()` first asks discovery for `extension-module` capability items, scoped to the `native` provider. The capability also has claude/codex/gemini/opencode providers, and their items were discarded here anyway, so the provider filter is passed into the load and those four directory walks never run.
+
+Native `extension-module` discovery comes from one place:
+
+- User directory: `~/.veyyon/profiles/default/agent/extensions`
+- Native legacy/settings JSON entries: `~/.veyyon/profiles/default/agent/settings.json#extensions`
+
+The user root is the active profile's agent directory via `getAgentDir()`, so under `veyyon --profile <name>` it becomes `~/.veyyon/profiles/<name>/agent/extensions` (and it honors `VEYYON_CODING_AGENT_DIR`). See [Profiles](../handbook/src/architecture/config.md#profiles). There is no project root: `<cwd>/.veyyon/extensions` and `<cwd>/.veyyon/settings.json#extensions` used to be read, and are not any more, because a checked-in file must not hand the agent executable modules.
+
+Notes:
+
+- Native auto-discovery is `.veyyon` based (`CONFIG_DIR_NAME`, one owner in `@veyyon/utils` dirs.ts).
+- Package manifests read the `veyyon` key first, then legacy `omp` / `pi` (`MANIFEST_KEYS` in `src/extensibility/manifest-key.ts`). Neither `.omp/` nor `.pi/` directories are native roots.
+
+### 2) Discovered JS/TS hook factories
+
+After native auto-discovery, `discoverAndLoadExtensions()` also appends JS/TS hook factories from the `hook` capability, any hook whose entry path is a `.ts`/`.js` file, so they load through the same module pipeline.
+
+Hook-capability loading already applies its own hook-specific disabled ids, so these paths are not additionally filtered by `disabledExtensions` extension-module names.
+
+### 3) Installed plugin extension entries
+
+After hook discovery, `discoverAndLoadExtensions()` appends extension entry points from enabled installed plugins via `getAllPluginExtensionPaths(cwd)`.
+
+Plugin extension entries come from package `veyyon.extensions` manifests (legacy `omp.extensions` / `pi.extensions`), including enabled feature entries.
+
+### 4) Explicitly configured paths
+
+After plugin extension entries, configured paths are appended and resolved.
+
+Configured path sources in the main session startup path (`sdk.ts`):
+
+1. CLI-provided paths (`--extension/-e`, and `--hook` is also treated as an extension path)
+2. Merged settings `extensions` array
+
+Settings files:
+
+- User: `~/.veyyon/profiles/default/agent/config.yml` (or custom agent dir via `VEYYON_CODING_AGENT_DIR`)
+
+Native extension-module discovery also reads the legacy JSON extension list from:
+
+- `~/.veyyon/profiles/default/agent/settings.json`
+
+Examples:
+
+```yaml
+# ~/.veyyon/profiles/default/agent/config.yml
+extensions:
+  - ~/my-exts/safety.ts
+  - ./local/ext-pack
+```
+
+```json
+{
+  "extensions": ["./.veyyon/extensions/my-extra"]
+}
+```
+
+---
+
+## Enable/disable controls
+
+### Disable discovery
+
+- CLI: `--no-extensions`
+- SDK option: `disableExtensionDiscovery`
+
+Behavior split:
+
+- SDK: when `disableExtensionDiscovery=true`, it still loads `additionalExtensionPaths` via `loadExtensions()`.
+- CLI path building (`main.ts`) currently clears CLI extension paths when `--no-extensions` is set, so explicit `-e/--hook` are not forwarded in that mode.
+
+### Disable specific extension modules
+
+`disabledExtensions` setting filters by extension id format:
+
+- `extension-module:<derivedName>`
+
+`derivedName` is based on entry path (`getExtensionNameFromPath`), for example:
+
+- `/x/foo.ts` -> `foo`
+- `/x/bar/index.ts` -> `bar`
+
+Example:
+
+```yaml
+disabledExtensions:
+  - extension-module:foo
+```
+
+---
+
+## Path and entry resolution
+
+### Path normalization
+
+For configured paths:
+
+1. Normalize unicode spaces
+2. Expand `~`
+3. If relative, resolve against current `cwd`
+
+### If configured path is a file
+
+It is used directly as a module entry candidate.
+
+### If configured path is a directory
+
+Resolution order:
+
+1. `package.json` in that directory with `veyyon.extensions` (or legacy `omp.extensions` / `pi.extensions`) -> use declared entries
+2. `index.ts`
+3. `index.js`
+4. Otherwise scan one level for extension entries:
+   - direct `*.ts` / `*.js`
+   - subdir `index.ts` / `index.js`
+   - subdir `package.json` with `veyyon.extensions` (or legacy keys)
+
+Rules and constraints:
+
+- no recursive discovery beyond one subdirectory level
+- declared `extensions` manifest entries are resolved relative to that package directory
+- declared entries are included only if file exists/access is allowed
+- in `*/index.{ts,js}` pairs, TypeScript is preferred over JavaScript
+- symlinks are treated as eligible files/directories
+
+### Ignore behavior differs by source
+
+- Both native auto-discovery and explicit configured-directory scanning use the same `discoverExtensionModulePaths` glob walk (single owner, discovery helpers; the separate `readdir` walk was removed). It runs with `gitignore: false` and `hidden: false` (gitignore filtering is deliberately disabled so gitignored `extensions/` folders still load).
+
+---
+
+## Load order and precedence
+
+`discoverAndLoadExtensions()` builds one ordered list and then calls `loadExtensions()`.
+
+Order:
+
+1. Native auto-discovered modules
+2. Discovered JS/TS hook factories
+3. Installed plugin extension entries
+4. Explicit configured paths (in provided order)
+
+In `sdk.ts`, configured order is:
+
+1. CLI additional paths
+2. Settings `extensions`
+
+De-duplication:
+
+- absolute path based
+- first seen path wins
+- later duplicates are ignored
+
+Implication: if the same module path is both auto-discovered and explicitly configured, it is loaded once at the first position (auto-discovered stage).
+
+---
+
+## Module import and factory contract
+
+Each candidate path is loaded via `loadLegacyPiModule()` (`src/extensibility/plugins/legacy-pi-compat.ts`):
+
+- the entry's realpath is resolved, then dynamically imported with an `?mtime` cache-buster so edited source reloads
+- a scoped Bun `onLoad` hook rewrites legacy pi-package specifiers (`@mariozechner/*`, `@earendil-works/*`) and bare `@sinclair/typebox` onto the host-bundled copies before evaluation
+- factory is selected by `getExtensionFactory(module)`: the module itself if it is a function, otherwise `module.default`
+- factory must be a function (`ExtensionFactory`)
+
+If export is not a function, that path fails with a structured error and loading continues.
+
+---
+
+## Failure handling and isolation
+
+### During loading
+
+Per extension path, failures are captured as `{ path, error }` and do not stop other paths from loading.
+
+Common cases:
+
+- import failure / missing file
+- invalid factory export (non-function)
+- exception thrown while executing factory
+
+### Runtime isolation model
+
+- Extensions are **not sandboxed** (same process/runtime).
+- They share one `EventBus` and one `ExtensionRuntime` instance.
+- During load, runtime action methods intentionally throw `ExtensionRuntimeNotInitializedError`; action wiring happens later in `ExtensionRunner.initialize()`.
+
+### After loading
+
+When events run through `ExtensionRunner`, handler exceptions are caught and emitted as extension errors instead of crashing the runner loop.
+
+---
+
+## Minimal layout example
+
+```text
+~/.veyyon/profiles/default/agent/
+  config.yml
+  extensions/
+    guardrails.ts
+    audit/
+      index.ts
+```
+
+An extension package can also carry a `package.json` manifest:
+
+`audit/package.json`:
+
+```json
+{
+  "veyyon": {
+    "extensions": ["./src/check-a.ts", "./src/check-b.js"]
+  }
+}
+```
+
+Legacy manifest key still accepted:
+
+```json
+{
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
+```
+
+*Verified against `7e4c6374` on 2026-08-06.*

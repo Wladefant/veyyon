@@ -1,0 +1,1344 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
+import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
+import { errorMessage, getProjectDir, isCancellation, isTimeoutError, logger, postmortem } from "@veyyon/utils";
+import { Settings } from "../config/settings";
+import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
+import { OutputSink } from "../session/streaming-output";
+import { ProducerOutputGuard } from "../secrets/producer-output";
+import type { ToolSession } from "../tools";
+import { inlineBudgetFor } from "../tools/core/output-artifact";
+import {
+	type OutputArtifactError,
+	resolveOutputMaxColumns,
+	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkHeadBytes,
+} from "../tools/core/output-meta";
+import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, isEvalTimeoutControlEvent } from "./bridge-timeout";
+import type { JsStatusEvent } from "./js/shared/types";
+import {
+	KERNEL_SHUTDOWN_GRACE_MS,
+	type KernelEnvPatch,
+	type KernelExecutor,
+	type KernelStartOptions,
+	releaseKernel,
+	type SessionKernel,
+	UnconfirmedKernelStartupError,
+} from "./kernel-base";
+import { ensureKernelToolBridge, type KernelToolBridgeInfo, registerKernelToolBridge } from "./kernel-tool-bridge";
+import type { KernelDisplayOutput } from "./py/display";
+
+/**
+ * Constructor for a language executor's cancellation error. Each backend
+ * subclasses {@link Error} and carries a `timedOut` flag distinguishing a
+ * deadline expiry from a plain abort.
+ */
+export type CancelledErrorClass = new (timedOut: boolean) => Error & { timedOut: boolean };
+
+export class KernelExecutionCancelledError extends Error {
+	readonly timedOut: boolean;
+
+	constructor(timedOut: boolean) {
+		super(timedOut ? "Command timed out" : "Command aborted");
+		this.name = timedOut ? "TimeoutError" : "AbortError";
+		this.timedOut = timedOut;
+	}
+}
+
+/**
+ * Options every kernel-backed language executor shares. Per-language option
+ * interfaces structurally extend this; the base executor only reads these.
+ */
+/**
+ * Whether a language's kernel outlives one eval call.
+ *
+ * `session` keeps one kernel per session, so a later cell sees variables an earlier one defined, which
+ * is what makes eval feel like a notebook. `per-call` starts a kernel, runs the cell and shuts it down,
+ * so nothing carries over: the choice a user makes when they want a run to be reproducible rather than
+ * cumulative, or when leftover state from an earlier cell is what is confusing them.
+ *
+ * One type for every language, because it is one user-facing concept. Python owned a
+ * `PythonKernelMode` alias of exactly this shape while Ruby and Julia had no concept at all, so the
+ * setting existed for one language out of three.
+ */
+export type KernelMode = "session" | "per-call";
+
+export interface KernelExecutorBaseOptions {
+	cwd?: string;
+	timeoutMs?: number;
+	deadlineMs?: number;
+	idleTimeoutMs?: number;
+	onChunk?: (chunk: string) => Promise<void> | void;
+	signal?: AbortSignal;
+	onStatus?: (event: JsStatusEvent) => void;
+	emitStatus?: (event: JsStatusEvent) => void;
+	toolSession?: ToolSession;
+	bridgeSessionId?: string;
+	artifactId?: string;
+	artifactPath?: string;
+	sessionId?: string;
+	kernelOwnerId?: string;
+	kernelMode?: KernelMode;
+	interpreter?: string;
+	reset?: boolean;
+	sessionFile?: string;
+	artifactsDir?: string;
+	localRoots?: Record<string, string>;
+	bridge?: KernelToolBridgeInfo;
+	env?: KernelEnvPatch;
+}
+
+/** Normalised execution result produced by {@link executeWithKernelBase}. */
+export interface KernelExecutionResult {
+	output: string;
+	exitCode: number | undefined;
+	cancelled: boolean;
+	truncated: boolean;
+	artifactId?: string | undefined;
+	artifactElidedBytes?: number;
+	artifactError?: OutputArtifactError;
+	totalLines: number;
+	totalBytes: number;
+	outputLines: number;
+	outputBytes: number;
+	displayOutputs: KernelDisplayOutput[];
+	stdinRequested: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Cancellation helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * The absolute cwd a cell runs in.
+ *
+ * One owner for all three managed runtimes, so `./foo` and `/abs/foo` resolve
+ * to the same directory wherever a cwd is compared or sent to a kernel.
+ */
+export function normalizeSessionCwd(cwd: string): string {
+	return path.resolve(cwd);
+}
+
+/**
+ * The key a retained kernel session is stored under: the session id, the
+ * explicit interpreter if the caller named one, and otherwise the part of the
+ * cwd that selects the default runtime (a project venv for Python, nothing for
+ * Ruby and Julia).
+ *
+ * The cwd itself is not part of the key. Every runner applies the cwd sent with
+ * each cell, so one kernel serves a session in any directory and keeps its
+ * variables across a directory change. A cwd in the key started a kernel per
+ * directory and kept every earlier one alive until the session ended.
+ *
+ * Python, Ruby and Julia each had their own copy of this, and the copies had
+ * drifted in two ways that both cost a kernel:
+ *
+ *  - Python and Ruby canonicalised the interpreter with `realpath`, so
+ *    `/usr/bin/python3` and the versioned binary it links to keyed the same
+ *    session. Julia only called `path.resolve`, which does not follow a
+ *    symlink, so reaching the same Julia through a link started a SECOND kernel
+ *    that shared no state with the first.
+ *  - Julia joined the parts with `::`, which can occur inside a session id or a
+ *    path, so two different sessions could in principle produce one key. The NUL
+ *    byte the other two used cannot appear in either.
+ *
+ * The unified version canonicalises and uses NUL, so all three behave the way
+ * the two that were checked did.
+ */
+export function buildEvalSessionKey(options: {
+	sessionId: string;
+	cwd: string;
+	/** The interpreter the caller asked for, or undefined to let the runtime choose. */
+	interpreter: string | undefined;
+	/** The language's own explicit-runtime resolution, e.g. `resolveExplicitPythonRuntime`. */
+	resolveInterpreterPath: (interpreter: string, cwd: string) => string;
+	/**
+	 * What in `cwd` selects the runtime when no interpreter is named, or undefined
+	 * when the default runtime does not depend on the cwd.
+	 */
+	resolveDefaultRuntimeScope?: (cwd: string) => string;
+}): string {
+	const cwd = normalizeSessionCwd(options.cwd);
+	if (options.interpreter === undefined) {
+		return `${options.sessionId}\0\0${options.resolveDefaultRuntimeScope?.(cwd) ?? ""}`;
+	}
+	const resolved = options.resolveInterpreterPath(options.interpreter, cwd);
+	// A path that cannot be canonicalised is keyed as written. This is not a
+	// fallback to a different mechanism: the string is only ever a map key, and
+	// an interpreter that does not exist yet gets its own key either way. The
+	// failure surfaces where it matters, when the kernel is started.
+	let interpreter: string;
+	try {
+		interpreter = fs.realpathSync.native(resolved);
+	} catch {
+		interpreter = resolved;
+	}
+	return `${options.sessionId}\0${interpreter}\0`;
+}
+
+export function getExecutionDeadlineMs(options?: { deadlineMs?: number; timeoutMs?: number }): number | undefined {
+	if (options?.deadlineMs !== undefined) return options.deadlineMs;
+	if (options?.timeoutMs === undefined) return undefined;
+	return Date.now() + options.timeoutMs;
+}
+
+export function getRemainingTimeoutMs(deadlineMs?: number): number | undefined {
+	if (deadlineMs === undefined) return undefined;
+	return deadlineMs - Date.now();
+}
+export function requireRemainingTimeoutMs(
+	deadlineMs?: number,
+	cancelledErrorClass?: CancelledErrorClass,
+): number | undefined {
+	const remainingMs = getRemainingTimeoutMs(deadlineMs);
+	if (remainingMs === undefined) return undefined;
+	if (remainingMs <= 0) {
+		if (cancelledErrorClass) {
+			throw new cancelledErrorClass(true);
+		}
+		const error = new Error("Command timed out");
+		error.name = "TimeoutError";
+		throw error;
+	}
+	return remainingMs;
+}
+
+/**
+ * True when an error means the execution was cancelled or timed out, either through
+ * the kernel's own error class or through a standard abort/timeout.
+ *
+ * The standard half is {@link isCancellation} from `@veyyon/utils`, the repo-wide
+ * owner: this function adds only the kernel-specific class the caller passes in.
+ */
+export function isCancellationError(error: unknown, cancelledErrorClass: CancelledErrorClass): boolean {
+	return error instanceof cancelledErrorClass || isCancellation(error);
+}
+
+export function isTimedOutCancellation(
+	error: unknown,
+	cancelledErrorClass: CancelledErrorClass,
+	signal?: AbortSignal,
+): boolean {
+	if (error instanceof cancelledErrorClass) return error.timedOut;
+	// The error itself, or the reason the signal carries: `AbortSignal.timeout()` fires an
+	// abort whose reason is the TimeoutError, so the deadline is only visible there.
+	return isTimeoutError(error) || isTimeoutError(signal?.reason);
+}
+
+export async function waitForPromiseWithCancellation<T>(
+	promise: Promise<T>,
+	options: { signal?: AbortSignal; deadlineMs?: number },
+	cancelledErrorClass: CancelledErrorClass,
+): Promise<T> {
+	// Every exit below, including the early throws, abandons `promise` before the `.then` at the end can
+	// observe it. The caller built it a moment ago (a kernel start that rejects with the aborted signal's
+	// reason), so an abandoned rejection would surface as a process-fatal unhandled rejection. The cell
+	// reports the cancellation; the outcome of the abandoned work has nowhere left to go.
+	promise.catch(() => {});
+	if (options.signal?.aborted) {
+		throw new cancelledErrorClass(isTimedOutCancellation(options.signal.reason, cancelledErrorClass, options.signal));
+	}
+	const remainingMs = getRemainingTimeoutMs(options.deadlineMs);
+	if (remainingMs !== undefined && remainingMs <= 0) {
+		throw new cancelledErrorClass(true);
+	}
+	if (!options.signal && remainingMs === undefined) {
+		return await promise;
+	}
+
+	const { promise: resultPromise, resolve, reject } = Promise.withResolvers<T>();
+	const cleanups: Array<() => void> = [];
+	const finish = (cb: () => void): void => {
+		while (cleanups.length > 0) cleanups.pop()?.();
+		cb();
+	};
+	if (options.signal) {
+		const onAbort = (): void =>
+			finish(() =>
+				reject(
+					new cancelledErrorClass(
+						isTimedOutCancellation(options.signal?.reason, cancelledErrorClass, options.signal),
+					),
+				),
+			);
+		options.signal.addEventListener("abort", onAbort, { once: true });
+		cleanups.push(() => options.signal?.removeEventListener("abort", onAbort));
+	}
+	if (remainingMs !== undefined) {
+		const timer = setTimeout(() => finish(() => reject(new cancelledErrorClass(true))), remainingMs);
+		timer.unref();
+		cleanups.push(() => clearTimeout(timer));
+	}
+	promise.then(
+		value => finish(() => resolve(value)),
+		err => finish(() => reject(err)),
+	);
+	return await resultPromise;
+}
+
+interface BridgeAbortShield {
+	signal: AbortSignal | undefined;
+	abortRequested: boolean;
+	timedOut: boolean;
+	handleStatus?: (event: JsStatusEvent) => void;
+	dispose?: () => void;
+}
+
+function createBridgeAbortShield(source: AbortSignal | undefined): BridgeAbortShield {
+	const shield: BridgeAbortShield = {
+		signal: undefined,
+		abortRequested: false,
+		timedOut: false,
+	};
+	if (!source) return shield;
+
+	const controller = new AbortController();
+	let pauseDepth = 0;
+	let abortReason: unknown;
+	let removeAbortListener: (() => void) | undefined;
+
+	const requestAbort = (reason: unknown): void => {
+		shield.abortRequested = true;
+		shield.timedOut = shield.timedOut || isTimeoutError(reason);
+		abortReason = reason;
+		if (pauseDepth > 0 || controller.signal.aborted) return;
+		controller.abort(reason);
+	};
+
+	const onAbort = (): void => {
+		const reason = source.reason;
+		requestAbort(reason);
+	};
+
+	shield.signal = controller.signal;
+	shield.handleStatus = (event: JsStatusEvent): void => {
+		if (event.deferExternalAbort !== true) return;
+		if (event.op === EVAL_TIMEOUT_PAUSE_OP) {
+			pauseDepth++;
+			return;
+		}
+		if (event.op !== EVAL_TIMEOUT_RESUME_OP || pauseDepth === 0) return;
+		pauseDepth--;
+		if (shield.abortRequested && !controller.signal.aborted) controller.abort(abortReason);
+	};
+	shield.dispose = (): void => {
+		removeAbortListener?.();
+		removeAbortListener = undefined;
+	};
+
+	if (source.aborted) {
+		requestAbort(source.reason);
+	} else {
+		source.addEventListener("abort", onAbort, { once: true });
+		removeAbortListener = () => {
+			source.removeEventListener("abort", onAbort);
+		};
+		if (source.aborted) {
+			source.removeEventListener("abort", onAbort);
+			removeAbortListener = undefined;
+			requestAbort(source.reason);
+		}
+	}
+
+	return shield;
+}
+
+export function createCancelledKernelResult(output: string): KernelExecutionResult {
+	const outputBytes = Buffer.byteLength(output, "utf-8");
+	const outputLines = output.length > 0 ? 1 : 0;
+	return {
+		output,
+		exitCode: undefined,
+		cancelled: true,
+		truncated: false,
+		artifactId: undefined,
+		totalLines: outputLines,
+		totalBytes: outputBytes,
+		outputLines,
+		outputBytes,
+		displayOutputs: [],
+		stdinRequested: false,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Timeout annotations (shared by every kernel executor: python, ruby, ...)
+// ---------------------------------------------------------------------------
+
+/** Whole seconds for a timeout label, floored at 1 so a sub-second budget never reads "0 seconds". */
+export function timeoutSeconds(timeoutMs: number): number {
+	return Math.max(1, Math.round(timeoutMs / 1000));
+}
+
+/**
+ * One-line "command timed out" annotation for a cancelled kernel cell. Always a
+ * string: with no known budget it states the bare timeout, otherwise it names
+ * the whole-second budget.
+ */
+export function formatTimeoutAnnotation(timeoutMs?: number): string {
+	if (timeoutMs === undefined) return "Command timed out";
+	return `Command timed out after ${timeoutSeconds(timeoutMs)} seconds`;
+}
+
+/**
+ * Richer annotation for a kernel-level timeout that distinguishes a killed
+ * kernel (state gone, will be recreated) from an interrupted-but-alive kernel.
+ */
+export function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean): string {
+	if (kernelKilled) {
+		return "eval cell timed out and the kernel was unresponsive to interrupt; the kernel has been killed and will be recreated on the next call.";
+	}
+	const duration = timeoutMs === undefined ? "the configured timeout" : `${timeoutSeconds(timeoutMs)}s`;
+	return `eval cell timed out after ${duration}; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`;
+}
+
+// ---------------------------------------------------------------------------
+// Managed environment helpers
+// ---------------------------------------------------------------------------
+
+export const MANAGED_KERNEL_ENV_KEYS = [
+	"VEYYON_SESSION_FILE",
+	"VEYYON_ARTIFACTS_DIR",
+	"VEYYON_TOOL_BRIDGE_URL",
+	"VEYYON_TOOL_BRIDGE_TOKEN",
+	"VEYYON_TOOL_BRIDGE_SESSION",
+	"VEYYON_EVAL_LOCAL_ROOTS",
+	"VEYYON_EVAL_SESSION_ID",
+] as const;
+
+interface ManagedKernelEnvOptions {
+	sessionFile?: string;
+	artifactsDir?: string;
+	/** The eval session's stable id; the `kv` store keys its file by it, bridge or no bridge. */
+	evalSessionId?: string;
+	sessionId?: string;
+	bridgeSessionId?: string;
+	bridge?: { url: string; token: string };
+	localRoots?: Record<string, string>;
+}
+
+export function buildManagedKernelEnvPatch(options: ManagedKernelEnvOptions): Record<string, string | null> {
+	const localRoots = options.localRoots;
+	return {
+		VEYYON_SESSION_FILE: options.sessionFile ?? null,
+		VEYYON_ARTIFACTS_DIR: options.artifactsDir ?? null,
+		VEYYON_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
+		VEYYON_TOOL_BRIDGE_TOKEN: options.bridge?.token ?? null,
+		VEYYON_TOOL_BRIDGE_SESSION: options.bridge && options.bridgeSessionId ? options.bridgeSessionId : null,
+		VEYYON_EVAL_LOCAL_ROOTS: localRoots && Object.keys(localRoots).length > 0 ? JSON.stringify(localRoots) : null,
+		VEYYON_EVAL_SESSION_ID: options.evalSessionId ?? options.sessionId ?? null,
+	};
+}
+
+export function buildManagedKernelEnv(options: ManagedKernelEnvOptions): Record<string, string> | undefined {
+	const patch = buildManagedKernelEnvPatch(options);
+	const env: Record<string, string> = {};
+	let hasKeys = false;
+	for (const key of MANAGED_KERNEL_ENV_KEYS) {
+		const value = patch[key];
+		if (value !== null) {
+			env[key] = value;
+			hasKeys = true;
+		}
+	}
+	return hasKeys ? env : undefined;
+}
+
+export function attachSessionOwner(
+	session: { ownerIds: Set<string>; hasFallbackOwner: boolean },
+	sessionId: string,
+	ownerId: string | undefined,
+): void {
+	if (ownerId !== undefined) {
+		if (session.hasFallbackOwner) {
+			session.ownerIds.delete(sessionId);
+			session.hasFallbackOwner = false;
+		}
+		session.ownerIds.add(ownerId);
+		return;
+	}
+	if (session.hasFallbackOwner || session.ownerIds.size === 0) {
+		session.ownerIds.add(sessionId);
+		session.hasFallbackOwner = true;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Base executor implementation
+// ---------------------------------------------------------------------------
+
+export interface ExecuteWithKernelBaseParams<
+	TOptions extends KernelExecutorBaseOptions,
+	TEnv extends KernelEnvPatch = Record<string, string | null>,
+> {
+	kernel: KernelExecutor;
+	code: string;
+	options: TOptions | undefined;
+	/** Prefix for the per-execution run id (e.g. `"py"`, `"rb"`, `"jl"`). */
+	runIdPrefix: string;
+	/** Human-readable language label used in the failure log line. */
+	errorLogLabel: string;
+	/**
+	 * Julia surfaces eval-timeout control events through its normal status path,
+	 * so they must NOT be filtered out the way the JS-status backends do.
+	 */
+	isJulia?: boolean;
+	cancelledErrorClass: CancelledErrorClass;
+	buildKernelEnvPatch: (options: TOptions) => TEnv;
+	formatKernelTimeoutAnnotation: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
+	formatTimeoutAnnotation: (executionTimeoutMs: number | undefined) => string | undefined;
+	/**
+	 * Override how the wall-clock deadline is derived from options. Defaults to
+	 * {@link getExecutionDeadlineMs}; Julia passes the pre-computed `deadlineMs`
+	 * straight through instead of re-deriving from `timeoutMs`.
+	 */
+	resolveDeadlineMs?: (options: TOptions | undefined) => number | undefined;
+}
+
+export async function executeWithKernelBase<
+	TOptions extends KernelExecutorBaseOptions,
+	TEnv extends KernelEnvPatch = Record<string, string | null>,
+>(params: ExecuteWithKernelBaseParams<TOptions, TEnv>): Promise<KernelExecutionResult> {
+	const {
+		kernel,
+		code,
+		options,
+		runIdPrefix,
+		errorLogLabel,
+		isJulia,
+		cancelledErrorClass,
+		buildKernelEnvPatch,
+		formatKernelTimeoutAnnotation,
+		formatTimeoutAnnotation,
+		resolveDeadlineMs,
+	} = params;
+
+	const settings = await Settings.init();
+	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText),
+		onChunk: options?.onChunk,
+		artifactPath: options?.artifactPath,
+		artifactId: options?.artifactId,
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(settings),
+		// Priced by how long the result will sit in context, through the same
+		// owner every other tool uses. Without this the sink keeps a flat 50KB
+		// tail, which is why eval results reached 71KB and then cost a re-read on
+		// every subsequent turn. A session-less caller gets the flat budget.
+		...(options?.toolSession ? { spillThreshold: inlineBudgetFor(options.toolSession) } : {}),
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
+	});
+
+	const displayOutputs: KernelDisplayOutput[] = [];
+	const deadlineMs = (resolveDeadlineMs ?? getExecutionDeadlineMs)(options);
+	let executionTimeoutMs: number | undefined;
+	const abortShield = createBridgeAbortShield(options?.signal);
+
+	const collectDisplay = (output: KernelDisplayOutput): void => {
+		if (output.type === "json") {
+			try {
+				const serialized = JSON.stringify(output.data);
+				const filtered = new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText).sanitize(serialized);
+				output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
+			} catch {
+				output = { type: "json", data: "[credential output withheld]" };
+			}
+		}
+		if (output.type === "status") {
+			if (output.event.op === "env" && "value" in output.event) {
+				output = {
+					...output,
+					event: {
+						...output.event,
+						key: typeof output.event.key === "string" ? redactUsageText(output.event.key, []) : undefined,
+						value: redactUsageText("<redacted>", []),
+					},
+				};
+			}
+			abortShield.handleStatus?.(output.event);
+			options?.onStatus?.(output.event);
+			if (!isJulia && isEvalTimeoutControlEvent(output.event)) return;
+		}
+		displayOutputs.push(output);
+	};
+
+	const emitStatus: (event: JsStatusEvent) => void =
+		options?.emitStatus ?? (event => collectDisplay({ type: "status", event }));
+	const runId = `${runIdPrefix}-${crypto.randomUUID()}`;
+	const unregisterBridge =
+		options?.toolSession && options?.bridgeSessionId
+			? registerKernelToolBridge(options.bridgeSessionId, runId, {
+					toolSession: options.toolSession,
+					signal: abortShield.signal,
+					emitStatus,
+					abortRequested: () => {
+						return abortShield.abortRequested;
+					},
+				})
+			: null;
+
+	try {
+		const remainingMs = getRemainingTimeoutMs(deadlineMs);
+		if (remainingMs !== undefined) {
+			if (remainingMs <= 0) {
+				throw new cancelledErrorClass(true);
+			}
+			executionTimeoutMs = remainingMs;
+		}
+
+		const result = await kernel.execute(code, {
+			cwd: options?.cwd,
+			env: buildKernelEnvPatch(options ?? ({} as TOptions)),
+			id: runId,
+			signal: abortShield.signal,
+			timeoutMs: executionTimeoutMs,
+			onChunk: text => sink.push(text),
+			onDisplay: output => collectDisplay(output),
+		});
+
+		if (result.cancelled && result.kernelKilled && !result.timedOut && !abortShield.abortRequested) {
+			throw new Error(`${errorLogLabel} kernel exited during execution`);
+		}
+
+		if (result.cancelled || abortShield.abortRequested) {
+			const timedOut = result.timedOut || abortShield.timedOut;
+			const annotation = timedOut
+				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
+				: undefined;
+			const dumped = await sink.dumpWithArtifactStatus(annotation);
+			return {
+				exitCode: undefined,
+				cancelled: true,
+				truncated: dumped.truncated,
+				output: dumped.output,
+				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
+				totalLines: dumped.totalLines,
+				totalBytes: dumped.totalBytes,
+				outputLines: dumped.outputLines,
+				outputBytes: dumped.outputBytes,
+				displayOutputs,
+				stdinRequested: !!result.stdinRequested,
+			};
+		}
+
+		if (result.stdinRequested) {
+			const dumped = await sink.dumpWithArtifactStatus(
+				"Kernel requested stdin; interactive input is not supported.",
+			);
+			return {
+				exitCode: 1,
+				cancelled: false,
+				truncated: dumped.truncated,
+				output: dumped.output,
+				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
+				totalLines: dumped.totalLines,
+				totalBytes: dumped.totalBytes,
+				outputLines: dumped.outputLines,
+				outputBytes: dumped.outputBytes,
+				displayOutputs,
+				stdinRequested: true,
+			};
+		}
+
+		const exitCode = result.status === "ok" ? 0 : 1;
+		const dumped = await sink.dumpWithArtifactStatus();
+		return {
+			exitCode,
+			cancelled: false,
+			truncated: dumped.truncated,
+			output: dumped.output,
+			artifactId: dumped.artifactId ?? undefined,
+			artifactElidedBytes: dumped.artifactElidedBytes,
+			artifactError: dumped.artifactError,
+			totalLines: dumped.totalLines,
+			totalBytes: dumped.totalBytes,
+			outputLines: dumped.outputLines,
+			outputBytes: dumped.outputBytes,
+			displayOutputs,
+			stdinRequested: false,
+		};
+	} catch (err) {
+		if (isCancellationError(err, cancelledErrorClass) || abortShield.abortRequested || abortShield.signal?.aborted) {
+			const timedOut = abortShield.timedOut || isTimedOutCancellation(err, cancelledErrorClass, abortShield.signal);
+			const dumped = await sink.dumpWithArtifactStatus(
+				timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
+			);
+			return {
+				exitCode: undefined,
+				cancelled: true,
+				truncated: dumped.truncated,
+				output: dumped.output,
+				artifactId: dumped.artifactId ?? undefined,
+				artifactElidedBytes: dumped.artifactElidedBytes,
+				artifactError: dumped.artifactError,
+				totalLines: dumped.totalLines,
+				totalBytes: dumped.totalBytes,
+				outputLines: dumped.outputLines,
+				outputBytes: dumped.outputBytes,
+				displayOutputs,
+				stdinRequested: false,
+			};
+		}
+		const error = err instanceof Error ? err : new Error(String(err));
+		logger.error(`${errorLogLabel} execution failed`, { error: error.message });
+		throw error;
+	} finally {
+		unregisterBridge?.();
+		abortShield.dispose?.();
+	}
+}
+
+export interface SessionOwnerState {
+	ownerIds: Set<string>;
+	hasFallbackOwner: boolean;
+}
+
+export interface ManagedKernelSession<TKernel extends SessionKernel = SessionKernel> extends SessionOwnerState {
+	sessionKey: string;
+	sessionId: string;
+	cwd: string;
+	kernel: TKernel;
+}
+
+export interface StartingManagedKernelSession<TKernel extends SessionKernel = SessionKernel> extends SessionOwnerState {
+	promise: Promise<ManagedKernelSession<TKernel>>;
+	/** Startup belongs to the shared session, not to any one waiter's cancellation or deadline. */
+	startupAbort: AbortController;
+	/** Callers currently awaiting this startup, by owner key. An owner leaves only with its last waiter. */
+	waiters: Map<string, number>;
+	/** Owners explicitly released during startup, distinct from fallback-owner adoption. */
+	disposedOwnerIds: Set<string>;
+}
+
+export interface KernelSessionPoolOptions<
+	TOptions extends KernelExecutorBaseOptions,
+	TKernel extends SessionKernel = SessionKernel,
+> {
+	languageName: string;
+	logLabel: string;
+	cancelledErrorClass?: CancelledErrorClass;
+	startKernel: (cwd: string, options: TOptions) => Promise<TKernel>;
+	shutdownGraceMs?: number;
+	warnOnDiedSubprocess?: boolean;
+}
+
+export class KernelSessionPool<
+	TOptions extends KernelExecutorBaseOptions,
+	TKernel extends SessionKernel = SessionKernel,
+> {
+	readonly #sessions = new Map<string, ManagedKernelSession<TKernel>>();
+	readonly #startingSessions = new Map<string, StartingManagedKernelSession<TKernel>>();
+	readonly #resettingSessions = new Map<string, Promise<void>>();
+	readonly #transitions = new Map<string, Promise<void>>();
+	readonly #retiring = new Set<ManagedKernelSession<TKernel>>();
+	readonly #failedStartups = new Map<string, ManagedKernelSession<SessionKernel>>();
+	readonly #options: KernelSessionPoolOptions<TOptions, TKernel>;
+	readonly #cancelledErrorClass: CancelledErrorClass;
+
+	constructor(options: KernelSessionPoolOptions<TOptions, TKernel>) {
+		this.#options = options;
+		this.#cancelledErrorClass = options.cancelledErrorClass ?? KernelExecutionCancelledError;
+	}
+
+	get sessions(): Map<string, ManagedKernelSession<TKernel>> {
+		return this.#sessions;
+	}
+
+	get startingSessions(): Map<string, StartingManagedKernelSession<TKernel>> {
+		return this.#startingSessions;
+	}
+
+	get resettingSessions(): Map<string, Promise<void>> {
+		return this.#resettingSessions;
+	}
+
+	hasSession(sessionKey: string, session: ManagedKernelSession<TKernel>): boolean {
+		return this.#sessions.get(sessionKey) === session;
+	}
+
+	async acquireSession(
+		sessionKey: string,
+		sessionId: string,
+		cwd: string,
+		options: TOptions,
+	): Promise<ManagedKernelSession<TKernel>> {
+		const existing = this.#sessions.get(sessionKey);
+		const transition = this.#transitions.get(sessionKey);
+		if (transition) {
+			await waitForPromiseWithCancellation(transition, options, this.#cancelledErrorClass);
+			return await this.acquireSession(sessionKey, sessionId, cwd, options);
+		}
+		if (this.#failedStartups.has(sessionKey)) {
+			await this.#retireFailedStartup(sessionKey);
+			return await this.acquireSession(sessionKey, sessionId, cwd, options);
+		}
+		if (existing && this.#retiring.has(existing)) {
+			await this.#retireSession(existing);
+			return await this.acquireSession(sessionKey, sessionId, cwd, options);
+		}
+		if (existing) {
+			attachSessionOwner(existing, sessionId, options.kernelOwnerId);
+			this.#logOwnership(existing, "owned");
+			return existing;
+		}
+
+		const ownerKey = options.kernelOwnerId ?? sessionId;
+		const inFlight = this.#startingSessions.get(sessionKey);
+		if (inFlight) {
+			if (inFlight.startupAbort.signal.aborted) {
+				await waitForPromiseWithCancellation(
+					inFlight.promise.catch(() => undefined),
+					options,
+					this.#cancelledErrorClass,
+				);
+				return await this.acquireSession(sessionKey, sessionId, cwd, options);
+			}
+			attachSessionOwner(inFlight, sessionId, options.kernelOwnerId);
+			return await this.#awaitStartup(sessionKey, inFlight, ownerKey, options);
+		}
+
+		let startingSession!: StartingManagedKernelSession<TKernel>;
+		const startupAbort = new AbortController();
+		const startPromise = (async () => {
+			const kernel = await this.#options.startKernel(cwd, {
+				...options,
+				signal: startupAbort.signal,
+				deadlineMs: undefined,
+			});
+			const session: ManagedKernelSession<TKernel> = {
+				sessionKey,
+				sessionId,
+				cwd,
+				kernel,
+				ownerIds: startingSession.ownerIds,
+				hasFallbackOwner: startingSession.hasFallbackOwner,
+			};
+			if (startingSession.ownerIds.size === 0) {
+				// Keep the old runner discoverable until its OS exit is confirmed.
+				this.#sessions.set(sessionKey, session);
+				await this.#retireSession(session);
+				return session;
+			}
+			if (this.#startingSessions.get(sessionKey) === startingSession) {
+				this.#sessions.set(sessionKey, session);
+				this.#logOwnership(session, "owned");
+			}
+			return session;
+		})().catch(error => {
+			throw this.#retainFailedStartup(error, sessionKey, sessionId, cwd, startingSession);
+		});
+
+		startingSession = {
+			ownerIds: new Set(),
+			hasFallbackOwner: false,
+			promise: startPromise,
+			startupAbort,
+			waiters: new Map(),
+			disposedOwnerIds: new Set(),
+		};
+		attachSessionOwner(startingSession, sessionId, options.kernelOwnerId);
+		this.#startingSessions.set(sessionKey, startingSession);
+		void startPromise
+			.finally(() => {
+				if (this.#startingSessions.get(sessionKey) === startingSession) {
+					this.#startingSessions.delete(sessionKey);
+				}
+			})
+			.catch(() => {});
+		return await this.#awaitStartup(sessionKey, startingSession, ownerKey, options);
+	}
+
+	async #awaitStartup(
+		sessionKey: string,
+		starting: StartingManagedKernelSession<TKernel>,
+		ownerKey: string,
+		options: TOptions,
+	): Promise<ManagedKernelSession<TKernel>> {
+		starting.waiters.set(ownerKey, (starting.waiters.get(ownerKey) ?? 0) + 1);
+		let left = true;
+		const leave = (): number => {
+			left = false;
+			const remaining = (starting.waiters.get(ownerKey) ?? 1) - 1;
+			if (remaining > 0) starting.waiters.set(ownerKey, remaining);
+			else starting.waiters.delete(ownerKey);
+			return remaining;
+		};
+		try {
+			const session = await waitForPromiseWithCancellation(starting.promise, options, this.#cancelledErrorClass);
+			if (starting.disposedOwnerIds.has(ownerKey)) throw new this.#cancelledErrorClass(false);
+			return session;
+		} catch (error) {
+			if (leave() === 0) starting.ownerIds.delete(ownerKey);
+			if (starting.ownerIds.size === 0) starting.startupAbort.abort(error);
+			const session = this.#sessions.get(sessionKey);
+			if (session?.ownerIds === starting.ownerIds && session.ownerIds.size === 0 && starting.waiters.size === 0) {
+				await this.resetSession(sessionKey);
+			}
+			throw error;
+		} finally {
+			if (left) leave();
+		}
+	}
+
+	async replaceSessionKernel(session: ManagedKernelSession<TKernel>, cwd: string, options: TOptions): Promise<void> {
+		const oldKernel = session.kernel;
+		let pending = this.#transitions.get(session.sessionKey);
+		while (pending) {
+			await pending;
+			if (session.kernel !== oldKernel) return;
+			pending = this.#transitions.get(session.sessionKey);
+		}
+		this.#retiring.add(session);
+		const replacing = (async () => {
+			if (this.#failedStartups.has(session.sessionKey)) await this.#confirmFailedStartupShutdown(session.sessionKey);
+			await this.#confirmShutdown(session, getRemainingTimeoutMs(options.deadlineMs));
+			if (!this.hasSession(session.sessionKey, session)) throw new this.#cancelledErrorClass(false);
+			requireRemainingTimeoutMs(options.deadlineMs, this.#cancelledErrorClass);
+			let nextKernel: TKernel;
+			try {
+				nextKernel = await this.#options.startKernel(cwd, options);
+			} catch (error) {
+				throw this.#retainFailedStartup(error, session.sessionKey, session.sessionId, cwd, session);
+			}
+			session.kernel = nextKernel;
+			this.#retiring.delete(session);
+			this.#logOwnership(session, "owned");
+		})();
+		this.#transitions.set(session.sessionKey, replacing);
+		try {
+			await replacing;
+		} finally {
+			if (this.#transitions.get(session.sessionKey) === replacing) this.#transitions.delete(session.sessionKey);
+		}
+	}
+
+	#logOwnership(session: ManagedKernelSession<SessionKernel>, state: "owned" | "retiring" | "released"): void {
+		logger.info("eval kernel session ownership", {
+			language: this.#options.languageName,
+			pid: session.kernel.processId,
+			sessionId: session.sessionId,
+			ownerIds: [...session.ownerIds],
+			state,
+		});
+	}
+
+	async #confirmShutdown(session: ManagedKernelSession<SessionKernel>, remainingMs?: number): Promise<void> {
+		this.#logOwnership(session, "retiring");
+		const grace = this.#options.shutdownGraceMs ?? KERNEL_SHUTDOWN_GRACE_MS;
+		const result = await session.kernel.shutdown({ timeoutMs: Math.max(0, Math.min(grace, remainingMs ?? grace)) });
+		if (!result.confirmed) {
+			throw new Error(`${this.#options.languageName} kernel shutdown was not confirmed; replacement refused`);
+		}
+	}
+
+	#retainFailedStartup(
+		error: unknown,
+		sessionKey: string,
+		sessionId: string,
+		cwd: string,
+		owners: SessionOwnerState,
+	): unknown {
+		if (!(error instanceof UnconfirmedKernelStartupError)) return error;
+		this.#failedStartups.set(sessionKey, {
+			sessionKey,
+			sessionId,
+			cwd,
+			kernel: error.kernel,
+			ownerIds: new Set(owners.ownerIds),
+			hasFallbackOwner: owners.hasFallbackOwner,
+		});
+		return error.cause;
+	}
+
+	async #confirmFailedStartupShutdown(sessionKey: string): Promise<void> {
+		const session = this.#failedStartups.get(sessionKey);
+		if (!session) return;
+		await this.#confirmShutdown(session);
+		if (this.#failedStartups.get(sessionKey) === session) this.#failedStartups.delete(sessionKey);
+		this.#logOwnership(session, "released");
+	}
+
+	async #retireFailedStartup(sessionKey: string): Promise<void> {
+		const pending = this.#transitions.get(sessionKey);
+		if (pending) await pending;
+		if (!this.#failedStartups.has(sessionKey)) return;
+		const retiring = this.#confirmFailedStartupShutdown(sessionKey);
+		this.#transitions.set(sessionKey, retiring);
+		try {
+			await retiring;
+		} finally {
+			if (this.#transitions.get(sessionKey) === retiring) this.#transitions.delete(sessionKey);
+		}
+	}
+
+	async #disposeFailedStartups(ownerId?: string): Promise<void> {
+		const failed = [...this.#failedStartups.values()].filter(
+			session => !ownerId || session.ownerIds.size === 0 || session.ownerIds.has(ownerId),
+		);
+		const results = await Promise.allSettled(failed.map(session => this.#retireFailedStartup(session.sessionKey)));
+		for (let i = 0; i < results.length; i += 1) {
+			const result = results[i];
+			if (result.status === "rejected") {
+				logger.warn(`${this.#options.languageName} failed startup shutdown not confirmed`, {
+					sessionKey: failed[i].sessionKey,
+					reason: result.reason,
+				});
+			}
+		}
+	}
+
+	async #retireSession(session: ManagedKernelSession<TKernel>): Promise<void> {
+		const pending = this.#transitions.get(session.sessionKey);
+		if (pending) await pending;
+		if (!this.hasSession(session.sessionKey, session)) return;
+		this.#retiring.add(session);
+		const retiring = (async () => {
+			await this.#confirmShutdown(session);
+			if (this.hasSession(session.sessionKey, session)) this.#sessions.delete(session.sessionKey);
+			this.#retiring.delete(session);
+			this.#logOwnership(session, "released");
+		})();
+		this.#transitions.set(session.sessionKey, retiring);
+		try {
+			await retiring;
+		} finally {
+			if (this.#transitions.get(session.sessionKey) === retiring) this.#transitions.delete(session.sessionKey);
+		}
+	}
+
+	async resetSession(sessionKey: string): Promise<void> {
+		const session =
+			this.#sessions.get(sessionKey) ??
+			(await this.#startingSessions.get(sessionKey)?.promise.catch(() => undefined));
+		if (this.#failedStartups.has(sessionKey)) await this.#retireFailedStartup(sessionKey);
+		if (!session) return;
+		await this.#retireSession(session);
+	}
+
+	async disposeAll(): Promise<void> {
+		const pending = [...this.#startingSessions.values()].map(starting => starting.promise);
+		const started = await Promise.allSettled(pending);
+		await this.#disposeFailedStartups();
+		const all = [...this.#sessions.entries()];
+		for (const result of started) {
+			if (result.status !== "fulfilled") continue;
+			if (!all.some(([, session]) => session === result.value)) {
+				all.push([result.value.sessionKey, result.value]);
+			}
+		}
+		const results = await Promise.allSettled(all.map(([, session]) => this.#retireSession(session)));
+		for (let i = 0; i < all.length; i += 1) {
+			const [id, session] = all[i];
+			const result = results[i];
+			if (result.status === "fulfilled") continue;
+			const reason = result.status === "rejected" ? result.reason : "not confirmed";
+			logger.warn(`${this.#options.languageName} kernel shutdown not confirmed`, {
+				sessionId: session.sessionId,
+				sessionKey: id,
+				cwd: session.cwd,
+				reason,
+			});
+		}
+	}
+
+	async disposeByOwner(ownerId: string): Promise<void> {
+		const failedDisposal = this.#failedStartups.size ? this.#disposeFailedStartups(ownerId) : undefined;
+		const toShutdown: ManagedKernelSession<TKernel>[] = [];
+		for (const session of [...this.#sessions.values()]) {
+			if (!session.ownerIds.has(ownerId)) continue;
+			if (session.ownerIds.size === 1) {
+				toShutdown.push(session);
+				continue;
+			}
+			session.ownerIds.delete(ownerId);
+			this.#logOwnership(session, "owned");
+		}
+		for (const [sessionKey, starting] of [...this.#startingSessions.entries()]) {
+			if (this.#sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
+			starting.ownerIds.delete(ownerId);
+			starting.disposedOwnerIds.add(ownerId);
+			if (starting.ownerIds.size === 0) starting.startupAbort.abort(new this.#cancelledErrorClass(false));
+			// Keep startup visible until its eventual runner exits. Another live
+			// owner may still join this startup without creating a second process.
+		}
+		const results = await Promise.allSettled(toShutdown.map(session => this.#retireSession(session)));
+		for (let i = 0; i < toShutdown.length; i += 1) {
+			const session = toShutdown[i];
+			const result = results[i];
+			if (result.status === "fulfilled") {
+				session.ownerIds.delete(ownerId);
+				continue;
+			}
+			const reason = result.status === "rejected" ? result.reason : "not confirmed";
+			logger.warn(`${this.#options.languageName} kernel shutdown not confirmed`, {
+				sessionId: session.sessionId,
+				sessionKey: session.sessionKey,
+				cwd: session.cwd,
+				reason,
+			});
+		}
+		await failedDisposal;
+	}
+}
+
+export interface KernelExecutionDriverOptions<
+	TOptions extends KernelExecutorBaseOptions,
+	TKernel extends SessionKernel = SessionKernel,
+> {
+	languageName: string;
+	logLabel: string;
+	runIdPrefix: string;
+	disposerName: string;
+	cancelledErrorClass?: CancelledErrorClass;
+	kernelClass?: { start: (options: KernelStartOptions) => Promise<TKernel> };
+	startKernel?: (cwd: string, options: TOptions) => Promise<TKernel>;
+	checkKernelAvailability: (cwd: string, interpreter?: string) => Promise<{ ok: boolean; reason?: string }>;
+	resolveInterpreterPath: (interpreter: string, cwd: string) => string;
+	/** See `buildEvalSessionKey`: what in a cwd selects the default runtime, when anything does. */
+	resolveDefaultRuntimeScope?: (cwd: string) => string;
+	buildKernelEnvPatch?: (options: TOptions) => Record<string, string | null | undefined>;
+	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
+	formatTimeoutAnnotation?: (executionTimeoutMs: number | undefined) => string | undefined;
+	createCancelledResult?: (timedOut: boolean, timeoutMs?: number) => KernelExecutionResult;
+	resolveDeadlineMs?: (options?: TOptions) => number | undefined;
+	isJulia?: boolean;
+	shutdownGraceMs?: number;
+	warnOnDiedSubprocess?: boolean;
+}
+
+export interface KernelExecutionDriver<
+	TOptions extends KernelExecutorBaseOptions,
+	TKernel extends SessionKernel = SessionKernel,
+> {
+	readonly pool: KernelSessionPool<TOptions, TKernel>;
+	executeWithKernel(kernel: KernelExecutor, code: string, options?: TOptions): Promise<KernelExecutionResult>;
+	execute(code: string, options?: TOptions): Promise<KernelExecutionResult>;
+	disposeAll(): Promise<void>;
+	disposeByOwner(ownerId: string): Promise<void>;
+}
+
+export function createKernelExecutionDriver<
+	TOptions extends KernelExecutorBaseOptions,
+	TKernel extends SessionKernel = SessionKernel,
+>(config: KernelExecutionDriverOptions<TOptions, TKernel>): KernelExecutionDriver<TOptions, TKernel> {
+	const {
+		languageName,
+		logLabel,
+		runIdPrefix,
+		disposerName,
+		cancelledErrorClass = KernelExecutionCancelledError,
+		kernelClass,
+		startKernel = async (cwd: string, options: TOptions): Promise<TKernel> => {
+			if (!kernelClass) {
+				throw new Error(`Neither startKernel nor kernelClass provided for ${languageName}`);
+			}
+			return await kernelClass.start({
+				cwd,
+				env: buildManagedKernelEnv(options),
+				signal: options.signal,
+				deadlineMs: options.deadlineMs,
+				interpreter: options.interpreter,
+				sessionId: options.sessionId ?? `session:${cwd}`,
+				kernelOwnerId: options.kernelOwnerId,
+				adoptPid: sessionCpuAdoption(() => options.toolSession?.getSessionId?.() ?? null),
+			});
+		},
+		checkKernelAvailability,
+		resolveInterpreterPath,
+		resolveDefaultRuntimeScope,
+		buildKernelEnvPatch = opts => ({
+			...buildManagedKernelEnvPatch({ ...opts, evalSessionId: opts.sessionId }),
+			...(opts.env ?? {}),
+		}),
+		formatKernelTimeoutAnnotation: formatKernelTimeout = formatKernelTimeoutAnnotation,
+		formatTimeoutAnnotation: formatTimeout = formatTimeoutAnnotation,
+		createCancelledResult = (timedOut, timeoutMs) =>
+			createCancelledKernelResult(timedOut ? (formatTimeout(timeoutMs) ?? "") : ""),
+		resolveDeadlineMs: customResolveDeadlineMs,
+		isJulia,
+		shutdownGraceMs,
+		warnOnDiedSubprocess,
+	} = config;
+
+	const pool = new KernelSessionPool<TOptions, TKernel>({
+		languageName,
+		logLabel,
+		cancelledErrorClass,
+		startKernel,
+		shutdownGraceMs,
+		warnOnDiedSubprocess,
+	});
+
+	async function executeWithKernel(
+		kernel: KernelExecutor,
+		code: string,
+		options: TOptions | undefined,
+	): Promise<KernelExecutionResult> {
+		return executeWithKernelBase<TOptions>({
+			kernel,
+			code,
+			options,
+			runIdPrefix,
+			errorLogLabel: languageName,
+			isJulia,
+			cancelledErrorClass,
+			buildKernelEnvPatch: buildKernelEnvPatch as (options: TOptions) => Record<string, string | null>,
+			formatKernelTimeoutAnnotation: formatKernelTimeout,
+			formatTimeoutAnnotation: formatTimeout,
+			resolveDeadlineMs: customResolveDeadlineMs,
+		});
+	}
+
+	async function ensureKernelAvailable(cwd: string, options: TOptions): Promise<void> {
+		const availability = await waitForPromiseWithCancellation(
+			checkKernelAvailability(cwd, options.interpreter),
+			options,
+			cancelledErrorClass,
+		);
+		if (!availability.ok) {
+			throw new Error(availability.reason ?? `${languageName} kernel unavailable`);
+		}
+	}
+
+	async function ensureToolBridge(options: TOptions): Promise<void> {
+		if (!options.toolSession || options.bridge) return;
+		try {
+			options.bridge = await ensureKernelToolBridge();
+		} catch (err) {
+			logger.warn(`Failed to start ${languageName} tool bridge`, {
+				error: errorMessage(err),
+			});
+		}
+	}
+
+	async function executePerCall(code: string, cwd: string, options: TOptions): Promise<KernelExecutionResult> {
+		if (options.bridge && !options.bridgeSessionId) {
+			options.bridgeSessionId = `${runIdPrefix}-bridge:${crypto.randomUUID()}`;
+		}
+		const kernel = await startKernel(cwd, options);
+		try {
+			return await executeWithKernel(kernel, code, { ...options, cwd });
+		} finally {
+			await releaseKernel(kernel, `${logLabel}-one-shot-finished`);
+		}
+	}
+
+	async function executeOnSession(code: string, cwd: string, options: TOptions): Promise<KernelExecutionResult> {
+		const sessionId = options.sessionId ?? `session:${cwd}`;
+		const sessionKey = buildEvalSessionKey({
+			sessionId,
+			cwd,
+			interpreter: options.interpreter,
+			resolveInterpreterPath,
+			resolveDefaultRuntimeScope,
+		});
+		if (options.bridge && !options.bridgeSessionId) {
+			options.bridgeSessionId = sessionId;
+		}
+		if (options.reset) {
+			const inFlight = pool.resettingSessions.get(sessionKey);
+			if (inFlight) await inFlight;
+			else {
+				const resetPromise = pool.resetSession(sessionKey);
+				pool.resettingSessions.set(sessionKey, resetPromise);
+				try {
+					await resetPromise;
+				} finally {
+					pool.resettingSessions.delete(sessionKey);
+				}
+			}
+		} else {
+			const inFlight = pool.resettingSessions.get(sessionKey);
+			if (inFlight) await inFlight;
+		}
+		const session = await pool.acquireSession(sessionKey, sessionId, cwd, options);
+		if (options.signal?.aborted) {
+			throw new cancelledErrorClass(
+				isTimedOutCancellation(options.signal.reason, cancelledErrorClass, options.signal),
+			);
+		}
+		if (!pool.hasSession(session.sessionKey, session)) {
+			throw new cancelledErrorClass(false);
+		}
+		if (!session.kernel.isAlive()) {
+			await pool.replaceSessionKernel(session, cwd, options);
+			if (!pool.hasSession(session.sessionKey, session)) {
+				throw new cancelledErrorClass(false);
+			}
+		}
+		const runOptions = { ...options, cwd };
+		try {
+			return await executeWithKernel(session.kernel, code, runOptions);
+		} catch (err) {
+			if (isCancellationError(err, cancelledErrorClass) || options.signal?.aborted) throw err;
+			if (session.kernel.isAlive()) throw err;
+			if (!pool.hasSession(session.sessionKey, session)) {
+				throw new cancelledErrorClass(false);
+			}
+			await pool.replaceSessionKernel(session, cwd, options);
+			if (!pool.hasSession(session.sessionKey, session)) {
+				throw new cancelledErrorClass(false);
+			}
+			return await executeWithKernel(session.kernel, code, runOptions);
+		}
+	}
+
+	async function execute(code: string, options?: TOptions): Promise<KernelExecutionResult> {
+		const cwd = normalizeSessionCwd(options?.cwd ?? getProjectDir());
+		const deadlineMs = (customResolveDeadlineMs ?? getExecutionDeadlineMs)(options);
+		const executionOptions = {
+			...(options ?? {}),
+			cwd,
+			deadlineMs,
+		} as TOptions;
+
+		await gateSessionCpuSpawn(options?.toolSession?.getSessionId?.() ?? null, `a ${languageName} eval cell`);
+		try {
+			requireRemainingTimeoutMs(deadlineMs, cancelledErrorClass);
+			if (executionOptions.signal?.aborted) {
+				throw new cancelledErrorClass(
+					isTimedOutCancellation(executionOptions.signal.reason, cancelledErrorClass, executionOptions.signal),
+				);
+			}
+			await ensureKernelAvailable(cwd, executionOptions);
+			await ensureToolBridge(executionOptions);
+
+			const kernelMode = executionOptions.kernelMode ?? "session";
+			if (kernelMode === "per-call") {
+				return await executePerCall(code, cwd, executionOptions);
+			}
+			return await executeOnSession(code, cwd, executionOptions);
+		} catch (err) {
+			if (isCancellationError(err, cancelledErrorClass) || executionOptions.signal?.aborted) {
+				return createCancelledResult(
+					isTimedOutCancellation(err, cancelledErrorClass, executionOptions.signal),
+					options?.timeoutMs,
+				);
+			}
+			throw err;
+		}
+	}
+
+	const disposeAll = () => pool.disposeAll();
+	const disposeByOwner = (ownerId: string) => pool.disposeByOwner(ownerId);
+
+	registerOwnedResourceDisposer({
+		name: disposerName,
+		scope: "eval-kernel-owner",
+		dispose: disposeByOwner,
+	});
+	postmortem.register(`${logLabel}-cleanup`, disposeAll);
+
+	return {
+		pool,
+		executeWithKernel,
+		execute,
+		disposeAll,
+		disposeByOwner,
+	};
+}

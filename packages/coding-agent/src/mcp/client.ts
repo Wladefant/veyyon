@@ -1,0 +1,708 @@
+/**
+ * MCP Client.
+ *
+ * Handles connection initialization, tool listing, and tool calling.
+ */
+
+import * as path from "node:path";
+import * as url from "node:url";
+import { errorMessage, getProjectDir, logger, withTimeout } from "@veyyon/utils";
+import { MCP_PROTOCOL_VERSION } from "./protocol-version";
+import { describeMCPTimeout, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "./timeout";
+import { MAX_TOOL_LIST_PAGES, validateToolListPage } from "./tool-list-validation";
+import { createHttpTransport } from "./transports/http";
+import { createSseTransport } from "./transports/sse";
+import { createStdioTransport, StdioTransport } from "./transports/stdio";
+import type {
+	MCPEventDescriptor,
+	MCPEventOccurrence,
+	MCPEventsListResult,
+	MCPEventsPollResult,
+	MCPGetPromptParams,
+	MCPGetPromptResult,
+	MCPHttpServerConfig,
+	MCPInitializeParams,
+	MCPInitializeResult,
+	MCPPrompt,
+	MCPPromptsListResult,
+	MCPRequestOptions,
+	MCPResource,
+	MCPResourceReadParams,
+	MCPResourceReadResult,
+	MCPResourceSubscribeParams,
+	MCPResourcesListResult,
+	MCPResourceTemplate,
+	MCPResourceTemplatesListResult,
+	MCPServerCapabilities,
+	MCPServerConfig,
+	MCPServerConnection,
+	MCPSseServerConfig,
+	MCPStdioServerConfig,
+	MCPToolCallParams,
+	MCPToolCallResult,
+	MCPToolDefinition,
+	MCPTransport,
+} from "./types";
+import { assertNoUnresolvedPlaceholder } from "./unresolved-placeholder";
+
+/** MCP protocol version we support */
+
+/** Client info sent during initialization */
+const CLIENT_INFO = {
+	name: "veyyon-coding-agent",
+	version: "1.0.0",
+};
+const RFC3339_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Default handler for standard MCP server-to-client requests.
+ * Handles `ping` and `roots/list`; rejects unknown methods with -32601.
+ * Reads getProjectDir() at call time so the root stays stable even if
+ * the process cwd changes during tool execution.
+ */
+async function defaultRequestHandler(method: string, _params: unknown): Promise<unknown> {
+	switch (method) {
+		case "ping":
+			return {};
+		case "roots/list": {
+			const cwd = getProjectDir();
+			return {
+				roots: [{ uri: url.pathToFileURL(cwd).href, name: path.basename(cwd) }],
+			};
+		}
+		default:
+			throw Object.assign(
+				new Error(
+					`This MCP client does not implement the server-to-client request "${method}". It answers "ping" and "roots/list" only. Fix: nothing for the operator to do; the server should treat -32601 as "unsupported" and continue. If it does not, report the method name to the server's maintainer.`,
+				),
+				{ code: -32601 },
+			);
+	}
+}
+
+/**
+ * Create a transport for the given server config.
+ *
+ * The placeholder guard runs first: nothing below it may spawn a process or dial a host with the
+ * text of an unset environment variable in place of a value.
+ */
+async function createTransport(config: MCPServerConfig): Promise<MCPTransport> {
+	assertNoUnresolvedPlaceholder(config);
+	const serverType = config.type ?? "stdio";
+
+	switch (serverType) {
+		case "stdio":
+			return createStdioTransport(config as MCPStdioServerConfig);
+		case "http":
+			return createHttpTransport(config as MCPHttpServerConfig);
+		case "sse":
+			return createSseTransport(config as MCPSseServerConfig);
+		default:
+			throw new Error(
+				`MCP server type "${serverType}" is not supported. Fix: set "type" to "stdio" (a server this machine spawns), "http" (a remote Streamable HTTP server) or "sse" (a legacy 2024-11-05 HTTP+SSE server) on this server's entry in your MCP config.`,
+			);
+	}
+}
+
+/**
+ * Initialize connection with MCP server.
+ */
+async function initializeConnection(
+	transport: MCPTransport,
+	options?: {
+		signal?: AbortSignal;
+		/** Called after the initialize response (which sets the session ID) but before notifications/initialized. */
+		onInitialized?: () => void | Promise<void>;
+	},
+): Promise<MCPInitializeResult> {
+	const params: MCPInitializeParams = {
+		protocolVersion: MCP_PROTOCOL_VERSION,
+		capabilities: {
+			roots: { listChanged: false },
+		},
+		clientInfo: CLIENT_INFO,
+	};
+
+	const result = await transport.request<MCPInitializeResult>("initialize", params, { signal: options?.signal });
+
+	if (options?.signal?.aborted) {
+		throw options.signal.reason instanceof Error ? options.signal.reason : new Error("Aborted");
+	}
+
+	// Hook point: the transport now has the session ID from the initialize response.
+	// For HTTP, this is the moment to open the SSE stream so server-to-client requests
+	// triggered by notifications/initialized (e.g. roots/list) can be delivered.
+	await options?.onInitialized?.();
+
+	// Send initialized notification
+	await transport.notify("notifications/initialized");
+
+	return result;
+}
+
+/**
+ * Connect to an MCP server.
+ * Has a 30 second timeout by default to prevent blocking startup.
+ * Set VEYYON_MCP_TIMEOUT_MS=0 to disable MCP client-side timeouts.
+ */
+export async function connectToServer(
+	name: string,
+	config: MCPServerConfig,
+	options?: {
+		signal?: AbortSignal;
+		onNotification?: (method: string, params: unknown) => void;
+		onRequest?: (method: string, params: unknown) => Promise<unknown>;
+		/** Session CPU budget hook: a spawned stdio server's pid is handed here so it joins the session's budget group. */
+		onSpawnPid?: (pid: number) => void;
+		/** Session CPU budget gate: refuse the stdio spawn while the group is saturated or uncreated. */
+		beforeSpawn?: () => Promise<void>;
+	},
+): Promise<MCPServerConnection> {
+	const timeoutMs = resolveMCPTimeoutMs(config.timeout);
+	let transport: MCPTransport | undefined;
+
+	const connect = async (): Promise<MCPServerConnection> => {
+		transport = await createTransport(config);
+		if (options?.onNotification) {
+			transport.onNotification = options.onNotification;
+		}
+		if (transport instanceof StdioTransport) {
+			if (options?.onSpawnPid) {
+				transport.onSpawnPid = options.onSpawnPid;
+			}
+			if (options?.beforeSpawn) {
+				transport.beforeSpawn = options.beforeSpawn;
+			}
+		}
+
+		// Always handle standard MCP server-to-client requests (ping, roots/list).
+		// The initialize request declares roots capability, so we must respond to
+		// roots/list — even for short-lived test connections.
+		transport.onRequest = options?.onRequest ?? defaultRequestHandler;
+
+		try {
+			const initResult = await initializeConnection(transport, {
+				signal: options?.signal,
+				async onInitialized() {
+					// Open the SSE stream before sending initialized, so server-to-client
+					// requests triggered by on_initialized (e.g. roots/list) are delivered.
+					if ("startSSEListener" in transport! && typeof transport!.startSSEListener === "function") {
+						await (transport as { startSSEListener(): Promise<void> }).startSSEListener();
+					}
+				},
+			});
+
+			return {
+				name,
+				config,
+				transport,
+				serverInfo: initResult.serverInfo,
+				capabilities: initResult.capabilities,
+				instructions: initResult.instructions,
+			};
+		} catch (error) {
+			await transport.close();
+			throw error;
+		}
+	};
+
+	try {
+		if (!isMCPTimeoutEnabled(timeoutMs)) {
+			return await connect();
+		}
+		return await withTimeout(
+			connect(),
+			timeoutMs,
+			`Connection to MCP server "${name}" timed out after ${describeMCPTimeout(timeoutMs)}`,
+			options?.signal,
+		);
+	} catch (error) {
+		// If withTimeout rejected (timeout/abort) while connect() was still pending,
+		// the transport may be alive with an open SSE listener. Close it.
+		if (transport) {
+			closeTransportDetached(transport, name, "connect-timeout");
+		}
+		throw error;
+	}
+}
+
+/**
+ * Every page of a cursor-paginated list method, collected in order.
+ *
+ * The two guards were added to `tools/list` after a server answered every page
+ * with the same cursor: no request timeout catches that, because each request
+ * answers promptly, so the loop grew its list until the process died. The
+ * other list methods paginate the same way and had no guard, so the guards
+ * are stated once here for all of them: a repeated cursor and the page limit
+ * both end the listing with a warning and whatever was collected so far.
+ */
+async function listAllPages<Result, Item>(
+	connection: MCPServerConnection,
+	method: string,
+	what: string,
+	options: { signal?: AbortSignal } | undefined,
+	page: (result: Result) => { items: Item[]; nextCursor?: string },
+): Promise<Item[]> {
+	const items: Item[] = [];
+	const seenCursors = new Set<string>();
+	let cursor: string | undefined;
+	let pages = 0;
+
+	do {
+		const params: Record<string, unknown> = {};
+		if (cursor) {
+			params.cursor = cursor;
+		}
+
+		const result = page(await connection.transport.request<Result>(method, params, options));
+		for (let i = 0; i < result.items.length; i++) items.push(result.items[i]!);
+		cursor = result.nextCursor;
+		pages++;
+
+		if (cursor && seenCursors.has(cursor)) {
+			logger.warn(`MCP server repeated a pagination cursor; stopped listing its ${what}`, {
+				method,
+				path: `mcp:${connection.name}`,
+				server: connection.name,
+				items: items.length,
+			});
+			break;
+		}
+		if (cursor) seenCursors.add(cursor);
+		if (pages >= MAX_TOOL_LIST_PAGES) {
+			logger.warn(`MCP server exceeded the page limit; stopped listing its ${what}`, {
+				method,
+				pages,
+				path: `mcp:${connection.name}`,
+				server: connection.name,
+				items: items.length,
+			});
+			break;
+		}
+	} while (cursor);
+
+	return items;
+}
+
+/** List event types advertised by a draft-capable server. */
+export async function listEvents(
+	connection: MCPServerConnection,
+	options?: { signal?: AbortSignal },
+): Promise<MCPEventDescriptor[]> {
+	if (!connection.capabilities.events) return [];
+	return listAllPages(connection, "events/list", "events", options, (raw: unknown) => {
+		if (!raw || typeof raw !== "object" || !Array.isArray((raw as MCPEventsListResult).events)) {
+			throw new Error(`MCP server "${connection.name}" returned an invalid events/list page`);
+		}
+		const page = raw as MCPEventsListResult;
+		if (page.nextCursor !== undefined && typeof page.nextCursor !== "string") {
+			throw new Error(`MCP server "${connection.name}" returned an invalid events/list cursor`);
+		}
+		for (const event of page.events) {
+			if (
+				typeof event?.name !== "string" ||
+				event.name.length === 0 ||
+				!Array.isArray(event.delivery) ||
+				event.delivery.length === 0 ||
+				event.delivery.some(mode => mode !== "poll" && mode !== "push" && mode !== "webhook")
+			) {
+				throw new Error(`MCP server "${connection.name}" returned an invalid event descriptor`);
+			}
+		}
+		return { items: page.events, nextCursor: page.nextCursor };
+	});
+}
+
+/** Fetch one page of events; callers own scheduling and cursor persistence. */
+export async function pollEvents(
+	connection: MCPServerConnection,
+	name: string,
+	args: Record<string, unknown>,
+	cursor: string | null,
+	options?: MCPRequestOptions,
+): Promise<MCPEventsPollResult> {
+	if (!connection.capabilities.events) throw new Error(`MCP server "${connection.name}" does not advertise events`);
+	const result = await connection.transport.request<MCPEventsPollResult>(
+		"events/poll",
+		{ name, arguments: args, cursor },
+		options,
+	);
+	if (!result || !Array.isArray(result.events)) {
+		throw new Error(`MCP server "${connection.name}" returned an invalid events/poll result`);
+	}
+	if (
+		result.cursor !== undefined && result.cursor !== null && typeof result.cursor !== "string" ||
+		result.truncated !== undefined && typeof result.truncated !== "boolean" ||
+		result.hasMore !== undefined && typeof result.hasMore !== "boolean" ||
+		result.nextPollMs !== undefined && (typeof result.nextPollMs !== "number" || !Number.isFinite(result.nextPollMs))
+	) {
+		throw new Error(`MCP server "${connection.name}" returned invalid events/poll controls`);
+	}
+	for (const event of result.events) {
+		if (
+			typeof event?.eventId !== "string" ||
+			event.eventId.length === 0 ||
+			typeof event.name !== "string" ||
+			event.name.length === 0 ||
+			typeof event.timestamp !== "string" ||
+			!RFC3339_DATE_TIME.test(event.timestamp) ||
+			!Number.isFinite(Date.parse(event.timestamp)) ||
+			event.cursor !== undefined && event.cursor !== null && typeof event.cursor !== "string" ||
+			event.data === undefined
+		) {
+			throw new Error(`MCP server "${connection.name}" returned an invalid event occurrence`);
+		}
+	}
+	return result;
+}
+
+/** Register or refresh a webhook-only event subscription. */
+export async function subscribeToEvents(
+	connection: MCPServerConnection,
+	name: string,
+	args: Record<string, unknown>,
+	delivery: { url: string; secret: string },
+	cursor: string | null,
+	ttlMs: number | null,
+	options?: MCPRequestOptions,
+): Promise<{ id: string; refreshBefore: string | null; cursor?: string | null; truncated?: boolean }> {
+	if (!connection.capabilities.events) throw new Error(`MCP server "${connection.name}" does not advertise events`);
+	const result = await connection.transport.request<{
+		id: string;
+		refreshBefore: string | null;
+		cursor?: string | null;
+		truncated?: boolean;
+	}>("events/subscribe", {
+		name,
+		arguments: args,
+		delivery: { mode: "webhook", ...delivery },
+		cursor,
+		ttlMs,
+	}, options);
+	if (
+		!result ||
+		typeof result.id !== "string" ||
+		result.id.length === 0 ||
+		!(result.refreshBefore === null || typeof result.refreshBefore === "string") ||
+		(typeof result.refreshBefore === "string" && !Number.isFinite(Date.parse(result.refreshBefore))) ||
+		(result.cursor !== undefined && result.cursor !== null && typeof result.cursor !== "string") ||
+		(result.truncated !== undefined && typeof result.truncated !== "boolean")
+	) {
+		throw new Error(`MCP server "${connection.name}" returned an invalid events/subscribe result`);
+	}
+	return result;
+}
+
+/** Remove a webhook-only event subscription by its canonical key. */
+export async function unsubscribeFromEvents(
+	connection: MCPServerConnection,
+	name: string,
+	args: Record<string, unknown>,
+	url: string,
+	options?: MCPRequestOptions,
+): Promise<void> {
+	if (!connection.capabilities.events) throw new Error(`MCP server "${connection.name}" does not advertise events`);
+	await connection.transport.request("events/unsubscribe", {
+		name,
+		arguments: args,
+		delivery: { url },
+	}, options);
+}
+
+
+/**
+ * List tools from a connected server.
+ */
+export async function listTools(
+	connection: MCPServerConnection,
+	options?: { signal?: AbortSignal },
+): Promise<MCPToolDefinition[]> {
+	// Check if server supports tools
+	if (!connection.capabilities.tools) {
+		return [];
+	}
+
+	// Return cached tools if available
+	if (connection.tools) {
+		return connection.tools;
+	}
+
+	// Deliberately NOT cast to the result type and spread. That cast is erased
+	// at runtime, so the old code trusted a third-party server's payload
+	// completely: a missing `tools` threw a bare TypeError, and a `tools` that
+	// was a string got spread into one nameless tool per character.
+	const allTools = await listAllPages(connection, "tools/list", "tools", options, (raw: unknown) => {
+		const page = validateToolListPage(raw, connection.name);
+		return { items: page.tools, nextCursor: page.nextCursor };
+	});
+
+	// Cache tools
+	connection.tools = allTools;
+
+	return allTools;
+}
+
+/**
+ * Call a tool on a connected server.
+ */
+export async function callTool(
+	connection: MCPServerConnection,
+	toolName: string,
+	args: Record<string, unknown> = {},
+	options?: MCPRequestOptions,
+): Promise<MCPToolCallResult> {
+	const params: MCPToolCallParams = {
+		name: toolName,
+		arguments: args,
+	};
+
+	return connection.transport.request<MCPToolCallResult>("tools/call", params, options);
+}
+
+/**
+ * Disconnect from a server.
+ */
+export async function disconnectServer(connection: MCPServerConnection): Promise<void> {
+	await connection.transport.close();
+}
+
+/**
+ * Close a transport on a path that cannot report the close's own failure, in one place.
+ *
+ * The callers are all tearing a connection down: a connect that timed out with the transport possibly
+ * alive, a server being replaced by a reconnect, a reconnect abandoned because the manager was reset, a
+ * tool-list that failed after the handshake. Each either throws its own error, which is the one the
+ * operator needs, or is deliberately not awaited because a close can take the transport's full timeout
+ * (an HTTP DELETE at 30s by default) and blocking the reconnect loop on it is worse than not knowing.
+ *
+ * Not knowing is still the wrong default, because a close that fails leaves a zombie: an open SSE
+ * listener, or a stdio subprocess that outlives every reference to it. So the failure is reported with the
+ * server it belonged to, and the caller keeps its own control flow.
+ */
+export function closeTransportDetached(
+	transport: Pick<MCPServerConnection["transport"], "close">,
+	server: string,
+	context: string,
+): void {
+	void transport.close().catch((error: unknown) => {
+		logger.warn("MCP transport close failed; it may be left open", {
+			path: `mcp:${server}`,
+			context,
+			error: errorMessage(error),
+		});
+	});
+}
+
+/**
+ * Check if a server supports tools.
+ */
+export function serverSupportsTools(capabilities: MCPServerCapabilities): boolean {
+	return capabilities.tools !== undefined;
+}
+
+/**
+ * List resources from a connected server.
+ */
+export async function listResources(
+	connection: MCPServerConnection,
+	options?: { signal?: AbortSignal },
+): Promise<MCPResource[]> {
+	if (!connection.capabilities.resources) {
+		return [];
+	}
+
+	if (connection.resources) {
+		return connection.resources;
+	}
+
+	const allResources = await listAllPages(
+		connection,
+		"resources/list",
+		"resources",
+		options,
+		(result: MCPResourcesListResult) => ({ items: result.resources, nextCursor: result.nextCursor }),
+	);
+
+	connection.resources = allResources;
+	return allResources;
+}
+
+/** True when an error is a JSON-RPC "method not found" (-32601) response. */
+function isMethodNotFoundError(error: unknown): boolean {
+	const message = errorMessage(error);
+	return message.includes("-32601") || /method not found/i.test(message);
+}
+
+/**
+ * List resource templates from a connected server.
+ *
+ * A server MAY advertise the `resources` capability without implementing the
+ * optional `resources/templates/list` method (it is optional in the MCP spec).
+ * Such servers reject the request with JSON-RPC -32601 ("Method not found").
+ * Treat that as "no templates" and return `[]` rather than throwing — otherwise
+ * a caller that loads resources and templates together (see `MCPManager`'s
+ * `Promise.all([listResources, listResourceTemplates])`) would discard the
+ * server's concrete resources too. Any other error still propagates.
+ */
+export async function listResourceTemplates(
+	connection: MCPServerConnection,
+	options?: { signal?: AbortSignal },
+): Promise<MCPResourceTemplate[]> {
+	if (!connection.capabilities.resources) {
+		return [];
+	}
+
+	if (connection.resourceTemplates) {
+		return connection.resourceTemplates;
+	}
+
+	let allTemplates: MCPResourceTemplate[];
+	try {
+		allTemplates = await listAllPages(
+			connection,
+			"resources/templates/list",
+			"resource templates",
+			options,
+			(result: MCPResourceTemplatesListResult) => ({
+				items: result.resourceTemplates,
+				nextCursor: result.nextCursor,
+			}),
+		);
+	} catch (error) {
+		// A server that doesn't implement the optional templates method answers
+		// -32601; cache an empty list so we neither retry nor let the failure
+		// bubble up and discard the server's concrete resources.
+		if (isMethodNotFoundError(error)) {
+			connection.resourceTemplates = [];
+			return [];
+		}
+		throw error;
+	}
+
+	connection.resourceTemplates = allTemplates;
+	return allTemplates;
+}
+
+/**
+ * Read a resource from a connected server.
+ */
+export async function readResource(
+	connection: MCPServerConnection,
+	uri: string,
+	options?: MCPRequestOptions,
+): Promise<MCPResourceReadResult> {
+	const params: MCPResourceReadParams = { uri };
+	return connection.transport.request<MCPResourceReadResult>("resources/read", params, options);
+}
+
+/**
+ * Subscribe to resource update notifications.
+ */
+export async function subscribeToResources(
+	connection: MCPServerConnection,
+	uris: string[],
+	options?: MCPRequestOptions,
+): Promise<void> {
+	await requestPerResource(connection, "resources/subscribe", uris, options, "Failed to subscribe to MCP resource");
+}
+
+/**
+ * Unsubscribe from resource update notifications.
+ */
+export async function unsubscribeFromResources(
+	connection: MCPServerConnection,
+	uris: string[],
+	options?: MCPRequestOptions,
+): Promise<void> {
+	await requestPerResource(
+		connection,
+		"resources/unsubscribe",
+		uris,
+		options,
+		"Failed to unsubscribe from MCP resource",
+	);
+}
+
+/** One request per uri, sent together; a rejected one is logged as `failure` and the rest still land. */
+async function requestPerResource(
+	connection: MCPServerConnection,
+	method: "resources/subscribe" | "resources/unsubscribe",
+	uris: string[],
+	options: MCPRequestOptions | undefined,
+	failure: string,
+): Promise<void> {
+	if (uris.length === 0 || !connection.capabilities.resources?.subscribe) return;
+	const results = await Promise.allSettled(
+		uris.map(uri => connection.transport.request(method, { uri } satisfies MCPResourceSubscribeParams, options)),
+	);
+	for (const result of results) {
+		if (result.status === "rejected") {
+			logger.warn(failure, { error: result.reason });
+		}
+	}
+}
+
+/**
+ * Check if a server supports resource subscriptions.
+ */
+export function serverSupportsResourceSubscriptions(capabilities: MCPServerCapabilities): boolean {
+	return capabilities.resources?.subscribe === true;
+}
+
+/**
+ * Check if a server supports resources.
+ */
+export function serverSupportsResources(capabilities: MCPServerCapabilities): boolean {
+	return capabilities.resources !== undefined;
+}
+
+/**
+ * List prompts from a connected server.
+ */
+export async function listPrompts(
+	connection: MCPServerConnection,
+	options?: { signal?: AbortSignal },
+): Promise<MCPPrompt[]> {
+	if (!connection.capabilities.prompts) {
+		return [];
+	}
+
+	if (connection.prompts) {
+		return connection.prompts;
+	}
+
+	const allPrompts = await listAllPages(
+		connection,
+		"prompts/list",
+		"prompts",
+		options,
+		(result: MCPPromptsListResult) => ({ items: result.prompts, nextCursor: result.nextCursor }),
+	);
+
+	connection.prompts = allPrompts;
+	return allPrompts;
+}
+
+/**
+ * Get a specific prompt from a connected server.
+ */
+export async function getPrompt(
+	connection: MCPServerConnection,
+	name: string,
+	args?: Record<string, string>,
+	options?: MCPRequestOptions,
+): Promise<MCPGetPromptResult> {
+	const params: MCPGetPromptParams = { name };
+	if (args && Object.keys(args).length > 0) {
+		params.arguments = args;
+	}
+
+	return connection.transport.request<MCPGetPromptResult>("prompts/get", params, options);
+}
+
+/**
+ * Check if a server supports prompts.
+ */
+export function serverSupportsPrompts(capabilities: MCPServerCapabilities): boolean {
+	return capabilities.prompts !== undefined;
+}

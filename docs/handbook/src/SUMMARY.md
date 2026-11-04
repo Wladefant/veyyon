@@ -1,0 +1,158 @@
+# Summary
+
+[The Veyyon handbook](./introduction.md)
+
+# Understand Veyyon
+
+- [Design and mechanisms](./why/index.md)
+  - [Overview](./why/value.md)
+  - [Mechanisms](./why/innovations.md)
+  - [Argot](./why/argot.md)
+- [Harness design goals](./foundations/thesis.md)
+- [Architecture at a glance](./foundations/architecture.md)
+- [Performance](./why/performance.md)
+
+# Get started
+
+- [Install](./using/install.md)
+- [Signing in](./using/authentication.md)
+- [Quickstart](./using/quickstart.md)
+- [Getting started](./using/getting-started.md)
+- [Configuring providers](./using/configuring-providers.md)
+
+# Core concepts
+
+- [Core concepts](./concepts/index.md)
+  - [Sessions, turns, and threads](./concepts/sessions-turns-threads.md)
+  - [Permission model](./concepts/permission-model.md)
+  - [Model contract](./concepts/model-contract.md)
+
+# Everyday use
+
+- [Features](./features/index.md)
+- [Editing and repair](./using/editing.md)
+- [Approvals](./features/sandbox.md)
+  - [Safety](./using/safety.md)
+- [Resource limits](./features/resource-limits.md)
+- [Secrets](./features/secrets.md)
+- [Models and providers](./using/models.md)
+- [Sessions](./using/sessions.md)
+- [Agents](./features/agents.md)
+- [Writing an agent](./features/agents-authoring.md)
+- [Multi-agent monitoring](./features/cockpit.md)
+- [Keybindings and Vim mode](./features/keybindings.md)
+- [Web search](./features/web-search.md)
+- [Code review](./features/review.md)
+- [Non-interactive mode](./features/exec.md)
+- [Themes and identity](./using/themes.md)
+- [Live collaboration](./features/collab.md)
+- [Native desktop](./desktop/index.md)
+  - [Surfaces and interactions](./desktop/surfaces.md)
+  - [Motion](./desktop/motion.md)
+  - [Tokens and themes](./desktop/tokens.md)
+- [Task guides](./using/task-guides.md)
+- [Examples](./using/examples.md)
+
+# Extend and customize
+
+- [Plan mode, goals, and vibe](./features/plan-mode.md)
+- [Skills](./features/skills.md)
+  - [Skills authoring](./features/skills-authoring.md)
+- [Plugins](./features/plugins.md)
+- [Extensions](./features/extensions.md)
+  - [Extensions authoring](./features/extensions-authoring.md)
+- [Custom tools](./using/custom-tools.md)
+- [Marketplaces](./features/marketplace.md)
+  - [Marketplace authoring](./features/marketplace-authoring.md)
+- [Hooks](./features/hooks.md)
+  - [Hooks authoring](./features/hooks-authoring.md)
+- [Language servers](./features/lsp.md)
+- [The advisor and the watchdog](./features/advisor.md)
+- [Autoresearch](./features/autoresearch.md)
+  - [Autoswarm](./features/autoswarm.md)
+- [Python and JavaScript cells](./features/python-repl.md)
+- [MCP](./features/mcp.md)
+  - [MCP setup](./using/mcp-setup.md)
+- [Connectors and Apps](./features/connectors.md)
+- [Session branching](./features/branching.md)
+- [Memory](./features/memory.md)
+- [Profiles](./features/profiles.md)
+  - [Models, helpers, and profiles](./using/roles-and-profiles.md)
+  - [Personalities](./features/personalities.md)
+- [Speech](./features/speech.md)
+- [Export and import](./features/export-import.md)
+- [Configuration](./using/configuration.md)
+  - [Feature flags](./features/feature-flags.md)
+  - [Tools, skills, and extension data](./using/extending.md)
+- [Migration guide](./using/migration-guide.md)
+
+# Reference
+
+- [Reference](./reference/index.md)
+  - [CLI reference](./reference/cli.md)
+  - [Slash commands](./reference/slash-commands.md)
+  - [Tools reference](./reference/tools.md)
+  - [Keyboard shortcuts](./reference/keybindings-ref.md)
+  - [Keybinding configuration](./reference/keybindings-config.md)
+  - [Environment variables](./reference/environment.md)
+  - [Environment variables, complete](./reference/environment-complete.md)
+  - [Settings](./reference/settings.md)
+  - [Settings, every key](./reference/settings-reference.md)
+  - [models.yml](./reference/models-yml.md)
+  - [Providers](./reference/providers.md)
+  - [MCP configuration](./reference/mcp-config.md)
+  - [Approval modes](./reference/approval-mode.md)
+  - [Project trust](./reference/project-trust.md)
+  - [Themes](./reference/theme.md)
+  - [Hooks API](./reference/hooks.md)
+  - [Skills](./reference/skills.md)
+  - [The `/tree` command](./reference/tree-command.md)
+  - [The RPC surface](./reference/rpc.md)
+  - [The ACP server](./reference/acp.md)
+  - [The SDK](./reference/sdk.md)
+  - [Exit codes](./reference/exit-codes.md)
+  - [File locations](./reference/file-locations.md)
+
+# Architecture and internals
+
+- [Architecture overview](./architecture/overview.md)
+  - [Approvals internals](./architecture/sandbox.md)
+  - [Session and turn internals](./architecture/session-turn.md)
+  - [Config layering](./architecture/config.md)
+  - [MCP internals](./architecture/mcp.md)
+  - [Providers internals](./architecture/providers.md)
+  - [Secrets internals](./architecture/secrets.md)
+  - [Memory internals](./architecture/memory.md)
+  - [Compaction internals](./architecture/compaction.md)
+  - [The terminal UI](./architecture/tui.md)
+- [Testing and verification](./foundations/verification.md)
+- [Repair](./repair/overview.md)
+  - [The repair cascade](./repair/cascade.md)
+  - [Per-model posture](./repair/per-model.md)
+  - [Soundness and telemetry](./repair/soundness.md)
+- [The edit engine](./edit/engine.md)
+  - [Repair on edits](./edit/edit-repair.md)
+  - [Edit-path properties](./edit/roadmap.md)
+- [Provider stack](./models/providers.md)
+  - [Execution-order prompts](./models/prompts.md)
+  - [Customizing the system prompt](./models/system-prompt.md)
+- [Context](./context/reads-search.md)
+  - [Context files](./context/context-files.md)
+  - [Goal state and long sessions](./context/goal-state.md)
+  - [Compaction and project memory](./context/compaction-memory.md)
+- [Model policy](./router/role-routing.md)
+- [Observability](./observability/overview.md)
+
+# Troubleshooting
+
+- [Troubleshooting](./using/troubleshooting.md)
+- [FAQ](./using/faq.md)
+- [Diagnostics and health](./features/doctor.md)
+
+# Acknowledgements
+
+- [Credits and licenses](./acknowledgements.md)
+
+# Appendix
+
+- [Glossary](./appendix/glossary.md)

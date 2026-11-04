@@ -1,0 +1,479 @@
+// The repo-root CHANGELOG sync shell.
+//
+// Three contracts matter here and are worth a dedicated suite:
+//
+//  1. the shell renders through the ONE shared core, so the root file can never
+//     diverge from the website's changelog logic,
+//  2. the root aggregates EVERY package's changelog, because the file a visitor
+//     reads on the GitHub repo page is the product's changelog and a generator
+//     that reads one package silently deletes the rest on every regeneration,
+//  3. the file actually committed at the repo root is in sync with those
+//     sources — the same thing `changelog:root:check` enforces in CI, encoded as
+//     a test so a local `bun test` catches drift before a push.
+
+import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+// @ts-expect-error — plain .mjs module, no types; imported for its exports.
+import { renderRootChangelog } from "../apps/site/tools/gen-changelog.mjs";
+import { unreleasedEntries } from "./changelog-unreleased";
+import { buildRootChangelog, changelogSources, orphanedRootEntries, REPO_ROOT, ROOT_PATH } from "./sync-root-changelog";
+
+/**
+ * A member's changelog bytes, resolved through the same sweep the renderer uses.
+ *
+ * A test that joined `packages/<name>` instead broke the day `hashline` and `swarm-extension` moved
+ * to `plugins/`, and it broke with ENOENT on a path the product no longer has, which says nothing
+ * about the contract under test. The sweep reaches a member at whatever depth it is declared, so
+ * the precondition below follows the package instead of its directory.
+ */
+function memberChangelog(name: string): string {
+	const source = changelogSources().find(candidate => candidate.name === name);
+	if (!source) throw new Error(`no workspace member declares a changelog named ${name}`);
+	return source.md;
+}
+
+describe("buildRootChangelog", () => {
+	it("renders through the shared renderRootChangelog core, not a private copy", () => {
+		// If the shell ever grew its own rebrand/merge logic, this would diverge and
+		// the website and repo-root changelogs could drift apart.
+		expect(buildRootChangelog()).toBe(renderRootChangelog(changelogSources()));
+	});
+
+	it("produces a non-trivial changelog: title, at least one release, and the upstream credit", () => {
+		const md = buildRootChangelog();
+		expect(md.startsWith("# Changelog\n")).toBe(true);
+		expect(md).toMatch(/## \[\d+\.\d+\.\d+\] - \d{4}-\d{2}-\d{2}/); // a real cut release
+		expect(md).toContain("## Upstream history");
+		expect(md.trimEnd().endsWith("for it.")).toBe(true);
+	});
+
+	it("speaks in Veyyon's voice: no leaked upstream omp CLI or scheme tokens", () => {
+		const md = buildRootChangelog();
+		expect(md).not.toContain("omp://");
+		expect(md).not.toMatch(/\bomp /);
+	});
+
+	/**
+	 * The link rule, stated as a test because it was previously only implicit and
+	 * the committed file disagreed with the generator about it. An issue link into
+	 * `can1357/oh-my-pi` from veyyon's own changelog sends the reader to a
+	 * different project's tracker, which cannot answer their question, so the root
+	 * strips them exactly as the website does. The per-package changelogs keep
+	 * them as the engineering record.
+	 */
+	it("strips upstream issue links while keeping the upstream credit", () => {
+		const md = buildRootChangelog();
+		expect(md).not.toContain("can1357/oh-my-pi/issues");
+		// The credit note still links the project itself, which is the attribution
+		// and must survive.
+		expect(md).toContain("https://github.com/can1357/oh-my-pi");
+	});
+});
+
+describe("the root changelog covers every package", () => {
+	/**
+	 * The defect this work fixed. The old generator read `coding-agent` alone, so
+	 * a fix recorded in any other package vanished from the root the moment anyone
+	 * regenerated it. `hashline` is the exemplar because it is a non-lead package
+	 * that has its own cut veyyon release, so its entries have to travel through
+	 * both the multi-source read and the fork-point cut to arrive.
+	 */
+	it("carries an entry that lives only in a non-lead package", () => {
+		const hashline = memberChangelog("hashline");
+		expect(hashline).toContain("`MV DEST` no longer silently overwrites");
+
+		expect(buildRootChangelog()).toContain("`MV DEST` no longer silently overwrites");
+	});
+
+	/**
+	 * Every package with a changelog must be read. A source list built by hand
+	 * would go stale the first time a package is added, and the failure would be
+	 * silent: the new package's entries simply never appear.
+	 */
+	it("reads a member changelog under every workspace root, not only packages/", () => {
+		const names = changelogSources().map(source => source.name);
+		expect(names).toContain("coding-agent");
+		expect(names).toContain("collab-web");
+		expect(names).toContain("ai");
+		expect(names).toContain("utils");
+		// A member outside `packages/`. This function enumerated that one directory, so moving `wire`
+		// to `contracts/` orphaned its unreleased entry: the root still carried the line, no source
+		// produced it any more, and the writer refused to run rather than delete it. Naming a contract
+		// here is what makes the enumeration cover a root instead of a directory.
+		expect(names).toContain("wire");
+		expect(names).toContain("view");
+		// The product's own entries lead, so they are what a reader sees first.
+		expect(names[0]).toBe("coding-agent");
+	});
+
+	/**
+	 * A shared fix recorded by two packages in one release is duplicate noise. The same wording
+	 * under two different release headings is history: keep both occurrences to show when it shipped.
+	 */
+	it("lists each distinct entry once per release", () => {
+		const md = buildRootChangelog();
+		const releases = md.split(/^## \[/m).slice(1);
+		expect(releases.length).toBeGreaterThan(0);
+		for (const release of releases) {
+			const bullets = release.split("\n").filter(line => line.startsWith("- "));
+			expect(new Set(bullets).size).toBe(bullets.length);
+		}
+	});
+
+	/**
+	 * Only veyyon's own releases appear. Every package carries inherited oh-my-pi
+	 * history at or below the fork point, and replaying thirteen packages' worth
+	 * of it would bury veyyon's actual releases under someone else's.
+	 */
+	it("collapses pre-fork upstream releases into the credit note", () => {
+		const md = buildRootChangelog();
+		expect(md).not.toMatch(/^## \[16\./m);
+		expect(md).toContain("## Upstream history");
+	});
+
+	/**
+	 * Product releases are defined by the lead changelog, not by a package file's
+	 * position or major version. Extracted packages contain inherited history
+	 * first and can append Veyyon releases after it. Their inherited history also
+	 * descends below the fork major, so "keep versions below 16" would replay more
+	 * than fifteen thousand lines of another project's releases.
+	 */
+	it("drops upstream history that dips below the fork major", () => {
+		const swarm = memberChangelog("swarm-extension");
+		// The precondition: a pre-16 upstream entry sitting below a 16.x one.
+		expect(swarm.indexOf("## [16.3.7]")).toBeLessThan(swarm.indexOf("## [15.9.0]"));
+
+		expect(buildRootChangelog()).not.toMatch(/^## \[15\./m);
+	});
+
+	/**
+	 * The lead changelog owns the product release train. A package can carry
+	 * inherited history first and append a Veyyon release after it, as hashline
+	 * does. Matching the lead version keeps that release while rejecting both the
+	 * 16.x fork history and older inherited versions whose majors happen to be
+	 * smaller.
+	 */
+	it("merges appended package releases only when they belong to the product release train", () => {
+		const md = renderRootChangelog(
+			[
+				{
+					name: "coding-agent",
+					md: "# Changelog\n\n## [1.0.1] - 2026-03-01\n\n### Fixed\n\n- product release\n",
+				},
+				{
+					name: "package",
+					md:
+						"# Changelog\n\n## [16.5.2] - 2026-01-01\n\n### Fixed\n\n- fork point\n\n" +
+						"## [0.9.0] - 2025-01-01\n\n### Fixed\n\n- ancient upstream\n\n" +
+						"## [1.0.1] - 2026-03-01\n\n### Fixed\n\n- package fix\n",
+				},
+			],
+			{ forkPointVersion: "16.5.2" },
+		) as string;
+
+		expect(md).toContain("- product release");
+		expect(md).toContain("- package fix");
+		expect(md).not.toContain("- fork point");
+		expect(md).not.toContain("- ancient upstream");
+	});
+
+	/**
+	 * A package that has never been cut since the fork contributes its pending
+	 * work and nothing else. Without the `Unreleased` exemption the cut would fire
+	 * on the very first versioned entry and silently drop pending entries from
+	 * every package but the two that have released.
+	 */
+	it("keeps Unreleased from a package with no release of its own", () => {
+		const md = renderRootChangelog(
+			[
+				{
+					name: "a",
+					md: "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- pending\n\n## [16.5.1] - 2026-01-01\n\n### Fixed\n\n- upstream\n",
+				},
+			],
+			{ forkPointVersion: "16.5.2" },
+		) as string;
+
+		expect(md).toContain("- pending");
+		expect(md).not.toContain("- upstream");
+	});
+
+	/**
+	 * Sections keep Keep a Changelog order within a release, so the merged result
+	 * reads like a changelog rather than like whatever order the packages happened
+	 * to be read in.
+	 */
+	it("orders Breaking Changes before Added and Fixed within a release", () => {
+		const md = renderRootChangelog([
+			{ name: "a", md: "# Changelog\n\n## [1.0.1] - 2026-01-01\n\n### Fixed\n\n- fixed thing\n" },
+			{ name: "b", md: "# Changelog\n\n## [1.0.1] - 2026-01-01\n\n### Added\n\n- added thing\n" },
+			{
+				name: "c",
+				md: "# Changelog\n\n## [1.0.1] - 2026-01-01\n\n### Breaking Changes\n\n- broke thing\n",
+			},
+		]) as string;
+
+		expect(md.indexOf("### Breaking Changes")).toBeLessThan(md.indexOf("### Added"));
+		expect(md.indexOf("### Added")).toBeLessThan(md.indexOf("### Fixed"));
+		expect(md).toContain("- broke thing");
+		expect(md).toContain("- added thing");
+		expect(md).toContain("- fixed thing");
+	});
+
+	/**
+	 * Releases are newest-first, with `Unreleased` at the top, whatever order the
+	 * packages list them in. Version comparison has to be numeric: sorted as
+	 * strings, 1.0.37 would fall below 1.0.4.
+	 */
+	it("orders releases newest first, Unreleased on top", () => {
+		const md = renderRootChangelog([
+			{
+				name: "a",
+				md: "# Changelog\n\n## [1.0.37] - 2026-02-01\n\n" + "## [1.0.4] - 2026-01-01\n\n### Fixed\n\n- older\n",
+			},
+			{
+				name: "b",
+				md: "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- pending\n\n## [1.0.37] - 2026-02-01\n\n### Fixed\n\n- newer\n",
+			},
+		]) as string;
+
+		expect(md.indexOf("## [Unreleased]")).toBeLessThan(md.indexOf("## [1.0.37]"));
+		expect(md.indexOf("## [1.0.37]")).toBeLessThan(md.indexOf("## [1.0.4]"));
+	});
+
+	/**
+	 * A release date belongs to the release, not to whichever package happened to
+	 * be read first, and a package that omitted it must not blank it.
+	 */
+	it("keeps a release date even when one package omits it", () => {
+		const md = renderRootChangelog([
+			{ name: "a", md: "# Changelog\n\n## [1.0.1]\n\n### Fixed\n\n- undated\n" },
+			{ name: "b", md: "# Changelog\n\n## [1.0.1] - 2026-01-01\n\n### Fixed\n\n- dated\n" },
+		]) as string;
+
+		expect(md).toContain("## [1.0.1] - 2026-01-01");
+	});
+});
+
+/**
+ * The root is generated, so a paragraph written directly into it is not a
+ * changelog entry — it is content the next render deletes. That is easy to do by
+ * accident, because the root is the file a contributor opens first and it reads
+ * as hand-written, and the deletion was SILENT: `--check` failed in CI, the
+ * contributor ran the fix command it names, and the fix threw their paragraph
+ * away without a word. It happened during this session, to 23 entries across
+ * several packages.
+ *
+ * So the write path refuses when the root holds an unreleased entry the render
+ * does not produce. These tests pin the detection, and above all pin that it does
+ * not cry wolf: a guard with false positives gets bypassed and then protects
+ * nothing.
+ */
+describe("orphaned root entries", () => {
+	const ROOT = (bullets: string) =>
+		`# Changelog\n\n## [Unreleased]\n\n### Changed\n\n${bullets}\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- old\n`;
+
+	it("reports an entry the render does not produce", () => {
+		const orphans = orphanedRootEntries(ROOT("- hand written\n- rendered"), ROOT("- rendered"));
+
+		expect(orphans).toEqual(["hand written"]);
+	});
+
+	it("reports nothing when every entry is accounted for", () => {
+		expect(orphanedRootEntries(ROOT("- rendered"), ROOT("- rendered"))).toEqual([]);
+	});
+
+	/** The renderer rewrites entry text on the way through (the omp→veyyon rebrand),
+	 * which is why the comparison is against the RENDER and not against the package
+	 * files: comparing to the sources reported every rewritten entry as unclaimed. */
+	it("does not report an entry the renderer rewrote, because it compares to the render", () => {
+		expect(orphanedRootEntries(buildRootChangelog(), buildRootChangelog())).toEqual([]);
+	});
+
+	/** A bullet may wrap over several lines. Comparing lines instead of whole
+	 * bullets would report every wrapped entry as half-missing. */
+	it("treats a re-wrapped entry as the same entry", () => {
+		const wrapped = ROOT("- one entry that happens to\n  wrap over two lines");
+		const flat = ROOT("- one entry that happens to wrap over two lines");
+
+		expect(orphanedRootEntries(wrapped, flat)).toEqual([]);
+	});
+
+	/**
+	 * The regression that made this guard hostile. Editing a package entry after a
+	 * root sync left the root holding the old wording, which was reported as an
+	 * orphan, and the ONLY way forward was `--force`, whose purpose is to discard
+	 * entries deliberately. A routine reword pushed the author onto the one flag
+	 * that can lose work. It was hit three times in one session.
+	 */
+	it("does not report an entry whose wording was edited after the last sync", () => {
+		const before = ROOT("- The selected roster row is highlighted across the whole row, which it was not before.");
+		const after = ROOT("- The selected roster row is highlighted across the whole row and stops at the gutter.");
+
+		expect(orphanedRootEntries(before, after)).toEqual([]);
+	});
+
+	/** An entry that gained a whole trailing paragraph is still the same entry. */
+	it("does not report an entry that grew after the last sync", () => {
+		const before = ROOT("- Page up and page down move the Agent Control Center.");
+		const after = ROOT(
+			"- Page up and page down move the Agent Control Center. They come from the shared bindings, so it is the same key and the same distance as every other selector.",
+		);
+
+		expect(orphanedRootEntries(before, after)).toEqual([]);
+	});
+
+	/**
+	 * And the guard still fires on what it exists for. A paragraph typed into the
+	 * root by hand shares no opening with anything the render produces, so it is
+	 * reported rather than silently deleted by the next write.
+	 */
+	it("still reports a hand-written entry that shares no opening with any rendered one", () => {
+		const rendered = ROOT("- The selected roster row is highlighted across the whole row.");
+		const withHandWritten = ROOT(
+			"- The selected roster row is highlighted across the whole row.\n- Somebody typed this straight into the generated root file.",
+		);
+
+		expect(orphanedRootEntries(withHandWritten, rendered)).toEqual([
+			"Somebody typed this straight into the generated root file.",
+		]);
+	});
+
+	/**
+	 * An entry rewritten from its FIRST word is indistinguishable from a new
+	 * hand-written paragraph, and is reported. That is the right way round:
+	 * reporting a reword costs a sentence of reading, and missing a hand-written
+	 * paragraph loses it. Pinned so the limitation is a decision, not a surprise.
+	 */
+	it("reports an entry rewritten from its opening, which cannot be told from a new one", () => {
+		const before = ROOT("- Wheel scrolling now moves the card rather than being swallowed by it.");
+		const after = ROOT("- The scroll wheel moves the card instead of being swallowed by it.");
+
+		expect(orphanedRootEntries(before, after)).toEqual([
+			"Wheel scrolling now moves the card rather than being swallowed by it.",
+		]);
+	});
+
+	/**
+	 * A short entry has no distinctive opening, so it is matched on its whole
+	 * text. Two one-word bullets sharing a prefix are not the same entry, and
+	 * treating them as one would silently drop the second.
+	 */
+	it("matches a short entry on its whole text rather than an opening", () => {
+		expect(orphanedRootEntries(ROOT("- fixed a thing"), ROOT("- fixed a thing too"))).toEqual(["fixed a thing"]);
+	});
+
+	it("ignores released sections, which are not at risk", () => {
+		const withRelease = `# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- kept\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- only here\n`;
+		const rendered = `# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- kept\n`;
+
+		expect(orphanedRootEntries(withRelease, rendered)).toEqual([]);
+	});
+});
+
+describe("unreleasedEntries against the real generated root", () => {
+	/**
+	 * And the banner the renderer actually emits is parsed correctly, not just a hand-written
+	 * lookalike. Asserting against the real render is what makes this a check on the pair rather
+	 * than on a fixture that can drift away from the banner it stands in for.
+	 *
+	 * This used to assert `bullets.length > 20`. That number described the repo on the day it was
+	 * written, not a contract: it passes for any parser that returns enough lines, including one
+	 * that leaks bullets out of released sections, and it fails for a correct parser as soon as a
+	 * release empties Unreleased. It did exactly that, and sat red on main unnoticed because this
+	 * suite runs in a bucket CI never invoked.
+	 *
+	 * Its replacement was red too, for a subtler reason, and this is the repair. It required the
+	 * parser to equal a list built by taking each `- ` line on its own. An entry may WRAP over
+	 * several lines, and joining a wrapped entry back into one string is the parser's job and the
+	 * reason orphan detection can identify an entry at all. So the expectation contradicted the
+	 * contract, and one wrapped entry in the real render was enough to fail it.
+	 *
+	 * The section is still sliced independently, and the opening line of each entry is still the
+	 * expectation, but an entry is now required to BEGIN with its opening rather than equal it.
+	 * Together with the count that still has to match exactly, that keeps every mistake the
+	 * previous version was written to catch: a slice that runs past the next heading, an
+	 * off-by-one that drops the last bullet, a match on prose that merely looks like a list, and
+	 * any reordering. What it no longer does is fail the parser for doing the joining correctly.
+	 */
+	it("reads the unreleased entries out of the real generated root", () => {
+		const rendered = buildRootChangelog();
+		const lines = rendered.split("\n");
+		const start = lines.findIndex(line => /^##\s*\[Unreleased\]/i.test(line));
+		expect(start).toBeGreaterThanOrEqual(0);
+		const rest = lines.slice(start + 1);
+		const end = rest.findIndex(line => /^##\s/.test(line));
+		const section = end === -1 ? rest : rest.slice(0, end);
+		const openings = section
+			.filter(line => line.trim().startsWith("- "))
+			.map(line => line.trim().slice(2).replace(/\s+/g, " ").trim())
+			.filter(bullet => !bullet.includes("Generated file."));
+
+		const parsed = unreleasedEntries(rendered);
+
+		expect(parsed).toHaveLength(openings.length);
+		expect(parsed.map((entry, index) => entry.startsWith(openings[index] ?? "\u0000"))).toEqual(
+			openings.map(() => true),
+		);
+	});
+
+	/**
+	 * The half of the contract an equality check against a possibly empty section cannot reach. The
+	 * released sections below Unreleased are full of bullets, and a parser that forgot to stop at
+	 * the next heading would return them while still looking plausible.
+	 */
+	it("stops at the first released version and returns none of its entries", () => {
+		const rendered = buildRootChangelog();
+		const lines = rendered.split("\n");
+		const firstRelease = lines.findIndex(line => /^##\s*\[\d/.test(line));
+		expect(firstRelease).toBeGreaterThanOrEqual(0);
+		const releasedBullets = lines
+			.slice(firstRelease)
+			.filter(line => line.startsWith("- "))
+			.map(line => line.slice(2).trim());
+		expect(releasedBullets.length).toBeGreaterThan(0);
+
+		const parsed = new Set(unreleasedEntries(rendered));
+		expect(releasedBullets.filter(bullet => parsed.has(bullet))).toEqual([]);
+	});
+});
+
+describe("committed root CHANGELOG.md", () => {
+	// WHY THIS IS NOT A BYTE-EQUALITY TEST ANY MORE. It was, and it ran in the
+	// repo script gates, which run on pull requests. The changelog gate requires
+	// a bullet under the changed package's `## [Unreleased]` section, and adding
+	// that bullet is what desynchronizes the generated root, so a contributor who
+	// followed CONTRIBUTING.md failed two jobs over a file AGENTS.md tells them
+	// never to edit by hand. Automation owns the file now, and what this suite
+	// defends is that the automation is wired: a render that nothing runs leaves
+	// the root stale forever, which is the failure the byte check used to catch.
+	//
+	// WHAT IT DOES NOT CATCH: whether a given commit's root is fresh. The
+	// pre-push hook answers that for a direct push to main, and the sync workflow
+	// answers it for a merge. Neither is observable from here.
+	const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/changelog-sync.yml"), "utf8")) as {
+		on?: { push?: { branches?: string[] } };
+		permissions?: { contents?: string };
+		jobs?: Record<string, { steps?: { run?: string }[] }>;
+	};
+	const runs = Object.values(workflow.jobs ?? {})
+		.flatMap(job => job.steps ?? [])
+		.map(step => step.run ?? "")
+		.join("\n");
+
+	it("is regenerated by a workflow that runs on every push to main", () => {
+		expect(workflow.on?.push?.branches).toEqual(["main"]);
+		expect(runs).toContain("scripts/sync-root-changelog.ts");
+	});
+
+	it("is committed back by that workflow, not merely rendered into a discarded checkout", () => {
+		expect(workflow.permissions?.contents).toBe("write");
+		expect(runs).toContain("git commit");
+		expect(runs).toContain("git push");
+	});
+
+	it("lives at the repo root where a GitHub visitor looks first", () => {
+		expect(ROOT_PATH).toBe(join(REPO_ROOT, "CHANGELOG.md"));
+	});
+});

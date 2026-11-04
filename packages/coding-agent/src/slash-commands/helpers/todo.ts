@@ -1,0 +1,277 @@
+import { titleCaseSentence, titleCaseWords } from "@veyyon/utils";
+import { tokenizeQuotedArgs } from "@veyyon/utils/cli";
+import type { TodoPhase } from "../../tools/agent/todo";
+import {
+	applyOpsToPhases,
+	getLatestTodoPhasesFromEntries,
+	markdownToPhases,
+	phasesToMarkdown,
+	resolveTodoMarkdownPath,
+	USER_TODO_EDIT_CUSTOM_TYPE,
+} from "../../tools/agent/todo";
+import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime } from "../types";
+import { commandConsumed, errorMessage, parseSubcommand, usage } from "./parse";
+
+type TodoMutationVerb = "done" | "drop" | "rm" | "pending";
+
+interface TodoTaskMatch {
+	task: { content: string; status: string };
+	phase: TodoPhase;
+}
+
+function findPhaseFuzzy(phases: TodoPhase[], query: string): TodoPhase | undefined {
+	const normalizedQuery = query.trim().toLowerCase();
+	if (!normalizedQuery) return undefined;
+	const exact = phases.find(phase => phase.name.toLowerCase() === normalizedQuery);
+	if (exact) return exact;
+	const prefixMatches = phases.filter(phase => phase.name.toLowerCase().startsWith(normalizedQuery));
+	if (prefixMatches.length === 1) return prefixMatches[0];
+	const substringMatches = phases.filter(phase => phase.name.toLowerCase().includes(normalizedQuery));
+	if (substringMatches.length === 1) return substringMatches[0];
+	return undefined;
+}
+
+function findTaskFuzzy(phases: TodoPhase[], query: string): TodoTaskMatch | undefined {
+	const normalizedQuery = query.trim().toLowerCase();
+	if (!normalizedQuery) return undefined;
+	for (const phase of phases) {
+		for (const task of phase.tasks) {
+			if (task.content.toLowerCase() === normalizedQuery) return { task, phase };
+		}
+	}
+	const matches: TodoTaskMatch[] = [];
+	for (const phase of phases) {
+		for (const task of phase.tasks) {
+			if (task.content.toLowerCase().includes(normalizedQuery)) matches.push({ task, phase });
+		}
+	}
+	if (matches.length === 1) return matches[0];
+	const active = matches.filter(match => match.task.status === "in_progress" || match.task.status === "pending");
+	if (active.length === 1) return active[0];
+	return undefined;
+}
+
+function currentPhases(runtime: SlashCommandRuntime): TodoPhase[] {
+	const fromEntries = getLatestTodoPhasesFromEntries(runtime.sessionManager.getBranch());
+	return fromEntries.length > 0 ? fromEntries : runtime.session.getTodoPhases();
+}
+
+function commitTodos(runtime: SlashCommandRuntime, phases: TodoPhase[]): void {
+	runtime.session.setTodoPhases(phases);
+	runtime.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
+}
+
+const TODO_HELP_TEXT = [
+	"Usage: /todo <verb> [args]",
+	"  /todo                              Show current todos",
+	"  /todo edit                         (TUI only) open in $EDITOR",
+	"  /todo copy                         Print todos as Markdown",
+	"  /todo export [<path>]              Write todos to file (default: TODO.md)",
+	"  /todo import [<path>]              Replace todos from file (default: TODO.md)",
+	"  /todo append [<phase>] <task...>   Append a task",
+	"  /todo start  <task>                Mark task in_progress (fuzzy match)",
+	"  /todo done   [<task|phase>]        Mark task/phase/all completed",
+	"  /todo drop   [<task|phase>]        Mark task/phase/all abandoned",
+	"  /todo rm     [<task|phase>]        Remove task/phase/all",
+	"  /todo pending [<task|phase>]        Reset task/phase to pending",
+	"  /todo reset   [<task|phase>]        Reset task/phase to pending (alias for pending)",
+	"  /todo help                         Show this help",
+].join("\n");
+
+async function handleTodoCopyCommand(runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	const phases = currentPhases(runtime);
+	const markdown = phases.length === 0 ? "" : phasesToMarkdown(phases).trimEnd();
+	await runtime.output(`Copy not available in ACP mode; printing instead:\n\n${markdown || "No todos."}`);
+	return commandConsumed();
+}
+
+async function handleTodoExportCommand(restArgs: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	const phases = currentPhases(runtime);
+	if (phases.length === 0) {
+		await runtime.output("No todos to export.");
+		return commandConsumed();
+	}
+	let target: string;
+	try {
+		target = resolveTodoMarkdownPath(restArgs, runtime.sessionManager.getCwd());
+		await Bun.write(target, phasesToMarkdown(phases));
+	} catch (err) {
+		return usage(`Failed to write todos: ${errorMessage(err)}`, runtime);
+	}
+	await runtime.output(`Wrote todos to ${target}`);
+	return commandConsumed();
+}
+
+async function handleTodoImportCommand(restArgs: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	let target: string;
+	let content: string;
+	try {
+		target = resolveTodoMarkdownPath(restArgs, runtime.sessionManager.getCwd());
+		content = await Bun.file(target).text();
+	} catch (err) {
+		return usage(`Failed to read todos: ${errorMessage(err)}`, runtime);
+	}
+	const { phases, errors } = markdownToPhases(content);
+	if (errors.length > 0) return usage(`Could not parse ${target}:\n  ${errors.join("\n  ")}`, runtime);
+	commitTodos(runtime, phases);
+	const taskCount = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
+	await runtime.output(`Imported ${phases.length} phase(s), ${taskCount} task(s) from ${target}.`);
+	return commandConsumed();
+}
+
+async function handleTodoAppendCommand(restArgs: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	const tokens = tokenizeQuotedArgs(restArgs);
+	if (tokens.length === 0) return usage("Usage: /todo append [<phase>] <task...>", runtime);
+
+	const current = currentPhases(runtime);
+	const phaseName = tokens.length === 1 ? undefined : tokens[0];
+	const content = tokens.length === 1 ? tokens[0]! : tokens.slice(1).join(" ");
+	const next = current.map(phase => ({ ...phase, tasks: phase.tasks.slice() }));
+	let targetPhase: TodoPhase;
+
+	if (phaseName) {
+		const existing = findPhaseFuzzy(next, phaseName);
+		targetPhase = existing ?? { name: titleCaseWords(phaseName), tasks: [] };
+		if (!existing) next.push(targetPhase);
+	} else if (next.length > 0) {
+		targetPhase = next[next.length - 1]!;
+	} else {
+		targetPhase = { name: "Todos", tasks: [] };
+		next.push(targetPhase);
+	}
+
+	const finalContent = titleCaseSentence(content);
+	targetPhase.tasks.push({ content: finalContent, status: "pending" });
+	commitTodos(runtime, next);
+	await runtime.output(`Appended to ${targetPhase.name}: ${finalContent}`);
+	return commandConsumed();
+}
+
+async function handleTodoStartCommand(restArgs: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	if (!restArgs) return usage("Usage: /todo start <task>", runtime);
+	const current = currentPhases(runtime);
+	const query = tokenizeQuotedArgs(restArgs).join(" ") || restArgs;
+	const hit = findTaskFuzzy(current, query);
+	if (!hit) return usage(`No task matched "${restArgs}". Use /todo to list current tasks.`, runtime);
+	const { phases } = applyOpsToPhases(current, [{ op: "start", task: hit.task.content }]);
+	commitTodos(runtime, phases);
+	await runtime.output(`Started: ${hit.task.content}`);
+	return commandConsumed();
+}
+
+async function handleTodoMutationCommand(
+	verb: TodoMutationVerb,
+	restArgs: string,
+	runtime: SlashCommandRuntime,
+): Promise<SlashCommandResult> {
+	const current = currentPhases(runtime);
+	const trimmedArg = restArgs.trim();
+	if (!trimmedArg) {
+		if (verb === "rm") {
+			commitTodos(runtime, []);
+			await runtime.output("Cleared all todos.");
+			return commandConsumed();
+		}
+		const { phases } = applyOpsToPhases(current, [{ op: verb }]);
+		commitTodos(runtime, phases);
+		await runtime.output(
+			verb === "done"
+				? "Marked all tasks completed."
+				: verb === "drop"
+					? "Marked all tasks abandoned."
+					: "Reset all tasks to pending.",
+		);
+		return commandConsumed();
+	}
+
+	const taskHit = findTaskFuzzy(current, trimmedArg);
+	if (taskHit) {
+		const { phases } = applyOpsToPhases(current, [{ op: verb, task: taskHit.task.content }]);
+		commitTodos(runtime, phases);
+		const label =
+			verb === "done"
+				? "Marked completed"
+				: verb === "drop"
+					? "Marked abandoned"
+					: verb === "pending"
+						? "Reset to pending"
+						: "Removed";
+		await runtime.output(`${label}: ${taskHit.task.content}`);
+		return commandConsumed();
+	}
+
+	const phaseHit = findPhaseFuzzy(current, trimmedArg);
+	if (phaseHit) {
+		const { phases } = applyOpsToPhases(current, [{ op: verb, phase: phaseHit.name }]);
+		commitTodos(runtime, phases);
+		const message =
+			verb === "done"
+				? `Marked phase ${phaseHit.name} completed.`
+				: verb === "drop"
+					? `Marked phase ${phaseHit.name} abandoned.`
+					: verb === "pending"
+						? `Reset phase ${phaseHit.name} to pending.`
+						: `Removed phase: ${phaseHit.name}`;
+		await runtime.output(message);
+		return commandConsumed();
+	}
+
+	return usage(`No task or phase matched "${trimmedArg}".`, runtime);
+}
+
+type TodoVerbHandler = (restArgs: string, runtime: SlashCommandRuntime) => Promise<SlashCommandResult>;
+
+/**
+ * Every verb `/todo` accepts, in the order the unknown-verb message names them. The dispatcher
+ * looks a verb up here instead of switching on it, so a verb cannot be accepted without being
+ * named and cannot be named without being accepted: the table is both the dispatch and the
+ * message. `?` is the punctuation spelling of `help`; it dispatches through the alias below and is
+ * deliberately not named in prose.
+ */
+const TODO_VERB_HANDLERS: Record<string, TodoVerbHandler> = {
+	append: handleTodoAppendCommand,
+	start: handleTodoStartCommand,
+	done: (restArgs, runtime) => handleTodoMutationCommand("done", restArgs, runtime),
+	drop: (restArgs, runtime) => handleTodoMutationCommand("drop", restArgs, runtime),
+	rm: (restArgs, runtime) => handleTodoMutationCommand("rm", restArgs, runtime),
+	pending: (restArgs, runtime) => handleTodoMutationCommand("pending", restArgs, runtime),
+	reset: (restArgs, runtime) => handleTodoMutationCommand("pending", restArgs, runtime),
+	copy: (_restArgs, runtime) => handleTodoCopyCommand(runtime),
+	export: handleTodoExportCommand,
+	import: handleTodoImportCommand,
+	edit: (_restArgs, runtime) =>
+		usage(
+			"/todo edit requires the TUI editor; use /todo export then /todo import for non-interactive edits.",
+			runtime,
+		),
+	help: async (_restArgs, runtime) => {
+		await runtime.output(TODO_HELP_TEXT);
+		return commandConsumed();
+	},
+};
+
+/** The verbs `/todo` dispatches on, in the order the unknown-verb message names them. */
+export const TODO_VERBS: readonly string[] = Object.keys(TODO_VERB_HANDLERS);
+
+const UNKNOWN_TODO_VERB_MESSAGE = `Unknown /todo subcommand.\nUse ${TODO_VERBS.slice(0, -1).join(", ")}, or ${TODO_VERBS[TODO_VERBS.length - 1]}.`;
+
+/** ACP/text-mode `/todo` handler. Shared by both dispatchers via the spec. */
+export async function handleTodoAcp(
+	command: ParsedSlashCommand,
+	runtime: SlashCommandRuntime,
+): Promise<SlashCommandResult> {
+	const trimmed = command.args.trim();
+	if (!trimmed) {
+		const phases = currentPhases(runtime);
+		await runtime.output(
+			phases.length === 0 ? "No todos. Use /todo append <task> to start one." : phasesToMarkdown(phases).trimEnd(),
+		);
+		return commandConsumed();
+	}
+
+	const { verb, rest } = parseSubcommand(trimmed);
+	const name = verb === "?" ? "help" : verb;
+	const handler = Object.hasOwn(TODO_VERB_HANDLERS, name) ? TODO_VERB_HANDLERS[name] : undefined;
+	if (!handler) return usage(UNKNOWN_TODO_VERB_MESSAGE, runtime);
+	return await handler(rest, runtime);
+}

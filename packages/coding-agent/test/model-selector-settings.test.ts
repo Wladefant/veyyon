@@ -1,0 +1,142 @@
+import { describe, expect, it } from "bun:test";
+import { buildModel } from "@veyyon/catalog/build";
+import {
+	cachedAuthAwareBrowserItems,
+	formatModelAuthBadge,
+	resolveModelAuthStatus,
+} from "@veyyon/coding-agent/modes/terminal/components/selectors/model-selector";
+import {
+	DEFAULT_MODEL_SETTING_ID,
+	getSettingsForTab,
+	invalidateSettingDefsCache,
+} from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
+
+describe("settings model pickers", () => {
+	it("exposes compaction.model as a model selector on the model tab", () => {
+		invalidateSettingDefsCache();
+		const modelTab = getSettingsForTab("model");
+		expect(modelTab.find(def => def.path === "compaction.model")?.type).toBe("modelSelector");
+	});
+
+	/**
+	 * The shared agent model is a picker on the Agents tab and nowhere else, drawn under the
+	 * switch that turns it on. It also sat on the Model tab while the per-agent overrides sat behind
+	 * `/agents` and a role called "Subtask" sat in the role table: three places to look for one
+	 * decision, which is how an operator could set an agent model and watch something else win. A
+	 * Model-tab row is that split reopening.
+	 */
+	it("exposes agent.model on the Agents tab only", () => {
+		invalidateSettingDefsCache();
+		expect(getSettingsForTab("agents").find(def => def.path === "agent.model")?.type).toBe("modelSelector");
+		expect(getSettingsForTab("model").find(def => def.path === "agent.model")).toBeUndefined();
+	});
+
+	/**
+	 * `/settings` needs a control for the model each new session starts on, or
+	 * it is set only by editing config by hand. The entry edits `defaultModel`
+	 * (the setting the interactive `/model` choice persists to) and must sit at
+	 * the very top of the model tab's "Models" group, where "what model do I
+	 * start on?" is looked for.
+	 */
+	it("exposes a Default Model entry at the top of the model tab", () => {
+		invalidateSettingDefsCache();
+		const modelTab = getSettingsForTab("model");
+		const dm = modelTab.find(def => def.path === DEFAULT_MODEL_SETTING_ID);
+		expect(dm?.type).toBe("defaultModel");
+		expect(dm?.label).toBe("Default Model");
+		expect(dm?.group).toBe("Models");
+		// First item in the Models group (top of the tab).
+		expect(modelTab.filter(def => def.group === "Models")[0]?.path).toBe(DEFAULT_MODEL_SETTING_ID);
+	});
+});
+
+describe("model auth badges", () => {
+	it("formats authenticated / keyless / unauthenticated labels", () => {
+		expect(formatModelAuthBadge("authenticated")).toEqual({ text: "auth", color: "success" });
+		expect(formatModelAuthBadge("keyless")).toEqual({ text: "local", color: "dim" });
+		expect(formatModelAuthBadge("unauthenticated")).toEqual({ text: "no auth", color: "warning" });
+	});
+
+	it("resolveModelAuthStatus uses registry auth + keyless", () => {
+		const model = {
+			id: "x",
+			name: "x",
+			provider: "ollama",
+			api: "openai-completions",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text" as const],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1,
+			maxTokens: 1,
+		};
+		const keyless = {
+			isKeylessProvider: (p: string) => p === "ollama",
+			hasConfiguredAuth: () => true,
+			authStorage: { hasAuth: () => false },
+		};
+		expect(resolveModelAuthStatus(keyless as never, model as never)).toBe("keyless");
+
+		const authed = {
+			isKeylessProvider: () => false,
+			hasConfiguredAuth: () => true,
+			authStorage: { hasAuth: () => true },
+		};
+		expect(resolveModelAuthStatus(authed as never, model as never)).toBe("authenticated");
+
+		const missing = {
+			isKeylessProvider: () => false,
+			hasConfiguredAuth: () => false,
+			authStorage: { hasAuth: () => false },
+		};
+		expect(resolveModelAuthStatus(missing as never, model as never)).toBe("unauthenticated");
+	});
+});
+
+describe("model selector catalog projection", () => {
+	/**
+	 * Opening model editors repeatedly must reuse catalog search rows while
+	 * recomputing authentication, otherwise a long fallback chain pays the full
+	 * catalog sort on every position and a newly connected provider stays stale.
+	 */
+	it("caches static catalog work but refreshes auth badges", () => {
+		const model = buildModel({
+			id: "cached-model",
+			name: "Cached model",
+			api: "openai-completions",
+			provider: "test",
+			baseUrl: "https://example.test",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 10_000,
+			maxTokens: 1_000,
+		});
+		let nameReads = 0;
+		Object.defineProperty(model, "name", {
+			configurable: true,
+			get: () => {
+				nameReads += 1;
+				return "Cached model";
+			},
+		});
+		let authenticated = false;
+		const registry = {
+			isKeylessProvider: () => false,
+			hasConfiguredAuth: () => authenticated,
+			authStorage: { hasAuth: () => authenticated },
+		};
+		const models = [model];
+
+		const first = cachedAuthAwareBrowserItems(models, registry as never);
+		const readsAfterFirstProjection = nameReads;
+		authenticated = true;
+		const second = cachedAuthAwareBrowserItems(models, registry as never);
+
+		expect(first[0]?.badge).toBe("no auth");
+		expect(second[0]?.badge).toBe("auth");
+		expect(nameReads).toBe(readsAfterFirstProjection);
+		expect(first).not.toBe(second);
+		expect(first[0]).not.toBe(second[0]);
+	});
+});

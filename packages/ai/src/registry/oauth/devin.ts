@@ -1,0 +1,121 @@
+import { DEVIN_AUTH_ENDPOINT, DEVIN_WEBAPP_URL } from "@veyyon/catalog/provider-endpoints";
+import { decodeJwtPayload } from "@veyyon/utils/jwt";
+import { DAY_MS } from "@veyyon/utils/time";
+import * as AIError from "../../error";
+import { DEFAULT_CALLBACK_PATH, OAuthCallbackFlow } from "./callback-server";
+import { credentialExpiryFromJwtExp } from "./expiry";
+import { generatePKCE } from "./pkce";
+import type { OAuthController, OAuthCredentials } from "./types";
+
+type FetchFunction = NonNullable<OAuthController["fetch"]>;
+
+const CALLBACK_PORT = 59653;
+const TOKEN_PATH = "/auth/cli/token";
+const FALLBACK_EXPIRES_MS = 365 * DAY_MS;
+
+interface DevinPKCEParams {
+	verifier: string;
+	challenge: string;
+}
+
+export async function loginDevin(ctrl: OAuthController): Promise<OAuthCredentials> {
+	const flow = new DevinOAuthFlow(ctrl);
+	return flow.login();
+}
+
+class DevinOAuthFlow extends OAuthCallbackFlow {
+	#pkce?: DevinPKCEParams;
+
+	constructor(ctrl: OAuthController) {
+		super(ctrl, {
+			preferredPort: CALLBACK_PORT,
+			callbackPath: DEFAULT_CALLBACK_PATH,
+			callbackHostname: "127.0.0.1",
+		});
+	}
+
+	generateState(): string {
+		return crypto.randomUUID();
+	}
+
+	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
+		this.#pkce = await generatePKCE();
+		const params = new URLSearchParams({
+			redirect_uri: redirectUri,
+			state,
+			prompt: "select_account",
+			code_challenge: this.#pkce.challenge,
+			code_challenge_method: "S256",
+		});
+
+		return {
+			url: `${DEVIN_WEBAPP_URL}/auth/cli/continue?${params.toString()}`,
+			instructions: "Sign in to Devin in your browser.",
+		};
+	}
+
+	async exchangeToken(code: string): Promise<OAuthCredentials> {
+		if (!this.#pkce) {
+			throw new AIError.OAuthError("Devin PKCE verifier was not initialized", {
+				kind: "configuration",
+				provider: "devin",
+			});
+		}
+		const token = await exchangeDevinCliToken(code, this.#pkce.verifier, this.ctrl.fetch);
+
+		return {
+			access: token,
+			refresh: token,
+			expires: getTokenExpiry(token),
+			apiEndpoint: DEVIN_AUTH_ENDPOINT,
+			enterpriseUrl: DEVIN_WEBAPP_URL,
+		};
+	}
+}
+
+export async function exchangeDevinCliToken(
+	authorizationCode: string,
+	codeVerifier: string,
+	fetchImpl: FetchFunction = fetch,
+): Promise<string> {
+	const response = await fetchImpl(`${DEVIN_AUTH_ENDPOINT}${TOKEN_PATH}`, {
+		method: "POST",
+		headers: {
+			Accept: "application/json",
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			code: authorizationCode,
+			code_verifier: codeVerifier,
+		}),
+	});
+
+	if (!response.ok) {
+		// A token endpoint's error body can echo the credential it refused, so it is read
+		// through the shared bounded reader and its redactor.
+		const error = await AIError.readProviderErrorDetail(response);
+		throw new AIError.OAuthError(`Devin CLI token exchange failed: ${response.status} ${error}`.trim(), {
+			kind: "token-exchange",
+			provider: "devin",
+			status: response.status,
+		});
+	}
+
+	const data = (await response.json()) as { token?: unknown };
+	if (typeof data.token !== "string" || data.token.length === 0) {
+		throw new AIError.OAuthError("Devin CLI token exchange returned an empty token", {
+			kind: "validation",
+			provider: "devin",
+		});
+	}
+	return data.token;
+}
+
+function getTokenExpiry(token: string): number {
+	const decoded = decodeJwtPayload<{ exp?: unknown }>(token);
+	if (decoded && typeof decoded.exp === "number" && Number.isFinite(decoded.exp)) {
+		return credentialExpiryFromJwtExp(decoded.exp, { provider: "devin" });
+	}
+	// Malformed / non-JWT tokens use a conservative long-lived fallback.
+	return Date.now() + FALLBACK_EXPIRES_MS;
+}

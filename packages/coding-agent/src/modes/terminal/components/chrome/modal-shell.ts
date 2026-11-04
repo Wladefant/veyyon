@@ -1,0 +1,767 @@
+/**
+ * ModalShell — shared floating overlay chrome for Veyyon TUI surfaces.
+ *
+ * Structure mirrors Grok Build's ModalWindow (sizing, title border, tip gap,
+ * centered shortcut footer, content inset math, fold glyphs, chrome mouse).
+ * Brand: silver is the structural chrome — border, title, footer chips, fold
+ * glyphs. The sun/ember accent is rare and reserved for the caret, focus
+ * ring, and links elsewhere in the product; it never paints a modal border
+ * or fill here. Sharp box-drawing only, no rounded corners.
+ *
+ * Product constraint: Veyyon stays transcript + composer; overlays float on
+ * top. This is not a full-screen TUI conversion.
+ */
+import { TERMINAL } from "@veyyon/tui";
+import { getKeybindings, type Keybinding } from "@veyyon/utils/keybindings";
+import { clamp } from "@veyyon/utils/math";
+import { padding } from "@veyyon/utils/padding";
+import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
+import { transitionsEnabled } from "../../../../theme/shimmer";
+import { theme, visibleGroundHex } from "../../../../theme/theme";
+import { keyHint } from "../../utils/key-hint";
+import { emberTick } from "../composer/composer-chrome";
+import { computeModalDims, type ModalSizing } from "./modal-geometry";
+import { bottomBorder, divider, fit, row, topBorder } from "./overlay-box";
+
+/** Fold indicator always occupies two columns (Grok FoldInfo parity). */
+export const FOLD_COLS = 2;
+
+/**
+ * Rows {@link renderModalShell} reserves outside the body when nothing is
+ * droppable: the top border, the caller's vertical padding ABOVE AND BELOW the
+ * body, the footer divider, the reserved footer band, and the bottom border.
+ *
+ * A caller that decides its own layout before rendering (side-by-side preview
+ * versus stacked, say) needs the body budget, and the only alternative to this is
+ * to restate the arithmetic. `ask-dialog.ts` did restate it, as
+ * `3 + footerLines + vPad`, with a comment admitting it "mirrors the arithmetic
+ * renderModalShell uses internally". That is the same number by coincidence of
+ * three unnamed `1`s, and nothing would have failed if the shell had grown a row.
+ * The terms live here now, next to the loop that shrinks them.
+ *
+ * This is the MINIMUM. The real reservation grows with a search line (two more
+ * rows) and with shortcut chips that wrap past `footerLines`, and shrinks again
+ * when the card is too short: the tip gap goes, then the tip, then `vPad`, then
+ * the caller's reserved footer padding down to the chip rows. A caller sizing a
+ * layout wants the floor, which is what this returns.
+ */
+export function minModalChromeRows(sizing: ModalSizing): number {
+	const topBorder = 1;
+	const footerDivider = 1;
+	const bottomBorder = 1;
+	return topBorder + 2 * sizing.vPad + footerDivider + sizing.footerLines + bottomBorder;
+}
+
+/** What {@link renderModalShell} will reserve outside the body for a given card. */
+export interface ModalChromePlan {
+	/** Laid-out shortcut chip rows (already wrapped to `contentWidth`). */
+	layoutRows: ShortcutLayoutRow[];
+	tipText: string;
+	searchChrome: number;
+	/** Padding rows, charged once ABOVE and once BELOW the body. */
+	vPad: number;
+	tipRows: number;
+	tipGap: number;
+	footerBand: number;
+	/** Every row that is not body: borders, padding, divider, footer band. */
+	nonBody: number;
+	/** Body rows the card can actually show. Content past this is dropped. */
+	maxBodyRows: number;
+}
+
+/**
+ * Resolve the chrome reservation for one card, including the shrink order that
+ * applies when it is too short.
+ *
+ * {@link minModalChromeRows} answers the static question (what does this sizing
+ * cost at minimum). This answers the real one: given these shortcuts, this tip,
+ * and this height, how many body rows will the card show? A caller that builds
+ * its body before rendering needs that number, because the shell SILENTLY
+ * TRUNCATES a body that is too long — `input.body.slice(0, bodyBudget)`.
+ *
+ * `model-hub.ts` learned that the hard way. It sized its split pane against a
+ * restated `3 + footerLines + vPad`, which charges `vPad` once where the card
+ * charges it twice, so its body ran two rows long and the shell silently ate the
+ * tail. The tail was the hub's strip row, which carries the hint line and every
+ * chip strip, so the entire contextual surface of the model hub was missing on
+ * an ordinary 40-row terminal. There must be ONE answer to "how many rows do I
+ * get", and this is it.
+ */
+export function planModalChrome(input: {
+	sizing: ModalSizing;
+	modalHeight: number;
+	contentWidth: number;
+	shortcuts?: readonly ModalShortcut[];
+	hoveredShortcutId?: string | null;
+	tipCandidates?: readonly string[];
+	hasSearch?: boolean;
+}): ModalChromePlan {
+	const { sizing, modalHeight, contentWidth } = input;
+	const layoutRows = layoutShortcutRows(input.shortcuts ?? [], contentWidth, input.hoveredShortcutId);
+	const tipText = input.tipCandidates?.length ? fitTipLine(input.tipCandidates, contentWidth) : "";
+	const searchChrome = input.hasSearch ? 2 : 0;
+
+	// Chips (or the caller's reserved footer lines) plus the top border, footer
+	// divider, and bottom border are mandatory chrome — they must never be
+	// clipped. The tip line, its gap, and the vertical padding are droppable, in
+	// that order, when the card is too short (e.g. a search+tip overlay on a
+	// 24-row terminal, where a naive slice would shear off the bottom border).
+	const shortcutRows = layoutRows.length;
+	let vPad = sizing.vPad;
+	let tipRows = tipText ? 1 : 0;
+	let tipGap = tipRows > 0 && modalHeight >= 6 ? 1 : 0;
+	let footerBand = Math.max(sizing.footerLines, shortcutRows + tipRows + tipGap);
+	// vPad is charged TWICE: the body gets the same breathing room above and
+	// below. A single top pad was invisible while every card was full height and
+	// padded with filler rows, but a card that hugs its content shows the last
+	// row resting directly on the footer divider.
+	const nonBody = () => 1 + searchChrome + 2 * vPad + 1 + footerBand + 1;
+	const refreshFooterBand = () => {
+		footerBand = Math.max(sizing.footerLines, shortcutRows + tipRows + tipGap);
+	};
+	if (nonBody() > modalHeight && tipGap > 0) {
+		tipGap = 0;
+		refreshFooterBand();
+	}
+	if (nonBody() > modalHeight && tipRows > 0) {
+		tipRows = 0;
+		refreshFooterBand();
+	}
+	while (nonBody() > modalHeight && vPad > 0) vPad--;
+	// Last resort: give up the caller's reserved footer padding, but keep every
+	// shortcut chip row.
+	while (nonBody() > modalHeight && footerBand > shortcutRows) footerBand--;
+
+	return {
+		layoutRows,
+		tipText,
+		searchChrome,
+		vPad,
+		tipRows,
+		tipGap,
+		footerBand,
+		nonBody: nonBody(),
+		maxBodyRows: Math.max(0, modalHeight - nonBody()),
+	};
+}
+
+/** The close chip on a card's title row, and the one place its cells are counted. */
+const MODAL_CLOSE_CHIP = " [x] ";
+
+/**
+ * The card width whose TITLE row shows `titleWidth` cells without an ellipsis. The title row is
+ * not the content row: it pays for the two borders, the ember tick that replaces the leading
+ * rule, a space each side of the title, and the close chip. A card sized only by
+ * {@link modalWidthForContent} cuts the last word off its own title, which is how a credential
+ * prompt lost the sentence that told the operator a name comes later.
+ */
+export function modalWidthForTitle(titleWidth: number): number {
+	return titleWidth + 2 + 2 + 2 + visibleWidth(MODAL_CLOSE_CHIP);
+}
+
+/** One footer chip. `clickable` marks action vs inert hint (mouse targets). */
+export interface ModalShortcut {
+	/** Display text. When `keybindings` is present, the live bound keys are prepended at render time. */
+	label: string;
+	/** Actions that trigger this shortcut. Unbound actions are omitted; an entirely unbound chip disappears. */
+	keybindings?: readonly Keybinding[];
+	clickable?: boolean;
+	id?: string;
+}
+
+/** Screen-space hit rect for a clickable footer chip. */
+export interface ShortcutHitRect {
+	id: string;
+	row: number;
+	colStart: number;
+	colEnd: number;
+}
+
+// One separator grammar across the whole TUI: the middle dot, two spaces each
+// side. The composer status line, welcome hints, and every ceremony footer use
+// `·`; modal footers used to be the lone `|` holdout, which read as a different
+// dialect on the same screen. Same visible width (5 cells), so chip layout math
+// is unchanged.
+const SHORTCUT_SEP = "  ·  ";
+
+function styleShortcutChip(label: string, hovered: boolean): string {
+	const space = label.indexOf(" ");
+	const key = space === -1 ? label : label.slice(0, space);
+	const rest = space === -1 ? "" : label.slice(space);
+	// Keys are bright silver (structure); labels stay muted. Hover keeps silver
+	// weight — never promote sun/ember into the chip band.
+	const keyStyled = theme.bold(theme.fg("accent", key));
+	const restStyled = rest ? theme.fg(hovered ? "muted" : "dim", rest) : "";
+	const chip = `${keyStyled}${restStyled}`;
+	return hovered ? theme.bg("selectedBg", chip) : chip;
+}
+
+export interface ShortcutLayoutRow {
+	plain: string;
+	styled: string;
+	/** Chip placements within the content column (before centering pad). */
+	chips: { id?: string; clickable: boolean; offset: number; width: number }[];
+}
+
+/**
+ * Chip labels with live keybindings resolved. A chip whose every action is unbound disappears.
+ *
+ * Each action contributes its FIRST bound key only. `tui.select.cancel` is bound to both escape
+ * and ctrl+c, and printing both made every list footer read `esc/ctrl+c close` beside cards whose
+ * hand-written footers say `esc close`. The first key is the one a remap puts first, so a user who
+ * rebinds cancel still sees the key they chose.
+ */
+function resolveShortcutLabels(shortcuts: readonly ModalShortcut[]): ModalShortcut[] {
+	const resolved: ModalShortcut[] = [];
+	for (const shortcut of shortcuts) {
+		if (!shortcut.keybindings) {
+			resolved.push(shortcut);
+			continue;
+		}
+		const keys = shortcut.keybindings
+			.map(action => keyHint(getKeybindings().getKeys(action).slice(0, 1)))
+			.filter(Boolean);
+		if (keys.length === 0) continue;
+		resolved.push({ ...shortcut, label: `${keys.join("/")} ${shortcut.label}` });
+	}
+	return resolved;
+}
+
+/**
+ * Greedy forward pack of chip widths into rows, in the order given.
+ *
+ * ONE OWNER FOR THE PACKING RULE, because two callers ask about it: the renderer, which needs the
+ * rows, and {@link shortcutBandWidth}, which needs only how many there would be at a candidate
+ * width. A second copy of this loop would let a card size itself against a packing its own footer
+ * does not perform, which paints a row of chips the card is one column too narrow to hold.
+ *
+ * Greedy is optimal for the row COUNT, since the chips cannot be reordered, but it can strand a
+ * lone trailing chip whose row-mates all landed on the row above; the caller that renders fixes
+ * that by borrowing backwards, which never changes the count.
+ */
+function packChipRows(widths: readonly number[], width: number, sepW: number): number[][] {
+	const groups: number[][] = [];
+	let current: number[] = [];
+	let currentW = 0;
+	for (let i = 0; i < widths.length; i++) {
+		const w = widths[i]!;
+		const extra = current.length === 0 ? w : sepW + w;
+		if (current.length > 0 && currentW + extra > width) {
+			groups.push(current);
+			current = [i];
+			currentW = w;
+		} else {
+			current.push(i);
+			currentW += extra;
+		}
+	}
+	if (current.length > 0) groups.push(current);
+	return groups;
+}
+
+export function layoutShortcutRows(
+	shortcuts: readonly ModalShortcut[],
+	width: number,
+	hoveredId?: string | null,
+): ShortcutLayoutRow[] {
+	if (width <= 0 || shortcuts.length === 0) return [];
+	const resolvedShortcuts = resolveShortcutLabels(shortcuts);
+	const chips = resolvedShortcuts.map(s => ({
+		id: s.id,
+		clickable: Boolean(s.clickable && s.id),
+		plain: s.label,
+		styled: styleShortcutChip(s.label, Boolean(s.id && s.id === hoveredId)),
+		w: visibleWidth(s.label),
+	}));
+	const sepW = visibleWidth(SHORTCUT_SEP);
+	const groups = packChipRows(
+		chips.map(c => c.w),
+		width,
+		sepW,
+	);
+
+	const groupWidth = (indices: number[]): number =>
+		indices.reduce((w, idx, pos) => w + chips[idx]!.w + (pos > 0 ? sepW : 0), 0);
+
+	// Orphan-avoidance pass: borrow chips backward from the previous row's
+	// tail so no row ends up alone beneath a fuller one above it. A donor row
+	// may give up its last chip as long as it keeps at least one for itself —
+	// no special-casing of row 0 needed: sweeping right-to-left means a row
+	// drained down to 1 while donating is re-examined (and refilled from its
+	// own predecessor) on the very next iteration, so a deficiency cascades
+	// as far back as width allows.
+	for (let i = groups.length - 1; i > 0; i--) {
+		while (groups[i]!.length < 2 && groups[i - 1]!.length > 1) {
+			const prev = groups[i - 1]!;
+			const movedIdx = prev[prev.length - 1]!;
+			const existingWidth = groupWidth(groups[i]!);
+			const candidateWidth = chips[movedIdx]!.w + (groups[i]!.length > 0 ? sepW + existingWidth : 0);
+			if (candidateWidth > width) break;
+			prev.pop();
+			groups[i]!.unshift(movedIdx);
+		}
+	}
+
+	return groups.map(indices => {
+		let plain = "";
+		let styled = "";
+		let w = 0;
+		const rowChips: ShortcutLayoutRow["chips"] = [];
+		for (const idx of indices) {
+			const chip = chips[idx]!;
+			if (w === 0) {
+				plain = chip.plain;
+				styled = chip.styled;
+				rowChips.push({ id: chip.id, clickable: chip.clickable, offset: 0, width: chip.w });
+				w = chip.w;
+			} else {
+				const offset = w + sepW;
+				plain += SHORTCUT_SEP + chip.plain;
+				styled += theme.fg("dim", SHORTCUT_SEP) + chip.styled;
+				w += sepW + chip.w;
+				rowChips.push({ id: chip.id, clickable: chip.clickable, offset, width: chip.w });
+			}
+		}
+		return { plain, styled, chips: rowChips };
+	});
+}
+
+/**
+ * Greedy wrap of centered shortcut chips. Returns ANSI-styled lines.
+ */
+export function renderModalShortcuts(
+	shortcuts: readonly ModalShortcut[],
+	width: number,
+	hoveredId?: string | null,
+): string[] {
+	return layoutShortcutRows(shortcuts, width, hoveredId).map(({ plain, styled }) => {
+		const pad = Math.max(0, width - visibleWidth(plain));
+		const left = Math.floor(pad / 2);
+		return padding(left) + styled + padding(pad - left);
+	});
+}
+
+/** First tip candidate that fits; else truncate the last. */
+export function fitTipLine(candidates: readonly string[], width: number): string {
+	if (width <= 0 || candidates.length === 0) return "";
+	for (const c of candidates) {
+		if (visibleWidth(c) <= width) return c;
+	}
+	return truncateToWidth(candidates[candidates.length - 1] ?? "", width);
+}
+
+/** Collapsed fold glyph + trailing space (always {@link FOLD_COLS} columns). */
+export function foldCollapsedGlyph(hovered = false): string {
+	const g = `${theme.nav.expand} `;
+	return hovered ? theme.bold(theme.fg("accent", g)) : theme.fg("dim", g);
+}
+
+/** Expanded fold glyph + trailing space (always {@link FOLD_COLS} columns). */
+export function foldExpandedGlyph(hovered = false): string {
+	const g = `${theme.nav.collapse} `;
+	return hovered ? theme.bold(theme.fg("accent", g)) : theme.fg("dim", g);
+}
+
+export interface ModalShellInput {
+	title: string;
+	/** Breadcrumb suffix shown after title, e.g. " › Theme". */
+	breadcrumb?: string;
+	/**
+	 * When true (and {@link breadcrumb} is set), style the whole title as an
+	 * underlined click target and hit-test it as `{ kind: "breadcrumb" }`
+	 * (peel one sub-pane level back to Browse). Mirrors Grok's clickable
+	 * `settings_breadcrumb_rect`.
+	 */
+	breadcrumbClickable?: boolean;
+	/** Hover state for the clickable breadcrumb title (brighter fg). */
+	breadcrumbHovered?: boolean;
+	sizing: ModalSizing;
+	areaWidth: number;
+	areaHeight: number;
+	/** Body lines already clipped to contentWidth (no outer border). */
+	body: readonly string[];
+	/**
+	 * Body rows this surface actually wants, when the terminal can spare fewer
+	 * than the card's maximum.
+	 *
+	 * Without it the card is always the full height the vertical margins allow,
+	 * so a seven-row list paints into a card sized for twenty and the ten blank
+	 * rows below it read as a list that failed to load the rest rather than as a
+	 * list that is simply short.
+	 *
+	 * Pass the surface's NATURAL row count, not the count currently visible: a
+	 * filtered list that passed its filtered length would resize the card on every
+	 * keystroke, which is worse than the empty space. The value is clamped to what
+	 * fits, so a caller can pass an honest number without also doing the chrome
+	 * arithmetic. Omit it to keep the full-height card.
+	 */
+	preferredBodyRows?: number;
+	/** Optional tip candidates (LONG then SHORT). */
+	tipCandidates?: readonly string[];
+	shortcuts?: readonly ModalShortcut[];
+	/** When set, paint a search chrome row above the body. */
+	searchLine?: string;
+	hoveredShortcutId?: string | null;
+	showClose?: boolean;
+}
+
+/**
+ * Columns between a card's left edge and its body text: the border and one space of padding.
+ *
+ * Owned by the shell because the shell is what draws them. Every card that hit-tests its own body
+ * needs the same number, and each one that spelled it `cardColStart + 2` locally was a separate
+ * place to be wrong the next time the border changes.
+ */
+export const CARD_BODY_COL_INSET = 2;
+
+export interface ModalShellGeometry {
+	leftPad: number;
+	topPad: number;
+	modalWidth: number;
+	modalHeight: number;
+	contentWidth: number;
+	/** Screen row (0-based in returned frame) where body content starts. */
+	bodyRowStart: number;
+	bodyRowCount: number;
+	/** Screen row of the search line, or -1. */
+	searchRow: number;
+	footerRowStart: number;
+	/** First row of shortcut chips (after tip + gap). */
+	shortcutRowStart: number;
+	closeColStart: number;
+	closeColEnd: number;
+	/** Clickable breadcrumb title span on {@link titleRow} (-1 when not clickable). */
+	breadcrumbColStart: number;
+	breadcrumbColEnd: number;
+	titleRow: number;
+	/** Absolute screen rect of the floating card. */
+	cardColStart: number;
+	cardColEnd: number;
+	cardRowStart: number;
+	cardRowEnd: number;
+	/** Clickable footer chips in screen coordinates. */
+	shortcutHits: readonly ShortcutHitRect[];
+}
+
+export interface ModalShellResult {
+	lines: string[];
+	geometry: ModalShellGeometry | null;
+}
+
+/**
+ * Paint a floating modal into a full-terminal frame (empty pads around card).
+ * Returns empty lines + null geometry when the terminal is too small.
+ */
+export function renderModalShell(input: ModalShellInput): ModalShellResult {
+	const dims = computeModalDims(input.areaWidth, input.areaHeight, input.sizing);
+	if (!dims) {
+		return {
+			lines: Array.from({ length: input.areaHeight }, () => padding(input.areaWidth)),
+			geometry: null,
+		};
+	}
+
+	const { modalWidth, modalHeight, leftPad, contentWidth } = dims;
+	const title = input.breadcrumb ? `${input.title}${input.breadcrumb}` : input.title;
+
+	const plan = planModalChrome({
+		sizing: input.sizing,
+		modalHeight,
+		contentWidth,
+		shortcuts: input.shortcuts,
+		hoveredShortcutId: input.hoveredShortcutId,
+		tipCandidates: input.tipCandidates,
+		hasSearch: input.searchLine !== undefined,
+	});
+	const { layoutRows, tipText, vPad, tipRows, tipGap, footerBand, maxBodyRows } = plan;
+	const hasSearch = input.searchLine !== undefined;
+	// The card is as tall as its content asks for, bounded by what fits. A caller
+	// that asks for nothing gets the full-height card it always got.
+	const bodyBudget =
+		input.preferredBodyRows === undefined
+			? maxBodyRows
+			: clamp(input.preferredBodyRows, Math.min(1, maxBodyRows), maxBodyRows);
+	const cardHeight = plan.nonBody + bodyBudget;
+	// Re-centre: the card shrank, so the pad above it grew by half the difference.
+	const cardTopPad = Math.max(0, Math.floor((input.areaHeight - cardHeight) / 2));
+
+	const body = [...input.body.slice(0, bodyBudget)];
+	while (body.length < bodyBudget) body.push("");
+
+	const card: string[] = [];
+	let closeColStart = -1;
+	let closeColEnd = -1;
+	let breadcrumbColStart = -1;
+	let breadcrumbColEnd = -1;
+	const breadcrumbClickable = Boolean(input.breadcrumb && input.breadcrumbClickable);
+
+	if (input.showClose !== false) {
+		const closePlain = MODAL_CLOSE_CHIP;
+		// Close glyph is silver structure (same as the frame), not dim soup.
+		const closeStyled = theme.fg("accent", closePlain);
+		const closeW = visibleWidth(closePlain);
+		const box = theme.boxSharp;
+		const inner = Math.max(0, modalWidth - 2);
+		const shown = truncateToWidth(` ${title} `, Math.max(0, inner - closeW - 2));
+		const fillWidth = Math.max(0, inner - 2 - visibleWidth(shown) - closeW);
+		const clickableTitle = breadcrumbClickable ? theme.bold(theme.underline(theme.fg("accent", shown))) : "";
+		const titleStyled = breadcrumbClickable
+			? input.breadcrumbHovered
+				? theme.bg("selectedBg", clickableTitle)
+				: clickableTitle
+			: theme.bold(theme.fg("accent", shown));
+		const frame = (s: string) => theme.fg("borderAccent", s);
+		// The title rail carries one ember tick right after the corner — the
+		// website's progress-sun-on-the-header-rule motif. Geometry is identical:
+		// the tick's cells occupy the space the leading rule + title space used.
+		card.push(
+			frame(box.topLeft) +
+				emberTick(TERMINAL.trueColor, 2) +
+				titleStyled +
+				frame(box.horizontal.repeat(fillWidth)) +
+				closeStyled +
+				frame(box.topRight),
+		);
+		closeColStart = leftPad + 1 + 2 + visibleWidth(shown) + fillWidth;
+		closeColEnd = closeColStart + closeW;
+		if (breadcrumbClickable) {
+			breadcrumbColStart = leftPad + 1 + 2;
+			breadcrumbColEnd = breadcrumbColStart + visibleWidth(shown);
+		}
+	} else {
+		card.push(topBorder(modalWidth, title, theme));
+	}
+
+	let searchRowInCard = -1;
+	if (hasSearch) {
+		searchRowInCard = card.length;
+		card.push(row(fit(input.searchLine ?? "", contentWidth), modalWidth, theme));
+		card.push(divider(modalWidth, theme));
+	}
+
+	for (let i = 0; i < vPad; i++) {
+		card.push(row("", modalWidth, theme));
+	}
+
+	const bodyRowStartInCard = card.length;
+	for (const line of body) {
+		card.push(row(fit(line, contentWidth), modalWidth, theme));
+	}
+
+	for (let i = 0; i < vPad; i++) {
+		card.push(row("", modalWidth, theme));
+	}
+
+	card.push(divider(modalWidth, theme));
+	const footerStartInCard = card.length;
+	if (tipText && tipRows > 0) {
+		card.push(row(theme.italic(theme.fg("dim", tipText)), modalWidth, theme));
+		if (tipGap) card.push(row("", modalWidth, theme));
+	}
+	const shortcutStartInCard = card.length;
+	// Content inset: border column + one space (matches overlay-box `row`).
+	const contentColStart = leftPad + 2;
+	const shortcutHits: ShortcutHitRect[] = [];
+	for (let i = 0; i < layoutRows.length; i++) {
+		const layout = layoutRows[i]!;
+		const pad = Math.max(0, contentWidth - visibleWidth(layout.plain));
+		const left = Math.floor(pad / 2);
+		card.push(row(padding(left) + layout.styled + padding(pad - left), modalWidth, theme));
+		const screenRow = cardTopPad + shortcutStartInCard + i;
+		for (const chip of layout.chips) {
+			if (!chip.clickable || !chip.id) continue;
+			shortcutHits.push({
+				id: chip.id,
+				row: screenRow,
+				colStart: contentColStart + left + chip.offset,
+				colEnd: contentColStart + left + chip.offset + chip.width,
+			});
+		}
+	}
+	while (card.length < footerStartInCard + footerBand) {
+		card.push(row("", modalWidth, theme));
+	}
+	card.push(bottomBorder(modalWidth, theme));
+
+	while (card.length < cardHeight) {
+		card.splice(bodyRowStartInCard + body.length, 0, row("", modalWidth, theme));
+	}
+	const clipped = card.slice(0, cardHeight);
+
+	const rightPad = Math.max(0, input.areaWidth - leftPad - modalWidth);
+	const frame: string[] = [];
+	for (let i = 0; i < cardTopPad; i++) frame.push(padding(input.areaWidth));
+	for (const line of clipped) {
+		frame.push(padding(leftPad) + line + padding(rightPad));
+	}
+	while (frame.length < input.areaHeight) frame.push(padding(input.areaWidth));
+
+	return {
+		lines: frame.slice(0, input.areaHeight),
+		geometry: {
+			leftPad,
+			topPad: cardTopPad,
+			modalWidth,
+			modalHeight: cardHeight,
+			contentWidth,
+			bodyRowStart: cardTopPad + bodyRowStartInCard,
+			bodyRowCount: bodyBudget,
+			searchRow: searchRowInCard >= 0 ? cardTopPad + searchRowInCard : -1,
+			footerRowStart: cardTopPad + footerStartInCard,
+			shortcutRowStart: cardTopPad + shortcutStartInCard,
+			closeColStart,
+			closeColEnd,
+			breadcrumbColStart,
+			breadcrumbColEnd,
+			titleRow: cardTopPad,
+			cardColStart: leftPad,
+			cardColEnd: leftPad + modalWidth,
+			cardRowStart: cardTopPad,
+			cardRowEnd: cardTopPad + Math.min(clipped.length, cardHeight),
+			shortcutHits,
+		},
+	};
+}
+
+/** Sentinel hover id for the clickable breadcrumb title (not a real shortcut chip). */
+export const BREADCRUMB_HOVER_ID = "breadcrumb";
+
+export type ModalChromeAction =
+	| { kind: "close" }
+	| { kind: "outside" }
+	| { kind: "breadcrumb" }
+	| { kind: "shortcut"; id: string }
+	| { kind: "hover-shortcut"; id: string | null }
+	| { kind: "none" };
+
+/**
+ * Hit-test ModalShell chrome: close glyph, click-outside, footer chips.
+ * Body/content routing stays with the host.
+ */
+export function hitTestModalChrome(
+	geometry: ModalShellGeometry | null,
+	row: number,
+	col: number,
+	opts: { motion?: boolean; leftClick?: boolean } = {},
+): ModalChromeAction {
+	if (!geometry) return { kind: "none" };
+	const inCard =
+		row >= geometry.cardRowStart &&
+		row < geometry.cardRowEnd &&
+		col >= geometry.cardColStart &&
+		col < geometry.cardColEnd;
+
+	const overBreadcrumb =
+		row === geometry.titleRow &&
+		geometry.breadcrumbColStart >= 0 &&
+		col >= geometry.breadcrumbColStart &&
+		col < geometry.breadcrumbColEnd;
+
+	if (opts.motion) {
+		if (!inCard) return { kind: "hover-shortcut", id: null };
+		if (overBreadcrumb) return { kind: "hover-shortcut", id: BREADCRUMB_HOVER_ID };
+		for (const hit of geometry.shortcutHits) {
+			if (row === hit.row && col >= hit.colStart && col < hit.colEnd) {
+				return { kind: "hover-shortcut", id: hit.id };
+			}
+		}
+		return { kind: "hover-shortcut", id: null };
+	}
+
+	if (!opts.leftClick) return { kind: "none" };
+
+	if (!inCard) return { kind: "outside" };
+
+	if (
+		row === geometry.titleRow &&
+		geometry.closeColStart >= 0 &&
+		col >= geometry.closeColStart &&
+		col < geometry.closeColEnd
+	) {
+		return { kind: "close" };
+	}
+
+	if (overBreadcrumb) return { kind: "breadcrumb" };
+
+	for (const hit of geometry.shortcutHits) {
+		if (row === hit.row && col >= hit.colStart && col < hit.colEnd) {
+			return { kind: "shortcut", id: hit.id };
+		}
+	}
+	return { kind: "none" };
+}
+
+/**
+ * The motion half of chrome hit-testing, with the consumption answer folded
+ * in. {@link hitTestModalChrome} reports EVERY motion as `"hover-shortcut"`
+ * — carrying the hovered chip's id, or `null` as the clear-hover signal — so
+ * a host that early-returns on the kind alone swallows every body-row
+ * motion, which is exactly what every ModalShell host did: pointer hover on
+ * list rows, browser rows, and settings submenu rows never reached the body
+ * until this. Update the host's hovered chip (the setter fires only on
+ * change, which is when a re-render is wanted) and answer whether the chrome
+ * consumed the event: `true` only while the pointer is actually on a chip or
+ * the breadcrumb, `false` to continue into body handling.
+ */
+export function consumeModalChipHover(
+	chrome: ModalChromeAction,
+	currentHoveredId: string | null,
+	setHoveredId: (id: string | null) => void,
+): boolean {
+	if (chrome.kind !== "hover-shortcut") return false;
+	const next = chrome.id ?? null;
+	if (currentHoveredId !== next) setHoveredId(next);
+	return next !== null;
+}
+
+/**
+ * Default settings footer chips (Browse layer).
+ *
+ * `left categories` is the only route from the settings pane to another
+ * category, so it is advertised rather than left to be discovered. Without it
+ * the footer named no key that leaves the tab the card opens on, and a reader
+ * who never guessed Left could reach exactly one of the fourteen categories.
+ */
+export const SETTINGS_BROWSE_SHORTCUTS: readonly ModalShortcut[] = [
+	{ label: "up/down navigate" },
+	{ label: "left categories" },
+	{ label: "enter change" },
+	{ label: "/ search" },
+	{ label: "esc close", clickable: true, id: "close" },
+];
+
+export const SETTINGS_FILTER_SHORTCUTS: readonly ModalShortcut[] = [
+	{ label: "up/down navigate" },
+	{ label: "enter keep filter" },
+	{ label: "esc clear search", clickable: true, id: "clear-filter" },
+];
+
+export const SETTINGS_SUBPANE_SHORTCUTS: readonly ModalShortcut[] = [
+	{ label: "enter confirm" },
+	{ label: "esc back", clickable: true, id: "back" },
+];
+
+/** Shared chips for simple list pickers (theme/thinking/queue/…). */
+export const SELECT_LIST_SHORTCUTS: readonly ModalShortcut[] = [
+	{ label: "navigate", keybindings: ["tui.select.up", "tui.select.down"] },
+	{ label: "select", keybindings: ["tui.select.confirm"], clickable: true, id: "confirm" },
+	{ label: "close", keybindings: ["tui.select.cancel"], clickable: true, id: "close" },
+];
+
+// --- Pointer-band motion ----------------------------------------------------
+
+/**
+ * Ambient gate for pointer-band motion on modal surfaces:
+ * `display.transitions: off` turns structural motion off, and non-truecolor
+ * terminals skip motion entirely.
+ */
+export function pointerMotionEnabled(): boolean {
+	return TERMINAL.trueColor && transitionsEnabled();
+}
+
+/**
+ * The color the pointer band fades out of on a modal card. One owner, in the theme.
+ */
+export function modalRevealGround(): string {
+	return visibleGroundHex();
+}

@@ -1,0 +1,159 @@
+/**
+ * `veyyon grep` standalone command: content/count/files modes, glob filtering,
+ * limit, and error exit codes over a real fixture tree, plus a positive
+ * assertion that the engine's literal fallback for unparseable regexes is
+ * announced loudly (Law 10: no silent fallback — tracked in BACKLOG
+ * GREP-LITERAL-FALLBACK-INVISIBLE, now fixed). The demotion was previously
+ * silent; the CLI now prints a notice so the operator knows matches are literal
+ * text, not the regex they wrote.
+ */
+import { afterAll, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { removeSyncWithRetries } from "@veyyon/utils";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+
+const cliPath = path.resolve(import.meta.dir, "../../src/cli.ts");
+
+/**
+ * Fixture trees this file made, deleted together at the end.
+ *
+ * Neither these nor the spawn HOMEs were ever deleted. The CLI writes a whole
+ * config root under whatever home it is handed, so one abandoned run was ~287MB;
+ * this suite and the `read`/`models` ones had left 3,265 directories and 34GB in
+ * `/tmp` on the machine where it was found. Registered cleanup rather than
+ * remembered cleanup, because a leak that shows up only on a developer's disk is
+ * invisible to every gate here.
+ */
+const fixtures: string[] = [];
+
+afterAll(() => {
+	for (const dir of fixtures) removeSyncWithRetries(dir);
+	fixtures.length = 0;
+});
+
+function makeFixtureTree(): string {
+	const root = mkdtempSync(path.join(tmpdir(), "veyyon-grep-fixture-"));
+	fixtures.push(root);
+	writeFileSync(path.join(root, "alpha.txt"), "needle one\nplain line\nneedle two\n");
+	writeFileSync(path.join(root, "beta.md"), "no match here\nneedle three\n");
+	mkdirSync(path.join(root, "sub"));
+	writeFileSync(path.join(root, "sub", "gamma.txt"), "fetchProvider(\n");
+	return root;
+}
+
+async function runGrep(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	// `hermeticSpawnEnv` owns both halves of this: the temp HOME's cleanup, and the
+	// full list of variables a spawned CLI must not inherit. The hand-built env here
+	// cleared three veyyon keys and none of the four XDG bases, so a developer with
+	// `XDG_STATE_HOME` set gave every child CLI a state root inside their real tree.
+	const { env, cleanup } = hermeticSpawnEnv();
+	try {
+		const proc = Bun.spawn(["bun", cliPath, "grep", ...args], {
+			env,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		return { exitCode, stdout, stderr };
+	} finally {
+		// `finally`, so a thrown assertion still cleans up. A cleanup that runs only on
+		// the happy path turns an unconditional leak into an intermittent one.
+		cleanup();
+	}
+}
+
+describe("veyyon grep", () => {
+	it("content mode reports exact totals and file:line matches", async () => {
+		const root = makeFixtureTree();
+		const { exitCode, stdout } = await runGrep(["needle", root]);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("Total matches: 3");
+		expect(stdout).toContain("Files with matches: 2");
+		expect(stdout).toContain("alpha.txt:1: needle one");
+		expect(stdout).toContain("alpha.txt:3: needle two");
+		expect(stdout).toContain("beta.md:2: needle three");
+	}, 30_000);
+
+	it("count mode (-c) prints per-file match counts", async () => {
+		const root = makeFixtureTree();
+		const { exitCode, stdout } = await runGrep(["-c", "needle", root]);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("alpha.txt: 2 matches");
+		expect(stdout).toContain("beta.md: 1 matches");
+	}, 30_000);
+
+	it("files mode (-f) prints matching paths only, no line content", async () => {
+		const root = makeFixtureTree();
+		const { exitCode, stdout } = await runGrep(["-f", "needle", root]);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("alpha.txt");
+		expect(stdout).toContain("beta.md");
+		expect(stdout).not.toContain("needle one");
+	}, 30_000);
+
+	it("--glob restricts the searched files", async () => {
+		const root = makeFixtureTree();
+		const { exitCode, stdout } = await runGrep(["-g", "*.md", "needle", root]);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("Total matches: 1");
+		expect(stdout).toContain("beta.md:2: needle three");
+		expect(stdout).not.toContain("alpha.txt");
+	}, 30_000);
+
+	it("--limit caps matches and reports the truncation", async () => {
+		const root = makeFixtureTree();
+		const { exitCode, stdout } = await runGrep(["-l", "1", "needle", root]);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("Limit reached: true");
+	}, 30_000);
+
+	it("exits 1 with the OS error when the search path does not exist", async () => {
+		const { exitCode, stderr } = await runGrep(["needle", "/nonexistent-grep-path-xyz"]);
+		expect(exitCode).toBe(1);
+		expect(stderr).toContain("Path not found");
+	}, 30_000);
+
+	it("exits 2 with usage when the pattern is missing", async () => {
+		const { exitCode, stderr } = await runGrep([]);
+		expect(exitCode).toBe(2);
+		expect(stderr).toContain("Pattern is required");
+	}, 30_000);
+
+	it("a code-snippet pattern with a stray paren still matches (paren-escape retry)", async () => {
+		const root = makeFixtureTree();
+		const { exitCode, stdout } = await runGrep(["fetchProvider(", root]);
+		expect(exitCode).toBe(0);
+		expect(stdout).toContain("Total matches: 1");
+		expect(stdout).toContain("sub/gamma.txt:1: fetchProvider(");
+	}, 30_000);
+
+	// An unparseable regex (`[unclosed`) is demoted to a literal search. Recall is
+	// preserved — the literal text is still found — but the demotion is announced
+	// loudly, not silent (Law 10). See BACKLOG GREP-LITERAL-FALLBACK-INVISIBLE.
+	it("announces when an unparseable regex is demoted to a literal search", async () => {
+		const root = makeFixtureTree();
+		const literal = makeFixtureTree();
+		writeFileSync(path.join(literal, "delta.txt"), "prefix [unclosed suffix\n");
+
+		const miss = await runGrep(["[unclosed", root]);
+		expect(miss.exitCode).toBe(0);
+		expect(miss.stdout).toContain("Total matches: 0");
+		// The demotion is surfaced even when nothing matched.
+		expect(miss.stdout).toMatch(/did not compile as a regex/i);
+		expect(miss.stdout).toMatch(/searched literally/i);
+
+		const hit = await runGrep(["[unclosed", literal]);
+		expect(hit.exitCode).toBe(0);
+		expect(hit.stdout).toContain("Total matches: 1");
+		expect(hit.stdout).toContain("delta.txt:1: prefix [unclosed suffix");
+		// Same loud notice on the hit path.
+		expect(hit.stdout).toMatch(/did not compile as a regex/i);
+	}, 30_000);
+});

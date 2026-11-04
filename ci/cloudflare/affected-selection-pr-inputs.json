@@ -1,0 +1,236 @@
+{
+  "repository": "Wladefant/veyyon",
+  "pull_requests": [
+    {
+      "number": 620,
+      "url": "https://github.com/Wladefant/veyyon/pull/620",
+      "base_ref": "main",
+      "base_sha": "5646799e6ea503953b5029f414ff85cd39fb8e4b",
+      "head_ref": "cf-ci/gemini-missing-counter",
+      "head_sha": "982580902d9c0895ac6683b3c1b14cc0ae4ac987",
+      "file_count": 3,
+      "files": [
+        {
+          "filename": "packages/ai/CHANGELOG.md",
+          "status": "modified",
+          "sha": "fd165dd1b8c2aa73a9cdfe11590deb2f5b771ce5",
+          "previous_filename": null,
+          "additions": 1,
+          "deletions": 0,
+          "changes": 1
+        },
+        {
+          "filename": "packages/ai/src/usage/google-antigravity.ts",
+          "status": "modified",
+          "sha": "9b66adb4635add22a64d3c43500a86a182aabb5c",
+          "previous_filename": null,
+          "additions": 28,
+          "deletions": 10,
+          "changes": 38
+        },
+        {
+          "filename": "packages/ai/test/google-antigravity-usage.test.ts",
+          "status": "modified",
+          "sha": "c18ef85b74223ab793f65816f46f46b31d3f5c01",
+          "previous_filename": null,
+          "additions": 99,
+          "deletions": 0,
+          "changes": 99
+        }
+      ]
+    },
+    {
+      "number": 627,
+      "url": "https://github.com/Wladefant/veyyon/pull/627",
+      "base_ref": "main",
+      "base_sha": "5646799e6ea503953b5029f414ff85cd39fb8e4b",
+      "head_ref": "cf-ci/517-launch-client-disposal",
+      "head_sha": "b00fb5afb7c1f615b750970ff762532a56e1a8dc",
+      "file_count": 3,
+      "files": [
+        {
+          "filename": "packages/coding-agent/CHANGELOG.md",
+          "status": "modified",
+          "sha": "ced9c08ad60105d7635d4446a2c2cd1b409d73f7",
+          "previous_filename": null,
+          "additions": 1,
+          "deletions": 0,
+          "changes": 1
+        },
+        {
+          "filename": "packages/coding-agent/src/launch/client.ts",
+          "status": "modified",
+          "sha": "1ef1294f93053bcf86a6a7e0ffdb6fc24c8d5167",
+          "previous_filename": null,
+          "additions": 8,
+          "deletions": 0,
+          "changes": 8
+        },
+        {
+          "filename": "packages/coding-agent/test/launch/a-closed-client-rejects-a-wait-during-connect.test.ts",
+          "status": "added",
+          "sha": "21dcaccb067524df3d6cf3cc76a64d60ded37c72",
+          "previous_filename": null,
+          "additions": 90,
+          "deletions": 0,
+          "changes": 90
+        }
+      ]
+    },
+    {
+      "number": 607,
+      "url": "https://github.com/Wladefant/veyyon/pull/607",
+      "base_ref": "main",
+      "base_sha": "5646799e6ea503953b5029f414ff85cd39fb8e4b",
+      "head_ref": "feat/session-handoff-603",
+      "head_sha": "414a40190255f689d33cb6fdb23e2eda9ce28d9d",
+      "file_count": 16,
+      "files": [
+        {
+          "filename": "cloud/checkpoints/worker.test.ts",
+          "status": "modified",
+          "sha": "aa99dfabb8e7e06d9b04df9de7481c5b5bad1c18",
+          "previous_filename": null,
+          "additions": 157,
+          "deletions": 2,
+          "changes": 159
+        },
+        {
+          "filename": "cloud/checkpoints/worker.ts",
+          "status": "modified",
+          "sha": "003f722132e16d3e0545893399c5051c03559e20",
+          "previous_filename": null,
+          "additions": 104,
+          "deletions": 13,
+          "changes": 117
+        },
+        {
+          "filename": "contracts/session/src/checkpoint-ownership.ts",
+          "status": "added",
+          "sha": "a17e1e48cea3b63b04aa9e749e38450ddd6fd103",
+          "previous_filename": null,
+          "additions": 11,
+          "deletions": 0,
+          "changes": 11
+        },
+        {
+          "filename": "docs/handbook/src/reference/cli.md",
+          "status": "modified",
+          "sha": "392d318bc8e2d93c45a532285598855d117b580d",
+          "previous_filename": null,
+          "additions": 12,
+          "deletions": 0,
+          "changes": 12
+        },
+        {
+          "filename": "packages/coding-agent/src/checkpoints/cloud-checkpoints.ts",
+          "status": "modified",
+          "sha": "0b1d8106205cf90446a3b96f00b2afc2ec5660cb",
+          "previous_filename": null,
+          "additions": 127,
+          "deletions": 3,
+          "changes": 130
+        },
+        {
+          "filename": "packages/coding-agent/src/checkpoints/native-recovery.ts",
+          "status": "modified",
+          "sha": "9682c5ed118f126d9a7705605989bc032cf542b0",
+          "previous_filename": null,
+          "additions": 130,
+          "deletions": 9,
+          "changes": 139
+        },
+        {
+          "filename": "packages/coding-agent/src/checkpoints/session-ownership-marker.ts",
+          "status": "added",
+          "sha": "85520331dfe9d392efcf1ad94757d3d2964637a1",
+          "previous_filename": null,
+          "additions": 162,
+          "deletions": 0,
+          "changes": 162
+        },
+        {
+          "filename": "packages/coding-agent/src/checkpoints/synchronized-session.ts",
+          "status": "modified",
+          "sha": "3af29e5945d1fe3f0ada63088ba2c4e21b3ad22e",
+          "previous_filename": null,
+          "additions": 58,
+          "deletions": 6,
+          "changes": 64
+        },
+        {
+          "filename": "packages/coding-agent/src/cli/checkpoint-cli.ts",
+          "status": "modified",
+          "sha": "ff19b9be4cd01c61ad79fd9977b463bbeb9aa91d",
+          "previous_filename": null,
+          "additions": 110,
+          "deletions": 17,
+          "changes": 127
+        },
+        {
+          "filename": "packages/coding-agent/src/commands/session.ts",
+          "status": "modified",
+          "sha": "dc610d5eb79719e3170699e0b36690e9a225f306",
+          "previous_filename": null,
+          "additions": 9,
+          "deletions": 2,
+          "changes": 11
+        },
+        {
+          "filename": "packages/coding-agent/src/session/agent-session.ts",
+          "status": "modified",
+          "sha": "d20359cc9f00b6f4e4a14c8f58890304d8a9e547",
+          "previous_filename": null,
+          "additions": 32,
+          "deletions": 3,
+          "changes": 35
+        },
+        {
+          "filename": "packages/coding-agent/test/agent-session-checkpoint-admission.test.ts",
+          "status": "added",
+          "sha": "327a16fae2c5f06885bb25ec918c18454afb9770",
+          "previous_filename": null,
+          "additions": 151,
+          "deletions": 0,
+          "changes": 151
+        },
+        {
+          "filename": "packages/coding-agent/test/checkpoint-cli.test.ts",
+          "status": "modified",
+          "sha": "894f39bea400c140097b8c31e16c1919c0712be1",
+          "previous_filename": null,
+          "additions": 220,
+          "deletions": 0,
+          "changes": 220
+        },
+        {
+          "filename": "packages/coding-agent/test/native-recovery.test.ts",
+          "status": "modified",
+          "sha": "5433caa26a03b32272cbde12a4e8cf5a9039f7f9",
+          "previous_filename": null,
+          "additions": 50,
+          "deletions": 0,
+          "changes": 50
+        },
+        {
+          "filename": "packages/coding-agent/test/session-ownership-marker.test.ts",
+          "status": "added",
+          "sha": "129f3312478cd42742fa94a2660a8391ef027da0",
+          "previous_filename": null,
+          "additions": 53,
+          "deletions": 0,
+          "changes": 53
+        },
+        {
+          "filename": "packages/coding-agent/test/synchronized-session.test.ts",
+          "status": "modified",
+          "sha": "802e581292e934761c70ab7adb05a1a3301820eb",
+          "previous_filename": null,
+          "additions": 148,
+          "deletions": 0,
+          "changes": 148
+        }
+      ]
+    }
+  ]
+}

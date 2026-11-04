@@ -1,0 +1,103 @@
+/**
+ * Regression guard for issue #2190 / PR #2193 review.
+ *
+ * The CLI loads extensions early to parse custom flags, then hands the result
+ * back through `preloadedExtensions` so its OWN session can reuse the loaded
+ * instances without redoing the FS scan. `createAgentSession()` augments the
+ * result with inline extensions (autoresearch + custom-tools wrapper), so it
+ * MUST clone the caller's `extensions` array before mutating it — otherwise
+ * the caller's array accumulates session-local wrappers it never authored.
+ *
+ * Agent forwarding is a separate path (`preloadedExtensionPaths`) which
+ * reloads extensions per session so each session's `ExtensionAPI` is its own.
+ */
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import type { LoadExtensionsResult } from "@veyyon/coding-agent/extensibility/extensions/types";
+import { createAgentSession } from "@veyyon/coding-agent/sdk";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { removeSyncWithRetries } from "@veyyon/utils";
+
+describe("createAgentSession preloadedExtensions isolation (issue #2190)", () => {
+	let sharedDir: string;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
+
+	beforeAll(async () => {
+		sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-preloaded-ext-"));
+		authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		removeSyncWithRetries(sharedDir);
+	});
+
+	it("does not mutate the caller's extensions array when preloadedExtensions is provided", async () => {
+		const preloaded: LoadExtensionsResult = {
+			extensions: [],
+			errors: [],
+			withheld: [],
+			runtime: {
+				flagValues: new Map(),
+				pendingProviderRegistrations: [],
+				// Cast: only the fields we touch matter; the SDK happily accepts a
+				// minimal runtime when no extension hooks fire.
+			} as unknown as LoadExtensionsResult["runtime"],
+		};
+		const beforeLength = preloaded.extensions.length;
+		const beforeArrayRef = preloaded.extensions;
+
+		// Disposed below, and not optional: the first top-level session in a process installs the
+		// process-wide `AsyncJobManager` singleton, and an undisposed session keeps it installed for every
+		// later suite in the same `bun test` process. That is what made
+		// `sdk-async-job-manager-singleton.test.ts` fail only when run alongside its neighbours: with a
+		// manager already installed, the next top-level session constructs none, owns none, and clears none
+		// on dispose, so an assertion that the singleton is empty afterwards reads the leak instead of the
+		// code. The session also holds timers and temp state, so leaking it is wrong on its own terms.
+		const { session } = await createAgentSession({
+			cwd: sharedDir,
+			agentDir: sharedDir,
+			sessionManager: SessionManager.inMemory(),
+			modelRegistry,
+			settings: Settings.isolated(),
+			preloadedExtensions: preloaded,
+			// Disable everything that would touch the network / FS scans.
+			enableLsp: false,
+			enableMCP: false,
+			skipPythonPreflight: true,
+			skills: [],
+			rules: [],
+			preloadedCustomToolPaths: [],
+			contextFiles: [],
+			promptTemplates: [],
+		});
+
+		try {
+			// The session's own `extensionsResult` carries inline wrappers, but the
+			// caller's array (and its identity) must be untouched.
+			expect(preloaded.extensions).toBe(beforeArrayRef);
+			expect(preloaded.extensions.length).toBe(beforeLength);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	/**
+	 * The suite must leave the process as it found it, or it breaks its neighbours rather than the code.
+	 *
+	 * This is asserted rather than assumed because the leak it guards against is invisible from inside this
+	 * file: everything here passes with or without the dispose above, and the damage shows up as a failure
+	 * in a different suite entirely.
+	 */
+	it("leaves no AsyncJobManager installed for the next suite", () => {
+		expect(AsyncJobManager.instance()).toBeUndefined();
+	});
+});

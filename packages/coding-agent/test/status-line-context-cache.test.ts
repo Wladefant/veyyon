@@ -1,0 +1,257 @@
+/**
+ * Contract for `StatusLineComponent.getCachedContextBreakdown`.
+ *
+ * The status-line context% segment no longer keeps its own cl100k estimate of
+ * the whole conversation. It surfaces `session.getContextUsage()`, which
+ * anchors on the last assistant's real provider prompt-token count — so the bar
+ * matches the provider and the `/context` panel instead of an independent
+ * estimate that drifted past 100%.
+ *
+ * `getTopBorder()` runs on every agent event (event-controller.ts), so the
+ * breakdown is memoized: it re-queries `getContextUsage()` only when an input
+ * it depends on changes (a new/grown message, a replaced message array, or the
+ * model's context window). A stable conversation must not re-query on every
+ * redraw — that per-event recompute is what previously froze large sessions.
+ */
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import type { ContextUsage } from "@veyyon/coding-agent/extensibility/extensions/types";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
+import { StatusPresentationProducer } from "../src/presentation/status-producer";
+import { statusLineSessionParts } from "./helpers/status-line-session";
+
+beforeAll(async () => {
+	resetSettingsForTest();
+	await Settings.init({ inMemory: true });
+	await initTheme();
+});
+
+afterAll(() => {
+	resetSettingsForTest();
+});
+
+interface Fake {
+	session: AgentSession;
+	producer: StatusPresentationProducer;
+	/** Number of times `getContextUsage()` was queried. */
+	usageCalls: () => number;
+	/** Swap the value the next `getContextUsage()` query returns. */
+	setUsage: (usage: ContextUsage | undefined) => void;
+	/** Bump the in-flight pending revision the next `getCachedContextBreakdown()` reads. */
+	setRevision: (n: number) => void;
+}
+
+function makeSession(opts: { messages: unknown[]; contextWindow?: number; usage?: ContextUsage | undefined }): Fake {
+	const contextWindow = opts.contextWindow ?? 200_000;
+	let usage: ContextUsage | undefined = "usage" in opts ? opts.usage : { tokens: 1234, contextWindow, percent: 0.6 };
+	let calls = 0;
+	let revision = 0;
+	const session = {
+		...statusLineSessionParts({ messages: opts.messages, contextWindow, sessionName: "test" }),
+		systemPrompt: ["You are a helpful assistant."],
+		// Counted and mutable: these cases assert the breakdown is recomputed
+		// exactly when the revision moves, so the reading has to be observable.
+		getContextUsage: () => {
+			calls++;
+			return usage;
+		},
+		get contextUsageRevision() {
+			return revision;
+		},
+	} as unknown as AgentSession;
+	const producer = new StatusPresentationProducer(session);
+	return {
+		session,
+		producer,
+		usageCalls: () => calls,
+		setUsage: next => {
+			usage = next;
+		},
+		setRevision: (n: number) => {
+			revision = n;
+		},
+	};
+}
+
+function userMessage(text: string): unknown {
+	return { role: "user", content: text };
+}
+function assistantMessage(text: string): unknown {
+	return { role: "assistant", content: [{ type: "text", text }] };
+}
+
+describe("StatusLineComponent context breakdown", () => {
+	it("surfaces the provider-anchored tokens and context window from getContextUsage", () => {
+		const { producer } = makeSession({
+			messages: [userMessage("hi")],
+			usage: { tokens: 5000, contextWindow: 272_000, percent: 1.8 },
+		});
+		const breakdown = new StatusLineComponent(producer).getCachedContextBreakdown();
+		expect(breakdown.usedTokens).toBe(5000);
+		expect(breakdown.contextWindow).toBe(272_000);
+	});
+
+	it("memoizes: repeated redraws with no change do not re-query usage", () => {
+		const { producer, usageCalls } = makeSession({ messages: [userMessage("hi")] });
+		const comp = new StatusLineComponent(producer);
+
+		comp.getCachedContextBreakdown();
+		comp.getCachedContextBreakdown();
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(1);
+	});
+
+	it("re-queries and surfaces the new total when a message is appended", () => {
+		const fake = makeSession({
+			messages: [userMessage("hi")],
+			usage: { tokens: 100, contextWindow: 200_000, percent: 0.05 },
+		});
+		const comp = new StatusLineComponent(fake.producer);
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(100);
+
+		(fake.session.messages as unknown[]).push(assistantMessage("a reply that bumped the real prompt size"));
+		fake.setUsage({ tokens: 250, contextWindow: 200_000, percent: 0.125 });
+
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(250);
+		expect(fake.usageCalls()).toBe(2);
+	});
+
+	it("re-queries when the streaming tail grows in place", () => {
+		const tail = assistantMessage("partial") as { content: { type: string; text: string }[] };
+		const { producer, usageCalls } = makeSession({ messages: [userMessage("hi"), tail] });
+		const comp = new StatusLineComponent(producer);
+
+		comp.getCachedContextBreakdown();
+		tail.content[0]!.text = "partial response that kept streaming".repeat(8);
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(2);
+	});
+
+	it("re-queries when the message array is replaced (branch switch / rebuild)", () => {
+		const { session, producer, usageCalls } = makeSession({
+			messages: [userMessage("a"), userMessage("b")],
+		});
+		const comp = new StatusLineComponent(producer);
+		comp.getCachedContextBreakdown();
+
+		(session as { messages: unknown[] }).messages = [userMessage("c"), userMessage("d")];
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(2);
+	});
+
+	it("re-queries when the model context window changes", () => {
+		const { session, producer, usageCalls } = makeSession({ messages: [userMessage("hi")], contextWindow: 200_000 });
+		const comp = new StatusLineComponent(producer);
+		comp.getCachedContextBreakdown();
+
+		(session.model as { contextWindow: number }).contextWindow = 400_000;
+		comp.getCachedContextBreakdown();
+
+		expect(usageCalls()).toBe(2);
+	});
+
+	it("re-queries when only the in-flight pending revision changes (no message change)", () => {
+		const fake = makeSession({
+			messages: [userMessage("hi")],
+			usage: { tokens: 190_000, contextWindow: 272_000, percent: 69.9 },
+		});
+		const comp = new StatusLineComponent(fake.producer);
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(190_000);
+
+		// Turn ends/aborts: the message list and last-message fingerprint are
+		// unchanged, but clearing the pending snapshot recalibrates usage to the
+		// real provider anchor. The memo must not keep serving the stale estimate.
+		fake.setUsage({ tokens: 117_000, contextWindow: 272_000, percent: 43.0 });
+		fake.setRevision(1);
+
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(117_000);
+		expect(fake.usageCalls()).toBe(2);
+	});
+
+	it("propagates a speculative/numeric token count, e.g. right after compaction", () => {
+		const { producer } = makeSession({
+			messages: [userMessage("compaction summary")],
+			usage: { tokens: 1234, contextWindow: 272_000, percent: 0.45 },
+		});
+		const breakdown = new StatusLineComponent(producer).getCachedContextBreakdown();
+		expect(breakdown.usedTokens).toBe(1234);
+		expect(breakdown.contextWindow).toBe(272_000);
+	});
+
+	// Not zero: zero is a real count and the gauge spends it as `100% left`. An
+	// unavailable usage means there is no anchor yet, which the breakdown reports as
+	// `null` so the footline can say `? left` instead of inventing a full context.
+	it("reports an unknown token count as unknown, keeping the model window", () => {
+		const { producer } = makeSession({ messages: [userMessage("hi")], usage: undefined, contextWindow: 128_000 });
+		const breakdown = new StatusLineComponent(producer).getCachedContextBreakdown();
+		expect(breakdown.usedTokens).toBeNull();
+		expect(breakdown.contextWindow).toBe(128_000);
+	});
+
+	it("does not query usage when no context segment is rendered", () => {
+		const { producer, usageCalls } = makeSession({ messages: [userMessage("hi")] });
+		const comp = new StatusLineComponent(producer);
+		comp.updateSettings({
+			preset: "custom",
+			leftSegments: ["pi"],
+			rightSegments: ["session_name"],
+		});
+
+		const line = comp.renderQuietLine(80);
+		expect((line ?? "").length).toBeGreaterThan(0);
+		expect(usageCalls()).toBe(0);
+	});
+
+	/**
+	 * The gauge used to have a second form — a `5K/272K` token readout behind a
+	 * `context_pct.bar` option — and these tests drove it through
+	 * `getTopBorder`. Neither existed on a production path: the composer
+	 * footline is the only renderer and it always asked for the bar. Asserting
+	 * the bar form is the only way these stay honest.
+	 */
+	it("renders the room left as a percentage in the context segment", () => {
+		const { producer } = makeSession({
+			messages: [userMessage("hi"), assistantMessage("done")],
+			usage: { tokens: 5000, contextWindow: 272_000, percent: 1.8 },
+		});
+		const comp = new StatusLineComponent(producer);
+		comp.updateSettings({ preset: "custom", leftSegments: ["context_pct"], rightSegments: [] });
+
+		const plain = (comp.renderQuietLine(80) ?? "").replaceAll(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toContain("98% left");
+		// Both halves of the gauge report room LEFT, so they cannot disagree: at
+		// 98% left the eight-cell bar is all but full.
+		expect(plain).toContain("▰▰▰▰▰▰▰▰");
+	});
+
+	it("renders speculative usage instead of ? after compaction", () => {
+		const { producer } = makeSession({
+			messages: [userMessage("compaction summary")],
+			usage: { tokens: 1234, contextWindow: 272_000, percent: 0.45 },
+		});
+		const comp = new StatusLineComponent(producer);
+		comp.updateSettings({ preset: "custom", leftSegments: ["context_pct"], rightSegments: [] });
+
+		const plain = (comp.renderQuietLine(80) ?? "").replaceAll(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toContain("100% left");
+		expect(plain).not.toContain("? left");
+	});
+
+	it("admits an unknown percentage when the model window is unavailable", () => {
+		const { producer } = makeSession({
+			messages: [userMessage("hi")],
+			contextWindow: 0,
+			usage: { tokens: 5000, contextWindow: 0, percent: 0 },
+		});
+		const comp = new StatusLineComponent(producer);
+		comp.updateSettings({ preset: "custom", leftSegments: ["context_pct"], rightSegments: [] });
+
+		const plain = (comp.renderQuietLine(80) ?? "").replaceAll(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toMatch(/(\? left|100% left)/);
+	});
+});

@@ -1,0 +1,604 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { type } from "@veyyon/ai/utils/schema/arktype";
+import { errorMessage, formatCount, lazy, truncate } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
+import type { TextBlockView, ViewSpan, ViewTone } from "@veyyon/view";
+import type { ToolDefinition } from "../../extensibility/extensions";
+import * as git from "../../utils/git";
+import { leaveArm } from "../arm-model";
+import { computeRunModifiedPaths, getCurrentAutoresearchBranch, parseWorkDirDirtyPaths, tryReadHeadSha } from "../git";
+import {
+	ensureNumericMetricMap,
+	formatNum,
+	formatPercentChange,
+	isBetter,
+	mergeAsi,
+	pathMatchesSpec,
+	readWorkDirStatus,
+	resolveActiveBranchSession,
+	sanitizeAsi,
+	type WorkDirStatus,
+} from "../helpers";
+import {
+	buildExperimentState,
+	computeConfidence,
+	currentResults,
+	findBaselineSecondary,
+	findBestKeptMetric,
+	findBestKeptResult,
+} from "../state";
+import type { SessionRow } from "../storage";
+import type {
+	ASIData,
+	AutoresearchToolFactoryOptions,
+	ExperimentResult,
+	ExperimentState,
+	ExperimentStatus,
+	LogDetails,
+	NumericMetricMap,
+} from "../types";
+import { activeToolsFor } from ".";
+
+function truncateAsiValue(value: ASIData[string]): string {
+	const text = typeof value === "string" ? value : JSON.stringify(value);
+	return truncate(text, 120, "...");
+}
+
+const logExperimentSchema = lazy(() =>
+	type({
+		metric: type("number").describe("primary metric value"),
+		status: type("'keep'|'discard'|'crash'|'checks_failed'").describe("run outcome"),
+		description: type("string").describe("short run description"),
+		"metrics?": type({ "[string]": "number" }).describe("secondary metrics"),
+		"asi?": type({ "[string]": "unknown" }).describe("free-form structured metadata"),
+		"commit?": type("string").describe("override recorded commit hash"),
+		"justification?": type("string").describe("required when keeping a scope-deviating run"),
+		"arm?": type("string").describe("candidate arm this result came from, when breadth > 1"),
+		"certified_by?": type("string").describe("arm or `director` that certified this result"),
+		"flag_runs?": type({
+			run_id: type("number.integer").describe("run id to flag"),
+			reason: type("string").describe("why this run is suspect"),
+		})
+			.array()
+			.describe("flag earlier runs as suspect"),
+	}),
+);
+
+export function createLogExperimentTool(
+	options: AutoresearchToolFactoryOptions,
+): ToolDefinition<typeof logExperimentSchema.value, LogDetails> {
+	return {
+		name: "log_experiment",
+		label: "Log Experiment",
+		description:
+			"Log the result of the latest run_experiment. Records the metric, optional ASI metadata, modified paths, and scope deviations. On `keep`, modified files are committed; on `discard`/`crash`/`checks_failed`, the worktree is reverted. Pass `flag_runs` to mark earlier runs as suspect; flagged runs are excluded from baseline and best-metric math.",
+		get parameters() {
+			return logExperimentSchema.value;
+		},
+		defaultInactive: true,
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
+			if (!sessionResult.ok) return sessionResult.result;
+			const { storage, session } = sessionResult;
+			const pendingRun = storage.getPendingRun(session.id);
+			if (!pendingRun) {
+				return {
+					content: [{ type: "text", text: "Error: no pending run available. Run run_experiment first." }],
+				};
+			}
+
+			const runtime = options.getRuntime(ctx);
+
+			const flaggedRuns: LogDetails["flaggedRuns"] = [];
+			for (const flag of params.flag_runs ?? []) {
+				const target = storage.getRunById(flag.run_id);
+				if (!target || target.sessionId !== session.id) continue;
+				storage.flagRun(flag.run_id, flag.reason);
+				flaggedRuns.push({ runId: flag.run_id, reason: flag.reason });
+			}
+
+			const branchName = await getCurrentAutoresearchBranch(ctx.cwd);
+			const onAutoresearchBranch = branchName !== null;
+
+			let allModified: string[];
+			try {
+				// On a dedicated autoresearch branch every iteration starts from a clean
+				// worktree (init_experiment baseline + previous keep commit / discard reset),
+				// so any currently-dirty path is the agent's iteration change. Off-branch we
+				// can't tell user dirt apart from agent edits, so we keep the (lossy)
+				// preRunDirtyPaths filter.
+				if (onAutoresearchBranch) {
+					const { statusText, workDirPrefix } = await readWorkDirStatus(ctx.cwd);
+					allModified = parseWorkDirDirtyPaths(statusText, workDirPrefix);
+				} else {
+					const { modifiedTracked, modifiedUntracked } = await detectModifiedPaths(
+						ctx.cwd,
+						pendingRun.preRunDirtyPaths,
+					);
+					allModified = [...modifiedTracked, ...modifiedUntracked];
+				}
+			} catch (err) {
+				// Refusing to log is the right answer: every field this run would record -- modified paths,
+				// scope deviations, and whether a discard has anything to revert -- is derived from this
+				// status, so logging without it would write an experiment result that is confidently empty.
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Error: git status failed, so this run was not logged: ${errorMessage(err)}`,
+						},
+					],
+				};
+			}
+			const scopeDeviations = computeScopeDeviations(allModified, session);
+
+			const justification = params.justification?.trim() || null;
+			const warnings: string[] = [];
+
+			// `keep` commits the change onto the branch. A change that did not move
+			// the metric past the segment's best is churn on that branch: one loop
+			// kept eight flat runs in a row, each a commit that changed nothing the
+			// harness could see. The rules the model runs under say a flat run is a
+			// discard; a keep that is groundwork for a later step is still allowed,
+			// but has to say so. Nothing is logged or reverted here, so the pending
+			// run can be logged again with the other status.
+			if (params.status === "keep") {
+				const best = findBestKeptResult(
+					buildExperimentState(session, storage.listLoggedRuns(session.id)).results,
+					session.currentSegment,
+					session.direction,
+				);
+				if (best !== null && !isBetter(params.metric, best.metric, session.direction) && justification === null) {
+					const unit = session.metricUnit;
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: not logged. ${session.primaryMetric}=${formatNum(params.metric, unit)} does not improve on the segment's best, ${formatNum(best.metric, unit)} (run ${best.runNumber ?? "?"}), and \`keep\` would commit a change the metric cannot see. Log it as \`discard\`, or pass \`justification\` if the change is groundwork a later step needs.`,
+							},
+						],
+					};
+				}
+			}
+
+			const headSha = await tryReadHeadSha(ctx.cwd);
+			const explicitCommit = params.commit?.trim();
+			let commitHash = explicitCommit && explicitCommit.length > 0 ? explicitCommit : headSha;
+
+			let gitNote: string | null = null;
+			if (params.status === "keep") {
+				if (onAutoresearchBranch && allModified.length > 0) {
+					const commitResult = await commitKeptExperiment(
+						ctx.cwd,
+						params.description,
+						params.status,
+						params.metric,
+						params.metrics ?? {},
+						allModified,
+						session.primaryMetric,
+					);
+					if (commitResult.error) {
+						return {
+							content: [{ type: "text", text: `Error: ${commitResult.error}` }],
+						};
+					}
+					gitNote = commitResult.note ?? null;
+					const newSha = await tryReadHeadSha(ctx.cwd);
+					if (newSha) commitHash = newSha;
+				} else if (!onAutoresearchBranch) {
+					warnings.push(
+						"Auto-commit skipped: not on a dedicated autoresearch branch. Modified files remain in the worktree.",
+					);
+				} else if (allModified.length === 0) {
+					gitNote = "nothing to commit";
+				}
+				if (scopeDeviations.length > 0) {
+					if (justification === null) {
+						warnings.push(
+							`Kept with unjustified scope deviations: ${scopeDeviations.join(", ")}. Pass \`justification\` next time or \`flag_runs\` this entry on a future log_experiment if it was a mistake.`,
+						);
+					} else {
+						warnings.push(`Kept with scope deviations (justified): ${scopeDeviations.join(", ")}`);
+					}
+				}
+			} else {
+				const revertResult = await revertFailedExperiment(
+					ctx.cwd,
+					pendingRun.preRunDirtyPaths,
+					onAutoresearchBranch,
+				);
+				if (revertResult.error) {
+					return {
+						content: [{ type: "text", text: `Error: ${revertResult.error}` }],
+					};
+				}
+				gitNote = revertResult.note ?? null;
+			}
+
+			const metric = params.metric;
+			const secondaryMetrics: NumericMetricMap = mergeMetrics(
+				pendingRun.parsedMetrics,
+				params.metrics,
+				session.primaryMetric,
+			);
+			const asi: ASIData | undefined = mergeAsi(pendingRun.parsedAsi, sanitizeAsi(params.asi));
+
+			if (pendingRun.parsedPrimary !== null && metric !== pendingRun.parsedPrimary) {
+				warnings.push(
+					`Logged metric ${metric} differs from parsed primary ${pendingRun.parsedPrimary}. Both values stored.`,
+				);
+			}
+
+			// The model is recorded on the measurement, by `run_experiment`, and is
+			// not touched here. A certified round logs the winner after every arm
+			// has been measured, so the arm in flight at this call is the last arm
+			// built, not the one being logged: reading the session model here would
+			// stamp the wrong arm's model on the row.
+			const loggedArm = params.arm?.trim() || undefined;
+
+			const loggedAt = Date.now();
+			const tentativeRun = storage.markRunLogged({
+				runId: pendingRun.id,
+				status: params.status,
+				description: params.description,
+				metric,
+				metrics: secondaryMetrics,
+				asi: asi ?? null,
+				commitHash,
+				confidence: null,
+				modifiedPaths: allModified,
+				scopeDeviations,
+				justification,
+				loggedAt,
+				arm: loggedArm,
+				certifiedBy: params.certified_by?.trim() || undefined,
+			});
+
+			// Recompute confidence with this run included
+			const refreshedSession = storage.getSessionById(session.id) ?? session;
+			const loggedRuns = storage.listLoggedRuns(session.id);
+			const stateForConfidence = buildExperimentState(refreshedSession, loggedRuns);
+			const confidence = computeConfidence(
+				stateForConfidence.results,
+				stateForConfidence.currentSegment,
+				stateForConfidence.bestDirection,
+			);
+			storage.updateRunConfidence(tentativeRun.id, confidence);
+
+			const finalState = buildExperimentState(refreshedSession, storage.listLoggedRuns(session.id));
+			runtime.state = finalState;
+			runtime.runningExperiment = null;
+			runtime.lastRunSummary = null;
+			runtime.lastRunDuration = null;
+			runtime.lastRunAsi = null;
+			runtime.lastRunArtifactDir = null;
+			runtime.lastRunNumber = null;
+			runtime.autoResumeArmed = true;
+			runtime.lastAutoResumePendingRunNumber = null;
+			// The arm this result belongs to is over. Whatever comes next -- the next
+			// arm, triage, the next hypothesis -- runs on the session's own model
+			// until another `start_arm` says otherwise.
+			const armExit = await leaveArm(options.pi, runtime);
+			if (armExit.strandedOn) {
+				// The next arm would otherwise be built on this arm's model and read
+				// as a comparison it is not.
+				warnings.push(
+					`The session could not be returned to its own model and is still on ${armExit.strandedOn}. Re-select your model before the next arm.`,
+				);
+			}
+
+			const experiment: ExperimentResult = {
+				runNumber: tentativeRun.id,
+				commit: (commitHash ?? "").slice(0, 12),
+				metric,
+				measuredPrimary: pendingRun.parsedPrimary,
+				metrics: secondaryMetrics,
+				status: params.status,
+				description: params.description,
+				timestamp: loggedAt,
+				segment: pendingRun.segment,
+				confidence,
+				asi,
+				modifiedPaths: allModified,
+				scopeDeviations,
+				justification,
+				// The verdict is whatever the row carries: `certify_arms` may already
+				// have flagged this arm's measurement before it was logged.
+				flagged: tentativeRun.flagged,
+				flaggedReason: tentativeRun.flaggedReason,
+				arm: tentativeRun.arm,
+				certifiedBy: tentativeRun.certifiedBy,
+				model: tentativeRun.model,
+			};
+
+			const segmentRunCount = currentResults(finalState.results, finalState.currentSegment).length;
+			if (finalState.maxExperiments !== null && segmentRunCount >= finalState.maxExperiments) {
+				runtime.autoresearchMode = false;
+				options.pi.appendEntry(
+					"autoresearch-control",
+					runtime.goal ? { mode: "off", goal: runtime.goal } : { mode: "off" },
+				);
+				await options.pi.setActiveTools(activeToolsFor(options.pi.getActiveTools(), false, finalState.breadth));
+			}
+
+			options.dashboard.update(ctx, runtime);
+			options.dashboard.requestRender();
+
+			const wallClockSeconds = pendingRun.durationMs !== null ? pendingRun.durationMs / 1000 : null;
+			const text = buildLogText(
+				finalState,
+				experiment,
+				segmentRunCount,
+				wallClockSeconds,
+				gitNote,
+				warnings,
+				flaggedRuns,
+			);
+
+			return {
+				content: [{ type: "text", text }],
+				details: {
+					experiment,
+					state: finalState,
+					wallClockSeconds,
+					scopeDeviations,
+					justification,
+					flaggedRuns,
+				},
+			};
+		},
+		view: {
+			renderCall: args => ({
+				kind: "textBlock",
+				spans: [
+					{ text: "log_experiment", tone: "title", bold: true },
+					{ text: " " },
+					{ text: args.status, tone: statusTone(args.status) },
+					{ text: " " },
+					{ text: truncateToWidth(replaceTabs(args.description), 100), tone: "muted" },
+				],
+			}),
+			renderResult: result =>
+				result.details === undefined
+					? {
+							kind: "textBlock",
+							spans: [{ text: replaceTabs(result.content.find(part => part.type === "text")?.text ?? "") }],
+						}
+					: summaryView(result.details),
+		},
+	};
+}
+
+interface KeepCommitResult {
+	error?: string;
+	note?: string;
+}
+
+async function commitKeptExperiment(
+	cwd: string,
+	description: string,
+	status: ExperimentResult["status"],
+	metric: number,
+	metrics: NumericMetricMap,
+	files: string[],
+	primaryMetric: string,
+): Promise<KeepCommitResult> {
+	if (files.length === 0) return { note: "nothing to commit" };
+	try {
+		await git.stage.files(cwd, files);
+	} catch (err) {
+		return { error: `git add failed: ${errorMessage(err)}` };
+	}
+	if (!(await git.diff.has(cwd, { cached: true, files }))) {
+		return { note: "nothing to commit" };
+	}
+	const payload: { [key: string]: string | number } = {
+		status,
+		[primaryMetric]: metric,
+	};
+	for (const [name, value] of Object.entries(metrics)) {
+		payload[name] = value;
+	}
+	const commitMessage = `${description}\n\nResult: ${JSON.stringify(payload)}`;
+	try {
+		const commitResult = await git.commit(cwd, commitMessage, { files });
+		const summary = `${commitResult.stdout}${commitResult.stderr}`.split("\n").find(line => line.trim().length > 0);
+		return { note: summary?.trim() ?? "committed" };
+	} catch (err) {
+		return { error: `git commit failed: ${errorMessage(err)}` };
+	}
+}
+
+async function revertFailedExperiment(
+	cwd: string,
+	preRunDirtyPaths: string[],
+	onAutoresearchBranch: boolean,
+): Promise<KeepCommitResult> {
+	if (onAutoresearchBranch) {
+		// Discard reverts only the current iteration's uncommitted changes — never
+		// rewinds prior `keep` commits. Reset to HEAD so any kept improvements
+		// already on the branch survive.
+		try {
+			await git.reset(cwd, { hard: true, target: "HEAD" });
+			await git.clean(cwd);
+			return { note: "worktree reset to HEAD" };
+		} catch (err) {
+			return { error: `git reset/clean failed: ${errorMessage(err)}` };
+		}
+	}
+
+	// A status this cannot read used to parse as "no dirty paths", so the revert reported "nothing to
+	// revert" and returned success while the experiment's changes stayed in the tree -- the one outcome a
+	// discard must never produce. The caller surfaces this error to the agent instead.
+	let status: WorkDirStatus;
+	try {
+		status = await readWorkDirStatus(cwd);
+	} catch (err) {
+		return { error: `git status failed, so nothing was reverted: ${errorMessage(err)}` };
+	}
+	const { tracked, untracked } = computeRunModifiedPaths(preRunDirtyPaths, status.statusText, status.workDirPrefix);
+	const total = tracked.length + untracked.length;
+	if (total === 0) return { note: "nothing to revert" };
+	if (tracked.length > 0) {
+		try {
+			await git.restore(cwd, { files: tracked, source: "HEAD", staged: true, worktree: true });
+		} catch (err) {
+			return { error: `git restore failed: ${errorMessage(err)}` };
+		}
+	}
+	for (const filePath of untracked) {
+		try {
+			fs.rmSync(path.join(cwd, filePath), { force: true, recursive: true });
+		} catch {
+			// best effort
+		}
+	}
+	return { note: `reverted ${formatCount("file", total)}` };
+}
+
+/**
+ * The paths this run changed. Failures propagate: an unreadable status used to parse as "nothing
+ * changed", which recorded the experiment with an empty modified-path list and made the
+ * scope-deviation check pass vacuously, so an experiment that touched an `off_limits` file was logged
+ * as staying inside its scope.
+ */
+async function detectModifiedPaths(
+	cwd: string,
+	preRunDirtyPaths: string[],
+): Promise<{ modifiedTracked: string[]; modifiedUntracked: string[] }> {
+	const { statusText, workDirPrefix } = await readWorkDirStatus(cwd);
+	const { tracked, untracked } = computeRunModifiedPaths(preRunDirtyPaths, statusText, workDirPrefix);
+	return { modifiedTracked: tracked, modifiedUntracked: untracked };
+}
+
+function computeScopeDeviations(modifiedPaths: string[], session: SessionRow): string[] {
+	const deviations: string[] = [];
+	for (const filePath of modifiedPaths) {
+		if (session.offLimits.some(spec => pathMatchesSpec(filePath, spec))) {
+			deviations.push(filePath);
+			continue;
+		}
+		if (session.scopePaths.length > 0 && !session.scopePaths.some(spec => pathMatchesSpec(filePath, spec))) {
+			deviations.push(filePath);
+		}
+	}
+	return deviations;
+}
+
+function mergeMetrics(
+	parsed: NumericMetricMap | null,
+	overrides: NumericMetricMap | undefined,
+	primaryMetricName: string,
+): NumericMetricMap {
+	const merged: NumericMetricMap = {};
+	for (const [name, value] of Object.entries(parsed ?? {})) {
+		if (name === primaryMetricName) continue;
+		merged[name] = value;
+	}
+	for (const [name, value] of Object.entries(ensureNumericMetricMap(overrides))) {
+		if (name === primaryMetricName) continue;
+		merged[name] = value;
+	}
+	return merged;
+}
+
+function buildLogText(
+	state: ExperimentState,
+	experiment: ExperimentResult,
+	segmentRunCount: number,
+	wallClockSeconds: number | null,
+	gitNote: string | null,
+	warnings: string[],
+	flaggedRuns: LogDetails["flaggedRuns"],
+): string {
+	const displayRunNumber = experiment.runNumber ?? state.results.length;
+	const lines = [`Logged run #${displayRunNumber}: ${experiment.status} - ${experiment.description}`];
+	if (wallClockSeconds !== null) {
+		lines.push(`Wall clock: ${wallClockSeconds.toFixed(1)}s`);
+	}
+	if (state.bestMetric !== null) {
+		lines.push(`Baseline ${state.metricName}: ${formatNum(state.bestMetric, state.metricUnit)}`);
+	}
+	const runChange = segmentRunCount > 1 ? formatPercentChange(experiment.metric, state.bestMetric) : undefined;
+	lines.push(
+		runChange
+			? `This run: ${formatNum(experiment.metric, state.metricUnit)} (${runChange})`
+			: `This run: ${formatNum(experiment.metric, state.metricUnit)}`,
+	);
+	if (Object.keys(experiment.metrics).length > 0) {
+		const baselineSecondary = findBaselineSecondary(state.results, state.currentSegment, state.secondaryMetrics);
+		const parts = Object.entries(experiment.metrics).map(([name, value]) => {
+			const unit = state.secondaryMetrics.find(metric => metric.name === name)?.unit ?? "";
+			const baseline = baselineSecondary[name];
+			const change = segmentRunCount === 1 ? undefined : formatPercentChange(value, baseline);
+			return change ? `${name}: ${formatNum(value, unit)} (${change})` : `${name}: ${formatNum(value, unit)}`;
+		});
+		lines.push(`Secondary metrics: ${parts.join("  ")}`);
+	}
+	const bestKept = findBestKeptMetric(state.results, state.currentSegment, state.bestDirection);
+	if (bestKept !== null && state.bestMetric !== null && bestKept !== state.bestMetric) {
+		lines.push(`Best kept ${state.metricName}: ${formatNum(bestKept, state.metricUnit)}`);
+	}
+	if (experiment.asi) {
+		const asiSummary = Object.entries(experiment.asi)
+			.map(([key, value]) => `${key}: ${truncateAsiValue(value)}`)
+			.join(" | ");
+		lines.push(`ASI: ${asiSummary}`);
+	}
+	if (state.confidence !== null) {
+		const status = state.confidence >= 2 ? "likely real" : state.confidence >= 1 ? "marginal" : "within noise";
+		lines.push(`Confidence: ${state.confidence.toFixed(1)}x noise floor (${status})`);
+	}
+	if (gitNote) {
+		lines.push(`Git: ${gitNote}`);
+	}
+	if (state.maxExperiments !== null) {
+		lines.push(`Progress: ${segmentRunCount}/${state.maxExperiments} runs in current segment`);
+		if (segmentRunCount >= state.maxExperiments) {
+			lines.push(`Maximum experiments reached (${state.maxExperiments}). Autoresearch mode is now off.`);
+		}
+	}
+	if (flaggedRuns.length > 0) {
+		const formatted = flaggedRuns.map(({ runId, reason }) => `#${runId} (${reason})`).join(", ");
+		lines.push(`Flagged: ${formatted}`);
+	}
+	for (const warning of warnings) {
+		lines.push(`Warning: ${warning}`);
+	}
+	return lines.join("\n");
+}
+
+/** What a status means, which a host maps to its own colour. */
+function statusTone(status: ExperimentStatus): ViewTone {
+	return status === "keep" ? "success" : status === "discard" ? "warning" : "error";
+}
+
+/**
+ * The result row: the outcome, the description, the metric, and whichever of baseline, confidence
+ * and scope deviations the run recorded.
+ *
+ * Each separating space is a span of its own with no tone, so it stays unstyled exactly as the
+ * string concatenation this replaced left it.
+ */
+function summaryView(details: LogDetails): TextBlockView {
+	const { experiment, state } = details;
+	const spans: ViewSpan[] = [
+		{ text: experiment.status.toUpperCase(), tone: statusTone(experiment.status) },
+		{ text: " " },
+		{ text: truncateToWidth(replaceTabs(experiment.description), 100), tone: "muted" },
+		{ text: " " },
+		{ text: `${state.metricName}=${formatNum(experiment.metric, state.metricUnit)}`, tone: "accent" },
+	];
+	if (state.bestMetric !== null) {
+		spans.push({ text: " " }, { text: `baseline ${formatNum(state.bestMetric, state.metricUnit)}`, tone: "dim" });
+	}
+	if (state.confidence !== null) {
+		spans.push({ text: " " }, { text: `conf ${state.confidence.toFixed(1)}x`, tone: "dim" });
+	}
+	if (details.scopeDeviations.length > 0) {
+		spans.push({ text: " " }, { text: `deviations:${details.scopeDeviations.length}`, tone: "warning" });
+	}
+	return { kind: "textBlock", spans };
+}

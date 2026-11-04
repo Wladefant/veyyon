@@ -1,0 +1,261 @@
+/**
+ * WHY: a provider whose credential is one pasted API key used to reach `/login <id>` and be told
+ * the provider "has no browser login". The defect class is not "openai was forgotten" — it is that
+ * nothing in the tree forced anyone to decide, per provider, whether a key-paste login exists. The
+ * membership list for `/login` is derived from the registry, so a provider could be added with no
+ * `login` and nothing anywhere would go red.
+ *
+ * What this file closes: the registry is read at run time and split on `login`. Every provider that
+ * lacks one must appear in `NO_LOGIN_EXCEPTIONS` with a non-empty recorded reason, so adding a new
+ * provider with no login turns this suite red until someone writes that reason down. The exception
+ * set itself is pinned to the providers that genuinely cannot be one pasted key, and each
+ * exception is cross-checked against the registry so a stale entry (provider deleted, or provider
+ * that has since grown a login) also goes red. For every enumerated single-key provider the login is
+ * driven end to end through a fake controller: the pasted key comes back trimmed, `onAuth` receives
+ * that vendor's real key page, the validation request goes to that vendor's real endpoint, and an
+ * all-whitespace paste is rejected.
+ *
+ * What it does NOT catch: whether a vendor URL is still correct upstream (a moved key page or a
+ * retired `/v1/models` route stays green here — only a live request would notice), whether the
+ * pasted key is actually accepted by the vendor, whether the credential is persisted correctly by
+ * `AuthStorage`, and whether the login list renders the new entries.
+ */
+import { describe, expect, test, vi } from "bun:test";
+import { ApiKeyRequiredError, LoginCancelledError } from "@veyyon/ai/error";
+import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
+import type { OAuthAuthInfo, OAuthLoginCallbacks } from "@veyyon/ai/registry/oauth/types";
+import type { ProviderDefinition } from "@veyyon/ai/registry/types";
+import type { FetchImpl } from "@veyyon/ai/types";
+
+/**
+ * Providers that cannot be authenticated by one pasted key. Each entry records what the provider
+ * needs instead; a blank reason does not count as a decision.
+ */
+const NO_LOGIN_EXCEPTIONS: Readonly<Record<string, string>> = {
+	azure: "needs a per-resource endpoint plus a deployment name alongside the key, not a key alone",
+	"google-vertex": "needs a GCP project and location plus Application Default Credentials, not a pasted key",
+	"amazon-bedrock": "needs AWS credentials (access key id, secret, region, optional session token), not a pasted key",
+	"chatgpt-web":
+		"the local bridge daemon authenticates its own signed-in Chrome profile through its `setup` command; there is no credential Veyyon could paste, and declaring one would mint OFFICIAL openai-codex credentials from a second /login row",
+	local: "synthetic role provider backed by on-device inference; it has no remote account and no credential to paste",
+	web: "synthetic role provider for web search; it has no account of its own and no credential to paste",
+};
+
+/** Registry ids that lack a login and have no recorded reason. Empty means every case was decided. */
+function unexplainedMissingLogin(
+	defs: readonly ProviderDefinition[],
+	exceptions: Readonly<Record<string, string>> = NO_LOGIN_EXCEPTIONS,
+): string[] {
+	return defs
+		.filter(def => typeof def.login !== "function")
+		.map(def => def.id)
+		.filter(id => (exceptions[id] ?? "").trim() === "");
+}
+
+type SingleKeyProvider = {
+	id: string;
+	authUrl: string;
+	/** Validation request the login is expected to make, or null when the vendor has no key check. */
+	validationUrl: string | null;
+};
+
+const SINGLE_KEY_PROVIDERS: readonly SingleKeyProvider[] = [
+	{ id: "openai", authUrl: "https://platform.openai.com/api-keys", validationUrl: "https://api.openai.com/v1/models" },
+	{
+		id: "google",
+		authUrl: "https://aistudio.google.com/apikey",
+		validationUrl: "https://generativelanguage.googleapis.com/v1beta/openai/models",
+	},
+	{ id: "groq", authUrl: "https://console.groq.com/keys", validationUrl: "https://api.groq.com/openai/v1/models" },
+	{ id: "xai", authUrl: "https://console.x.ai/team/default/api-keys", validationUrl: "https://api.x.ai/v1/models" },
+	{
+		id: "mistral",
+		authUrl: "https://console.mistral.ai/api-keys",
+		validationUrl: "https://api.mistral.ai/v1/models",
+	},
+	{
+		id: "minimax",
+		authUrl: "https://platform.minimax.io/user-center/basic-information/interface-key",
+		validationUrl: "https://api.minimax.io/v1/models",
+	},
+	{ id: "aimlapi", authUrl: "https://aimlapi.com/app/keys", validationUrl: null },
+	{
+		id: "command-code",
+		authUrl: "https://commandcode.ai/studio/provider",
+		validationUrl: "https://api.commandcode.ai/provider/v1/chat/completions",
+	},
+	{
+		id: "cloudflare-ai-gateway",
+		authUrl: "https://developers.cloudflare.com/ai-gateway/configuration/authentication/",
+		validationUrl: null,
+	},
+	{
+		id: "vercel-ai-gateway",
+		authUrl: "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys",
+		validationUrl: null,
+	},
+	{
+		id: "litellm",
+		authUrl: "https://docs.litellm.ai/docs/proxy/deploy",
+		validationUrl: null,
+	},
+	{
+		id: "parallel",
+		authUrl: "https://platform.parallel.ai/settings?tab=api-keys",
+		validationUrl: null,
+	},
+	{
+		id: "tavily",
+		authUrl: "https://app.tavily.com/home",
+		validationUrl: null,
+	},
+	{
+		id: "kagi",
+		authUrl: "https://kagi.com/settings/api",
+		validationUrl: null,
+	},
+];
+
+function providerById(id: string): ProviderDefinition {
+	const def = PROVIDER_REGISTRY.find(entry => entry.id === id);
+	if (!def) {
+		throw new Error(`provider ${id} is missing from PROVIDER_REGISTRY`);
+	}
+	return def;
+}
+
+type CapturedRequest = {
+	url: string;
+	init?: RequestInit;
+};
+
+type Harness = {
+	callbacks: OAuthLoginCallbacks;
+	authCalls: OAuthAuthInfo[];
+	fetchUrls: string[];
+	fetchRequests: CapturedRequest[];
+};
+
+function harness(paste: string): Harness {
+	const authCalls: OAuthAuthInfo[] = [];
+	const fetchUrls: string[] = [];
+	const fetchRequests: CapturedRequest[] = [];
+	const fetchStub: FetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const url = String(input);
+		fetchUrls.push(url);
+		fetchRequests.push({ url, init });
+		return new Response(JSON.stringify({ data: [] }), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	});
+	return {
+		authCalls,
+		fetchUrls,
+		fetchRequests,
+		callbacks: {
+			onAuth: vi.fn((info: OAuthAuthInfo) => {
+				authCalls.push(info);
+			}),
+			onProgress: vi.fn(),
+			onPrompt: vi.fn(async () => paste),
+			fetch: fetchStub,
+		},
+	};
+}
+
+describe("single-key providers have a real /login", () => {
+	test("every registry provider without a login carries a recorded reason", () => {
+		expect(unexplainedMissingLogin(PROVIDER_REGISTRY)).toEqual([]);
+	});
+
+	test("a newly added provider with no login is reported until a reason is recorded", () => {
+		const newcomer = { id: "brand-new-gateway", name: "Brand New Gateway" } as const satisfies ProviderDefinition;
+		expect(unexplainedMissingLogin([...PROVIDER_REGISTRY, newcomer])).toEqual(["brand-new-gateway"]);
+	});
+
+	test("an exception whose reason is blank does not count as a decision", () => {
+		const blanked = { ...NO_LOGIN_EXCEPTIONS, azure: "   " };
+		expect(unexplainedMissingLogin(PROVIDER_REGISTRY, blanked)).toEqual(["azure"]);
+	});
+
+	test("the exception set is exactly the providers a pasted key cannot authenticate", () => {
+		expect(Object.keys(NO_LOGIN_EXCEPTIONS).sort()).toEqual([
+			"amazon-bedrock",
+			"azure",
+			"chatgpt-web",
+			"google-vertex",
+			"local",
+			"web",
+		]);
+		for (const [id, reason] of Object.entries(NO_LOGIN_EXCEPTIONS)) {
+			expect(providerById(id).login).toBeUndefined();
+			expect(reason.trim().length).toBeGreaterThan(0);
+		}
+	});
+
+	test.each(SINGLE_KEY_PROVIDERS.map(provider => [provider.id, provider] as const))(
+		"%s returns the trimmed pasted key and opens its own key page",
+		async (_id, provider) => {
+			const def = providerById(provider.id);
+			const login = def.login;
+			if (typeof login !== "function") {
+				throw new Error(`provider ${provider.id} has no callable login`);
+			}
+
+			const { callbacks, authCalls, fetchUrls } = harness("  pasted-secret-key  ");
+			const credential = await login(callbacks);
+
+			expect(credential).toBe("pasted-secret-key");
+			expect(authCalls).toHaveLength(1);
+			expect(authCalls[0]?.url).toBe(provider.authUrl);
+			expect(fetchUrls).toEqual(provider.validationUrl === null ? [] : [provider.validationUrl]);
+		},
+	);
+
+	test.each(SINGLE_KEY_PROVIDERS.map(provider => [provider.id, provider] as const))(
+		"%s rejects an empty paste instead of storing it",
+		async (_id, provider) => {
+			const def = providerById(provider.id);
+			const login = def.login;
+			if (typeof login !== "function") {
+				throw new Error(`provider ${provider.id} has no callable login`);
+			}
+
+			const { callbacks, fetchUrls } = harness("   \t \n ");
+			await expect(login(callbacks)).rejects.toBeInstanceOf(ApiKeyRequiredError);
+			expect(fetchUrls).toEqual([]);
+		},
+	);
+
+	test.each(SINGLE_KEY_PROVIDERS.map(provider => [provider.id, provider] as const))(
+		"%s throws LoginCancelledError when the abort signal is aborted",
+		async (_id, provider) => {
+			const def = providerById(provider.id);
+			const login = def.login;
+			if (typeof login !== "function") {
+				throw new Error(`provider ${provider.id} has no callable login`);
+			}
+
+			const controller = new AbortController();
+			controller.abort();
+			const { callbacks } = harness("pasted-secret-key");
+			await expect(login({ ...callbacks, signal: controller.signal })).rejects.toBeInstanceOf(LoginCancelledError);
+		},
+	);
+
+	test("Command Code validates the trimmed key with the documented bearer request and model", async () => {
+		const login = providerById("command-code").login;
+		if (typeof login !== "function") throw new Error("provider command-code has no callable login");
+		const { callbacks, fetchRequests } = harness("  command-secret  ");
+
+		await expect(login(callbacks)).resolves.toBe("command-secret");
+
+		expect(fetchRequests).toHaveLength(1);
+		const request = fetchRequests[0];
+		expect(request?.url).toBe("https://api.commandcode.ai/provider/v1/chat/completions");
+		expect(new Headers(request?.init?.headers).get("Authorization")).toBe("Bearer command-secret");
+		const body = JSON.parse(String(request?.init?.body)) as { model?: unknown };
+		expect(body.model).toBe("claude-sonnet-4-6");
+	});
+});

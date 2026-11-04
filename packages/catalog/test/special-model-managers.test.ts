@@ -1,0 +1,243 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import {
+	cursorModelManagerOptions,
+	devinModelManagerOptions,
+	gitLabDuoWorkflowModelManagerOptions,
+	openaiCodexModelManagerOptions,
+	zaiModelManagerOptions,
+} from "../src/provider-models/special";
+
+// These builders gate the dynamic-discovery closure on a present credential:
+// no credential -> a bare static provider config; credential -> a wired
+// `fetchDynamicModels` that carries the secret into the exact discovery call.
+// Lock both the gating shape and the credential wiring end to end.
+
+describe("openaiCodexModelManagerOptions", () => {
+	const realFetch = globalThis.fetch;
+	afterEach(() => {
+		globalThis.fetch = realFetch;
+	});
+
+	it("returns a bare provider config with no dynamic fetcher when unauthenticated", () => {
+		const options = openaiCodexModelManagerOptions();
+		expect(options.providerId).toBe("openai-codex");
+		expect(options.fetchDynamicModels).toBeUndefined();
+	});
+
+	it("wires an access-token-backed fetcher that returns the discovered models", async () => {
+		const options = openaiCodexModelManagerOptions({ accessToken: "codex-secret", clientVersion: "1.2.3" });
+		expect(options.providerId).toBe("openai-codex");
+		expect(typeof options.fetchDynamicModels).toBe("function");
+
+		let sawAuth = "";
+		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			sawAuth = headers.get("Authorization") ?? "";
+			return new Response(JSON.stringify({ data: [{ slug: "gpt-5-codex" }] }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		const models = await options.fetchDynamicModels?.();
+		expect(models?.map(model => model.id)).toEqual(["gpt-5-codex"]);
+		expect(sawAuth).toContain("codex-secret");
+	});
+
+	it("unions models across multiple accounts and preserves order/dedupes", async () => {
+		const options = openaiCodexModelManagerOptions({
+			resolveAccounts: async () => [
+				{ accessToken: "tok-1", accountId: "acc-1" },
+				{ accessToken: "tok-2", accountId: "acc-2" },
+			],
+		});
+		expect(options.dynamicModelsAuthoritative).toBe(true);
+		const requested: string[] = [];
+		globalThis.fetch = (async (_u: unknown, init?: RequestInit) => {
+			const id = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
+			requested.push(id);
+			return Response.json({ data: [{ slug: id === "acc-1" ? "m-1" : "m-2" }, { slug: "m-common" }] });
+		}) as unknown as typeof fetch;
+		const models = await options.fetchDynamicModels?.();
+		expect(requested).toEqual(["acc-1", "acc-2"]);
+		expect(models?.map(m => m.id)).toEqual(["m-1", "m-common", "m-2"]);
+	});
+
+	it("aborts discovery (returns null) when resolveAccounts returns null", async () => {
+		let called = false;
+		globalThis.fetch = (async () => {
+			called = true;
+			return new Response("{}", { status: 200 });
+		}) as unknown as typeof fetch;
+		expect(
+			await openaiCodexModelManagerOptions({ resolveAccounts: async () => null }).fetchDynamicModels?.(),
+		).toBeNull();
+		expect(called).toBe(false);
+	});
+
+	it("aborts discovery (returns null) when any account fetch fails", async () => {
+		const options = openaiCodexModelManagerOptions({
+			resolveAccounts: async () => [
+				{ accessToken: "tok-ok", accountId: "acc-ok" },
+				{ accessToken: "tok-fail", accountId: "acc-fail" },
+			],
+		});
+		globalThis.fetch = (async (_u: unknown, init?: RequestInit) =>
+			new Headers(init?.headers).get("chatgpt-account-id") === "acc-ok"
+				? Response.json({ data: [{ slug: "ok" }] })
+				: new Response("Unauthorized", { status: 401 })) as unknown as typeof fetch;
+		expect(await options.fetchDynamicModels?.()).toBeNull();
+	});
+
+	it("namespaces cache under union-v2 and isolates distinct account fingerprints", () => {
+		expect(openaiCodexModelManagerOptions().cacheProviderId).toBe("openai-codex:union-v2");
+		const a = openaiCodexModelManagerOptions({ accountFingerprint: "a" });
+		const b = openaiCodexModelManagerOptions({ accountFingerprint: "a\u0000b" });
+		expect(a.cacheProviderId).toBe("openai-codex:union-v2:a");
+		expect(b.cacheProviderId).toBe("openai-codex:union-v2:a\u0000b");
+		expect(a.cacheProviderId).not.toBe(b.cacheProviderId);
+	});
+	// WHY: each account is listed the models its tier may use, so discovery lists every signed-in account,
+	// and the cached list belongs to the account set that produced it. A row shared by every account set
+	// kept a new login's tier out of the catalog for the cache TTL. Not caught: a stored account whose id
+	// is unknown, which leaves the row to the accounts whose ids are known.
+	it("lists every resolved account and falls back to the access token's account when none resolve", async () => {
+		const requested: Array<string | null> = [];
+		globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+			requested.push(accountId);
+			return new Response(JSON.stringify({ data: [{ slug: `model-of-${accountId}` }] }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}) as typeof fetch;
+		const resolved = [
+			{ accessToken: "token-blue", accountId: "acc_blue" },
+			{ accessToken: "token-red", accountId: "acc_red" },
+		];
+
+		const every = await openaiCodexModelManagerOptions({
+			accessToken: "token-blue",
+			accountId: "acc_blue",
+			resolveAccounts: async () => resolved,
+		}).fetchDynamicModels?.();
+		const fallback = await openaiCodexModelManagerOptions({
+			accessToken: "token-blue",
+			accountId: "acc_blue",
+		}).fetchDynamicModels?.();
+
+		expect(every?.map(model => [model.id, model.accountAccess])).toEqual([
+			["model-of-acc_blue", { acc_blue: { listed: true }, acc_red: { listed: false } }],
+			["model-of-acc_red", { acc_blue: { listed: false }, acc_red: { listed: true } }],
+		]);
+		expect(fallback?.map(model => model.id)).toEqual(["model-of-acc_blue"]);
+		expect(requested.toSorted()).toEqual(["acc_blue", "acc_blue", "acc_red"]);
+	});
+});
+
+describe("cursorModelManagerOptions", () => {
+	// The version suffix is bumped whenever the resolved windows change, because the
+	// model cache is keyed by `cacheProviderId` and a stale entry decides when
+	// compaction fires for up to the cache TTL. So the row pins what must hold
+	// across a bump: the namespace is versioned, and it is never the bare provider
+	// id that the vendor rows are cached under.
+	it("namespaces the cache under a versioned max-mode id even without a credential", () => {
+		const options = cursorModelManagerOptions();
+		expect(options.providerId).toBe("cursor");
+		expect(options.cacheProviderId).toMatch(/^cursor:max-mode-v\d+$/);
+		expect(options.cacheProviderId).not.toBe(options.providerId);
+		expect(options.fetchDynamicModels).toBeUndefined();
+	});
+
+	it("attaches a dynamic fetcher once an api key is supplied", () => {
+		const options = cursorModelManagerOptions({ apiKey: "cursor-key" });
+		expect(typeof options.fetchDynamicModels).toBe("function");
+	});
+});
+
+describe("gitLabDuoWorkflowModelManagerOptions", () => {
+	it("ships the Vertex Sonnet fallback and no fetcher when unauthenticated", () => {
+		const options = gitLabDuoWorkflowModelManagerOptions();
+		expect(options.providerId).toBe("gitlab-duo-agent");
+		expect(options.dynamicModelsAuthoritative).toBe(true);
+		expect(options.fetchDynamicModels).toBeUndefined();
+		expect(options.staticModels?.map(model => model.id)).toEqual(["claude_sonnet_4_6_vertex"]);
+	});
+
+	it("partitions the cache per credential/namespace so two accounts never share a catalog", () => {
+		const a = gitLabDuoWorkflowModelManagerOptions({ apiKey: "token-a", namespaceId: "42" });
+		const b = gitLabDuoWorkflowModelManagerOptions({ apiKey: "token-b", namespaceId: "42" });
+		const c = gitLabDuoWorkflowModelManagerOptions({ apiKey: "token-a", namespaceId: "99" });
+		expect(a.cacheProviderId).toStartWith("gitlab-duo-agent:");
+		expect(a.cacheProviderId).not.toBe(b.cacheProviderId);
+		expect(a.cacheProviderId).not.toBe(c.cacheProviderId);
+	});
+
+	it("carries the api key into the GraphQL discovery call", async () => {
+		let sawAuth = "";
+		let sawUrl = "";
+		const spyFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+			sawUrl = String(url);
+			sawAuth = new Headers(init?.headers).get("Authorization") ?? "";
+			return new Response(JSON.stringify({ data: { aiChatAvailableModels: null } }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		const options = gitLabDuoWorkflowModelManagerOptions({
+			apiKey: "glpat-secret",
+			namespaceId: "42",
+			fetch: spyFetch,
+		});
+		expect(typeof options.fetchDynamicModels).toBe("function");
+		// No candidate namespace surfaces models. This used to THROW, and now answers `null` with a reported
+		// reason, like every other reader in this package: a throw reached the manager's catch and was labelled
+		// a bug in the reader (`unhandled`), when what happened is that the token sees no namespace with Duo
+		// access. The credential must still have reached the GitLab API by then, since namespace enumeration
+		// runs before the per-namespace model GraphQL query.
+		const reasons: string[] = [];
+		await expect(options.fetchDynamicModels?.({ onFailure: f => reasons.push(f.detail) })).resolves.toBeNull();
+		expect(reasons.join("\n")).toMatch(/namespace/i);
+		expect(sawUrl).toContain("gitlab.com/api/");
+		expect(sawAuth).toBe("Bearer glpat-secret");
+	});
+});
+
+describe("devinModelManagerOptions", () => {
+	it("returns a bare provider config with no fetcher when unauthenticated", () => {
+		const options = devinModelManagerOptions();
+		expect(options.providerId).toBe("devin");
+		expect(options.dynamicModelsAuthoritative).toBeUndefined();
+		expect(options.fetchDynamicModels).toBeUndefined();
+	});
+
+	it("posts the session token to the Cascade model-config endpoint", async () => {
+		let sawUrl = "";
+		let sawMethod = "";
+		const spyFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+			sawUrl = String(url);
+			sawMethod = init?.method ?? "";
+			return new Response(new Uint8Array(), { status: 200 });
+		}) as typeof fetch;
+
+		const options = devinModelManagerOptions({ apiKey: "devin-session", fetch: spyFetch });
+		expect(options.dynamicModelsAuthoritative).toBe(true);
+		expect(typeof options.fetchDynamicModels).toBe("function");
+
+		// An empty proto body decodes to no configs, so the fetcher resolves to
+		// null/[] — the assertion is that the request actually went out.
+		await options.fetchDynamicModels?.();
+		expect(sawUrl).toContain("/GetCliModelConfigs");
+		expect(sawMethod).toBe("POST");
+	});
+});
+
+describe("zaiModelManagerOptions", () => {
+	it("is a fixed static provider with no dynamic discovery", () => {
+		const options = zaiModelManagerOptions();
+		expect(options.providerId).toBe("zai");
+		expect(options.fetchDynamicModels).toBeUndefined();
+		expect(options.staticModels).toBeUndefined();
+	});
+});

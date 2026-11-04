@@ -1,0 +1,618 @@
+name: OVH CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label admitted for this dispatch (empty uses veyyon)
+        type: string
+        default: veyyon
+      target_sha:
+        description: Exact source commit to exercise (empty uses workflow commit)
+        type: string
+      base_sha:
+        description: Exact actual PR base commit (required for focused checks)
+        type: string
+      test_files:
+        description: JSON array of related test paths (empty uses dependency selection)
+        type: string
+      fleet_adapter:
+        description: Run the complete discovered fleet adapter contracts
+        type: boolean
+        default: false
+      native:
+        description: Build native addon for focused tests
+        type: boolean
+        default: false
+      cargo_packages:
+        description: JSON array of Cargo package names to test on the runner (empty skips)
+        type: string
+      typecheck:
+        description: Run full TypeScript check across all packages
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.target_sha || github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    # Automatic PR work stays closed until the runner admission receipt in #676
+    # is accepted. This job condition is evaluated before allocating a runner.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && !inputs.typecheck) ||
+      (github.event_name == 'pull_request' &&
+       !github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       vars.OVH_CI_PR_ADMISSION == 'verified')
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.planner.outputs.matrix }}
+      native_ready: ${{ steps.native.outputs.native_ready || 'false' }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+      - name: Record checkout identity
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+        run: |
+          if [[ -n "$EXPECTED_SHA" ]]; then
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
+            [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo '::error::Target checkout mismatch'; exit 1; }
+          fi
+          echo "checked-out SHA: $(git rev-parse HEAD)"
+          echo "runner.name: ${RUNNER_NAME}"
+      - name: Detect changed paths
+        id: changed
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+          RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
+          TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
+          PINNED_BASE: ${{ inputs.base_sha || github.event.pull_request.base.sha }}
+          FOCUSED_TESTS: ${{ inputs.test_files }}
+          FLEET_ADAPTER: ${{ inputs.fleet_adapter }}
+        run: |
+          set -euo pipefail
+          [[ "$FLEET_ADAPTER" != "true" || -n "$FOCUSED_TESTS" ]] || { echo '::error::Fleet adapter requires explicit test_files'; exit 1; }
+          [[ -z "$FOCUSED_TESTS" || -n "$PINNED_BASE" ]] || { echo '::error::Focused checks require an exact base SHA'; exit 1; }
+          if [[ -n "$PINNED_BASE" ]]; then
+            [[ "$PINNED_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Base must be a full SHA'; exit 1; }
+            git cat-file -e "$PINNED_BASE^{commit}"
+          else
+            PINNED_BASE="$(git rev-parse origin/main)"
+          fi
+          export PINNED_BASE
+          base="$(git merge-base "$PINNED_BASE" HEAD)"
+          echo "PINNED_BASE=$PINNED_BASE" >> "$GITHUB_ENV"
+          echo "DIFF_BASE=$base" >> "$GITHUB_ENV"
+          workflow_changes="$(git diff --name-only "$base" HEAD -- .github/workflows/ovh-ci.yml scripts/validate-ovh-pr-workflow.ts)"
+          if [[ -n "$workflow_changes" ]]; then
+            echo 'workflow_changed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'workflow_changed=false' >> "$GITHUB_OUTPUT"
+          fi
+          echo "RELATED_TESTS=$RUNNER_TEMP/ovh-related-tests" >> "$GITHUB_ENV"
+          echo "RECEIPT=$RUNNER_TEMP/ovh-receipt.txt" >> "$GITHUB_ENV"
+          echo "TOUCHED_PACKAGES=$RUNNER_TEMP/ovh-touched-packages" >> "$GITHUB_ENV"
+          git diff --name-only -z "$base" HEAD | BASE="$base" node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const paths=s.split('\\0').filter(Boolean);const code=paths.length>0;require('fs').appendFileSync(process.env.GITHUB_OUTPUT,'has_code='+code+'\\n');require('fs').writeFileSync(process.env.RECEIPT,'sha='+require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()+'\\nrunner.name='+process.env.RUNNER_NAME+'\\nmerge-base='+process.env.BASE+'\\nchanged-paths='+paths.length+'\\nselected-tests=0\\npass=0\\nfail=0\\nran=0\\ntsc-start=0\\ntsc-end=0\\ntsc-elapsed=0\\n');if(!code){require('fs').writeFileSync(process.env.RELATED_TESTS,'');require('fs').writeFileSync(process.env.TOUCHED_PACKAGES,'');console.log('no-related-tests: 0 selected, 0 passed, 0 failed')}})"
+          printf 'pinned-base=%s\n' "$PINNED_BASE" >> "$RECEIPT"
+          if [[ -n "$FOCUSED_TESTS" ]]; then
+            node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const root = fs.realpathSync('.');
+          const files = JSON.parse(process.env.FOCUSED_TESTS);
+          if (process.env.FLEET_ADAPTER === 'true') {
+            const testDir = 'packages/coding-agent/test';
+            const fleetExpected = fs.readdirSync(testDir, { withFileTypes: true })
+              .filter(entry => entry.isFile() && /^mainplane-.*\.test\.ts$/.test(entry.name))
+              .map(entry => `${testDir}/${entry.name}`).sort();
+            if (fleetExpected.length < 4 || fleetExpected.length > 30 || !Array.isArray(files) ||
+                files.length !== fleetExpected.length || new Set(files).size !== files.length ||
+                fleetExpected.some(file => !files.includes(file))) {
+              throw new Error('Fleet adapter requires exactly all discovered mainplane-*.test.ts paths');
+            }
+          }
+          if (!Array.isArray(files) || files.length === 0 || files.length > 30 ||
+              files.some(file => typeof file !== 'string' || !/^[A-Za-z0-9_./-]+\.(test|spec)\.[cm]?[jt]sx?$/.test(file) ||
+                file.split('/').includes('..') || file.startsWith('/') || !fs.statSync(file).isFile())) {
+            throw new Error('Focused checks require 1..30 existing relative test paths');
+          }
+          for (const file of files) {
+            const relative = path.relative(root, fs.realpathSync(file));
+            if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Test escapes repository');
+          }
+          fs.writeFileSync(process.env.RELATED_TESTS, [...new Set(files)].join('\n') + '\n');
+          fs.writeFileSync(process.env.TOUCHED_PACKAGES, '');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'has_code=true\n');
+          fs.appendFileSync(process.env.RECEIPT, `focused-tests=${JSON.stringify(files)}\n`);
+          NODE
+          fi
+      - name: Install dependencies and generate code
+        id: install
+        if: steps.changed.outputs.has_code == 'true'
+        uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+      - name: Validate OVH pull-request workflow
+        if: steps.changed.outputs.workflow_changed == 'true' && steps.install.outcome == 'success' && !inputs.test_files
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        run: bun scripts/validate-ovh-pr-workflow.ts
+      - name: Resolve related test graph
+        id: selection
+        if: steps.changed.outputs.has_code == 'true' && steps.install.outcome == 'success'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
+          TOUCHED_PACKAGES: ${{ runner.temp }}/ovh-touched-packages
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+          FOCUSED_TESTS: ${{ inputs.test_files }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$FOCUSED_TESTS" ]]; then
+            count="$(wc -l < "$RELATED_TESTS")"
+            sed -i "s/^selected-tests=0$/selected-tests=$count/" "$RECEIPT"
+            echo "ts_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/ovh-related-tests.mjs --base "$DIFF_BASE" --head HEAD --typecheck-planned
+          fi
+      - name: Biome changed TypeScript and JavaScript
+        id: biome
+        if: steps.install.outcome == 'success' && !inputs.test_files
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        run: |
+          mapfile -d '' files < <(git diff --diff-filter=ACMRT --name-only -z "$DIFF_BASE" HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mts' '*.cts' '*.mjs' '*.cjs')
+          if ((${#files[@]})); then bunx biome check --no-errors-on-unmatched -- "${files[@]}"; else echo 'No changed TS/JS files for Biome.'; fi
+      - name: TypeScript check
+        id: types
+        if: steps.selection.outputs.ts_changed == 'true'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+        run: |
+          set -euo pipefail
+          tsc_start=$(date +%s)
+          record_tsc() {
+            tsc_status=$?
+            tsc_end=$(date +%s)
+            tsc_elapsed=$((tsc_end - tsc_start))
+            sed -i "s/^tsc-start=.*/tsc-start=$tsc_start/;s/^tsc-end=.*/tsc-end=$tsc_end/;s/^tsc-elapsed=.*/tsc-elapsed=$tsc_elapsed/" "$RECEIPT"
+            {
+              echo "### TypeScript Check"
+              echo "- Exit: $tsc_status"
+              echo "- Start: $tsc_start"
+              echo "- End: $tsc_end"
+              echo "- Elapsed: ${tsc_elapsed}s"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          trap record_tsc EXIT
+          while IFS= read -r package; do
+            [[ -n "$package" ]] || continue
+            bun run --filter "$package" check:types
+          done < "$RUNNER_TEMP/ovh-touched-packages"
+      - name: Record skipped TypeScript check summary
+        if: steps.selection.outputs.ts_changed != 'true'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        run: |
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            {
+              echo "### TypeScript Check"
+              echo "- Status: skipped"
+              echo "- Start: 0"
+              echo "- End: 0"
+              echo "- Elapsed: 0s"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Build and verify native addon
+        id: native
+        if: steps.install.outcome == 'success'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          CARGO_BUILD_JOBS: "2"
+          RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
+          NATIVE_INPUT: ${{ inputs.native }}
+        run: |
+          set -euo pipefail
+          if [[ -s "$RELATED_TESTS" || "$NATIVE_INPUT" == "true" ]]; then
+            bun run ci:build:native
+            shopt -s nullglob
+            node_files=(natives/bridge/bindings/native/veyyon_natives.linux-x64*.node)
+            if [[ ${#node_files[@]} -eq 0 ]]; then
+              echo '::error::Missing native binding veyyon_natives.linux-x64*.node'
+              exit 1
+            fi
+            bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();'
+            echo "native_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "native_ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Plan test shards
+        id: planner
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          INPUT_FILE: ${{ runner.temp }}/ovh-related-tests
+          OUTPUT_DIR: ${{ runner.temp }}/ovh-shards
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          node scripts/ovh-test-shards.mjs --input "$INPUT_FILE" --output "$OUTPUT_DIR"
+          cp "$INPUT_FILE" "$OUTPUT_DIR/selected-tests.txt"
+          cp "$RECEIPT" "$OUTPUT_DIR/ovh-receipt.txt"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
+      - name: Upload selection plan artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ovh-shards
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload native artifact
+        if: steps.native.outputs.native_ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: natives/bridge/bindings/native/veyyon_natives.linux-x64*.node
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload preparation receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-prepare-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ovh-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  test:
+    name: test (shard ${{ matrix.index }})
+    needs: prepare
+    if: >-
+      needs.prepare.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && !inputs.typecheck) ||
+       (github.event_name == 'pull_request' &&
+       !github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       vars.OVH_CI_PR_ADMISSION == 'verified'))
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      OVH_MATRIX_INDEX: ${{ matrix.index }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+      - name: Record checkout identity
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+        run: |
+          if [[ -n "$EXPECTED_SHA" ]]; then
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
+            [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo '::error::Target checkout mismatch'; exit 1; }
+          fi
+          echo "checked-out SHA: $(git rev-parse HEAD)"
+          echo "runner.name: ${RUNNER_NAME}"
+      - name: Download prepared plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ovh-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ovh-shards
+      - name: Install dependencies and generate code
+        id: install
+        uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+      - name: Download native addon
+        if: needs.prepare.outputs.native_ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ovh-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: natives/bridge/bindings/native
+      - name: Run cargo tests
+        id: cargo
+        if: ${{ !cancelled() && inputs.cargo_packages != '' && matrix.index == 0 }}
+        env:
+          CARGO_BUILD_JOBS: "2"
+          CARGO_PACKAGES: ${{ inputs.cargo_packages }}
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        run: |
+          set -euo pipefail
+          package_names="$(node -e "const p=JSON.parse(process.env.CARGO_PACKAGES);if(!Array.isArray(p)||p.length===0||p.length>10||p.some(x=>typeof x!=='string'||!/^[A-Za-z0-9_-]+$/.test(x)))throw new Error('cargo_packages needs 1..10 crate names');console.log(p.join('\n'))")"
+          mapfile -t packages <<< "$package_names"
+          args=(); for p in "${packages[@]}"; do args+=(-p "$p"); done
+          log="$RUNNER_TEMP/ovh-cargo-test.log"
+          status=0
+          timeout 840 cargo test --locked "${args[@]}" 2>&1 | tee "$log" || status=1
+          pass="$(sed -nE 's/^test result: [a-z]+\. ([0-9]+) passed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
+          fail="$(sed -nE 's/^test result: [a-z]+\. [0-9]+ passed; ([0-9]+) failed.*/\1/p' "$log" | awk '{s+=$1} END{print s+0}')"
+          echo "OVH_CARGO_TOTAL packages=${packages[*]} pass=$pass fail=$fail"
+          ((pass>0)) || { echo '::error::No cargo tests ran'; status=1; }
+          ((fail==0)) || status=1
+          exit "$status"
+      - name: Verify native addon
+        if: steps.install.outcome == 'success'
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          FILES: ${{ matrix.files }}
+          NATIVE_READY: ${{ needs.prepare.outputs.native_ready }}
+        run: |
+          set -euo pipefail
+          if [[ "$FILES" != "0" && "$NATIVE_READY" != "true" ]]; then
+            echo '::error::Nonempty shard requires prepared native artifact'
+            exit 1
+          fi
+          if [[ "$NATIVE_READY" == "true" ]]; then
+            bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();'
+          fi
+      - name: Prepare bwrap runtime
+        id: bwrap
+        if: steps.install.outcome == 'success'
+        run: |
+          set -euo pipefail
+          mkdir -p .ovh-tools/bin /var/tmp
+          cp -L "$(bun -p 'process.execPath')" .ovh-tools/bin/bun
+          alias_root="$(mktemp -d /var/tmp/veyyon-ovh-XXXXXX)"
+          ln -s "$GITHUB_WORKSPACE" "$alias_root/repo"
+          echo "VEYYON_SANDBOX_REPO_ROOT=$alias_root/repo" >> "$GITHUB_ENV"
+          echo 'VEYYON_SANDBOX_REMOTE=0' >> "$GITHUB_ENV"
+          echo 'VEYYON_SANDBOX_RUNG=bwrap' >> "$GITHUB_ENV"
+          echo 'VEYYON_SANDBOX_TIMEOUT=600' >> "$GITHUB_ENV"
+      - name: Run selected tests serially
+        if: ${{ !cancelled() && steps.bwrap.outcome == 'success' }}
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          RECEIPT: ${{ runner.temp }}/ovh-receipt.txt
+          SHARD_FILE: ${{ runner.temp }}/ovh-shards/shard-${{ matrix.index }}.txt
+          FLEET_ADAPTER: ${{ inputs.fleet_adapter }}
+        run: |
+          set -uo pipefail
+          shard_start=$(date +%s)
+          head_sha="$(git rev-parse HEAD)"
+
+          {
+            echo "sha=$head_sha"
+            echo "run=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "index=${{ matrix.index }}"
+            echo "count=${{ matrix.count }}"
+            echo "selected-tests=${{ matrix.files }}"
+            echo "projected_ms=${{ matrix.projected_ms }}"
+            echo "runner.name=${RUNNER_NAME:-}"
+            echo "shard-start=$shard_start"
+            echo "shard-end=0"
+            echo "shard-elapsed=0"
+            echo "pass=0"
+            echo "fail=0"
+            echo "ran=0"
+          } > "$RECEIPT"
+
+          if ! bun scripts/ovh-test-shards.mjs --verify "$SHARD_FILE" --expected "${{ matrix.files }}"; then
+            echo "::error::Shard ${{ matrix.index }} test list does not match the plan (expected ${{ matrix.files }} tests)"
+            exit 1
+          fi
+
+          if [[ "${{ matrix.files }}" == "0" ]]; then
+            echo 'no-related-tests: 0 selected, 0 passed, 0 failed'
+            shard_end=$(date +%s)
+            shard_elapsed=$((shard_end - shard_start))
+            sed -i "s/^shard-end=.*/shard-end=$shard_end/;s/^shard-elapsed=.*/shard-elapsed=$shard_elapsed/" "$RECEIPT"
+            if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+              {
+                echo "### OVH CI Test Shard ${{ matrix.index }} of ${{ matrix.count }}"
+                echo "- Status: no related tests"
+                echo "- Coverage: complete related coverage"
+                echo "- Start: $shard_start"
+                echo "- End: $shard_end"
+                echo "- Elapsed: ${shard_elapsed}s"
+                echo "- Pass: 0"
+                echo "- Fail: 0"
+                echo "- Ran: 0"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 0
+          fi
+
+          status=0; total_pass=0; total_fail=0; total_ran=0
+          if [[ "$FLEET_ADAPTER" == "true" && "${{ matrix.index }}" == "0" ]]; then
+            mkdir -p .ovh-tools/fleet-ci
+            unit_log="$GITHUB_WORKSPACE/.ovh-tools/fleet-ci/reducer-unit.log"
+            if timeout 180 bash scripts/test-sandbox/run.sh --rung=bwrap /usr/bin/python3 -m unittest discover -s scripts/fleet -p 'test_*.py' 2>&1 | tee "$unit_log"; then :; else status=1; fi
+          fi
+          while IFS= read -r file; do
+            [[ -n "$file" ]] || continue
+            log="$RUNNER_TEMP/ovh-test-$(printf '%s' "$file" | sha256sum | cut -c1-16).log"
+            sandbox_root="$(bash scripts/test-sandbox/run.sh --rung=bwrap /bin/pwd)"
+            runtime_bin="$sandbox_root/.ovh-tools/bin"
+            junit_args=()
+            if [[ "$FLEET_ADAPTER" == "true" ]]; then mkdir -p .ovh-tools/fleet-ci; junit_args=(--reporter=junit --reporter-outfile="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"); fi
+            if timeout 600 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'export PATH="$1:$PATH"; shift; exec "$@"' _ "$runtime_bin" "$runtime_bin/bun" test --preload "$sandbox_root/packages/utils/test/helpers/real-data-tripwire.ts" --preload "$sandbox_root/packages/ai/test/helpers/provider-override-tripwire.ts" "$file" "${junit_args[@]}" 2>&1 | tee "$log"; then rc=0; else rc=${PIPESTATUS[0]}; status=1; fi
+            if [[ "$FLEET_ADAPTER" == "true" ]]; then report="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").xml"; receipt="$sandbox_root/.ovh-tools/fleet-ci/$(basename "$file").json"; if timeout 180 bash scripts/test-sandbox/run.sh --rung=bwrap /bin/sh -c 'exec /usr/bin/python3 scripts/fleet/junit_receipt.py --input "$1" --head-sha "$(git rev-parse HEAD)" --output "$2"' _ "$report" "$receipt"; then :; else status=1; fi; fi
+            summary="$(grep -E '^[[:space:]]*[0-9]+ (pass|fail)([,[:space:]]|$)|Ran [0-9]+' "$log" || true)"; printf '%s\n' "$summary"
+            pass="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) pass.*/\1/p' | awk '{s+=$1} END{print s+0}')"
+            fail="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*([0-9]+) fail.*/\1/p' | awk '{s+=$1} END{print s+0}')"
+            ran="$(printf '%s\n' "$summary" | sed -nE 's/^[[:space:]]*Ran ([0-9]+).*/\1/p' | awk '{s+=$1} END{print s+0}')"
+            total_pass=$((total_pass+pass)); total_fail=$((total_fail+fail)); total_ran=$((total_ran+ran))
+            if ((rc!=0||ran==0||fail!=0)); then echo "::error::Test failed or ran zero cases: $file exit=$rc ran=$ran fail=$fail"; status=1; fi
+            printf 'test=%s pass=%s fail=%s ran=%s exit=%s\n' "$file" "$pass" "$fail" "$ran" "$rc" >> "$RECEIPT"
+          done < "$SHARD_FILE"
+          echo "OVH_TEST_TOTAL pass=$total_pass fail=$total_fail ran=$total_ran"
+          shard_end=$(date +%s)
+          shard_elapsed=$((shard_end - shard_start))
+          sed -i "s/^pass=.*/pass=$total_pass/;s/^fail=.*/fail=$total_fail/;s/^ran=.*/ran=$total_ran/;s/^shard-end=.*/shard-end=$shard_end/;s/^shard-elapsed=.*/shard-elapsed=$shard_elapsed/" "$RECEIPT"
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            {
+              echo "### OVH CI Test Shard ${{ matrix.index }} of ${{ matrix.count }}"
+              echo "- Coverage: complete related coverage"
+              echo "- Start: $shard_start"
+              echo "- End: $shard_end"
+              echo "- Elapsed: ${shard_elapsed}s"
+              echo "- Selected: ${{ matrix.files }}"
+              echo "- Projected: ${{ matrix.projected_ms }}ms"
+              echo "- Pass: $total_pass"
+              echo "- Fail: $total_fail"
+              echo "- Ran: $total_ran"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          ((total_ran>0)) || { echo '::error::No selected tests ran'; status=1; }
+          exit "$status"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
+      - name: Upload test logs and receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-shard-${{ matrix.index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ovh-test-*.log
+            ${{ runner.temp }}/ovh-receipt.txt
+            .ovh-tools/fleet-ci/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+  typecheck:
+    if: github.event_name == 'workflow_dispatch' && inputs.typecheck
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+      - name: Record checkout identity
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          EXPECTED_SHA: ${{ inputs.target_sha || (github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha) }}
+        run: |
+          if [[ -n "$EXPECTED_SHA" ]]; then
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Target must be a full SHA'; exit 1; }
+            [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || { echo '::error::Target checkout mismatch'; exit 1; }
+          fi
+          echo "checked-out SHA: $(git rev-parse HEAD)"
+          echo "runner.name: ${RUNNER_NAME}"
+      - name: Install dependencies and generate code
+        id: install
+        uses: ./.github/actions/bun-install
+        with:
+          shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+      - name: Run TypeScript check
+        id: check
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        env:
+          RAW_LOG: ${{ runner.temp }}/ovh-typecheck-raw.log
+          KEYS_FILE: ${{ runner.temp }}/ovh-typecheck-keys.txt
+        run: |
+          set -uo pipefail
+          status=0
+          bun run check:ts 2>&1 | tee "$RAW_LOG" || status=${PIPESTATUS[0]}
+          target_sha="$(git rev-parse HEAD)"
+          export RAW_LOG KEYS_FILE target_sha
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const lines = fs.readFileSync(process.env.RAW_LOG, 'utf8').split('\n');
+          const keys = [];
+          for (const line of lines) {
+            const match = line.match(/^\s*(\S+)\((\d+),\d+\): error (TS\d+):/);
+            if (!match) continue;
+            const file = match[1].replace(/\\/g, '/').replace(/^\.\//, '');
+            keys.push(`${file}:${match[2]}:${match[3]}`);
+          }
+
+          keys.sort();
+
+          fs.writeFileSync(process.env.KEYS_FILE, keys.length ? `${keys.join('\n')}\n` : '');
+          console.log(`OVH_TYPECHECK target=${process.env.target_sha} diagnostics=${keys.length}`);
+          for (const key of keys) console.log(key);
+          NODE
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+      - name: Clean orphaned processes
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # The checkout may be an older explicit target lacking --cleanup.
+          # Pin the reaper to the workflow definition's trusted commit.
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Workflow cleanup SHA is invalid'; exit 1; }
+          git cat-file -e "$WORKFLOW_SHA^{commit}" || { echo '::error::Workflow commit unavailable for cleanup'; exit 1; }
+          cleanup_script="$(mktemp "$RUNNER_TEMP/ovh-cleanup.XXXXXXXX")"
+          trap 'rm -f -- "$cleanup_script"' EXIT
+          git show "$WORKFLOW_SHA:scripts/ovh-process-group.sh" > "$cleanup_script"
+          bash "$cleanup_script" --cleanup
+      - name: Upload typecheck artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ovh-typecheck-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ovh-typecheck-raw.log
+            ${{ runner.temp }}/ovh-typecheck-keys.txt
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce TypeScript check exit status
+        if: always()
+        shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
+        run: |
+          exit_code="${{ steps.check.outputs.exit_code }}"
+          if [[ -z "$exit_code" || "$exit_code" -ne 0 ]]; then
+            echo "::error::TypeScript check failed with exit code ${exit_code:-unknown}"
+            exit "${exit_code:-1}"
+          fi
+

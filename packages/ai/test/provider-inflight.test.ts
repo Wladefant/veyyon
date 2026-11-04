@@ -1,0 +1,482 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { clearCustomApis } from "@veyyon/ai/api-registry";
+import { configureProviderMaxInFlightRequests } from "@veyyon/ai/provider-inflight-limits";
+import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
+import { __providerInFlightForTesting, streamSimple } from "@veyyon/ai/stream";
+import type { Context } from "@veyyon/ai/types";
+
+function context(): Context {
+	return {
+		systemPrompt: [],
+		messages: [{ role: "user", content: "hi", timestamp: 0 }],
+	};
+}
+
+let limiterRoot: string | undefined;
+
+afterEach(async () => {
+	clearCustomApis();
+	configureProviderMaxInFlightRequests(undefined);
+	__providerInFlightForTesting.setRoot(undefined);
+	if (limiterRoot !== undefined) {
+		await fs.rm(limiterRoot, { recursive: true, force: true });
+		limiterRoot = undefined;
+	}
+});
+
+async function useIsolatedLimiterRoot(): Promise<void> {
+	limiterRoot = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-provider-inflight-test-"));
+	__providerInFlightForTesting.setRoot(limiterRoot);
+}
+
+function limiterDir(provider: string): string {
+	return __providerInFlightForTesting.providerDir(provider);
+}
+
+describe("provider in-flight request limits", () => {
+	beforeEach(async () => {
+		await useIsolatedLimiterRoot();
+	});
+	test("serializes concurrent streamSimple calls for the same provider", async () => {
+		registerMockApi();
+		const firstStarted = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		let active = 0;
+		let maxActive = 0;
+		let callIndex = 0;
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async () => {
+				callIndex++;
+				active++;
+				maxActive = Math.max(maxActive, active);
+				try {
+					if (callIndex === 1) {
+						firstStarted.resolve();
+						await releaseFirst.promise;
+					}
+					return { content: [`reply ${callIndex}`] };
+				} finally {
+					active--;
+				}
+			},
+		});
+
+		const first = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		const firstResult = first.result();
+		await firstStarted.promise;
+
+		const second = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		await Bun.sleep(20);
+		expect(mock.calls).toHaveLength(1);
+
+		releaseFirst.resolve();
+		const [firstMessage, secondMessage] = await Promise.all([firstResult, second.result()]);
+
+		expect(firstMessage.content).toEqual([{ type: "text", text: "reply 1" }]);
+		expect(secondMessage.content).toEqual([{ type: "text", text: "reply 2" }]);
+		expect(maxActive).toBe(1);
+		expect(mock.calls).toHaveLength(2);
+	});
+
+	test("removes an aborted queued request without dispatching it", async () => {
+		registerMockApi();
+		const firstStarted = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		let callIndex = 0;
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async () => {
+				callIndex++;
+				if (callIndex === 1) {
+					firstStarted.resolve();
+					await releaseFirst.promise;
+				}
+				return { content: [`reply ${callIndex}`] };
+			},
+		});
+
+		const first = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		const firstResult = first.result();
+		await firstStarted.promise;
+
+		const controller = new AbortController();
+		const second = streamSimple(mock.model, context(), {
+			maxInFlightRequests: { tests: 1 },
+			signal: controller.signal,
+		});
+		controller.abort(new Error("cancel queued request"));
+
+		await expect(second.result()).rejects.toThrow("cancel queued request");
+		expect(mock.calls).toHaveLength(1);
+
+		releaseFirst.resolve();
+		await firstResult;
+		expect(mock.calls).toHaveLength(1);
+	});
+
+	test("shares limits with leases created by another process", async () => {
+		registerMockApi();
+		const providerDir = limiterDir("tests");
+		const externalLease = path.join(providerDir, "external");
+		await fs.mkdir(externalLease, { recursive: true });
+		await Bun.write(
+			path.join(externalLease, "info.json"),
+			JSON.stringify({ pid: process.pid, timestamp: Date.now(), token: "external" }),
+		);
+
+		const controller = new AbortController();
+		const mock = createMockModel({ provider: "tests", responses: [{ content: ["reply"] }] });
+		const stream = streamSimple(mock.model, context(), {
+			maxInFlightRequests: { tests: 1 },
+			signal: controller.signal,
+		});
+
+		await Bun.sleep(150);
+		expect(mock.calls).toHaveLength(0);
+
+		await fs.rm(externalLease, { recursive: true, force: true });
+		await Bun.write(path.join(providerDir, ".wakeup"), String(Date.now()));
+		const result = await stream.result();
+		expect(result.content).toEqual([{ type: "text", text: "reply" }]);
+		expect(mock.calls).toHaveLength(1);
+	});
+
+	test("does not signal waiters when no slot was freed", async () => {
+		registerMockApi();
+		const providerDir = limiterDir("tests");
+		const externalLease = path.join(providerDir, "external");
+		await fs.mkdir(externalLease, { recursive: true });
+		await Bun.write(
+			path.join(externalLease, "info.json"),
+			JSON.stringify({ pid: process.pid, timestamp: Date.now(), token: "external" }),
+		);
+
+		const controller = new AbortController();
+		const mock = createMockModel({ provider: "tests", responses: [{ content: ["reply"] }] });
+		const stream = streamSimple(mock.model, context(), {
+			maxInFlightRequests: { tests: 1 },
+			signal: controller.signal,
+		});
+
+		await Bun.sleep(50);
+		expect(await Bun.file(path.join(providerDir, ".wakeup")).exists()).toBe(false);
+		expect(mock.calls).toHaveLength(0);
+
+		controller.abort(new Error("cancel saturated waiter"));
+		await expect(stream.result()).rejects.toThrow("cancel saturated waiter");
+	});
+
+	test("does not signal waiters when acquiring a slot", async () => {
+		registerMockApi();
+		const providerDir = limiterDir("tests");
+		const firstStarted = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async () => {
+				firstStarted.resolve();
+				await releaseFirst.promise;
+				return { content: ["reply"] };
+			},
+		});
+
+		const stream = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		await firstStarted.promise;
+
+		expect(await Bun.file(path.join(providerDir, ".wakeup")).exists()).toBe(false);
+
+		releaseFirst.resolve();
+		const result = await stream.result();
+		expect(result.content).toEqual([{ type: "text", text: "reply" }]);
+	});
+
+	test("does not reap a live lock just because its timestamp is old", async () => {
+		registerMockApi();
+		const lockDir = __providerInFlightForTesting.lockDir("tests");
+		await fs.mkdir(lockDir, { recursive: true });
+		await Bun.write(
+			path.join(lockDir, "info.json"),
+			JSON.stringify({ pid: process.pid, timestamp: Date.now() - 60_000, token: "live-lock" }),
+		);
+
+		const controller = new AbortController();
+		const mock = createMockModel({ provider: "tests", responses: [{ content: ["reply"] }] });
+		const stream = streamSimple(mock.model, context(), {
+			maxInFlightRequests: { tests: 1 },
+			signal: controller.signal,
+		});
+
+		await Bun.sleep(150);
+		expect(mock.calls).toHaveLength(0);
+
+		controller.abort(new Error("cancel lock waiter"));
+		await expect(stream.result()).rejects.toThrow("cancel lock waiter");
+		expect(mock.calls).toHaveLength(0);
+	});
+
+	test("treats unreadable fresh lease info as active", async () => {
+		registerMockApi();
+		const providerDir = limiterDir("tests");
+		const externalLease = path.join(providerDir, "partial-info");
+		await fs.mkdir(externalLease, { recursive: true });
+		const old = new Date(Date.now() - 60_000);
+		await fs.utimes(externalLease, old, old);
+		await Bun.write(path.join(externalLease, "info.json"), "{");
+
+		const controller = new AbortController();
+		const mock = createMockModel({ provider: "tests", responses: [{ content: ["reply"] }] });
+		const stream = streamSimple(mock.model, context(), {
+			maxInFlightRequests: { tests: 1 },
+			signal: controller.signal,
+		});
+
+		await Bun.sleep(150);
+		expect(mock.calls).toHaveLength(0);
+
+		controller.abort(new Error("cancel partial-info waiter"));
+		await expect(stream.result()).rejects.toThrow("cancel partial-info waiter");
+		expect(mock.calls).toHaveLength(0);
+	});
+
+	test("does not delete a fresh lock after observing a stale lock", async () => {
+		const lockDir = __providerInFlightForTesting.lockDir("tests");
+		await fs.mkdir(lockDir, { recursive: true });
+		await Bun.write(
+			path.join(lockDir, "info.json"),
+			JSON.stringify({ pid: 999999, timestamp: Date.now() - 60_000, token: "stale-lock" }),
+		);
+		const staleRelease = await __providerInFlightForTesting.captureStaleLockRelease("tests");
+		expect(staleRelease).not.toBeNull();
+
+		await fs.rm(lockDir, { recursive: true, force: true });
+		await fs.mkdir(lockDir, { recursive: true });
+		await Bun.write(
+			path.join(lockDir, "info.json"),
+			JSON.stringify({ pid: process.pid, timestamp: Date.now(), token: "fresh-lock" }),
+		);
+
+		await staleRelease?.();
+
+		const remaining = JSON.parse(await Bun.file(path.join(lockDir, "info.json")).text()) as { token: string };
+		expect(remaining.token).toBe("fresh-lock");
+	});
+
+	test("does not delete a fresh lock after a write-failure cleanup observes an old lock", async () => {
+		const lockDir = __providerInFlightForTesting.lockDir("tests");
+		await fs.mkdir(lockDir, { recursive: true });
+		const staleCleanup = await __providerInFlightForTesting.captureLockDirRelease("tests");
+		expect(staleCleanup).not.toBeNull();
+
+		await fs.rm(lockDir, { recursive: true, force: true });
+		await fs.mkdir(lockDir, { recursive: true });
+		await Bun.write(
+			path.join(lockDir, "info.json"),
+			JSON.stringify({ pid: process.pid, timestamp: Date.now(), token: "fresh-lock" }),
+		);
+
+		await staleCleanup?.();
+
+		const remaining = JSON.parse(await Bun.file(path.join(lockDir, "info.json")).text()) as { token: string };
+		expect(remaining.token).toBe("fresh-lock");
+	});
+
+	test("does not dispatch when aborted immediately after slot acquisition", async () => {
+		registerMockApi();
+		const controller = new AbortController();
+		const mock = createMockModel({ provider: "tests", responses: [{ content: ["reply"] }] });
+		const stream = streamSimple(mock.model, context(), {
+			maxInFlightRequests: { tests: 1 },
+			signal: controller.signal,
+		});
+
+		controller.abort(new Error("cancel acquired request"));
+
+		await expect(stream.result()).rejects.toThrow("cancel acquired request");
+		expect(mock.calls).toHaveLength(0);
+	});
+
+	test("uses opaque path segments for provider ids", async () => {
+		const dir = limiterDir("..");
+		const relative = path.relative(limiterRoot!, dir);
+
+		expect(relative).not.toBe("");
+		expect(relative.startsWith("..")).toBe(false);
+		expect(path.isAbsolute(relative)).toBe(false);
+	});
+});
+
+/**
+ * A request that fails AFTER acquiring an in-flight slot must give the slot
+ * back. The happy-path tests above only prove the slot is released when a
+ * request completes normally; they never exercise the `catch` arm of
+ * `withProviderInFlightLimit`, which is the arm that runs when the provider
+ * throws mid-dispatch (a dropped connection, a 5xx, a handler that rejects).
+ *
+ * If that arm ever stops releasing the slot, the failure is silent and
+ * catastrophic: the lease dir stays on disk with a live heartbeat, so it never
+ * ages into staleness (30s) and never gets reaped. With `maxInFlightRequests`
+ * set to 1, the very next request to that provider blocks forever. These tests
+ * make that regression a hard, fast failure instead of a production wedge.
+ */
+describe("provider in-flight slot release on failure", () => {
+	beforeEach(async () => {
+		await useIsolatedLimiterRoot();
+	});
+
+	test("releases the slot after a mid-dispatch failure so a queued request proceeds", async () => {
+		registerMockApi();
+		const firstStarted = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		let callIndex = 0;
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async () => {
+				callIndex++;
+				if (callIndex === 1) {
+					firstStarted.resolve();
+					await releaseFirst.promise;
+					throw new Error("provider exploded mid-dispatch");
+				}
+				return { content: [`reply ${callIndex}`] };
+			},
+		});
+
+		const first = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		const firstResult = first.result();
+		await firstStarted.promise;
+
+		// The second request queues behind the in-flight (soon-to-fail) first one;
+		// with a limit of 1 it cannot dispatch until the slot is freed.
+		const second = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		await Bun.sleep(20);
+		expect(mock.calls).toHaveLength(1);
+
+		// The first request now fails. Its slot MUST be released here, or the
+		// second request never dispatches and this test hangs to timeout.
+		releaseFirst.resolve();
+		await expect(firstResult).rejects.toThrow("provider exploded mid-dispatch");
+
+		const secondMessage = await second.result();
+		expect(secondMessage.content).toEqual([{ type: "text", text: "reply 2" }]);
+		expect(mock.calls).toHaveLength(2);
+	});
+
+	/**
+	 * A timeout is an abort delivered while the provider is already streaming,
+	 * which is a different exit from the mid-dispatch throw above: the failure
+	 * arrives from OUTSIDE the dispatch, through the signal, rather than from the
+	 * handler returning. It has to release the slot on the same path.
+	 *
+	 * The lease is a directory on disk, so a leak here does not merely stall this
+	 * process: the slot stays taken for every future request against that provider
+	 * until the stale reaper reclaims it, and the symptom is requests that hang
+	 * with no error anywhere. A request-timeout is exactly the moment a user is
+	 * most likely to retry, so the leak would compound.
+	 */
+	test("releases the slot when a request is aborted mid-stream, and the retry succeeds", async () => {
+		registerMockApi();
+		const providerDir = limiterDir("tests");
+		const started = Promise.withResolvers<void>();
+		const neverResolves = Promise.withResolvers<void>();
+		let callIndex = 0;
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async (_ctx, options?: { signal?: AbortSignal }) => {
+				callIndex++;
+				if (callIndex === 1) {
+					started.resolve();
+					// Hang like a stalled upstream so the abort lands mid-request.
+					await new Promise<void>((_resolve, reject) => {
+						options?.signal?.addEventListener("abort", () => reject(options.signal?.reason));
+						void neverResolves.promise;
+					});
+				}
+				return { content: [`reply ${callIndex}`] };
+			},
+		});
+
+		const controller = new AbortController();
+		const stalled = streamSimple(mock.model, context(), {
+			maxInFlightRequests: { tests: 1 },
+			signal: controller.signal,
+		});
+		const stalledResult = stalled.result().catch((error: unknown) => error);
+		await started.promise;
+
+		controller.abort(new Error("request timed out"));
+		await stalledResult;
+
+		// No lease is left on disk for the reaper to clean up later. `lock*` and the
+		// dot-prefixed waiter-wakeup file are limiter bookkeeping, not held slots.
+		const entries = await fs.readdir(providerDir).catch(() => [] as string[]);
+		expect(entries.filter(entry => !entry.startsWith("lock") && !entry.startsWith("."))).toEqual([]);
+
+		// And the slot is genuinely free, not merely unreferenced: a fresh request
+		// acquires it and completes.
+		const retry = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		const message = await retry.result();
+		expect(message.content).toEqual([{ type: "text", text: "reply 2" }]);
+	});
+
+	test("does not leak slots across repeated mid-dispatch failures", async () => {
+		registerMockApi();
+		const FAILURES = 4;
+		let callIndex = 0;
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async () => {
+				callIndex++;
+				if (callIndex <= FAILURES) throw new Error(`boom ${callIndex}`);
+				return { content: [`reply ${callIndex}`] };
+			},
+		});
+
+		// Every failure must return its slot. A slow leak (one lease not released
+		// per failure) would only surface after several failures, so drive a run
+		// of them before proving a fresh request can still acquire the sole slot.
+		for (let i = 1; i <= FAILURES; i++) {
+			const failing = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+			await expect(failing.result()).rejects.toThrow(`boom ${i}`);
+		}
+
+		const ok = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		const message = await ok.result();
+		expect(message.content).toEqual([{ type: "text", text: `reply ${FAILURES + 1}` }]);
+		expect(mock.calls).toHaveLength(FAILURES + 1);
+	});
+
+	test("signals waiters when releasing the slot after a failure", async () => {
+		registerMockApi();
+		const providerDir = limiterDir("tests");
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async () => {
+				started.resolve();
+				await release.promise;
+				throw new Error("boom");
+			},
+		});
+
+		const stream = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		const result = stream.result();
+		await started.promise;
+
+		// Acquiring an uncontended slot writes no wakeup (see the acquisition test
+		// above), so the file must be absent while the request is still in flight.
+		expect(await Bun.file(path.join(providerDir, ".wakeup")).exists()).toBe(false);
+
+		release.resolve();
+		await expect(result).rejects.toThrow("boom");
+
+		// Releasing the slot on the error path must still wake any waiter, exactly
+		// as the success path does. Prove the wakeup was written by the release,
+		// not merely by a queued waiter's fallback timer (there is no waiter here).
+		expect(await Bun.file(path.join(providerDir, ".wakeup")).exists()).toBe(true);
+	});
+});

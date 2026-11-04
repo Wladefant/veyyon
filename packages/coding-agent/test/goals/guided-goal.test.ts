@@ -1,0 +1,477 @@
+import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
+import * as path from "node:path";
+import * as core from "@veyyon/agent-core";
+import { ThinkingLevel } from "@veyyon/agent-core";
+import type { Api, ApiKey, Context, Model, SimpleStreamOptions } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { runGuidedGoalTurn } from "@veyyon/coding-agent/goals/guided-setup";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { AgentSession as RealAgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { createTools, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
+
+const planModel = { provider: "test", id: "plan" } as unknown as Model<Api>;
+const currentModel = { provider: "test", id: "current" } as unknown as Model<Api>;
+
+function createSession(options?: { plan?: boolean; current?: boolean; thinkingLevel?: ThinkingLevel }): AgentSession {
+	const plan = options?.plan ?? true;
+	const current = options?.current ?? false;
+	return {
+		// An unset plan helper runs the session's model, and resolves to nothing without one.
+		resolveHelperModel(id: string) {
+			if (id !== "plan") return undefined;
+			if (plan) return { model: planModel, inherited: false };
+			if (current) return { model: currentModel, inherited: true };
+			return undefined;
+		},
+		modelRegistry: {
+			getAvailable: () => [currentModel],
+			getApiKey: async () => "test-key",
+			resolver: (model: typeof planModel) => `${model.provider}/${model.id}:key`,
+		},
+		model: current ? currentModel : undefined,
+		thinkingLevel: options?.thinkingLevel,
+		sessionId: "session-1",
+		preferWebsockets: true,
+		providerSessionState: new Map(),
+		obfuscateProviderText: (text: string) => text,
+		agent: { telemetry: undefined },
+	} as unknown as AgentSession;
+}
+
+function mockResponse(args: unknown) {
+	return {
+		stopReason: "tool_use",
+		content: [{ type: "toolCall", name: "respond", arguments: args }],
+	};
+}
+
+function mockTextResponse(text: string) {
+	return {
+		stopReason: "stop",
+		content: [{ type: "text", text }],
+	};
+}
+
+function createToolSession(cwd: string, settings: Settings): ToolSession {
+	return {
+		cwd,
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings,
+	};
+}
+
+async function createInteractiveGoalHarness(): Promise<{
+	mode: InteractiveMode;
+	session: RealAgentSession;
+	modelRegistry: ModelRegistry;
+	authStorage: AuthStorage;
+	tempDir: TempDir;
+	cleanup: () => Promise<void>;
+}> {
+	resetSettingsForTest();
+	const tempDir = TempDir.createSync("@pi-guided-goal-");
+	await Settings.init({ inMemory: true, cwd: tempDir.path() });
+	const settings = Settings.isolated({
+		"compaction.enabled": false,
+		"goal.enabled": true,
+		"plan.enabled": true,
+	});
+	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+	const modelRegistry = new ModelRegistry(authStorage);
+	const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+	if (!model) {
+		throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+	}
+	const initialTools = await createTools(createToolSession(tempDir.path(), settings), ["read"]);
+	const toolRegistry = new Map<string, Tool>(initialTools.map(tool => [tool.name, tool] as const));
+	const session = new RealAgentSession({
+		agent: new core.Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: initialTools,
+				messages: [],
+			},
+		}),
+		sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+		settings,
+		modelRegistry,
+		toolRegistry,
+		rebuildSystemPrompt: async () => ({ systemPrompt: ["Test"] }),
+	});
+	const mode = new InteractiveMode(session, "test");
+	vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
+	vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
+	mode.ui.requestRender = vi.fn();
+	return {
+		mode,
+		session,
+		modelRegistry,
+		authStorage,
+		tempDir,
+		cleanup: async () => {
+			mode.stop();
+			await session.dispose();
+			authStorage.close();
+			await tempDir.remove();
+			resetSettingsForTest();
+		},
+	};
+}
+
+describe("guided goal setup", () => {
+	beforeAll(() => {
+		initTheme();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		(core.instrumentedCompleteSimple as { mockRestore?: () => void }).mockRestore?.();
+	});
+
+	it("prefers the plan model", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "question", question: "What is done?" }) as never,
+		);
+
+		const result = await runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] });
+
+		expect(result).toEqual({ kind: "question", question: "What is done?" });
+		expect(complete.mock.calls[0]?.[0]).toBe(planModel);
+	});
+
+	it("routes the guided-goal request through the session provider transport", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "question", question: "What is done?" }) as never,
+		);
+		const session = createSession();
+
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "Ship it" }] });
+
+		// Regression (#5304): without a websocket-capable provider session, Codex
+		// falls back to SSE and rejects websocket-only models (gpt-5.6-luna) with
+		// "Model not found". The oneshot must inherit the session transport and use
+		// an isolated session id so it never pollutes the main conversation state.
+		const requestOptions = complete.mock.calls[0]?.[2];
+		expect(requestOptions?.preferWebsockets).toBe(true);
+		expect(requestOptions?.providerSessionState).toBe(session.providerSessionState);
+		expect(requestOptions?.promptCacheKey).toBe("session-1");
+		expect(requestOptions?.sessionId).toStartWith("session-1:guided-goal:");
+		expect(requestOptions?.sessionId).not.toBe("session-1");
+	});
+
+	it("reuses a supplied side session id across interview turns", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "question", question: "What is done?" }) as never,
+		);
+		const session = createSession();
+		const sideSessionId = "session-1:guided-goal:fixed";
+
+		// Regression (#5471 review): a multi-question interview must share one Codex
+		// side session so it does not leak a websocket-only socket per turn and trip
+		// websocket_connection_limit_reached (which drops back to the rejected SSE path).
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "Ship it" }], sideSessionId });
+		await runGuidedGoalTurn(session, { messages: [{ role: "user", content: "More" }], sideSessionId });
+
+		expect(complete.mock.calls[0]?.[2]?.sessionId).toBe(sideSessionId);
+		expect(complete.mock.calls[1]?.[2]?.sessionId).toBe(sideSessionId);
+	});
+
+	it("throws when the plan helper resolves no model", async () => {
+		await expect(
+			runGuidedGoalTurn(createSession({ plan: false }), {
+				messages: [{ role: "user", content: "Ship it" }],
+			}),
+		).rejects.toThrow("No model is available for /guided-goal: agent.helpers.plan.model matches no available model");
+	});
+
+	it("runs the current session model and effort when the plan helper is unset", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "ready", objective: "Deliver with the active model." }) as never,
+		);
+
+		const result = await runGuidedGoalTurn(
+			createSession({ plan: false, current: true, thinkingLevel: ThinkingLevel.High }),
+			{ messages: [{ role: "user", content: "Ship it" }] },
+		);
+
+		expect(result).toEqual({ kind: "ready", objective: "Deliver with the active model." });
+		expect(complete.mock.calls[0]?.[0]).toBe(currentModel);
+		expect((complete.mock.calls[0]?.[2] as { reasoning?: ThinkingLevel } | undefined)?.reasoning).toBe(
+			ThinkingLevel.High,
+		);
+	});
+
+	it("preserves disabled reasoning when falling back to the current session model", async () => {
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "ready", objective: "Deliver without reasoning." }) as never,
+		);
+
+		await runGuidedGoalTurn(createSession({ plan: false, current: true, thinkingLevel: ThinkingLevel.Off }), {
+			messages: [{ role: "user", content: "Ship it" }],
+		});
+
+		expect((complete.mock.calls[0]?.[2] as { disableReasoning?: boolean } | undefined)?.disableReasoning).toBe(true);
+	});
+
+	it("rejects malformed structured responses", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(mockResponse({ kind: "ready" }) as never);
+
+		await expect(
+			runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] }),
+		).rejects.toThrow("guided goal returned an invalid response");
+	});
+
+	it("captures a draft objective alongside a question", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockResponse({ kind: "question", question: "What is done?", objective: "Ship the feature." }) as never,
+		);
+
+		const result = await runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] });
+
+		expect(result).toEqual({ kind: "question", question: "What is done?", objective: "Ship the feature." });
+	});
+
+	// WHY: an endpoint that rejects a forced tool_choice gets the request again without it, so the
+	// respond tool is offered rather than required. A model that answers in text instead of calling
+	// it is the ordinary case on those models, not a malformed reply, and the
+	// interview has to continue from it. Turn-level coverage stopped at the tool-call route, so a
+	// regression in the text branch of runGuidedGoalTurn would have surfaced only as a dead
+	// interview on a live gateway. The shapes suite covers the parse; these cover the route.
+	// Does not catch: whether the model actually chooses to answer in either form.
+	it("reads a question the model answered in text instead of calling the tool", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockTextResponse(JSON.stringify({ kind: "question", question: "What is done?" })) as never,
+		);
+
+		const result = await runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] });
+
+		expect(result).toEqual({ kind: "question", question: "What is done?" });
+	});
+
+	it("starts a goal the model declared ready in text around prose", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockTextResponse(
+				`Here is the objective:\n\n${JSON.stringify({ kind: "ready", objective: "Deliver the confirmed feature." })}`,
+			) as never,
+		);
+
+		const result = await runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] });
+
+		expect(result).toEqual({ kind: "ready", objective: "Deliver the confirmed feature." });
+	});
+
+	it("rejects a text answer that carried no payload", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockTextResponse("Sure, I can help you set that up.") as never,
+		);
+
+		await expect(
+			runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] }),
+		).rejects.toThrow("No JSON payload found in response");
+	});
+
+	it("obfuscates secrets in the transcript before the request and deobfuscates the echoed objective", async () => {
+		const obfuscator = {
+			hasSecrets: () => true,
+			obfuscate: (text: string) => text.replaceAll("SECRET123", "#S0#"),
+			deobfuscate: (text: string) => text.replaceAll("#S0#", "SECRET123"),
+		};
+		const session = {
+			...createSession(),
+			obfuscator,
+			obfuscateProviderText: (text: string) => obfuscator.obfuscate(text),
+		} as unknown as AgentSession;
+		const complete = spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			// The model echoes the obfuscated placeholder back inside its objective.
+			mockResponse({ kind: "ready", objective: "Rotate the key #S0# and redeploy." }) as never,
+		);
+
+		const result = await runGuidedGoalTurn(session, {
+			messages: [{ role: "user", content: "my api key is SECRET123, automate rotation" }],
+		});
+
+		// The provider never sees the raw secret — only the placeholder.
+		const sentContext = complete.mock.calls[0]?.[1] as { messages: Array<{ content: Array<{ text: string }> }> };
+		const sentText = sentContext.messages[0]!.content[0]!.text;
+		expect(sentText).not.toContain("SECRET123");
+		expect(sentText).toContain("#S0#");
+
+		// The objective is restored to the real secret before the goal starts.
+		expect(result).toEqual({ kind: "ready", objective: "Rotate the key SECRET123 and redeploy." });
+	});
+
+	it("rebuilds and recursively sanitizes each guided-goal credential attempt", async () => {
+		// Why: the interview remains raw in memory while credentials resolve. A runtime swapped
+		// during that await (or a 401 retry) must protect both the rebuilt context and nested final
+		// payload strings; a one-time pre-projection transform is stale.
+		const marker = `GUIDED_ATTEMPT_BOUNDARY_START_${"X".repeat(160)}_GUIDED_ATTEMPT_BOUNDARY_END`;
+		const runtime = (replacement: string) => ({
+			hasSecrets: () => true,
+			obfuscate: (text: string) => text.replaceAll(marker, replacement),
+			deobfuscate: (text: string) => text.replaceAll(replacement, marker),
+		});
+		let currentObfuscator:
+			| {
+					hasSecrets: () => boolean;
+					obfuscate: (text: string) => string;
+					deobfuscate: (text: string) => string;
+			  }
+			| undefined;
+		const base = createSession();
+		let resolutions = 0;
+		const modelRegistry = {
+			...(base.modelRegistry as object),
+			getApiKey: async () => "preflight-key",
+			resolver: () =>
+				(async () => {
+					resolutions += 1;
+					currentObfuscator = runtime(resolutions === 1 ? "#GUIDED_FIRST#" : "#GUIDED_CURRENT#");
+					return `attempt-key-${resolutions}`;
+				}) as ApiKey,
+		};
+		const session: AgentSession = {
+			...base,
+			modelRegistry,
+			get obfuscator() {
+				return currentObfuscator;
+			},
+			obfuscateProviderText: (text: string) => currentObfuscator?.obfuscate(text) ?? text,
+		} as unknown as AgentSession;
+		const contexts: string[] = [];
+		const payloads: string[] = [];
+		spyOn(core, "instrumentedCompleteSimple").mockImplementation(
+			async (_model: Model, context: Context, request?: SimpleStreamOptions) => {
+				if (typeof request?.apiKey === "function") {
+					await request.apiKey({ lastChance: false, error: undefined });
+					contexts.push(JSON.stringify(context));
+					payloads.push(
+						JSON.stringify(
+							request.onPayload?.({
+								context,
+								nested: { [marker]: [`payload-${marker}`] },
+							}),
+						),
+					);
+					await request.apiKey({ lastChance: false, error: new Error("401") });
+					contexts.push(JSON.stringify(context));
+					payloads.push(JSON.stringify(request.onPayload?.({ context, nested: marker })));
+				}
+				return mockResponse({ kind: "ready", objective: "Use #GUIDED_CURRENT#." }) as never;
+			},
+		);
+
+		const result = await runGuidedGoalTurn(session, {
+			messages: [{ role: "user", content: `prefix-${marker}-suffix` }],
+		});
+
+		expect(contexts).toHaveLength(2);
+		expect(contexts[0]).toContain("#GUIDED_FIRST#");
+		expect(contexts[1]).toContain("#GUIDED_CURRENT#");
+		expect(payloads[0]).toContain("#GUIDED_FIRST#");
+		expect(payloads[1]).toContain("#GUIDED_CURRENT#");
+		for (const capture of [...contexts, ...payloads]) {
+			expect(capture).not.toContain(marker);
+			expect(capture).not.toContain("GUIDED_ATTEMPT_BOUNDARY_START");
+			expect(capture).not.toContain("GUIDED_ATTEMPT_BOUNDARY_END");
+		}
+		expect(result).toEqual({ kind: "ready", objective: `Use ${marker}.` });
+	});
+
+	it("salvages the latest guided objective when the turn cap ends on a question without one", async () => {
+		const harness = await createInteractiveGoalHarness();
+		try {
+			const model = harness.session.model;
+			if (!model) throw new Error("expected session model");
+			spyOn(harness.session, "resolveHelperModel").mockReturnValue({ model, inherited: true });
+			spyOn(harness.modelRegistry, "getApiKey").mockResolvedValue("test-key");
+			const complete = spyOn(core, "instrumentedCompleteSimple");
+			complete
+				.mockResolvedValueOnce(
+					mockResponse({
+						kind: "question",
+						question: "Who is the user?",
+						objective: "Draft one.",
+					}) as never,
+				)
+				.mockResolvedValueOnce(
+					mockResponse({
+						kind: "question",
+						question: "What is success?",
+						objective: "Draft two is the latest usable objective.",
+					}) as never,
+				)
+				.mockResolvedValueOnce(mockResponse({ kind: "question", question: "Constraint?" }) as never)
+				.mockResolvedValueOnce(mockResponse({ kind: "question", question: "Timeline?" }) as never)
+				.mockResolvedValueOnce(mockResponse({ kind: "question", question: "Risk?" }) as never)
+				.mockResolvedValueOnce(mockResponse({ kind: "question", question: "Anything else?" }) as never);
+			const editor = vi
+				.spyOn(harness.mode, "showHookEditor")
+				.mockResolvedValueOnce("answer 1")
+				.mockResolvedValueOnce("answer 2")
+				.mockResolvedValueOnce("answer 3")
+				.mockResolvedValueOnce("answer 4")
+				.mockResolvedValueOnce("answer 5")
+				.mockResolvedValueOnce("answer 6")
+				.mockResolvedValueOnce("Confirmed objective.");
+			const warning = vi.spyOn(harness.mode, "showWarning");
+
+			await harness.mode.handleGuidedGoalCommand("Initial goal");
+
+			expect(editor).toHaveBeenLastCalledWith(
+				"Review guided goal",
+				"Draft two is the latest usable objective.",
+				undefined,
+				{
+					promptStyle: true,
+				},
+			);
+			expect(harness.session.getGoalModeState()?.goal.objective).toBe("Confirmed objective.");
+			expect(warning).not.toHaveBeenCalledWith(
+				"Guided goal setup needs more detail. Run /guided-goal again with a narrower objective.",
+			);
+		} finally {
+			await harness.cleanup();
+		}
+	});
+
+	it("shows progress in the status area while a guided turn is in flight", async () => {
+		// A guided turn is a one-shot completion that emits no session events, so
+		// the only sign of work is what the status area holds WHILE the request is
+		// open. Reading it after the turn resolves finds an empty container either
+		// way, which is why the screen looked inert and nothing caught it.
+		const harness = await createInteractiveGoalHarness();
+		try {
+			const model = harness.session.model;
+			if (!model) throw new Error("expected session model");
+			spyOn(harness.session, "resolveHelperModel").mockReturnValue({ model, inherited: true });
+			spyOn(harness.modelRegistry, "getApiKey").mockResolvedValue("test-key");
+
+			const statusChildrenDuringTurn: number[] = [];
+			spyOn(core, "instrumentedCompleteSimple").mockImplementation((async () => {
+				statusChildrenDuringTurn.push(harness.mode.statusContainer.children.length);
+				return mockResponse({ kind: "question", question: "Who is the user?" });
+			}) as never);
+			vi.spyOn(harness.mode, "showHookEditor").mockResolvedValueOnce("answer 1").mockResolvedValue(undefined);
+
+			await harness.mode.handleGuidedGoalCommand("Initial goal");
+
+			// Every turn, not only the first: the second one is where the user has
+			// answered and is waiting with nothing on screen.
+			expect(statusChildrenDuringTurn).toEqual([1, 1]);
+			// And it comes down again, so the question is not printed under a
+			// spinner that never stopped.
+			expect(harness.mode.statusContainer.children).toHaveLength(0);
+		} finally {
+			await harness.cleanup();
+		}
+	});
+});

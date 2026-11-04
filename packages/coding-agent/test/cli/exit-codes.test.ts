@@ -1,0 +1,362 @@
+import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import {
+	CLI_EXIT_CODES,
+	EXIT_FAILURE,
+	EXIT_INTERRUPTED,
+	EXIT_OK,
+	EXIT_USAGE,
+} from "@veyyon/coding-agent/cli/exit-codes";
+import { APPROVAL_MODE_VALUES } from "@veyyon/coding-agent/tools/core/approval-modes";
+import { CLI_EXIT_USAGE } from "@veyyon/utils/cli";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+
+/**
+ * The exit code is the only thing a script can branch on, so it has to be right.
+ *
+ * WHY THIS SUITE EXISTS (OUT-1). Nothing else veyyon emits is machine-readable
+ * from a shell. A CI step, a wrapper script, and an agent driving veyyon as a
+ * subprocess all decide what to do next from the status alone, and the decision
+ * they most need to make is whether retrying could possibly help.
+ *
+ * That decision rests on the difference between 1 and 2. A `1` says the
+ * invocation was valid and the attempt failed, so a retry may succeed. A `2`
+ * says the command line was wrong and nothing ran, so an identical retry is
+ * guaranteed to fail again. Collapse them and a wrapper loops forever on a
+ * typo'd flag.
+ *
+ * Before this row the codes were twenty bare `process.exit(0|1|2)` calls across
+ * `main.ts` and `cli.ts`, with the meaning of `2` written in a comment beside
+ * exactly one of them. Nothing stopped the next exit from picking a different
+ * number for the same class, and nothing checked that what shipped matched
+ * `docs/handbook/src/reference/exit-codes.md`, which had been documenting this
+ * contract to users the whole time.
+ *
+ * The behavioural cases SPAWN A REAL CLI. An in-process assertion on a constant
+ * proves the constant, not the exit, and the exit is the contract. They run
+ * against a hermetic HOME so a child process can never read or migrate the
+ * developer's real `~/.veyyon`.
+ */
+
+const repoRoot = path.resolve(import.meta.dir, "..", "..");
+const cliEntry = path.join(repoRoot, "src", "cli.ts");
+
+interface SpawnResult {
+	code: number;
+	stdout: string;
+	stderr: string;
+}
+
+async function runCli(args: string[], input = ""): Promise<SpawnResult> {
+	const { env, cleanup } = hermeticSpawnEnv();
+	try {
+		const proc = Bun.spawn([process.execPath, cliEntry, ...args], {
+			env,
+			stdin: input.length > 0 ? new TextEncoder().encode(input) : "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		return { code, stdout, stderr };
+	} finally {
+		cleanup();
+	}
+}
+
+describe("a successful command exits 0", () => {
+	/**
+	 * `--version` is the cheapest complete success path: it takes the same startup
+	 * and teardown as anything else and needs no network, so a non-zero here means
+	 * the process cannot exit cleanly at all.
+	 */
+	it("exits 0 for --version", async () => {
+		const result = await runCli(["--version"]);
+
+		expect(result.code).toBe(EXIT_OK);
+		expect(result.stdout.trim().length).toBeGreaterThan(0);
+	}, 60_000);
+
+	/** Help is a request that was satisfied, not an error, so it is a success. */
+	it("exits 0 for --help", async () => {
+		const result = await runCli(["--help"]);
+
+		expect(result.code).toBe(EXIT_OK);
+		expect(result.stdout).toContain("USAGE");
+	}, 60_000);
+
+	/** Subcommand help is the same contract one level down. */
+	it("exits 0 for a subcommand's --help", async () => {
+		const result = await runCli(["config", "--help"]);
+
+		expect(result.code).toBe(EXIT_OK);
+	}, 60_000);
+});
+
+describe("a failure is never reported as 0", () => {
+	/**
+	 * `--export <path>` with no file at the path wrote an empty transcript and
+	 * exited 0, because the session loader reads a missing file as an empty
+	 * session. The doc row for `1` names "no such session" verbatim. A directory
+	 * is the sibling: it is not a session file either, and the loader would have
+	 * failed on it later with a less useful message. Both must exit 1 (the
+	 * invocation was valid, the attempt failed) and write nothing.
+	 */
+	it.each([
+		["a path with no file", (dir: string) => path.join(dir, "nothere.jsonl"), "Session file not found"],
+		["a directory", (dir: string) => dir, "Not a session file"],
+	])(
+		"exits 1 for --export of %s",
+		async (_label, target, diagnostic) => {
+			const { home, env, cleanup } = hermeticSpawnEnv();
+			try {
+				const input = target(home);
+				const proc = Bun.spawn([process.execPath, cliEntry, "--export", input], {
+					env,
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [stdout, stderr, code] = await Promise.all([
+					new Response(proc.stdout).text(),
+					new Response(proc.stderr).text(),
+					proc.exited,
+				]);
+
+				expect(code).toBe(EXIT_FAILURE);
+				expect(stderr).toContain(diagnostic);
+				expect(stdout).not.toContain("Exported to:");
+			} finally {
+				cleanup();
+			}
+		},
+		60_000,
+	);
+});
+
+describe("a usage error exits 2, distinct from a runtime failure", () => {
+	/**
+	 * THE CASE THE WHOLE DISTINCTION EXISTS FOR. An unrecognized flag can never
+	 * succeed on a retry, and reporting it as `1` is what makes a wrapper loop.
+	 * It must also fail BEFORE any session starts: the original defect behind this
+	 * code path let the unrecognized token be consumed and the next positional
+	 * leak through as a prompt, which started a real model session.
+	 */
+	it("exits 2 for an unrecognized flag", async () => {
+		const result = await runCli(["--definitely-not-a-real-flag", "hello"]);
+
+		expect(result.code).toBe(EXIT_USAGE);
+		expect(result.stderr.length).toBeGreaterThan(0);
+	}, 60_000);
+
+	/**
+	 * A single-shot run with nothing to send is a usage error, not a failure: the
+	 * command line is incomplete, so no attempt was made.
+	 */
+	it("exits 2 for --print with no prompt and no stdin", async () => {
+		const result = await runCli(["--print"]);
+
+		expect(result.code).toBe(EXIT_USAGE);
+	}, 60_000);
+
+	/**
+	 * The diagnostic goes to stderr. A usage error on stdout would corrupt the
+	 * output of any caller piping veyyon into another program, and stdout is
+	 * reserved for the thing that was asked for.
+	 */
+	it("writes the usage diagnostic to stderr, not stdout", async () => {
+		const result = await runCli(["--definitely-not-a-real-flag"]);
+
+		expect(result.stderr.trim().length).toBeGreaterThan(0);
+		expect(result.stdout).not.toContain("definitely-not-a-real-flag");
+	}, 60_000);
+
+	/**
+	 * A bad VALUE for a good flag is the same class as a bad flag. Both are
+	 * "the command line is wrong", and splitting them would give a caller two
+	 * codes to handle for one decision.
+	 *
+	 * The assertions name the exit code AND the accepted set, because a weaker
+	 * "non-zero" check passed here for the wrong reason: the setter used to drop
+	 * an unusable value and let the run continue, so what failed was the
+	 * credential lookup further downstream, not the invalid mode.
+	 */
+	it("exits 2 for a flag value outside its declared set, listing the accepted values", async () => {
+		const result = await runCli(["--mode", "not-a-mode", "--print", "hi"]);
+
+		expect(result.code).toBe(EXIT_USAGE);
+		expect(result.stderr).toContain('Invalid --mode value: "not-a-mode".');
+		expect(result.stderr).toContain("Expected one of: text, json, rpc, acp, rpc-ui.");
+	}, 60_000);
+
+	/**
+	 * The same contract for the flag where silence is a SAFETY problem, not a
+	 * cosmetic one. A dropped `--approval-mode` value ran the session under
+	 * whatever the config said, so a typo quietly granted more autonomy than the
+	 * command line asked for while the run still looked successful.
+	 */
+	it("exits 2 for an unknown --approval-mode instead of falling back to the default", async () => {
+		const result = await runCli(["--approval-mode", "nonsense", "--print", "hi"]);
+
+		expect(result.code).toBe(EXIT_USAGE);
+		expect(result.stderr).toContain('Invalid --approval-mode value: "nonsense".');
+		// Derived from the one array the flag validator itself reads, so a ladder
+		// change surfaces as a real mismatch rather than a stale literal here.
+		expect(result.stderr).toContain(`Expected one of: ${APPROVAL_MODE_VALUES.join(", ")}.`);
+	}, 60_000);
+
+	/**
+	 * `--tools` dropped unknown names one by one, so a single typo left the list
+	 * EMPTY and the agent started with no tools at all — reported only by the
+	 * model saying mid-answer that it had none. Refusing is the only honest
+	 * outcome: an empty toolset is what `--no-tools` is for.
+	 */
+	it("exits 2 for an unknown --tools name rather than starting with no tools", async () => {
+		const result = await runCli(["--tools", "raed", "--print", "hi"]);
+
+		expect(result.code).toBe(EXIT_USAGE);
+		expect(result.stderr).toContain('Unknown tool passed to --tools: "raed".');
+		expect(result.stderr).toContain("read");
+	}, 60_000);
+
+	/**
+	 * An explicitly EMPTY prompt is still an incomplete command line. It used to
+	 * slip past the missing-prompt guard and spend a real provider round-trip,
+	 * which came back to the user as a raw upstream 400 payload and an internal
+	 * http-log path — a provider-shaped error for a plain input mistake.
+	 */
+	it("exits 2 for a blank -p prompt without contacting the provider", async () => {
+		const result = await runCli(["--print", "   "]);
+
+		expect(result.code).toBe(EXIT_USAGE);
+		expect(result.stderr).toContain("No prompt provided");
+		expect(result.stderr).not.toContain("at least one message is required");
+	}, 60_000);
+
+	/**
+	 * A mistyped SUBCOMMAND is the same decision for a wrapper as a mistyped
+	 * flag, so it must return the same code. This exited 1 while
+	 * `--definitely-not-a-real-flag` exited 2, which is exactly the collapse this
+	 * suite exists to prevent, one level up.
+	 */
+	it("exits 2 for a mistyped subcommand, agreeing with the unrecognized-flag case", async () => {
+		const result = await runCli(["confg"]);
+
+		expect(result.code).toBe(EXIT_USAGE);
+		expect(result.stderr).toContain("`veyyon confg` is not a command");
+		expect(result.stderr).toContain("`veyyon config`");
+	}, 60_000);
+
+	/**
+	 * EVERY BRANCH, NOT THE ONE THAT HAPPENED TO BE LOOKED AT. Root-level flag
+	 * parsing returned EXIT_USAGE while every subcommand returned 1 for the same
+	 * mistake, so `veyyon --nope` and `veyyon config --nope` disagreed and a
+	 * wrapper that stopped on the first looped forever on the second. The doc row
+	 * for `2` names three of these verbatim: an unrecognized flag, a bad flag
+	 * value, a missing required argument.
+	 *
+	 * The cases below cover every distinct code path that can reject a subcommand
+	 * command line, because the defect was that only one of them was right:
+	 *
+	 *   - `@veyyon/utils/cli` rejecting an undeclared flag,
+	 *   - `@veyyon/utils/cli` rejecting a value outside a declared `options` set,
+	 *   - `@veyyon/utils/cli` rejecting a missing required positional,
+	 *   - `completions` catching the parse error itself instead of rethrowing,
+	 *   - a hand-rolled guard that prints its own `Usage:` line and exits,
+	 *   - a hand-rolled guard in a command with no shared parse at all.
+	 *
+	 * A runtime failure is the control: it must stay 1, or the distinction the
+	 * whole code is for has been collapsed from the other direction.
+	 */
+	it.each([
+		["framework: undeclared flag", ["config", "--definitely-not-a-real-flag"], EXIT_USAGE],
+		["framework: value outside the declared options", ["config", "definitely-not-an-action"], EXIT_USAGE],
+		["framework: missing required positional", ["read"], EXIT_USAGE],
+		["completions: parse error caught in the command", ["completions", "tcsh"], EXIT_USAGE],
+		["hand-rolled: missing argument with its own usage line", ["config", "get"], EXIT_USAGE],
+		["hand-rolled: unknown setting key", ["config", "get", "no.such.setting.key"], EXIT_USAGE],
+		["hand-rolled: no shared parse", ["models", "find"], EXIT_USAGE],
+		// `install` accepts zero-or-more targets so the framework cannot reject an
+		// empty list; its own guard printed `Usage:` and exited 1 (audit finding).
+		["hand-rolled: optional-multiple positional left empty", ["install"], EXIT_USAGE],
+		["control: runtime failure stays 1", ["--print", "--resume", "zzzzzzzzzz", "hi"], EXIT_FAILURE],
+	])(
+		"%s",
+		async (_label, argv, expected) => {
+			const result = await runCli(argv);
+
+			expect(result.code).toBe(expected);
+			expect(result.stderr.trim().length).toBeGreaterThan(0);
+		},
+		60_000,
+	);
+});
+
+describe("the code table is the one the docs promise", () => {
+	/**
+	 * The constants are pinned to their literal values because those values ARE
+	 * the published contract. Renaming a constant is free; changing what `2` means
+	 * breaks every script that ever branched on it, so the number is asserted
+	 * rather than merely referenced.
+	 */
+	it("pins each code to the value documented in the handbook", () => {
+		expect(EXIT_OK).toBe(0);
+		expect(EXIT_FAILURE).toBe(1);
+		expect(EXIT_USAGE).toBe(2);
+		expect(EXIT_INTERRUPTED).toBe(130);
+	});
+
+	/**
+	 * The two declarations of "the command line was wrong" hold the same number.
+	 *
+	 * `EXIT_USAGE` above and `CLI_EXIT_USAGE` in `@veyyon/utils/cli` are separate
+	 * literals on purpose: the coding-agent module sits on `cli.ts`'s static boot
+	 * graph, which `the-boot-path-stays-thin` caps, and importing the command
+	 * framework there would put the whole thing on the startup path for one
+	 * integer. Two literals need a check, and this is it. They disagreed once, and
+	 * the symptom was `veyyon --nope` exiting 2 while `veyyon config --nope`,
+	 * routed through the framework, exited 1.
+	 */
+	it("agrees with the command framework's own usage code", () => {
+		expect(CLI_EXIT_USAGE).toBe(EXIT_USAGE);
+	});
+
+	/**
+	 * The enumeration covers every constant. A code added without an entry here is
+	 * invisible to anything that iterates the table, including the doc check
+	 * below.
+	 */
+	it("enumerates every declared code exactly once", () => {
+		const values = Object.values(CLI_EXIT_CODES);
+
+		expect(new Set(values).size).toBe(values.length);
+		expect(values.sort((a, b) => a - b)).toEqual([0, 1, 2, 130]);
+	});
+
+	/**
+	 * Interruption is NOT a failure. A CI step that folds a user cancellation into
+	 * the failure code reports a cancelled job as a broken one, which sends
+	 * someone to debug a build that was never broken.
+	 */
+	it("keeps interruption distinct from failure", () => {
+		expect(EXIT_INTERRUPTED).not.toBe(EXIT_FAILURE);
+		expect(EXIT_INTERRUPTED).toBeGreaterThan(128);
+	});
+
+	/**
+	 * The published table and the code agree. This is the check that would have
+	 * caught the drift the row is about, because the doc was already correct while
+	 * nothing verified the code matched it.
+	 */
+	it("matches every row of the handbook's exit-code table", async () => {
+		const docPath = path.join(repoRoot, "..", "..", "docs", "handbook", "src", "reference", "exit-codes.md");
+		const doc = await Bun.file(docPath).text();
+
+		for (const code of Object.values(CLI_EXIT_CODES)) {
+			expect(doc).toContain(`| \`${code}\` |`);
+		}
+	});
+});

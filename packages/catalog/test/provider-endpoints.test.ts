@@ -1,0 +1,366 @@
+import { describe, expect, it } from "bun:test";
+import {
+	ANTHROPIC_API_ENDPOINT,
+	ANTIGRAVITY_ENDPOINTS,
+	ANTIGRAVITY_PRIMARY_ENDPOINT,
+	ANTIGRAVITY_SANDBOX_ENDPOINT,
+	CLOUD_CODE_ENDPOINT,
+	CURSOR_API_ENDPOINT,
+	DEVIN_AUTH_ENDPOINT,
+	DEVIN_CASCADE_ENDPOINT,
+	DEVIN_WEBAPP_URL,
+	GEMINI_DEVELOPER_API_ENDPOINT,
+	GITLAB_SAAS_URL,
+	OPENROUTER_API_ENDPOINT,
+} from "@veyyon/catalog/provider-endpoints";
+import { moduleSpecifiersIn, withoutComments } from "@veyyon/utils/module-reach";
+import { collectPackageSourceFiles, memberFileOf, memberRelative } from "../../utils/test/support/package-sources";
+
+/**
+ * Google's Cloud Code Assist and Antigravity base URLs, and the one place they are written.
+ *
+ * These are three strings that a request either reaches or does not, so a wrong one is a total outage for
+ * the provider it belongs to, not a degradation. They were written in ten modules under nine names:
+ * `https://cloudcode-pa.googleapis.com` six times as `DEFAULT_ENDPOINT`, `CLOUD_CODE_ENDPOINT`,
+ * `CODE_ASSIST_ENDPOINT` and `CLOUD_CODE_ASSIST_ENDPOINT`, and the Antigravity daily host six more times
+ * including once as a bare literal inside a settings switch. `catalog/discovery/antigravity.ts` did export
+ * two of them, but reaching that export drags in arktype and the entire discovery machinery for one
+ * string, which is why the value kept being retyped rather than imported.
+ *
+ * The suites below pin the exact bytes rather than the shape, because every failure mode here is a wrong
+ * host that still looks like a URL. The ordered fallback list is pinned too: Antigravity is tried on the
+ * daily host and then the sandbox host, and four modules each kept a copy of that pair, one of them with
+ * the sandbox host as an inline literal beside its named constant, so a host rotation would have updated
+ * the name and missed the literal. The last suite is the ratchet that stops an eleventh copy appearing.
+ */
+
+describe("the Google Cloud Code and Antigravity hosts", () => {
+	/**
+	 * Cloud Code Assist serves Gemini CLI credential loading, `v1internal` model and onboarding calls, and
+	 * Gemini usage reporting. Six modules spelled this out; a typo in any one of them would have broken
+	 * exactly one of those paths and left the others working, which is the hardest kind of report to read.
+	 */
+	it("serves Cloud Code Assist from cloudcode-pa.googleapis.com over https with no trailing slash", () => {
+		expect(CLOUD_CODE_ENDPOINT).toBe("https://cloudcode-pa.googleapis.com");
+	});
+
+	/** Antigravity's production host, the one a request goes to when nothing is configured. */
+	it("serves Antigravity from daily-cloudcode-pa.googleapis.com", () => {
+		expect(ANTIGRAVITY_PRIMARY_ENDPOINT).toBe("https://daily-cloudcode-pa.googleapis.com");
+	});
+
+	/** The sandbox host, selected explicitly by `providers.antigravityEndpoint` and tried as a fallback. */
+	it("serves the Antigravity sandbox from daily-cloudcode-pa.sandbox.googleapis.com", () => {
+		expect(ANTIGRAVITY_SANDBOX_ENDPOINT).toBe("https://daily-cloudcode-pa.sandbox.googleapis.com");
+	});
+
+	/**
+	 * The sandbox host is the production host with `.sandbox` inserted, which is precisely why a copy of one
+	 * can be edited into the other by accident. If these ever collapsed to the same string, the fallback
+	 * chain would retry the host that just failed and the sandbox setting would silently do nothing.
+	 */
+	it("keeps the production and sandbox hosts distinct", () => {
+		expect(ANTIGRAVITY_SANDBOX_ENDPOINT).not.toBe(ANTIGRAVITY_PRIMARY_ENDPOINT);
+	});
+
+	/**
+	 * Every host is a bare origin. A trailing slash would double up when a caller appends `/v1internal:...`,
+	 * and a path segment here would be silently prefixed onto every request.
+	 */
+	it("stores bare origins, so appending a path cannot produce a double slash", () => {
+		for (const endpoint of [CLOUD_CODE_ENDPOINT, ANTIGRAVITY_PRIMARY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT]) {
+			expect(new URL(endpoint).pathname).toBe("/");
+			expect(endpoint.endsWith("/")).toBeFalse();
+			expect(new URL(endpoint).protocol).toBe("https:");
+		}
+	});
+});
+
+describe("the Antigravity fallback order", () => {
+	/**
+	 * The order is the contract: production first, sandbox second. Four modules each had their own copy of
+	 * this pair, so a reordering in one would have made two providers disagree about which host is tried
+	 * first, and the only visible symptom would be different latency.
+	 */
+	it("tries the production host before the sandbox host", () => {
+		expect([...ANTIGRAVITY_ENDPOINTS]).toEqual([
+			"https://daily-cloudcode-pa.googleapis.com",
+			"https://daily-cloudcode-pa.sandbox.googleapis.com",
+		]);
+	});
+
+	/** The list is built from the same constants the callers import, not from a second copy of the strings. */
+	it("is built from the exported hosts", () => {
+		expect(ANTIGRAVITY_ENDPOINTS[0]).toBe(ANTIGRAVITY_PRIMARY_ENDPOINT);
+		expect(ANTIGRAVITY_ENDPOINTS[1]).toBe(ANTIGRAVITY_SANDBOX_ENDPOINT);
+		expect(ANTIGRAVITY_ENDPOINTS).toHaveLength(2);
+	});
+
+	/**
+	 * Callers spread this list into a mutable array because several of them narrow it to one host. If a
+	 * caller narrowed the shared list in place instead, every later caller in the process would inherit the
+	 * narrowing and lose its fallback. The `as const` makes that a type error; this records why.
+	 */
+	it("is frozen at the type level so a caller narrowing its own copy cannot narrow everyone's", () => {
+		const narrowed: string[] = [...ANTIGRAVITY_ENDPOINTS];
+		narrowed.length = 1;
+		expect(narrowed).toEqual(["https://daily-cloudcode-pa.googleapis.com"]);
+		expect(ANTIGRAVITY_ENDPOINTS).toHaveLength(2);
+	});
+});
+
+describe("GitLab's SaaS instance", () => {
+	/**
+	 * The default when no self-managed instance URL is configured. GitLab is the provider most likely to be
+	 * self-hosted, so this is the fallback every unconfigured GitLab request depends on: the OAuth authorize
+	 * and token endpoints and the Duo API all live on whichever instance the user actually has.
+	 */
+	it("is https://gitlab.com", () => {
+		expect(GITLAB_SAAS_URL).toBe("https://gitlab.com");
+	});
+
+	/**
+	 * A bare origin, because every caller appends a path (`/oauth/authorize`, `/oauth/token`,
+	 * `/api/v4/ai/...`). A trailing slash would produce a double slash in each of them.
+	 */
+	it("is a bare https origin with no trailing slash", () => {
+		expect(new URL(GITLAB_SAAS_URL).pathname).toBe("/");
+		expect(GITLAB_SAAS_URL.endsWith("/")).toBeFalse();
+		expect(new URL(GITLAB_SAAS_URL).protocol).toBe("https:");
+	});
+});
+
+describe("Devin's three hosts", () => {
+	/**
+	 * The chat host, which is still a `codeium.com` domain because Devin is Cognition's rebrand of Codeium's
+	 * Cascade backend. That surprise is exactly why it needs a name: `server.codeium.com` sitting in a Devin code
+	 * path reads like a mistake until you know.
+	 */
+	it("serves Cascade chat from server.codeium.com", () => {
+		expect(DEVIN_CASCADE_ENDPOINT).toBe("https://server.codeium.com");
+	});
+
+	/** The token host, which serves the CLI OAuth exchange and is not the chat host. */
+	it("serves tokens from api.devin.ai", () => {
+		expect(DEVIN_AUTH_ENDPOINT).toBe("https://api.devin.ai");
+	});
+
+	/** The web app a user is sent to in order to approve a CLI login. Not an API at all. */
+	it("hosts login approval on app.devin.ai", () => {
+		expect(DEVIN_WEBAPP_URL).toBe("https://app.devin.ai");
+	});
+
+	/**
+	 * THREE DISTINCT HOSTS, which is the reason each has its own name. Two of them used to be declared as
+	 * `DEVIN_API_URL`: the chat host in `ai/src/providers/devin.ts`, which EXPORTED it, and the token host in the
+	 * sibling `ai/src/registry/oauth/devin.ts`. Anything reaching for "the Devin API URL" in order to
+	 * authenticate would have imported the chat host and failed against an endpoint that does not serve tokens.
+	 */
+	it("keeps all three hosts distinct", () => {
+		const hosts = [DEVIN_CASCADE_ENDPOINT, DEVIN_AUTH_ENDPOINT, DEVIN_WEBAPP_URL];
+		expect(new Set(hosts).size).toBe(3);
+		expect(new Set(hosts.map(host => new URL(host).hostname)).size).toBe(3);
+	});
+
+	/** Each is a bare https origin, since every caller appends a path such as `/auth/cli/token`. */
+	it("holds bare https origins", () => {
+		for (const host of [DEVIN_CASCADE_ENDPOINT, DEVIN_AUTH_ENDPOINT, DEVIN_WEBAPP_URL]) {
+			expect(new URL(host).pathname, host).toBe("/");
+			expect(host.endsWith("/"), host).toBeFalse();
+			expect(new URL(host).protocol, host).toBe("https:");
+		}
+	});
+});
+
+describe("Gemini, Anthropic and Cursor", () => {
+	/**
+	 * The Gemini developer API base, path included. `/v1beta` is part of the value rather than something a
+	 * caller appends, because every consumer needs the same version: the host is stable and the version is not,
+	 * and the three declarations this replaces shared no name, so a bump had to find all three by luck.
+	 */
+	it("holds the Gemini developer API base with its version segment", () => {
+		expect(GEMINI_DEVELOPER_API_ENDPOINT).toBe("https://generativelanguage.googleapis.com/v1beta");
+		expect(GEMINI_DEVELOPER_API_ENDPOINT.endsWith("/v1beta")).toBeTrue();
+	});
+
+	/**
+	 * It is a different host from Cloud Code Assist, which is the distinction the three names obscured: an API
+	 * key talks to the developer API, and an OAuth credential talks to Cloud Code Assist.
+	 */
+	it("keeps the developer API separate from Cloud Code Assist", () => {
+		expect(new URL(GEMINI_DEVELOPER_API_ENDPOINT).host).not.toBe(new URL(CLOUD_CODE_ENDPOINT).host);
+	});
+
+	/** Anthropic's official host, with no path and no trailing slash, since callers append their own. */
+	it("holds Anthropic's official host bare", () => {
+		expect(ANTHROPIC_API_ENDPOINT).toBe("https://api.anthropic.com");
+		expect(new URL(ANTHROPIC_API_ENDPOINT).pathname).toBe("/");
+		expect(ANTHROPIC_API_ENDPOINT.endsWith("/")).toBeFalse();
+	});
+
+	/**
+	 * THE REASON THIS ONE MATTERS. `compat/anthropic.ts` decides whether a configured base URL is Anthropic
+	 * itself, and its check is exact-or-followed-by-a-slash rather than a prefix test, so a lookalike host
+	 * cannot pass. Driven through the real predicate, including the lookalike its own doc names, because that
+	 * check and the fallback TO this host used to read two different declarations of it.
+	 */
+	it("recognises the official host without accepting a lookalike", async () => {
+		const { isOfficialAnthropicApiUrl } = await import("../src/compat/anthropic");
+		expect(isOfficialAnthropicApiUrl(ANTHROPIC_API_ENDPOINT)).toBeTrue();
+		expect(isOfficialAnthropicApiUrl(`${ANTHROPIC_API_ENDPOINT}/v1`)).toBeTrue();
+		expect(isOfficialAnthropicApiUrl("https://api.anthropic.com.evil.com")).toBeFalse();
+		expect(isOfficialAnthropicApiUrl("https://api.anthropic.com.evil.com/v1")).toBeFalse();
+		expect(isOfficialAnthropicApiUrl("https://proxy.internal/anthropic")).toBeFalse();
+	});
+
+	/** Cursor's host, the fallback when nothing is configured. */
+	it("holds Cursor's API host", () => {
+		expect(CURSOR_API_ENDPOINT).toBe("https://api2.cursor.sh");
+		expect(new URL(CURSOR_API_ENDPOINT).pathname).toBe("/");
+	});
+
+	/** All three are https, since a plaintext fallback would send a credential in the clear. */
+	it("serves every host over https", () => {
+		for (const endpoint of [GEMINI_DEVELOPER_API_ENDPOINT, ANTHROPIC_API_ENDPOINT, CURSOR_API_ENDPOINT]) {
+			expect(new URL(endpoint).protocol, endpoint).toBe("https:");
+		}
+	});
+});
+
+describe("OpenRouter's API base", () => {
+	/** The base, `/v1` included, since every consumer appends a path to it. */
+	it("holds the API base with its version segment", () => {
+		expect(OPENROUTER_API_ENDPOINT).toBe("https://openrouter.ai/api/v1");
+		expect(OPENROUTER_API_ENDPOINT.endsWith("/v1")).toBeTrue();
+	});
+
+	/** mnemopi publishes its embedding default under its own name, and that name resolves to this value. */
+	it("keeps mnemopi's published embedding default pointing here", async () => {
+		const { DEFAULT_EMBEDDING_API_URL } = await import("@veyyon/mnemopi/config");
+		expect(DEFAULT_EMBEDDING_API_URL).toBe(OPENROUTER_API_ENDPOINT);
+	});
+});
+
+describe("the hosts have one owner", () => {
+	const OWNER = "catalog/src/provider-endpoints.ts";
+	const HOSTS = [
+		"cloudcode-pa.googleapis.com",
+		"daily-cloudcode-pa.googleapis.com",
+		"gitlab.com",
+		"server.codeium.com",
+		"api.devin.ai",
+		"app.devin.ai",
+		"api.anthropic.com",
+		"api2.cursor.sh",
+	];
+
+	/**
+	 * Endpoints whose PATH is part of the value, so the bare-host form above would not see a copy of them.
+	 * The Gemini developer API is the case: `/v1beta` is the version every consumer has to agree on, and the
+	 * three declarations it used to have shared no name, so a version bump had three places to find.
+	 */
+	const PATH_ENDPOINTS = ["https://generativelanguage.googleapis.com/v1beta", "https://openrouter.ai/api/v1"];
+	/**
+	 * The generated model database legitimately carries a `baseUrl` per model row, and the model catalog is
+	 * data rather than a place a host is decided, so it is not a second declaration.
+	 *
+	 * `provider-models/openai-compat.ts` is the same kind of thing in TypeScript: one descriptor row per
+	 * provider, each carrying the host its models are served from, alongside dozens of providers that have no
+	 * constant here at all. Counting those rows would make this case report the catalog's data as duplication
+	 * and there would be no honest way to satisfy it.
+	 */
+	const DATA_FILES = new Set([
+		"catalog/src/models.json",
+		"catalog/src/provider-models/openai-compat.ts",
+		// A site scraper addresses the public site it reads, not a provider API, and `@veyyon/web`
+		// imports nothing that owns provider hosts.
+		"plugins/web/src/scrapers/gitlab.ts",
+		"tests/simulations/src/cache-sim/harness.ts",
+	]);
+
+	/**
+	 * Every spelling of an owned endpoint in code: a quoted origin, an origin with a path appended in the
+	 * literal (`"https://api2.cursor.sh/auth/poll"`), and a template literal that interpolates the rest. A
+	 * host followed by another host character is a different host (`api.anthropic.com.evil.com`), and
+	 * `https://openrouter.ai/keys` is the provider's website rather than the API base, so neither counts.
+	 */
+	const OWNED_ENDPOINT = new RegExp(
+		`(?:${[...HOSTS.map(host => `https://${host}`), ...PATH_ENDPOINTS].map(url => url.replaceAll(".", "\\.")).join("|")})(?![\\w.-])`,
+	);
+
+	function namesAnOwnedEndpoint(source: string): boolean {
+		return OWNED_ENDPOINT.test(withoutComments(source));
+	}
+
+	/** Every member's shipped `src`, keyed the way an allow-list above is written. */
+	async function shippedSources(): Promise<Array<{ file: string; text: string }>> {
+		const files = (await collectPackageSourceFiles({ includeExemptPackages: true }))
+			.map(memberRelative)
+			.filter(file => !DATA_FILES.has(file))
+			.sort();
+		return Promise.all(files.map(async file => ({ file, text: await Bun.file(memberFileOf(file)).text() })));
+	}
+
+	async function sourcesNamingAHost(): Promise<Array<{ file: string; text: string }>> {
+		return (await shippedSources()).filter(entry => namesAnOwnedEndpoint(entry.text));
+	}
+
+	/**
+	 * The spellings the ratchet below has to see. A module that wrote `https://openrouter.ai/api/v1/chat/completions`
+	 * or built a Gemini URL in a template literal held a second copy of the base while every quoted-origin
+	 * check passed; both forms shipped until this matcher replaced the quoted-origin one.
+	 */
+	it("recognises an owned endpoint however a module spells the URL", () => {
+		expect(namesAnOwnedEndpoint('const BASE = "https://api.anthropic.com";')).toBeTrue();
+		expect(namesAnOwnedEndpoint('const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";')).toBeTrue();
+		// biome-ignore lint/suspicious/noTemplateCurlyInString: quoted TypeScript source whose template literal interpolates `id`
+		expect(namesAnOwnedEndpoint("fetch(`https://api2.cursor.sh/auth/poll?id=${id}`);")).toBeTrue();
+		expect(namesAnOwnedEndpoint('fetch("https://openrouter.ai/api/v1/chat/completions");')).toBeTrue();
+		expect(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: quoted TypeScript source whose template literal interpolates `model`
+			namesAnOwnedEndpoint("`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`"),
+		).toBeTrue();
+		expect(namesAnOwnedEndpoint('const SITE = "https://openrouter.ai/keys";')).toBeFalse();
+		expect(namesAnOwnedEndpoint('const LOOKALIKE = "https://api.anthropic.com.evil.com";')).toBeFalse();
+		expect(namesAnOwnedEndpoint("// see https://api.anthropic.com/v1/messages\nconst x = 1;")).toBeFalse();
+	});
+
+	/**
+	 * The ratchet. Ten modules held a literal before the owner existed, and the reason they did was that the
+	 * only export of one lived behind arktype. Now that taking a host costs one module there is no excuse
+	 * for an eleventh copy, and this fails the moment one appears in any shipped source file.
+	 */
+	it("writes a host literal in provider-endpoints.ts and in no other shipped module", async () => {
+		expect((await sourcesNamingAHost()).map(entry => entry.file)).toEqual([OWNER]);
+	});
+
+	/**
+	 * The non-vacuity twin. If the glob stopped matching, the case above would pass by reading nothing at
+	 * all, so this proves the scan really covers a package outside catalog and really can see a literal.
+	 */
+	it("scans far enough to see a module in another package", async () => {
+		const scanned = (await shippedSources()).map(entry => entry.file);
+		expect(scanned).toContain("ai/src/providers/google-gemini-cli.ts");
+		expect(scanned).toContain("plugins/mnemopi/src/config.ts");
+		expect(scanned).toContain("coding-agent/src/tools/web/image-gen.ts");
+		// And past `packages/`, which is where the members a hand-written list used to miss now live.
+		expect(scanned.some(file => file.startsWith("hosts/terminal/engine/src/"))).toBeTrue();
+		expect(scanned.some(file => file.startsWith("kernel/src/"))).toBeTrue();
+		expect(scanned.length).toBeGreaterThan(1_000);
+		const owner = await Bun.file(memberFileOf(OWNER)).text();
+		for (const host of HOSTS) expect(owner).toContain(`"https://${host}"`);
+		for (const endpoint of PATH_ENDPOINTS) expect(owner).toContain(`"${endpoint}"`);
+	});
+
+	/**
+	 * The owner is a leaf on purpose. The whole reason ten modules retyped a string is that the existing
+	 * export sat behind arktype and the discovery machinery, so if this module ever grew an import the same
+	 * pressure would come back and the next module would copy the literal again.
+	 */
+	it("imports nothing, so taking a host costs one module", async () => {
+		const owner = await Bun.file(memberFileOf(OWNER)).text();
+		// The PARSED specifier list, not the characters: the scan this replaced also went red on a doc
+		// comment containing `from "..."`, and on a free `import type`, which costs nothing at runtime.
+		expect(moduleSpecifiersIn(owner)).toEqual([]);
+	});
+});

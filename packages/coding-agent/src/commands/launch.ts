@@ -1,0 +1,262 @@
+/**
+ * Root command for the coding agent CLI.
+ */
+
+import { Args, Command, Flags } from "@veyyon/utils/cli";
+import { APP_NAME } from "@veyyon/utils/dirs";
+import * as logger from "@veyyon/utils/logger";
+import { type Args as ParsedArgs, parseArgs, reportCliUsageError } from "../cli/args";
+import { MODE_VALUES } from "../cli/flag-tables";
+import { shouldPrepaintLaunchCard } from "../cli/launch-card-eligibility";
+import { CLI_THINKING_LEVELS } from "../thinking";
+
+export default class Index extends Command {
+	static description = "AI coding assistant";
+	static hidden = true;
+
+	static args = {
+		messages: Args.string({
+			description: "Messages to send (prefix files with @)",
+			required: false,
+			multiple: true,
+		}),
+	};
+
+	static flags = {
+		model: Flags.string({
+			description: 'Model to use (fuzzy match: "opus", "gpt-5.2", or "openai/gpt-5.2")',
+		}),
+		plan: Flags.string({
+			description: "Plan helper model for this run",
+		}),
+		"compaction-model": Flags.string({
+			description: "Model that summarizes the conversation when it is compacted (overrides compaction.model)",
+		}),
+		prewalk: Flags.boolean({
+			description:
+				"Switch from the start model to the cheap model at the first edit/write after the plan's todo list exists (default off; see prewalk.enabled)",
+		}),
+		"no-prewalk": Flags.boolean({
+			description: "Disable prewalk even if prewalk.enabled is set",
+		}),
+		"prewalk-into": Flags.string({
+			description: "Cheap target model for prewalk (default prewalk.cheapModel; required when it is unset)",
+		}),
+		"plan-yolo": Flags.boolean({
+			description:
+				"Force read-only plan mode at start, auto-approve the plan on the model's first resolve call, then switch to --plan-yolo-into to implement it",
+		}),
+		"plan-yolo-into": Flags.string({
+			description: "Target model for plan-yolo execution (default the first defaultModel entry)",
+		}),
+		provider: Flags.string({
+			description: "Provider to use (legacy; prefer --model)",
+		}),
+		"api-key": Flags.string({
+			description: "API key (defaults to env vars)",
+		}),
+		"system-prompt": Flags.string({
+			description: "System prompt (default: coding assistant prompt)",
+		}),
+		"append-system-prompt": Flags.string({
+			description: "Append text or file contents to the system prompt",
+		}),
+		"allow-home": Flags.boolean({
+			description: "Allow starting in ~ without auto-switching to a temp dir",
+		}),
+		profile: Flags.string({
+			description: "Use an isolated profile for auth, sessions, settings, and caches",
+		}),
+		alias: Flags.string({
+			description: "Create a shell shortcut for the selected profile and exit",
+		}),
+		cwd: Flags.string({
+			description: "Directory to start in (overrides the launch cwd)",
+		}),
+		mode: Flags.string({
+			// Both derived from the parser's own table so the help can never list a
+			// subset of what `--mode` accepts (it omitted `acp` for a release).
+			description: `Output mode: ${MODE_VALUES.map(mode => (mode === "text" ? "text (default)" : mode)).join(", ")}`,
+			options: [...MODE_VALUES],
+		}),
+		config: Flags.string({
+			description: "Load an extra config.yml-style overlay for this run (repeatable)",
+			multiple: true,
+		}),
+		"mcp-config": Flags.string({
+			description: "Add MCP servers from an absolute JSON path for this run, including ACP sessions",
+		}),
+		print: Flags.boolean({
+			char: "p",
+			description: "Non-interactive mode: process prompt and exit",
+		}),
+		continue: Flags.boolean({
+			char: "c",
+			description: "Continue previous session",
+		}),
+		resume: Flags.string({
+			char: "r",
+			aliases: ["session"],
+			description: "Resume a session (by ID prefix, path, or picker if omitted)",
+		}),
+		fork: Flags.string({
+			description: "Branch a copy of a session (by ID prefix or path) and leave the original untouched",
+		}),
+		"session-dir": Flags.string({
+			description: "Directory for session storage and lookup",
+		}),
+		"provider-session-id": Flags.string({
+			description: "Reuse an existing provider-side session id instead of starting a new one",
+		}),
+		"prompt-cache-key": Flags.string({
+			description: "Explicit provider prompt-cache key (defaults to one derived from the session)",
+		}),
+		"no-session": Flags.boolean({
+			description: "Don't save session (ephemeral)",
+		}),
+		models: Flags.string({
+			description: "Comma-separated model patterns for Ctrl+P cycling",
+		}),
+		"no-tools": Flags.boolean({
+			description: "Disable all built-in tools",
+		}),
+		"no-lsp": Flags.boolean({
+			description: "Disable LSP tools, formatting, and diagnostics",
+		}),
+		"no-pty": Flags.boolean({
+			description: "Disable PTY-based interactive bash execution",
+		}),
+		tools: Flags.string({
+			description: "Comma-separated list of tools to enable (default: all)",
+		}),
+		thinking: Flags.string({
+			description: `Set thinking level: ${CLI_THINKING_LEVELS.join(", ")}`,
+			options: CLI_THINKING_LEVELS.slice(),
+		}),
+		"hide-thinking": Flags.boolean({
+			description: "Hide thinking blocks in TUI output (display only, does not disable model thinking)",
+		}),
+		advisor: Flags.boolean({
+			description: "Enable the advisor runtime (passively reviews each turn and injects notes)",
+		}),
+		hook: Flags.string({
+			description: "Load a hook/extension file (can be used multiple times)",
+			multiple: true,
+		}),
+		extension: Flags.string({
+			char: "e",
+			description: "Load an extension file (can be used multiple times)",
+			multiple: true,
+		}),
+		"no-extensions": Flags.boolean({
+			description: "Disable extension discovery (explicit -e paths still work)",
+		}),
+		"plugin-dir": Flags.string({
+			description: "Additional directory to discover plugins in (can be used multiple times)",
+			multiple: true,
+		}),
+		"no-skills": Flags.boolean({
+			description: "Disable skills discovery and loading",
+		}),
+		skills: Flags.string({
+			description: "Comma-separated glob patterns to filter skills (e.g., git-*,docker)",
+		}),
+		"no-rules": Flags.boolean({
+			description: "Disable rules discovery and loading",
+		}),
+		export: Flags.string({
+			description: "Export session file to HTML and exit",
+		}),
+		"no-title": Flags.boolean({
+			description: "Disable title auto-generation",
+		}),
+		"print-thoughts": Flags.boolean({
+			description: "Include thinking blocks in print mode text output",
+		}),
+		"max-time": Flags.string({
+			description: "Stop the session after this duration (e.g., 600, 10m, 1h)",
+		}),
+		// `--auto-approve` / `--yolo`: declared here so the generated `--help` lists both spellings.
+		// Runtime parsing happens in `cli/args.ts parseArgs` — `runRootCommand` consumes the manual
+		// parser's output, not these descriptors. If you rename or remove either form, update both
+		// call sites in lockstep; `test/cli/launch-help-documents-every-flag.test.ts` fails if you don't.
+		"auto-approve": Flags.boolean({
+			aliases: ["yolo"],
+			description: "Auto-approve all tool calls (skip approval prompts)",
+		}),
+		// `--dangerously-skip-permissions`: start with the full /yolo bypass on.
+		// Declared here so `--help` lists it; runtime parsing is in
+		// `cli/args.ts parseArgs`, applied via `bypassAllApprovals` on the session.
+		"dangerously-skip-permissions": Flags.boolean({
+			description:
+				"Remove the session's permission prompts, including per-tool prompt overrides (a blatantly destructive command, an explicit deny, and plan mode still block). Toggle at runtime with /yolo.",
+		}),
+		// `--approval-mode`: declared here so the generated `--help` lists it; runtime parsing
+		// happens in `cli/args.ts parseArgs`. The value is applied via `Settings.override("tools.approvalMode", …)`
+		// in `main.ts` after the `Settings` instance is constructed, so every `settings.get("tools.approvalMode")`
+		// site (wrapper, `/settings` UI) observes the same value.
+		"approval-mode": Flags.string({
+			options: ["plan", "ask", "ask-command", "auto", "yolo", "always-ask", "write", "auto-edit"],
+			description:
+				"Override tools.approvalMode for this session (ask|ask-command|auto|yolo|plan; legacy always-ask|write|auto-edit accepted)",
+		}),
+	};
+
+	static examples = [
+		`# Interactive mode\n  ${APP_NAME}`,
+		`# Interactive mode with initial prompt\n  ${APP_NAME} "List all .ts files in src/"`,
+		`# Include files in initial message\n  ${APP_NAME} @prompt.md @image.png "What color is the sky?"`,
+		`# Non-interactive mode (process and exit)\n  ${APP_NAME} -p "List all .ts files in src/"`,
+		`# Continue previous session\n  ${APP_NAME} --continue "What did we discuss?"`,
+		`# Create a shell shortcut for a work profile\n  ${APP_NAME} --profile work --alias ${APP_NAME}-work`,
+		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
+		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
+		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.veyyon/profiles/default/agent/sessions/--path--/session.jsonl`,
+	];
+
+	static strict = false;
+
+	async run(): Promise<void> {
+		let args = this.argv;
+		if (args.includes("--acp-terminal-auth")) {
+			const { prepareAcpTerminalAuthArgs } = await logger.time(
+				"import:acp-terminal-auth",
+				() => import("../modes/acp/terminal-auth"),
+			);
+			args = prepareAcpTerminalAuthArgs(args).args;
+		}
+		let parsed: ParsedArgs;
+		try {
+			parsed = logger.time("parseArgs", parseArgs, args);
+		} catch (error) {
+			if (reportCliUsageError(error)) {
+				process.exitCode = 2;
+				return;
+			}
+			throw error;
+		}
+		// Painted BEFORE the runtime graph loads, so a bare interactive launch
+		// reaches a typable composer in ~60ms rather than waiting ~760ms for
+		// `../main` to evaluate.
+		//
+		// Dynamic because a static import cannot work here: this module's flag
+		// table is what `veyyon --help` loads, and a top-level import would put
+		// the first-frame paint graph on the help route. The specifier is
+		// literal, so the graph stays reviewable; only its evaluation is
+		// deferred. The card module imports the terminal renderer, so it loads
+		// only for a launch that paints: `--version`, `--export`, `--print` and
+		// the protocol modes go straight to `../main`.
+		if (shouldPrepaintLaunchCard(parsed)) {
+			const { runStartupPrologue } = await logger.time("import:launch-card", () => import("../cli/launch-card"));
+			await logger.time("runStartupPrologue", runStartupPrologue, parsed);
+			// The card is up and its typeahead gate is listening, so the runtime
+			// graph is loaded in stages that hand the loop back between subtrees.
+			// Without it the next line blocks for the whole evaluation and a
+			// keystroke typed during it is not echoed until the composer mounts.
+			const { warmRuntimeGraph } = await import("../cli/runtime-warmup");
+			await logger.time("warmRuntimeGraph", warmRuntimeGraph);
+		}
+		const { runRootCommand } = await logger.time("import:main", () => import("../main"));
+		await runRootCommand(parsed, args);
+	}
+}

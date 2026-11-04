@@ -1,0 +1,32 @@
+import type { Component } from "@veyyon/tui";
+import { visibleWidth } from "@veyyon/utils/width";
+import { fgOrPlain } from "../../theme/theme-binding";
+import { QrCode, renderQrHalfBlocks } from "../../utils/qrcode";
+
+/**
+ * One-shot transcript block that prints a collab browser-join URL as a
+ * scannable QR code. The symbol is encoded once at construction (byte mode,
+ * EC level M) and rendered as ANSI half-blocks; on terminals too narrow for
+ * the symbol it degrades to a one-line hint pointing at the printed URL.
+ *
+ * The block opens with a blank row, so the caller presents it alone rather than
+ * paired with a spacer of its own.
+ */
+export class CollabQrCodeComponent implements Component {
+	readonly #lines: readonly string[];
+	readonly #minWidth: number;
+
+	constructor(readonly url: string) {
+		const rows = renderQrHalfBlocks(QrCode.encodeText(url, "M"));
+		this.#lines = ["", ...rows.map(row => ` ${row}`)];
+		this.#minWidth = rows.reduce((max, row) => Math.max(max, visibleWidth(row)), 0) + 1;
+	}
+
+	render(width: number): readonly string[] {
+		if (width < this.#minWidth) {
+			const warning = `QR code hidden: terminal width ${width}; need ${this.#minWidth}. Use the browser URL above.`;
+			return ["", ` ${fgOrPlain("warning", warning)}`];
+		}
+		return this.#lines;
+	}
+}

@@ -1,0 +1,7 @@
+# Focused native-fleet adapter CI
+
+Refs #792/#775. Use the existing `OVH CI` workflow dispatch. Set `target_sha` and `base_sha` to the exact source head and exact PR base. Set `test_files` to the complete JSON array of regular files matching `packages/coding-agent/test/mainplane-*.test.ts` at the selected `target_sha`, only at that directory's top level. Order does not matter; duplicates, omitted suites, extra paths, fewer than four suites, more than 30 suites, and paths resolving outside the repository are rejected. Set `fleet_adapter` to `true`. Dispatch only after the existing runner label has been admitted as unique. This change makes no automatic-push claim.
+
+All resource jobs retain the `[self-hosted, Linux, X64]` runner class. The dispatch `runner_label` selects an admitted runner label and defaults to `veyyon`. Labels do not establish capacity or sandbox admission: dispatch only after the shared pool owner verifies finite per-job CPU/RAM limits, atomic admission and release, and the existing bubblewrap boundary for every eligible runner.
+
+The reducer records test identities/counts and source SHA, and retains `live_workers_tested=false` and `provider_requests=false`. The existing artifact upload includes only the scoped `.ovh-tools/fleet-ci/` report directory alongside its existing logs and receipt; hidden files are enabled so that directory is retained. Passing evidence covers injected transports only. It does not qualify live workers, native platform behavior, or provider access.

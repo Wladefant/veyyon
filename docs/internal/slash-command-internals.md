@@ -1,0 +1,350 @@
+# Slash command internals
+
+This document describes how slash commands are discovered, deduplicated, surfaced in interactive mode, and expanded at prompt time in `coding-agent`.
+
+## Implementation files
+
+- [`src/extensibility/slash-commands.ts`](../../packages/coding-agent/src/extensibility/slash-commands.ts)
+- [`src/discovery/capability/slash-command.ts`](../../packages/coding-agent/src/discovery/capability/slash-command.ts)
+- [`src/discovery/builtin.ts`](../../packages/coding-agent/src/discovery/builtin.ts)
+- [`src/discovery/claude.ts`](../../packages/coding-agent/src/discovery/claude.ts)
+- [`src/discovery/codex.ts`](../../packages/coding-agent/src/discovery/codex.ts)
+- [`src/discovery/claude-plugins.ts`](../../packages/coding-agent/src/discovery/claude-plugins.ts)
+- [`src/discovery/capability/index.ts`](../../packages/coding-agent/src/discovery/capability/index.ts)
+- [`src/discovery/helpers.ts`](../../packages/coding-agent/src/discovery/helpers.ts)
+- [`src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts)
+- [`src/modes/terminal/interactive-mode.ts`](../../packages/coding-agent/src/modes/terminal/interactive-mode.ts)
+- [`src/modes/terminal/controllers/input-controller.ts`](../../packages/coding-agent/src/modes/terminal/controllers/input-controller.ts)
+- [`src/modes/terminal/utils/ui-helpers.ts`](../../packages/coding-agent/src/modes/terminal/utils/ui-helpers.ts)
+- [`src/modes/terminal/controllers/command-controller.ts`](../../packages/coding-agent/src/modes/terminal/controllers/command-controller.ts)
+- [`src/slash-commands/builtin-registry.ts`](../../packages/coding-agent/src/slash-commands/builtin-registry.ts)
+- [`src/slash-commands/builtin-declarations.ts`](../../packages/coding-agent/src/slash-commands/builtin-declarations.ts)
+- [`src/slash-commands/text-mode-builtins.ts`](../../packages/coding-agent/src/slash-commands/text-mode-builtins.ts)
+- [`src/slash-commands/acp-builtins.ts`](../../packages/coding-agent/src/slash-commands/acp-builtins.ts)
+- [`src/slash-commands/dispatch.ts`](../../packages/coding-agent/src/slash-commands/dispatch.ts)
+- [`src/slash-commands/builtin-categories.ts`](../../packages/coding-agent/src/slash-commands/builtin-categories.ts)
+- [`src/slash-commands/handler-types.ts`](../../packages/coding-agent/src/slash-commands/handler-types.ts)
+- `src/slash-commands/builtin-<domain>.ts`, one per category: `setup`, `modes`, `session`, `context`, `share`, `workspace`, `model`, `info`
+
+### Which of these you want
+
+The builtins are split by what a caller needs, because the handlers are expensive to load:
+
+- `builtin-declarations.ts` holds the NAMES and their metadata. Ask it which names are taken.
+- `text-mode-builtins.ts` holds the metadata view a text client renders. Ask it what a client can
+  drive.
+- `dispatch.ts` runs a command without first knowing whether there is one. It answers "is this a
+  builtin" from the declarations and loads the registry only after a name matches, which is what a
+  caller on the input path wants.
+- `builtin-registry.ts` holds the HANDLERS. It reaches about 1,138 modules, since a handler can
+  touch the settings store, the MCP client and the session store. Import it only to run a command
+  already known to be one.
+
+The registry owns no handler body. Each command's handler is in the domain module its category
+names, `builtin-<domain>.ts`, and the registry spreads the eight maps into one record keyed by every
+declared name, so a handler for a command that does not exist and a command with no handler are both
+compile errors. `builtin-categories.ts` states a command's domain once;
+`test/slash-commands/a-builtin-lives-in-the-domain-it-is-categorised-under.test.ts` fails when a
+handler sits in a module the category map does not name.
+
+`acp-builtins.ts` dispatches for print, RPC and ACP mode, and it loads the registry with a dynamic
+import inside `executeAcpBuiltinSlashCommand`, after `parseSlashCommand` has said the text is a
+command. That function runs on every message in those modes and almost every message is a prompt, so
+a static import made `veyyon -p "hello"` load the whole command surface to find out the text had no
+slash in it. `dispatch.ts` is that same order for the TUI, and `main.ts` and the input controller
+reach the builtins through it. If you add a dispatcher, copy the order: answer "is this a command"
+with the parse leaf and the declarations, then load the handlers.
+
+## 1) Discovery model
+
+Slash commands are a capability (`id: "slash-commands"`) keyed by command name (`key: cmd => cmd.name`).
+
+The capability registry loads all registered providers, sorted by provider priority descending, and deduplicates by key with **first wins** semantics.
+
+### Provider precedence
+
+Current slash-command providers and priorities:
+
+1. `native` (Veyyon): priority `100`
+2. `veyyon-plugins` (extension packages): priority `90`
+3. `claude`: priority `80`
+4. `claude-plugins`: priority `70`
+5. `agents` (`.agent`/`.agents` standard dirs): priority `70`
+6. `codex`: priority `70`
+7. `opencode`: priority `55`
+
+Tie behavior: equal-priority providers keep registration order. Current import order registers `claude-plugins` before `agents` before `codex`, so plugin commands win over both on name collisions.
+
+### Name-collision behavior
+
+For `slash-commands`, collisions are resolved strictly by capability dedup:
+
+- highest-precedence item is kept in `result.items`
+- lower-precedence duplicates remain only in `result.all` and are marked `_shadowed = true`
+
+This applies across providers and also within a provider if it returns duplicate names.
+
+### File scanning behavior
+
+Providers mostly use `loadFilesFromDir(...)`, which currently:
+
+- defaults to non-recursive matching (`*.md`)
+- uses native glob with `gitignore: true`, `hidden: false`, `fileType: File`
+- reads matching files in parallel and transforms them into `SlashCommand` items
+
+So hidden files/directories are not loaded, ignored paths are skipped, and file order follows native glob result order unless a provider adds its own ordering.
+
+## 2) Provider-specific source paths and local precedence
+
+## `native` provider (`builtin.ts`)
+
+Search root is the active profile's agent dir only:
+
+- user: `~/.veyyon/profiles/default/agent/commands/*.md` (profile-scoped: `getAgentDir()` points at the active profile's agent dir, e.g. `~/.veyyon/profiles/<name>/agent`)
+
+A repository's `.veyyon/commands/` is not read: a working tree does not install commands.
+
+## `claude` provider (`claude.ts`)
+
+Loads, subject to the `commands.enableClaudeUser` setting:
+
+- user: `~/.claude/commands/**/*.md` (recursive)
+
+A project's `.claude/commands/` is not read: a repository does not install slash commands.
+
+Commands in subdirectories additionally get a namespaced alias: `foo/bar.md` is registered under both `bar` and `foo:bar` (`addClaudeCommandNamespaceAliases`).
+
+## `codex` provider (`codex.ts`)
+
+Loads:
+
+- user: `~/.codex/commands/*.md`
+
+A project's `.codex/commands/` is not read.
+
+Codex command content is parsed with frontmatter stripping (`parseFrontmatter`), and command name can be overridden by frontmatter `name`; otherwise filename is used.
+
+## `opencode` provider (`opencode.ts`)
+
+Loads, subject to the `commands.enableOpencodeUser` setting:
+
+- user: `~/.config/opencode/commands/*.md`
+
+A project's `.opencode/commands/` is not read: a repository does not install slash commands.
+
+OpenCode command content is parsed with frontmatter stripping, and the command name can be overridden by frontmatter `name`; otherwise the filename is used.
+
+## `claude-plugins` provider (`claude-plugins.ts`)
+
+Loads plugin command roots via `listClaudePluginRoots(...)`, which reads `~/.claude/plugins/installed_plugins.json`, `~/.veyyon/profiles/default/plugins/installed_plugins.json`, and the nearest project-scoped registry resolved from cwd. For each root it scans `<pluginRoot>/commands/*.md` (the directory can be remapped by plugin config keys `commands`/`slash-commands`), and command names are prefixed with the plugin name: `<plugin>:<command>`.
+
+Across the three registries, roots are merged by precedence rather than sorted: `--plugin-dir` injected roots come first, then project-scoped entries (which shadow user entries for the same plugin id), then user entries, with the Veyyon registry authoritative over Claude's for the same plugin id. Within each registry, per-plugin entry order from the JSON data is preserved; there is no additional sort step.
+
+## 3) Materialization to runtime `FileSlashCommand`
+
+`loadSlashCommands()` in `src/extensibility/slash-commands.ts` converts capability items into `FileSlashCommand` objects used at prompt time.
+
+For each command:
+
+1. parse frontmatter/body (`parseFrontmatter`)
+2. description source:
+   - `frontmatter.description` if present
+   - else first non-empty body line (max 60 chars with `...`)
+3. keep parsed body as executable template content
+4. compute a display source string like `via Claude Code Project`
+
+Frontmatter parse severity is source-dependent:
+
+- `native` level -> parse errors are `fatal`
+- `user`/`project` levels -> parse errors are `warn` with fallback parsing
+
+### Bundled fallback commands
+
+After filesystem/provider commands, embedded command templates are appended (`EMBEDDED_COMMAND_TEMPLATES`) if their names are not already present.
+
+Current embedded set comes from `src/task/commands.ts` and is used as a fallback (`source: "bundled"`).
+
+## 4) Interactive mode: where command lists come from
+
+Interactive mode combines multiple command sources for autocomplete and command routing.
+
+At construction time it builds a pending command list from:
+
+- built-ins (`BUILTIN_SLASH_COMMAND_DEFS` from `src/slash-commands/builtin-registry.ts`; includes argument completion and inline hints for selected commands)
+- extension-registered slash commands (`extensionRunner.getRegisteredCommands(...)`)
+- TypeScript custom commands (`session.customCommands`), mapped to slash command labels
+- optional skill commands (`/skill:<name>`) when `skills.enableSkillCommands` is enabled
+
+Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands and install one autocomplete provider (`createPromptActionAutocompleteProvider`, a `PromptActionAutocompleteProvider` wrapping a `CombinedAutocompleteProvider`) containing:
+
+- pending commands above
+- discovered file-based commands
+- discovered prompt-template commands whose names aren't already taken by a built-in/hook/custom/skill/file command
+
+`refreshSlashCommandState(...)` also updates `session.setSlashCommands(...)` so prompt expansion uses the same discovered file command set.
+
+The composer takes keys before `init()` installs the provider: the launch card's editor is live from the first frame. When an editor's first provider attaches, the editor evaluates the text at the cursor once, as the last keystroke would have, so a `/` command, `@` mention, `#` action or shortcode typed before then opens its suggestions or is rewritten. Escape before the attach withdraws that evaluation, and a provider that replaces another evaluates nothing.
+
+### Refresh lifecycle
+
+Slash command state is refreshed:
+
+- during interactive init
+- after `/move` changes working directory (`handleMoveCommand` -> `applyCwdChange`, which calls `session.rescopeToCwd(newCwd)`, whose process-global half invokes `resetCapabilities()` for non-agent sessions, then `refreshSlashCommandState(newCwd)`)
+- when the editor component is swapped (`setEditorComponent` re-runs `refreshSlashCommandState()`)
+
+There is no continuous file watcher for command directories.
+
+### Other surfacing
+
+The Extensions dashboard also loads `slash-commands` capability and displays active/shadowed command entries, including `_shadowed` duplicates.
+
+## 5) Prompt pipeline placement
+
+`AgentSession.prompt(...)` slash handling order (when `expandPromptTemplates !== false`):
+
+1. **Extension commands** (`#tryExecuteExtensionCommand`)  
+   If `/name` matches extension-registered command, handler executes immediately and prompt returns.
+2. **TypeScript custom commands and MCP prompt commands** (`#tryExecuteCustomCommand`)
+   Boundary only: if matched, it executes and may return:
+   - `string` -> replace prompt text with that string
+   - `void/undefined` -> treated as handled; no LLM prompt
+3. **File-based slash commands** (`expandSlashCommand`)  
+   If text still starts with `/`, attempt markdown command expansion.
+4. **Prompt templates** (`expandPromptTemplate`)  
+   Applied after slash/custom processing.
+5. **Delivery**
+   - idle: prompt is sent immediately to agent
+   - streaming: prompt is queued as steer/follow-up depending on `streamingBehavior`
+
+This is why slash command expansion sits before prompt-template expansion, and why custom commands can transform away the leading slash before file-command matching.
+
+## 6) Expansion semantics for file-based slash commands
+
+`expandSlashCommand(text, fileCommands)` behavior:
+
+- only runs when text begins with `/`
+- parses command name from first token after `/`
+- parses args from remaining text via `parseCommandArgs`
+- finds exact name match in loaded `fileCommands`
+- if matched, applies:
+  - positional replacement: `$1`, `$2`, ...
+  - slice replacement: `$@[start]` / `$@[start:length]` using 1-based positions
+  - aggregate replacement: `$ARGUMENTS` and `$@`
+  - template rendering via `prompt.render` with `{ args, ARGUMENTS, arguments }`
+  - inline-argument fallback append when the template did not use an inline argument placeholder
+
+### `parseCommandArgs` caveats
+
+The parser is simple quote-aware splitting:
+
+- supports `'single'` and `"double"` quoting to keep spaces
+- strips quote delimiters
+- does not implement backslash escaping rules
+- unmatched quote is not an error; parser consumes until end
+
+## 7) Unknown `/...` behavior
+
+Unknown slash input is **not rejected** by core slash logic.
+
+If command is not handled by extension/custom/file layers, `expandSlashCommand` returns original text, and the literal `/...` prompt proceeds through normal prompt-template expansion and LLM delivery.
+
+Interactive mode separately hard-handles many built-ins in `InputController` (for example `/settings`, `/model`, `/mcp`, `/move`, `/exit`). Those are consumed before `session.prompt(...)` and therefore never reach file-command expansion in that path.
+
+## 8) Streaming-time differences vs idle
+
+## Idle path
+
+- `session.prompt("/x ...")` runs command pipeline and either executes command immediately or sends expanded text directly.
+
+## Streaming path (`session.isStreaming === true`)
+
+- `prompt(...)` still runs extension/custom/file/template transforms first
+- then requires `streamingBehavior`:
+  - `"steer"` -> queue interrupt message (`agent.steer`)
+  - `"followUp"` -> queue post-turn message (`agent.followUp`)
+- if `streamingBehavior` is omitted, prompt throws an error
+
+### Important command-specific streaming behavior
+
+- Extension commands are executed immediately even during streaming (not queued as text).
+- `steer(...)`/`followUp(...)` helper methods reject extension commands (`#throwIfExtensionCommand`) to avoid queuing command text for handlers that must run synchronously.
+- Compaction queue replay uses `isKnownSlashCommand(...)` to decide whether queued entries should be replayed via `session.prompt(...)` (for known slash commands) vs raw steer/follow-up methods.
+
+## 9) Bare invocation of a command that has subcommands
+
+A command that declares `subcommands` must never silently behave as one of them. Typing
+`/account` and pressing enter used to print the status text, which is what `/account status`
+does. The other seven subcommands existed, and nothing on screen said so. You only found
+`manager`, `switch`, `logout`, or `add` by tabbing through completions, so the command taught
+you that it did one thing when it did eight.
+
+The rule: **bare `/cmd` opens a picker listing every subcommand, and you choose one.** The picker
+is navigable with the up and down arrows, accepts a click, and closes on escape. Choosing an
+entry runs exactly what typing that subcommand would have run, so the picker adds a way in and
+never becomes a second implementation.
+
+This holds for every command whose declaration carries `subcommands`, with one exception.
+
+### The distinct-bare-form exception
+
+Some commands have a meaning of their own that is not any subcommand. `/yolo` flips the approval
+bypass, `/fast` flips the fast model, `/browser` flips headless mode, `/setup` opens a wizard,
+`/todo` renders the list, and `/secret` opens a masked field. In each case a picker would put a
+menu in front of an action the user already asked for, and cost a keystroke on the common act.
+
+Declare that intent rather than leaving it to be inferred:
+
+```ts
+{
+  name: "yolo",
+  bareAction: "distinct", // bare /yolo toggles; it is not a hidden subcommand
+  subcommands: [ /* … */ ],
+}
+```
+
+The value is `"distinct"` and not `"toggle"` because only three of the commands that claim it are
+switches. What they share is that bare does something distinct from every declared subcommand.
+Naming the exception after the rarer case would invite the next author to file a hidden default
+under a word that does not fit, and the register below is the only place that would catch it.
+
+`bareAction` defaults to `"picker"`. A command that has subcommands and does not declare
+`"distinct"` gets the picker, so the safe behavior is what you get by saying nothing.
+
+A waiver granted because the subcommand list is a synonym of the bare form (`/plugins list`,
+`/setup providers`) stops being true the moment a second subcommand is added. No automated check
+can see that, so each such declaration carries a comment saying what bare does. Re-read it when
+you extend the list.
+
+### Why this is enforced by a test rather than by review
+
+The defect is invisible from inside the handler. Each of these reads as ordinary code:
+
+```ts
+if (!verb || verb === "status") { /* … */ }        // /account, /permissions
+if (!verb || (verb === "show" && !rest)) { /* … */ } // /usage
+const verb = args.trim().split(/\s+/)[0] || "view";  // /memory
+```
+
+Nothing local is wrong. The problem only appears when you compare the handler against the
+declaration and notice that the bare path resolves to a name that is also in `subcommands`. That
+is a whole-file comparison a reviewer will not repeat on every change, so
+`test/slash-commands/bare-command-opens-a-picker.test.ts` does it: for every declaration with
+`subcommands`, the bare path must open the picker or the declaration must say `"distinct"`.
+
+A new command therefore cannot reintroduce this by accident. It either opts into the
+distinct-bare-form exception on purpose or it gets the picker. That exception is itself a
+register: every declaration claiming it must appear in the test's table with the written reason
+its bare form is not a hidden default, because the dispatcher cannot tell an honest switch from a
+hidden default dressed as one.
+
+## 10) Error handling and failure surfaces
+
+- Provider load failures are isolated; registry collects warnings and continues with other providers.
+- Invalid slash command items (missing name/path/content or invalid level) are dropped by capability validation.
+- Frontmatter parse failures:
+  - native commands: fatal parse error bubbles
+  - non-native commands: warning + fallback key/value parse
+- Extension/custom command handler exceptions are caught and reported via extension error channel (or logger fallback for custom commands without extension runner), and treated as handled (no unintended fallback execution).
+
+*Verified against `73787e442eacbe1c7771912c6db8d5fa0ae452ec` on 2026-10-18.*

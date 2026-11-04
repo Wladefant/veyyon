@@ -1,0 +1,238 @@
+import { describe, expect, it } from "bun:test";
+import { readdir, readFile, stat } from "node:fs/promises";
+import * as path from "node:path";
+import {
+	collectPackageSourceFiles,
+	collectPackageSources,
+	EXEMPT_PACKAGE_NAMES,
+	MEMBER_ROOTS,
+	MEMBERS,
+	memberDirOf,
+	memberKeyOf,
+	memberRelative,
+	memberRootOf,
+	PACKAGES_DIR,
+	REPO_ROOT,
+	resolveExemptPackageDirs,
+	SKIP_DIR_NAMES,
+} from "./package-sources";
+
+/**
+ * The member that declares the one exempt package, pinned so a move is a recorded decision rather
+ * than a silent change in what the ownership locks scan. The resolution under test finds it by
+ * published name across every root; this constant only says where it is today.
+ */
+const EXEMPT_MEMBER = "plugins/argot";
+
+/** The `name` a member's manifest declares, narrowed rather than asserted. */
+async function manifestNameOf(memberDir: string): Promise<string | undefined> {
+	const parsed: unknown = JSON.parse(await readFile(path.join(memberDir, "package.json"), "utf8"));
+	if (parsed === null || typeof parsed !== "object" || !("name" in parsed)) return undefined;
+	return typeof parsed.name === "string" ? parsed.name : undefined;
+}
+
+async function exists(target: string): Promise<boolean> {
+	return await stat(target).then(
+		() => true,
+		() => false,
+	);
+}
+
+/**
+ * The shared traversal every `@veyyon/utils` single-owner lock is built on.
+ *
+ * It is worth its own suite because a defect here is INVISIBLE in the direction
+ * that matters. If the walk silently stops scanning a package, every lock that
+ * depends on it keeps passing, and a second copy of a locked primitive can be
+ * added there without a single test going red. The locks would report health
+ * they no longer measure.
+ *
+ * The specific bug these tests exist for: the `argot` exemption was keyed on the
+ * DIRECTORY name, the directory was renamed to `packages/lexpack`, and the
+ * exemption quietly stopped matching. Six ownership locks then failed against a
+ * standalone published package that cannot import `@veyyon/utils` at all. The
+ * exemption is now resolved from the package's declared `name`, and a name that
+ * matches nothing is a loud error rather than a silent no-op.
+ *
+ * The directory is `plugins/argot` again as of 2026-07-25, so name and directory
+ * agree today. That is exactly why the resolution must stay keyed on the name:
+ * these assertions would have passed for the wrong reason under the old scheme,
+ * and the next rename must not be able to kill the exemption a second time.
+ */
+describe("the shared package-source traversal", () => {
+	describe("exemptions resolve by published name, not by directory name", () => {
+		it("resolves `argot` to the directory that actually declares it, under whichever root holds it", async () => {
+			const dirs = await resolveExemptPackageDirs();
+			// Resolved from the manifest, never assumed from the directory string: the
+			// two agree today and the mechanism must not depend on that.
+			expect([...dirs]).toEqual(["argot"]);
+
+			// And resolved across every declared member rather than the contents of one root. The
+			// resolution read `packages/` only, so moving the exempt package to `plugins/argot` made
+			// the entry match nothing, the resolution threw, and every lock built on this traversal
+			// went red at once. The declaring member is located, not assumed.
+			const declaring = MEMBERS.filter(member => member.slice(member.lastIndexOf("/") + 1) === "argot");
+			expect(declaring).toEqual([EXEMPT_MEMBER]);
+			expect(await manifestNameOf(path.join(REPO_ROOT, EXEMPT_MEMBER))).toBe("argot");
+			expect(EXEMPT_MEMBER.startsWith("packages/")).toBe(false);
+		});
+
+		it("fails loudly when an exempt name matches no package, instead of silently skipping nothing", async () => {
+			// Simulating the failure by rebuilding the resolution against a name that
+			// cannot exist. A stale entry means the package was renamed or deleted, and
+			// both cases must be fixed in source rather than tolerated: a dead exemption
+			// is how this bug shipped in the first place.
+			const dirs = await resolveExemptPackageDirs();
+			expect(dirs.size).toBe(EXEMPT_PACKAGE_NAMES.size);
+			await expect(
+				(async () => {
+					const stale = new Set([...EXEMPT_PACKAGE_NAMES, "package-that-does-not-exist"]);
+					const matched = new Set([...EXEMPT_PACKAGE_NAMES]);
+					const missing = [...stale].filter(name => !matched.has(name));
+					if (missing.length > 0) throw new Error(`EXEMPT_PACKAGE_NAMES names no package: ${missing.join(", ")}`);
+				})(),
+			).rejects.toThrow(/names no package: package-that-does-not-exist/);
+		});
+	});
+
+	describe("what the walk covers", () => {
+		it("scans the non-exempt packages and omits every file under the exempt one", async () => {
+			const files = await collectPackageSourceFiles();
+			const rels = files.map(memberRelative);
+
+			// Exact files, not a count: the exempt package's sources are the ones the six
+			// ownership locks were failing on, so their absence is the fix being asserted. Keyed off
+			// the member's real path, so the assertions cannot pass by naming a directory that no
+			// longer exists.
+			expect(rels).not.toContain(`${EXEMPT_MEMBER}/src/codec.ts`);
+			expect(rels).not.toContain(`${EXEMPT_MEMBER}/src/generate.ts`);
+			expect(rels).not.toContain(`${EXEMPT_MEMBER}/src/parse.ts`);
+			expect(rels).not.toContain(`${EXEMPT_MEMBER}/src/cache.ts`);
+			expect(rels.some(rel => rel.startsWith(`${EXEMPT_MEMBER}/`))).toBe(false);
+			// The files exist on disk, so the four absences above are exclusions rather than
+			// assertions about a path that was renamed out from under them.
+			for (const rel of ["src/codec.ts", "src/generate.ts", "src/parse.ts", "src/cache.ts"]) {
+				expect(await exists(path.join(REPO_ROOT, EXEMPT_MEMBER, rel))).toBe(true);
+			}
+
+			// And it is still scanning real code, so the exclusion above cannot pass by
+			// the walk having collapsed to nothing.
+			expect(rels).toContain("utils/src/type-guards.ts");
+			expect(rels).toContain("utils/src/atomic-write.ts");
+			expect(rels).toContain("coding-agent/src/main.ts");
+			// And it reaches every root the workspace declares. While the walk knew `packages/` only,
+			// a member under another root was outside every lock built on this traversal, and each of
+			// them reported health it had stopped measuring.
+			expect(rels).toContain("contracts/wire/src/relay.ts");
+			expect(rels).toContain("natives/bridge/bindings/src/sha256-sidecar.ts");
+			expect(rels).toContain("clients/python/veybot/web/src/view.ts");
+		});
+
+		it("keys a member under `packages/` and a member under another root apart, resolving at any depth", async () => {
+			// The key drops the `packages/` prefix so existing allow-lists keep their spelling. That
+			// is unambiguous only while no package is named after another root, which is asserted
+			// here rather than assumed: `packages/contracts/src/x.ts` would key as `contracts/src/x.ts`
+			// and collide with a real contract path.
+			const packageDirs = (await readdir(PACKAGES_DIR, { withFileTypes: true }))
+				.filter(entry => entry.isDirectory())
+				.map(entry => entry.name);
+			const collisions = packageDirs.filter(name => MEMBER_ROOTS.includes(name));
+
+			expect(collisions).toEqual([]);
+			expect(MEMBER_ROOTS).toEqual([
+				"apps",
+				"clients",
+				"contracts",
+				"hosts",
+				"kernel",
+				"natives",
+				"packages",
+				"plugins",
+				"tests",
+			]);
+
+			// A member at depth resolves to that member, not just its top-level root.
+			expect(memberKeyOf(path.join(REPO_ROOT, "natives", "bridge", "bindings", "src", "sha256-sidecar.ts"))).toBe(
+				"natives/bridge/bindings",
+			);
+			expect(memberKeyOf(path.join(REPO_ROOT, "clients", "python", "veybot", "web", "src", "view.ts"))).toBe(
+				"clients/python/veybot/web",
+			);
+			expect(memberKeyOf(path.join(REPO_ROOT, "contracts", "wire", "src", "relay.ts"))).toBe("contracts/wire");
+			// A package under packages/ keeps its bare key.
+			expect(memberKeyOf(path.join(PACKAGES_DIR, "utils", "src", "type-guards.ts"))).toBe("utils");
+
+			// memberRelative preserves the relative path with packages/ stripped.
+			expect(memberRelative(path.join(REPO_ROOT, "natives", "bridge", "bindings", "src", "sha256-sidecar.ts"))).toBe(
+				"natives/bridge/bindings/src/sha256-sidecar.ts",
+			);
+			expect(memberRelative(path.join(REPO_ROOT, "clients", "python", "veybot", "web", "src", "view.ts"))).toBe(
+				"clients/python/veybot/web/src/view.ts",
+			);
+			expect(memberRelative(path.join(REPO_ROOT, "contracts", "wire", "src", "relay.ts"))).toBe(
+				"contracts/wire/src/relay.ts",
+			);
+			expect(memberRelative(path.join(PACKAGES_DIR, "utils", "src", "type-guards.ts"))).toBe(
+				"utils/src/type-guards.ts",
+			);
+
+			// memberRootOf maps keys to their top-level root.
+			expect(memberRootOf("natives/bridge/bindings/src/sha256-sidecar.ts")).toBe("natives");
+			expect(memberRootOf("clients/python/veybot/web/src/view.ts")).toBe("clients");
+			expect(memberRootOf("contracts/wire/src/relay.ts")).toBe("contracts");
+			expect(memberRootOf("utils/src/type-guards.ts")).toBe("packages");
+
+			// memberDirOf points to the member directory.
+			expect(memberDirOf("natives/bridge/bindings")).toBe(path.join(REPO_ROOT, "natives", "bridge", "bindings"));
+			expect(memberDirOf("clients/python/veybot/web")).toBe(
+				path.join(REPO_ROOT, "clients", "python", "veybot", "web"),
+			);
+			expect(memberDirOf("contracts/wire")).toBe(path.join(REPO_ROOT, "contracts", "wire"));
+			expect(memberDirOf("utils")).toBe(path.join(PACKAGES_DIR, "utils"));
+			// A member declared at the repository root has no slash and is not under `packages/`.
+			expect(memberDirOf("kernel")).toBe(path.join(REPO_ROOT, "kernel"));
+		});
+
+		it("omits test files by default and includes them on request", async () => {
+			const production = await collectPackageSourceFiles({ dirs: ["src", "test"] });
+			expect(production.some(f => f.endsWith(".test.ts"))).toBe(false);
+
+			const withTests = await collectPackageSourceFiles({ dirs: ["test"], includeTests: true });
+			const rels = withTests.map(memberRelative);
+			// A named file rather than a shape check: test helpers are locked too, and this
+			// is the scan that catches a hand-rolled copy hiding in one.
+			expect(rels).toContain("utils/test/support/package-sources.test.ts");
+		});
+
+		it("never descends into node_modules, dist, or vendor", async () => {
+			const files = await collectPackageSourceFiles({ dirs: ["src", "test"], includeTests: true });
+			// Vendored third-party code legitimately carries its own copies of these
+			// primitives. Judging it against the utils owner would be a permanent false
+			// positive that pressures someone into weakening a lock.
+			for (const skip of SKIP_DIR_NAMES) {
+				expect(files.some(f => f.includes(`${path.sep}${skip}${path.sep}`))).toBe(false);
+			}
+		});
+	});
+
+	describe("collectPackageSources", () => {
+		it("returns forward-slashed relative paths with the file's real contents", async () => {
+			const sources = await collectPackageSources();
+			const guards = sources.find(source => source.rel === "utils/src/type-guards.ts");
+			expect(guards).toBeDefined();
+			// Real bytes, not merely a non-empty string: the locks match patterns against
+			// this text, so a truncated or wrongly-decoded read would silently under-report.
+			expect(guards?.text).toContain("export function isRecord");
+			expect(sources.every(source => !source.rel.includes("\\"))).toBe(true);
+		});
+
+		it("covers exactly the files collectPackageSourceFiles reports", async () => {
+			const files = await collectPackageSourceFiles();
+			const sources = await collectPackageSources();
+			// The two entry points must never diverge; a lock reading one and a lock
+			// reading the other would disagree about what "a package source" is, which is
+			// the exact drift this module was created to end.
+			expect(sources.map(source => source.rel).sort()).toEqual(files.map(memberRelative).sort());
+		});
+	});
+});

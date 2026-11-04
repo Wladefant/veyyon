@@ -1,0 +1,309 @@
+/**
+ * OpenCode Discovery Provider
+ *
+ * Loads configuration from OpenCode's config directories:
+ * - User: ~/.config/opencode/
+ * - Project: .opencode/ (cwd) and opencode.json (project root)
+ *
+ * Capabilities:
+ * - context-files: AGENTS.md (user-level only at ~/.config/opencode/AGENTS.md)
+ * - mcps: From opencode.json "mcp" key
+ * - settings: From opencode.json
+ * - skills: From skills/ subdirectories
+ * - slash-commands: From commands/ subdirectories
+ * - extension-modules: From plugins/ subdirectories
+ *
+ * Priority: 55 (tool-specific provider)
+ */
+
+import { isRecord, logger, parseFrontmatter, tryParseJson } from "@veyyon/utils";
+// The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
+import { settings } from "../config/settings-instance";
+import { registerProvider } from "./capability";
+import { type ContextFile, contextFileCapability } from "./capability/context-file";
+import { type ExtensionModule, extensionModuleCapability } from "./capability/extension-module";
+import { readFile } from "./capability/fs";
+import { type MCPServer, mcpCapability } from "./capability/mcp";
+import { type DiscoveredSkill, skillCapability } from "./capability/skill";
+import { type SlashCommand, slashCommandCapability } from "./capability/slash-command";
+import type { LoadContext, LoadResult, SourceMeta } from "./capability/types";
+
+import { expandEnvVarsDeep, warnUnresolved } from "./env-expansion";
+import {
+	buildExtensionModuleItems,
+	createSourceMeta,
+	discoverExtensionModulePaths,
+	getUserPath,
+	loadFilesFromDir,
+	loadUserContextFile,
+	scanSkillsFromDir,
+} from "./helpers";
+
+const PROVIDER_ID = "opencode";
+const DISPLAY_NAME = "OpenCode";
+const PRIORITY = 55;
+
+// =============================================================================
+// JSON Config Loading
+// =============================================================================
+
+async function loadJsonConfig(configPath: string): Promise<Record<string, unknown> | null> {
+	const content = await readFile(configPath);
+	if (!content) return null;
+
+	const parsed = tryParseJson<Record<string, unknown>>(content);
+	if (!parsed) {
+		logger.warn("Failed to parse OpenCode JSON config", { path: configPath });
+		return null;
+	}
+	return parsed;
+}
+
+// =============================================================================
+// Context Files (AGENTS.md)
+// =============================================================================
+
+/**
+ * Load OpenCode context files.
+ *
+ * Scopes: a home-level layer only, emitted as `level: "user"`
+ * (`~/.config/opencode/AGENTS.md`).
+ *
+ * PROFILE scope does not apply: OpenCode has no profile concept, so there is no
+ * per-profile file to read, and the home-level file loses veyyon's single home
+ * slot to a real profile AGENTS.md on priority (native 100 against 55). GLOBAL
+ * scope does not apply either: that layer is veyyon's own
+ * `<globalConfigRoot>/AGENTS.md`, owned by the native provider. PROJECT scope is
+ * absent from the OpenCode convention, which keeps its AGENTS.md under the
+ * user's XDG config directory rather than in the checkout.
+ */
+async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFile>> {
+	return loadUserContextFile(ctx, PROVIDER_ID, "opencode", "AGENTS.md");
+}
+
+// =============================================================================
+// MCP Servers (opencode.json → mcp)
+// =============================================================================
+
+/** OpenCode MCP server config (from opencode.json "mcp" key) */
+interface OpenCodeMCPConfig {
+	type?: "local" | "remote";
+	command?: string | string[];
+	args?: string[];
+	env?: Record<string, string>;
+	environment?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
+	enabled?: boolean;
+	timeout?: number;
+}
+
+function stringArray(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	for (const item of value) {
+		if (typeof item !== "string") return undefined;
+	}
+	return value;
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+	if (!isRecord(value)) return undefined;
+
+	const record: Record<string, string> = {};
+	for (const [key, item] of Object.entries(value)) {
+		if (typeof item !== "string") return undefined;
+		record[key] = item;
+	}
+	return record;
+}
+
+function normalizeCommand(
+	commandValue: string | string[] | undefined,
+	argsValue: unknown,
+): { command: string | undefined; args: string[] | undefined } {
+	const configuredArgs = stringArray(argsValue);
+	if (Array.isArray(commandValue)) {
+		const [command, ...commandArgs] = commandValue;
+		const args = configuredArgs ? commandArgs.concat(configuredArgs) : commandArgs;
+		return {
+			command: typeof command === "string" ? command : undefined,
+			args: args.length > 0 ? args : undefined,
+		};
+	}
+
+	return {
+		command: typeof commandValue === "string" ? commandValue : undefined,
+		args: configuredArgs && configuredArgs.length > 0 ? configuredArgs : undefined,
+	};
+}
+
+async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> {
+	const items: MCPServer[] = [];
+	const warnings: string[] = [];
+
+	// User-level: ~/.config/opencode/opencode.json
+	const userConfigPath = getUserPath(ctx, "opencode", "opencode.json");
+	if (userConfigPath) {
+		const config = await loadJsonConfig(userConfigPath);
+		if (config) {
+			const result = extractMCPServers(config, userConfigPath);
+			items.push(...result.items);
+			if (result.warnings) warnings.push(...result.warnings);
+		}
+	}
+
+	return { items, warnings };
+}
+
+function extractMCPServers(config: Record<string, unknown>, configPath: string): LoadResult<MCPServer> {
+	const items: MCPServer[] = [];
+	const warnings: string[] = [];
+
+	if (!config.mcp || typeof config.mcp !== "object") {
+		return { items, warnings };
+	}
+
+	const servers = expandEnvVarsDeep(config.mcp as Record<string, unknown>, warnUnresolved(warnings, configPath));
+
+	for (const [name, raw] of Object.entries(servers)) {
+		if (!raw || typeof raw !== "object") {
+			warnings.push(`Invalid MCP config for "${name}" in ${configPath}`);
+			continue;
+		}
+
+		const serverConfig = raw as OpenCodeMCPConfig;
+
+		// Determine transport from OpenCode's "type" field
+		let transport: "stdio" | "sse" | "http" | undefined;
+		if (serverConfig.type === "local") {
+			transport = "stdio";
+		} else if (serverConfig.type === "remote") {
+			transport = "http";
+		} else if (serverConfig.url) {
+			transport = "http";
+		} else if (serverConfig.command) {
+			transport = "stdio";
+		}
+
+		const command = normalizeCommand(serverConfig.command, serverConfig.args);
+		const env = stringRecord(serverConfig.environment) ?? stringRecord(serverConfig.env);
+
+		items.push({
+			name,
+			command: command.command,
+			args: command.args,
+			env,
+			url: typeof serverConfig.url === "string" ? serverConfig.url : undefined,
+			headers: serverConfig.headers && typeof serverConfig.headers === "object" ? serverConfig.headers : undefined,
+			enabled: serverConfig.enabled,
+			timeout: typeof serverConfig.timeout === "number" ? serverConfig.timeout : undefined,
+			transport,
+			_source: createSourceMeta(PROVIDER_ID, configPath, "user"),
+		});
+	}
+
+	return { items, warnings };
+}
+
+// =============================================================================
+// Skills (skills/)
+// =============================================================================
+
+async function loadSkills(ctx: LoadContext): Promise<LoadResult<DiscoveredSkill>> {
+	const userSkillsDir = getUserPath(ctx, "opencode", "skills");
+	if (!userSkillsDir) return { items: [], warnings: [] };
+
+	return await scanSkillsFromDir({ dir: userSkillsDir, providerId: PROVIDER_ID, level: "user" });
+}
+
+// =============================================================================
+// Extension Modules (plugins/)
+// =============================================================================
+
+async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<ExtensionModule>> {
+	const userPluginsDir = getUserPath(ctx, "opencode", "plugins");
+	const userPaths = userPluginsDir ? await discoverExtensionModulePaths(userPluginsDir) : [];
+	return { items: buildExtensionModuleItems(PROVIDER_ID, userPaths, []), warnings: [] };
+}
+
+// =============================================================================
+// Slash Commands (commands/)
+// =============================================================================
+
+/**
+ * Read the OpenCode command-loading toggle from settings.
+ * Falls back to true (current behavior) when settings are not initialized,
+ * e.g. inside discovery unit tests that run without Settings.init().
+ */
+function readOpencodeCommandsEnabled(): boolean {
+	try {
+		return settings.get("commands.enableOpencodeUser");
+	} catch {
+		return true;
+	}
+}
+
+async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
+	if (!readOpencodeCommandsEnabled()) return { items: [], warnings: [] };
+	const userCommandsDir = getUserPath(ctx, "opencode", "commands");
+	if (!userCommandsDir) return { items: [], warnings: [] };
+
+	return await loadFilesFromDir(userCommandsDir, PROVIDER_ID, "user", {
+		extensions: ["md"],
+		transform: (name: string, content: string, filePath: string, source: SourceMeta) => {
+			const { frontmatter, body } = parseFrontmatter(content, { source: filePath });
+			const commandName = frontmatter.name || name.replace(/\.md$/, "");
+			return {
+				name: String(commandName),
+				path: filePath,
+				content: body,
+				level: "user" as const,
+				_source: source,
+			};
+		},
+	});
+}
+
+// =============================================================================
+// Provider Registration
+// =============================================================================
+
+registerProvider(contextFileCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "Load AGENTS.md from ~/.config/opencode/",
+	priority: PRIORITY,
+	load: loadContextFiles,
+});
+
+registerProvider(mcpCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "Load MCP servers from opencode.json mcp key",
+	priority: PRIORITY,
+	load: loadMCPServers,
+});
+
+registerProvider(skillCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "Load skills from ~/.config/opencode/skills/ and .opencode/skills/",
+	priority: PRIORITY,
+	load: loadSkills,
+});
+
+registerProvider(extensionModuleCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "Load extension modules from ~/.config/opencode/plugins/ and .opencode/plugins/",
+	priority: PRIORITY,
+	load: loadExtensionModules,
+});
+
+registerProvider(slashCommandCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "Load slash commands from ~/.config/opencode/commands/ and .opencode/commands/",
+	priority: PRIORITY,
+	load: loadSlashCommands,
+});

@@ -1,0 +1,344 @@
+import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
+import { DeferredMCPTool, MCPTool, type MCPToolDefinition } from "@veyyon/coding-agent/mcp";
+import type { MCPServerConnection } from "@veyyon/coding-agent/mcp/types";
+import { TempDir } from "@veyyon/utils";
+import { INTENT_FIELD } from "@veyyon/wire";
+import { createMockConnection, createMockTransport } from "./helpers/mcp-mocks";
+
+type CapturedRequest = {
+	method: string;
+	params: Record<string, unknown> | undefined;
+};
+
+const unusedContext = {} as CustomToolContext;
+
+function createSearchToolDefinition(): MCPToolDefinition {
+	return {
+		name: "search",
+		description: "Search symbols or file locations",
+		inputSchema: {
+			type: "object",
+			properties: {
+				symbol: { type: "string" },
+				language: { type: "string" },
+				file: { type: "string" },
+				line: { type: "number" },
+				column: { type: "number" },
+				filters: { type: "object" },
+				exact: { type: "boolean" },
+			},
+			required: ["symbol", "language"],
+		},
+	};
+}
+
+function createCapturedConnection(calls: CapturedRequest[]): MCPServerConnection {
+	const transport = createMockTransport(
+		new Map([["tools/call", [{ content: [{ type: "text", text: "ok" }] }]]]),
+		(method, params) => calls.push({ method, params }),
+	);
+	return createMockConnection({ tools: {} }, transport);
+}
+
+const imageToolDefinition: MCPToolDefinition = {
+	name: "read_image_with_model",
+	description: "Read an image from a local filesystem path",
+	inputSchema: {
+		type: "object",
+		properties: {
+			image_path: { type: "string" },
+		},
+		required: ["image_path"],
+	},
+};
+
+async function createLocalImageContext(
+	tempDir: TempDir,
+): Promise<{ context: CustomToolContext; expectedPath: string }> {
+	const artifactsDir = tempDir.join("artifacts");
+	const writtenPath = path.join(artifactsDir, "local", "image-issue.png");
+	await Bun.write(writtenPath, "png bytes");
+	const expectedPath = await fs.realpath(writtenPath);
+	return {
+		context: {
+			localProtocolOptions: {
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "session-id",
+			},
+		} as CustomToolContext,
+		expectedPath,
+	};
+}
+
+describe("MCP tool arguments", () => {
+	it("omits optional empty placeholders before tools/call", async () => {
+		const calls: CapturedRequest[] = [];
+		const tool = new MCPTool(createCapturedConnection(calls), createSearchToolDefinition());
+
+		await tool.execute(
+			"call-1",
+			{ symbol: "Foo", language: "", file: "", line: 0, filters: {}, exact: false },
+			undefined,
+			unusedContext,
+			undefined,
+		);
+
+		expect(calls).toEqual([
+			{
+				method: "tools/call",
+				params: {
+					name: "search",
+					arguments: { symbol: "Foo", language: "", line: 0, exact: false },
+				},
+			},
+		]);
+	});
+
+	it("omits optional empty placeholders for deferred MCP tools", async () => {
+		const calls: CapturedRequest[] = [];
+		const connection = createCapturedConnection(calls);
+		const tool = new DeferredMCPTool("intellij-index", createSearchToolDefinition(), async () => connection);
+
+		await tool.execute(
+			"call-1",
+			{ symbol: "Foo", language: "TypeScript", file: "", column: "", filters: {} },
+			undefined,
+			unusedContext,
+			undefined,
+		);
+
+		expect(calls).toEqual([
+			{
+				method: "tools/call",
+				params: {
+					name: "search",
+					arguments: { symbol: "Foo", language: "TypeScript" },
+				},
+			},
+		]);
+	});
+
+	it("strips the harness intent field before tools/call", async () => {
+		// Regression: the harness injects `i` into every tool's wire schema and
+		// the eval `tool.*` bridge forwards it verbatim. Strict-schema MCP
+		// servers (e.g. Linear) reject every such call with
+		// `unrecognized_keys: ["i"]`. The MCP boundary owns the contract; `i`
+		// must never reach `tools/call`.
+		const calls: CapturedRequest[] = [];
+		const tool = new MCPTool(createCapturedConnection(calls), createSearchToolDefinition());
+
+		await tool.execute(
+			"call-1",
+			{ [INTENT_FIELD]: "looking up Foo", symbol: "Foo", language: "TypeScript", file: "" },
+			undefined,
+			unusedContext,
+			undefined,
+		);
+
+		expect(calls).toEqual([
+			{
+				method: "tools/call",
+				params: { name: "search", arguments: { symbol: "Foo", language: "TypeScript" } },
+			},
+		]);
+	});
+
+	it("strips the harness intent field for deferred MCP tools", async () => {
+		const calls: CapturedRequest[] = [];
+		const connection = createCapturedConnection(calls);
+		const tool = new DeferredMCPTool("intellij-index", createSearchToolDefinition(), async () => connection);
+
+		await tool.execute(
+			"call-1",
+			{ [INTENT_FIELD]: "deferred lookup", symbol: "Bar", language: "TypeScript" },
+			undefined,
+			unusedContext,
+			undefined,
+		);
+
+		expect(calls).toEqual([
+			{
+				method: "tools/call",
+				params: { name: "search", arguments: { symbol: "Bar", language: "TypeScript" } },
+			},
+		]);
+	});
+
+	it("preserves `i` when the server's own schema declares it", async () => {
+		// A server that legitimately exposes `i` as one of its parameters
+		// must receive the caller-supplied value untouched. The boundary
+		// guard checks the server's declared `properties` and steps aside.
+		const calls: CapturedRequest[] = [];
+		const definition: MCPToolDefinition = {
+			name: "echo",
+			description: "Echo a single token",
+			inputSchema: {
+				type: "object",
+				properties: { i: { type: "string" } },
+				required: ["i"],
+			},
+		};
+		const tool = new MCPTool(createCapturedConnection(calls), definition);
+
+		await tool.execute("call-1", { i: "hello" }, undefined, unusedContext, undefined);
+
+		expect(calls).toEqual([{ method: "tools/call", params: { name: "echo", arguments: { i: "hello" } } }]);
+	});
+
+	it("resolves local image arguments before forwarding tools/call", async () => {
+		using tempDir = TempDir.createSync("@pi-mcp-local-image-");
+		const calls: CapturedRequest[] = [];
+		const { context, expectedPath } = await createLocalImageContext(tempDir);
+		const tool = new MCPTool(createCapturedConnection(calls), imageToolDefinition);
+
+		await tool.execute("call-1", { image_path: "local://image-issue.png" }, undefined, context, undefined);
+
+		expect(calls).toEqual([
+			{
+				method: "tools/call",
+				params: { name: "read_image_with_model", arguments: { image_path: expectedPath } },
+			},
+		]);
+	});
+
+	it("expands local URLs before recursively transforming nested string keys and values", async () => {
+		using tempDir = TempDir.createSync("@pi-mcp-provider-boundary-");
+		const calls: CapturedRequest[] = [];
+		const { context, expectedPath } = await createLocalImageContext(tempDir);
+		const transformedInputs: string[] = [];
+		context.obfuscateProviderText = text => {
+			transformedInputs.push(text);
+			return `safe:${text}`;
+		};
+		const rawArgs = {
+			image_path: "local://image-issue.png",
+			nested_secret: { hidden_key: "hidden_value" },
+			list: ["list_value"],
+		};
+		const tool = new MCPTool(createCapturedConnection(calls), imageToolDefinition);
+
+		await tool.execute("call-1", rawArgs, undefined, context, undefined);
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.params?.arguments).toEqual({
+			"safe:image_path": `safe:${expectedPath}`,
+			"safe:nested_secret": { "safe:hidden_key": "safe:hidden_value" },
+			"safe:list": ["safe:list_value"],
+		});
+		expect(transformedInputs).toContain(expectedPath);
+		expect(transformedInputs).not.toContain("local://image-issue.png");
+		expect(rawArgs).toEqual({
+			image_path: "local://image-issue.png",
+			nested_secret: { hidden_key: "hidden_value" },
+			list: ["list_value"],
+		});
+	});
+
+	it("does not send MCPTool requests or expose raw input when the transform rejects", async () => {
+		const rawSecret = "mcp-raw-secret";
+		const calls: CapturedRequest[] = [];
+		const context = {
+			obfuscateProviderText: (text: string) => {
+				if (text === rawSecret) throw new Error(`cannot transform ${rawSecret}`);
+				return text;
+			},
+		} as CustomToolContext;
+		const tool = new MCPTool(createCapturedConnection(calls), imageToolDefinition);
+
+		const result = await tool.execute("call-1", { image_path: rawSecret }, undefined, context, undefined);
+
+		expect(calls).toHaveLength(0);
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text:
+				'MCP tool "read_image_with_model" on server "test-server" failed: MCP tool call confidentiality transform failed.\n' +
+				"Next step: retry this call at most once. A transport, auth or configuration failure returns the same error " +
+				"on every attempt, so a retry loop costs turns and changes nothing. If a second attempt fails, stop calling " +
+				"this tool and tell the operator what failed, which server it was on, and the fix named above.",
+		});
+		expect(JSON.stringify(result)).not.toContain(rawSecret);
+	});
+	it("suppresses a remote isError payload that reflects raw nested arguments", async () => {
+		const rawSecret = "mcp-reflected-raw-secret";
+		const transport = createMockTransport(
+			new Map([
+				[
+					"tools/call",
+					[
+						{
+							content: [{ type: "text", text: `server rejected ${rawSecret}` }],
+							isError: true,
+						},
+					],
+				],
+			]),
+		);
+		const tool = new MCPTool(createMockConnection({ tools: {} }, transport), imageToolDefinition);
+		const context = {
+			obfuscateProviderText: (text: string) => text.replaceAll(rawSecret, "safe-secret"),
+		} as CustomToolContext;
+
+		const result = await tool.execute(
+			"call-reflected-error",
+			{ nested: { image_path: rawSecret } },
+			undefined,
+			context,
+		);
+
+		// The withheld case used to read "Error: MCP tool call failed.", which named
+		// no server, no tool, and did not say anything had been withheld, so the
+		// model read it as a transport fault and retried. It now says what was
+		// suppressed and why, and that changing the arguments is the way forward.
+		expect(result.content[0]?.type).toBe("text");
+		const withheld = result.content[0] as { type: "text"; text: string };
+		expect(withheld.text).toStartWith('MCP tool "read_image_with_model" on server "test-server" failed: ');
+		expect(withheld.text).toContain(
+			"the server reported an error whose text echoed this call's arguments, so it was withheld to keep credentials out of the transcript. Change the arguments and call again, or ask the operator to check the server's own logs.",
+		);
+		expect(withheld.text).toContain("Next step: retry this call at most once.");
+		expect(result.details?.rawContent).toBeUndefined();
+		expect(JSON.stringify(result)).not.toContain(rawSecret);
+	});
+
+	it("delivers an isError payload that names only an argument key, not a value", async () => {
+		// A server that rejects a call names the field it rejected. The field name
+		// comes from the tool schema, which the model already holds, so nothing is
+		// protected by withholding it, and the old check withheld exactly this.
+		const transport = createMockTransport(
+			new Map([
+				[
+					"tools/call",
+					[{ content: [{ type: "text", text: "image_path must be an absolute path" }], isError: true }],
+				],
+			]),
+		);
+		const tool = new MCPTool(createMockConnection({ tools: {} }, transport), imageToolDefinition);
+		const context = { obfuscateProviderText: (text: string) => text } as CustomToolContext;
+
+		const result = await tool.execute("call-key-only", { image_path: "./relative.png" }, undefined, context);
+
+		const delivered = result.content[0] as { type: "text"; text: string };
+		expect(delivered.text).toContain("image_path must be an absolute path");
+		expect(delivered.text).not.toContain("withheld");
+	});
+
+	it("waits for DeferredMCPTool connection resolution before using the live transform", async () => {
+		const rawSecret = "deferred-raw-secret";
+		const calls: CapturedRequest[] = [];
+		const context = {
+			obfuscateProviderText: (text: string) => text,
+		} as CustomToolContext;
+		const connection = createCapturedConnection(calls);
+		const tool = new DeferredMCPTool("test-server", imageToolDefinition, async () => {
+			context.obfuscateProviderText = text => text.replaceAll(rawSecret, "deferred-safe");
+			return connection;
+		});
+
+		await tool.execute("call-1", { image_path: rawSecret }, undefined, context, undefined);
+
+		expect(calls[0]?.params?.arguments).toEqual({ image_path: "deferred-safe" });
+	});
+});

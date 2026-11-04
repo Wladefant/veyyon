@@ -1,0 +1,11 @@
+{
+	"trigger_name": "Veyyon Cloudflare remote CI",
+	"build_command": "bash ci/cloudflare/lane-tests.sh",
+	"deploy_command": "npx wrangler@4 versions upload --config ci/cloudflare/wrangler.jsonc",
+	"root_directory": "/",
+	"branch_includes": ["*"],
+	"branch_excludes": ["main"],
+	"path_includes": ["*"],
+	"path_excludes": [],
+	"build_caching_enabled": true
+}

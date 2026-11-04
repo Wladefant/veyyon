@@ -1,0 +1,78 @@
+// Fills the usage-provider registry that `auth-storage.ts` consults. The credential store no
+// longer imports the eleven backends itself, so SOMETHING has to, and the barrel is where every
+// consumer of `AuthStorage` from this package already arrives. Without it the registry refuses to
+// answer rather than reporting no usage for everything -- see `usage/registry.ts`.
+import "./usage/defaults";
+// The barrel hands out Zod (`z` below), so it installs the converter `zodToWireSchema` uses for a
+// schema that has no `toJSONSchema` method of its own (`zod/mini`).
+import "./utils/schema/zod-core";
+
+export type { Type } from "arktype";
+export { type ZodType, z } from "zod/v4";
+export * from "./api-registry";
+export type * from "./auth-broker";
+export {
+	isRefreshFailureDisableCause,
+	isSqliteBusyError,
+	OAUTH_REFRESH_FAILURE_DISABLE_PREFIX,
+} from "./auth-credential-rows";
+export type * from "./auth-gateway/dispatch";
+export type { AuthGatewayBootOptions, ModelResolver } from "./auth-gateway/dispatch";
+export * from "./auth-gateway/types";
+export * from "./auth-retry";
+export * from "./auth-storage";
+export * from "./auth-storage-sqlite";
+export * from "./env-api-key";
+export * from "./error/rate-limit";
+export * from "./instrumentation";
+export * from "./provider-details";
+export { configureProviderMaxInFlightRequests } from "./provider-inflight-limits";
+export * from "./providers/anthropic";
+export * from "./providers/anthropic-client";
+export * from "./providers/anthropic-session-state";
+export * from "./providers/anthropic-tool-schema";
+export * from "./providers/azure-openai-responses";
+export * from "./providers/claude-device-id";
+export type * from "./providers/cursor";
+export * from "./providers/gitlab-duo";
+export * from "./providers/gitlab-duo-workflow";
+export type * from "./providers/google";
+export type * from "./providers/google-gemini-cli";
+export type * from "./providers/google-vertex";
+export * from "./providers/kimi";
+export * from "./providers/mock";
+export * from "./providers/ollama";
+export * from "./providers/openai-codex/session-state";
+export * from "./providers/openai-codex-responses";
+export * from "./providers/openai-completions";
+export * from "./providers/openai-responses";
+export * from "./providers/synthetic";
+export * from "./registry";
+export * from "./stream";
+export * from "./types";
+export * from "./usage";
+export * from "./usage/anthropic-reset";
+export * from "./usage/claude";
+export * from "./usage/cursor";
+export * from "./usage/gemini";
+export * from "./usage/github-copilot";
+export * from "./usage/google-antigravity";
+export * from "./usage/kimi";
+export * from "./usage/minimax-code";
+export * from "./usage/ollama";
+export * from "./usage/openai-codex";
+export * from "./usage/openai-codex-predictions";
+export * from "./usage/openai-codex-reset";
+export * from "./usage/opencode-go";
+export * from "./usage/zai";
+export * from "./utils/anthropic-auth";
+export * from "./utils/event-stream";
+export * from "./utils/message-text";
+export * from "./utils/opencode-headers";
+export * from "./utils/openrouter-headers";
+export * from "./utils/retry";
+export * from "./utils/schema";
+export { type } from "./utils/schema/arktype";
+export * from "./utils/thinking-loop";
+export * from "./utils/tool-call-loop-guard";
+export * from "./utils/validation";

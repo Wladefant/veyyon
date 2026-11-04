@@ -1,0 +1,312 @@
+import { beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { buildSystemPrompt as buildSdkSystemPrompt } from "@veyyon/coding-agent/session/factory-prompt";
+import {
+	buildSystemPrompt,
+	buildSystemPromptToolMetadata,
+	type SystemPromptToolMetadata,
+} from "@veyyon/coding-agent/system-prompt";
+import { createTools, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
+import { useTempHome } from "./helpers/temp-home";
+import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
+
+// Tracked temp directories: the factory deletes what it made when this file finishes.
+// These call sites used a bare `mkdtempSync` with no teardown, so every run left the
+// directory in `/tmp` forever. Cleanup is attached to creation so a new case cannot
+// reintroduce the leak by forgetting an `afterAll`.
+const makePiPromptInvDir = useTrackedTempDirs("pi-prompt-inv-");
+
+const EMPTY_TREE = {
+	rootPath: "",
+	rendered: "",
+	truncated: false,
+	totalLines: 0,
+	agentsMdFiles: [],
+};
+
+const TOOLS = new Map<string, SystemPromptToolMetadata>([
+	[
+		"read",
+		{
+			label: "Read",
+			description: "Reads files from disk.",
+			parameters: { type: "object", properties: { path: { type: "string" } } },
+		},
+	],
+	[
+		"bash",
+		{
+			label: "Bash",
+			description: "Executes a shell command.",
+			parameters: { type: "object", properties: { command: { type: "string" } } },
+		},
+	],
+]);
+
+const SDK_TOOL: Tool = {
+	name: "sdk_custom",
+	label: "SDK Custom",
+	description: "SDK-provided custom tool.",
+	parameters: { type: "object", properties: {} },
+	approval: "read",
+	async execute() {
+		return { content: [{ type: "text", text: "ok" }] };
+	},
+};
+
+describe("system prompt tool inventory", () => {
+	let tempDir = "";
+
+	// The config root moves with HOME, not just the variable: the assembled prompt reads
+	// the global `AGENTS.md` from a path built on `os.homedir()`, so a bare
+	// `process.env.HOME` assignment left this suite rendering the developer's real one.
+	useTempHome();
+
+	beforeEach(() => {
+		tempDir = makePiPromptInvDir();
+	});
+
+	async function render(opts: { nativeTools: boolean; inlineToolDescriptors: boolean }): Promise<string> {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read", "bash"],
+			tools: TOOLS,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			nativeTools: opts.nativeTools,
+			inlineToolDescriptors: opts.inlineToolDescriptors,
+		});
+		return systemPrompt.join("\n\n");
+	}
+
+	function makeToolSession(settings: Settings): ToolSession {
+		return {
+			cwd: tempDir,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings,
+		} as ToolSession;
+	}
+
+	it("honours schema and example metadata overrides", () => {
+		// All fields admitted by the override type must win. Silently retaining
+		// the tool's originals makes verbose prompt descriptors disagree with the caller.
+		const originalParameters = { type: "object", properties: { old: { type: "string" } } } as const;
+		const replacementParameters = { type: "object", properties: { current: { type: "number" } } } as const;
+		const originalExamples = [{ call: { old: "value" } }];
+		const replacementExamples = [{ call: { current: 1 } }];
+		const tool = {
+			...SDK_TOOL,
+			parameters: originalParameters,
+			examples: originalExamples,
+		};
+
+		const metadata = buildSystemPromptToolMetadata(new Map([[tool.name, tool]]), {
+			[tool.name]: {
+				parameters: replacementParameters,
+				examples: replacementExamples,
+			},
+		}).get(tool.name);
+
+		expect(metadata?.parameters).toBe(replacementParameters);
+		expect(metadata?.examples).toBe(replacementExamples);
+	});
+
+	it("omits the redundant inventory when native schemas are the descriptor source", async () => {
+		const text = await render({ nativeTools: true, inlineToolDescriptors: false });
+		expect(text).not.toContain("# Tool Inventory");
+		expect(text).not.toContain("- Read: `read`");
+		expect(text).not.toContain("- Bash: `bash`");
+		expect(text).not.toContain("# Tool: read");
+		expect(text).not.toContain("Reads files from disk.");
+	});
+
+	it("renders `# Tool:` sections (not a name list) when tools are not native", async () => {
+		const text = await render({ nativeTools: false, inlineToolDescriptors: false });
+		expect(text).toContain("# Tool: read");
+		expect(text).toContain("# Tool: bash");
+		expect(text).toContain("Reads files from disk.");
+		expect(text).not.toContain("- Read: `read`");
+		// The legacy `<tool>` wrapper is gone.
+		expect(text).not.toContain("<tool name=");
+	});
+
+	it("renders `# Tool:` sections when descriptors are inlined even with native tools", async () => {
+		const text = await render({ nativeTools: true, inlineToolDescriptors: true });
+		expect(text).toContain("# Tool: read");
+		expect(text).toContain("Executes a shell command.");
+		expect(text).not.toContain("- Read: `read`");
+	});
+
+	it("does not synthesize a native name inventory when no tools map is provided", async () => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		const text = systemPrompt.join("\n\n");
+		expect(text).not.toContain("# Tool Inventory");
+	});
+
+	it("omits eval prompt guidance when every eval backend is disabled", async () => {
+		const settings = Settings.isolated({
+			"eval.py": false,
+			"eval.js": false,
+			"eval.rb": false,
+			"eval.jl": false,
+		});
+		const session = makeToolSession(settings);
+		const tools = await createTools(session, ["bash", "eval"]);
+		const toolNames = tools.map(tool => tool.name);
+		const bash = tools.find(tool => tool.name === "bash");
+
+		expect(toolNames).toContain("bash");
+		expect(toolNames).not.toContain("eval");
+		expect(bash?.description).toContain("purpose-built tool");
+		expect(bash?.description).not.toContain("eval` cell");
+		expect(bash?.description).not.toContain("use `eval` cells");
+		expect(bash?.description).not.toContain("Prefer `eval`");
+		expect(bash?.description).not.toContain("`grep` tool");
+		expect(bash?.description).not.toContain("`ls` → `read`");
+		expect(bash?.description).not.toContain("`find` → the `glob` tool");
+
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames,
+			tools: buildSystemPromptToolMetadata(new Map(tools.map(tool => [tool.name, tool]))),
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			nativeTools: true,
+			inlineToolDescriptors: true,
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).not.toContain("Default for any compute");
+		expect(text).not.toContain("use `eval` cells");
+	});
+
+	it("SDK wrapper also leaves native tool names to provider schemas", async () => {
+		const { systemPrompt } = await buildSdkSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			tools: [SDK_TOOL],
+		});
+		const text = systemPrompt.join("\n\n");
+		expect(text).not.toContain("# Tool Inventory");
+		expect(text).not.toContain("- SDK Custom: `sdk_custom`");
+	});
+
+	it("SDK wrapper preserves an explicit empty tool list", async () => {
+		const { systemPrompt } = await buildSdkSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			tools: [],
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).not.toContain("# Inventory");
+		expect(text).not.toContain("- `read`");
+	});
+
+	it("keeps visible skills when no tools map is provided", async () => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [
+				{
+					name: "prompt-authoring",
+					description: "Prompt authoring workflow",
+					filePath: path.join(tempDir, "SKILL.md"),
+					baseDir: tempDir,
+					source: "test",
+				},
+			],
+			rules: [],
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).toContain("- prompt-authoring: Prompt authoring workflow");
+	});
+
+	it("omits skills when active tool names exclude read", async () => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [
+				{
+					name: "search-only-skill",
+					description: "Should not render without read",
+					filePath: path.join(tempDir, "SKILL.md"),
+					baseDir: tempDir,
+					source: "test",
+				},
+			],
+			rules: [],
+			toolNames: ["bash"],
+			tools: TOOLS,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).not.toContain("search-only-skill");
+	});
+
+	it("omits hidden skills even when read is active", async () => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [
+				{
+					name: "hidden-workflow",
+					description: "Hidden prompt workflow",
+					filePath: path.join(tempDir, "SKILL.md"),
+					baseDir: tempDir,
+					source: "test",
+					hide: true,
+				},
+			],
+			rules: [],
+			toolNames: ["read"],
+			tools: TOOLS,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).not.toContain("hidden-workflow");
+	});
+
+	it("tells the agent to read matching skills before work", async () => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [
+				{
+					name: "frontend-design",
+					description: "Frontend UI workflow",
+					filePath: path.join(tempDir, "SKILL.md"),
+					baseDir: tempDir,
+					source: "test",
+				},
+			],
+			rules: [],
+			toolNames: ["read"],
+			tools: TOOLS,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).toContain("<skills>");
+		expect(text).toContain("- frontend-design: Frontend UI workflow");
+	});
+});

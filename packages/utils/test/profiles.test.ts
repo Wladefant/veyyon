@@ -1,0 +1,669 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as url from "node:url";
+import {
+	__resetDirsFromEnvForTests,
+	__resetProfileSnapshotForTests,
+	APP_NAME,
+	assertRemovableProfileDir,
+	captureDirOverrides,
+	DEFAULT_PROFILE_DIR_NAME,
+	type DirOverridesSnapshot,
+	getActiveProfile,
+	getActiveProfileOrDefault,
+	getAgentDbPath,
+	getAgentDir,
+	getConfigAgentDirName,
+	getConfigRootDir,
+	getProfileRootDir,
+	getPythonGatewayDir,
+	getSessionsDir,
+	getStatsDbPath,
+	listProfiles,
+	normalizeProfileName,
+	profileExists,
+	resolveProfileEnv,
+	restoreDirOverrides,
+	setAgentDir,
+	setProfile,
+} from "@veyyon/utils/dirs";
+import { withoutComments } from "@veyyon/utils/module-reach";
+import { Snowflake } from "@veyyon/utils/snowflake";
+import { stringConstantsIn } from "@veyyon/utils/source-declarations";
+import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "./helpers/isolated-config-root";
+
+async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+		return text + decoder.decode();
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+describe("profile directories", () => {
+	let tempRoot = "";
+	let isolated: IsolatedConfigRoot | undefined;
+	/** The absolute config root for the current test, and the relative value the resolver
+	 * was given. Both are asserted: one names paths on disk, the other is what
+	 * `getConfigAgentDirName()` returns. */
+	let configRoot = "";
+	let configDirName = "";
+	let dirOverrides: DirOverridesSnapshot | undefined;
+	let originalXdgDataHome: string | undefined;
+	let originalXdgStateHome: string | undefined;
+	let originalXdgCacheHome: string | undefined;
+
+	beforeEach(async () => {
+		// One snapshot of everything the dirs module keys off, including the invisible
+		// pre-profile baseline. Hand-rolled restores of the agent dir and the profile
+		// name cannot put that baseline back, and this file leaked its active profile
+		// into every suite that ran after it as a result.
+		dirOverrides = captureDirOverrides();
+		originalXdgDataHome = process.env.XDG_DATA_HOME;
+		originalXdgStateHome = process.env.XDG_STATE_HOME;
+		originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+		tempRoot = mkdtempSync(path.join(os.tmpdir(), "veyyon-utils-profiles-"));
+		// A temp root, not a dot-directory NAME under the real home: the name form writes
+		// profile trees into the developer's actual home whenever this runs outside the
+		// test runner's sandboxed HOME, which is how most suites are run while working.
+		isolated = enterIsolatedConfigRoot("profiles");
+		configRoot = isolated.root;
+		configDirName = isolated.envValue;
+		await fs.mkdir(tempRoot, { recursive: true });
+		// Other suites that run before this one (e.g. dirs-python-gateway) may have
+		// called `setAgentDir`, which permanently mutates the module-level
+		// pre-profile snapshot. Reset it here so each test starts from a clean
+		// `VEYYON_CODING_AGENT_DIR` baseline matching the env we just configured.
+		delete process.env.VEYYON_CODING_AGENT_DIR;
+		__resetProfileSnapshotForTests();
+		delete process.env.XDG_DATA_HOME;
+		delete process.env.XDG_STATE_HOME;
+		delete process.env.XDG_CACHE_HOME;
+	});
+
+	afterEach(async () => {
+		setProfile(undefined);
+		if (originalXdgDataHome === undefined) {
+			delete process.env.XDG_DATA_HOME;
+		} else {
+			process.env.XDG_DATA_HOME = originalXdgDataHome;
+		}
+		if (originalXdgStateHome === undefined) {
+			delete process.env.XDG_STATE_HOME;
+		} else {
+			process.env.XDG_STATE_HOME = originalXdgStateHome;
+		}
+		if (originalXdgCacheHome === undefined) {
+			delete process.env.XDG_CACHE_HOME;
+		} else {
+			process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+		}
+		await fs.rm(tempRoot, { recursive: true, force: true });
+		// The config root comes back FIRST, then the overrides: `restore()` re-derives
+		// the profile and every path from the environment, so undoing the overrides
+		// before it would hand it the wrong baseline to re-derive from.
+		isolated?.restore();
+		isolated = undefined;
+		if (dirOverrides !== undefined) restoreDirOverrides(dirOverrides);
+		dirOverrides = undefined;
+	});
+
+	it("moves agent and root data under the named profile root", () => {
+		setProfile("work");
+
+		const root = path.join(configRoot, "profiles", "work");
+		const agent = path.join(root, "agent");
+		expect(getActiveProfile()).toBe("work");
+		expect(getConfigRootDir()).toBe(root);
+		expect(getConfigAgentDirName()).toBe(path.join(configDirName, "profiles", "work", "agent"));
+		expect(getAgentDir()).toBe(agent);
+		expect(getAgentDbPath()).toBe(path.join(agent, "agent.db"));
+		expect(getSessionsDir()).toBe(path.join(agent, "sessions"));
+		expect(getStatsDbPath()).toBe(path.join(root, "stats.db"));
+	});
+
+	it("treats the default profile as regular mode", () => {
+		setProfile("default");
+
+		const root = path.join(configRoot, "profiles", "default");
+		expect(getActiveProfile()).toBeUndefined();
+		expect(getConfigRootDir()).toBe(root);
+		expect(getAgentDir()).toBe(path.join(root, "agent"));
+	});
+
+	it("lists default and named profiles", async () => {
+		const root = configRoot;
+		await fs.mkdir(path.join(root, "profiles", "work", "agent"), { recursive: true });
+		const listed = listProfiles();
+		expect(listed.map(profile => profile.name)).toEqual(["default", "work"]);
+		expect(listed.find(profile => profile.name === "work")?.rootDir).toBe(path.join(root, "profiles", "work"));
+	});
+
+	it("reports profile existence", async () => {
+		expect(profileExists("default")).toBe(false);
+		const root = configRoot;
+		await fs.mkdir(path.join(root, "profiles", "work"), { recursive: true });
+		expect(profileExists("work")).toBe(true);
+	});
+
+	it("keeps XDG-backed named profile state under profile-specific roots", async () => {
+		if (process.platform === "win32") return;
+
+		process.env.XDG_DATA_HOME = path.join(tempRoot, "data");
+		process.env.XDG_STATE_HOME = path.join(tempRoot, "state");
+		process.env.XDG_CACHE_HOME = path.join(tempRoot, "cache");
+		// Named profiles only adopt XDG when their *own* XDG path already exists,
+		// so the profile location stays stable across activations.
+		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, APP_NAME, "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, APP_NAME, "profiles", "work"), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, APP_NAME, "profiles", "work"), { recursive: true });
+
+		setProfile("work");
+
+		expect(getAgentDbPath()).toBe(path.join(process.env.XDG_DATA_HOME, APP_NAME, "profiles", "work", "agent.db"));
+		expect(getSessionsDir()).toBe(path.join(process.env.XDG_DATA_HOME, APP_NAME, "profiles", "work", "sessions"));
+		expect(getPythonGatewayDir()).toBe(
+			path.join(process.env.XDG_STATE_HOME, APP_NAME, "profiles", "work", "python-gateway"),
+		);
+	});
+
+	it("does not silently switch a named profile to XDG once the base app dir appears", async () => {
+		if (process.platform === "win32") return;
+
+		process.env.XDG_DATA_HOME = path.join(tempRoot, "data");
+		process.env.XDG_STATE_HOME = path.join(tempRoot, "state");
+		process.env.XDG_CACHE_HOME = path.join(tempRoot, "cache");
+
+		// Fresh install: XDG vars are set (typical Linux) but no $XDG/veyyon exists yet.
+		// First activation must land in ~/<config-dir>/profiles/work because
+		// the profile-specific XDG path does not exist.
+		setProfile("work");
+		const firstAgentDir = getAgentDir();
+		expect(firstAgentDir).toBe(path.join(configRoot, "profiles", "work", "agent"));
+
+		// Later, the base XDG app dir materializes (e.g. via `veyyon config init-xdg`
+		// migrating only the default-profile data). The named profile must stay
+		// in its original location until the user explicitly migrates it.
+		await fs.mkdir(path.join(process.env.XDG_DATA_HOME, APP_NAME), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_STATE_HOME, APP_NAME), { recursive: true });
+		await fs.mkdir(path.join(process.env.XDG_CACHE_HOME, APP_NAME), { recursive: true });
+
+		setProfile(undefined);
+		setProfile("work");
+		expect(getAgentDir()).toBe(firstAgentDir);
+	});
+
+	it("rejects path-like profile names", () => {
+		expect(() => setProfile("../work")).toThrow("Invalid profile");
+		expect(() => setProfile("work/team")).toThrow("Invalid profile");
+	});
+
+	it("rejects trailing-dot profile names to avoid Windows path collisions", () => {
+		for (const name of ["work.", "work.."]) {
+			expect(() => setProfile(name)).toThrow("cannot end with");
+		}
+	});
+
+	it("restores the pre-profile VEYYON_CODING_AGENT_DIR override on reset", () => {
+		const customAgentDir = path.join(tempRoot, "custom-agent");
+		setAgentDir(customAgentDir);
+		expect(getAgentDir()).toBe(customAgentDir);
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBe(customAgentDir);
+
+		setProfile("work");
+		expect(getActiveProfile()).toBe("work");
+		expect(getAgentDir()).not.toBe(customAgentDir);
+
+		setProfile(undefined);
+		expect(getActiveProfile()).toBeUndefined();
+		// Critical: reset must restore the user's override, not delete it.
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBe(customAgentDir);
+		expect(getAgentDir()).toBe(customAgentDir);
+	});
+
+	it("clears VEYYON_CODING_AGENT_DIR on reset when nothing was set originally", () => {
+		delete process.env.VEYYON_CODING_AGENT_DIR;
+		// Force a baseline snapshot of "no override" via setProfile so a stale
+		// module-load snapshot from a previous test cannot leak in.
+		setProfile("work");
+		setProfile(undefined);
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBeUndefined();
+	});
+
+	it("propagates VEYYON_CODING_AGENT_DIR on profile switch and reset, never a legacy PI_ key", () => {
+		const customAgentDir = path.join(tempRoot, "propagate-agent");
+		setAgentDir(customAgentDir);
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBe(customAgentDir);
+		expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+
+		setProfile("work");
+		const workAgentDir = getAgentDir();
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBe(workAgentDir);
+		expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+
+		setProfile(undefined);
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBe(customAgentDir);
+		expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+	});
+
+	it("ignores a stray dropped PI_CODING_AGENT_DIR and honors VEYYON_CODING_AGENT_DIR", () => {
+		setProfile(undefined);
+		const veyyonDir = path.join(tempRoot, "veyyon-agent");
+		const strayPiDir = path.join(tempRoot, "pi-legacy-agent");
+		process.env.VEYYON_CODING_AGENT_DIR = veyyonDir;
+		process.env.PI_CODING_AGENT_DIR = strayPiDir;
+		try {
+			__resetDirsFromEnvForTests();
+			// The dropped PI_ alias is not read at all: the VEYYON_ override wins,
+			// and the stray PI_ value has zero effect on the resolved agent dir.
+			expect(getAgentDir()).toBe(veyyonDir);
+		} finally {
+			delete process.env.PI_CODING_AGENT_DIR;
+		}
+	});
+
+	it("honors VEYYON_CODING_AGENT_DIR alone as the agent-dir override", () => {
+		setProfile(undefined);
+		const veyyonDir = path.join(tempRoot, "veyyon-only-agent");
+		process.env.VEYYON_CODING_AGENT_DIR = veyyonDir;
+		__resetDirsFromEnvForTests();
+		expect(getAgentDir()).toBe(veyyonDir);
+	});
+
+	it("honors a custom agent dir outside profiles/ even when it is named agent", () => {
+		// Only `<configRoot>/profiles/<name>/agent` is profile-derived; any other path is the
+		// caller's explicit override and default mode keeps it.
+		setProfile(undefined);
+		const customDir = path.join(tempRoot, "profiles", "work", "agent");
+		process.env.VEYYON_CODING_AGENT_DIR = customDir;
+		__resetDirsFromEnvForTests();
+		expect(getAgentDir()).toBe(customDir);
+	});
+
+	it("rejects Windows reserved device names case-insensitively", () => {
+		for (const name of ["CON", "con", "PRN", "AUX", "NUL", "COM0", "COM9", "lpt1", "LPT9", "CON.txt", "com1.bak"]) {
+			expect(() => setProfile(name)).toThrow("Windows reserved device name");
+		}
+	});
+
+	it("does not restore a profile-derived agent dir as the default baseline", () => {
+		// Reproduces a child process that inherited VEYYON_PROFILE=work plus the
+		// profile-derived VEYYON_CODING_AGENT_DIR that setProfile propagates to
+		// children. The module-load snapshot must not capture that profile dir as
+		// the default baseline, or setProfile(undefined) would resolve default
+		// mode into the work profile's agent dir.
+		setProfile("work");
+		const workAgentDir = path.join(configRoot, "profiles", "work", "agent");
+		expect(getAgentDir()).toBe(workAgentDir);
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBe(workAgentDir);
+
+		// Re-snapshot exactly as module load would, now that VEYYON_PROFILE and the
+		// profile-derived VEYYON_CODING_AGENT_DIR are present in the environment.
+		__resetProfileSnapshotForTests();
+
+		setProfile(undefined);
+		expect(getActiveProfile()).toBeUndefined();
+		expect(process.env.VEYYON_CODING_AGENT_DIR).toBeUndefined();
+		expect(getAgentDir()).toBe(path.join(configRoot, "profiles", "default", "agent"));
+	});
+});
+
+describe("profile env + name validation", () => {
+	it("resolves a VEYYON_PROFILE value and treats empty/default as the default profile", () => {
+		// A concrete profile name resolves to itself.
+		expect(resolveProfileEnv("work")).toBe("work");
+		// Empty, whitespace-only, and the literal "default" all select the default
+		// profile (represented as undefined). A missing value is also the default.
+		expect(resolveProfileEnv("")).toBeUndefined();
+		expect(resolveProfileEnv("   ")).toBeUndefined();
+		expect(resolveProfileEnv("default")).toBeUndefined();
+		expect(resolveProfileEnv(undefined)).toBeUndefined();
+	});
+
+	it("rejects uppercase profile names so isolation is filesystem-independent", () => {
+		// `work` and `WORK` would collide on case-insensitive macOS/Windows but
+		// differ on Linux; reject uppercase to keep profile identity stable.
+		expect(() => normalizeProfileName("WORK")).toThrow("Invalid profile");
+		expect(() => normalizeProfileName("Work")).toThrow("Invalid profile");
+		expect(normalizeProfileName("work")).toBe("work");
+		expect(normalizeProfileName("work-2.0_a")).toBe("work-2.0_a");
+	});
+});
+
+describe("dirs module import behavior", () => {
+	it("does not scrub inherited macOS malloc logging env variables on import", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-utils-dirs-import-"));
+		try {
+			const probePath = path.join(root, "probe.ts");
+			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+			await Bun.write(
+				probePath,
+				[
+					`import ${JSON.stringify(dirsUrl)};`,
+					"process.stdout.write(JSON.stringify({",
+					"	malloc: process.env.MallocStackLogging,",
+					"	compact: process.env.MallocStackLoggingNoCompact,",
+					"}));",
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				MallocStackLogging: "0",
+				MallocStackLoggingNoCompact: "0",
+			};
+			const proc = Bun.spawn([process.execPath, probePath], {
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(exitCode, stderr).toBe(0);
+			expect(JSON.parse(stdout)).toEqual({
+				malloc: "0",
+				compact: "0",
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+	it("exposes worker-host without loading agent env", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-utils-worker-host-import-"));
+		try {
+			const workerHostUrl = import.meta.resolve("@veyyon/utils/worker-host");
+			const agentDir = path.join(root, "agent");
+			await fs.mkdir(agentDir, { recursive: true });
+			await Bun.write(path.join(agentDir, ".env"), "VEYYON_WORKER_HOST_PROBE=from-agent-env\n");
+			const probePath = path.join(root, "probe.ts");
+			await Bun.write(
+				probePath,
+				[
+					`import { declareWorkerHostEntry, workerHostEntry } from ${JSON.stringify(workerHostUrl)};`,
+					"declareWorkerHostEntry();",
+					"process.stdout.write(JSON.stringify({",
+					"	envProbe: process.env.VEYYON_WORKER_HOST_PROBE ?? null,",
+					"	hostDeclared: workerHostEntry() === Bun.main,",
+					"}));",
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				VEYYON_CODING_AGENT_DIR: agentDir,
+			};
+			delete childEnv.VEYYON_WORKER_HOST_PROBE;
+			const proc = Bun.spawn([process.execPath, probePath], {
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(exitCode, stderr).toBe(0);
+			expect(JSON.parse(stdout)).toEqual({
+				envProbe: null,
+				hostDeclared: true,
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves the default profile in a subprocess when VEYYON_PROFILE is empty or 'default'", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-utils-dirs-default-profile-"));
+		// The CHILD needs the isolation, and it inherits this process's environment, so the
+		// value has to work there: the child's own `os.homedir()` is the real home too, and a
+		// relative config-dir value reaches the temp root from it. A bare
+		// `.veyyon-default-profile-<id>` name (what this used to pass) made the CHILD create
+		// that directory in the real home, and the parent then removed it — real-home writes
+		// dressed up as isolation.
+		const probe = enterIsolatedConfigRoot("default-profile-probe");
+		try {
+			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+			const defaultAgentDir = path.join(probe.root, "profiles", "default", "agent");
+
+			// An explicitly-empty or literal "default" VEYYON_PROFILE both select the
+			// default profile; neither activates a named profile.
+			for (const veyyonProfile of ["", "default"]) {
+				const probePath = path.join(root, `default-profile-${veyyonProfile || "empty"}.ts`);
+				await Bun.write(
+					probePath,
+					[
+						`import { getActiveProfile, getAgentDir } from ${JSON.stringify(dirsUrl)};`,
+						"process.stdout.write(JSON.stringify({",
+						"	activeProfile: getActiveProfile() ?? null,",
+						"	agentDir: getAgentDir(),",
+						"}));",
+					].join("\n"),
+				);
+
+				const childEnv: Record<string, string | undefined> = {
+					...process.env,
+					VEYYON_CONFIG_DIR: probe.envValue,
+					VEYYON_PROFILE: veyyonProfile,
+				};
+				delete childEnv.VEYYON_CODING_AGENT_DIR;
+				const proc = Bun.spawn([process.execPath, probePath], {
+					stdout: "pipe",
+					stderr: "pipe",
+					env: childEnv,
+				});
+				const [stdout, stderr, exitCode] = await Promise.all([
+					readStream(proc.stdout as ReadableStream<Uint8Array>),
+					readStream(proc.stderr as ReadableStream<Uint8Array>),
+					proc.exited,
+				]);
+
+				expect(exitCode, stderr).toBe(0);
+				expect(JSON.parse(stdout)).toEqual({
+					activeProfile: null,
+					agentDir: defaultAgentDir,
+				});
+			}
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+			probe.restore();
+		}
+	});
+
+	it("honors XDG dir keys from a profile .env applied after the resolver froze", async () => {
+		if (process.platform === "win32") return;
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-utils-profile-env-xdg-"));
+		const homeDir = path.join(root, "home");
+		const xdgStateRoot = path.join(root, "xdg-state");
+		// A bare NAME is correct here, unlike everywhere else in this file: the child below
+		// gets `HOME: homeDir`, and a child process resolves `os.homedir()` from the HOME it
+		// is given, so the name is joined onto the temp home. Do NOT route this through
+		// `enterIsolatedConfigRoot` — that computes a value relative to the PARENT's real
+		// home, which is not where this child's home is.
+		const profileConfigDir = `.veyyon-env-xdg-${Snowflake.next()}`;
+		try {
+			const envUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "env.ts")).href;
+			const dirsUrl = url.pathToFileURL(path.join(import.meta.dir, "..", "src", "dirs.ts")).href;
+			const agentDir = path.join(homeDir, profileConfigDir, "profiles", "work", "agent");
+			await fs.mkdir(agentDir, { recursive: true });
+			// The profile's agent .env sets a directory-affecting key. env.ts parses
+			// and applies it to the environment *after* dirs.ts froze the resolver at
+			// import time — the exact ordering refreshDirsFromEnv() guards.
+			await Bun.write(path.join(agentDir, ".env"), `XDG_STATE_HOME=${xdgStateRoot}\n`);
+			// Named profiles only adopt XDG when their own XDG path already exists.
+			const xdgProfileRoot = path.join(xdgStateRoot, APP_NAME, "profiles", "work");
+			await fs.mkdir(xdgProfileRoot, { recursive: true });
+
+			const probePath = path.join(root, "probe.ts");
+			await Bun.write(
+				probePath,
+				[
+					`import ${JSON.stringify(envUrl)};`,
+					`import { getActiveProfile, getAgentDir, getPythonGatewayDir } from ${JSON.stringify(dirsUrl)};`,
+					"process.stdout.write(JSON.stringify({",
+					"	activeProfile: getActiveProfile() ?? null,",
+					"	agentDir: getAgentDir(),",
+					"	pythonGateway: getPythonGatewayDir(),",
+					"}));",
+				].join("\n"),
+			);
+
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				HOME: homeDir,
+				VEYYON_CONFIG_DIR: profileConfigDir,
+				VEYYON_PROFILE: "work",
+			};
+			delete childEnv.VEYYON_CODING_AGENT_DIR;
+			delete childEnv.XDG_DATA_HOME;
+			delete childEnv.XDG_STATE_HOME;
+			delete childEnv.XDG_CACHE_HOME;
+			const proc = Bun.spawn([process.execPath, probePath], {
+				cwd: root,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+
+			expect(exitCode, stderr).toBe(0);
+			// Before the fix the frozen resolver ignored the late XDG_STATE_HOME and
+			// python-gateway resolved under the home-based agent dir. After the fix
+			// it lands under the profile-specific XDG state root.
+			expect(JSON.parse(stdout)).toEqual({
+				activeProfile: "work",
+				agentDir: path.join(homeDir, profileConfigDir, "profiles", "work", "agent"),
+				pythonGateway: path.join(xdgProfileRoot, "python-gateway"),
+			});
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("profile path segment ownership", () => {
+	// `setProfile(undefined)` is NOT the inverse of activating a profile: it drops the
+	// caller's own profile too. This block used to end with it, so a run that started
+	// under a named profile (`VEYYON_PROFILE=work`) had that profile silently switched
+	// off for every suite that ran afterwards.
+	let dirOverrides: DirOverridesSnapshot | undefined;
+
+	beforeEach(() => {
+		dirOverrides = captureDirOverrides();
+	});
+
+	afterEach(() => {
+		if (dirOverrides !== undefined) restoreDirOverrides(dirOverrides);
+		dirOverrides = undefined;
+	});
+
+	it("getActiveProfileOrDefault returns the active profile, or the default name when none is active", () => {
+		setProfile(undefined);
+		expect(getActiveProfileOrDefault()).toBe(DEFAULT_PROFILE_DIR_NAME);
+		setProfile("work");
+		expect(getActiveProfileOrDefault()).toBe("work");
+		// The explicit "default" sentinel normalizes to the implicit default.
+		setProfile("default");
+		expect(getActiveProfileOrDefault()).toBe(DEFAULT_PROFILE_DIR_NAME);
+	});
+
+	it('dirs.ts builds every profile path from PROFILES_DIR_NAME, never a raw "profiles" literal', async () => {
+		// ONE PLACE lock: the profiles-directory segment has a single owner
+		// (PROFILES_DIR_NAME). A second raw "profiles" path literal reintroduced by
+		// a future path builder would drift on a rename, so the only permitted
+		// occurrence is the const declaration itself.
+		const dirsSource = await fs.readFile(path.join(import.meta.dir, "..", "src", "dirs.ts"), "utf-8");
+		// Code only, any quote style: prose naming the directory is not a path literal, and a
+		// single-quoted or template copy is the same drift as a double-quoted one.
+		const literals = withoutComments(dirsSource).match(/(["'`])profiles\1/g) ?? [];
+		expect(literals).toHaveLength(1);
+		expect(stringConstantsIn(dirsSource).filter(constant => constant.value === "profiles")).toEqual([
+			{ name: "PROFILES_DIR_NAME", value: "profiles", exported: true },
+		]);
+	});
+
+	/**
+	 * The fail-closed guard against wiping a whole profiles tree
+	 * (FINDING-HOST-PROFILE-DIR-DELETED-DURING-BENCH). A profile lifecycle
+	 * operation must only ever recursively remove a DIRECT child of the profiles
+	 * root; the guard throws for the profiles root itself, the config root, the
+	 * home directory, any path outside the tree, and any deeper nesting.
+	 *
+	 * Every boundary path is derived from `getProfileRootDir` so the test reads
+	 * the SAME config-root resolution the guard does under the sandboxed
+	 * VEYYON_CONFIG_DIR — no second copy of the layout to drift.
+	 */
+	describe("assertRemovableProfileDir", () => {
+		// profiles/work -> profilesRoot -> configRoot -> home, walked up from the resolver.
+		const workProfile = () => getProfileRootDir("work");
+		const profilesRoot = () => path.dirname(workProfile());
+		const configRoot = () => path.dirname(profilesRoot());
+		const homeRoot = () => path.dirname(configRoot());
+
+		it("allows removing a named profile directory (a direct child of the profiles root)", () => {
+			const target = workProfile();
+			// Returns the resolved path it validated, so the caller removes exactly that.
+			expect(assertRemovableProfileDir(target)).toBe(path.resolve(target));
+		});
+
+		it("allows removing a staging sibling (the dot-prefixed .tmp create uses)", () => {
+			const staging = path.join(profilesRoot(), `.work.${process.pid}.abcdef.tmp`);
+			expect(assertRemovableProfileDir(staging)).toBe(path.resolve(staging));
+		});
+
+		it("REFUSES the profiles root itself, so the whole tree can never be wiped", () => {
+			// This is the exact directory the bench run deleted; the guard makes it impossible.
+			expect(() => assertRemovableProfileDir(profilesRoot())).toThrow(/Refusing to recursively remove/);
+		});
+
+		it("REFUSES the config root (~/.veyyon)", () => {
+			expect(() => assertRemovableProfileDir(configRoot())).toThrow(/Refusing to recursively remove/);
+		});
+
+		it("REFUSES the home directory", () => {
+			expect(() => assertRemovableProfileDir(homeRoot())).toThrow(/Refusing to recursively remove/);
+		});
+
+		it("REFUSES a path outside the profiles tree entirely", () => {
+			expect(() => assertRemovableProfileDir(path.join(os.tmpdir(), "not-a-profile"))).toThrow(
+				/Refusing to recursively remove/,
+			);
+		});
+
+		it("REFUSES a nested grandchild (a subdir of a profile is not directly removable)", () => {
+			// dirname is profilesRoot/work, not profilesRoot -> refused. Removing a
+			// profile's agent dir must go through that profile, not this guard.
+			expect(() => assertRemovableProfileDir(path.join(workProfile(), "agent"))).toThrow(
+				/Refusing to recursively remove/,
+			);
+		});
+
+		it("REFUSES a `..` traversal that resolves up out of the profiles root", () => {
+			// profilesRoot/.. resolves to the config root; the guard resolves before
+			// checking, so the traversal cannot smuggle the config root past it.
+			expect(() => assertRemovableProfileDir(path.join(profilesRoot(), ".."))).toThrow(
+				/Refusing to recursively remove/,
+			);
+		});
+	});
+});

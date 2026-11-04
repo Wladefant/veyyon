@@ -1,0 +1,194 @@
+import { instrumentedCompleteSimple, resolveTelemetry } from "@veyyon/agent-core";
+import type { Context, Tool } from "@veyyon/ai";
+import { isRecord, prompt, Snowflake } from "@veyyon/utils";
+import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
+import { refreshAfterEachApiKeyResolution } from "../config/api-key-resolver";
+import { missingCredentialsMessage } from "../config/missing-credentials";
+import { goalsPrompts } from "../prompts/goals/rows";
+import { mapJsonStrings } from "../secrets/obfuscator";
+import type { AgentSession } from "../session/agent-session";
+import { helperSettingPath } from "../task/helper-settings";
+import { concreteThinkingLevel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
+
+const RESPOND_TOOL_NAME = "respond";
+
+const RESPOND_TOOL: Tool = {
+	name: RESPOND_TOOL_NAME,
+	description: "Return the next guided-goal interview step.",
+	parameters: {
+		type: "object",
+		properties: {
+			kind: { type: "string", enum: ["question", "ready"] },
+			question: { type: "string" },
+			objective: { type: "string" },
+		},
+		required: ["kind"],
+		additionalProperties: false,
+	},
+	strict: false,
+};
+
+export interface GuidedGoalMessage {
+	role: "user" | "assistant";
+	content: string;
+}
+
+export type GuidedGoalTurnResult =
+	| { kind: "question"; question: string; objective?: string }
+	| { kind: "ready"; objective: string };
+
+export interface GuidedGoalTurnOptions {
+	messages: readonly GuidedGoalMessage[];
+	signal?: AbortSignal;
+	/**
+	 * Stable Codex transport session id reused across every turn of one
+	 * interview. `handleGuidedGoalCommand` runs up to six turns; minting a fresh
+	 * id per turn opens a new websocket-only Codex socket each time (kept in
+	 * `providerSessionState` until session dispose), which can trip
+	 * `websocket_connection_limit_reached` and drop back to the SSE path this
+	 * fix avoids. Callers pass one id for the whole interview; omitted for
+	 * one-shot callers, which mint a unique id per call.
+	 */
+	sideSessionId?: string;
+}
+
+/** Mint a guided-goal Codex side-session id keyed off the main session id. */
+export function newGuidedGoalSessionId(session: AgentSession): string {
+	return `${session.sessionId}:guided-goal:${Snowflake.next()}`;
+}
+
+export function parseGuidedGoalPayload(value: unknown): GuidedGoalTurnResult {
+	if (!isRecord(value)) {
+		throw new Error("guided goal returned an invalid response");
+	}
+	const payload = value as Record<string, unknown>;
+	const kind = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : undefined;
+	const question = typeof payload.question === "string" ? payload.question.trim() : "";
+	const objective = typeof payload.objective === "string" ? payload.objective.trim() : "";
+
+	if (kind === "ready" && objective) return { kind: "ready", objective };
+	if (kind === "question" && question) {
+		return objective ? { kind: "question", question, objective } : { kind: "question", question };
+	}
+	// A turn that answered the right shape under the wrong label still said
+	// something the interview can use. A question outranks a draft objective,
+	// because asking it is what carries the interview to a usable one.
+	if (question) {
+		return objective ? { kind: "question", question, objective } : { kind: "question", question };
+	}
+	if (kind !== "question" && objective) return { kind: "ready", objective };
+	throw new Error("guided goal returned an invalid response");
+}
+
+function parseToolArguments(value: unknown): unknown {
+	return typeof value === "string" ? parseJsonPayload(value) : value;
+}
+
+export async function runGuidedGoalTurn(
+	session: AgentSession,
+	options: GuidedGoalTurnOptions,
+): Promise<GuidedGoalTurnResult> {
+	const plan = session.resolveHelperModel("plan");
+	if (!plan) {
+		throw new Error(
+			`No model is available for /guided-goal: ${helperSettingPath("plan", "model")} matches no available model, or no session model is set.`,
+		);
+	}
+	const resolved = { model: plan.model, thinkingLevel: plan.thinkingLevel ?? session.thinkingLevel };
+
+	let apiKey: string | undefined;
+	try {
+		apiKey = await session.modelRegistry.getApiKey(resolved.model, session.sessionId);
+	} catch {
+		throw new Error("Could not resolve credentials for the guided goal request.");
+	}
+	if (!apiKey) {
+		throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, "the guided-goal model"));
+	}
+
+	const rawSystemPrompt = prompt.render(goalsPrompts["goals/guided-goal-system"].text);
+	const sanitizeLive = (text: string): string => session.obfuscateProviderText(text);
+	const providerContext: Context = { messages: [] };
+	const refreshProviderContext = (): void => {
+		// Retain the raw interview transcript until the physical attempt. Each complete field is
+		// sanitized before prompt rendering so later projection cannot split a secret.
+		const providerMessages = options.messages.map(message => ({
+			label: message.role.toUpperCase(),
+			content: sanitizeLive(message.content),
+		}));
+		const userPrompt = prompt.render(goalsPrompts["goals/guided-goal-interview"].text, {
+			messages: providerMessages,
+		});
+		providerContext.systemPrompt = [sanitizeLive(rawSystemPrompt)];
+		providerContext.messages = [
+			{ role: "user", content: [{ type: "text", text: sanitizeLive(userPrompt) }], timestamp: Date.now() },
+		];
+		providerContext.tools = [RESPOND_TOOL];
+	};
+	const thinkingLevel = concreteThinkingLevel(resolved.thinkingLevel);
+	const response = await instrumentedCompleteSimple(
+		resolved.model,
+		providerContext,
+		{
+			apiKey: refreshAfterEachApiKeyResolution(
+				session.modelRegistry.resolver(resolved.model, session.sessionId),
+				refreshProviderContext,
+			),
+			signal: options.signal,
+			reasoning: toReasoningEffort(thinkingLevel),
+			disableReasoning: shouldDisableReasoning(thinkingLevel),
+			toolChoice: { type: "tool", name: RESPOND_TOOL_NAME },
+			// Provider adapters may introduce another serialized string surface. Walk the final
+			// payload with the then-current session runtime for every physical send.
+			onPayload: payload => mapJsonStrings(payload, sanitizeLive),
+			// Route through the session's provider transport so websocket-only Codex
+			// models (gpt-5.6-luna/sol/terra) get a websocket session instead of
+			// falling back to SSE — the Codex SSE /responses endpoint does not serve
+			// those ids and rejects the turn with "Model not found" (#5304, same class
+			// as the /btw regression in #5213). The side session id is minted once per
+			// interview and reused across turns so a multi-question interview shares one
+			// Codex socket instead of opening a fresh one each turn; it stays distinct
+			// from the main session id so the oneshot's append-only turn state never
+			// pollutes the main conversation.
+			sessionId: options.sideSessionId ?? newGuidedGoalSessionId(session),
+			// Providers route on `promptCacheKey ?? sessionId`. Mirror the pinned key
+			// the live turns cache under (fork/tan/shared sessions set one) so the
+			// interview reads that prefix instead of cold-missing it.
+			promptCacheKey: session.agent.promptCacheKey ?? session.sessionId,
+			preferWebsockets: session.preferWebsockets,
+			providerSessionState: session.providerSessionState,
+		},
+		{ telemetry: resolveTelemetry(session.agent.telemetry, session.sessionId), oneshotKind: "guided_goal_setup" },
+	);
+
+	if (response.stopReason === "error") {
+		throw new Error(sanitizeLive(response.errorMessage ?? "guided goal request failed"));
+	}
+	if (response.stopReason === "aborted") {
+		throw new Error("guided goal request aborted");
+	}
+
+	const call = extractToolCall(response, RESPOND_TOOL_NAME);
+	let result: GuidedGoalTurnResult;
+	if (call) {
+		result = parseGuidedGoalPayload(parseToolArguments(call.arguments));
+	} else {
+		const text = extractTextContent(response);
+		if (!text) {
+			throw new Error("guided goal returned an invalid response");
+		}
+		result = parseGuidedGoalPayload(parseJsonPayload(text));
+	}
+
+	// Reverse the current runtime's placeholders before the result is shown or started.
+	const obfuscator = session.obfuscator;
+	if (!obfuscator?.hasSecrets()) return result;
+	if (result.kind === "question") {
+		return {
+			kind: "question",
+			question: obfuscator.deobfuscate(result.question),
+			objective: result.objective !== undefined ? obfuscator.deobfuscate(result.objective) : undefined,
+		};
+	}
+	return { kind: "ready", objective: obfuscator.deobfuscate(result.objective) };
+}

@@ -1,0 +1,230 @@
+;(() => {
+  if (typeof Window_Proxy !== "function" || typeof Reflect_apply !== "function") return;
+
+  const screenObject = window.screen;
+  if (!screenObject) return;
+
+  const isFiniteNumber = (value) =>
+    typeof value === "number" &&
+    value === value &&
+    value !== Infinity &&
+    value !== -Infinity;
+
+  const readValue = (object, prop, fallback) => {
+    try {
+      const value = object[prop];
+      return value === undefined ? fallback : value;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const finiteNumber = (value, fallback) =>
+    isFiniteNumber(value) ? value : fallback;
+
+  const positiveNumber = (value, fallback) =>
+    isFiniteNumber(value) && value > 0 ? value : fallback;
+
+  const positiveInteger = (value, fallback) =>
+    isFiniteNumber(value) && value > 0 ? Math_floor(value) : fallback;
+
+  const findDescriptorOwner = (object, prop) => {
+    let owner = object;
+    while (owner) {
+      let descriptor;
+      try {
+        descriptor = Object_getOwnPropertyDescriptor(owner, prop);
+      } catch {
+        return undefined;
+      }
+      if (descriptor) return [owner, descriptor];
+      try {
+        owner = Object_getPrototypeOf(owner);
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+
+  const patchGetter = (object, prop, getValue) => {
+    const found = findDescriptorOwner(object, prop);
+    if (!found) return false;
+
+    const owner = found[0];
+    const descriptor = found[1];
+    if (descriptor.configurable !== true || typeof descriptor.get !== "function") {
+      return false;
+    }
+
+    const originalGet = descriptor.get;
+    const patchedGet = new Window_Proxy(originalGet, {
+      apply(target, thisArg, args) {
+        const nativeValue = Reflect_apply(target, thisArg, args);
+        return getValue(nativeValue, thisArg);
+      },
+    });
+    patchToString(patchedGet, "get " + prop);
+    try {
+      Object_defineProperty(owner, prop, {
+        configurable: descriptor.configurable,
+        enumerable: descriptor.enumerable,
+        get: patchedGet,
+        set: descriptor.set,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const frame = stealthProfile.windowChrome.frame;
+  const chromeTop = stealthProfile.windowChrome.top;
+  const innerWidthNow = () => positiveInteger(readValue(window, "innerWidth", 0), 0);
+  const innerHeightNow = () => positiveInteger(readValue(window, "innerHeight", 0), 0);
+  // Headless Chrome has no tab strip, toolbar or frame, and one window for all its tabs, sized at
+  // launch: a tab whose emulated viewport is not the window's still reports the window's size. A
+  // headless window is therefore the top frame's viewport plus the host's chrome. `outerWidth` and
+  // `outerHeight` are the top-level window's in every frame, so a child frame reads the top frame's
+  // viewport where its origin allows and the native size where it does not. A headful window has its own.
+  const headlessWindow = stealthProfile.headless === true;
+  const topViewport = (prop, nativeValue) => {
+    let value = 0;
+    try {
+      value = positiveInteger(window.top[prop], 0);
+    } catch {}
+    return value || positiveInteger(nativeValue, 0);
+  };
+
+  if (headlessWindow) {
+    patchGetter(window, "outerWidth", (nativeValue) => topViewport("innerWidth", nativeValue) + 2 * frame);
+    patchGetter(window, "outerHeight", (nativeValue) =>
+      topViewport("innerHeight", nativeValue) + chromeTop + frame,
+    );
+  }
+
+  // The launch sizes headless Chrome's screen to hold its window. A window made larger later gets the
+  // smallest common screen of the host's OS that holds it, so the screen never ends inside the window.
+  const workArea = stealthProfile.workArea;
+  const scale = positiveNumber(readValue(window, "devicePixelRatio", 1), 1);
+  const needWidth =
+    positiveInteger(readValue(window, "outerWidth", 0), 0) +
+    Math_max(0, finiteNumber(readValue(window, "screenX", 0), 0));
+  const needHeight =
+    positiveInteger(readValue(window, "outerHeight", 0), 0) +
+    Math_max(0, finiteNumber(readValue(window, "screenY", 0), 0)) +
+    workArea.bottom;
+  let enlarged = false;
+  if (
+    positiveInteger(readValue(screenObject, "width", 0), 0) < needWidth ||
+    positiveInteger(readValue(screenObject, "height", 0), 0) < needHeight
+  ) {
+    let screenWidth = needWidth;
+    let screenHeight = needHeight;
+    for (let index = 0; index < stealthProfile.screens.length; index += 1) {
+      const physical = stealthProfile.screens[index];
+      if (physical[0] / scale >= needWidth && physical[1] / scale >= needHeight) {
+        screenWidth = Math_floor(physical[0] / scale + 0.5);
+        screenHeight = Math_floor(physical[1] / scale + 0.5);
+        break;
+      }
+    }
+    patchGetter(screenObject, "width", () => screenWidth);
+    patchGetter(screenObject, "height", () => screenHeight);
+    enlarged = true;
+  }
+
+  // A desktop keeps a taskbar, a dock or a menu bar on its screen, which the work area (`avail*`)
+  // leaves out. Headless Chrome's screen has none, and its work area is the whole screen.
+  if (headlessWindow || enlarged) {
+    const screenWidthNow = () => positiveInteger(readValue(screenObject, "width", 0), 0);
+    const screenHeightNow = () => positiveInteger(readValue(screenObject, "height", 0), 0);
+    patchGetter(screenObject, "availLeft", () => 0);
+    patchGetter(screenObject, "availTop", () => workArea.top);
+    patchGetter(screenObject, "availWidth", () => screenWidthNow());
+    patchGetter(screenObject, "availHeight", () =>
+      Math_max(0, screenHeightNow() - workArea.top - workArea.bottom),
+    );
+  }
+
+  // Viewport emulation reports a portrait orientation whatever the screen's shape; a desktop screen
+  // wider than tall is landscape-primary at angle 0.
+  const orientation = readValue(screenObject, "orientation", null);
+  if (orientation) {
+    const type = readValue(orientation, "type", "");
+    if (
+      typeof type === "string" &&
+      type.startsWith("portrait") &&
+      readValue(screenObject, "width", 0) > readValue(screenObject, "height", 0)
+    ) {
+      patchGetter(orientation, "type", () => "landscape-primary");
+      patchGetter(orientation, "angle", () => 0);
+    }
+  }
+
+  // A trusted mouse event's screen position is its viewport position plus where the viewport sits on
+  // the screen: the window's screen position, the frame on the left, the chrome above. Input the
+  // DevTools protocol dispatches carries the headless window's own geometry instead, so where the two
+  // disagree the event reports the position the window above implies. Events a script constructs keep
+  // the position they were given. A child frame's viewport starts inside the page, which only the top
+  // frame knows, so child frames keep the native position.
+  const mouseProto = window.MouseEvent && window.MouseEvent.prototype;
+  let topFrame = false;
+  try {
+    topFrame = window.top === window;
+  } catch {}
+  if (headlessWindow && topFrame && mouseProto) {
+    const clientX = findDescriptorOwner(mouseProto, "clientX");
+    const clientY = findDescriptorOwner(mouseProto, "clientY");
+    const clientXGet = clientX && clientX[1].get;
+    const clientYGet = clientY && clientY[1].get;
+    if (typeof clientXGet === "function" && typeof clientYGet === "function") {
+      const screenPosition = (nativeValue, event, clientGet, offset) => {
+        if (!event || event.isTrusted !== true) return nativeValue;
+        const expected = Reflect_apply(clientGet, event, []) + offset;
+        return nativeValue === expected ? nativeValue : expected;
+      };
+      patchGetter(mouseProto, "screenX", (nativeValue, event) =>
+        screenPosition(
+          nativeValue,
+          event,
+          clientXGet,
+          finiteNumber(readValue(window, "screenX", 0), 0) + frame,
+        ),
+      );
+      patchGetter(mouseProto, "screenY", (nativeValue, event) =>
+        screenPosition(
+          nativeValue,
+          event,
+          clientYGet,
+          finiteNumber(readValue(window, "screenY", 0), 0) + chromeTop,
+        ),
+      );
+    }
+  }
+
+  const visualViewportObject = readValue(window, "visualViewport", null);
+  if (visualViewportObject) {
+    const initialScale = positiveNumber(readValue(visualViewportObject, "scale", 1), 1);
+    if (readValue(visualViewportObject, "scale", undefined) !== initialScale) {
+      patchGetter(visualViewportObject, "scale", (nativeValue) =>
+        positiveNumber(nativeValue, initialScale),
+      );
+    }
+
+    const getViewportScale = () =>
+      positiveNumber(readValue(visualViewportObject, "scale", initialScale), initialScale);
+
+    if (positiveNumber(readValue(visualViewportObject, "width", 0), 0) <= 0) {
+      patchGetter(visualViewportObject, "width", (nativeValue) =>
+        positiveNumber(nativeValue, innerWidthNow() / getViewportScale()),
+      );
+    }
+
+    if (positiveNumber(readValue(visualViewportObject, "height", 0), 0) <= 0) {
+      patchGetter(visualViewportObject, "height", (nativeValue) =>
+        positiveNumber(nativeValue, innerHeightNow() / getViewportScale()),
+      );
+    }
+  }
+})();

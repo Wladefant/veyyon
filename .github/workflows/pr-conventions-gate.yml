@@ -1,0 +1,36 @@
+name: PR Conventions Gate
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+      - milestoned
+      - demilestoned
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-conventions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conventions-gate:
+    name: Verify PR Conventions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run Consolidated PR Conventions Gate
+        run: node .github/scripts/pr-conventions-gate.cjs
+        env:
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_ACTIONS: 'true'

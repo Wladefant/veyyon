@@ -1,0 +1,325 @@
+import { errorMessage } from "@veyyon/utils/type-guards";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
+import { ANTIGRAVITY_ENDPOINTS } from "../provider-endpoints";
+import type { FetchImpl, ModelSpec } from "../types";
+import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toStringArray, toStringValue } from "../utils";
+import {
+	ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+	collapseEffortVariants,
+	type VariantCollapseTable,
+} from "../variant-collapse";
+import { getAntigravityUserAgent } from "../wire/gemini-headers";
+import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
+import { gatewayContextWindow, gatewayMaxTokens } from "./gateway-limits";
+
+const DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS = ANTIGRAVITY_ENDPOINTS;
+/**
+ * The path both model discovery and the usage reader append to an Antigravity endpoint.
+ *
+ * `packages/ai/src/usage/google-antigravity.ts` had a second declaration of it under the
+ * same name. `@veyyon/catalog` owns what goes on this wire, so an API path that moved
+ * would have been changed here and left the usage reader calling the old one, which
+ * fails as "no quota information" rather than as a wrong URL.
+ */
+export const FETCH_AVAILABLE_MODELS_PATH = "/v1internal:fetchAvailableModels";
+export const RETRIEVE_USER_QUOTA_SUMMARY_PATH = "/v1internal:retrieveUserQuotaSummary";
+
+const ANTIGRAVITY_DISCOVERY_DENYLIST = new Set(["chat_20706", "chat_23310", "gemini-2.5-pro"]);
+
+/**
+ * Raw model metadata returned by Antigravity's `fetchAvailableModels` endpoint.
+ */
+export interface AntigravityDiscoveryApiModel {
+	displayName?: string;
+	supportsImages?: boolean;
+	supportsThinking?: boolean;
+	thinkingBudget?: number;
+	recommended?: boolean;
+	maxTokens?: number;
+	maxOutputTokens?: number;
+	model?: string;
+	apiProvider?: string;
+	modelProvider?: string;
+	isInternal?: boolean;
+	supportsVideo?: boolean;
+}
+
+/**
+ * Grouping metadata used by Antigravity to surface recommended model ids.
+ */
+export interface AntigravityDiscoveryAgentModelGroup {
+	modelIds?: string[];
+}
+
+/**
+ * Sort/group metadata used by Antigravity to surface recommended model ids.
+ */
+export interface AntigravityDiscoveryAgentModelSort {
+	groups?: AntigravityDiscoveryAgentModelGroup[];
+}
+
+/**
+ * Response payload returned by Antigravity's `fetchAvailableModels` endpoint.
+ */
+export interface AntigravityDiscoveryApiResponse {
+	models?: Record<string, AntigravityDiscoveryApiModel>;
+	agentModelSorts?: AntigravityDiscoveryAgentModelSort[];
+	imageGenerationModelIds?: string[];
+}
+/**
+ * Antigravity's `fetchAvailableModels` payload, read field by field.
+ *
+ * Every field here is optional and every one was already declared as `unknown` piped through a
+ * `typeof` check, so a schema library contributed nothing but its 362ms module evaluation on a
+ * launch path that reaches this file through the provider descriptor table. A field of the wrong
+ * type is dropped and the rest of the entry kept: this endpoint adds fields without notice, and
+ * one unreadable flag is not a reason to hide a model the account can use.
+ */
+function readDiscoveryModel(value: unknown): AntigravityDiscoveryApiModel | undefined {
+	const fields = toFields(value);
+	if (!fields) {
+		return undefined;
+	}
+	return {
+		displayName: toStringValue(fields.displayName),
+		supportsImages: toBoolean(fields.supportsImages),
+		supportsThinking: toBoolean(fields.supportsThinking),
+		thinkingBudget: toFiniteNumber(fields.thinkingBudget),
+		recommended: toBoolean(fields.recommended),
+		maxTokens: toFiniteNumber(fields.maxTokens),
+		maxOutputTokens: toFiniteNumber(fields.maxOutputTokens),
+		model: toStringValue(fields.model),
+		apiProvider: toStringValue(fields.apiProvider),
+		modelProvider: toStringValue(fields.modelProvider),
+		isInternal: toBoolean(fields.isInternal),
+		supportsVideo: toBoolean(fields.supportsVideo),
+	};
+}
+
+function readAgentModelSort(value: unknown): AntigravityDiscoveryAgentModelSort | undefined {
+	const fields = toFields(value);
+	if (!fields) {
+		return undefined;
+	}
+	const groups = toArray(fields.groups);
+	if (!groups) {
+		return {};
+	}
+	const parsed: AntigravityDiscoveryAgentModelGroup[] = [];
+	for (const group of groups) {
+		const groupFields = toFields(group);
+		if (groupFields) {
+			parsed.push({ modelIds: toStringArray(groupFields.modelIds) });
+		}
+	}
+	return { groups: parsed };
+}
+
+/**
+ * The response, or `undefined` when the body is not an object at all.
+ *
+ * A `models` map that is not an object, and an `agentModelSorts` that is not a list, read as
+ * absent rather than as a failure: the caller falls back to the endpoint's other signals and
+ * reports its own reason, and this endpoint has shipped both shapes.
+ */
+function readDiscoveryResponse(value: unknown): AntigravityDiscoveryApiResponse | undefined {
+	const fields = toFields(value);
+	if (!fields) {
+		return undefined;
+	}
+	const response: AntigravityDiscoveryApiResponse = {};
+
+	const models = toFields(fields.models);
+	if (models) {
+		const normalized: Record<string, AntigravityDiscoveryApiModel> = {};
+		for (const [modelId, modelValue] of Object.entries(models)) {
+			const model = readDiscoveryModel(modelValue);
+			if (model) {
+				normalized[modelId] = model;
+			}
+		}
+		response.models = normalized;
+	}
+
+	const sorts = toArray(fields.agentModelSorts);
+	if (sorts) {
+		const parsed: AntigravityDiscoveryAgentModelSort[] = [];
+		for (const sort of sorts) {
+			const readSort = readAgentModelSort(sort);
+			if (readSort) {
+				parsed.push(readSort);
+			}
+		}
+		response.agentModelSorts = parsed;
+	}
+
+	const imageModels = toStringArray(fields.imageGenerationModelIds);
+	if (imageModels) {
+		response.imageGenerationModelIds = imageModels.filter(id => id.length > 0);
+	}
+
+	return response;
+}
+/**
+ * Options for fetching Antigravity discovery models.
+ */
+export interface FetchAntigravityDiscoveryModelsOptions {
+	/** OAuth access token used as `Authorization: Bearer <token>`. */
+	token: string;
+	/** Optional endpoint override. Defaults to Antigravity fallback endpoints. */
+	endpoint?: string;
+	/** Deprecated and ignored for antigravity discovery parity. */
+	project?: string;
+	/** Optional user agent override. */
+	userAgent?: string;
+	/** Optional abort signal for request cancellation. */
+	signal?: AbortSignal;
+	/** Optional fetch implementation override for tests. */
+	fetcher?: FetchImpl;
+	/**
+	 * Hand collapse table to apply to the discovered list. Defaults to the
+	 * Antigravity (budget-transport) table; `googleGeminiCli` passes the
+	 * level-transport table so cloudcode-pa keeps `thinkingLevel`.
+	 */
+	collapseTable?: VariantCollapseTable;
+	/**
+	 * Called with the reason each endpoint attempt produced nothing.
+	 *
+	 * The same channel every reader in this package uses. This reader walks a LIST of fallback endpoints and
+	 * `continue`d past every kind of failure, so a token the service rejects looked identical to a list of
+	 * endpoints that have all moved -- and the final answer was a bare `null` naming none of them. Every
+	 * attempt reports, because "all three endpoints answered 401" and "all three refused the connection"
+	 * are different problems. Never called on success, including a success with no models.
+	 */
+	onFailure?: DiscoveryHooks["onFailure"];
+}
+
+/**
+ * Fetches discoverable Antigravity models and normalizes them into canonical model entries.
+ *
+ * Returns `null` on network/payload/auth failures.
+ * Returns `[]` only when the endpoint responds successfully with no usable models.
+ */
+/** Advertised image model and serving endpoint for one Antigravity account. */
+export interface AntigravityImageModel {
+	id: string;
+	endpoint: string;
+}
+
+/** Resolves the first image-generation model advertised by an Antigravity account. */
+export async function fetchAntigravityImageModel(
+	options: FetchAntigravityDiscoveryModelsOptions,
+): Promise<AntigravityImageModel | null> {
+	const discovered = await fetchAntigravityDiscoveryResponse(options);
+	const id = discovered?.payload.imageGenerationModelIds?.find(modelId => modelId.length > 0);
+	return id && discovered ? { id, endpoint: discovered.endpoint } : null;
+}
+
+interface AntigravityDiscoveryResponse {
+	payload: AntigravityDiscoveryApiResponse;
+	endpoint: string;
+}
+
+async function fetchAntigravityDiscoveryResponse(
+	options: FetchAntigravityDiscoveryModelsOptions,
+): Promise<AntigravityDiscoveryResponse | null> {
+	const fetcher = discoveryFetch(options.fetcher);
+	const endpoints = options.endpoint
+		? [trimTrailingSlashes(options.endpoint)]
+		: DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS.map(trimTrailingSlashes);
+
+	for (const endpoint of endpoints) {
+		const url = `${endpoint}${FETCH_AVAILABLE_MODELS_PATH}`;
+		const report = (stage: DiscoveryFailure["stage"], detail: string): void =>
+			options.onFailure?.({ stage, url, detail });
+		let response: Response;
+		try {
+			response = await fetcher(url, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${options.token}`,
+					"Content-Type": "application/json",
+					"User-Agent": options.userAgent ?? getAntigravityUserAgent(),
+				},
+				body: JSON.stringify({}),
+				signal: options.signal,
+			});
+		} catch (error) {
+			// `continue` tries the next fallback endpoint, which is right; what was wrong is that the attempt
+			// left no trace, so an operator whose whole endpoint list is unreachable saw only an empty picker.
+			report("request", errorMessage(error));
+			continue;
+		}
+
+		const payload = await readDiscoveryJson(response, report);
+		if (payload === undefined) continue;
+
+		const parsed = parseAntigravityDiscoveryResponse(payload);
+		if (!parsed) {
+			report("payload", "response holds no model map this reader recognizes");
+			continue;
+		}
+
+		return { payload: parsed, endpoint };
+	}
+
+	return null;
+}
+
+export async function fetchAntigravityDiscoveryModels(
+	options: FetchAntigravityDiscoveryModelsOptions,
+): Promise<ModelSpec<"google-gemini-cli">[] | null> {
+	const discovered = await fetchAntigravityDiscoveryResponse(options);
+	if (!discovered) {
+		return null;
+	}
+
+	const { payload: parsed, endpoint } = discovered;
+	const models: ModelSpec<"google-gemini-cli">[] = [];
+
+	for (const [modelId, model] of Object.entries(parsed.models ?? {})) {
+		if (ANTIGRAVITY_DISCOVERY_DENYLIST.has(modelId)) {
+			continue;
+		}
+		if (model.isInternal === true) {
+			continue;
+		}
+
+		const supportsImages = model.supportsImages === true;
+		models.push({
+			id: modelId,
+			name: model.displayName || modelId,
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: endpoint,
+			reasoning: model.supportsThinking === true,
+			// Google Gemini / Antigravity multimodal input (text, image, video): https://ai.google.dev/gemini-api/docs/multimodal
+			input: supportsImages ? ["text", "image", "video"] : ["text"],
+			// This endpoint publishes no pricing, so the zeros mean "not told", not "free".
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			pricing: "unknown",
+			// Reported when this endpoint says anything, else the catalog's own numbers for the
+			// proxied model, else the gateway assumption. `maxTokens`/`maxOutputTokens` are absent
+			// on most rows here, and falling straight to 200k described a 1M-window Gemini as a
+			// fifth of its size.
+			contextWindow: gatewayContextWindow(modelId, model.maxTokens),
+			maxTokens: gatewayMaxTokens(modelId, model.maxOutputTokens),
+		});
+	}
+
+	// Collapse effort-tier variants at the source so runtime discovery,
+	// the gemini-cli re-provision, and the catalog generator all see
+	// logical ids only.
+	const collapsed = collapseEffortVariants(models, options.collapseTable ?? ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+	collapsed.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+	return collapsed;
+}
+
+function parseAntigravityDiscoveryResponse(value: unknown): AntigravityDiscoveryApiResponse | null {
+	return readDiscoveryResponse(value) ?? null;
+}

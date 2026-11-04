@@ -1,0 +1,144 @@
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { SourceMeta } from "@veyyon/coding-agent/discovery/capability/types";
+import type { MCPServerConfig } from "@veyyon/coding-agent/mcp/types";
+import { MCPCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/mcp-command-controller";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { getMCPConfigPath, getProjectDir, removeWithRetries, setAgentDir, setProjectDir } from "@veyyon/utils";
+import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
+
+const originalProjectDir = getProjectDir();
+// One owner for "undo a setAgentDir call": the hand-rolled version below could not
+// restore an ABSENT VEYYON_CODING_AGENT_DIR and left the active profile cleared,
+// which leaked into every file that ran after this one.
+const dirOverrides = captureDirOverrides();
+
+function restoreAgentDir(): void {
+	restoreDirOverrides(dirOverrides);
+	// `Bun.env` and `process.env` are the same store under Bun, but this file wrote
+	// through both, so both are cleared when the snapshot says the override was
+	// absent. Reading the snapshot rather than deleting unconditionally: an override
+	// the developer actually set has to survive this suite.
+	if (dirOverrides.agentDirEnv === undefined) delete Bun.env.VEYYON_CODING_AGENT_DIR;
+}
+
+function createController() {
+	const refreshMCPTools = vi.fn(async () => {});
+	const mcpManager = {
+		disconnectAll: vi.fn(async () => {}),
+		invalidateCommandCredentials: vi.fn(() => 0),
+		discoverAndConnect: vi.fn(async () => ({ errors: new Map<string, string>() })),
+		disconnectServer: vi.fn(async () => {}),
+		connectServers: vi.fn(
+			async (_configs: Record<string, MCPServerConfig>, _sources: Record<string, SourceMeta>) => ({
+				errors: new Map<string, string>(),
+				connectedServers: [],
+				tools: [],
+				exaApiKeys: [],
+			}),
+		),
+		getTools: vi.fn(() => []),
+		waitForConnection: vi.fn(async () => ({})),
+		getConnectionStatus: vi.fn(() => "connected"),
+		getSource: vi.fn(() => undefined),
+	};
+	const controller = new MCPCommandController({
+		chatContainer: { addChild: vi.fn() },
+		present: vi.fn(),
+		ui: { requestRender: vi.fn() },
+		editor: {},
+		showError: vi.fn(),
+		showStatus: vi.fn(),
+		oauthManualInput: {
+			hasPending: vi.fn(() => false),
+			pendingProviderId: undefined,
+			tryClaimInput: vi.fn(),
+		},
+		session: {
+			refreshMCPTools,
+			modelRegistry: { authStorage: undefined },
+		},
+		mcpManager,
+	} as never);
+
+	return { controller, mcpManager, refreshMCPTools };
+}
+
+/**
+ * The fixture lives in the PROFILE-scoped `<agentDir>/mcp.json`, which is where MCP
+ * config comes from. It used to be written to `<cwd>/.veyyon/mcp.json`; a repository
+ * does not name the servers an agent connects to, and `/mcp enable` resolves the
+ * server it reconnects through `loadAllMCPConfigs`, so a project fixture now names
+ * nothing. The subject here is the toggle's blast radius, not the scope.
+ */
+async function writeUserConfig(agentDir: string, servers: Record<string, MCPServerConfig>): Promise<void> {
+	await Bun.write(
+		getMCPConfigPath("user", getProjectDir(), agentDir),
+		`${JSON.stringify(
+			{
+				mcpServers: servers,
+			},
+			null,
+			2,
+		)}\n`,
+	);
+}
+
+describe("/mcp enable and disable", () => {
+	let projectDir = "";
+	let agentDir = "";
+
+	beforeAll(() => {
+		initTheme();
+	});
+
+	beforeEach(async () => {
+		projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-mcp-toggle-project-"));
+		agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-mcp-toggle-agent-"));
+		setProjectDir(projectDir);
+		setAgentDir(agentDir);
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		setProjectDir(originalProjectDir);
+		restoreAgentDir();
+		await removeWithRetries(projectDir);
+		await removeWithRetries(agentDir);
+	});
+
+	test("disabling one configured server does not reload other MCP servers", async () => {
+		await writeUserConfig(agentDir, {
+			mcp1: { type: "stdio", command: "mcp-one" },
+			mcp2: { type: "stdio", command: "mcp-two" },
+		});
+		const { controller, mcpManager, refreshMCPTools } = createController();
+
+		await controller.handle("/mcp disable mcp1");
+
+		expect(mcpManager.disconnectServer).toHaveBeenCalledWith("mcp1");
+		expect(refreshMCPTools).toHaveBeenCalledWith([]);
+		expect(mcpManager.disconnectAll).not.toHaveBeenCalled();
+		expect(mcpManager.discoverAndConnect).not.toHaveBeenCalled();
+		expect(mcpManager.connectServers).not.toHaveBeenCalled();
+	});
+
+	test("enabling one configured server connects only that MCP server", async () => {
+		await writeUserConfig(agentDir, {
+			mcp1: { type: "stdio", command: "mcp-one", enabled: false },
+			mcp2: { type: "stdio", command: "mcp-two" },
+		});
+		const { controller, mcpManager } = createController();
+
+		await controller.handle("/mcp enable mcp1");
+
+		expect(mcpManager.disconnectAll).not.toHaveBeenCalled();
+		expect(mcpManager.discoverAndConnect).not.toHaveBeenCalled();
+		expect(mcpManager.connectServers).toHaveBeenCalledTimes(1);
+		const [configs] = mcpManager.connectServers.mock.calls[0]!;
+		expect(Object.keys(configs)).toEqual(["mcp1"]);
+		expect(configs.mcp1).toEqual({ type: "stdio", command: "mcp-one", enabled: true });
+	});
+});

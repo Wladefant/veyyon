@@ -1,0 +1,138 @@
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { AgentToolContext } from "@veyyon/agent-core";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { createAgentSession } from "@veyyon/coding-agent/sdk";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { Snowflake } from "@veyyon/utils";
+import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
+
+// Exercises the real per-tool approval gate (ExtensionToolWrapper) for read/search/write,
+// proving an `ssh://` target is exec-tier (prompts / is denied without a UI) while the
+// equivalent local-path call runs. ssh:// calls are rejected at the approval gate before any
+// connection, so this suite needs no live ssh.
+//
+// The read and search cases run at `ask-command`, not `ask`. `ask` runs nothing
+// unasked, so a local read would be refused there too and the pair would prove
+// nothing about ssh://. `ask-command` allows the read tier outright, so the only
+// thing that can still stop the ssh:// half is the exec escalation this suite is
+// about. The write case uses `write`, the legacy alias for the same rung, which
+// likewise allows the local write and leaves ssh:// as the sole exec trigger.
+const BASE_SETTINGS = {
+	"async.enabled": false,
+	"bash.autoBackground.enabled": false,
+	"bashInterceptor.enabled": false,
+} as const;
+
+const APPROVAL_RE = /requires approval but no interactive UI available/;
+
+describe("ssh:// tools are exec-gated through the production approval wrapper", () => {
+	let tempDir: string;
+	let session: AgentSession;
+
+	beforeAll(async () => {
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-ssh-approval-${Snowflake.next()}-`));
+		const cwd = path.join(tempDir, "cwd");
+		fs.mkdirSync(cwd, { recursive: true });
+		fs.writeFileSync(path.join(cwd, "local.txt"), "hello-local\n");
+		const sessionManager = SessionManager.create(cwd, path.join(tempDir, "sessions"));
+		const created = await createAgentSession({
+			cwd,
+			agentDir: tempDir,
+			sessionManager,
+			authStorage: await isolatedAuthStorage(tempDir),
+			settings: Settings.isolated(BASE_SETTINGS),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			workspaceTree: { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] },
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			toolNames: ["read", "search", "write"],
+		});
+		session = created.session;
+	});
+
+	afterAll(async () => {
+		await session.dispose();
+		try {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		} catch {
+			// best-effort cleanup; the OS reclaims the temp dir
+		}
+	});
+
+	function tool(name: "read" | "search" | "write") {
+		const found = session.getToolByName(name);
+		if (!found) throw new Error(`Expected ${name} tool`);
+		return found;
+	}
+
+	function ctx(approvalMode: "ask-command" | "write"): AgentToolContext {
+		return {
+			settings: Settings.isolated({ ...BASE_SETTINGS, "tools.approvalMode": approvalMode }),
+		} as AgentToolContext;
+	}
+
+	it("read: ssh:// requires approval (exec), a local path runs (read)", async () => {
+		await expect(
+			tool("read").execute(
+				"r-ssh",
+				{ path: "ssh://localhost/etc/hostname" },
+				undefined,
+				undefined,
+				ctx("ask-command"),
+			),
+		).rejects.toThrow(APPROVAL_RE);
+		const ok = await tool("read").execute("r-local", { path: "local.txt" }, undefined, undefined, ctx("ask-command"));
+		expect(JSON.stringify(ok.content)).toContain("hello-local");
+	});
+
+	it("search: a delimited ssh:// entry requires approval before path expansion", async () => {
+		// The wrapper sees `path` verbatim (pre-expansion), so the substring scan must trip exec here.
+		await expect(
+			tool("search").execute(
+				"s-ssh",
+				{ type: "text", input: "x", path: "local.txt,ssh://localhost/etc/hosts" },
+				undefined,
+				undefined,
+				ctx("ask-command"),
+			),
+		).rejects.toThrow(APPROVAL_RE);
+		const ok = await tool("search").execute(
+			"s-local",
+			{ type: "text", input: "hello", path: "." },
+			undefined,
+			undefined,
+			ctx("ask-command"),
+		);
+		expect(ok).toBeDefined();
+	});
+
+	it("write: ssh:// requires approval (exec), a local write runs (write tier, write mode)", async () => {
+		await expect(
+			tool("write").execute(
+				"w-ssh",
+				{ path: "ssh://localhost/tmp/x", content: "x" },
+				undefined,
+				undefined,
+				ctx("write"),
+			),
+		).rejects.toThrow(APPROVAL_RE);
+		const ok = await tool("write").execute(
+			"w-local",
+			{ path: "out.txt", content: "data\n" },
+			undefined,
+			undefined,
+			ctx("write"),
+		);
+		expect(JSON.stringify(ok.content)).toContain("out.txt");
+	});
+});

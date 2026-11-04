@@ -1,0 +1,127 @@
+#!/usr/bin/env bun
+
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { formatBytes, isEnoent } from "@veyyon/utils";
+import { buildPayloadDefines } from "./generate-docs-index";
+
+const packageDir = path.join(import.meta.dir, "..");
+const outDir = path.join(packageDir, "dist");
+const cliPath = path.join(outDir, "cli.js");
+const shebang = "#!/usr/bin/env bun\n";
+
+// Native / optional / platform-specific deps are loaded from installed files.
+// `veyyon-legacy-pi-modules` exists only in compiled binaries via the build plugin;
+// the standalone bundle never executes that `isCompiledBinary()` branch.
+const ALWAYS_EXTERNAL = [
+	"mupdf",
+	"@veyyon/natives",
+	"@huggingface/transformers",
+	"fastembed",
+	"onnxruntime-node",
+	"veyyon-legacy-pi-modules",
+];
+
+// Heavy, lazily-used third-party leaf deps. Each is a declared `dependency`, so the
+// published package resolves it from node_modules at runtime; bundling only embeds a
+// redundant copy that bloats dist/cli.js. NEVER add a patched dependency here — the
+// bundle is where a root `patchedDependencies` patch is baked in, so an externalized
+// import would load the unpatched npm package in users' installs (currently
+// @ark/schema is patched, so it — and arktype, which pulls @ark/schema — stay
+// bundled).
+const RUNTIME_EXTERNAL = [
+	"puppeteer-core",
+	"@puppeteer/browsers",
+	"@babel/parser",
+	"@xterm/headless",
+	"turndown",
+	"turndown-plugin-gfm",
+	"@mozilla/readability",
+	"linkedom",
+	"@agentclientprotocol/sdk",
+];
+
+async function runCommand(command: string[]): Promise<void> {
+	const proc = Bun.spawn(command, {
+		cwd: packageDir,
+		stdout: "inherit",
+		stderr: "inherit",
+	});
+	const exitCode = await proc.exited;
+	if (exitCode !== 0) throw new Error(`Command failed with exit code ${exitCode}: ${command.join(" ")}`);
+}
+
+async function ensureShebang(): Promise<void> {
+	const text = await Bun.file(cliPath).text();
+	if (text.startsWith(shebang)) return;
+	const withoutExisting = text.startsWith("#!") ? text.slice(text.indexOf("\n") + 1) : text;
+	await Bun.write(cliPath, shebang + withoutExisting);
+}
+
+async function cleanBundleOutputs(): Promise<void> {
+	// dist/ is shared with the dev binary (dist/vey); only remove this
+	// script's own outputs (entry bundle + copied native assets).
+	let entries: string[];
+	try {
+		entries = await fs.readdir(outDir);
+	} catch (err) {
+		if (isEnoent(err)) return;
+		throw err;
+	}
+	await Promise.all(
+		entries
+			.filter(
+				entry =>
+					entry === "cli.js" || entry.endsWith(".json") || entry.endsWith(".node") || entry.endsWith(".js.map"),
+			)
+			.map(entry => fs.rm(path.join(outDir, entry), { force: true })),
+	);
+}
+
+async function main(): Promise<void> {
+	const start = Bun.nanoseconds();
+	await cleanBundleOutputs();
+	// The standalone bundle ships no stats dashboard sources, so embed the dashboard
+	// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
+	// afterwards to keep the checked-in placeholder empty.
+	await runCommand(["bun", "--cwd=../../apps/stats", "run", "gen:stats"]);
+	try {
+		// Build in-process: the docs embed payload is far larger than Linux's
+		// 128KiB per-argv-string cap, so it can never be passed as a CLI
+		// `--define` (posix_spawn fails with E2BIG).
+		const output = await Bun.build({
+			entrypoints: [path.join(packageDir, "src/cli.ts")],
+			outdir: outDir,
+			target: "bun",
+			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
+			// `@veyyon/catalog/models` imports its catalog and `theme/` its bundled themes as files and
+			// reads them on demand; the bundle copies each beside `cli.js` under its own name so
+			// `package.json` `files` can list them as `dist/*.json`.
+			naming: { asset: "[name].[ext]" },
+			define: {
+				"process.env.VEYYON_BUNDLED": JSON.stringify("true"),
+				...(await buildPayloadDefines()),
+			},
+			minify: {
+				whitespace: true,
+				syntax: true,
+				identifiers: true,
+				keepNames: true,
+			},
+			throw: false,
+		});
+		if (!output.success) {
+			throw new Error(`CLI bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
+		}
+	} finally {
+		await runCommand(["bun", "--cwd=../../apps/stats", "run", "gen:stats:reset"]);
+	}
+	await ensureShebang();
+	const stat = await fs.stat(cliPath);
+	const elapsedMs = (Bun.nanoseconds() - start) / 1_000_000;
+	process.stdout.write(
+		`Bundled coding-agent CLI to dist/cli.js (${formatBytes(stat.size)}) in ${elapsedMs.toFixed(0)}ms\n`,
+	);
+}
+
+await main();

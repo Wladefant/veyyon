@@ -1,0 +1,221 @@
+import type { ThinkingLevel } from "@veyyon/agent-core";
+import type { Api, ApiKey, AssistantMessage, Model } from "@veyyon/ai";
+import { prompt } from "@veyyon/utils";
+import { withScopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
+import { commitPrompts } from "../../prompts/commit/rows";
+import { mapWithConcurrencyLimit } from "../../task/parallel";
+import { toReasoningEffort } from "../../thinking";
+import { completeCommitSimple, type ResolveObfuscateProviderText } from "../shared-llm";
+import type { FileDiff, FileObservation } from "../types";
+import { isExcludedFile } from "../utils/exclusions";
+import { MAX_FILE_TOKENS, truncateToTokenLimit } from "./utils";
+
+const MAX_CONTEXT_FILES = 20;
+const MAX_CONCURRENCY = 5;
+const MAP_PHASE_TIMEOUT_MS = 120_000;
+const MAX_RETRIES = 3;
+const RETRY_BACKOFF_MS = 1000;
+
+interface ContextFileProjection {
+	filename: string;
+	additions: number;
+	deletions: number;
+	description: string;
+}
+
+type ContextProjection =
+	| { largeCommitFileCount: number; rankedFiles?: never }
+	| { largeCommitFileCount?: never; totalFileCount: number; rankedFiles: ContextFileProjection[] };
+
+export interface MapPhaseInput {
+	model: Model<Api>;
+	apiKey: ApiKey;
+	thinkingLevel?: ThinkingLevel;
+	files: FileDiff[];
+	config?: {
+		maxFileTokens?: number;
+		maxConcurrency?: number;
+		timeoutMs?: number;
+		maxRetries?: number;
+		retryBackoffMs?: number;
+	};
+	resolveObfuscateProviderText: ResolveObfuscateProviderText;
+}
+
+export async function runMapPhase({
+	model,
+	apiKey,
+	thinkingLevel,
+	files,
+	config,
+	resolveObfuscateProviderText,
+}: MapPhaseInput): Promise<FileObservation[]> {
+	const filtered = files.filter(file => !isExcludedFile(file.filename));
+	const contextProjection = buildContextProjection(filtered);
+	const observerSystemPrompt = prompt.render(commitPrompts["commit/file-observer-system"].text);
+	const maxFileTokens = config?.maxFileTokens ?? MAX_FILE_TOKENS;
+	const maxConcurrency = config?.maxConcurrency ?? MAX_CONCURRENCY;
+	const timeoutMs = config?.timeoutMs ?? MAP_PHASE_TIMEOUT_MS;
+	const maxRetries = config?.maxRetries ?? MAX_RETRIES;
+	const retryBackoffMs = config?.retryBackoffMs ?? RETRY_BACKOFF_MS;
+	// Bounded worker pool is owned by task/parallel.ts. It normalizes
+	// `maxConcurrency <= 0`/non-finite to "run all at once" (veyyon's shared
+	// `agent.maxConcurrency = 0` = Unlimited convention) and fails fast, cancelling
+	// in-flight siblings, if any file errors after its retries are exhausted.
+	const { results } = await mapWithConcurrencyLimit(filtered, maxConcurrency, async file => {
+		if (file.isBinary) {
+			return {
+				file: file.filename,
+				observations: ["Binary file changed."],
+				additions: file.additions,
+				deletions: file.deletions,
+			};
+		}
+
+		const response = await withRetry(
+			() =>
+				withScopedTimeoutSignal(timeoutMs, timeoutSignal =>
+					completeCommitSimple(
+						model,
+						sanitize => {
+							// A physical attempt touches only this file's raw payload. The
+							// bounded metadata projection was built once above, so retries
+							// never rescan unrelated file contents.
+							const providerFilename = sanitize(file.filename);
+							const truncated = truncateToTokenLimit(sanitize(file.content), maxFileTokens);
+							const contextHeader = sanitize(generateContextHeader(contextProjection, file.filename));
+							const userContent = prompt.render(commitPrompts["commit/file-observer-user"].text, {
+								filename: providerFilename,
+								diff: truncated,
+								context_header: contextHeader,
+							});
+							return {
+								systemPrompt: [sanitize(observerSystemPrompt)],
+								messages: [{ role: "user", content: userContent, timestamp: Date.now() }],
+							};
+						},
+						{
+							apiKey,
+							maxTokens: 400,
+							reasoning: toReasoningEffort(thinkingLevel),
+							signal: timeoutSignal,
+						},
+						resolveObfuscateProviderText,
+					),
+				),
+			maxRetries,
+			retryBackoffMs,
+		);
+
+		const observations = parseObservations(response);
+		return {
+			file: file.filename,
+			observations,
+			additions: file.additions,
+			deletions: file.deletions,
+		};
+	});
+	// The pool only resolves (rather than throwing) once every worker has filled
+	// its slot, so on this path there are no undefined holes.
+	return results as FileObservation[];
+}
+
+function parseObservations(message: AssistantMessage): string[] {
+	const text = message.content
+		.filter(content => content.type === "text")
+		.map(content => content.text)
+		.join("")
+		.trim();
+
+	if (!text) return [];
+
+	const lines = text
+		.split("\n")
+		.map(line => line.trim())
+		.filter(Boolean)
+		.map(line => line.replace(/^[-*]\s+/, ""))
+		.filter(Boolean);
+
+	return lines.slice(0, 5);
+}
+
+function buildContextProjection(files: FileDiff[]): ContextProjection {
+	if (files.length > 100) return { largeCommitFileCount: files.length };
+
+	const rankedFiles = files
+		.map(file => ({
+			filename: file.filename,
+			additions: file.additions,
+			deletions: file.deletions,
+			description: inferFileDescription(file),
+		}))
+		.sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions))
+		.slice(0, MAX_CONTEXT_FILES + 1);
+	return { totalFileCount: files.length, rankedFiles };
+}
+
+function generateContextHeader(projection: ContextProjection, currentFile: string): string {
+	if (projection.largeCommitFileCount !== undefined) {
+		return `(Large commit with ${projection.largeCommitFileCount} total files)`;
+	}
+
+	const otherFiles = projection.rankedFiles.filter(file => file.filename !== currentFile);
+	if (otherFiles.length === 0) return "";
+
+	const toShow = otherFiles.slice(0, MAX_CONTEXT_FILES);
+	const lines = ["OTHER FILES IN THIS CHANGE:"];
+	for (const file of toShow) {
+		const lineCount = file.additions + file.deletions;
+		lines.push(`- ${file.filename} (${lineCount} lines): ${file.description}`);
+	}
+	const elided = Math.max(0, projection.totalFileCount - 1 - toShow.length);
+	if (elided > 0) lines.push(`[…${elided} files elided…]`);
+
+	return lines.join("\n");
+}
+
+function inferFileDescription(file: FileDiff): string {
+	const filenameLower = file.filename.toLowerCase();
+	if (filenameLower.includes("test")) return "test file";
+	if (filenameLower.endsWith(".md")) return "documentation";
+	if (
+		filenameLower.includes("config") ||
+		filenameLower.endsWith(".toml") ||
+		filenameLower.endsWith(".yaml") ||
+		filenameLower.endsWith(".yml")
+	) {
+		return "configuration";
+	}
+	if (filenameLower.includes("error")) return "error definitions";
+	if (filenameLower.includes("type")) return "type definitions";
+	if (filenameLower.endsWith("mod.rs") || filenameLower.endsWith("lib.rs")) return "module exports";
+	if (filenameLower.endsWith("main.rs") || filenameLower.endsWith("main.go") || filenameLower.endsWith("main.py")) {
+		return "entry point";
+	}
+
+	const content = file.content;
+	if (content.includes("interface ") || content.includes("type ")) return "type definitions";
+	if (content.includes("class ") || content.includes("function ") || content.includes("fn ")) return "implementation";
+	if (content.includes("async ") || content.includes("await")) return "async code";
+	return "source code";
+}
+
+async function withRetry<T>(fn: () => Promise<T>, attempts: number, backoffMs: number): Promise<T> {
+	// Always make at least one attempt. A zero/negative/non-finite `attempts`
+	// would otherwise skip the loop body entirely and throw an undefined
+	// `lastError` — a non-Error that reports no cause and is nearly impossible to
+	// diagnose downstream.
+	const total = Number.isFinite(attempts) ? Math.max(1, Math.floor(attempts)) : 1;
+	let lastError: unknown;
+	for (let attempt = 0; attempt < total; attempt += 1) {
+		try {
+			return await fn();
+		} catch (error) {
+			lastError = error;
+			if (attempt < total - 1) {
+				await Bun.sleep(backoffMs * (attempt + 1));
+			}
+		}
+	}
+	throw lastError;
+}

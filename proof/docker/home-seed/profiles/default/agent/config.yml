@@ -1,0 +1,19 @@
+# Profile settings for the recording container only.
+#
+# `theme` and `model` are machine-wide and live in ~/.veyyon/config.yml; the
+# rest of the settings are per-profile and are read from here. Seeding
+# `doubleEscapeAction` in the machine-wide file did nothing for that reason, and
+# `/branch` kept opening the session tree.
+#
+# `/branch` follows this setting: `tree` sends it to the session tree, which the
+# recordings reach with `/tree` anyway. `branch` is what makes the fourth
+# picker -- the user-message card -- reachable in a scene.
+doubleEscapeAction: branch
+
+# Nothing a single row needs belongs here. The compaction row's two settings used to,
+# and one row's tuning then distorted every other row: a 1200-token recent budget in a
+# 33k window whose prefix is 20k makes a tool-heavy turn compact repeatedly and free
+# nothing, and the language-server row recorded the product saying so ("Compaction
+# freed too little context to make progress") and then losing its task. A recipe in
+# scripts/demos/record-hd-demo.sh passes the lines its row needs as SCENE_SETTINGS and
+# record-x11.sh appends them to this file inside the container.

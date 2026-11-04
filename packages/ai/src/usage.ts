@@ -1,0 +1,320 @@
+/**
+ * Usage reporting types for provider quota/limit endpoints.
+ *
+ * Provides a normalized schema to represent multiple limit windows, model tiers,
+ * and shared quotas across providers.
+ */
+import { clamp01 } from "@veyyon/utils/math";
+import type { FetchImpl, Provider } from "./types";
+
+export * from "./shared-project-providers";
+export type UsageUnit = "percent" | "tokens" | "requests" | "usd" | "minutes" | "bytes" | "unknown";
+
+export type UsageStatus = "ok" | "warning" | "exhausted" | "unknown";
+
+/** Time window for a limit (e.g. 5h, 7d, monthly). */
+export interface UsageWindow {
+	/** Stable identifier (e.g. "5h", "7d", "monthly"). */
+	id: string;
+	/** Human label (e.g. "5 Hour", "7 Day"). */
+	label: string;
+	/** Window duration in milliseconds, when known. */
+	durationMs?: number;
+	/** Absolute reset timestamp in milliseconds since epoch. */
+	resetsAt?: number;
+}
+
+/** Quantitative usage data. */
+export interface UsageAmount {
+	/** Amount used in the given unit. */
+	used?: number;
+	/** Maximum limit in the given unit. */
+	limit?: number;
+	/** Remaining amount in the given unit. */
+	remaining?: number;
+	/** Fraction used (0..1). */
+	usedFraction?: number;
+	/** Fraction remaining (0..1). */
+	remainingFraction?: number;
+	/** Unit for the amounts (percent, tokens, etc.). */
+	unit: UsageUnit;
+}
+
+/** Scope metadata describing what the limit applies to. */
+export interface UsageScope {
+	provider: Provider;
+	accountId?: string;
+	projectId?: string;
+	orgId?: string;
+	modelId?: string;
+	tier?: string;
+	windowId?: string;
+	shared?: boolean;
+}
+
+/**
+ * How a limit is worded and drawn, for providers whose own app words it differently from the
+ * default "percent used" bar. Absent means the default.
+ */
+export interface UsageLimitDisplay {
+	/** Draw and word the limit as what is LEFT (`8% left`), the way the provider's own app does. */
+	remaining?: true;
+	/** The limit does not apply right now (a 5-hour meter under an exhausted weekly one): no bar, no percent. */
+	inapplicable?: true;
+}
+
+/** Normalized limit entry for a single window or quota bucket. */
+export interface UsageLimit {
+	/** Stable identifier for this limit entry. */
+	id: string;
+	/** Human label for display. */
+	label: string;
+	scope: UsageScope;
+	window?: UsageWindow;
+	amount: UsageAmount;
+	status?: UsageStatus;
+	notes?: string[];
+	/** Wording and drawing hints for providers whose own app differs from the default. */
+	display?: UsageLimitDisplay;
+}
+
+/**
+ * Per-credit detail for a saved/banked rate-limit reset.
+ *
+ * Populated when the provider's listing endpoint returns individual credit
+ * metadata (OpenAI Codex `wham/rate-limit-reset-credits`, Anthropic's
+ * `cedar_ember` grants). Callers that only need the count can ignore this;
+ * display layers use `expiresAt` to show when banked resets expire.
+ */
+export interface UsageResetCreditDetail {
+	/** Provider credit or grant id, the value a redeem names. */
+	id?: string;
+	/** Human-facing title, e.g. "One free rate limit reset". */
+	title?: string;
+	/** ISO timestamp when the credit was granted. */
+	grantedAt?: string;
+	/** ISO timestamp when the credit expires and can no longer be redeemed. */
+	expiresAt?: string;
+	/** Backend status, e.g. `available`, `redeemed`, `paused`. */
+	status?: string;
+	/** Usage windows one redeem clears, in the provider's names, when the provider states them. */
+	clears?: string[];
+}
+
+/**
+ * Saved/banked rate-limit resets an account can redeem on demand.
+ *
+ * Surfaced by providers that let users defer a usage-window reset and spend it
+ * later (OpenAI Codex saved resets, Anthropic usage-limit resets). The redeem
+ * itself is a separate, provider-specific action; this is the read-only count
+ * for display.
+ */
+export interface UsageResetCredits {
+	/** Number of resets available to redeem right now. */
+	availableCount: number;
+	/** Individual credit details (expiry dates, etc.) when the provider exposes them. */
+	credits?: UsageResetCreditDetail[];
+}
+
+/** Aggregated usage report for a provider. */
+export interface UsageReport {
+	provider: Provider;
+	fetchedAt: number;
+	limits: UsageLimit[];
+	/** Saved rate-limit resets the account can redeem, when the provider reports them. */
+	resetCredits?: UsageResetCredits;
+	/**
+	 * Provider-wide disclaimers shown once above per-account sections.
+	 * Use this for caveats that apply to every limit (e.g. "Veyyon-observed
+	 * spend only"). Per-limit notes that differ per window (e.g. "Overage
+	 * requests: N") stay on {@link UsageLimit.notes}.
+	 */
+	notes?: string[];
+	metadata?: Record<string, unknown>;
+	raw?: unknown;
+}
+
+/**
+ * Resolve a limit's used fraction (0..1; >1 means overage) from whichever
+ * amount fields the provider populated. Precedence mirrors the usage UIs:
+ * explicit fraction > used/limit > percent-unit used > inverted remaining.
+ */
+export function resolveUsedFraction(limit: UsageLimit): number | undefined {
+	const amount = limit.amount;
+	if (amount.usedFraction !== undefined) return amount.usedFraction;
+	if (amount.used !== undefined && amount.limit !== undefined && amount.limit > 0) {
+		return amount.used / amount.limit;
+	}
+	if (amount.unit === "percent" && amount.used !== undefined) return amount.used / 100;
+	if (amount.remainingFraction !== undefined) return Math.max(0, 1 - amount.remainingFraction);
+	return undefined;
+}
+
+/**
+ * The fraction (0..1) a bar is filled to, and the one place that decides which way a bar points. A
+ * limit that asks to be drawn as what is LEFT ({@link UsageLimitDisplay.remaining}) fills with the
+ * remainder; every other limit fills with what is used. `undefined` means draw no bar: the amount is
+ * unknown, or the provider says the window does not apply right now.
+ *
+ * Takes the used fraction and the display hint separately because the account surfaces carry a
+ * flattened row (`usedFraction` + `display`), not the {@link UsageLimit} it came from.
+ */
+export function fractionToDraw(used: number | undefined, display?: UsageLimitDisplay): number | undefined {
+	if (display?.inapplicable || used === undefined) return undefined;
+	const clamped = clamp01(used);
+	return display?.remaining ? 1 - clamped : clamped;
+}
+
+/** {@link fractionToDraw} for a limit as the provider reported it. */
+export function resolveDisplayFraction(limit: UsageLimit): number | undefined {
+	return fractionToDraw(resolveUsedFraction(limit), limit.display);
+}
+
+/**
+ * One recorded usage-limit snapshot: a single limit window of one account at
+ * a point in time. The usage cache itself is latest-snapshot-only; history
+ * rows are appended by the auth storage layer whenever a fresh report is
+ * fetched, so limit utilization stays inspectable over time.
+ */
+export interface UsageHistoryEntry {
+	/** Epoch ms the report was fetched. */
+	recordedAt: number;
+	provider: Provider;
+	/** Stable credential identity key (account/email/project derived). */
+	accountKey: string;
+	email?: string;
+	accountId?: string;
+	/** {@link UsageLimit.id} of the recorded window. */
+	limitId: string;
+	/** Human label of the limit. */
+	label: string;
+	windowLabel?: string;
+	/** Used fraction (0..1) when resolvable. */
+	usedFraction?: number;
+	status?: UsageStatus;
+	/** Epoch ms the window resets, when known. */
+	resetsAt?: number;
+}
+
+/** Filter for reading recorded usage history. */
+export interface UsageHistoryQuery {
+	provider?: string;
+	/** Inclusive lower bound on {@link UsageHistoryEntry.recordedAt} (epoch ms). */
+	sinceMs?: number;
+}
+
+/** One observed provider request cost, attributed to the credential that made it. */
+export interface UsageCostHistoryEntry {
+	/** Epoch ms the request completed. */
+	recordedAt: number;
+	provider: Provider;
+	/** Stable credential identity key (account/email/project/secret derived). */
+	accountKey: string;
+	/** Estimated request cost in USD. */
+	costUsd: number;
+}
+
+export interface UsageCostHistoryQuery {
+	provider?: string;
+	sinceMs?: number;
+}
+
+// The wire schemas for a usage report live in `./usage/report-wire`, built on first use.
+// Declaring them here made every consumer of this module -- which is every launch, through
+// `auth-storage.ts` -> `api-registry.ts` -> `stream.ts` -- evaluate arktype for 362ms in
+// order to hold a validator nothing had asked to run yet.
+
+/** Optional logger for usage fetchers. */
+export interface UsageLogger {
+	debug(message: string, meta?: Record<string, unknown>): void;
+	warn(message: string, meta?: Record<string, unknown>): void;
+}
+
+/** Credential bundle for usage endpoints. */
+export interface UsageCredential {
+	type: "api_key" | "oauth";
+	apiKey?: string;
+	accessToken?: string;
+	refreshToken?: string;
+	expiresAt?: number;
+	accountId?: string;
+	projectId?: string;
+	email?: string;
+	/** Organization/workspace the credential is scoped to (see OAuthCredentials.orgId). */
+	orgId?: string;
+	/** Human-readable organization name for display. */
+	orgName?: string;
+	enterpriseUrl?: string;
+	metadata?: Record<string, unknown>;
+	apiEndpoint?: string;
+}
+
+/** Parameters provided to a usage fetcher. */
+export interface UsageFetchParams {
+	provider: Provider;
+	credential: UsageCredential;
+	/** Stable credential identity key derived by the auth storage layer. */
+	accountKey?: string;
+	baseUrl?: string;
+	signal?: AbortSignal;
+}
+
+/** Shared runtime utilities for fetchers. */
+export interface UsageFetchContext {
+	fetch: FetchImpl;
+	logger?: UsageLogger;
+	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+	listUsageCosts?: (query?: UsageCostHistoryQuery) => UsageCostHistoryEntry[];
+}
+
+/** Provider implementation for fetching usage information. */
+export interface UsageProvider {
+	id: Provider;
+	fetchUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null>;
+	/** Parse provider rate-limit response headers (lowercased keys) into a usage report, if supported. */
+	parseRateLimitHeaders?(headers: Record<string, string>, now?: number): UsageReport | null;
+	supports?(params: UsageFetchParams): boolean;
+	/** True when fetchUsage contacts upstream and can authenticate the credential for health checks. */
+	validatesCredentials?: boolean;
+}
+
+/** Request context used when ranking usage for a specific model. */
+export interface CredentialRankingContext {
+	/** Provider model id, when the caller is selecting a credential for one model. */
+	modelId?: string;
+}
+
+/** Strategy for usage-based credential ranking. Providers implement this to opt into smart credential selection. */
+export interface CredentialRankingStrategy {
+	/** Extract the primary (short) and secondary (long) window limits from a usage report. */
+	findWindowLimits(
+		report: UsageReport,
+		context?: CredentialRankingContext,
+	): {
+		primary?: UsageLimit;
+		secondary?: UsageLimit;
+	};
+	/**
+	 * Restrict limits to the ones relevant for the requested model before
+	 * credential-wide exhaustion checks and ranking. Providers with shared
+	 * account-wide quotas can omit this and use all limits.
+	 */
+	scopeLimits?(report: UsageReport, context?: CredentialRankingContext): UsageLimit[];
+	/**
+	 * Return a provider-local backoff scope for the requested model. Providers
+	 * with backend-specific quotas use this so one exhausted model family does
+	 * not block unrelated families on the same OAuth credential.
+	 */
+	blockScope?(context?: CredentialRankingContext): string | undefined;
+	/** Fallback window durations (ms) when limits don't specify durationMs. */
+	windowDefaults: {
+		primaryMs: number;
+		secondaryMs: number;
+	};
+	/**
+	 * Optional: priority boost for specific credential states (e.g., fresh 5h
+	 * ticker start). `primaryUncapped` is true only when the fetched report has
+	 * an applicable secondary window but no applicable primary window.
+	 */
+	hasPriorityBoost?(primary: UsageLimit | undefined, primaryUncapped?: boolean): boolean;
+}

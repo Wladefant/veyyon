@@ -1,0 +1,2047 @@
+/**
+ * Fullscreen /models hub, shown on the alternate screen like /settings.
+ *
+ * Layout: a sidebar of scopes (default model and fallbacks, all models, one
+ * entry per provider — locked providers included, dimmed) beside a
+ * {@link ModelBrowser} body. The "Default & fallbacks" view sets the profile's
+ * default model, adjusts its thinking level in an inline strip, clears it back to
+ * the launch auto-selection, and edits `retry.fallbackChains`. Locked providers
+ * forward to the /login flow. Fully mouse-navigable (hover, wheel, click).
+ * Session-only switching lives in the compact alt+p picker ({@link ./model-picker}).
+ */
+import { ThinkingLevel } from "@veyyon/agent-core";
+import type { Model } from "@veyyon/ai";
+import { getOAuthProviders } from "@veyyon/ai/oauth";
+import { getCatalogProviderEntry } from "@veyyon/catalog/provider-models";
+import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
+import { type Component, ScrollView, type TUI } from "@veyyon/tui";
+import { clampLow, errorMessage } from "@veyyon/utils";
+import { fuzzyFilter } from "@veyyon/utils/fuzzy";
+import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
+import { HoverFade } from "@veyyon/utils/motion";
+import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
+import { padding } from "@veyyon/utils/padding";
+import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
+import type { ModelRegistry } from "../../../../config/model-registry";
+import type { Settings } from "../../../../config/settings";
+import {
+	DEFAULT_RETRY_FALLBACK_KEY,
+	isRetryFallbackModelKey,
+	sanitizeRetryFallbackChains,
+} from "../../../../session/agent-session-retry-fallback";
+import { theme } from "../../../../theme/theme-binding";
+import {
+	type ConfiguredThinkingLevel,
+	configuredThinkingLevelsForModel,
+	getConfiguredThinkingLevelMetadata,
+} from "../../../../thinking";
+import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
+import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import {
+	type ModalShellGeometry,
+	type ModalShortcut,
+	planModalChrome,
+	pointerMotionEnabled,
+	renderModalShell,
+} from "../chrome/modal-shell";
+import { fit } from "../chrome/overlay-box";
+import {
+	buildBrowserItems,
+	type DefaultModelAssignment,
+	ModelBrowser,
+	type ModelBrowserItem,
+	resolveDefaultModelAssignment,
+	sortModelItems,
+	thinkingLevelGlyph,
+} from "./model-browser";
+import { routeModalChrome } from "./select-list-mouse-routing";
+import { hoverBandAt } from "./selector-helpers";
+
+/**
+ * A row of the "Default & fallbacks" view: the default model, a model/wildcard
+ * chain-key header, one of a chain's fallback entries, or the trailing
+ * "+ New fallback…". Fallback rows carry their chain's `key`: `default` for the
+ * default model's chain, else a `provider/model-id` or `provider/*` selector.
+ */
+type ChainRow =
+	| { kind: "default" }
+	| { kind: "chainKey"; key: string }
+	| { kind: "fallback"; key: string; chainIndex: number; selector: string }
+	| { kind: "separator" }
+	| { kind: "newFallback" };
+
+/** What a key does to the chain view's cursor row. */
+type ChainCommand = "activate" | "remove" | "earlier" | "later" | "fallback" | "thinking";
+
+/**
+ * The chain-view command a key stands for, or nothing when it stands for none.
+ *
+ * `x` and Backspace/Delete remove; `[` / shift+↑ moves a fallback row earlier and `]` / shift+↓ later.
+ */
+function chainCommandFor(data: string): ChainCommand | undefined {
+	if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") return "activate";
+	if (matchesKey(data, "backspace") || matchesKey(data, "delete")) return "remove";
+	if (matchesKey(data, "shift+up")) return "earlier";
+	if (matchesKey(data, "shift+down")) return "later";
+	switch (extractPrintableText(data)) {
+		case "x":
+			return "remove";
+		case "[":
+			return "earlier";
+		case "]":
+			return "later";
+		case "f":
+			return "fallback";
+		case "t":
+			return "thinking";
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * What the model browser is currently picking for: the default model, a slot in
+ * a fallback chain (`key` is `default`, a model selector, or `provider/*`), or
+ * the primary model a brand-new fallback chain protects.
+ */
+type AssignTarget =
+	| { kind: "default" }
+	| { kind: "fallback"; key: string; index: number | null }
+	| { kind: "fallbackKey" };
+
+/** A `--models` scope entry (mirrors the session's scoped model list). */
+export interface ScopedModelItem {
+	model: Model;
+	thinkingLevel?: string;
+}
+
+export interface ModelHubCallbacks {
+	/** Persist the profile's default model. `selector` is `provider/id`. */
+	onSetDefault: (model: Model, thinkingLevel: ConfiguredThinkingLevel | undefined, selector: string) => void;
+	/** Clear the profile's default model so launch auto-selects one again. */
+	onClearDefault: () => void;
+	/** Persist a `retry.fallbackChains` entry — keyed by `default`, `provider/model-id`, or `provider/*`; an empty chain clears the key. */
+	onFallbackChainChange?: (key: string, chain: string[]) => void;
+	/** Locked provider activation: forward to the /login flow. */
+	onLoginRequest?: (providerId: string) => void;
+	onCancel: () => void;
+}
+
+export interface ModelHubOptions {
+	/** Preselect this provider's sidebar entry (e.g. when reopening after /login). */
+	initialProviderId?: string;
+}
+
+interface SidebarEntry {
+	id: string;
+	kind: "recent" | "chains" | "all" | "separator" | "provider";
+	label: string;
+	providerId?: string;
+	locked?: boolean;
+	/** Right-aligned annotation: model count, configured chain count, or `login`. */
+	annotation?: string;
+	oauth?: boolean;
+	catalogCount?: number;
+}
+
+interface StripChip {
+	label: string;
+	/** Pre-styled label body (without selection decoration). */
+	styled: string;
+	action: "setDefault" | "clearDefault" | "fallback" | "fallbackModel" | "fallbackProvider" | "thinking";
+	thinkingLevel?: ConfiguredThinkingLevel;
+}
+
+/** A footer strip of chips: what to do with one model, or the default model's thinking level. */
+interface ChipStrip {
+	kind: "pick" | "thinking";
+	item: ModelBrowserItem;
+	chips: StripChip[];
+	index: number;
+	/** Where to land when a thinking strip closes. */
+	returnToChains: boolean;
+}
+
+/** Recorded chip hit-range on the footer row (columns relative to frame col 0). */
+interface ChipRange {
+	start: number;
+	end: number;
+	index: number;
+}
+
+/** Where a pointer report lands in the sidebar|body split. */
+interface HubPointer {
+	/** Row within the split, counted from its first row. */
+	contentLine: number;
+	/** Row within the body pane, whose row 0 is the status row. */
+	bodyLine: number;
+	overSidebar: boolean;
+	overBody: boolean;
+}
+
+/** What every chain-view row is composed against. */
+interface ChainRowStyle {
+	width: number;
+	/** The `default` tag width, which fallback rows indent past. */
+	tagWidth: number;
+	/** Whether the rows own the arrows, which is when the cursor glyph is drawn. */
+	listFocused: boolean;
+}
+
+const PROVIDER_REFRESH_DEBOUNCE_MS = 120;
+const RECENT_LIMIT = 15;
+const SIDEBAR_MIN_WIDTH = 18;
+const SIDEBAR_MAX_WIDTH = 26;
+
+/**
+ * Providers already auto-refreshed this process. Selecting a provider fetches
+ * its live model list at most once per application lifetime (surviving hub
+ * close/reopen); F5 re-fetches on demand.
+ */
+const autoRefreshedProviders = new Set<string>();
+
+/** Test hook: forget which providers were auto-refreshed this process. */
+export function resetProviderAutoRefreshGuard(): void {
+	autoRefreshedProviders.clear();
+}
+
+/**
+ * The model hub component: a floating ModalShell LARGE card (title + `[x]`,
+ * click-outside/Esc cancel), hosted fullscreen via
+ * `ui.showOverlay(..., { fullscreen: true })` like `/settings`. The sidebar
+ * (scopes/providers) and body (chains/browser/locked) render as split panes
+ * inside the shell, joined by a plain vertical rule — the shell owns the
+ * chrome, not a DynamicBorder box. The host must call
+ * {@link ModelHubComponent.dispose} when the overlay closes.
+ */
+export class ModelHubComponent implements Component {
+	#tui: TUI;
+	#settings: Settings;
+	#registry: ModelRegistry;
+	#scopedModels: ReadonlyArray<ScopedModelItem>;
+	#callbacks: ModelHubCallbacks;
+
+	#browser: ModelBrowser;
+	#defaultModel: DefaultModelAssignment | undefined;
+	#availableItems: ModelBrowserItem[] = [];
+	#recentItems: ModelBrowserItem[] = [];
+	#configError: string | undefined;
+
+	#entries: SidebarEntry[] = [];
+	// Sidebar sections from the last registry sync; #composeEntries assembles
+	// #entries from these (reordered while searching).
+	#fixedEntries: SidebarEntry[] = [];
+	#unlockedProviderEntries: SidebarEntry[] = [];
+	#lockedProviderEntries: SidebarEntry[] = [];
+	/** Fuzzy match totals while searching: recent-scope hits and overall hits. */
+	#recentSearchCount = 0;
+	#searchTotal = 0;
+	#activeEntryId = "all";
+	#sidebarScroll = 0;
+	/** Snap the sidebar viewport to the active entry on the next render; wheel panning leaves it free. */
+	#sidebarFollowActive = true;
+	#sidebarHover: number | null = null;
+	/** Cross-fade for the sidebar band. The hub owns a repaint, so it is built in the constructor. */
+	#sidebarFade: HoverFade | undefined;
+	/**
+	 * Arrow-key ownership: `scope` (default) hops the sidebar even while the
+	 * search bar holds the caret; `list` navigates rows (browser models or
+	 * chain rows). Tab toggles.
+	 */
+	#focus: "scope" | "list" = "scope";
+
+	#chainRows: ChainRow[] = [];
+	#chainCursor = 0;
+	#chainHover: number | null = null;
+	/** Cross-fade for the chain-pane band; a second surface, so a second fade. */
+	#chainFade: HoverFade | undefined;
+
+	#assigning: AssignTarget | null = null;
+	#strip: ChipStrip | null = null;
+	/** Per-provider fuzzy match counts while a query is active; null when not searching. */
+	#searchCounts: Map<string, number> | null = null;
+
+	// Provider discovery refresh (debounced per sidebar selection, with spinner).
+	#refreshingProviders = new Set<string>();
+	#scheduledProviderRefreshes = new Map<string, Timer>();
+	#refreshSpinnerFrame = 0;
+	#refreshSpinnerInterval?: Timer;
+
+	// Frame geometry from the last render, for mouse hit-testing against the
+	// floating ModalShell card (see hitTestModalChrome + #routeMouseEvent).
+	#shellGeometry: ModalShellGeometry | null = null;
+	#hoveredShortcutId: string | null = null;
+	/** Card left inset (centering pad) from the last render. */
+	#frameLeft = 0;
+	/** Screen row where the sidebar|body split rows begin. */
+	#contentRowStart = 1;
+	/** Number of split (sidebar|body) rows rendered — excludes the strip/hint row. */
+	#splitRowCount = 0;
+	#sidebarWidthLast = SIDEBAR_MIN_WIDTH;
+	/** Screen row of the full-width strip/hint row (last body row, below the split). */
+	#stripRow = 0;
+	#chipRanges: ChipRange[] = [];
+	#lockedLoginLine: number | null = null;
+	#chainRowStart = 1;
+	/** First chain row drawn: the window offset that keeps the selection on screen. */
+	#chainScroll = 0;
+
+	constructor(
+		tui: TUI,
+		settings: Settings,
+		registry: ModelRegistry,
+		scopedModels: ReadonlyArray<ScopedModelItem>,
+		callbacks: ModelHubCallbacks,
+		options: ModelHubOptions = {},
+	) {
+		this.#tui = tui;
+		this.#settings = settings;
+		this.#registry = registry;
+		this.#scopedModels = scopedModels;
+		this.#callbacks = callbacks;
+
+		this.#browser = new ModelBrowser({
+			emptyText: () => this.#emptyStateMessage(),
+		});
+		this.#browser.onActivate = item => this.#activateItem(item);
+		this.#browser.onCancel = () => this.#callbacks.onCancel();
+		this.#browser.onQueryChange = query => this.#onQueryChanged(query);
+
+		// Three pointer surfaces share the card's repaint: the sidebar, the chain pane, and the
+		// model list. The browser paints inside this card's frame and has no repaint of its own.
+		const bandMotion = { requestRender: () => this.#tui.requestRender(), enabled: pointerMotionEnabled() };
+		this.#sidebarFade = new HoverFade(bandMotion);
+		this.#chainFade = new HoverFade(bandMotion);
+		this.#browser.setHoverMotion(bandMotion);
+
+		// Hydrate synchronously from the current registry snapshot so the first
+		// Enter after opening acts on cached models instead of being dropped
+		// while the offline refresh promise is still pending.
+		this.#syncFromRegistryState();
+
+		const initialProvider = options.initialProviderId;
+		if (initialProvider && this.#entries.some(entry => entry.providerId === initialProvider)) {
+			this.#setActiveEntry(`provider:${initialProvider}`);
+		} else {
+			this.#setActiveEntry("all");
+		}
+
+		// Reconcile with cached discovery state in the background. A --models
+		// scope is registry-independent, so the offline reload would only repeat
+		// the synchronous hydration above.
+		if (this.#scopedModels.length === 0) {
+			this.#registry
+				.refresh("offline")
+				.then(() => this.#syncFromRegistryState())
+				.catch(error => {
+					this.#configError = errorMessage(error);
+				})
+				.finally(() => this.#tui.requestRender());
+		}
+	}
+
+	/** Cancel pending provider refresh timers and the spinner. Host calls this on overlay close. */
+	dispose(): void {
+		this.#sidebarFade?.dispose();
+		this.#sidebarFade = undefined;
+		this.#sidebarHover = null;
+		this.#chainFade?.dispose();
+		this.#chainFade = undefined;
+		this.#chainHover = null;
+		this.#browser.disposeHoverMotion();
+		for (const [, timer] of this.#scheduledProviderRefreshes) clearTimeout(timer);
+		this.#scheduledProviderRefreshes.clear();
+		this.#refreshingProviders.clear();
+		if (this.#refreshSpinnerInterval) {
+			clearInterval(this.#refreshSpinnerInterval);
+			this.#refreshSpinnerInterval = undefined;
+		}
+	}
+
+	invalidate(): void {}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Data pipeline
+	// ═══════════════════════════════════════════════════════════════════════
+
+	/** Resolve the profile's default model against the catalog (or the `--models` scope). */
+	#reloadDefaultModel(autoCandidates: ReadonlyArray<Model>): void {
+		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll();
+		this.#defaultModel = resolveDefaultModelAssignment(this.#settings, allModels);
+	}
+
+	/** Rebuild items, the default model, and the sidebar from the registry's in-memory state. */
+	#syncFromRegistryState(): void {
+		let allModels: ReadonlyArray<Model>;
+		let availableModels: ReadonlyArray<Model>;
+		if (this.#scopedModels.length > 0) {
+			allModels = this.#scopedModels.map(scoped => scoped.model);
+			availableModels = allModels;
+			this.#configError = undefined;
+		} else {
+			const loadError = this.#registry.getError();
+			this.#configError = loadError ? errorMessage(loadError) : undefined;
+			allModels = this.#registry.getAll();
+			try {
+				availableModels = this.#registry.getAvailable();
+			} catch (error) {
+				this.#configError = errorMessage(error);
+				availableModels = [];
+			}
+		}
+
+		this.#reloadDefaultModel(availableModels);
+		this.#buildChainRows();
+
+		const storage = AgentStorage.forAgentDir(this.#settings.getAgentDir());
+		const mruOrder = storage?.getModelUsageOrder() ?? [];
+		this.#availableItems = buildBrowserItems(availableModels);
+		sortModelItems(this.#availableItems, { defaultModel: this.#defaultModel, mruOrder });
+		this.#browser.setDefaultModel(this.#defaultModel);
+		this.#browser.setMruOrder(mruOrder);
+		this.#browser.setPerfStats(storage?.getModelPerf() ?? new Map());
+
+		const bySelector = new Map(this.#availableItems.map(item => [item.selector, item]));
+		this.#recentItems = [];
+		for (const key of mruOrder) {
+			const item = bySelector.get(key);
+			if (item) this.#recentItems.push(item);
+			if (this.#recentItems.length >= RECENT_LIMIT) break;
+		}
+
+		this.#buildSidebar(allModels, availableModels);
+		this.#applyScope();
+	}
+
+	#buildSidebar(allModels: ReadonlyArray<Model>, availableModels: ReadonlyArray<Model>): void {
+		const scoped = this.#scopedModels.length > 0;
+		let disabledProviders: ReadonlySet<string>;
+		try {
+			disabledProviders = new Set(this.#settings.get("disabledProviders"));
+		} catch {
+			disabledProviders = new Set();
+		}
+
+		const availableCounts = new Map<string, number>();
+		for (const model of availableModels) {
+			availableCounts.set(model.provider, (availableCounts.get(model.provider) ?? 0) + 1);
+		}
+		const catalogCounts = new Map<string, number>();
+		for (const model of allModels) {
+			catalogCounts.set(model.provider, (catalogCounts.get(model.provider) ?? 0) + 1);
+		}
+
+		const unlocked = new Set<string>(availableCounts.keys());
+		const locked = new Set<string>();
+		if (!scoped) {
+			const authStorage = this.#registry.authStorage;
+			for (const provider of catalogCounts.keys()) {
+				if (!unlocked.has(provider) && !disabledProviders.has(provider)) {
+					locked.add(provider);
+				}
+			}
+			for (const provider of this.#registry.getDiscoverableProviders()) {
+				if (unlocked.has(provider) || disabledProviders.has(provider)) continue;
+				// Discoverable without stored auth: catalog-backed providers stay
+				// locked; keyless/custom endpoints (ollama, vllm, …) surface as
+				// selectable so discovery can populate them.
+				if (authStorage.hasAuth(provider) || !locked.has(provider)) {
+					locked.delete(provider);
+					unlocked.add(provider);
+				}
+			}
+		}
+
+		const oauthIds = new Set(getOAuthProviders().map(provider => provider.id));
+		const providerEntry = (providerId: string, isLocked: boolean): SidebarEntry => ({
+			id: `provider:${providerId}`,
+			kind: "provider",
+			label: providerId,
+			providerId,
+			locked: isLocked,
+			annotation: isLocked ? undefined : String(availableCounts.get(providerId) ?? 0),
+			oauth: oauthIds.has(providerId),
+			catalogCount: catalogCounts.get(providerId) ?? 0,
+		});
+
+		// The chain view leads the fixed section so downward hops head into
+		// model scopes instead of being captured by the chain rows.
+		const fixed: SidebarEntry[] = [
+			{
+				id: "chains",
+				kind: "chains",
+				label: "Default & fallbacks",
+				annotation: String(Object.keys(this.#fallbackChains()).length),
+			},
+			{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+		];
+
+		this.#fixedEntries = fixed;
+		this.#unlockedProviderEntries = Array.from(unlocked)
+			.sort((a, b) => a.localeCompare(b))
+			.map(provider => providerEntry(provider, false));
+		this.#lockedProviderEntries = Array.from(locked)
+			.sort((a, b) => a.localeCompare(b))
+			.map(provider => providerEntry(provider, true));
+		this.#composeEntries();
+	}
+
+	/**
+	 * Assemble `#entries` from the stored sections. While a search is active,
+	 * providers with matches float to the top of the provider section (each
+	 * group stays alphabetical) so the hop order, mouse hit-testing, and the
+	 * paint all agree.
+	 */
+	#composeEntries(): void {
+		const counts = this.#searchCounts;
+		let providers = this.#unlockedProviderEntries;
+		if (counts) {
+			providers = providers.slice().sort((a, b) => {
+				const aMatched = (counts.get(a.providerId ?? "") ?? 0) > 0;
+				const bMatched = (counts.get(b.providerId ?? "") ?? 0) > 0;
+				if (aMatched !== bMatched) return aMatched ? -1 : 1;
+				return a.label.localeCompare(b.label);
+			});
+		}
+
+		const entries: SidebarEntry[] = this.#fixedEntries.slice();
+		if (providers.length > 0) {
+			entries.push({ id: "sep:providers", kind: "separator", label: "" });
+			for (let i = 0; i < providers.length; i++) entries.push(providers[i]!);
+		}
+		if (this.#lockedProviderEntries.length > 0) {
+			entries.push({ id: "sep:locked", kind: "separator", label: "" });
+			for (let i = 0; i < this.#lockedProviderEntries.length; i++) entries.push(this.#lockedProviderEntries[i]!);
+		}
+
+		this.#entries = entries;
+		if (!entries.some(entry => entry.id === this.#activeEntryId)) {
+			this.#activeEntryId = "all";
+			this.#sidebarFollowActive = true;
+		}
+	}
+
+	#activeEntry(): SidebarEntry {
+		return this.#entries.find(entry => entry.id === this.#activeEntryId) ?? this.#entries[0];
+	}
+
+	#setActiveEntry(id: string): void {
+		if (!this.#entries.some(entry => entry.id === id)) return;
+		this.#activeEntryId = id;
+		this.#sidebarFollowActive = true;
+		this.#applyScope();
+		const entry = this.#activeEntry();
+		// Hops must never steal arrow focus: landing on a scope keeps provider
+		// navigation active. Diving into the chain rows is explicit (Enter, →,
+		// or a click on the "Default & fallbacks" entry).
+		this.#focus = "scope";
+		if (entry.kind === "provider" && !entry.locked) {
+			this.#scheduleProviderRefresh(entry.providerId ?? "");
+		}
+		this.#cancelScheduledRefreshesExcept(entry.kind === "provider" ? entry.providerId : undefined);
+	}
+
+	/** Push the active scope's items into the browser. */
+	#applyScope(): void {
+		const entry = this.#activeEntry();
+		switch (entry.kind) {
+			case "recent":
+				this.#browser.setShowProvider(true);
+				this.#browser.setItems(this.#recentItems.slice());
+				break;
+			case "provider": {
+				if (entry.locked) {
+					// Assign-mode renders the browser regardless of scope; a locked
+					// provider contributes nothing selectable.
+					this.#browser.setItems([]);
+					break;
+				}
+				const providerId = entry.providerId;
+				this.#browser.setShowProvider(false);
+				this.#browser.setItems(this.#availableItems.filter(item => item.provider === providerId));
+				break;
+			}
+			case "chains":
+				this.#chainCursor = Math.min(this.#chainCursor, Math.max(0, this.#chainRowCount - 1));
+				break;
+			default:
+				this.#browser.setShowProvider(true);
+				this.#browser.setItems(this.#availableItems.slice());
+				break;
+		}
+	}
+
+	/**
+	 * The configured `retry.fallbackChains` record with malformed keys/entries
+	 * dropped: non-array chains and non-string selectors never reach the rows
+	 * or chain editors, so an edit through the hub replaces them wholesale.
+	 */
+	#fallbackChains(): Record<string, string[]> {
+		try {
+			return sanitizeRetryFallbackChains(this.#settings.get("retry.fallbackChains"));
+		} catch {
+			// No readable chains means none to show. `get` throws only when there is no settings context, in
+			// which case this panel is not on screen either; a chain that IS configured cannot arrive empty
+			// through this path, because a malformed value is sanitized above rather than thrown over.
+			return {};
+		}
+	}
+
+	/**
+	 * Rebuild the chain view rows: the default model followed by its
+	 * fallback-chain entries, then model-oriented chains (`provider/model-id`
+	 * and `provider/*` keys) as headed groups.
+	 */
+	#buildChainRows(): void {
+		const rows: ChainRow[] = [{ kind: "default" }];
+		const chains = this.#fallbackChains();
+		const defaultChain = chains[DEFAULT_RETRY_FALLBACK_KEY] ?? [];
+		for (let i = 0; i < defaultChain.length; i++) {
+			rows.push({ kind: "fallback", key: DEFAULT_RETRY_FALLBACK_KEY, chainIndex: i, selector: defaultChain[i] });
+		}
+		rows.push({ kind: "separator" });
+		const modelKeys = Object.keys(chains).filter(isRetryFallbackModelKey).sort();
+		for (const key of modelKeys) {
+			const chain = chains[key] ?? [];
+			rows.push({ kind: "chainKey", key });
+			for (let i = 0; i < chain.length; i++) {
+				rows.push({ kind: "fallback", key, chainIndex: i, selector: chain[i] });
+			}
+		}
+		rows.push({ kind: "newFallback" });
+		this.#chainRows = rows;
+	}
+
+	/** Refresh the default model and chains after a settings mutation. */
+	#refreshAfterMutation(): void {
+		this.#syncFromRegistryState();
+		this.#tui.requestRender();
+	}
+
+	/**
+	 * Recompute per-provider match counts for the active query. Providers
+	 * without matches gray out and the scope hop skips them; a provider scope
+	 * that just lost its last match falls back to All models so the results
+	 * never silently vanish.
+	 */
+	#onQueryChanged(query: string): void {
+		if (!query.trim()) {
+			this.#searchCounts = null;
+			this.#composeEntries();
+			return;
+		}
+		const matches = fuzzyFilter(this.#availableItems, query, ({ provider, id }) => `${provider}/${id}`);
+		const counts = new Map<string, number>();
+		for (const item of matches) {
+			counts.set(item.provider, (counts.get(item.provider) ?? 0) + 1);
+		}
+		const recentSelectors = new Set(this.#recentItems.map(item => item.selector));
+		this.#recentSearchCount = matches.reduce(
+			(total, item) => total + (recentSelectors.has(item.selector) ? 1 : 0),
+			0,
+		);
+		this.#searchTotal = matches.length;
+		this.#searchCounts = counts;
+		this.#composeEntries();
+		const entry = this.#activeEntry();
+		if (
+			this.#assigning === null &&
+			entry.kind === "provider" &&
+			(entry.locked || (counts.get(entry.providerId ?? "") ?? 0) === 0)
+		) {
+			this.#setActiveEntry("all");
+		}
+	}
+
+	/**
+	 * Entries the scope hop skips: separators always; while searching, also
+	 * the chain view (not a model scope), an empty Recent, locked providers,
+	 * and providers without matches.
+	 */
+	#isHopSkipped(entry: SidebarEntry): boolean {
+		if (entry.kind === "separator") return true;
+		if (!this.#searchCounts) return false;
+		if (entry.kind === "chains") return true;
+		if (entry.kind === "recent") return this.#recentSearchCount === 0;
+		if (entry.kind === "provider") {
+			if (entry.locked) return true;
+			return (this.#searchCounts.get(entry.providerId ?? "") ?? 0) === 0;
+		}
+		return false;
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Provider discovery refresh
+	// ═══════════════════════════════════════════════════════════════════════
+
+	#startRefreshSpinner(): void {
+		if (this.#refreshSpinnerInterval) return;
+		this.#refreshSpinnerInterval = setInterval(() => {
+			const frameCount = theme.spinnerFrames.length;
+			if (frameCount > 0) {
+				this.#refreshSpinnerFrame = (this.#refreshSpinnerFrame + 1) % frameCount;
+			}
+			this.#tui.requestRender();
+		}, 80);
+	}
+
+	#stopRefreshSpinnerIfIdle(): void {
+		if (this.#refreshingProviders.size > 0) return;
+		if (this.#refreshSpinnerInterval) {
+			clearInterval(this.#refreshSpinnerInterval);
+			this.#refreshSpinnerInterval = undefined;
+		}
+		this.#refreshSpinnerFrame = 0;
+	}
+
+	#setProviderRefreshing(providerId: string, refreshing: boolean): void {
+		if (refreshing) {
+			this.#refreshingProviders.add(providerId);
+			this.#startRefreshSpinner();
+		} else {
+			this.#refreshingProviders.delete(providerId);
+			this.#stopRefreshSpinnerIfIdle();
+		}
+	}
+
+	#cancelScheduledRefreshesExcept(keepProviderId?: string): void {
+		for (const [providerId, timer] of this.#scheduledProviderRefreshes) {
+			if (providerId === keepProviderId) continue;
+			clearTimeout(timer);
+			this.#scheduledProviderRefreshes.delete(providerId);
+			this.#setProviderRefreshing(providerId, false);
+		}
+	}
+
+	#scheduleProviderRefresh(providerId: string, options?: { force?: boolean }): void {
+		if (this.#scopedModels.length > 0 || !providerId) return;
+		if (this.#scheduledProviderRefreshes.has(providerId) || this.#refreshingProviders.has(providerId)) return;
+		// Hovering a provider must not re-fetch on every visit: auto-refresh runs
+		// at most once per provider for the process lifetime. F5 forces a re-fetch.
+		if (!options?.force && autoRefreshedProviders.has(providerId)) return;
+		this.#setProviderRefreshing(providerId, true);
+		const timer = setTimeout(() => {
+			// Consume the once-guard only when the fetch actually starts: hopping
+			// through a provider cancels the debounce and must not burn its slot.
+			autoRefreshedProviders.add(providerId);
+			this.#scheduledProviderRefreshes.delete(providerId);
+			void this.#refreshProviderInBackground(providerId);
+		}, PROVIDER_REFRESH_DEBOUNCE_MS);
+		this.#scheduledProviderRefreshes.set(providerId, timer);
+	}
+
+	async #refreshProviderInBackground(providerId: string): Promise<void> {
+		try {
+			await this.#registry.refreshProvider(providerId, "online");
+			// The provider refresh already updated the registry snapshot;
+			// re-reading it here stays purely in-memory.
+			this.#syncFromRegistryState();
+		} catch (error) {
+			this.#configError = errorMessage(error);
+		} finally {
+			this.#setProviderRefreshing(providerId, false);
+			this.#tui.requestRender();
+		}
+	}
+
+	#emptyStateMessage(): string | undefined {
+		if (this.#configError) return `  ${this.#configError}`;
+		const entry = this.#activeEntry();
+		if (entry.kind === "recent") return "  No recently used models yet";
+		if (entry.kind !== "provider" || entry.locked) return undefined;
+		if (this.#browser.query.trim()) {
+			return `  No matching models in ${entry.label}. Switch to All models to search every provider.`;
+		}
+		const providerId = entry.providerId ?? "";
+		const state = this.#registry.getProviderDiscoveryState(providerId);
+		if (!state) return undefined;
+		const age = formatDiscoveryAge(state.fetchedAt);
+		switch (state.status) {
+			case "cached":
+				return age
+					? `  Using cached model list from ${age}. Live refresh is still pending.`
+					: "  Using cached model list. Live refresh is still pending.";
+			case "unavailable": {
+				const httpMatch = state.error?.match(/^HTTP (\d+) from (.+)$/);
+				if (httpMatch?.[1] === "404") {
+					return `  Discovery endpoint ${httpMatch[2]} returned 404. Point baseUrl at the host that serves /models (usually .../v1).`;
+				}
+				if (state.error) return `  Discovery failed: ${state.error}`;
+				return age ? `  Provider unavailable. Using cached model list from ${age}.` : "  Provider unavailable.";
+			}
+			case "unauthenticated":
+				return "  Provider requires authentication before models can be discovered.";
+			case "idle":
+				return "  Provider has not been refreshed yet.";
+			case "empty":
+				return "  Discovery succeeded but returned 0 models. Check that /models returns { data: [{ id }] }.";
+			case "ok":
+				return undefined;
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Assignment flow
+	// ═══════════════════════════════════════════════════════════════════════
+
+	#activateItem(item: ModelBrowserItem): void {
+		if (this.#assigning) {
+			const target = this.#assigning;
+			this.#assigning = null;
+			if (target.kind === "default") {
+				this.#setDefault(item, true);
+			} else if (target.kind === "fallbackKey") {
+				this.#openFallbackKeyStrip(item);
+			} else {
+				this.#commitFallback(item, target);
+			}
+			return;
+		}
+		this.#openPickStrip(item);
+	}
+
+	/** Whether `item` is the profile's default model. */
+	#isDefault(item: ModelBrowserItem): boolean {
+		const current = this.#defaultModel;
+		return !!current && current.model.provider === item.model.provider && current.model.id === item.model.id;
+	}
+
+	/** Persist `item` as the default model, preserving a still-supported thinking level, then open the thinking strip. */
+	#setDefault(item: ModelBrowserItem, returnToChains: boolean): void {
+		const current = this.#defaultModel;
+		let level: ConfiguredThinkingLevel = ThinkingLevel.Inherit;
+		if (current) {
+			const supported = thinkingOptionsFor(item.model);
+			level = supported.includes(current.thinkingLevel) ? current.thinkingLevel : ThinkingLevel.Inherit;
+		}
+		this.#callbacks.onSetDefault(item.model, level, item.selector);
+		this.#refreshAfterMutation();
+		this.#openThinkingStrip(item, returnToChains);
+	}
+
+	#clearDefault(): void {
+		if (!this.#defaultModel) return;
+		this.#callbacks.onClearDefault();
+		this.#refreshAfterMutation();
+	}
+
+	#openPickStrip(item: ModelBrowserItem): void {
+		const isDefault = this.#isDefault(item);
+		const chips: StripChip[] = [
+			{
+				label: "default",
+				styled: isDefault
+					? theme.fg("success", `${theme.status.enabled}default`) + theme.fg("dim", ` ${theme.status.success}`)
+					: theme.fg("success", "default"),
+				action: isDefault ? "clearDefault" : "setDefault",
+			},
+			{
+				label: `fallbacks:${item.model.id}`,
+				styled: theme.fg("muted", `fallbacks:${item.model.id}`),
+				action: "fallbackModel",
+			},
+			{
+				label: `fallbacks:${item.model.provider}/*`,
+				styled: theme.fg("muted", `fallbacks:${item.model.provider}/*`),
+				action: "fallbackProvider",
+			},
+			{ label: "fallback", styled: theme.fg("muted", "retry-fallback"), action: "fallback" },
+		];
+		this.#strip = { kind: "pick", item, chips, index: 0, returnToChains: false };
+	}
+
+	#openThinkingStrip(item: ModelBrowserItem, returnToChains: boolean): void {
+		const options = thinkingOptionsFor(item.model);
+		const current = this.#defaultModel?.thinkingLevel ?? ThinkingLevel.Inherit;
+		const chips: StripChip[] = options.map(level => {
+			const label = getConfiguredThinkingLevelMetadata(level).label;
+			const glyph = thinkingLevelGlyph(level);
+			return {
+				label,
+				styled: glyph ? `${theme.fg("accent", glyph)} ${label}` : label,
+				action: "thinking",
+				thinkingLevel: level,
+			};
+		});
+		const preselect = options.indexOf(current);
+		this.#strip = {
+			kind: "thinking",
+			item,
+			chips,
+			index: preselect >= 0 ? preselect : 0,
+			returnToChains,
+		};
+	}
+
+	#closeStrip(): void {
+		const strip = this.#strip;
+		this.#strip = null;
+		this.#chipRanges = [];
+		if (strip?.kind === "thinking" && strip.returnToChains) {
+			this.#setActiveEntry("chains");
+			this.#focus = "list";
+		}
+	}
+
+	#activateStripChip(): void {
+		const strip = this.#strip;
+		if (!strip) return;
+		const chip = strip.chips[strip.index];
+		if (!chip) return;
+		switch (chip.action) {
+			case "setDefault":
+				this.#strip = null;
+				this.#setDefault(strip.item, false);
+				return;
+			case "clearDefault":
+				this.#clearDefault();
+				this.#closeStrip();
+				return;
+			case "fallback":
+				this.#appendFallback(strip.item, DEFAULT_RETRY_FALLBACK_KEY);
+				this.#closeStrip();
+				return;
+			case "fallbackModel":
+				this.#closeStrip();
+				this.#startAssignFallback(strip.item.selector, null);
+				return;
+			case "fallbackProvider":
+				this.#closeStrip();
+				this.#startAssignFallback(`${strip.item.model.provider}/*`, null);
+				return;
+			case "thinking":
+				if (chip.thinkingLevel !== undefined) {
+					this.#callbacks.onSetDefault(strip.item.model, chip.thinkingLevel, strip.item.selector);
+					this.#refreshAfterMutation();
+				}
+				this.#closeStrip();
+				return;
+		}
+	}
+
+	/** Switch the body into assign mode for the default model: full catalog, cleared query, current model preselected. */
+	#startAssignDefault(): void {
+		this.#assigning = { kind: "default" };
+		this.#focus = "scope";
+		this.#browser.setShowProvider(true);
+		this.#browser.setItems(this.#availableItems.slice());
+		this.#browser.setQuery("");
+		const current = this.#defaultModel;
+		if (current) {
+			this.#browser.selectSelector(`${current.model.provider}/${current.model.id}`);
+		}
+	}
+
+	/** Browse the catalog to fill a fallback-chain slot: `index` replaces an entry, `null` appends. */
+	#startAssignFallback(key: string, index: number | null): void {
+		this.#assigning = { kind: "fallback", key, index };
+		this.#focus = "scope";
+		this.#browser.setShowProvider(true);
+		this.#browser.setItems(this.#availableItems.slice());
+		this.#browser.setQuery("");
+		if (index !== null) {
+			const selector = this.#fallbackChains()[key]?.[index];
+			if (selector) this.#browser.selectSelector(selector);
+		}
+	}
+
+	/** Browse the catalog for the primary model a brand-new fallback chain protects. */
+	#startAssignFallbackKey(): void {
+		this.#assigning = { kind: "fallbackKey" };
+		this.#focus = "scope";
+		this.#browser.setShowProvider(true);
+		this.#browser.setItems(this.#availableItems.slice());
+		this.#browser.setQuery("");
+	}
+
+	/** Second step of "+ New fallback…": key the chain by the picked model or its whole provider. */
+	#openFallbackKeyStrip(item: ModelBrowserItem): void {
+		const chips: StripChip[] = [
+			{
+				label: `for ${item.selector}`,
+				styled: theme.fg("muted", `for ${item.selector}`),
+				action: "fallbackModel",
+			},
+			{
+				label: `for ${item.model.provider}/*`,
+				styled: theme.fg("muted", `for ${item.model.provider}/*`),
+				action: "fallbackProvider",
+			},
+		];
+		this.#strip = { kind: "pick", item, chips, index: 0, returnToChains: false };
+	}
+
+	/** Write the picked model into the target chain slot, dedupe, and land back on its chain row. */
+	#commitFallback(item: ModelBrowserItem, target: { key: string; index: number | null }): void {
+		const chain = [...(this.#fallbackChains()[target.key] ?? [])];
+		const selector = item.selector;
+		if (target.index !== null && target.index < chain.length) {
+			chain[target.index] = selector;
+			for (let i = chain.length - 1; i >= 0; i--) {
+				if (i !== target.index && chain[i] === selector) chain.splice(i, 1);
+			}
+		} else if (!chain.includes(selector)) {
+			chain.push(selector);
+		}
+		this.#setFallbackChain(target.key, chain);
+		this.#browser.setQuery("");
+		this.#setActiveEntry("chains");
+		this.#focus = "list";
+		const rowIndex = this.#chainRows.findIndex(
+			row => row.kind === "fallback" && row.key === target.key && row.selector === selector,
+		);
+		if (rowIndex >= 0) this.#chainCursor = rowIndex;
+	}
+
+	/** Persist `key`'s chain through the host callback and rebuild dependent state. */
+	#setFallbackChain(key: string, chain: string[]): void {
+		this.#callbacks.onFallbackChainChange?.(key, chain);
+		this.#refreshAfterMutation();
+	}
+
+	/** Append `item` to `key`'s fallback chain (no-op when already present). */
+	#appendFallback(item: ModelBrowserItem, key: string): void {
+		const chain = [...(this.#fallbackChains()[key] ?? [])];
+		if (chain.includes(item.selector)) return;
+		chain.push(item.selector);
+		this.#setFallbackChain(key, chain);
+	}
+
+	/** Remove one chain entry; the cursor stays on the nearest surviving row. */
+	#removeFallback(row: { key: string; chainIndex: number }): void {
+		const chain = [...(this.#fallbackChains()[row.key] ?? [])];
+		if (row.chainIndex >= chain.length) return;
+		chain.splice(row.chainIndex, 1);
+		this.#setFallbackChain(row.key, chain);
+		this.#chainCursor = Math.min(this.#chainCursor, Math.max(0, this.#chainRows.length - 1));
+	}
+
+	/** Move a chain entry one slot earlier/later; the cursor follows the moved entry. */
+	#moveFallback(row: { key: string; chainIndex: number }, delta: -1 | 1): void {
+		const chain = [...(this.#fallbackChains()[row.key] ?? [])];
+		const target = row.chainIndex + delta;
+		if (row.chainIndex >= chain.length || target < 0 || target >= chain.length) return;
+		[chain[row.chainIndex], chain[target]] = [chain[target], chain[row.chainIndex]];
+		this.#setFallbackChain(row.key, chain);
+		this.#chainCursor += delta;
+	}
+
+	#cancelAssign(): void {
+		this.#assigning = null;
+		this.#browser.setQuery("");
+		this.#setActiveEntry("chains");
+		this.#focus = "list";
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Input
+	// ═══════════════════════════════════════════════════════════════════════
+
+	handleInput(data: string): void {
+		if (data.startsWith("\x1b[<")) {
+			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
+			return;
+		}
+
+		if (this.#strip) {
+			this.#handleStripInput(data);
+			return;
+		}
+
+		if (matchesSelectCancel(data)) {
+			this.#cancel();
+			return;
+		}
+
+		const entry = this.#activeEntry();
+		if (this.#handlePaneKey(data, entry)) return;
+		if (entry.kind === "chains" && this.#assigning === null) {
+			this.#handleChainViewInput(data);
+			return;
+		}
+		if (entry.kind === "provider" && entry.locked && this.#assigning === null) {
+			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+				this.#requestLogin(entry);
+			}
+			return;
+		}
+		this.#browser.handleInput(data);
+	}
+
+	/** Escape leaves an assignment first, then clears a search, and only then closes the hub. */
+	#cancel(): void {
+		if (this.#assigning !== null) {
+			this.#cancelAssign();
+			return;
+		}
+		if (this.#isBrowserView(this.#activeEntry()) && this.#browser.query.length > 0) {
+			this.#browser.handleCancel();
+			return;
+		}
+		this.#callbacks.onCancel();
+	}
+
+	/**
+	 * Apply a key that moves focus or refreshes rather than acting on a row, and report whether the
+	 * key was one: Tab toggles the focused pane, F5 refreshes a provider, ←/→ switch panes, and the
+	 * arrows hop scopes while the sidebar has focus.
+	 */
+	#handlePaneKey(data: string, entry: SidebarEntry): boolean {
+		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+			this.#focus = this.#focus === "scope" ? "list" : "scope";
+			return true;
+		}
+		if (matchesKey(data, "f5")) {
+			if (entry.kind === "provider" && !entry.locked) {
+				this.#scheduleProviderRefresh(entry.providerId ?? "", { force: true });
+			}
+			return true;
+		}
+
+		// ←/→ are spatial pane switches: the sidebar sits left of the rows.
+		// They never reach the search caret — fuzzy queries don't need one.
+		if (matchesKey(data, "left")) {
+			this.#focus = "scope";
+			return true;
+		}
+		if (matchesKey(data, "right")) {
+			// Only views with rows can take list focus (not the locked pane).
+			if ((entry.kind === "chains" && this.#assigning === null) || this.#isBrowserView(entry)) {
+				this.#focus = "list";
+			}
+			return true;
+		}
+
+		// Arrow ownership: scope mode hops the sidebar even while the search
+		// bar holds the caret; list mode navigates rows.
+		if (this.#focus !== "scope") return false;
+		if (matchesSelectUp(data)) {
+			this.#moveSidebar(-1);
+			return true;
+		}
+		if (matchesSelectDown(data)) {
+			this.#moveSidebar(1);
+			return true;
+		}
+		return false;
+	}
+
+	#isBrowserView(entry: SidebarEntry): boolean {
+		if (this.#assigning !== null) return true;
+		return entry.kind === "recent" || entry.kind === "all" || (entry.kind === "provider" && !entry.locked);
+	}
+
+	#handleStripInput(data: string): void {
+		const strip = this.#strip;
+		if (!strip) return;
+		if (matchesSelectCancel(data)) {
+			this.#closeStrip();
+			return;
+		}
+		if (matchesKey(data, "left") || matchesKey(data, "up") || matchesKey(data, "shift+tab")) {
+			strip.index = (strip.index - 1 + strip.chips.length) % strip.chips.length;
+			return;
+		}
+		if (matchesKey(data, "right") || matchesKey(data, "down") || matchesKey(data, "tab")) {
+			strip.index = (strip.index + 1) % strip.chips.length;
+			return;
+		}
+		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+			this.#activateStripChip();
+			return;
+		}
+	}
+
+	#moveSidebar(delta: number): void {
+		const count = this.#entries.length;
+		if (count === 0) return;
+		let index = this.#entries.findIndex(entry => entry.id === this.#activeEntryId);
+		if (index < 0) index = 0;
+		for (let step = 0; step < count; step++) {
+			index = (index + delta + count) % count;
+			const entry = this.#entries[index];
+			if (entry && !this.#isHopSkipped(entry)) {
+				// Scope changes keep an active assignment (scoping helps find the
+				// model); landing on the chain view cancels it.
+				if (entry.kind === "chains") this.#assigning = null;
+				this.#setActiveEntry(entry.id);
+				return;
+			}
+		}
+	}
+
+	/** Row count of the chain view (the default model, chains, their entries, and "+ New fallback…"). */
+	get #chainRowCount(): number {
+		return this.#chainRows.length;
+	}
+
+	/** Enter/click activation for a chain-view row. */
+	#activateChainRow(row: ChainRow): void {
+		switch (row.kind) {
+			case "default":
+				this.#startAssignDefault();
+				return;
+			case "chainKey":
+				this.#startAssignFallback(row.key, null);
+				return;
+			case "fallback":
+				this.#startAssignFallback(row.key, row.chainIndex);
+				return;
+			case "newFallback":
+				this.#startAssignFallbackKey();
+				return;
+			case "separator":
+				return;
+		}
+	}
+
+	/** Step the chain cursor by one row, skipping separator rows. Wraps at the ends unless `wrap: false` (then the cursor stays put). */
+	#stepChainCursor(from: number, delta: -1 | 1, options: { wrap?: boolean } = {}): number {
+		const wrap = options.wrap ?? true;
+		const count = this.#chainRows.length;
+		if (count === 0) return 0;
+		let index = from;
+		for (let i = 0; i < count; i++) {
+			const next = index + delta;
+			if (next < 0 || next >= count) {
+				if (!wrap) return from;
+				index = (next + count) % count;
+			} else {
+				index = next;
+			}
+			if (this.#chainRows[index]?.kind !== "separator") return index;
+		}
+		return from;
+	}
+
+	#handleChainViewInput(data: string): void {
+		// Scope focus treats the chain view as a preview: Enter/Space dives
+		// into the rows, everything else is inert (arrows already hop).
+		if (this.#focus === "scope") {
+			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n" || matchesKey(data, "space")) {
+				this.#focus = "list";
+			}
+			return;
+		}
+		if (matchesSelectUp(data)) {
+			this.#chainCursor = this.#stepChainCursor(this.#chainCursor, -1);
+			return;
+		}
+		if (matchesSelectDown(data)) {
+			this.#chainCursor = this.#stepChainCursor(this.#chainCursor, 1);
+			return;
+		}
+		const command = chainCommandFor(data);
+		if (command) this.#runChainCommand(command, this.#chainRows[this.#chainCursor]);
+	}
+
+	/** Apply a chain-view command to the row under the cursor. */
+	#runChainCommand(command: ChainCommand, row: ChainRow | undefined): void {
+		switch (command) {
+			case "activate":
+				if (row) this.#activateChainRow(row);
+				return;
+			case "remove":
+				if (row?.kind === "default") this.#clearDefault();
+				else if (row?.kind === "fallback") this.#removeFallback(row);
+				else if (row?.kind === "chainKey") this.#setFallbackChain(row.key, []);
+				return;
+			case "earlier":
+				if (row?.kind === "fallback") this.#moveFallback(row, -1);
+				return;
+			case "later":
+				if (row?.kind === "fallback") this.#moveFallback(row, 1);
+				return;
+			case "fallback":
+				if (row?.kind === "newFallback") this.#startAssignFallbackKey();
+				else if (row?.kind === "default") this.#startAssignFallback(DEFAULT_RETRY_FALLBACK_KEY, null);
+				else if (row?.kind === "chainKey" || row?.kind === "fallback") this.#startAssignFallback(row.key, null);
+				return;
+			case "thinking":
+				if (row?.kind === "default") this.#openDefaultThinkingStrip();
+				return;
+		}
+	}
+
+	/** Open the thinking strip for the default model; with no default there is nothing to tune. */
+	#openDefaultThinkingStrip(): void {
+		const assignment = this.#defaultModel;
+		if (!assignment) return;
+		const item: ModelBrowserItem = {
+			provider: assignment.model.provider,
+			id: assignment.model.id,
+			model: assignment.model,
+			selector: `${assignment.model.provider}/${assignment.model.id}`,
+		};
+		this.#openThinkingStrip(item, true);
+	}
+
+	#requestLogin(entry: SidebarEntry): void {
+		if (!entry.providerId) return;
+		if (entry.oauth) {
+			this.#callbacks.onLoginRequest?.(entry.providerId);
+		}
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Mouse
+	// ═══════════════════════════════════════════════════════════════════════
+
+	#routeMouseEvent(event: SgrMouseEvent): boolean {
+		const consumed = routeModalChrome({
+			shellGeometry: this.#shellGeometry,
+			event,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			onHoverShortcut: id => {
+				this.#hoveredShortcutId = id;
+				this.#tui.requestRender();
+			},
+			onCancel: () => this.#callbacks.onCancel(),
+		});
+		if (consumed) return true;
+
+		// Strip/hint row: a full-width row below the split, not part of
+		// ModalShell's own shortcut chips. Chip ranges are card-relative
+		// columns (see #renderStripRow), so subtract just `frameLeft`.
+		if (event.row === this.#stripRow && this.#strip) {
+			if (event.leftClick) {
+				this.#clickStripChip(this.#strip, event.col - this.#frameLeft);
+			}
+			return true;
+		}
+
+		const pointer = this.#pointerAt(event);
+		const entry = this.#activeEntry();
+		if (event.wheel !== null) this.#routeWheel(event, event.wheel, pointer, entry);
+		else if (event.motion) this.#routeMotion(event, pointer, entry);
+		else if (event.leftClick) this.#routeClick(event, pointer, entry);
+		return true;
+	}
+
+	/** Where a pointer report lands in the sidebar|body split. */
+	#pointerAt(event: SgrMouseEvent): HubPointer {
+		// row() insets content by the border column plus a space; the card may
+		// be centered, so the sidebar|body split starts at `frameLeft + 2`.
+		const innerCol = event.col - (2 + this.#frameLeft);
+		const contentLine = event.row - this.#contentRowStart;
+		const overSplitRows = contentLine >= 0 && contentLine < this.#splitRowCount;
+		return {
+			contentLine,
+			bodyLine: contentLine - 1, // body row 0 is the status row
+			overSidebar: overSplitRows && innerCol >= 0 && innerCol < this.#sidebarWidthLast,
+			overBody: overSplitRows && innerCol >= this.#sidebarWidthLast + 3, // sidebar + " │ " separator
+		};
+	}
+
+	/** The chain-view row a body line shows, or null past either end of the list. */
+	#chainLineAt(bodyLine: number): number | null {
+		const chainLine = bodyLine - this.#chainRowStart + this.#chainScroll;
+		return chainLine >= 0 && chainLine < this.#chainRowCount ? chainLine : null;
+	}
+
+	#clickStripChip(strip: ChipStrip, stripInnerCol: number): void {
+		for (const range of this.#chipRanges) {
+			if (stripInnerCol >= range.start && stripInnerCol < range.end) {
+				strip.index = range.index;
+				this.#activateStripChip();
+				return;
+			}
+		}
+	}
+
+	#routeWheel(event: SgrMouseEvent, wheel: -1 | 1, pointer: HubPointer, entry: SidebarEntry): void {
+		if (pointer.overSidebar) {
+			// Wheel pans the sidebar viewport; picking a scope is click/keys only.
+			const maxScroll = Math.max(0, this.#entries.length - this.#splitRowCount);
+			this.#sidebarScroll = clampLow(this.#sidebarScroll + wheel, 0, maxScroll);
+			this.#setSidebarHover(this.#sidebarEntryIndexAt(pointer.contentLine));
+			return;
+		}
+		if (!pointer.overBody) return;
+		if (entry.kind === "chains" && this.#assigning === null) {
+			this.#chainCursor = this.#stepChainCursor(this.#chainCursor, wheel > 0 ? 1 : -1, { wrap: false });
+		} else if (this.#isBrowserView(entry)) {
+			this.#browser.routeMouse(event, pointer.bodyLine);
+		}
+	}
+
+	#routeMotion(event: SgrMouseEvent, pointer: HubPointer, entry: SidebarEntry): void {
+		this.#setSidebarHover(pointer.overSidebar ? this.#sidebarEntryIndexAt(pointer.contentLine) : null);
+		if (pointer.overBody && entry.kind === "chains" && this.#assigning === null) {
+			this.#setChainHover(this.#chainLineAt(pointer.bodyLine));
+			return;
+		}
+		this.#setChainHover(null);
+		if (pointer.overBody && this.#isBrowserView(entry)) {
+			this.#browser.routeMouse(event, pointer.bodyLine);
+		} else {
+			// Pointer left the browser pane: without this, the last
+			// hovered row keeps its band while the sidebar hovers too.
+			this.#browser.clearHover();
+		}
+	}
+
+	#routeClick(event: SgrMouseEvent, pointer: HubPointer, entry: SidebarEntry): void {
+		if (pointer.overSidebar) {
+			this.#clickSidebar(pointer.contentLine);
+			return;
+		}
+		if (!pointer.overBody) return;
+		if (entry.kind === "chains" && this.#assigning === null) {
+			this.#clickChainRow(pointer.bodyLine);
+		} else if (entry.kind === "provider" && entry.locked && this.#assigning === null) {
+			if (this.#lockedLoginLine !== null && pointer.bodyLine === this.#lockedLoginLine) {
+				this.#requestLogin(entry);
+			}
+		} else if (this.#isBrowserView(entry)) {
+			this.#browser.routeMouse(event, pointer.bodyLine);
+		}
+	}
+
+	#clickSidebar(contentLine: number): void {
+		const index = this.#sidebarEntryIndexAt(contentLine);
+		const clicked = index !== null ? this.#entries[index] : undefined;
+		if (!clicked || clicked.kind === "separator") return;
+		const already = clicked.id === this.#activeEntryId;
+		if (clicked.kind === "chains") this.#assigning = null;
+		this.#setActiveEntry(clicked.id);
+		// A click on the chain view's entry is a deliberate dive into the rows.
+		if (clicked.kind === "chains") this.#focus = "list";
+		if (already && clicked.kind === "provider" && clicked.locked) {
+			this.#requestLogin(clicked);
+		}
+	}
+
+	/** A click on a chain-view row selects it, and a click on the selected row activates it. */
+	#clickChainRow(bodyLine: number): void {
+		this.#focus = "list";
+		const chainLine = this.#chainLineAt(bodyLine);
+		if (chainLine === null) return;
+		const rowDef = this.#chainRows[chainLine];
+		if (!rowDef || rowDef.kind === "separator") return;
+		if (chainLine === this.#chainCursor) {
+			this.#activateChainRow(rowDef);
+		} else {
+			this.#chainCursor = chainLine;
+		}
+	}
+
+	/** Map a content-line index to a sidebar entry index (accounting for scroll). */
+	#sidebarEntryIndexAt(contentLine: number): number | null {
+		const index = this.#sidebarScroll + contentLine;
+		if (index < 0 || index >= this.#entries.length) return null;
+		return index;
+	}
+
+	// ═══════════════════════════════════════════════════════════════════════
+	// Rendering
+	// ═══════════════════════════════════════════════════════════════════════
+
+	#sidebarWidth(): number {
+		let longest = 0;
+		for (const entry of this.#entries) {
+			const annotation = entry.annotation ?? "";
+			longest = Math.max(longest, visibleWidth(entry.label) + visibleWidth(annotation) + 5);
+		}
+		return clampLow(longest, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+	}
+
+	#renderSidebar(width: number, rows: number): string[] {
+		this.#scrollSidebar(rows);
+		const lines: string[] = [];
+		const end = Math.min(this.#entries.length, this.#sidebarScroll + rows);
+		for (let i = this.#sidebarScroll; i < end; i++) {
+			const entry = this.#entries[i];
+			if (!entry) continue;
+			lines.push(
+				entry.kind === "separator"
+					? theme.fg("borderAccent", "─".repeat(width))
+					: this.#sidebarLine(entry, i, width),
+			);
+		}
+		return lines;
+	}
+
+	/**
+	 * Keep the sidebar's scroll offset inside its entries.
+	 *
+	 * The offset is persistent: the wheel pans it freely. Only an activation (keys, click,
+	 * programmatic) snaps the viewport to the active entry, and only far enough to reveal it.
+	 */
+	#scrollSidebar(rows: number): void {
+		if (this.#sidebarFollowActive) {
+			const activeIndex = Math.max(
+				0,
+				this.#entries.findIndex(entry => entry.id === this.#activeEntryId),
+			);
+			if (activeIndex < this.#sidebarScroll) {
+				this.#sidebarScroll = activeIndex;
+			} else if (activeIndex >= this.#sidebarScroll + rows) {
+				this.#sidebarScroll = activeIndex - rows + 1;
+			}
+			this.#sidebarFollowActive = false;
+		}
+		this.#sidebarScroll = clampLow(this.#sidebarScroll, 0, Math.max(0, this.#entries.length - rows));
+	}
+
+	/** How many models a search matched in an entry's scope, or undefined while not searching or for a scope that counts none. */
+	#sidebarMatchCount(entry: SidebarEntry): number | undefined {
+		if (this.#searchCounts === null) return undefined;
+		if (entry.kind === "provider" && !entry.locked) return this.#searchCounts.get(entry.providerId ?? "") ?? 0;
+		if (entry.kind === "recent") return this.#recentSearchCount;
+		if (entry.kind === "all") return this.#searchTotal;
+		return undefined;
+	}
+
+	/** The right-aligned annotation: a spinner while the provider refreshes, else the match count or the entry's own. */
+	#sidebarAnnotation(entry: SidebarEntry, matchCount: number | undefined): string {
+		const refreshing = entry.providerId ? this.#refreshingProviders.has(entry.providerId) : false;
+		if (refreshing) {
+			return theme.fg("warning", theme.spinnerFrames[this.#refreshSpinnerFrame % theme.spinnerFrames.length] ?? "");
+		}
+		return theme.fg("dim", matchCount !== undefined ? String(matchCount) : (entry.annotation ?? ""));
+	}
+
+	#sidebarLine(entry: SidebarEntry, index: number, width: number): string {
+		const active = entry.id === this.#activeEntryId;
+		const hoverStrength = this.#sidebarStrength(index);
+		const matchCount = this.#sidebarMatchCount(entry);
+		// While searching, entries the hop skips gray out: locked and
+		// zero-match providers, an empty Recent, and the chain view.
+		const muted = entry.locked || matchCount === 0 || (this.#searchCounts !== null && entry.kind === "chains");
+		// The sidebar's active entry is state, not a cursor: accent label
+		// plus a cursor glyph while the sidebar owns the arrows. The band
+		// stays in the body pane so the two never look alike.
+		const cursor = active && this.#focus === "scope" ? theme.fg("accent", theme.nav.cursor) : " ";
+		const icon = sidebarIcon(entry.kind, muted);
+		const labelStyled = muted
+			? theme.fg("dim", entry.label)
+			: active
+				? theme.bold(theme.fg("accent", entry.label))
+				: entry.label;
+		const left = `${cursor} ${muted ? theme.fg("dim", icon) : theme.fg(entry.kind === "provider" ? "success" : "accent", icon)} ${labelStyled}`;
+		const line = fitSidebarRow(left, this.#sidebarAnnotation(entry, matchCount), width);
+		return hoverStrength > 0 ? hoverBandAt(line, width, hoverStrength) : line;
+	}
+
+	#statusRow(width: number): string {
+		if (this.#assigning !== null) {
+			if (this.#assigning.kind === "fallbackKey") {
+				return truncateToWidth(
+					theme.fg("accent", " New fallback chain — Enter picks the model it protects, Esc cancels"),
+					width,
+				);
+			}
+			if (this.#assigning.kind === "fallback") {
+				const key = this.#assigning.key;
+				const label = key === DEFAULT_RETRY_FALLBACK_KEY ? "the default model" : key;
+				const verb = this.#assigning.index === null ? "Adding fallback for" : "Replacing fallback of";
+				return truncateToWidth(
+					theme.fg("accent", ` ${verb} ${theme.bold(label)} — Enter picks the fallback model, Esc cancels`),
+					width,
+				);
+			}
+			return truncateToWidth(
+				theme.fg("accent", ` Setting the ${theme.bold("default model")} — Enter sets it, Esc cancels`),
+				width,
+			);
+		}
+		const entry = this.#activeEntry();
+		const scopedSuffix = this.#scopedModels.length > 0 ? " · --models scope" : "";
+		let text: string;
+		switch (entry.kind) {
+			case "recent":
+				text = `Recently used models${scopedSuffix}`;
+				break;
+			case "chains":
+				text = "Default model and retry fallbacks — f adds a fallback, x clears the default";
+				break;
+			case "provider":
+				if (entry.locked) {
+					text = `${entry.label} · not configured`;
+				} else if (entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
+					text = `${entry.label} · refreshing model list…`;
+				} else {
+					text = `${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`;
+				}
+				break;
+			default:
+				text = `All available models${scopedSuffix}`;
+				break;
+		}
+		if (this.#configError && entry.kind !== "provider") {
+			text = this.#configError;
+			return truncateToWidth(theme.fg("error", ` ${text}`), width);
+		}
+		return truncateToWidth(theme.fg("muted", ` ${text}`), width);
+	}
+
+	/** Move the sidebar band, telling the fade so the row left behind travels out. */
+	#setSidebarHover(index: number | null): void {
+		this.#sidebarHover = index;
+		this.#sidebarFade?.set(index);
+	}
+
+	/** Move the chain-pane band; same contract as {@link #setSidebarHover}. */
+	#setChainHover(index: number | null): void {
+		this.#chainHover = index;
+		this.#chainFade?.set(index);
+	}
+
+	/** Sidebar band strength; without a fade the hovered row is at 1 and the rest at 0. */
+	#sidebarStrength(index: number): number {
+		if (this.#sidebarFade !== undefined) return this.#sidebarFade.strengthAt(index);
+		return index === this.#sidebarHover ? 1 : 0;
+	}
+
+	/** Chain-pane band strength; same contract as {@link #sidebarStrength}. */
+	#chainStrength(index: number): number {
+		if (this.#chainFade !== undefined) return this.#chainFade.strengthAt(index);
+		return index === this.#chainHover ? 1 : 0;
+	}
+
+	#renderChainView(fullWidth: number, rows: number): string[] {
+		const lines: string[] = [""];
+		// First row's offset in bodyLine coordinates: the mouse router's
+		// `bodyLine` has already dropped the status row, so this is just the
+		// leading blank line — no extra status-row offset here.
+		this.#chainRowStart = lines.length;
+
+		// The chain list can be taller than its pane once fallback chains exist.
+		// Rows past the cut must stay reachable with a visible cue, so the list is
+		// windowed around the selection.
+		const visibleRows = Math.max(1, rows - 2 - this.#chainRowStart);
+		const maxScroll = Math.max(0, this.#chainRows.length - visibleRows);
+		if (this.#chainScroll > this.#chainCursor) this.#chainScroll = this.#chainCursor;
+		if (this.#chainCursor >= this.#chainScroll + visibleRows) this.#chainScroll = this.#chainCursor - visibleRows + 1;
+		this.#chainScroll = Math.min(Math.max(0, this.#chainScroll), maxScroll);
+
+		// A window with no cue is the browser's old bug in a new pane: the rows are
+		// simply not there and nothing says so. `ScrollView` with `scrollbar: auto`
+		// is the one idiom this TUI uses for that (the model browser composes rows
+		// the same way), so the chain list borrows it rather than inventing a
+		// second convention. It reserves two columns when the list overflows, and
+		// rows are composed inside that band so nothing is truncated against it.
+		const overflows = this.#chainRows.length > visibleRows;
+		const rowLines = this.#chainRowLines(fullWidth - (overflows ? 2 : 0), visibleRows);
+		if (overflows) {
+			const scrollView = new ScrollView(rowLines, {
+				height: rowLines.length,
+				scrollbar: "auto",
+				totalRows: this.#chainRows.length,
+				theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
+			});
+			scrollView.setScrollOffset(this.#chainScroll);
+			lines.push(...scrollView.render(fullWidth));
+		} else {
+			lines.push(...rowLines);
+		}
+
+		while (lines.length < rows) lines.push("");
+		return lines;
+	}
+
+	/** The scrolled window of chain-view rows, each composed to the style's width. */
+	#chainRowLines(width: number, visibleRows: number): string[] {
+		const style: ChainRowStyle = {
+			width,
+			tagWidth: DEFAULT_RETRY_FALLBACK_KEY.length,
+			listFocused: this.#focus === "list",
+		};
+		const rowLines: string[] = [];
+		for (let i = this.#chainScroll; i < this.#chainRows.length && rowLines.length < visibleRows; i++) {
+			const rowDef = this.#chainRows[i];
+			if (rowDef) rowLines.push(this.#chainRowLine(rowDef, i, style));
+		}
+		return rowLines;
+	}
+
+	#chainRowLine(rowDef: ChainRow, index: number, style: ChainRowStyle): string {
+		const { width } = style;
+		const selected = index === this.#chainCursor;
+		const hoverStrength = this.#chainStrength(index);
+		// The unfocused pane draws no cursor; accent text still marks the row.
+		const cursor = selected && style.listFocused ? theme.fg("accent", theme.nav.cursor) : " ";
+		switch (rowDef.kind) {
+			case "separator":
+				return `   ${theme.fg("borderAccent", "─".repeat(Math.max(1, width - 6)))}`;
+			case "newFallback":
+				return finishChainRow(
+					` ${cursor} ${theme.fg(selected ? "accent" : "dim", "+ New fallback…")}`,
+					width,
+					hoverStrength,
+				);
+			case "chainKey": {
+				const key = rowDef.key;
+				const slash = key.lastIndexOf("/");
+				const tail = key.slice(slash + 1);
+				const keyStyled = theme.fg("dim", key.slice(0, slash + 1)) + (selected ? theme.fg("accent", tail) : tail);
+				return finishChainRow(
+					` ${cursor} ${theme.fg("dim", theme.status.shadowed)} ${keyStyled}`,
+					width,
+					hoverStrength,
+				);
+			}
+			case "fallback": {
+				const branch = theme.fg("dim", `${"".padEnd(style.tagWidth + 3)}↳`);
+				const selector = selected ? theme.fg("accent", rowDef.selector) : theme.fg("muted", rowDef.selector);
+				return finishChainRow(` ${cursor} ${branch} ${selector}`, width, hoverStrength);
+			}
+			case "default":
+				return finishChainRow(this.#defaultRowText(selected, cursor, style), width, hoverStrength);
+		}
+	}
+
+	/** The default-model row before its band: the tag and model, then its thinking level right-aligned when it fits. */
+	#defaultRowText(selected: boolean, cursor: string, style: ChainRowStyle): string {
+		const assignment = this.#defaultModel;
+		const tag = DEFAULT_RETRY_FALLBACK_KEY.padEnd(style.tagWidth);
+
+		let dot: string;
+		let tagStyled: string;
+		let value: string;
+		let levelStyled = "";
+		if (assignment) {
+			dot = theme.fg("success", theme.status.enabled);
+			tagStyled = theme.fg("success", tag);
+			value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
+			const glyph = thinkingLevelGlyph(assignment.thinkingLevel);
+			const label = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
+			if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
+				levelStyled = theme.fg("dim", glyph ? `${glyph} ${label}` : label);
+			}
+		} else {
+			// Unset: launch auto-selects a model. Say so, rather than showing a dash.
+			dot = theme.fg("dim", theme.status.shadowed);
+			tagStyled = theme.fg("dim", tag);
+			value = theme.fg("dim", "(auto-select on launch)");
+		}
+
+		const line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
+		const rightWidth = visibleWidth(levelStyled);
+		const lineWidth = visibleWidth(line);
+		if (rightWidth > 0 && lineWidth + rightWidth + 2 <= style.width) {
+			return `${line}${" ".repeat(style.width - lineWidth - rightWidth - 1)}${levelStyled}`;
+		}
+		return line;
+	}
+
+	#renderLockedView(entry: SidebarEntry, width: number, rows: number): string[] {
+		const lines: string[] = [];
+		this.#lockedLoginLine = null;
+		lines.push("");
+		lines.push(truncateToWidth(theme.fg("warning", `  ${entry.label} has no credentials configured`), width));
+		lines.push("");
+		const envVars = entry.providerId ? (getCatalogProviderEntry(entry.providerId)?.envVars ?? []) : [];
+		if (envVars.length > 0) {
+			lines.push(
+				truncateToWidth(
+					theme.fg("muted", `  Set ${envVars.join(" or ")} in your environment, or add a key in config.`),
+					width,
+				),
+			);
+		} else {
+			lines.push(truncateToWidth(theme.fg("muted", "  Add an API key for this provider in config."), width));
+		}
+		if (entry.oauth) {
+			this.#lockedLoginLine = lines.length + 1; // +1 for the status row offset handled by caller
+			lines.push(truncateToWidth(theme.fg("accent", `  ${theme.nav.cursor} Log in with OAuth (Enter)`), width));
+		}
+		lines.push("");
+		const catalogCount = entry.catalogCount ?? 0;
+		if (catalogCount > 0) {
+			lines.push(truncateToWidth(theme.fg("dim", `  ${catalogCount} models in catalog:`), width));
+			const preview = this.#scopedModels.length > 0 ? [] : this.#registry.getAll();
+			for (const model of preview) {
+				if (model.provider !== entry.providerId) continue;
+				if (lines.length >= rows) break;
+				lines.push(truncateToWidth(theme.fg("dim", `    ${model.id}`), width));
+			}
+		}
+		while (lines.length < rows) lines.push("");
+		return lines.slice(0, rows);
+	}
+
+	#footerHint(): string {
+		const strip = this.#strip;
+		if (strip) {
+			return strip.kind === "pick"
+				? "←/→ choose · Enter apply · Esc cancel"
+				: "←/→ thinking level · Enter apply · Esc keep";
+		}
+		if (this.#assigning !== null) {
+			switch (this.#assigning.kind) {
+				case "fallback":
+					return "Enter pick fallback · ↑/↓ providers · type to search · Esc cancel";
+				case "fallbackKey":
+					return "Enter pick the protected model · ↑/↓ providers · type to search · Esc cancel";
+				default:
+					return "Enter set default · ↑/↓ providers · type to search · Esc cancel";
+			}
+		}
+		const entry = this.#activeEntry();
+		if (entry.kind === "chains") {
+			if (this.#focus !== "list") {
+				return "↑/↓ providers · → rows · Esc close";
+			}
+			const row = this.#chainRows[this.#chainCursor];
+			if (row?.kind === "fallback") {
+				return "↑/↓ rows · Enter replace · f add another · x remove · [/] reorder · ← providers";
+			}
+			if (row?.kind === "chainKey") {
+				return "↑/↓ rows · Enter/f add fallback · x clear chain · ← providers";
+			}
+			if (row?.kind === "newFallback") {
+				return "↑/↓ rows · Enter new model/provider fallback chain · ← providers";
+			}
+			return "↑/↓ rows · Enter pick · f fallback · x clear · t thinking";
+		}
+		if (entry.kind === "provider" && entry.locked) {
+			return entry.oauth ? "Enter log in · ↑/↓ providers · Esc close" : "↑/↓ providers · Esc close";
+		}
+		const arrows = this.#focus === "scope" ? "↑/↓ providers · → models" : "↑/↓ models · ← providers";
+		const refresh = entry.kind === "provider" ? " · F5 refresh" : "";
+		return `Enter set default or fallback · ${arrows} · type to search${refresh} · Esc close`;
+	}
+
+	/**
+	 * Full-width row below the sidebar|body split: the active strip (chips)
+	 * or the contextual hint line. This is body content, not ModalShell's own
+	 * shortcut chips ({@link #shortcuts}) — it carries per-state detail (which
+	 * row kind, which chip is selected) that a static footer can't.
+	 */
+	#renderStripRow(width: number): string {
+		this.#chipRanges = [];
+		const strip = this.#strip;
+		if (!strip) {
+			return truncateToWidth(theme.fg("dim", this.#footerHint()), width);
+		}
+
+		const prefix =
+			strip.kind === "pick"
+				? `${theme.fg("accent", strip.item.id)}${theme.fg("dim", " →")} `
+				: `${theme.fg("success", DEFAULT_RETRY_FALLBACK_KEY)}${theme.fg("dim", ` · ${strip.item.id} →`)} `;
+
+		// Horizontal window: once the strip overflows, drop leading chips behind
+		// a dim ellipsis so the selected chip (plus one chip of lookahead when it
+		// fits) stays visible while cycling right.
+		const prefixWidth = visibleWidth(prefix);
+		const available = Math.max(1, width - prefixWidth);
+		const chipWidths = strip.chips.map(
+			(chip, i) => visibleWidth(` ${chip.styled} `) + (i === strip.index ? 2 : 0) + 1,
+		);
+		// Smallest start index whose window [start..target] (with its "… " lead-in
+		// when start > 0) fits in the available width; `target` itself may still
+		// overflow when a single chip is wider than the row.
+		const startFor = (target: number): number => {
+			let start = 0;
+			while (start < target) {
+				let sum = start > 0 ? 2 : 0;
+				for (let i = start; i <= target; i++) sum += chipWidths[i] ?? 0;
+				if (sum <= available) break;
+				start++;
+			}
+			return start;
+		};
+		let start = startFor(Math.min(strip.index + 1, strip.chips.length - 1));
+		if (start > strip.index) start = startFor(strip.index);
+
+		let line = prefix;
+		// Columns are relative to the frame: row() insets content by 2.
+		let col = 2 + prefixWidth;
+		if (start > 0) {
+			line += theme.fg("dim", "… ");
+			col += 2;
+		}
+		for (let i = start; i < strip.chips.length; i++) {
+			const chip = strip.chips[i];
+			if (!chip) continue;
+			const selected = i === strip.index;
+			const body = ` ${chip.styled} `;
+			const rendered = selected
+				? theme.bg("selectedBg", `${theme.fg("accent", "[")}${body}${theme.fg("accent", "]")}`)
+				: body;
+			const w = visibleWidth(body) + (selected ? 2 : 0);
+			this.#chipRanges.push({ start: col, end: col + w, index: i });
+			line += rendered;
+			col += w;
+			line += " ";
+			col += 1;
+		}
+		return truncateToWidth(line, width);
+	}
+
+	/**
+	 * Centered, focus-aware ModalShell footer chips — a static, discoverable
+	 * complement to the detailed per-state hint in {@link #renderStripRow}.
+	 */
+	#shortcuts(): readonly ModalShortcut[] {
+		const strip = this.#strip;
+		if (strip) {
+			return strip.kind === "pick"
+				? [{ label: "←/→ choose" }, { label: "enter apply" }, { label: "esc cancel", clickable: true, id: "close" }]
+				: [{ label: "←/→ level" }, { label: "enter apply" }, { label: "esc keep", clickable: true, id: "close" }];
+		}
+		if (this.#assigning !== null) {
+			return [
+				{ label: "type to search" },
+				{ label: "↑/↓ providers" },
+				{ label: "enter pick" },
+				{ label: "esc cancel", clickable: true, id: "close" },
+			];
+		}
+		const entry = this.#activeEntry();
+		if (entry.kind === "chains") {
+			if (this.#focus !== "list") {
+				return [
+					{ label: "↑/↓ providers" },
+					{ label: "→ rows" },
+					{ label: "esc close", clickable: true, id: "close" },
+				];
+			}
+			return [
+				{ label: "↑/↓ rows" },
+				{ label: "enter pick" },
+				{ label: "f fallback" },
+				{ label: "x clear" },
+				{ label: "esc close", clickable: true, id: "close" },
+			];
+		}
+		if (entry.kind === "provider" && entry.locked) {
+			return entry.oauth
+				? [{ label: "enter log in" }, { label: "esc close", clickable: true, id: "close" }]
+				: [{ label: "esc close", clickable: true, id: "close" }];
+		}
+		const arrows = this.#focus === "scope" ? "↑/↓ providers · → models" : "↑/↓ models · ← providers";
+		const refresh: ModalShortcut[] = entry.kind === "provider" ? [{ label: "F5 refresh" }] : [];
+		return [
+			{ label: arrows },
+			{ label: "enter assign" },
+			{ label: "/ search" },
+			...refresh,
+			{ label: "esc close", clickable: true, id: "close" },
+		];
+	}
+
+	/**
+	 * Floating ModalShell LARGE card: sidebar|body split panes inside the
+	 * shell body (Grok idiom — chrome is the shell, not a DynamicBorder box),
+	 * a full-width strip/hint row below the split, and centered footer chips.
+	 */
+	render(width: number): string[] {
+		const height = this.#tui.terminal?.rows || process.stdout.rows || 40;
+		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
+		const dims = computeModalDims(width, height, sizing);
+		if (!dims) {
+			this.#shellGeometry = null;
+			return Array.from({ length: height }, () => padding(width));
+		}
+		const contentWidth = dims.contentWidth;
+		const sidebarWidth = this.#sidebarWidth();
+		this.#sidebarWidthLast = sidebarWidth;
+		const paneSep = theme.fg("dim", ` ${theme.boxSharp.vertical} `);
+		const bodyWidth = Math.max(1, contentWidth - sidebarWidth - 3);
+
+		// The strip row is the LAST body line, and the shell silently truncates a
+		// body that overruns its budget, so the split above the strip has to be
+		// sized against what the card will ACTUALLY show. This restated the
+		// arithmetic as `3 + footerLines + vPad`, charging vPad once where the
+		// shell charges it twice (above AND below the body); the body ran two rows
+		// long, the shell ate the tail, and the strip row — the hint line and every
+		// chip strip — never rendered at all on an ordinary 40-row terminal.
+		// `planModalChrome` is the one owner, and it accounts for wrapped chips and
+		// the short-card shrink order too, which a static minimum cannot.
+		const shortcuts = this.#shortcuts();
+		const chrome = planModalChrome({
+			sizing,
+			modalHeight: dims.modalHeight,
+			contentWidth,
+			shortcuts,
+			hoveredShortcutId: this.#hoveredShortcutId,
+		});
+		const bodyBudget = Math.max(1, chrome.maxBodyRows);
+		// The split gets everything the strip row does not. A `Math.max(4, …)`
+		// floor here meant a short card asked for five body rows when it could
+		// show one, and the shell dropped the strip again — the same silent
+		// truncation, one level up. A cramped split is recoverable (it scrolls);
+		// a missing strip row takes the key hints with it.
+		const splitRows = Math.max(0, bodyBudget - 1);
+
+		const entry = this.#activeEntry();
+		const paneLines: string[] = [this.#statusRow(bodyWidth)];
+		if (entry.kind === "chains" && this.#assigning === null) {
+			paneLines.push(...this.#renderChainView(bodyWidth, splitRows - 1));
+		} else if (entry.kind === "provider" && entry.locked && this.#assigning === null) {
+			paneLines.push(...this.#renderLockedView(entry, bodyWidth, splitRows - 1));
+		} else {
+			this.#browser.setMaxVisible(Math.max(1, splitRows - 1 - 5));
+			this.#browser.setFocused(this.#focus === "list");
+			paneLines.push(...this.#browser.render(bodyWidth));
+		}
+
+		const sidebarLines = this.#renderSidebar(sidebarWidth, splitRows);
+
+		const body: string[] = [];
+		for (let i = 0; i < splitRows; i++) {
+			// The hairline is what separates the scope column from the pane beside it.
+			body.push(fit(sidebarLines[i] ?? "", sidebarWidth) + paneSep + fit(paneLines[i] ?? "", bodyWidth));
+		}
+		this.#splitRowCount = splitRows;
+		body.push(this.#renderStripRow(contentWidth));
+
+		const shell = renderModalShell({
+			title: "Models",
+			sizing,
+			areaWidth: width,
+			areaHeight: height,
+			body,
+			shortcuts,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			showClose: true,
+		});
+
+		this.#shellGeometry = shell.geometry;
+		this.#frameLeft = shell.geometry?.leftPad ?? 0;
+		this.#contentRowStart = shell.geometry?.bodyRowStart ?? 0;
+		this.#stripRow = this.#contentRowStart + splitRows;
+		return shell.lines;
+	}
+}
+
+function formatDiscoveryAge(fetchedAt: number | undefined): string | undefined {
+	if (!fetchedAt) return undefined;
+	const ageMs = Math.max(0, Date.now() - fetchedAt);
+	if (ageMs < 60_000) return "less than a minute ago";
+	return `${Math.round(ageMs / 60_000)}m ago`;
+}
+
+function thinkingOptionsFor(model: Model): ConfiguredThinkingLevel[] {
+	return [ThinkingLevel.Inherit, ...configuredThinkingLevelsForModel(model)];
+}
+
+/** Clamp a chain row to `width`; the bg band is reserved for mouse hover. */
+function finishChainRow(line: string, width: number, hoverStrength: number): string {
+	if (hoverStrength > 0) return hoverBandAt(line, width, hoverStrength);
+	return truncateToWidth(line, width);
+}
+
+/** The glyph a sidebar row starts with: one per view, and a provider's state for a provider. */
+function sidebarIcon(kind: SidebarEntry["kind"], muted: boolean): string {
+	if (kind === "recent") return theme.icon.time;
+	if (kind === "chains") return theme.icon.extensionSkill;
+	if (kind === "all") return theme.icon.model;
+	return muted ? theme.status.shadowed : theme.status.enabled;
+}
+
+/**
+ * A sidebar row at `width`: the label left and the annotation right-aligned when both fit with a
+ * column between them, else the label cut to the width and padded out to it.
+ */
+function fitSidebarRow(left: string, annotation: string, width: number): string {
+	const leftWidth = visibleWidth(left);
+	const annWidth = visibleWidth(annotation);
+	if (leftWidth + annWidth + 1 <= width) return `${left}${" ".repeat(width - leftWidth - annWidth)}${annotation}`;
+	const line = truncateToWidth(left, width);
+	const lineWidth = visibleWidth(line);
+	return lineWidth < width ? line + " ".repeat(width - lineWidth) : line;
+}

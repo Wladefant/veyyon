@@ -1,0 +1,89 @@
+import {
+	createCancelledKernelResult,
+	createKernelExecutionDriver,
+	getExecutionDeadlineMs,
+	type KernelExecutionResult,
+	type KernelExecutorBaseOptions,
+} from "../executor-base";
+import { KERNEL_SHUTDOWN_GRACE_MS } from "../kernel-base";
+import type { EvalDisplayOutput, EvalStatusEvent } from "../types";
+import { checkJuliaKernelAvailability, JuliaKernel } from "./kernel";
+import { resolveExplicitJuliaRuntime } from "./runtime";
+
+export type { EvalDisplayOutput, EvalStatusEvent };
+
+export interface JuliaExecutorOptions extends KernelExecutorBaseOptions {}
+
+export type JuliaResult = KernelExecutionResult;
+
+class JuliaExecutionCancelledError extends Error {
+	constructor(readonly timedOut: boolean) {
+		super(timedOut ? "Julia execution timed out" : "Julia execution cancelled");
+		this.name = "JuliaExecutionCancelledError";
+	}
+}
+
+/**
+ * Julia's deadline rule: a timeout of zero means NO timeout.
+ *
+ * Named for the difference rather than sharing the shared owner's name. It used
+ * to be called `getExecutionDeadlineMs`, the same name as
+ * {@link getExecutionDeadlineMs} in `executor-base`, with a different answer for
+ * `timeoutMs: 0` -- the shared owner returns an immediate deadline, this returns
+ * none. Two behaviours behind one name is the shape a reader cannot see: a call
+ * site that imported the wrong one still compiled, and jl's kernel path would
+ * have rejected a still-valid session as already expired.
+ *
+ * The arithmetic is still the shared owner's; only the zero rule is here, so
+ * there is one place that knows a deadline is `now + timeout`.
+ */
+export function deadlineForNonZeroTimeout(
+	options?: Pick<JuliaExecutorOptions, "deadlineMs" | "timeoutMs">,
+): number | undefined {
+	if (options?.deadlineMs !== undefined) return options.deadlineMs;
+	if (options?.timeoutMs === undefined || options.timeoutMs <= 0) return undefined;
+	return getExecutionDeadlineMs(options);
+}
+
+function formatTimeoutAnnotation(timeoutMs?: number): string | undefined {
+	if (timeoutMs === undefined) return undefined;
+	const rounded = (timeoutMs / 1000).toFixed(0);
+	return `[cell timed out after ${rounded}s]`;
+}
+
+function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean): string {
+	const explanation = kernelKilled ? "; active subprocess terminated to recover" : "; kernel is still running";
+	if (timeoutMs === undefined) return `[execution timed out${explanation}]`;
+	const rounded = (timeoutMs / 1000).toFixed(0);
+	return `[execution timed out after ${rounded}s${explanation}]`;
+}
+
+export function createCancelledJuliaResult(timedOut: boolean, timeoutMs?: number): JuliaResult {
+	const output = timedOut ? (formatTimeoutAnnotation(timeoutMs) ?? "[cell timed out]\n") : "[execution cancelled]\n";
+	return createCancelledKernelResult(output);
+}
+
+const driver = createKernelExecutionDriver<JuliaExecutorOptions, JuliaKernel>({
+	languageName: "Julia",
+	logLabel: "julia",
+	runIdPrefix: "jl",
+	disposerName: "julia-kernels",
+	cancelledErrorClass: JuliaExecutionCancelledError,
+	kernelClass: JuliaKernel,
+	checkKernelAvailability: checkJuliaKernelAvailability,
+	resolveInterpreterPath: (interpreter, cwd) => resolveExplicitJuliaRuntime(interpreter, cwd, {}).juliaPath,
+	formatKernelTimeoutAnnotation,
+	formatTimeoutAnnotation,
+	createCancelledResult: createCancelledJuliaResult,
+	resolveDeadlineMs: deadlineForNonZeroTimeout,
+	isJulia: true,
+	shutdownGraceMs: KERNEL_SHUTDOWN_GRACE_MS,
+	warnOnDiedSubprocess: true,
+});
+
+export const {
+	disposeAll: disposeAllJuliaKernelSessions,
+	disposeByOwner: disposeJuliaKernelSessionsByOwner,
+	executeWithKernel: executeJuliaWithKernel,
+	execute: executeJulia,
+} = driver;

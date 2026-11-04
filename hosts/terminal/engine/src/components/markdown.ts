@@ -1,0 +1,2885 @@
+import { Ellipsis } from "@veyyon/natives";
+import { OSC66, SGR_RESET, sgrSequence } from "@veyyon/utils/ansi";
+import { latexToBlock } from "@veyyon/utils/latex-block";
+import { inlineMathSpanEnd, isBareMathEnvironment, latexToUnicode } from "@veyyon/utils/latex-unicode";
+import { padding } from "@veyyon/utils/padding";
+import { sgrCarryAfter } from "@veyyon/utils/sgr";
+import { unescapeHtml } from "@veyyon/utils/strings";
+import type { SymbolTheme } from "@veyyon/utils/symbols";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { encodeTextSized } from "@veyyon/utils/text-sizing";
+import { getPaddingX } from "@veyyon/utils/tight-mode";
+import { getSegmenter, truncateToWidth, visibleWidth } from "@veyyon/utils/width";
+import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
+import { LRUCache } from "lru-cache/raw";
+import { Marked, type Token, type TokenizerAndRendererExtension, type Tokens } from "marked";
+import { TERMINAL } from "../terminal-capabilities";
+import type { Component } from "../tui";
+import { applyLineBackground } from "../utils/text-layout";
+import { MarkdownTokenizer } from "./markdown-tokenizer";
+
+// OSC 66 (Kitty text-sizing) heading spans are emitted as a single indivisible
+// unit by the H1 render path. Like image-protocol lines, they must bypass
+// ANSI wrapping and width padding: re-wrapping splits/normalizes the sized span
+// (recomputing the explicit `w=` cell count and hoisting SGR out of the OSC
+// payload), and padding would append trailing cells past the doubled glyph.
+
+function isOsc66Line(line: string): boolean {
+	return line.includes(OSC66);
+}
+
+interface HtmlListState {
+	type: "ol" | "ul";
+	next: number;
+}
+
+interface HtmlNormalizationState {
+	lists: HtmlListState[];
+	openItems: boolean[];
+	itemHasContent: boolean[];
+}
+
+function createHtmlNormalizationState(): HtmlNormalizationState {
+	return { lists: [], openItems: [], itemHasContent: [] };
+}
+
+const HTML_COMMENT_REGEX = /<!--[\s\S]*?-->/g;
+const HTML_TAG_REGEX = /<\/?(?:br|p|ol|ul|li|span|summary|text|code|hr|blockquote)\b(?:\s[^>]*)?\s*\/?>/gi;
+// Block-level HTML that needs structural (not just textual) rendering: standalone
+// `<hr>` becomes a rule and balanced `<blockquote>…</blockquote>` renders with
+// quote styling. Group 1 captures blockquote inner content; it is undefined for hr.
+const BLOCK_HTML_REGEX = /<hr\b[^>]*\/?>|<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi;
+const SELF_CLOSING_HTML_TAG = /\/\s*>$/;
+
+function htmlTagName(tag: string): string {
+	const match = /^<\/?\s*([A-Za-z][A-Za-z0-9:-]*)/.exec(tag);
+	return match ? match[1].toLowerCase() : "";
+}
+
+function htmlOlStart(tag: string): number {
+	const match = /\bstart\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i.exec(tag);
+	if (!match) return 1;
+	return Number(match[1] ?? match[2] ?? match[3]);
+}
+
+function appendHtmlLineBreak(output: string, force: boolean = false): string {
+	const trimmed = output.replace(/[ \t]+$/u, "");
+	return !force && trimmed.endsWith("\n") ? trimmed : `${trimmed}\n`;
+}
+
+function htmlListIndent(state: HtmlNormalizationState): string {
+	return "  ".repeat(Math.max(0, state.lists.length - 1));
+}
+
+function appendHtmlListBreak(output: string, state: HtmlNormalizationState): string {
+	const indent = htmlListIndent(state);
+	return output.endsWith(`${indent}\n`) ? output : appendHtmlLineBreak(output);
+}
+
+function markCurrentHtmlItemContent(state: HtmlNormalizationState, text: string): void {
+	if (text.trim() !== "" && state.itemHasContent.length > 0) {
+		state.itemHasContent[state.itemHasContent.length - 1] = true;
+	}
+}
+
+function isAtEmptyHtmlListItem(state: HtmlNormalizationState): boolean {
+	const itemIndex = state.itemHasContent.length - 1;
+	return state.openItems[itemIndex] === true && state.itemHasContent[itemIndex] !== true;
+}
+
+/** Break before an opening `<p>`/`<blockquote>` that follows text on the same row, and after a closing one. */
+function htmlParagraphBreak(output: string, closing: boolean, state: HtmlNormalizationState): string {
+	if (closing) return appendHtmlLineBreak(output);
+	if (output.trim() !== "" && !output.endsWith("\n") && !isAtEmptyHtmlListItem(state)) {
+		return appendHtmlLineBreak(output);
+	}
+	return output;
+}
+
+/** Open an `<ol>`/`<ul>`: a list nested in an open item starts on its own row. */
+function openHtmlList(output: string, name: "ol" | "ul", tag: string, state: HtmlNormalizationState): string {
+	const nestedInItem = state.openItems.length > 0 && state.openItems[state.openItems.length - 1];
+	const opened = nestedInItem ? appendHtmlListBreak(output, state) : output;
+	state.lists.push({ type: name, next: name === "ol" ? htmlOlStart(tag) : 1 });
+	state.openItems.push(false);
+	state.itemHasContent.push(false);
+	return opened;
+}
+
+/** Open an `<li>`: end the previous item's row, then write the item's indent and marker. */
+function openHtmlListItem(output: string, state: HtmlNormalizationState): string {
+	let opened = output;
+	if (state.openItems.length > 0) {
+		const itemOpenIndex = state.openItems.length - 1;
+		if (state.openItems[itemOpenIndex]) opened = appendHtmlListBreak(opened, state);
+		state.openItems[itemOpenIndex] = true;
+		state.itemHasContent[itemOpenIndex] = false;
+	} else if (opened.trim() !== "" && !opened.endsWith("\n")) {
+		opened = appendHtmlLineBreak(opened);
+	}
+	const list = state.lists[state.lists.length - 1];
+	const indent = htmlListIndent(state);
+	if (list?.type === "ol") return `${opened}${indent}${list.next++}. `;
+	return `${opened}${indent}• `;
+}
+
+/** Apply one block-level tag (everything but the inline `span`/`summary`/`text` and `code`) to the output. */
+function applyHtmlBlockTag(output: string, name: string, tag: string, state: HtmlNormalizationState): string {
+	const isClosing = tag.startsWith("</");
+	switch (name) {
+		case "br":
+		case "hr":
+			return appendHtmlLineBreak(output, true);
+		case "p":
+		case "blockquote":
+			return htmlParagraphBreak(output, isClosing, state);
+		case "ol":
+		case "ul":
+			if (isClosing) {
+				state.lists.pop();
+				state.openItems.pop();
+				state.itemHasContent.pop();
+				return output;
+			}
+			return SELF_CLOSING_HTML_TAG.test(tag) ? output : openHtmlList(output, name, tag, state);
+		case "li":
+			return isClosing ? appendHtmlLineBreak(output) : openHtmlListItem(output, state);
+		default:
+			return output + tag;
+	}
+}
+
+/**
+ * Append the text that precedes a tag. Inline contexts — span, summary, text,
+ * and the content inside a `<code>` run — keep their surrounding whitespace
+ * verbatim because it is significant. For block-level tags, HTML formatting
+ * whitespace between tags (e.g. the newlines and indentation in pretty-printed
+ * `<ul>\n  <li>…`) is not rendered content; appending it literally would leak
+ * source indentation before bullets and blank rows between items, so a
+ * whitespace-only slice is dropped unless `verbatim`. `codeHook`, passed only
+ * inside a `<code>` run, applies the inline-code theme without leaking the raw
+ * `<code>`/`</code>` tags.
+ */
+function appendHtmlText(
+	output: string,
+	text: string,
+	verbatim: boolean,
+	codeHook: ((text: string) => string) | undefined,
+	state: HtmlNormalizationState,
+): string {
+	if (!verbatim && text.trim() === "") return output;
+	markCurrentHtmlItemContent(state, text);
+	return output + (codeHook ? codeHook(text) : text);
+}
+
+/** Whether a `<code>` run is open after `tag`, given whether one was open before it. */
+function codeRunOpenAfter(tag: string, inCode: boolean): boolean {
+	if (tag.startsWith("</")) return false;
+	return inCode || !SELF_CLOSING_HTML_TAG.test(tag);
+}
+
+function normalizeHtmlForTerminal(
+	raw: string,
+	state: HtmlNormalizationState = createHtmlNormalizationState(),
+	codeHook?: (text: string) => string,
+): string {
+	let output = "";
+	let lastIndex = 0;
+	let inCode = false;
+	const withoutComments = raw.replace(HTML_COMMENT_REGEX, "");
+
+	for (const match of withoutComments.matchAll(HTML_TAG_REGEX)) {
+		const tag = match[0];
+		const index = match.index ?? 0;
+		const name = htmlTagName(tag);
+		const isInlineTag = name === "span" || name === "summary" || name === "text";
+		const textBeforeTag = unescapeHtml(withoutComments.slice(lastIndex, index));
+		output = appendHtmlText(output, textBeforeTag, isInlineTag || inCode, inCode ? codeHook : undefined, state);
+		lastIndex = index + tag.length;
+
+		if (name === "code") {
+			inCode = codeRunOpenAfter(tag, inCode);
+		} else if (!isInlineTag) {
+			// Most tags handled here are block-level.
+			output = applyHtmlBlockTag(output, name, tag, state);
+		}
+	}
+
+	const remainingText = unescapeHtml(withoutComments.slice(lastIndex));
+	return appendHtmlText(output, remainingText, true, inCode ? codeHook : undefined, state);
+}
+
+function splitTerminalLines(text: string): string[] {
+	const lines = text.split("\n");
+	while (lines.length > 1 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Tree-guide hanging wrap
+//
+// Models routinely emit box-drawing trees ("├── item") inside plain
+// paragraphs — directory layouts, decision trees. The lexer sees those lines
+// as ordinary prose, so the generic wrap pass restarts wrapped continuations
+// at column 0 and visually shears the tree apart (doubly fast for CJK text,
+// where every glyph is two cells wide). Mirror the guide semantics of
+// `tree(1)` / rich.tree instead: wrap the node text within the cells that
+// remain after the guide prefix, and indent every continuation row under the
+// node text — branch glyphs swap to their pass-through form (`├` → `│`,
+// `└` → blank) so the rails of still-open ancestors stay visually joined.
+// ---------------------------------------------------------------------------
+
+/** Continuation glyph for each guide character a tree prefix may contain. */
+const TREE_GUIDE_CONTINUATION: Record<string, string> = {
+	"│": "│",
+	"┃": "┃",
+	"║": "║",
+	"├": "│",
+	"┣": "┃",
+	"╠": "║",
+	"└": " ",
+	"┗": " ",
+	"╚": " ",
+	"╰": " ",
+	"─": " ",
+	"━": " ",
+	"═": " ",
+	" ": " ",
+};
+
+/** Cheap pre-gate: any guide glyph at all. The structural test is TREE_BRANCH_CONNECTOR_RE. */
+const TREE_GUIDE_ANCHOR_RE = /[│┃║├┣╠└┗╚╰]/;
+
+/**
+ * A prefix qualifies as tree-shaped only when a branch/corner glyph is
+ * immediately followed by a horizontal connector (`├──`, `└─`, `╰──`, …).
+ * A lone rail or branch glyph used as prose ("│ is the Unicode vertical box
+ * drawing glyph…") never qualifies, so such paragraphs keep the plain wrap.
+ */
+const TREE_BRANCH_CONNECTOR_RE = /[├┣╠└┗╚╰][─━═]/;
+
+/** Below this many content cells a hanging wrap degenerates; keep the plain wrap. */
+const MIN_TREE_CONTENT_WIDTH = 8;
+
+const SGR_SEQUENCE_STICKY = sgrSequence("y");
+
+interface TreeGuidePrefix {
+	/** Index of the first char past the guide run (start of the node text). */
+	end: number;
+	/** SGR sequences interleaved with the guides, in order (zero visible width). */
+	codes: string;
+	/** Guide characters with SGR stripped, exactly as they appear on screen. */
+	guides: string;
+}
+
+/**
+ * Match the leading box-drawing guide run of a rendered line (e.g. `│   ├── `),
+ * tolerating interleaved SGR styling. Returns undefined unless the run
+ * contains a branch glyph joined to a horizontal connector and node text
+ * follows, so dash art, indented prose, and lone glyphs used as prose are
+ * never treated as a tree.
+ */
+function matchTreeGuidePrefix(line: string): TreeGuidePrefix | undefined {
+	let codes = "";
+	let guides = "";
+	let i = 0;
+	while (i < line.length) {
+		if (line.charCodeAt(i) === 0x1b) {
+			SGR_SEQUENCE_STICKY.lastIndex = i;
+			const match = SGR_SEQUENCE_STICKY.exec(line);
+			if (!match) break;
+			codes += match[0];
+			i = SGR_SEQUENCE_STICKY.lastIndex;
+			continue;
+		}
+		const char = line[i]!;
+		if (!(char in TREE_GUIDE_CONTINUATION)) break;
+		guides += char;
+		i++;
+	}
+	if (i >= line.length || !TREE_BRANCH_CONNECTOR_RE.test(guides)) return undefined;
+	return { end: i, codes, guides };
+}
+
+/** The guide prefix of a line that overflows `width` and leaves its node text enough cells, else undefined. */
+function hangingTreePrefix(line: string, width: number): TreeGuidePrefix | undefined {
+	if (visibleWidth(line) <= width) return undefined;
+	const prefix = matchTreeGuidePrefix(line);
+	if (!prefix || width - visibleWidth(prefix.guides) < MIN_TREE_CONTENT_WIDTH) return undefined;
+	return prefix;
+}
+
+/**
+ * Wrap a tree line's node text in the cells beside its guides and append the rows to `out`, each
+ * continuation row under the node text. `carry` is the SGR state open where the line starts.
+ */
+function pushHungTreeLine(out: string[], line: string, prefix: TreeGuidePrefix, carry: string, width: number): void {
+	const guideWidth = visibleWidth(prefix.guides);
+	// Re-play the SGR state ahead of the node text so the wrapper carries
+	// it onto every continuation row; the codes are zero-width, so measured
+	// row widths are unaffected.
+	const activeCodes = carry + prefix.codes;
+	const rows = wrapTextWithAnsi(activeCodes + line.slice(prefix.end), width - guideWidth);
+	let hang = "";
+	for (const guide of prefix.guides) hang += TREE_GUIDE_CONTINUATION[guide] ?? " ";
+	const hangShortfall = guideWidth - visibleWidth(hang);
+	if (hangShortfall > 0) hang += padding(hangShortfall);
+	out.push(carry + line.slice(0, prefix.end) + rows[0]!.slice(activeCodes.length));
+	for (let i = 1; i < rows.length; i++) {
+		out.push(activeCodes + hang + rows[i]!);
+	}
+}
+
+/**
+ * Hanging wrap for box-drawing tree lines inside prose block text.
+ *
+ * Returns undefined when no line needs the treatment, so paragraphs without
+ * overflowing tree lines keep their exact current render. When a paragraph
+ * does hang, its lines are returned pre-split and style-self-contained: the
+ * SGR state open at each line start is re-played onto that line (`carry`),
+ * because the caller's wrap pass — which normally carries SGR state across
+ * the newlines of a single entry — no longer sees them as one entry.
+ */
+function hangWrapTreeGuideLines(text: string, width: number): string[] | undefined {
+	if (width < MIN_TREE_CONTENT_WIDTH || !TREE_GUIDE_ANCHOR_RE.test(text)) return undefined;
+
+	const sourceLines = text.split("\n");
+	const prefixes = sourceLines.map(line => hangingTreePrefix(line, width));
+	if (!prefixes.some(prefix => prefix !== undefined)) return undefined;
+
+	const out: string[] = [];
+	let carry = "";
+	for (let i = 0; i < sourceLines.length; i++) {
+		const line = sourceLines[i]!;
+		const prefix = prefixes[i];
+		if (prefix) pushHungTreeLine(out, line, prefix, carry, width);
+		else out.push(carry ? carry + line : line);
+		carry = sgrCarryAfter(carry, line);
+	}
+	return out;
+}
+
+/** Code languages whose streamed complete lines are highlighted as a diff while the fence is open. */
+const STREAMED_DIFF_LANGS: ReadonlySet<string> = new Set(["diff", "patch", "udiff"]);
+
+const markdownParser = new Marked();
+markdownParser.setOptions({
+	tokenizer: new MarkdownTokenizer(),
+});
+
+// Math spans (`$$…$$`, `\[…\]`, `$…$`, `\(…\)`) are tokenized as a dedicated
+// `math` inline token before markdown's escape/emphasis/link rules run, so
+// backslash commands (`\frac`, `\alpha`) and intraword underscores (`x_i`)
+// survive intact instead of being mangled or split. The `$…$` form uses
+// pandoc's anti-currency heuristic (`inlineMathSpanEnd`) so "$5 and $10" is
+// never math. Inline extensions run before marked's escape tokenizer, so
+// `\(…\)` becomes math while a genuinely escaped `\$` is left to `escape` and
+// renders as a literal dollar.
+const CUSTOM_HR_START_REGEX = /(?:^|\n) {0,3}([-*_─━═=–—])[ \t]*(?:\1[ \t]*){2,}(?:\n+|$)/;
+const CUSTOM_HR_TOKENIZER_REGEX = /^ {0,3}([-*_─━═=–—])[ \t]*(?:\1[ \t]*){2,}(?:\n+|$)/;
+
+function getHrChar(char: string, hrChar: string): string {
+	const isAscii = hrChar === "-";
+	switch (char) {
+		case "=":
+			return "=";
+		case "═":
+			return isAscii ? "=" : "═";
+		case "━":
+			return isAscii ? "-" : "━";
+		case "─":
+			return isAscii ? "-" : "─";
+		case "–":
+			return isAscii ? "-" : "–";
+		case "—":
+			return isAscii ? "-" : "—";
+		default:
+			return hrChar;
+	}
+}
+
+/**
+ * The part of `src` a paragraph that starts there can span: up to and including the first line break of the
+ * first empty line, or all of `src`. marked calls a block extension's `start` with the rest of the document
+ * before every paragraph, only to cut that paragraph where the extension's block begins, so a `start`
+ * search bounded here finds every cut that lands inside the paragraph, and a search of the whole rest makes
+ * lexing quadratic in the message length.
+ */
+function paragraphReach(src: string): string {
+	const blank = src.indexOf("\n\n");
+	return blank === -1 ? src : src.slice(0, blank + 1);
+}
+
+const customHrExtension: TokenizerAndRendererExtension = {
+	name: "customHr",
+	level: "block",
+	start(src) {
+		const match = CUSTOM_HR_START_REGEX.exec(paragraphReach(src));
+		if (!match) return undefined;
+		let idx = match.index;
+		if (src[idx] === "\n") {
+			idx += 1;
+		}
+		return idx;
+	},
+	tokenizer(src) {
+		const match = CUSTOM_HR_TOKENIZER_REGEX.exec(src);
+		if (match) {
+			return {
+				type: "hr",
+				raw: match[0],
+			};
+		}
+		return undefined;
+	},
+	renderer() {
+		return "";
+	},
+};
+
+const mathExtension: TokenizerAndRendererExtension = {
+	name: "math",
+	level: "inline",
+	start(src) {
+		const m = /\$|\\\(|\\\[/.exec(src);
+		return m ? m.index : undefined;
+	},
+	tokenizer(src) {
+		if (src.startsWith("$$")) {
+			const end = src.indexOf("$$", 2);
+			if (end !== -1 && src.slice(2, end).trim().length > 0) {
+				return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: true };
+			}
+			return undefined;
+		}
+		if (src.startsWith("\\[")) {
+			const end = src.indexOf("\\]", 2);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: true };
+			return undefined;
+		}
+		if (src.startsWith("\\(")) {
+			const end = src.indexOf("\\)", 2);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: false };
+			return undefined;
+		}
+		if (src.charCodeAt(0) === 0x24 /* $ */) {
+			const end = inlineMathSpanEnd(src, 0);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 1), text: src.slice(1, end), display: false };
+		}
+		return undefined;
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+
+// Display math blocks: opening `$$` / `\[` and closing `$$` / `\]` each alone on
+// their own line (≤3 leading spaces). Matched at the block level — before
+// paragraph/list parsing — so a multi-line equation (e.g. a matrix with `\\`
+// row breaks) renders across several lines instead of being collapsed onto one,
+// and blank lines inside the block don't split it. The own-line requirement
+// keeps inline `$$…$$` inside prose for the inline tokenizer above.
+const MATH_BLOCK_DOLLAR = /^ {0,3}\$\$[ \t]*\n([\s\S]+?)\n {0,3}\$\$[ \t]*(?:\n|$)/;
+const MATH_BLOCK_BRACKET = /^ {0,3}\\\[[ \t]*\n([\s\S]+?)\n {0,3}\\\][ \t]*(?:\n|$)/;
+const MATH_BLOCK_START = /(?:^|\n) {0,3}(?:\$\$|\\\[)[ \t]*\n/;
+const mathBlockExtension: TokenizerAndRendererExtension = {
+	name: "mathBlock",
+	level: "block",
+	start(src) {
+		return MATH_BLOCK_START.exec(paragraphReach(src))?.index;
+	},
+	tokenizer(src) {
+		const m = MATH_BLOCK_DOLLAR.exec(src) ?? MATH_BLOCK_BRACKET.exec(src);
+		if (!m || m[1].trim().length === 0) return undefined;
+		return { type: "math", raw: m[0], text: m[1], display: true };
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+
+// Bare (delimiter-less) display-math environments: `\begin{<mathenv>}…\end{…}`
+// written without `$$`/`\[` fences (common in raw model output). Captured at the
+// block level as a whole unit — including any immediately preceding `lhs =`
+// line — so marked never splits it on inline `\\` row breaks. Restricted to math
+// environments (isBareMathEnvironment), and the `≤3 leading spaces` + "block
+// starts at offset 0" guards keep fenced/indented `\begin{cases}` code blocks
+// for marked's own code rules.
+const BARE_ENV_BEGIN = /(?:^|\n)[ \t]{0,3}\\begin\{([A-Za-z]+\*?)\}/;
+/** The bare environment block opened by `bm`, the first `\begin{…}` line match in `src`. */
+function bareMathEnvBlock(src: string, bm: RegExpExecArray | null): readonly [number, number] | null {
+	if (!bm || !isBareMathEnvironment(bm[1])) return null;
+	const beginLineStart = bm.index === 0 ? 0 : bm.index + 1; // skip the matched leading `\n`
+	const endToken = `\\end{${bm[1]}}`;
+	const endAt = src.indexOf(endToken, bm.index);
+	if (endAt === -1) return null;
+	// The `\end` must close before any blank line (i.e. within the same block).
+	if (/\n[ \t]*\n/.test(src.slice(beginLineStart, endAt))) return null;
+	let blockEnd = endAt + endToken.length;
+	while (src[blockEnd] === " " || src[blockEnd] === "\t") blockEnd++;
+	if (src[blockEnd] === "\n") blockEnd++;
+	// Pull in one immediately-preceding `lhs =`/open-delimiter line (e.g. `f(x) =`).
+	let start = beginLineStart;
+	if (start > 0 && src[start - 1] === "\n") {
+		const prevStart = src.lastIndexOf("\n", start - 2) + 1;
+		const prevLine = src.slice(prevStart, start - 1);
+		if (/[=([{]\s*$/.test(prevLine)) start = prevStart;
+	}
+	return [start, blockEnd];
+}
+const mathEnvBlockExtension: TokenizerAndRendererExtension = {
+	name: "mathEnvBlock",
+	level: "block",
+	start(src) {
+		const r = bareMathEnvBlock(src, BARE_ENV_BEGIN.exec(paragraphReach(src)));
+		return r ? r[0] : undefined;
+	},
+	tokenizer(src) {
+		// A block at offset 0 opens on the first line, or on the second behind a pulled-in `lhs =` line,
+		// so the `\begin` search stops at the end of the second line instead of scanning the document
+		// at every block marked tokenizes.
+		const firstBreak = src.indexOf("\n");
+		const secondBreak = firstBreak === -1 ? -1 : src.indexOf("\n", firstBreak + 1);
+		const head = secondBreak === -1 ? src : src.slice(0, secondBreak);
+		const r = bareMathEnvBlock(src, BARE_ENV_BEGIN.exec(head));
+		if (r?.[0] !== 0) return undefined; // only consume when the block starts at offset 0
+		const raw = src.slice(0, r[1]);
+		const text = raw.replace(/\n[ \t]*$/, "");
+		if (text.trim().length === 0) return undefined;
+		return { type: "math", raw, text, display: true };
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnvBlockExtension, mathExtension] });
+
+// ---------------------------------------------------------------------------
+// Module-level LRU render cache
+// ---------------------------------------------------------------------------
+// Each session-tree navigation discards and recreates Markdown component
+// instances, so the per-instance #cachedLines field is always cold on first
+// render of a fresh component. This module-level cache survives across
+// component lifetimes and eliminates redundant marked.lexer + highlightCode
+// (Rust FFI) work for content/layout combinations already seen this session.
+//
+// The key is the text the component holds, by reference, and the entry holds
+// the signature its rows were laid out under. A key that spells the text and the
+// signature together is a new string the length of the text: one copy of every
+// cached message, 2.9 KiB of the 10.2 KiB of strings a 3,000-character turn of an
+// interactive session kept. One text keeps one entry, the rows of its most recent
+// render.
+
+const RENDER_CACHE_MAX = 256; // sane cap: ~256 distinct message texts
+const RENDER_CACHE_MAX_SIZE = 512 * 1024;
+const RENDER_CACHE_MAX_ENTRY_SIZE = 32 * 1024;
+const EMPTY_RENDER_LINES: readonly string[] = [];
+
+/** The rows one text rendered to, with the width, padding, theme and capabilities they were laid out under. */
+interface RenderCacheEntry extends RenderSignature {
+	lines: readonly string[];
+}
+
+const renderCache = new LRUCache<string, RenderCacheEntry>({
+	max: RENDER_CACHE_MAX,
+	maxSize: RENDER_CACHE_MAX_SIZE,
+	maxEntrySize: RENDER_CACHE_MAX_ENTRY_SIZE,
+	sizeCalculation: entry => renderedLinesCacheSize(entry.lines),
+});
+
+function renderedLinesCacheSize(lines: readonly string[]): number {
+	let size = lines.length;
+	for (let i = 0; i < lines.length; i++) size += lines[i]!.length;
+	return Math.max(1, size);
+}
+
+// A reference-link definition (`[label]: dest`) resolves across the whole
+// document, so a split lex cannot reproduce it — disable the streaming fast path
+// when one is present (rare in streamed output). The label may contain
+// backslash-escaped characters (`[a\]b]: x`), so escapes are matched explicitly;
+// over-matching is safe (it only costs the fast path), under-matching is not.
+const HAS_REF_DEF = /^ {0,3}\[(?:\\.|[^\]\\])+\]:/m;
+
+// Can this text be lexed as an appended tail? A reference definition resolves
+// across the whole document and CR is normalized by marked, so either one in the
+// scanned span forces a full lex.
+function canStreamLex(text: string): boolean {
+	return !HAS_REF_DEF.test(text) && !text.includes("\r");
+}
+
+// A copy of `text` in storage of its own. A slice shares the buffer of the string
+// it was cut from, and so does every token marked cuts from that slice. A streamed
+// text is a new buffer on every frame, so tail tokens frozen on one frame after
+// another each held that frame's whole text: 76 MiB for one 206,000-character
+// answer. A structured clone is rebuilt from serialized bytes, so it cannot share
+// the source buffer, and it keeps the content exact (lone surrogates included).
+function unsharedCopy(text: string): string {
+	return structuredClone(text);
+}
+
+// Untrusted model output can over-nest markdown structure: a blockquote nests
+// once per leading `>` (`>>>>…`), a list once per indentation step. marked's
+// block lexer recurses per nesting level and is super-linear on list indent, so
+// a payload nested thousands deep overflows the stack (deep `>`) or hangs for
+// minutes (deep list) *before* render() — a trivial DoS on the TUI. Cap each
+// line's structural nesting to a depth far beyond any real document; the
+// render-depth guard (Markdown.MAX_RENDER_DEPTH) then bounds token recursion for
+// whatever survives. Applied once per render, folded into tab normalization.
+const MAX_BLOCKQUOTE_MARKERS = 24;
+const MAX_LEADING_INDENT = 64;
+// Cheap detector: does any line's leading `>`-run or whitespace-run exceed a cap?
+// `.test()` short-circuits and allocates nothing on the common no-match input, so
+// the streaming hotpath pays only a linear scan (as HAS_REF_DEF already does).
+const OVER_NESTED = new RegExp(
+	`(?:^|\\n)(?:[ \\t]*>){${MAX_BLOCKQUOTE_MARKERS + 1},}|(?:^|\\n)[ \\t]{${MAX_LEADING_INDENT + 1},}\\S`,
+);
+// Slow-path caps (only run when OVER_NESTED matches): keep the first N leading
+// blockquote markers and drop the rest of the `>`-run; keep the first M leading
+// whitespace chars and drop the rest up to the first non-space. Multiline `^`, so
+// each line is capped independently — the transform stays line-local and thus
+// append-stable for the streaming prefix cache.
+const BLOCKQUOTE_CAP = new RegExp(`^((?:[ \\t]*>){${MAX_BLOCKQUOTE_MARKERS}})(?:[ \\t]*>)+`, "gm");
+const INDENT_CAP = new RegExp(`^([ \\t]{${MAX_LEADING_INDENT}})[ \\t]+(?=\\S)`, "gm");
+
+// Bound structural nesting depth so pathological input can neither overflow the
+// lexer stack nor hang it. No-op (returns the input) unless a line actually
+// over-nests, so realistic markdown pays only the OVER_NESTED scan.
+function capMarkdownNesting(text: string): string {
+	if (!OVER_NESTED.test(text)) return text;
+	return text.replace(BLOCKQUOTE_CAP, "$1").replace(INDENT_CAP, "$1");
+}
+
+// A quote border (`│ `) takes two cells. A quote too narrow to keep a content
+// cell beside it drops the border and lays its content out at the full width:
+// re-wrapping a deeper quote's bordered rows at one cell splits each of them in
+// two, doubling the row count at every further nesting level.
+const QUOTE_BORDER_CELLS = 2;
+function quoteContentWidth(width: number): number {
+	return width > QUOTE_BORDER_CELLS ? width - QUOTE_BORDER_CELLS : Math.max(1, width);
+}
+
+/** Drop all L2 cache entries. Call on theme change to prevent stale styled output. */
+export function clearRenderCache(): void {
+	renderCache.clear();
+}
+
+// Stable numeric IDs for structural theme/style objects (no ID field on type).
+// WeakMap-keyed so the ID matches strict object identity and doesn't get copied by spread/cloning.
+const themeObjectIds = new WeakMap<object, number>();
+let nextObjectId = 0;
+function objectId(o: object): number {
+	let id = themeObjectIds.get(o);
+	if (id === undefined) {
+		id = nextObjectId++;
+		themeObjectIds.set(o, id);
+	}
+	return id;
+}
+
+/**
+ * Default text styling for markdown content.
+ * Applied to all text unless overridden by markdown formatting.
+ */
+export interface DefaultTextStyle {
+	/** Foreground color function */
+	color?: (text: string) => string;
+	/** Background color function */
+	bgColor?: (text: string) => string;
+	/** Bold text */
+	bold?: boolean;
+	/** Italic text */
+	italic?: boolean;
+	/** Strikethrough text */
+	strikethrough?: boolean;
+	/** Underline text */
+	underline?: boolean;
+}
+
+/**
+ * Theme functions for markdown elements.
+ * Each function takes text and returns styled text with ANSI codes.
+ */
+export interface MarkdownTheme {
+	heading: (text: string) => string;
+	link: (text: string) => string;
+	linkUrl: (text: string) => string;
+	code: (text: string) => string;
+	codeBlock: (text: string) => string;
+	codeBlockBorder: (text: string) => string;
+	/**
+	 * Full replacement for a fenced block's opening/closing rows. When absent,
+	 * the raw ``` markers render through {@link codeBlockBorder} (the default).
+	 * Themes use this to draw designed block chrome (a rule + language tag)
+	 * instead of literal backtick fences, which read as unrendered markdown.
+	 */
+	codeBlockFence?: (lang: string | undefined, pos: "open" | "close") => string;
+	quote: (text: string) => string;
+	quoteBorder: (text: string) => string;
+	hr: (text: string) => string;
+	listBullet: (text: string) => string;
+	bold: (text: string) => string;
+	italic: (text: string) => string;
+	strikethrough: (text: string) => string;
+	underline: (text: string) => string;
+	highlightCode?: (code: string, lang?: string) => string[];
+	/**
+	 * Resolve a mermaid ASCII rendering by fenced block source text.
+	 * Return null to fall back to fenced code rendering.
+	 */
+	resolveMermaidAscii?: (source: string, maxWidth?: number) => string | null;
+	symbols: SymbolTheme;
+}
+
+interface InlineStyleContext {
+	applyText: (text: string) => string;
+	stylePrefix: string;
+}
+
+type ListToken = Token & { items: Array<{ tokens?: Token[] }>; ordered: boolean; start?: number };
+type TableCellToken = { tokens?: Token[] };
+/**
+ * `align` carries one entry per column, from the delimiter row: `:---:` is
+ * `"center"`, `---:` is `"right"`, and both `:---` and a bare `---` are `null`,
+ * which GFM defines as the default (left). marked has always produced it; the
+ * renderer simply never read it.
+ */
+type TableAlign = "left" | "center" | "right" | null;
+type TableToken = Token & {
+	header: TableCellToken[];
+	rows: TableCellToken[][];
+	align?: TableAlign[];
+	raw?: string;
+};
+
+/** Column geometry shared by every row of one rendered table. */
+interface TableLayout {
+	columnWidths: number[];
+	align: TableAlign[];
+	styleContext: InlineStyleContext | undefined;
+}
+
+/** The most cells a column's longest unbroken word adds to the column's minimum width; a longer word wraps. */
+const TABLE_MAX_UNBROKEN_WORD_WIDTH = 30;
+
+/**
+ * Pad `text` to `width` according to a column's alignment.
+ *
+ * The one place a table cell is fitted to its column, used by the header row
+ * and the body rows alike. It previously existed twice as an inline
+ * `text + padding(width - visibleWidth(text))`, which is the left-aligned case
+ * written out longhand, so `| :---: |` and `| ---: |` parsed correctly and then
+ * rendered identically to `| --- |`. A centre-aligned column with an odd amount
+ * of slack gets the extra column on the right, matching how browsers round it.
+ */
+function alignCellText(text: string, width: number, align: TableAlign): string {
+	const slack = Math.max(0, width - visibleWidth(text));
+	if (slack === 0) return text;
+	if (align === "right") return padding(slack) + text;
+	if (align === "center") {
+		const left = Math.floor(slack / 2);
+		return padding(left) + text + padding(slack - left);
+	}
+	return text + padding(slack);
+}
+
+/**
+ * Per-column minimum widths when the longest unbroken words of every column do not fit in `availableForCells`:
+ * each column gets one cell, and the cells left over are shared in proportion to how far each column's longest
+ * word exceeds one cell, with rounding leftovers going to the leftmost columns.
+ */
+function squeezedMinColumnWidths(minWordWidths: number[], numCols: number, availableForCells: number): number[] {
+	const widths: number[] = new Array(numCols).fill(1);
+	const remaining = availableForCells - numCols;
+	if (remaining <= 0) return widths;
+
+	const totalWeight = minWordWidths.reduce((total, width) => total + Math.max(0, width - 1), 0);
+	const growth = minWordWidths.map(width =>
+		totalWeight > 0 ? Math.floor((Math.max(0, width - 1) / totalWeight) * remaining) : 0,
+	);
+	for (let i = 0; i < numCols; i++) {
+		widths[i] += growth[i] ?? 0;
+	}
+
+	let leftover = remaining - growth.reduce((total, width) => total + width, 0);
+	for (let i = 0; leftover > 0 && i < numCols; i++) {
+		widths[i]++;
+		leftover--;
+	}
+	return widths;
+}
+
+/**
+ * Column widths for a table whose natural widths overflow `availableForCells`: every column starts at its minimum
+ * and grows toward its natural width in proportion to how far short of it the column is, then the cells lost to
+ * rounding go one at a time, left to right, to columns still below their natural width.
+ */
+function shrunkColumnWidths(
+	naturalWidths: number[],
+	minColumnWidths: number[],
+	numCols: number,
+	availableForCells: number,
+): number[] {
+	const totalGrowPotential = naturalWidths.reduce(
+		(total, width, index) => total + Math.max(0, width - minColumnWidths[index]),
+		0,
+	);
+	const extraWidth = Math.max(0, availableForCells - minColumnWidths.reduce((a, b) => a + b, 0));
+	const columnWidths = minColumnWidths.map((minWidth, index) => {
+		if (totalGrowPotential <= 0) return minWidth;
+		const minWidthDelta = Math.max(0, naturalWidths[index] - minWidth);
+		return minWidth + Math.floor((minWidthDelta / totalGrowPotential) * extraWidth);
+	});
+
+	let remaining = availableForCells - columnWidths.reduce((a, b) => a + b, 0);
+	let grew = true;
+	while (remaining > 0 && grew) {
+		grew = false;
+		for (let i = 0; i < numCols && remaining > 0; i++) {
+			if (columnWidths[i] < naturalWidths[i]) {
+				columnWidths[i]++;
+				remaining--;
+				grew = true;
+			}
+		}
+	}
+	return columnWidths;
+}
+
+/**
+ * Column widths that fit `availableForCells`, given each column's natural (unwrapped) width and the width of its
+ * longest unbroken word.
+ */
+function tableColumnWidths(
+	naturalWidths: number[],
+	minWordWidths: number[],
+	numCols: number,
+	availableForCells: number,
+): number[] {
+	const minColumnWidths =
+		minWordWidths.reduce((a, b) => a + b, 0) > availableForCells
+			? squeezedMinColumnWidths(minWordWidths, numCols, availableForCells)
+			: minWordWidths;
+	if (naturalWidths.reduce((a, b) => a + b, 0) <= availableForCells) {
+		return naturalWidths.map((width, index) => Math.max(width, minColumnWidths[index]));
+	}
+	return shrunkColumnWidths(naturalWidths, minColumnWidths, numCols, availableForCells);
+}
+
+function formatHyperlink(text: string, target: string): string {
+	if (!TERMINAL.hyperlinks || !target) {
+		return text;
+	}
+
+	const safeTarget = target.replaceAll("\x1b", "").replaceAll("\x07", "");
+	if (!safeTarget) {
+		return text;
+	}
+
+	return `\x1b]8;;${safeTarget}\x07${text}\x1b]8;;\x07`;
+}
+
+function isAsciiTextSizingPayload(text: string): boolean {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code < 0x20 || code > 0x7e) return false;
+	}
+	return true;
+}
+
+function encodeTextSizedHeading(text: string, scale: 1 | 2 | 3): string {
+	let out = "";
+	let asciiRun = "";
+	const flushAscii = () => {
+		if (asciiRun === "") return;
+		out += encodeTextSized(asciiRun, { scale });
+		asciiRun = "";
+	};
+
+	for (const { segment } of getSegmenter().segment(text)) {
+		if (isAsciiTextSizingPayload(segment)) {
+			asciiRun += segment;
+			continue;
+		}
+		flushAscii();
+		out += encodeTextSized(segment, { scale, widthCells: visibleWidth(segment) });
+	}
+	flushAscii();
+	return out;
+}
+
+const MATH_NEWLINES = /\n+/g;
+
+/** True for the custom inline `math` token produced by the math extension. */
+function isMathToken(token: Token): token is Token & { text: string; display: boolean } {
+	return (token as { type: string }).type === "math";
+}
+
+/** Convert a `math` token's LaTeX to single-line Unicode for inline rendering. */
+function renderMathToken(text: string): string {
+	return latexToUnicode(text).replace(MATH_NEWLINES, " ");
+}
+
+/**
+ * When a paragraph's only meaningful content is a single display math token
+ * (`$$…$$` / `\[…\]`), return it so the paragraph can be stacked multi-line
+ * instead of flattened inline. Models routinely write display math on one line,
+ * which marked captures as an inline `display:true` math token inside a
+ * paragraph; without this it would flatten through `renderMathToken`.
+ */
+function soleDisplayMath(tokens?: Token[]): (Token & { text: string }) | null {
+	if (!tokens) return null;
+	let math: (Token & { text: string; display: boolean }) | null = null;
+	for (const token of tokens) {
+		if (isMathToken(token) && token.display) {
+			if (math) return null;
+			math = token;
+		} else if (!(token.type === "text" && typeof token.text === "string" && token.text.trim() === "")) {
+			return null;
+		}
+	}
+	return math;
+}
+
+/**
+ * The LaTeX a list-item token renders as stacked display math: a math token, or a text or
+ * paragraph token whose only content is one display math token. Undefined for anything else.
+ */
+function listItemDisplayMath(token: Token): string | undefined {
+	if (isMathToken(token)) return token.text;
+	if (token.type !== "text" && token.type !== "paragraph") return undefined;
+	return soleDisplayMath(token.tokens)?.text;
+}
+
+/** A row of a rendered list item; a nested list's rows are `nested` and already carry their full indent. */
+interface ListItemLine {
+	text: string;
+	nested: boolean;
+}
+
+/** A blank row follows a block when another block comes next; a space token supplies its own. */
+function gapFollowsBlock(nextTokenType: string | undefined): boolean {
+	return nextTokenType !== undefined && nextTokenType !== "" && nextTokenType !== "space";
+}
+
+function plainInlineTokens(tokens: Token[]): string {
+	let result = "";
+	for (const token of tokens) {
+		if (isMathToken(token)) {
+			result += renderMathToken(token.text);
+			continue;
+		}
+		switch (token.type) {
+			case "text":
+				result += token.tokens && token.tokens.length > 0 ? plainInlineTokens(token.tokens) : token.text;
+				break;
+			case "strong":
+			case "em":
+			case "del":
+			case "link":
+				result += plainInlineTokens(token.tokens || []);
+				break;
+			case "codespan":
+				result += token.text;
+				break;
+			default:
+				if ("text" in token && typeof token.text === "string") result += token.text;
+				break;
+		}
+	}
+	return result;
+}
+
+/**
+ * Classify an inline `html` token by tag name and whether it is a closing tag.
+ * Returns null for non-html tokens or raw that isn't a recognizable HTML tag.
+ */
+function inlineHtmlTag(token: Token): { name: string; closing: boolean } | null {
+	if ((token as { type: string }).type !== "html") return null;
+	const raw = (token as { raw?: unknown }).raw;
+	if (typeof raw !== "string") return null;
+	const name = htmlTagName(raw);
+	if (!name) return null;
+	return { name, closing: /^<\s*\//.test(raw) };
+}
+
+/**
+ * Collapse inline `<code>…</code>` runs — which marked emits as separate `html`
+ * open/close tokens around the literal content — into a single synthetic
+ * `codespan` token, so they render with the theme's inline-code styling instead
+ * of leaking the raw tags. HTML entities inside the run are decoded. Stray or
+ * unmatched code tags are dropped; other inline html tokens pass through for the
+ * `html` render path to normalize. Returns the original array when no `<code>`
+ * tag is present (the common case).
+ */
+function collapseInlineHtml(tokens: Token[]): Token[] {
+	if (!tokens.some(token => inlineHtmlTag(token)?.name === "code")) return tokens;
+
+	const out: Token[] = [];
+	// Once a `<code>` finds no closer, no later one can: every later opener is dropped unsearched.
+	let closersExhausted = false;
+	for (let i = 0; i < tokens.length; i++) {
+		const tag = inlineHtmlTag(tokens[i]);
+		if (tag?.name !== "code") {
+			out.push(tokens[i]);
+			continue;
+		}
+		// A stray `</code>` and an unmatched `<code>` are dropped; the rest renders normally.
+		if (tag.closing || closersExhausted) continue;
+		const close = closingCodeTagIndex(tokens, i + 1);
+		if (close < 0) {
+			closersExhausted = true;
+			continue;
+		}
+		const text = unescapeHtml(plainInlineTokens(tokens.slice(i + 1, close)));
+		out.push({ type: "codespan", raw: text, text } as Token);
+		i = close;
+	}
+	return out;
+}
+
+/** Index of the first closing `</code>` tag at or after `from`, or -1. */
+function closingCodeTagIndex(tokens: Token[], from: number): number {
+	for (let j = from; j < tokens.length; j++) {
+		const tag = inlineHtmlTag(tokens[j]);
+		if (tag?.name === "code" && tag.closing) return j;
+	}
+	return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Inline hex-color swatches
+// ---------------------------------------------------------------------------
+// When prose/thinking mentions a CSS hex color (e.g. #C5FFD6 or `#C5FFD6`),
+// render a small chip painted with that color just before the code. The chip
+// glyph comes from the theme's symbol set (ASCII → Unicode → Nerd Font), so it
+// degrades gracefully; the color itself is exact 24-bit on truecolor terminals
+// and the nearest 256-color cell otherwise (Bun.color quantizes for us).
+
+/** Fallback chip when the theme supplies no `colorSwatch` symbol (Unicode default). */
+const DEFAULT_COLOR_SWATCH_GLYPH = "■";
+
+// `#` + 3-8 hex digits, not glued to a surrounding word/`#`/`&` (avoids HTML
+// entities like &#9731; and paths like foo#fff) and not trailed by more hex
+// (so over-long runs never produce a misleading swatch). Length/letter rules
+// are enforced in classifyHexColor since the alternation can't express "exactly
+// 3, 6, or 8".
+const HEX_COLOR_REGEX = /(?<![\w#&])#([0-9a-fA-F]{3,8})(?![0-9a-fA-F])/g;
+const HEX_COLOR_EXACT_REGEX = /^#([0-9a-fA-F]{3,8})$/;
+
+/**
+ * Decide whether a run of hex digits denotes a renderable CSS color.
+ *
+ * Only the canonical CSS lengths (#RGB, #RRGGBB, #RRGGBBAA) qualify. The 4-digit
+ * #RGBA form is deliberately excluded: it collides with hashline `#TAG` snapshot
+ * tags (4 hex digits, e.g. #6C5E), which would otherwise sprout spurious swatches.
+ * In `strict` mode (bare prose) a 3-digit run must contain a hex letter, so the
+ * far more common short issue/PR references (#123, #1011) don't sprout swatches.
+ * Codespans opt out of strictness — the backticks already signal "this is a color".
+ */
+function classifyHexColor(hex: string, strict: boolean): boolean {
+	const n = hex.length;
+	if (n !== 3 && n !== 6 && n !== 8) return false;
+	if (strict && n === 3 && !/[a-fA-F]/.test(hex)) return false;
+	return true;
+}
+
+/** ANSI-painted `glyph` for `#${hex}`, or "" when the color can't be encoded. */
+function colorSwatch(hex: string, glyph: string): string {
+	const ansi = Bun.color(`#${hex}`, TERMINAL.trueColor ? "ansi-16m" : "ansi-256");
+	// Reset only the foreground (\x1b[39m) so an enclosing background/decoration
+	// applied later by the line renderer survives across the swatch.
+	return ansi ? `${ansi}${glyph}\x1b[39m ` : "";
+}
+
+/**
+ * Style a plain-text run, inserting a color swatch before each hex color it
+ * mentions. Non-color text (including the matched `#hex` itself) is routed
+ * through `applySegment` so the caller's base styling is preserved verbatim.
+ */
+function renderTextWithSwatches(text: string, applySegment: (t: string) => string, glyph: string): string {
+	HEX_COLOR_REGEX.lastIndex = 0;
+	let result = "";
+	let last = 0;
+	for (;;) {
+		const match = HEX_COLOR_REGEX.exec(text);
+		if (match === null) break;
+		if (!classifyHexColor(match[1], true)) continue;
+		const swatch = colorSwatch(match[1], glyph);
+		if (!swatch) continue;
+		if (match.index > last) result += applySegment(text.slice(last, match.index));
+		result += swatch + applySegment(match[0]);
+		last = match.index + match[0].length;
+	}
+	if (last === 0) return applySegment(text);
+	if (last < text.length) result += applySegment(text.slice(last));
+	return result;
+}
+
+/** Swatch for a codespan whose entire content is a single hex color, else "". */
+function codespanSwatch(code: string, glyph: string): string {
+	const match = HEX_COLOR_EXACT_REGEX.exec(code.trim());
+	if (!match || !classifyHexColor(match[1], false)) return "";
+	return colorSwatch(match[1], glyph);
+}
+
+/** Every input besides the text that the rows of a render depend on. */
+export interface RenderSignature {
+	width: number;
+	paddingX: number;
+	paddingY: number;
+	codeBlockIndent: number;
+	themeId: number;
+	defaultTextStyleId: number;
+	imageProtocol: string;
+	hyperlinks: boolean;
+	textSizing: boolean;
+	bgColorProbe: string;
+	headingProbe: string;
+}
+
+/** Whether two renders were laid out under the same width, padding, theme and terminal capabilities. */
+function sameRenderSignature(a: RenderSignature, b: RenderSignature): boolean {
+	return (
+		a.width === b.width &&
+		a.paddingX === b.paddingX &&
+		a.paddingY === b.paddingY &&
+		a.codeBlockIndent === b.codeBlockIndent &&
+		a.themeId === b.themeId &&
+		a.defaultTextStyleId === b.defaultTextStyleId &&
+		a.imageProtocol === b.imageProtocol &&
+		a.hyperlinks === b.hyperlinks &&
+		a.textSizing === b.textSizing &&
+		a.bgColorProbe === b.bgColorProbe &&
+		a.headingProbe === b.headingProbe
+	);
+}
+
+interface StreamPrefixLineCache extends RenderSignature {
+	text: string;
+	tokenCount: number;
+	lines: readonly string[];
+}
+interface StreamingDiffLineCache extends RenderSignature {
+	lang: string | undefined;
+	text: string;
+	lines: readonly string[];
+}
+
+/** Carried across rows while laying out: whether the previous row was an OSC 66 sized heading. */
+interface RowLayoutState {
+	afterOsc66: boolean;
+}
+
+/**
+ * Lay out one wrapped row: the left margin, then the row, filled to `width` when `bgFn` paints a
+ * background. Image lines and OSC 66 sized headings are output raw: no margins or background.
+ */
+function layoutRow(
+	row: string,
+	state: RowLayoutState,
+	margin: string,
+	width: number,
+	bgFn: ((text: string) => string) | undefined,
+): string {
+	// The first empty row after a scale>1 OSC 66 heading is structural: it reserves the
+	// lower cells occupied by the multicell glyphs. It is not padded or background-filled,
+	// because real spaces on that row can interact with Kitty's multicell overwrite rules
+	// during the first paint, and stays a cursor-only newline.
+	if (state.afterOsc66 && row === "") {
+		state.afterOsc66 = false;
+		return "";
+	}
+	const osc66 = isOsc66Line(row);
+	if (osc66 || TERMINAL.isImageLine(row)) {
+		state.afterOsc66 = osc66;
+		return row;
+	}
+	state.afterOsc66 = false;
+	return bgFn ? applyLineBackground(margin + row + margin, width, bgFn) : margin + row;
+}
+
+/**
+ * Laid-out rows of the complete body lines of the open code fence a streaming render ends on.
+ * Every body line but the last is followed by a newline, so it cannot change while the text only
+ * grows, and its rows depend on nothing but the line, the style and the signature.
+ */
+interface OpenFenceRowCache extends RenderSignature {
+	/** How the body lines were styled: `plain`, or `diff:<lang>` for a diff highlighted line by line. */
+	style: string;
+	/** The body text the rows were laid out from, through the newline ending its last line. */
+	stableText: string;
+	/** Appended to in place as lines complete; copied into each render, never handed out. */
+	rows: string[];
+	/** Layout state entering the first body row, and after the last cached one. */
+	enteredAfterOsc66: boolean;
+	afterOsc66: boolean;
+}
+
+export class Markdown implements Component {
+	#text: string;
+	#paddingX: number; // Left/right padding
+	#paddingY: number; // Top/bottom padding
+	#defaultTextStyle?: DefaultTextStyle;
+	#theme: MarkdownTheme;
+	#defaultStylePrefix?: string;
+	/** Number of spaces used to indent code block content. */
+	#codeBlockIndent: number;
+	/** Current token-render recursion depth (nested blockquotes/lists). */
+	#renderDepth = 0;
+	/** Current inline-render recursion depth (nested strong/em/link/del). */
+	#inlineDepth = 0;
+	/**
+	 * Number of blockquotes enclosing the token being rendered. A quote inside another leaves its rows
+	 * unstyled and the outermost quote styles each row once: styling at every level re-opens the style
+	 * after every close the inner levels wrote, so a row's escapes grow with the square of the depth.
+	 */
+	#quoteDepth = 0;
+
+	// Cache for rendered output. Cached arrays are shared and returned by
+	// reference (render contract: results are component-owned and immutable to
+	// callers); the L2 LRU may hand the same array to multiple instances.
+	#cachedText?: string;
+	#cachedWidth?: number;
+	#cachedLines?: readonly string[];
+	#transientRenderCache = false;
+
+	// Streaming-lex cache: the largest blank-line-bounded prefix of #text whose
+	// block tokens are frozen, plus those tokens. marked has no resumable lexer,
+	// but block tokenization is local across a "\n\n" boundary with balanced
+	// fences, so lex(prefix) ++ lex(tail) === lex(prefix+tail). On append-only
+	// growth (the streaming path) this re-lexes only the grown tail instead of the
+	// whole buffer, turning O(N^2) reveal cost into O(N). Width/theme do not affect
+	// tokenization, so this cache is independent of the render caches above.
+	#streamPrefixText?: string;
+	#streamPrefixTokens?: Token[];
+	#streamPrefixLineCache?: StreamPrefixLineCache;
+	// The text the frozen prefix above was cut from. Held by reference so a frame
+	// re-deriving the same string knows the prefix still is one without comparing
+	// the whole transcript again.
+	#streamPrefixSource?: string;
+	// The frozen prefix the current one was cut to extend, proven a prefix of the text both were
+	// cut from. A row cache or an exposure recorded against it is therefore a prefix of the
+	// current frozen text without comparing the transcript again.
+	#streamPrefixBase?: string;
+	// Leading whole lines of #text that need no render normalization, so a frame
+	// scans only what arrived after them (see #normalizeForRender).
+	#normalizedCleanHead?: string;
+	// Rows of the most recent render() that are settled — top padding plus the
+	// rendered frozen token prefix — exposed via getLastRenderSettledRows()
+	// for native-scrollback commit gating.
+	#lastRenderSettledRows = 0;
+	// Frozen-prefix text backing the last non-zero settled exposure. Settled
+	// rows are declared final downstream, so a render whose frozen text no
+	// longer extends this prefix (a rewind / wholesale rewrite) resets the
+	// exposure to 0 and re-earns it — the exposure is hard-monotone within a
+	// text lineage.
+	#settledExposedText?: string;
+	// True while #renderStreamingContentLines renders the frozen token range:
+	// frozen code blocks highlight even in transient mode so their bytes match
+	// the finalized render (they render once into the prefix line cache, so
+	// the FFI cost is amortized). The volatile tail normally stays
+	// unhighlighted; streaming diff fences line-highlight completed rows so
+	// semantic colors reach native scrollback before rows leave the viewport.
+	#renderingFrozenPrefix = false;
+	#streamingDiffLineCache?: StreamingDiffLineCache;
+	#openFenceRowCache?: OpenFenceRowCache;
+	#activeRenderSignature?: RenderSignature;
+
+	#ignoreTight = false;
+
+	setIgnoreTight(ignore: boolean): this {
+		this.#ignoreTight = ignore;
+		this.invalidate();
+		return this;
+	}
+
+	constructor(
+		text: string,
+		paddingX: number,
+		paddingY: number,
+		theme: MarkdownTheme,
+		defaultTextStyle?: DefaultTextStyle,
+		codeBlockIndent: number = 2,
+	) {
+		this.#text = text;
+		this.#paddingX = paddingX;
+		this.#paddingY = paddingY;
+		this.#theme = theme;
+		this.#defaultTextStyle = defaultTextStyle;
+		this.#codeBlockIndent = Math.max(0, Math.floor(codeBlockIndent));
+	}
+
+	setText(text: string): boolean {
+		// Equality guard: streaming re-emits identical text on ticks that carried
+		// no delta (throttled provider frames, reconciled tool-execution updates).
+		// Without this, the caller-side `#cachedLines` gets thrown away and the
+		// full lex + wrap runs per re-emit — one of the top CPU hotspots during
+		// streaming (issue #4353). Mirrors `Text.setText`'s guard.
+		if (text === this.#text) return false;
+		this.#text = text;
+		if (!text.trim()) {
+			// Blank replacement: render() early-returns before #lexTokens can see
+			// the non-append edit, so drop the frozen stream state here or it
+			// outlives the content it indexed.
+			this.#dropFrozenPrefix();
+			this.#settledExposedText = undefined;
+		}
+		this.invalidate();
+		return true;
+	}
+
+	invalidate(): void {
+		this.#cachedText = undefined;
+		this.#cachedWidth = undefined;
+		this.#cachedLines = undefined;
+	}
+
+	releaseRenderCache(): void {
+		this.invalidate();
+		this.#dropDerivedState();
+	}
+
+	// The frozen stream prefix: its text, its tokens, its rendered rows and the
+	// text it was cut from.
+	#dropFrozenPrefix(): void {
+		this.#streamPrefixText = undefined;
+		this.#streamPrefixTokens = undefined;
+		this.#streamPrefixLineCache = undefined;
+		this.#streamPrefixSource = undefined;
+		this.#streamPrefixBase = undefined;
+	}
+
+	// Every field derived from #text that the next render rebuilds: a full lex
+	// re-freezes the stable prefix, and the row caches refill as rows render.
+	#dropDerivedState(): void {
+		this.#dropFrozenPrefix();
+		this.#normalizedCleanHead = undefined;
+		this.#streamingDiffLineCache = undefined;
+		this.#openFenceRowCache = undefined;
+	}
+
+	get transientRenderCache(): boolean {
+		return this.#transientRenderCache;
+	}
+
+	set transientRenderCache(value: boolean) {
+		const next = value === true;
+		if (this.#transientRenderCache === next) return;
+		this.#transientRenderCache = next;
+		// The derived state serves the frames of a growing text and holds strings
+		// cut from those frames. A sealed block renders from its final text, so it
+		// keeps what one render of that text keeps and nothing from the stream.
+		if (!next) this.#dropDerivedState();
+		this.invalidate();
+	}
+
+	/**
+	 * Rows at the top of the most recent render() (top padding + rendered
+	 * frozen-token prefix) whose bytes are settled: byte-stable at this
+	 * width/theme for as long as the text keeps growing append-only. Hosts
+	 * feed this to transcript commit gating (see the coding agent's
+	 * `FinalizableBlock.getTranscriptBlockSettledRows`). 0 outside streaming
+	 * (`transientRenderCache`) mode, after a text rewind (re-earned on the new
+	 * lineage), and on cache-served non-streaming renders.
+	 */
+	getLastRenderSettledRows(): number {
+		return this.#lastRenderSettledRows;
+	}
+
+	// Tab expansion and the nesting caps for render. Both are line-local — tabs
+	// are replaced one character at a time and each cap is anchored at a line
+	// start — so a span of whole lines that needed no transform cannot need one
+	// because text arrived after it. Only the arrived tail is scanned, and text
+	// that needs no transform is returned by reference rather than copied: the
+	// nesting scan alone was 0.030ms of a 0.053ms frame at 10,000 streamed
+	// tokens, spent on bytes that had already been scanned on every earlier
+	// frame. A tail that does need transforming falls back to normalizing the
+	// whole text, which is what every frame did before.
+	#normalizeForRender(raw: string): string {
+		const clean = this.#normalizedCleanHead;
+		const from = clean !== undefined && raw.length >= clean.length && raw.startsWith(clean) ? clean.length : 0;
+		const tail = from === 0 ? raw : raw.slice(from);
+		if (tail.includes("\t") || OVER_NESTED.test(tail)) {
+			this.#normalizedCleanHead = undefined;
+			return capMarkdownNesting(replaceTabs(raw));
+		}
+		const boundary = raw.lastIndexOf("\n") + 1;
+		if (boundary > from) this.#normalizedCleanHead = raw.slice(0, boundary);
+		return raw;
+	}
+
+	// Lex `text` into block tokens, reusing the frozen stable prefix when the text
+	// only grew (the streaming path). Falls back to a full lex whenever the prefix
+	// is no longer a prefix (non-append edit), the text carries reference-link
+	// definitions, or it contains CR (marked normalizes CRLF, which would desync
+	// raw-span offsets). Every fallback is correctness-preserving — only speed
+	// differs; the render loop sees the identical token list either way.
+	//
+	// On the streaming path the two refusals are read off the arrived tail alone.
+	// A prefix is frozen only after the whole text passed this check, so neither
+	// shape can be inside it, and re-reading the transcript for them was the
+	// largest cost a long stream paid per frame: 0.032ms of a 0.082ms frame at
+	// 10,000 streamed tokens, spent again on every token.
+	#lexTokens(text: string): Token[] {
+		const prefix = this.#streamPrefixText;
+		const prefixTokens = this.#streamPrefixTokens;
+		if (
+			prefix !== undefined &&
+			prefixTokens !== undefined &&
+			text.length > prefix.length &&
+			text.startsWith(prefix)
+		) {
+			const tail = text.slice(prefix.length);
+			if (canStreamLex(tail)) {
+				// The tail is lexed from a copy so the tokens frozen out of it hold the
+				// tail alone, not the whole frame's text (see unsharedCopy).
+				const tailTokens = markdownParser.lexer(unsharedCopy(tail));
+				const tokens = [...prefixTokens, ...tailTokens];
+				this.#freezeStablePrefix(text, tokens, { preserveExisting: true });
+				// `text` extends the prefix, proven just above, and the freeze only
+				// ever advances the boundary within it. Recording which string that
+				// was is what lets the render path skip proving it again.
+				this.#streamPrefixSource = text;
+				return tokens;
+			}
+		}
+		const tokens = markdownParser.lexer(text);
+		if (canStreamLex(text)) {
+			this.#freezeStablePrefix(text, tokens, { preserveExisting: false });
+			if (this.#streamPrefixText !== undefined) this.#streamPrefixSource = text;
+		} else {
+			this.#dropFrozenPrefix();
+		}
+		return tokens;
+	}
+
+	// Freeze the largest run of leading blocks that end on a hard "\n\n" boundary
+	// (complete and immutable under append-only growth) so the next streaming
+	// render re-lexes only the unfrozen tail. Caller guarantees no CR / no
+	// reference definitions, so each token's `raw` is a verbatim slice of `text`
+	// and the summed offsets address `text` exactly.
+	//
+	// A boundary already frozen stays frozen under append-only growth, so the
+	// scan resumes there instead of re-summing every token's raw and re-slicing
+	// the whole frozen prefix on every frame.
+	#freezeStablePrefix(text: string, tokens: Token[], opts: { preserveExisting: boolean }): void {
+		const existingText = opts.preserveExisting ? this.#streamPrefixText : undefined;
+		const existingTokens = existingText === undefined ? undefined : this.#streamPrefixTokens;
+		const boundary = lastFreezeBoundary(tokens, existingTokens?.length ?? 0, existingText?.length ?? 0);
+		// Freeze only when the tail begins with real block content. If the next
+		// char is whitespace (an extra blank line, or an indented continuation),
+		// the block separator straddles the cut and lex(prefix)++lex(tail) would
+		// desync from a full lex — e.g. a fence followed by "\n\n\n- list". When
+		// the boundary is at end-of-text the next char is unknown, so defer.
+		const next = text.charCodeAt(boundary.end);
+		if (boundary.count > 0 && boundary.end < text.length && next !== 0x20 /* space */ && next !== 0x0a /* \n */) {
+			if (existingText === undefined || boundary.end > existingText.length) {
+				this.#streamPrefixText = text.slice(0, boundary.end);
+				this.#streamPrefixTokens = tokens.slice(0, boundary.count);
+				this.#streamPrefixBase = existingText;
+			}
+			return;
+		}
+		if (!opts.preserveExisting) this.#dropFrozenPrefix();
+	}
+
+	render(width: number): readonly string[] {
+		// L1: per-instance cache — fastest path for repeated renders of the same
+		// instance at the same width (e.g. resize debounce, repeated redraws).
+		// Returning the cached reference is load-bearing: parents memoize their
+		// concatenation on reference equality.
+		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
+			return this.#cachedLines;
+		}
+
+		// Recomputed below by the streaming path; every other path (cache-served,
+		// empty text, non-streaming full render) exposes no settled rows.
+		this.#lastRenderSettledRows = 0;
+		// A render outside streaming reports no settled rows, which ends the exposed
+		// lineage the same way a rewind does, so its text is no longer needed.
+		if (!this.transientRenderCache) this.#settledExposedText = undefined;
+
+		// Calculate available width for content (subtract horizontal padding)
+		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
+		const contentWidth = Math.max(1, width - paddingX * 2);
+
+		// Don't render anything if there's no actual text
+		if (!this.#text || this.#text.trim() === "") {
+			this.#cachedText = this.#text;
+			this.#cachedWidth = width;
+			this.#cachedLines = EMPTY_RENDER_LINES;
+			return EMPTY_RENDER_LINES;
+		}
+
+		const signature = this.#renderSignature(width, paddingX);
+
+		// L2: module-level LRU — survives component disposal/recreation across
+		// session-tree navigations. Keyed by the raw text, which render
+		// normalization below is a function of, and served only under a signature
+		// equal in every dimension that affects the rows.
+		// The signature encodes terminal capability state and theme/style function
+		// output samples so that capability shifts (image protocol changes,
+		// hyperlink toggle) or caller-supplied theme/bgColor functions that mutate
+		// their output without changing object identity miss the cache entry.
+		// bgColor probe uses \x01 (single non-printable byte): chalk/ANSI wrappers
+		// pass arbitrary bytes through verbatim, so this is safe and minimizes the
+		// risk of clashing with a function that returns text verbatim.
+		// theme.heading is used as the representative theme probe — it's required
+		// by MarkdownTheme and is one of the most styling-sensitive entries.
+		if (!this.transientRenderCache) {
+			const cached = renderCache.get(this.#text);
+			if (cached !== undefined && sameRenderSignature(cached, signature)) {
+				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
+				this.#cachedText = this.#text;
+				this.#cachedWidth = width;
+				this.#cachedLines = cached.lines;
+				return cached.lines;
+			}
+		}
+
+		// Replace tabs with 3 spaces for consistent rendering, then bound structural
+		// nesting depth so pathological model output can't overflow or hang the lexer.
+		const normalizedText = this.#normalizeForRender(this.#text);
+
+		// Parse markdown to HTML-like tokens
+		const tokens = this.#lexTokens(normalizedText);
+		let contentLines: string[];
+		this.#activeRenderSignature = signature;
+		try {
+			contentLines = this.transientRenderCache
+				? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
+				: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		} finally {
+			this.#activeRenderSignature = undefined;
+		}
+		const emptyLines = this.#renderEmptyPaddingLines(signature);
+
+		// Combine top padding, content, and bottom padding. The content array is
+		// this render's own, so with no padding it is handed out as it stands
+		// rather than spread into a third copy of every row.
+		const rawResult = emptyLines.length === 0 ? contentLines : emptyLines.concat(contentLines, emptyLines);
+		const result = rawResult.length > 0 ? rawResult : [""];
+
+		// Update caches and hand the array out by reference. Callers must not
+		// mutate it (Component render contract); the L2 entry is shared across
+		// instances keyed on identical inputs.
+		this.#cachedText = this.#text;
+		this.#cachedWidth = width;
+		this.#cachedLines = result;
+
+		// Update L2 module-level LRU so future instances with the same text and
+		// signature skip the marked.lexer + highlightCode (Rust FFI) work entirely.
+		if (!this.transientRenderCache) {
+			renderCache.set(this.#text, { ...signature, lines: result });
+		}
+
+		return result;
+	}
+
+	#renderSignature(width: number, paddingX: number): RenderSignature {
+		const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
+		const headingProbe = this.#theme.heading("");
+		return {
+			width,
+			paddingX,
+			paddingY: this.#paddingY,
+			codeBlockIndent: this.#codeBlockIndent,
+			themeId: objectId(this.#theme),
+			defaultTextStyleId: this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1,
+			imageProtocol: TERMINAL.imageProtocol ?? "",
+			hyperlinks: TERMINAL.hyperlinks,
+			textSizing: TERMINAL.textSizing,
+			bgColorProbe,
+			headingProbe,
+		};
+	}
+
+	#renderStreamingContentLines(
+		tokens: Token[],
+		normalizedText: string,
+		signature: RenderSignature,
+		contentWidth: number,
+	): string[] {
+		const frozenText = this.#streamPrefixText;
+		const frozenTokenCount = this.#streamPrefixTokens?.length ?? 0;
+		// #lexTokens records the string it left this prefix in place for, and it
+		// runs on every uncached render, so identity answers whether the prefix is
+		// still a prefix. Comparing the two strings instead re-read the whole
+		// settled transcript on every frame to reach the same answer. Anything
+		// else renders in full, which is correct and only slower.
+		if (frozenText === undefined || frozenTokenCount === 0 || this.#streamPrefixSource !== normalizedText) {
+			return this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		}
+
+		const frozenLines = this.#frozenPrefixLines(tokens, frozenText, frozenTokenCount, contentWidth, signature);
+		if (frozenLines.length > 0) this.#exposeSettledRows(frozenText, frozenLines.length, signature);
+
+		if (frozenTokenCount < tokens.length) {
+			const tail = this.#renderContentLines(tokens, frozenTokenCount, tokens.length, contentWidth, signature);
+			return frozenLines.concat(tail);
+		}
+		return frozenLines.slice();
+	}
+
+	/**
+	 * The rows of the frozen prefix: the cached rows when they cover every frozen token, else the cached rows
+	 * extended by the tokens frozen since. The frozen rows are held as one immutable array and reused by reference
+	 * while nothing new freezes, so a frame copies them exactly once — into the array it returns. Spreading them into
+	 * an accumulator and slicing that accumulator back into the cache copied every settled row twice per frame, and
+	 * `push(...rows)` puts one argument on the stack per row, which a long transcript is eventually large enough to
+	 * overflow.
+	 */
+	#frozenPrefixLines(
+		tokens: Token[],
+		frozenText: string,
+		frozenTokenCount: number,
+		contentWidth: number,
+		signature: RenderSignature,
+	): readonly string[] {
+		const reusablePrefix = this.#matchingStreamPrefixLineCache(frozenText, signature);
+		if (reusablePrefix && reusablePrefix.tokenCount === frozenTokenCount) return reusablePrefix.lines;
+		const reusedUntil =
+			reusablePrefix && reusablePrefix.tokenCount < frozenTokenCount ? reusablePrefix.tokenCount : 0;
+		// Frozen tokens render with full fidelity (syntax highlighting on)
+		// so these cached rows byte-match the finalized render.
+		this.#renderingFrozenPrefix = true;
+		let rendered: string[];
+		try {
+			rendered = this.#renderContentLines(tokens, reusedUntil, frozenTokenCount, contentWidth, signature);
+		} finally {
+			this.#renderingFrozenPrefix = false;
+		}
+		const frozenLines = reusedUntil > 0 && reusablePrefix ? reusablePrefix.lines.concat(rendered) : rendered;
+		this.#streamPrefixLineCache = {
+			...signature,
+			text: frozenText,
+			tokenCount: frozenTokenCount,
+			lines: frozenLines,
+		};
+		return frozenLines;
+	}
+
+	/**
+	 * Settled exposure (hard-monotone): the frozen rows are declared final to the host, so expose them only while the
+	 * frozen text still extends the previously exposed prefix; a rewind resets to 0 and re-earns on the rewritten
+	 * lineage.
+	 */
+	#exposeSettledRows(frozenText: string, frozenRows: number, signature: RenderSignature): void {
+		const exposed = this.#settledExposedText;
+		if (
+			exposed === undefined ||
+			exposed === frozenText ||
+			exposed === this.#streamPrefixBase ||
+			frozenText.startsWith(exposed)
+		) {
+			this.#settledExposedText = frozenText;
+			this.#lastRenderSettledRows = signature.paddingY + frozenRows;
+		} else {
+			this.#settledExposedText = undefined;
+		}
+	}
+
+	// `frozenText` is already known to be a prefix of `normalizedText`, so an entry
+	// whose text is a prefix of `frozenText` is a prefix of both. When the entry
+	// was written for that same string — the common case, since the frozen text is
+	// reused by reference while nothing new freezes — or for the prefix the frozen
+	// text was cut to extend, which is the case on the frame a new block freezes,
+	// that is already proven and comparing the transcript again answers nothing.
+	#matchingStreamPrefixLineCache(frozenText: string, signature: RenderSignature): StreamPrefixLineCache | undefined {
+		const cache = this.#streamPrefixLineCache;
+		if (!cache || !sameRenderSignature(cache, signature)) return undefined;
+		if (cache.text === frozenText || cache.text === this.#streamPrefixBase || frozenText.startsWith(cache.text)) {
+			return cache;
+		}
+		return undefined;
+	}
+
+	#renderContentLines(
+		tokens: Token[],
+		start: number,
+		end: number,
+		contentWidth: number,
+		signature: RenderSignature,
+	): string[] {
+		const fence = this.#streamingFence(tokens, start, end);
+		const renderedLines: string[] = [];
+		for (let i = start; i < (fence ? end - 1 : end); i++) {
+			const token = tokens[i];
+			const nextToken = tokens[i + 1];
+			this.#renderToken(renderedLines, token, contentWidth, nextToken?.type);
+		}
+
+		const contentLines: string[] = [];
+		const state: RowLayoutState = { afterOsc66: false };
+		this.#layoutRows(renderedLines, contentWidth, signature, state, contentLines);
+		if (fence) this.#layoutStreamingFence(fence, contentWidth, signature, state, contentLines);
+		return contentLines;
+	}
+
+	/**
+	 * Wrap each line to `contentWidth` and append its rows to `out`: the left margin, then the row.
+	 * A painted row (a background style) is padded to the full width so the fill reaches the edge;
+	 * an unpainted row ends at its ink. `state` carries from one call to the next, so rows laid out
+	 * in several calls match rows laid out in one.
+	 */
+	#layoutRows(
+		lines: readonly string[],
+		contentWidth: number,
+		signature: RenderSignature,
+		state: RowLayoutState,
+		out: string[],
+	): void {
+		const margin = padding(signature.paddingX);
+		const bgFn = this.#defaultTextStyle?.bgColor;
+		for (const line of lines) {
+			// Image protocol lines and OSC 66 sized headings are not wrapped: wrapping would corrupt
+			// the escape sequence or split the indivisible sized span.
+			const rows = TERMINAL.isImageLine(line) || isOsc66Line(line) ? [line] : wrapTextWithAnsi(line, contentWidth);
+			for (const row of rows) out.push(layoutRow(row, state, margin, signature.width, bgFn));
+		}
+	}
+
+	/**
+	 * The code token a streaming render ends on, when its body renders one styled line per source
+	 * line: plain `codeBlock` text, or a diff highlighted line by line. Only such a fence can reuse the
+	 * rows of its complete lines from one frame to the next. A Mermaid diagram the theme draws is not
+	 * one.
+	 */
+	#streamingFence(tokens: Token[], start: number, end: number): Tokens.Code | undefined {
+		if (!this.transientRenderCache || this.#renderingFrozenPrefix || end <= start || end !== tokens.length) {
+			return undefined;
+		}
+		const token = tokens[end - 1];
+		if (token.type !== "code") return undefined;
+		if (token.lang === "mermaid" && this.#theme.resolveMermaidAscii) return undefined;
+		return token as Tokens.Code;
+	}
+
+	/**
+	 * Lay out the code fence a streaming render ends on: the rows `#renderToken` would produce for
+	 * it, without re-wrapping the lines that were complete on an earlier frame. A frame of a long
+	 * fence otherwise wraps and pads every line of it again, which made each frame cost the length
+	 * of the fence and a streamed fence cost its length squared.
+	 */
+	#layoutStreamingFence(
+		token: Tokens.Code,
+		contentWidth: number,
+		signature: RenderSignature,
+		state: RowLayoutState,
+		out: string[],
+	): void {
+		const lang = token.lang;
+		const codeIndent = padding(this.#codeBlockIndent);
+		// A diff's complete lines are highlighted one at a time, as #renderCodeBodyLines does while
+		// streaming; every other language streams as plain text.
+		const highlightCode = this.#theme.highlightCode;
+		const highlightDiff =
+			highlightCode && STREAMED_DIFF_LANGS.has(lang?.toLowerCase() ?? "") ? highlightCode : undefined;
+		const style = highlightDiff ? `diff:${lang}` : "plain";
+		const styleLine = (line: string): string[] =>
+			highlightDiff ? highlightDiff(line, lang) : [this.#theme.codeBlock(line)];
+		const indentLines = (lines: readonly string[]): string[] => lines.map(line => `${codeIndent}${line}`);
+
+		this.#layoutRows([this.#codeFenceRow(lang, "open")], contentWidth, signature, state, out);
+
+		const text = token.text;
+		const stableEnd = text.lastIndexOf("\n") + 1;
+		let cache = this.#openFenceRowCache;
+		if (
+			cache === undefined ||
+			cache.style !== style ||
+			cache.enteredAfterOsc66 !== state.afterOsc66 ||
+			!text.startsWith(cache.stableText) ||
+			!sameRenderSignature(cache, signature)
+		) {
+			cache = {
+				...signature,
+				style,
+				stableText: "",
+				rows: [],
+				enteredAfterOsc66: state.afterOsc66,
+				afterOsc66: state.afterOsc66,
+			};
+			this.#openFenceRowCache = cache;
+		}
+		if (stableEnd > cache.stableText.length) {
+			const added = text.slice(cache.stableText.length, stableEnd - 1).split("\n");
+			const bodyState: RowLayoutState = { afterOsc66: cache.afterOsc66 };
+			this.#layoutRows(indentLines(added.flatMap(styleLine)), contentWidth, signature, bodyState, cache.rows);
+			cache.afterOsc66 = bodyState.afterOsc66;
+			cache.stableText = text.slice(0, stableEnd);
+		}
+		for (const row of cache.rows) out.push(row);
+		state.afterOsc66 = cache.afterOsc66;
+
+		// The line still streaming is plain until its newline arrives, unless the fence has closed.
+		const lastLine = text.slice(stableEnd);
+		const lastRows =
+			highlightDiff && codeTokenHasClosingFence(token)
+				? highlightDiff(lastLine, lang)
+				: [this.#theme.codeBlock(lastLine)];
+		this.#layoutRows(
+			[...indentLines(lastRows), this.#codeFenceRow(lang, "close")],
+			contentWidth,
+			signature,
+			state,
+			out,
+		);
+	}
+
+	/** One fence row: the theme's designed chrome when it defines
+	 *  {@link MarkdownTheme.codeBlockFence}, else the literal ``` markers. */
+	#codeFenceRow(lang: string | undefined, pos: "open" | "close"): string {
+		if (this.#theme.codeBlockFence) return this.#theme.codeBlockFence(lang || undefined, pos);
+		return this.#theme.codeBlockBorder(pos === "open" ? `\`\`\`${lang || ""}` : "```");
+	}
+
+	#renderCodeBodyLines(token: Token, codeIndent: string): string[] {
+		const tokenText = "text" in token && typeof token.text === "string" ? token.text : "";
+		const lang = "lang" in token && typeof token.lang === "string" ? token.lang : undefined;
+		if (this.#theme.highlightCode && (!this.transientRenderCache || this.#renderingFrozenPrefix)) {
+			return this.#theme.highlightCode(tokenText, lang).map(line => `${codeIndent}${line}`);
+		}
+		if (this.#theme.highlightCode && STREAMED_DIFF_LANGS.has(lang?.toLowerCase() ?? "")) {
+			const diffLines = this.#streamingDiffBodyLines(token, tokenText, lang, codeIndent);
+			if (diffLines) return diffLines;
+		}
+		return tokenText.split("\n").map(line => `${codeIndent}${this.#theme.codeBlock(line)}`);
+	}
+
+	/**
+	 * The body of a diff fence still streaming: its complete lines highlighted one at a time, the
+	 * line still arriving plain until the fence closes. Undefined before the first line completes.
+	 */
+	#streamingDiffBodyLines(
+		token: Token,
+		tokenText: string,
+		lang: string | undefined,
+		codeIndent: string,
+	): string[] | undefined {
+		const closedFence = codeTokenHasClosingFence(token);
+		const lineEnd = tokenText.lastIndexOf("\n");
+		if (!closedFence && lineEnd < 0) return undefined;
+		const completedText = closedFence ? tokenText : tokenText.slice(0, lineEnd);
+		const bodyLines = this.#highlightStreamingDiffLines(completedText, lang).map(line => `${codeIndent}${line}`);
+		if (!closedFence) {
+			for (const codeLine of tokenText.slice(lineEnd + 1).split("\n")) {
+				bodyLines.push(`${codeIndent}${this.#theme.codeBlock(codeLine)}`);
+			}
+		}
+		return bodyLines;
+	}
+
+	#highlightStreamingDiffLines(completedText: string, lang: string | undefined): readonly string[] {
+		const highlightCode = this.#theme.highlightCode;
+		if (!highlightCode) return [];
+		const signature = this.#activeRenderSignature;
+		const cache = this.#streamingDiffLineCache;
+		if (
+			signature &&
+			cache &&
+			completedText.startsWith(cache.text) &&
+			(cache.text.length === completedText.length || completedText.charCodeAt(cache.text.length) === 0x0a) &&
+			cache.lang === lang &&
+			sameRenderSignature(cache, signature)
+		) {
+			if (completedText.length === cache.text.length) return cache.lines;
+			const lines = cache.lines.slice();
+			const addedText = completedText.slice(cache.text.length + 1);
+			for (const codeLine of addedText.split("\n")) {
+				lines.push(...highlightCode(codeLine, lang));
+			}
+			this.#streamingDiffLineCache = { ...signature, lang, text: completedText, lines };
+			return lines;
+		}
+
+		const lines: string[] = [];
+		for (const codeLine of completedText.split("\n")) {
+			lines.push(...highlightCode(codeLine, lang));
+		}
+		if (signature) {
+			this.#streamingDiffLineCache = { ...signature, lang, text: completedText, lines };
+		}
+		return lines;
+	}
+
+	#renderEmptyPaddingLines(signature: RenderSignature): string[] {
+		const bgFn = this.#defaultTextStyle?.bgColor;
+		const emptyLine = bgFn ? applyLineBackground("", signature.width, bgFn) : "";
+		const emptyLines: string[] = [];
+		for (let i = 0; i < signature.paddingY; i++) {
+			emptyLines.push(emptyLine);
+		}
+		return emptyLines;
+	}
+
+	/**
+	 * Apply default text style to a string.
+	 * This is the base styling applied to all text content.
+	 * NOTE: Background color is NOT applied here - it's applied at the padding stage
+	 * to ensure it extends to the full line width.
+	 */
+	#applyDefaultStyle(text: string): string {
+		if (!this.#defaultTextStyle) {
+			return text;
+		}
+
+		let styled = text;
+
+		// Apply foreground color (NOT background - that's applied at padding stage)
+		if (this.#defaultTextStyle.color) {
+			styled = this.#defaultTextStyle.color(styled);
+		}
+
+		// Apply text decorations using this.#theme
+		if (this.#defaultTextStyle.bold) {
+			styled = this.#theme.bold(styled);
+		}
+		if (this.#defaultTextStyle.italic) {
+			styled = this.#theme.italic(styled);
+		}
+		if (this.#defaultTextStyle.strikethrough) {
+			styled = this.#theme.strikethrough(styled);
+		}
+		if (this.#defaultTextStyle.underline) {
+			styled = this.#theme.underline(styled);
+		}
+
+		return styled;
+	}
+
+	#getDefaultStylePrefix(): string {
+		if (!this.#defaultTextStyle) {
+			return "";
+		}
+
+		if (this.#defaultStylePrefix !== undefined) {
+			return this.#defaultStylePrefix;
+		}
+
+		this.#defaultStylePrefix = getStylePrefix(text => this.#applyDefaultStyle(text));
+		return this.#defaultStylePrefix;
+	}
+
+	#getDefaultInlineStyleContext(): InlineStyleContext {
+		return {
+			applyText: (text: string) => this.#applyDefaultStyle(text),
+			stylePrefix: this.#getDefaultStylePrefix(),
+		};
+	}
+
+	/**
+	 * Render one token, bounding recursion depth. Markdown from model output can
+	 * nest blockquotes/lists arbitrarily deep (`>>>>…`), and the per-token
+	 * recursion would overflow the JS stack — a crash on untrusted input. Past
+	 * {@link Markdown.MAX_RENDER_DEPTH} the token is rendered as its raw source on
+	 * a single plain line instead of recursing into its children.
+	 */
+	static readonly MAX_RENDER_DEPTH = 20;
+
+	/**
+	 * Inline-token recursion cap. marked nests emphasis arbitrarily deep — a run
+	 * like `**`×N around content parses to N-deep strong>strong>… tokens — and
+	 * `#renderInlineTokens` wraps each level in ANSI codes, so the bubbling string
+	 * concatenation is O(n^2): `**`×3000 rendered in ~8.8s (a per-message hang on
+	 * untrusted model output). Real inline nesting (a link holding bold holding
+	 * code) is only a handful deep; past this cap, flatten the subtree to styled
+	 * plain text in one pass (`plainInlineTokens` is O(n), no per-level wrapping)
+	 * instead of recursing.
+	 */
+	static readonly MAX_INLINE_DEPTH = 32;
+
+	/**
+	 * Append the rows of one block token to `out`. Returns true when every appended row is laid out
+	 * within `width`: it fits, and it opens with no indent a wrap at `width` would hang. Only a quote
+	 * lays its rows out; an enclosing quote styles those rows without wrapping them again.
+	 */
+	#renderToken(
+		out: string[],
+		token: Token,
+		width: number,
+		nextTokenType?: string,
+		styleContext?: InlineStyleContext,
+	): boolean {
+		if (this.#renderDepth >= Markdown.MAX_RENDER_DEPTH) {
+			const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
+			if (raw) out.push(this.#applyDefaultStyle(raw.replace(/[\r\n]+/g, " ")));
+			return false;
+		}
+		this.#renderDepth++;
+		try {
+			return this.#renderTokenInner(out, token, width, nextTokenType, styleContext);
+		} finally {
+			this.#renderDepth--;
+		}
+	}
+
+	#renderTokenInner(
+		out: string[],
+		token: Token,
+		width: number,
+		nextTokenType?: string,
+		styleContext?: InlineStyleContext,
+	): boolean {
+		// Display math block (own-line `$$…$$` / `\[…\]`): stack `\frac` vertically
+		// and keep `\\` row breaks, so fractions and matrices span multiple lines.
+		if (isMathToken(token)) {
+			this.#pushDisplayMath(out, token.text);
+			if (gapFollowsBlock(nextTokenType)) out.push("");
+			return false;
+		}
+
+		switch (token.type) {
+			case "heading":
+				this.#renderHeading(out, token as Tokens.Heading, width, nextTokenType, styleContext);
+				return false;
+			case "paragraph":
+				this.#renderParagraph(out, token as Tokens.Paragraph, width, nextTokenType, styleContext);
+				return false;
+			case "code":
+				this.#renderCodeBlock(out, token as Tokens.Code, width, nextTokenType);
+				return false;
+			case "list":
+				// No spacing after a list: a following space token supplies it.
+				out.push(...this.#renderList(token as ListToken, 0, styleContext));
+				return false;
+			case "table":
+				out.push(...this.#renderTable(token as TableToken, width, nextTokenType, styleContext));
+				return false;
+			case "blockquote":
+				return this.#renderBlockquote(out, token as Tokens.Blockquote, width, nextTokenType);
+			case "hr":
+				this.#renderHr(out, token as Tokens.Hr, width, nextTokenType);
+				return false;
+			case "html":
+				if ("raw" in token && typeof token.raw === "string") out.push(...this.#renderHtmlBlock(token.raw, width));
+				return false;
+			case "space":
+				// Space tokens represent blank lines in markdown
+				out.push("");
+				return false;
+			default:
+				// Handle any other token types as plain text
+				if ("text" in token && typeof token.text === "string") out.push(token.text);
+				return false;
+		}
+	}
+
+	#pushDisplayMath(out: string[], tex: string): void {
+		for (const mathLine of latexToBlock(tex)) out.push(this.#applyDefaultStyle(mathLine));
+	}
+
+	/** A rule drawn with the character its source used. */
+	#renderHr(out: string[], token: Tokens.Hr, width: number, nextTokenType: string | undefined): void {
+		const raw = typeof token.raw === "string" ? token.raw.trim() : "";
+		out.push(this.#renderHrLine(width, raw[0] || ""));
+		if (gapFollowsBlock(nextTokenType)) out.push("");
+	}
+
+	#renderHeading(
+		out: string[],
+		token: Tokens.Heading,
+		width: number,
+		nextTokenType: string | undefined,
+		styleContext: InlineStyleContext | undefined,
+	): void {
+		const headingLevel = token.depth;
+		const headingText = this.#renderInlineTokens(token.tokens || [], styleContext);
+		const headingPlainText = plainInlineTokens(token.tokens || []);
+		const plainWidth = headingLevel === 1 && TERMINAL.textSizing ? visibleWidth(headingPlainText) : 0;
+		if (plainWidth > 0 && 2 * plainWidth <= width) {
+			const sizedHeading = encodeTextSizedHeading(headingPlainText, 2);
+			out.push(this.#theme.heading(this.#theme.bold(this.#theme.underline(sizedHeading))));
+			out.push(""); // reserve the heading's second visual row
+		} else if (headingLevel === 1) {
+			out.push(this.#theme.heading(this.#theme.bold(this.#theme.underline(headingText))));
+		} else if (headingLevel === 2) {
+			out.push(this.#theme.heading(this.#theme.bold(headingText)));
+		} else {
+			out.push(this.#theme.heading(this.#theme.bold(`${"#".repeat(headingLevel)} ${headingText}`)));
+		}
+		if (gapFollowsBlock(nextTokenType)) out.push("");
+	}
+
+	#renderParagraph(
+		out: string[],
+		token: Tokens.Paragraph,
+		width: number,
+		nextTokenType: string | undefined,
+		styleContext: InlineStyleContext | undefined,
+	): void {
+		const displayMath = soleDisplayMath(token.tokens);
+		if (displayMath) {
+			this.#pushDisplayMath(out, displayMath.text);
+		} else {
+			const paragraphText = this.#renderInlineTokens(token.tokens || [], styleContext);
+			const hung = hangWrapTreeGuideLines(paragraphText, width);
+			if (hung) out.push(...hung);
+			else out.push(paragraphText);
+		}
+		// No spacing before a list or a space token, which supplies its own.
+		if (gapFollowsBlock(nextTokenType) && nextTokenType !== "list") out.push("");
+	}
+
+	#renderCodeBlock(out: string[], token: Tokens.Code, width: number, nextTokenType: string | undefined): void {
+		// Mermaid diagrams render as ASCII art when the theme supplies a
+		// resolver. The art is preformatted, so clip each row to the content
+		// width: the later wrap pass would otherwise fragment the box-drawing
+		// canvas. truncateToWidth is ANSI- and wide-char-aware, and the
+		// resolver already re-fits over-wide horizontal graphs top-down.
+		const ascii =
+			token.lang === "mermaid" && this.#theme.resolveMermaidAscii
+				? this.#theme.resolveMermaidAscii(token.text, width)
+				: undefined;
+		if (ascii) {
+			for (const asciiLine of ascii.split("\n")) {
+				out.push(visibleWidth(asciiLine) > width ? truncateToWidth(asciiLine, width, Ellipsis.Omit) : asciiLine);
+			}
+		} else {
+			out.push(this.#codeFenceRow(token.lang, "open"));
+			for (const bodyLine of this.#renderCodeBodyLines(token, padding(this.#codeBlockIndent))) out.push(bodyLine);
+			out.push(this.#codeFenceRow(token.lang, "close"));
+		}
+		if (gapFollowsBlock(nextTokenType)) out.push("");
+	}
+
+	/** Append a quote's rows to `out`; returns whether they are laid out within `width` (see {@link #renderToken}). */
+	#renderBlockquote(
+		out: string[],
+		token: Tokens.Blockquote,
+		width: number,
+		nextTokenType: string | undefined,
+	): boolean {
+		const quoteInlineStyleContext: InlineStyleContext = {
+			applyText: (text: string) => text,
+			stylePrefix: "",
+		};
+		const contentWidth = quoteContentWidth(width);
+		const quoteTokens = token.tokens || [];
+		const renderedQuoteLines: string[] = [];
+		const laidOut: number[] = [];
+		this.#quoteDepth++;
+		try {
+			for (let i = 0; i < quoteTokens.length; i++) {
+				const start = renderedQuoteLines.length;
+				const rowsLaidOut = this.#renderToken(
+					renderedQuoteLines,
+					quoteTokens[i]!,
+					contentWidth,
+					quoteTokens[i + 1]?.type,
+					quoteInlineStyleContext,
+				);
+				if (rowsLaidOut) laidOut.push(start, renderedQuoteLines.length);
+			}
+		} finally {
+			this.#quoteDepth--;
+		}
+		while (renderedQuoteLines.length > 0 && renderedQuoteLines[renderedQuoteLines.length - 1] === "") {
+			renderedQuoteLines.pop();
+		}
+		const quoteLaidOut = this.#applyQuoteBorder(out, renderedQuoteLines, width, laidOut);
+		if (gapFollowsBlock(nextTokenType)) out.push("");
+		return quoteLaidOut;
+	}
+
+	/** Render a horizontal rule line themed to `width`, matching `sourceChar` when given. */
+	#renderHrLine(width: number, sourceChar = ""): string {
+		const fillChar = getHrChar(sourceChar, this.#theme.symbols.hrChar);
+		return this.#theme.hr(fillChar.repeat(Math.min(width, 80)));
+	}
+
+	/**
+	 * Append already-rendered lines to `out` in the blockquote border and quote styling, and return
+	 * whether every appended row is laid out within `width` (see {@link #renderToken}). `width` is the
+	 * full content width; the border reserves two cells and is omitted when no content cell would
+	 * remain beside it. Inside an enclosing quote the lines keep no style of their own: the outermost
+	 * quote styles them.
+	 *
+	 * `laidOut` holds `[start, end)` index pairs of lines a nested quote already laid out within the
+	 * content width. The quote styling adds escape sequences and no cells, so the wrap would return
+	 * each of those lines as it is: they are styled and bordered without it. Wrapping them again made
+	 * every enclosing quote rescan every row of the quotes inside it, so a quote nested `d` deep cost
+	 * `d` scans of each of its rows.
+	 */
+	#applyQuoteBorder(out: string[], renderedLines: string[], width: number, laidOut: readonly number[] = []): boolean {
+		const quoteStyle = (text: string) => this.#theme.quote(this.#theme.italic(text));
+		const quoteStylePrefix = getStylePrefix(quoteStyle);
+		const applyQuoteStyle = (line: string): string => {
+			if (this.#quoteDepth > 0) return line;
+			if (!quoteStylePrefix || !line.includes(SGR_RESET)) {
+				return quoteStyle(line);
+			}
+			const lineWithReappliedStyle = line.replaceAll(SGR_RESET, `${SGR_RESET}${quoteStylePrefix}`);
+			return quoteStyle(lineWithReappliedStyle);
+		};
+		const contentWidth = quoteContentWidth(width);
+		const border = width > QUOTE_BORDER_CELLS ? this.#theme.quoteBorder(`${this.#theme.symbols.quoteBorder} `) : "";
+		// The rows fit `width` only if the border fits the cells reserved for it.
+		let rowsLaidOut = border === "" || visibleWidth(border) <= QUOTE_BORDER_CELLS;
+		let run = 0;
+		for (let i = 0; i < renderedLines.length; i++) {
+			const styled = applyQuoteStyle(renderedLines[i]!);
+			while (run < laidOut.length && laidOut[run + 1]! <= i) run += 2;
+			if (run < laidOut.length && laidOut[run]! <= i) {
+				out.push(border + styled);
+				continue;
+			}
+			for (const row of wrapTextWithAnsi(styled, contentWidth)) {
+				// A cluster wider than the content width overflows the row it is alone in.
+				rowsLaidOut &&= visibleWidth(row) <= contentWidth;
+				out.push(border + row);
+			}
+		}
+		return rowsLaidOut;
+	}
+
+	/**
+	 * Render a block-level `html` token to styled lines. Standalone `<hr>` tags
+	 * become rules and balanced `<blockquote>…</blockquote>` regions render with
+	 * quote styling; the remaining markup is normalized to terminal text (entities
+	 * decoded, `<code>` themed, lists/`<br>`/`<p>` laid out).
+	 */
+	#renderHtmlBlock(raw: string, width: number): string[] {
+		const lines: string[] = [];
+		const state = createHtmlNormalizationState();
+		const codeHook = (text: string): string => this.#theme.code(text) + this.#getDefaultStylePrefix();
+		const flushText = (chunk: string): void => {
+			const cleaned = normalizeHtmlForTerminal(chunk, state, codeHook);
+			if (cleaned.trim() === "") return;
+			for (const line of splitTerminalLines(cleaned)) {
+				const trimmed = line.trimEnd();
+				lines.push(trimmed.trim() === "" ? "" : this.#applyDefaultStyle(trimmed));
+			}
+		};
+		let lastIndex = 0;
+		BLOCK_HTML_REGEX.lastIndex = 0;
+		for (let match = BLOCK_HTML_REGEX.exec(raw); match !== null; match = BLOCK_HTML_REGEX.exec(raw)) {
+			flushText(raw.slice(lastIndex, match.index));
+			lastIndex = match.index + match[0].length;
+			if (match[1] !== undefined) {
+				this.#renderHtmlBlockquote(lines, match[1], width);
+			} else {
+				lines.push(this.#renderHrLine(width));
+			}
+		}
+		flushText(raw.slice(lastIndex));
+		return lines;
+	}
+
+	/** Append the inner content of an HTML `<blockquote>` to `out` with quote styling. */
+	#renderHtmlBlockquote(out: string[], inner: string, width: number): void {
+		const cleaned = normalizeHtmlForTerminal(inner, createHtmlNormalizationState(), text => this.#theme.code(text));
+		const innerLines = splitTerminalLines(cleaned).map(line => line.trimEnd());
+		while (innerLines.length > 0 && innerLines[innerLines.length - 1] === "") innerLines.pop();
+		this.#applyQuoteBorder(out, innerLines, width);
+	}
+
+	#renderInlineTokens(tokens: Token[], styleContext?: InlineStyleContext): string {
+		if (this.#inlineDepth >= Markdown.MAX_INLINE_DEPTH) {
+			// Degrade a pathologically deep inline tree to styled plain text: one
+			// O(n) flatten + one style pass, no further per-level ANSI wrapping.
+			const ctx = styleContext ?? this.#getDefaultInlineStyleContext();
+			const plain = plainInlineTokens(tokens);
+			return plain === "" ? "" : ctx.applyText(plain);
+		}
+		this.#inlineDepth++;
+		try {
+			return this.#renderInlineTokensInner(tokens, styleContext);
+		} finally {
+			this.#inlineDepth--;
+		}
+	}
+
+	#renderInlineTokensInner(tokens: Token[], styleContext?: InlineStyleContext): string {
+		const resolvedStyleContext = styleContext ?? this.#getDefaultInlineStyleContext();
+		const { applyText, stylePrefix } = resolvedStyleContext;
+		const applyTextWithNewlines = (text: string): string => {
+			const segments: string[] = text.split("\n");
+			return segments.map((segment: string) => (segment === "" ? "" : applyText(segment))).join("\n");
+		};
+		const swatchGlyph = this.#theme.symbols.colorSwatch || DEFAULT_COLOR_SWATCH_GLYPH;
+		return walkInlineTokens(tokens, {
+			theme: this.#theme,
+			applyText,
+			applyTextWithNewlines,
+			renderLeafText: (text: string) => renderTextWithSwatches(text, applyTextWithNewlines, swatchGlyph),
+			stylePrefix,
+			swatchGlyph,
+			hyperlinks: true,
+			useHtmlState: true,
+			handleBlocks: true,
+			stripTrailingPrefix: true,
+			renderNested: (subTokens: Token[]) => this.#renderInlineTokens(subTokens, resolvedStyleContext),
+		});
+	}
+
+	/**
+	 * Render a list with proper nesting support
+	 */
+	#renderList(token: ListToken, depth: number, styleContext?: InlineStyleContext): string[] {
+		const lines: string[] = [];
+		const indent = "  ".repeat(depth);
+		// Use the list's start property (defaults to 1 for ordered lists)
+		const startNumber = token.start ?? 1;
+		for (let i = 0; i < token.items.length; i++) {
+			const bullet = token.ordered ? `${startNumber + i}. ` : "- ";
+			// Process item tokens; nested-list lines arrive structurally tagged and
+			// already carry their own full indent.
+			const itemLines = this.#renderListItem(token.items[i].tokens || [], depth, styleContext);
+			this.#pushListItemLines(lines, itemLines, indent, bullet);
+		}
+		return lines;
+	}
+
+	/**
+	 * Append one item's rows: the bullet before the first, every later row hung under the item
+	 * text. A nested list's rows already carry their full indent and pass through as they are.
+	 */
+	#pushListItemLines(out: string[], itemLines: ListItemLine[], indent: string, bullet: string): void {
+		if (itemLines.length === 0) {
+			out.push(indent + this.#theme.listBullet(bullet));
+			return;
+		}
+		// Continuation rows align under the item text, so the hang matches the
+		// actual bullet width (`10. ` is 4 cells, not 2).
+		const continuationIndent = indent + padding(bullet.length);
+		const first = itemLines[0]!;
+		out.push(first.nested ? first.text : indent + this.#theme.listBullet(bullet) + first.text);
+		for (let j = 1; j < itemLines.length; j++) {
+			const line = itemLines[j]!;
+			out.push(line.nested ? line.text : continuationIndent + line.text);
+		}
+	}
+
+	/**
+	 * Render list item tokens, handling nested lists.
+	 * Returns lines WITHOUT the parent indent (renderList adds it); lines that
+	 * belong to a nested list are tagged `nested` so the caller never has to
+	 * sniff theme-dependent ANSI bytes to recognize them.
+	 */
+	#renderListItem(tokens: Token[], parentDepth: number, styleContext?: InlineStyleContext): ListItemLine[] {
+		const lines: ListItemLine[] = [];
+		const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
+		for (const token of tokens) this.#pushListItemToken(lines, token, parentDepth, styleContext, apply);
+		return lines;
+	}
+
+	#pushListItemToken(
+		lines: ListItemLine[],
+		token: Token,
+		parentDepth: number,
+		styleContext: InlineStyleContext | undefined,
+		apply: (text: string) => string,
+	): void {
+		if (token.type === "list") {
+			// Nested list - render with one additional indent level
+			// These lines carry their own indent, so tag them for pass-through
+			for (const nestedLine of this.#renderList(token as ListToken, parentDepth + 1, styleContext)) {
+				lines.push({ text: nestedLine, nested: true });
+			}
+			return;
+		}
+		if (token.type === "code") {
+			const codeIndent = padding(this.#codeBlockIndent);
+			lines.push({ text: this.#codeFenceRow(token.lang, "open"), nested: false });
+			for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
+				lines.push({ text: bodyLine, nested: false });
+			}
+			lines.push({ text: this.#codeFenceRow(token.lang, "close"), nested: false });
+			return;
+		}
+		const latex = listItemDisplayMath(token);
+		if (latex !== undefined) {
+			for (const mathLine of latexToBlock(latex)) lines.push({ text: apply(mathLine), nested: false });
+			return;
+		}
+		const text = this.#listItemInlineText(token, styleContext);
+		if (text !== undefined) lines.push({ text, nested: false });
+	}
+
+	/** The inline row of a list-item token; undefined for a token other than text or a paragraph that renders empty. */
+	#listItemInlineText(token: Token, styleContext: InlineStyleContext | undefined): string | undefined {
+		if (token.type === "text") {
+			return token.tokens && token.tokens.length > 0
+				? this.#renderInlineTokens(token.tokens, styleContext)
+				: token.text || "";
+		}
+		if (token.type === "paragraph") return this.#renderInlineTokens(token.tokens || [], styleContext);
+		// Other token types - try to render as inline
+		return this.#renderInlineTokens([token], styleContext) || undefined;
+	}
+
+	/**
+	 * Render a table with width-aware cell wrapping.
+	 * Cells that don't fit are wrapped to multiple lines.
+	 */
+	#renderTable(
+		token: TableToken,
+		availableWidth: number,
+		nextTokenType?: string,
+		styleContext?: InlineStyleContext,
+	): string[] {
+		const numCols = token.header.length;
+		if (numCols === 0) {
+			return [];
+		}
+		const trailingBlank = nextTokenType !== undefined && nextTokenType !== "" && nextTokenType !== "space";
+
+		// Calculate border overhead: "│ " + (n-1) * " │ " + " │"
+		// = 2 + (n-1) * 3 + 2 = 3n + 1
+		const availableForCells = availableWidth - (3 * numCols + 1);
+		if (availableForCells < numCols) {
+			// Too narrow to render a stable table. Fall back to raw markdown.
+			const fallbackLines = token.raw ? wrapTextWithAnsi(token.raw, availableWidth) : [];
+			if (trailingBlank) fallbackLines.push("");
+			return fallbackLines;
+		}
+
+		// Natural column widths (what each column needs unwrapped) and the longest unbroken word in each.
+		const naturalWidths: number[] = new Array(numCols).fill(0);
+		const minWordWidths: number[] = new Array(numCols).fill(1);
+		this.#measureTableCells(token.header, naturalWidths, minWordWidths, styleContext);
+		for (const row of token.rows) this.#measureTableCells(row, naturalWidths, minWordWidths, styleContext);
+
+		const layout: TableLayout = {
+			columnWidths: tableColumnWidths(naturalWidths, minWordWidths, numCols, availableForCells),
+			// A table whose delimiter row omits a column, or a token from a source that
+			// does not populate `align`, falls back to the GFM default rather than
+			// indexing past the end.
+			align: Array.from({ length: numCols }, (_, i) => token.align?.[i] ?? null),
+			styleContext,
+		};
+
+		const t = this.#theme.symbols.table;
+		const lines = [this.#tableRule(layout, t.topLeft, t.teeDown, t.topRight)];
+		lines.push(...this.#tableRowLines(token.header, layout, true));
+		const separatorLine = this.#tableRule(layout, t.teeRight, t.cross, t.teeLeft);
+		lines.push(separatorLine);
+
+		let prevRowWrapped = false;
+		for (let rowIndex = 0; rowIndex < token.rows.length; rowIndex++) {
+			const renderedRow = this.#tableRowLines(token.rows[rowIndex], layout, false);
+			const wrapped = renderedRow.length > 1;
+			if (rowIndex > 0 && (prevRowWrapped || wrapped)) {
+				lines.push(separatorLine);
+			}
+			lines.push(...renderedRow);
+			prevRowWrapped = wrapped;
+		}
+		lines.push(this.#tableRule(layout, t.bottomLeft, t.teeUp, t.bottomRight));
+		if (trailingBlank) lines.push("");
+		return lines;
+	}
+
+	/** Widen `naturalWidths` and `minWordWidths` to fit every cell of one table row. */
+	#measureTableCells(
+		cells: TableCellToken[],
+		naturalWidths: number[],
+		minWordWidths: number[],
+		styleContext: InlineStyleContext | undefined,
+	): void {
+		for (let i = 0; i < cells.length; i++) {
+			const text = this.#renderInlineTokens(cells[i]?.tokens || [], styleContext);
+			naturalWidths[i] = Math.max(naturalWidths[i] || 0, ...terminalLineWidths(text), 0);
+			minWordWidths[i] = Math.max(minWordWidths[i] || 1, getLongestWordWidth(text, TABLE_MAX_UNBROKEN_WORD_WIDTH));
+		}
+	}
+
+	/** A horizontal table border: `left`, then each column's run of `horizontal` joined by `mid`, then `right`. */
+	#tableRule(layout: TableLayout, left: string, mid: string, right: string): string {
+		const h = this.#theme.symbols.table.horizontal;
+		return `${left}${h}${layout.columnWidths.map(w => h.repeat(w)).join(`${h}${mid}${h}`)}${h}${right}`;
+	}
+
+	/** The terminal lines of one table row, each cell wrapped to its column and aligned, header cells bold. */
+	#tableRowLines(cells: TableCellToken[], layout: TableLayout, isHeader: boolean): string[] {
+		const { columnWidths, align, styleContext } = layout;
+		const v = this.#theme.symbols.table.vertical;
+		const cellLines = cells.map((cell, i) =>
+			wrapCellText(this.#renderInlineTokens(cell.tokens || [], styleContext), columnWidths[i]),
+		);
+		const maxLines = Math.max(...cellLines.map(c => c.length));
+		const out: string[] = [];
+		for (let lineIdx = 0; lineIdx < maxLines; lineIdx++) {
+			const rowParts = cellLines.map((lines, colIdx) => {
+				const text = alignCellText(lines[lineIdx] || "", columnWidths[colIdx], align[colIdx]);
+				return isHeader ? this.#theme.bold(text) : text;
+			});
+			out.push(`${v} ${rowParts.join(` ${v} `)} ${v}`);
+		}
+		return out;
+	}
+}
+
+interface FreezeBoundary {
+	/** Text offset the frozen prefix ends at. */
+	end: number;
+	/** Tokens the frozen prefix holds. */
+	count: number;
+}
+
+/**
+ * The last boundary a frozen stream prefix may end at, scanning `tokens` from token `count`, which starts at text
+ * offset `end`; the given boundary when no later token ends one.
+ */
+function lastFreezeBoundary(tokens: Token[], count: number, end: number): FreezeBoundary {
+	const boundary: FreezeBoundary = { end, count };
+	let pos = end;
+	for (let i = count; i < tokens.length; i++) {
+		const raw = tokens[i].raw;
+		pos += raw.length;
+		// A `space` token ending in "\n\n" closes the preceding block, but a
+		// `list` before it can still be extended by a following same-marker
+		// item across the blank line (CommonMark loose-list continuation),
+		// which marked merges into one renumbered loose list. Freezing across
+		// such a cut would keep the lists separate. Never freeze right after a
+		// list — it stays in the re-lexed tail.
+		if (raw.endsWith("\n\n") && tokens[i - 1]?.type !== "list") {
+			boundary.end = pos;
+			boundary.count = i + 1;
+		}
+	}
+	return boundary;
+}
+
+interface FenceMarker {
+	char: string;
+	length: number;
+}
+
+/** The marker opening a fence on `line`: up to three cells of indent, then three or more backticks or tildes. */
+function openingFenceMarker(line: string): FenceMarker | undefined {
+	const trimmed = line.trimStart();
+	if (line.length - trimmed.length > 3) return undefined;
+	const char = trimmed.charAt(0);
+	if (char !== "`" && char !== "~") return undefined;
+	let length = 0;
+	while (trimmed.charAt(length) === char) length++;
+	return length >= 3 ? { char, length } : undefined;
+}
+
+/** Whether `line` closes the fence `marker` opened: up to three cells of indent, a run as long or longer, then blanks. */
+function closesFence(line: string, marker: FenceMarker): boolean {
+	const trimmed = line.trimStart();
+	if (line.length - trimmed.length > 3) return false;
+	let length = 0;
+	while (trimmed.charAt(length) === marker.char) length++;
+	return length >= marker.length && trimmed.slice(length).trim().length === 0;
+}
+
+function codeTokenHasClosingFence(token: Token): boolean {
+	const raw = "raw" in token && typeof token.raw === "string" ? token.raw : "";
+	const firstLineEnd = raw.indexOf("\n");
+	if (firstLineEnd < 0) return false;
+	const marker = openingFenceMarker(raw.slice(0, firstLineEnd));
+	if (!marker) return false;
+
+	let lineStart = firstLineEnd + 1;
+	while (lineStart <= raw.length) {
+		const lineEnd = raw.indexOf("\n", lineStart);
+		if (closesFence(lineEnd >= 0 ? raw.slice(lineStart, lineEnd) : raw.slice(lineStart), marker)) return true;
+		if (lineEnd < 0) break;
+		lineStart = lineEnd + 1;
+	}
+	return false;
+}
+
+function getStylePrefix(styleFn: (text: string) => string): string {
+	const sentinel = "\u0000";
+	const styled = styleFn(sentinel);
+	const sentinelIndex = styled.indexOf(sentinel);
+	return sentinelIndex >= 0 ? styled.slice(0, sentinelIndex) : "";
+}
+
+/**
+ * Get the visible width of the longest word in a string.
+ */
+function getLongestWordWidth(text: string, maxWidth?: number): number {
+	const words = text.split(/\s+/).filter(word => word.length > 0);
+	let longest = 0;
+	for (const word of words) {
+		longest = Math.max(longest, visibleWidth(word));
+	}
+	if (maxWidth === undefined) {
+		return longest;
+	}
+	return Math.min(longest, maxWidth);
+}
+
+function terminalLineWidths(text: string): number[] {
+	return splitTerminalLines(text).map(line => visibleWidth(line));
+}
+
+/**
+ * Wrap a table cell to fit into a column.
+ *
+ * Delegates to wrapTextWithAnsi() so ANSI codes + long tokens are handled
+ * consistently with the rest of the renderer.
+ */
+function wrapCellText(text: string, maxWidth: number): string[] {
+	const cellWidth = Math.max(1, maxWidth);
+	return splitTerminalLines(text).flatMap(line => wrapTextWithAnsi(line, cellWidth));
+}
+
+/**
+ * Per-level dispatch context for {@link walkInlineTokens}. Both inline renderers
+ * (the rich Markdown component and the standalone {@link renderInlineMarkdown})
+ * flow through the one walker; every place they diverge is a field here rather
+ * than a second copy of the token switch:
+ *   - `renderLeafText` styles a bare text leaf (rich shows color swatches, the
+ *     standalone just applies its base color).
+ *   - `swatchGlyph` non-null adds the codespan color swatch.
+ *   - `hyperlinks` wraps links in OSC-8 escapes and appends the ` (href)` tail.
+ *   - `useHtmlState` threads an HTML-normalization state across the token run.
+ *   - `handleBlocks` activates the `paragraph`/`br` block cases (the standalone
+ *     falls those through to plain text).
+ *   - `stripTrailingPrefix` trims a dangling reopened-default SGR at the end.
+ * The recursion cap lives in the two thin callers, so this walker is pure
+ * single-level dispatch.
+ */
+interface InlineWalkContext {
+	theme: MarkdownTheme;
+	applyText: (text: string) => string;
+	applyTextWithNewlines: (text: string) => string;
+	renderLeafText: (text: string) => string;
+	stylePrefix: string;
+	swatchGlyph: string | null;
+	hyperlinks: boolean;
+	useHtmlState: boolean;
+	handleBlocks: boolean;
+	stripTrailingPrefix: boolean;
+	renderNested: (tokens: Token[]) => string;
+}
+
+/**
+ * The single owner of the inline-token grammar (text/strong/em/codespan/link/
+ * del/html/paragraph/br/math + fallback). Walks one level of inline tokens and
+ * returns the styled string; nested emphasis recurses through `ctx.renderNested`
+ * so each caller keeps its own depth guard. Kept byte-identical to the two
+ * former hand-copied switches — locked by markdown-inline-one-place.test.ts.
+ */
+function walkInlineTokens(tokens: Token[], ctx: InlineWalkContext): string {
+	const state: InlineWalkState = {
+		out: "",
+		trimLeadingWhitespace: false,
+		htmlState: ctx.useHtmlState ? createHtmlNormalizationState() : null,
+	};
+	for (const token of collapseInlineHtml(tokens)) {
+		appendInlineToken(token, ctx, state);
+	}
+
+	// Strip dangling re-opened-default SGR prefix left over from the last inline
+	// token (strong/em/codespan/link/del/etc.) so the emitted line self-terminates
+	// at its last styled segment instead of carrying an unmatched SGR open into
+	// the next line. Matches upstream behavior.
+	let result = state.out;
+	if (ctx.stripTrailingPrefix) {
+		while (ctx.stylePrefix && result.endsWith(ctx.stylePrefix)) {
+			result = result.slice(0, -ctx.stylePrefix.length);
+		}
+	}
+	return result;
+}
+
+/** What {@link walkInlineTokens} carries from one inline token to the next. */
+interface InlineWalkState {
+	/** The styled string so far. */
+	out: string;
+	/** Set after a line break, so the next text drops its leading whitespace. */
+	trimLeadingWhitespace: boolean;
+	/** HTML list state threaded across the run; null when the context does not use it. */
+	htmlState: HtmlNormalizationState | null;
+}
+
+function markInlineContent(state: InlineWalkState, text: string): void {
+	if (state.htmlState) markCurrentHtmlItemContent(state.htmlState, text);
+}
+
+/** `text` unescaped, without its leading whitespace when a line break preceded it; clears the pending trim. */
+function takeInlineText(state: InlineWalkState, text: string): string {
+	const rawText = state.trimLeadingWhitespace ? text.replace(/^\s+/, "") : text;
+	state.trimLeadingWhitespace = false;
+	return unescapeHtml(rawText);
+}
+
+/** Append one inline token to `state.out`. */
+function appendInlineToken(token: Token, ctx: InlineWalkContext, state: InlineWalkState): void {
+	if (isMathToken(token)) {
+		markInlineContent(state, token.text);
+		state.out += ctx.applyTextWithNewlines(renderMathToken(token.text));
+		return;
+	}
+	switch (token.type) {
+		case "text":
+			appendInlineText(token.text, token.tokens, ctx, state);
+			return;
+		case "paragraph":
+			// Paragraph tokens contain nested inline tokens
+			if (!ctx.handleBlocks) break;
+			appendInlineParagraph(token.tokens, ctx, state);
+			return;
+		case "br":
+			if (!ctx.handleBlocks) break;
+			state.out += "\n";
+			state.trimLeadingWhitespace = true;
+			return;
+		case "strong":
+			appendInlineSpan(token.tokens, "bold", ctx, state);
+			return;
+		case "em":
+			appendInlineSpan(token.tokens, "italic", ctx, state);
+			return;
+		case "del":
+			appendInlineSpan(token.tokens, "strikethrough", ctx, state);
+			return;
+		case "codespan": {
+			markInlineContent(state, token.text);
+			const swatch = ctx.swatchGlyph ? codespanSwatch(token.text, ctx.swatchGlyph) : "";
+			state.out += swatch + ctx.theme.code(token.text) + ctx.stylePrefix;
+			return;
+		}
+		case "link":
+			markInlineContent(state, token.text);
+			state.out += inlineLink(token.text, token.href, token.tokens || [], ctx) + ctx.stylePrefix;
+			return;
+		case "html":
+			if ("raw" in token && typeof token.raw === "string") appendInlineHtml(token.raw, ctx, state);
+			return;
+	}
+	// Handle any other inline token types (and the block cases a context does not handle) as plain text
+	appendInlinePlainToken(token, ctx, state);
+}
+
+/** Append `token.text` unstyled when the token holds text; a token without text appends nothing. */
+function appendInlinePlainToken(token: Token, ctx: InlineWalkContext, state: InlineWalkState): void {
+	if ("text" in token && typeof token.text === "string") {
+		const text = takeInlineText(state, token.text);
+		markInlineContent(state, text);
+		state.out += ctx.applyTextWithNewlines(text);
+	}
+}
+
+/** Append a paragraph's nested inline tokens unstyled. */
+function appendInlineParagraph(nested: Token[] | undefined, ctx: InlineWalkContext, state: InlineWalkState): void {
+	const tokens = nested || [];
+	markInlineContent(state, plainInlineTokens(tokens));
+	state.out += ctx.renderNested(tokens);
+}
+
+function appendInlineText(
+	rawText: string,
+	nested: Token[] | undefined,
+	ctx: InlineWalkContext,
+	state: InlineWalkState,
+): void {
+	const text = takeInlineText(state, rawText);
+	markInlineContent(state, text);
+	if (nested) markInlineContent(state, plainInlineTokens(nested));
+	// Text tokens in list items can have nested tokens for inline formatting
+	state.out += nested && nested.length > 0 ? ctx.renderNested(nested) : ctx.renderLeafText(text);
+}
+
+/** Append a `**strong**`, `*em*` or `~~del~~` span: its nested tokens styled by `style`, then the style prefix. */
+function appendInlineSpan(
+	nested: Token[] | undefined,
+	style: "bold" | "italic" | "strikethrough",
+	ctx: InlineWalkContext,
+	state: InlineWalkState,
+): void {
+	const tokens = nested || [];
+	markInlineContent(state, plainInlineTokens(tokens));
+	state.out += ctx.theme[style](ctx.renderNested(tokens)) + ctx.stylePrefix;
+}
+
+/** A styled link; with hyperlinks on, an OSC-8 link followed by ` (href)` unless the text already is the href. */
+function inlineLink(text: string, href: string, nested: Token[], ctx: InlineWalkContext): string {
+	const styledLinkText = ctx.theme.link(ctx.theme.underline(ctx.renderNested(nested)));
+	if (!ctx.hyperlinks) return styledLinkText;
+	const clickableLinkText = formatHyperlink(styledLinkText, href);
+	// If link text matches href, only show the link once. Compare raw text
+	// (token.text) not styled text (linkText) since linkText has ANSI codes.
+	// For mailto: links, strip the prefix before comparing (autolinked emails
+	// have text="foo@bar.com" but href="mailto:foo@bar.com").
+	const hrefForComparison = href.startsWith("mailto:") ? href.slice(7) : href;
+	if (text === href || text === hrefForComparison) return clickableLinkText;
+	return clickableLinkText + formatHyperlink(ctx.theme.linkUrl(` (${href})`), href);
+}
+
+function appendInlineHtml(raw: string, ctx: InlineWalkContext, state: InlineWalkState): void {
+	const cleaned = normalizeHtmlForTerminal(raw, state.htmlState ?? undefined);
+	state.out += ctx.applyTextWithNewlines(cleaned);
+	if (!ctx.handleBlocks) return;
+	if (cleaned.endsWith("\n")) {
+		state.trimLeadingWhitespace = true;
+	} else if (cleaned.length > 0) {
+		state.trimLeadingWhitespace = false;
+	}
+}
+
+/**
+ * Render inline markdown (bold, italic, code, links, strikethrough) to a styled string.
+ * Unlike the full Markdown component, this produces a single line with no block-level elements.
+ */
+export function renderInlineMarkdown(text: string, mdTheme: MarkdownTheme, baseColor?: (t: string) => string): string {
+	const applyText = baseColor ?? ((t: string) => t);
+	// Guard against undefined/null during streaming — partial JSON can leave fields unpopulated.
+	if (typeof text !== "string") return applyText(text != null ? String(text) : "");
+	let result = "";
+	for (const token of markdownParser.lexer(text)) {
+		if (isMathToken(token)) {
+			result += applyText(renderMathToken(token.text));
+		} else if (token.type === "paragraph" && token.tokens) {
+			result += renderInlineTokens(token.tokens, mdTheme, applyText);
+		} else if (token.type === "list") {
+			result += inlineListText(token as Tokens.List, mdTheme, applyText);
+		} else if ("text" in token && typeof token.text === "string") {
+			result += applyText(unescapeHtml(token.text));
+		}
+	}
+	return result;
+}
+
+/** A list flattened to one line: each item's bullet or number, then its inline content, items joined by a space. */
+function inlineListText(list: Tokens.List, mdTheme: MarkdownTheme, applyText: (t: string) => string): string {
+	return list.items
+		.map((item, index) => {
+			const prefix = list.ordered ? `${(list.start || 1) + index}. ` : "• ";
+			const content = item.tokens ? renderInlineTokens(item.tokens, mdTheme, applyText) : applyText(item.text);
+			return `${applyText(prefix)}${content}`;
+		})
+		.join(applyText(" "));
+}
+
+function renderInlineTokens(
+	tokens: Token[],
+	mdTheme: MarkdownTheme,
+	applyText: (t: string) => string,
+	depth = 0,
+): string {
+	// Same O(n^2) ANSI-wrapping hazard as Markdown#renderInlineTokens: deeply
+	// nested emphasis (`**`×N) recurses N deep, each level re-wrapping. Past the
+	// shared cap, flatten to styled plain text (O(n), no per-level wrapping).
+	if (depth >= Markdown.MAX_INLINE_DEPTH) {
+		const plain = plainInlineTokens(tokens);
+		return plain === "" ? "" : applyText(plain);
+	}
+	// Thin adapter over the shared grammar walker: no color swatches, no OSC-8
+	// hyperlinks, no HTML-normalization state, no block cases — the single-line
+	// inline subset. `stylePrefix` is `applyText("")` (the base-color reset the
+	// former copy appended after each styled span).
+	return walkInlineTokens(tokens, {
+		theme: mdTheme,
+		applyText,
+		applyTextWithNewlines: applyText,
+		renderLeafText: applyText,
+		stylePrefix: applyText(""),
+		swatchGlyph: null,
+		hyperlinks: false,
+		useHtmlState: false,
+		handleBlocks: false,
+		stripTrailingPrefix: false,
+		renderNested: (subTokens: Token[]) => renderInlineTokens(subTokens, mdTheme, applyText, depth + 1),
+	});
+}

@@ -1,0 +1,72 @@
+import type { ThinkingLevel } from "@veyyon/agent-core";
+import type { Api, ApiKey, Model } from "@veyyon/ai";
+import { $env } from "@veyyon/utils";
+import { parseFileDiffs } from "../git-diff";
+import type { ResolveObfuscateProviderText } from "../shared-llm";
+import type { ConventionalAnalysis } from "../types";
+import { isExcludedFile } from "../utils/exclusions";
+import { runMapPhase } from "./map-phase";
+import { runReducePhase } from "./reduce-phase";
+import { estimateTokens, MAX_FILE_TOKENS } from "./utils";
+
+const MIN_FILES_FOR_MAP_REDUCE = 4;
+
+export interface MapReduceSettings {
+	enabled?: boolean;
+	minFiles?: number;
+	maxFileTokens?: number;
+	maxConcurrency?: number;
+	timeoutMs?: number;
+}
+
+export interface MapReduceInput {
+	model: Model<Api>;
+	apiKey: ApiKey;
+	thinkingLevel?: ThinkingLevel;
+	helperModel: Model<Api>;
+	helperApiKey: ApiKey;
+	helperThinkingLevel?: ThinkingLevel;
+	diff: string;
+	stat: string;
+	scopeCandidates: string;
+	typesDescription?: string;
+	settings?: MapReduceSettings;
+	resolveObfuscateProviderText: ResolveObfuscateProviderText;
+}
+
+export function shouldUseMapReduce(diff: string, settings?: MapReduceSettings): boolean {
+	if ($env.VEYYON_COMMIT_MAP_REDUCE?.toLowerCase() === "false") return false;
+	if (settings?.enabled === false) return false;
+	const minFiles = settings?.minFiles ?? MIN_FILES_FOR_MAP_REDUCE;
+	const maxFileTokens = settings?.maxFileTokens ?? MAX_FILE_TOKENS;
+	const files = parseFileDiffs(diff).filter(file => !isExcludedFile(file.filename));
+	const fileCount = files.length;
+	if (fileCount >= minFiles) return true;
+	return files.some(file => estimateTokens(file.content) > maxFileTokens);
+}
+
+/**
+ * Run map-reduce analysis for large diffs using the commit helper and primary models.
+ */
+
+export async function runMapReduceAnalysis(input: MapReduceInput): Promise<ConventionalAnalysis> {
+	const fileDiffs = parseFileDiffs(input.diff).filter(file => !isExcludedFile(file.filename));
+	const observations = await runMapPhase({
+		model: input.helperModel,
+		apiKey: input.helperApiKey,
+		thinkingLevel: input.helperThinkingLevel,
+		files: fileDiffs,
+		config: input.settings,
+		resolveObfuscateProviderText: input.resolveObfuscateProviderText,
+	});
+	return runReducePhase({
+		model: input.model,
+		apiKey: input.apiKey,
+		thinkingLevel: input.thinkingLevel,
+		observations,
+		stat: input.stat,
+		scopeCandidates: input.scopeCandidates,
+		typesDescription: input.typesDescription,
+		resolveObfuscateProviderText: input.resolveObfuscateProviderText,
+	});
+}

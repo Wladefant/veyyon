@@ -1,0 +1,1077 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { AgentMessage } from "@veyyon/agent-core";
+import {
+	calculateContextTokens,
+	compact,
+	compactionContextTokens,
+	findCutPoint,
+	getLastAssistantUsage,
+	prepareCompaction,
+} from "@veyyon/agent-core/compaction/compaction";
+import {
+	type CompactionSettings,
+	DEFAULT_COMPACTION_SETTINGS,
+	isThresholdTokensClampedForWindow,
+	resolveThresholdTokens,
+	shouldCompact,
+} from "@veyyon/agent-core/compaction/threshold";
+import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
+import * as ai from "@veyyon/ai";
+import type { AssistantMessage, Model, Usage } from "@veyyon/ai/types";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { buildSessionContext } from "@veyyon/kernel/session/session-context";
+import type {
+	CompactionEntry,
+	ModelChangeEntry,
+	SessionEntry,
+	SessionMessageEntry,
+	ThinkingLevelChangeEntry,
+} from "@veyyon/kernel/session/session-entries";
+import { migrateSessionEntries } from "@veyyon/kernel/session/session-migrations";
+import { e2eApiKey } from "./helpers/e2e-session";
+
+// ============================================================================
+// Test fixtures
+// ============================================================================
+
+/**
+ * A large, non-uniform session, generated rather than replayed.
+ *
+ * This used to read a captured `.jsonl` transcript. A recorded session is
+ * somebody's actual conversation, so it cannot be committed, and it made the
+ * fixture unreadable besides: what the cut point had to land on was buried in
+ * a megabyte of prose. The generator states the shape the cut point depends on
+ * — 88 user turns, 453 assistant turns, 373 tool results, one enormous result,
+ * and every tool call paired with its result — and is seeded, so the entry
+ * sequence is identical on every run.
+ */
+function buildLargeSessionEntries(): SessionEntry[] {
+	let seed = 0x5eed_1a7e;
+	const rand = () => {
+		seed = (seed * 1_103_515_245 + 12_345) & 0x7fff_ffff;
+		return seed / 0x7fff_ffff;
+	};
+	const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
+
+	const start = Date.UTC(2026, 0, 2, 9, 0, 0);
+	let tick = 0;
+	const stamp = () => new Date(start + tick++ * 1_000).toISOString();
+	const prose = (words: number) =>
+		Array.from({ length: words }, () =>
+			pick(["index", "buffer", "resolve", "entry", "budget", "token", "cursor", "segment", "commit", "range"]),
+		).join(" ");
+
+	const entries: SessionEntry[] = [];
+	const push = (entry: SessionEntry) => entries.push(entry);
+	const message = (msg: Record<string, unknown>): SessionEntry =>
+		({ type: "message", timestamp: stamp(), message: msg }) as unknown as SessionEntry;
+
+	// Exactly 373 of the 453 assistant turns carry a tool call, so every count is
+	// reached by construction. Deciding per turn on a coin flip cannot hit 373 out
+	// of 453 and spins forever waiting to.
+	const kinds: boolean[] = [
+		...Array.from({ length: 373 }, () => true),
+		...Array.from({ length: 453 - 373 }, () => false),
+	];
+	for (let i = kinds.length - 1; i > 0; i--) {
+		const j = Math.floor(rand() * (i + 1));
+		[kinds[i], kinds[j]] = [kinds[j], kinds[i]];
+	}
+
+	// One result is two orders of magnitude larger than the median, which is what
+	// pushes the cut point away from the tail and makes this fixture worth having.
+	const huge = 43_000;
+	let calls = 0;
+	let results = 0;
+	let next = 0;
+
+	for (let user = 0; user < 88; user++) {
+		push(message({ role: "user", content: [{ type: "text", text: prose(12) }], timestamp: start + tick }));
+
+		// The tail user turn drains whatever is left, so no turn is dropped.
+		const remaining = kinds.length - next;
+		const turns = user === 87 ? remaining : Math.min(remaining, 1 + Math.floor(rand() * 9));
+		for (let t = 0; t < turns; t++) {
+			const wantsTool = kinds[next++];
+			const id = `call_${calls}`;
+			const content = wantsTool
+				? [
+						{
+							type: "toolCall",
+							id,
+							name: pick(["read", "search", "bash", "edit"]),
+							arguments: { path: "src/mod.ts" },
+						},
+					]
+				: [{ type: "text", text: prose(8 + Math.floor(rand() * 40)) }];
+			push(
+				message({
+					role: "assistant",
+					content,
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-sonnet-4-5",
+					usage: createMockUsage(1_200, 240),
+					stopReason: wantsTool ? "toolUse" : "stop",
+					timestamp: start + tick,
+				}),
+			);
+			if (wantsTool) {
+				calls++;
+				const size = results === 40 ? huge : 40 + Math.floor(rand() * 300);
+				push(
+					message({
+						role: "toolResult",
+						toolCallId: id,
+						toolName: "read",
+						content: [{ type: "text", text: "x".repeat(size) }],
+						isError: false,
+						timestamp: start + tick,
+					}),
+				);
+				results++;
+			}
+		}
+		if (rand() < 0.12) {
+			push({
+				type: "thinking_level_change",
+				timestamp: stamp(),
+				thinkingLevel: pick(["off", "low", "medium", "high"]),
+			} as ThinkingLevelChangeEntry);
+		}
+	}
+	push({ type: "model_change", timestamp: stamp(), model: "gpt-4" } as ModelChangeEntry);
+
+	migrateSessionEntries(entries); // the loader assigns id/parentId; generated entries need the same
+	return entries;
+}
+
+function createMockUsage(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {
+	return {
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		totalTokens: input + output + cacheRead + cacheWrite,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+}
+
+function createUserMessage(text: string): AgentMessage {
+	return { role: "user", content: text, timestamp: Date.now() };
+}
+
+function createAssistantMessage(text: string, usage?: Usage): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		usage: usage || createMockUsage(100, 50),
+		stopReason: "stop",
+		timestamp: Date.now(),
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+	};
+}
+
+let entryCounter = 0;
+let lastId: string | null = null;
+
+function resetEntryCounter() {
+	entryCounter = 0;
+	lastId = null;
+}
+
+// Reset counter before each test to get predictable IDs
+beforeEach(() => {
+	resetEntryCounter();
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+function createMessageEntry(message: AgentMessage): SessionMessageEntry {
+	const id = `test-id-${entryCounter++}`;
+	const entry: SessionMessageEntry = {
+		type: "message",
+		id,
+		parentId: lastId,
+		timestamp: new Date().toISOString(),
+		message,
+	};
+	lastId = id;
+	return entry;
+}
+
+function createCompactionEntry(summary: string, firstKeptEntryId: string): CompactionEntry {
+	const id = `test-id-${entryCounter++}`;
+	const entry: CompactionEntry = {
+		type: "compaction",
+		id,
+		parentId: lastId,
+		timestamp: new Date().toISOString(),
+		summary,
+		firstKeptEntryId,
+		tokensBefore: 10000,
+	};
+	lastId = id;
+	return entry;
+}
+
+function createModelChangeEntry(provider: string, modelId: string): ModelChangeEntry {
+	const id = `test-id-${entryCounter++}`;
+	const entry: ModelChangeEntry = {
+		type: "model_change",
+		id,
+		parentId: lastId,
+		timestamp: new Date().toISOString(),
+		model: `${provider}/${modelId}`,
+	};
+	lastId = id;
+	return entry;
+}
+
+function createThinkingLevelEntry(thinkingLevel: string): ThinkingLevelChangeEntry {
+	const id = `test-id-${entryCounter++}`;
+	const entry: ThinkingLevelChangeEntry = {
+		type: "thinking_level_change",
+		id,
+		parentId: lastId,
+		timestamp: new Date().toISOString(),
+		thinkingLevel,
+	};
+	lastId = id;
+	return entry;
+}
+
+// ============================================================================
+// Unit tests
+// ============================================================================
+
+describe("Token calculation", () => {
+	it("should calculate total context tokens from usage", () => {
+		const usage = createMockUsage(1000, 500, 200, 100);
+		expect(calculateContextTokens(usage)).toBe(1800);
+	});
+
+	it("should handle zero values", () => {
+		const usage = createMockUsage(0, 0, 0, 0);
+		expect(calculateContextTokens(usage)).toBe(0);
+	});
+});
+
+describe("getLastAssistantUsage", () => {
+	it("should find the last non-aborted assistant message usage", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("Hello")),
+			createMessageEntry(createAssistantMessage("Hi", createMockUsage(100, 50))),
+			createMessageEntry(createUserMessage("How are you?")),
+			createMessageEntry(createAssistantMessage("Good", createMockUsage(200, 100))),
+		];
+
+		const usage = getLastAssistantUsage(entries);
+		expect(usage).not.toBeNull();
+		expect(usage!.input).toBe(200);
+	});
+
+	it("should skip aborted messages", () => {
+		const abortedMsg: AssistantMessage = {
+			...createAssistantMessage("Aborted", createMockUsage(300, 150)),
+			stopReason: "aborted",
+		};
+
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("Hello")),
+			createMessageEntry(createAssistantMessage("Hi", createMockUsage(100, 50))),
+			createMessageEntry(createUserMessage("How are you?")),
+			createMessageEntry(abortedMsg),
+		];
+
+		const usage = getLastAssistantUsage(entries);
+		expect(usage).not.toBeNull();
+		expect(usage!.input).toBe(100);
+	});
+
+	it("should return undefined if no assistant messages", () => {
+		const entries: SessionEntry[] = [createMessageEntry(createUserMessage("Hello"))];
+		expect(getLastAssistantUsage(entries)).toBeUndefined();
+	});
+});
+
+describe("shouldCompact", () => {
+	it("should return true when context exceeds threshold", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 10000,
+			keepRecentTokens: 20000,
+		};
+
+		// default mode uses legacy reserve behavior:
+		// effective reserve = max(floor(100000 * 0.15), 10000) = 15000, threshold = 85000
+		expect(shouldCompact(95000, 100000, settings)).toBe(true);
+		expect(shouldCompact(86000, 100000, settings)).toBe(true);
+		expect(shouldCompact(84000, 100000, settings)).toBe(false);
+	});
+
+	it("uses proportional reserve when the DEFAULTED reserve nearly consumes a small window", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: -1,
+			// reserveTokens deliberately unset: provenance, not value equality,
+			// is what allows the proportional fallback.
+			keepRecentTokens: 20_000,
+		};
+
+		// 16,385-token GPT-3.5 windows should keep the same 15% reserve behavior
+		// used by smaller windows instead of collapsing the threshold to one token.
+		expect(shouldCompact(10_000, 16_385, settings)).toBe(false);
+		expect(shouldCompact(13_929, 16_385, settings)).toBe(true);
+	});
+
+	it("honors an EXPLICIT reserve equal to the old default on a small window", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: -1,
+			reserveTokens: 16_384,
+			keepRecentTokens: 20_000,
+		};
+
+		// The user chose 16,384 on purpose; it must not be mistaken for the
+		// defaulted reserve and silently replaced with the proportional one.
+		expect(resolveThresholdTokens(16_385, settings)).toBe(1);
+		expect(shouldCompact(2, 16_385, settings)).toBe(true);
+	});
+
+	it("respects a large valid configured reserve", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: -1,
+			reserveTokens: 90_000,
+			keepRecentTokens: 20_000,
+		};
+
+		expect(resolveThresholdTokens(100_000, settings)).toBe(10_000);
+		expect(shouldCompact(10_000, 100_000, settings)).toBe(false);
+		expect(shouldCompact(10_001, 100_000, settings)).toBe(true);
+	});
+
+	it("should use configured threshold percent", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: 90,
+			reserveTokens: 10000,
+			keepRecentTokens: 20000,
+		};
+
+		expect(shouldCompact(89_000, 100_000, settings)).toBe(false);
+		expect(shouldCompact(90_001, 100_000, settings)).toBe(true);
+	});
+
+	it("should use legacy reserve behavior when threshold is set to default sentinel", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: -1,
+			reserveTokens: 30_000,
+			keepRecentTokens: 20_000,
+		};
+
+		// effective reserve = max(15000, 30000) = 30000, threshold = 70000
+		expect(shouldCompact(70_000, 100_000, settings)).toBe(false);
+		expect(shouldCompact(70_001, 100_000, settings)).toBe(true);
+	});
+
+	/**
+	 * `enabled` is the only off switch. Legacy `off` strategy values migrate to
+	 * `summary` while setting `enabled: false`, so the canonical strategy itself
+	 * never changes whether compaction runs.
+	 */
+	it("does not compact when the canonical strategy is disabled", () => {
+		const base = { thresholdPercent: 1, reserveTokens: 10000, keepRecentTokens: 20000 };
+
+		expect(shouldCompact(99_000, 100_000, { enabled: false, strategy: "summary", ...base })).toBe(false);
+		expect(shouldCompact(99_000, 100_000, { enabled: true, strategy: "summary", ...base })).toBe(true);
+	});
+
+	it("should return false when disabled", () => {
+		const settings: CompactionSettings = {
+			enabled: false,
+			reserveTokens: 10000,
+			keepRecentTokens: 20000,
+		};
+
+		expect(shouldCompact(95000, 100000, settings)).toBe(false);
+	});
+});
+
+describe("resolveThresholdTokens — absolute token amount (the visible knob)", () => {
+	it("uses a configured absolute thresholdTokens verbatim, ignoring the percent knob", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdTokens: 150_000,
+			// A percent that would resolve to 900,000 on this window — proven ignored.
+			thresholdPercent: 90,
+			reserveTokens: 10_000,
+			keepRecentTokens: 20_000,
+		};
+
+		expect(resolveThresholdTokens(1_000_000, settings)).toBe(150_000);
+		expect(shouldCompact(149_999, 1_000_000, settings)).toBe(false);
+		expect(shouldCompact(150_001, 1_000_000, settings)).toBe(true);
+	});
+
+	it("is model-independent: the same amount triggers at the same token count on a different window", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdTokens: 100_000,
+			thresholdPercent: -1,
+			reserveTokens: 10_000,
+			keepRecentTokens: 20_000,
+		};
+
+		// 200k window and 1M window both trigger at exactly 100,000 tokens.
+		expect(resolveThresholdTokens(200_000, settings)).toBe(100_000);
+		expect(resolveThresholdTokens(1_000_000, settings)).toBe(100_000);
+	});
+
+	it("falls back to the percent knob when thresholdTokens is the default sentinel (-1)", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdTokens: -1,
+			thresholdPercent: 80,
+			reserveTokens: 10_000,
+			keepRecentTokens: 20_000,
+		};
+
+		expect(resolveThresholdTokens(100_000, settings)).toBe(80_000);
+	});
+
+	it("caps the amount at the reachable auto point when it exceeds what the model can hold", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdTokens: 500_000,
+			thresholdPercent: -1,
+			reserveTokens: 10_000,
+			keepRecentTokens: 20_000,
+		};
+
+		// 500k configured, 200k window, 15% reserve floor (30k) → capped to 170k,
+		// the largest trigger a request can actually reach on this model.
+		expect(resolveThresholdTokens(200_000, settings)).toBe(170_000);
+	});
+});
+
+describe("isThresholdTokensClampedForWindow — loud clamp signal", () => {
+	const base: CompactionSettings = {
+		enabled: true,
+		thresholdPercent: -1,
+		reserveTokens: 10_000,
+		keepRecentTokens: 20_000,
+	};
+
+	it("is true when the configured amount is past what the model can reach", () => {
+		const settings: CompactionSettings = { ...base, thresholdTokens: 500_000 };
+		expect(isThresholdTokensClampedForWindow(200_000, settings)).toBe(true);
+	});
+
+	it("is false when the configured amount fits inside the window", () => {
+		const settings: CompactionSettings = { ...base, thresholdTokens: 150_000 };
+		expect(isThresholdTokensClampedForWindow(200_000, settings)).toBe(false);
+	});
+
+	it("is false exactly at the auto point and true one token past it", () => {
+		const honored: CompactionSettings = { ...base, thresholdTokens: 170_000 };
+		expect(resolveThresholdTokens(200_000, honored)).toBe(170_000);
+		expect(isThresholdTokensClampedForWindow(200_000, honored)).toBe(false);
+
+		// Inside the window and still unreachable: the reserve is what makes the
+		// difference, which is why the window is the wrong ceiling.
+		const capped: CompactionSettings = { ...base, thresholdTokens: 170_001 };
+		expect(resolveThresholdTokens(200_000, capped)).toBe(170_000);
+		expect(isThresholdTokensClampedForWindow(200_000, capped)).toBe(true);
+	});
+
+	it("is false when thresholdTokens is unset (percent/reserve path, nothing to clamp)", () => {
+		const settings: CompactionSettings = { ...base, thresholdTokens: -1, thresholdPercent: 90 };
+		expect(isThresholdTokensClampedForWindow(200_000, settings)).toBe(false);
+	});
+});
+
+describe("compactionContextTokens", () => {
+	it("floors deflated provider usage by the stored-conversation estimate", () => {
+		// A before_provider_request compression extension (e.g. Headroom) shrinks the
+		// request, so the provider reports far fewer prompt tokens than the real
+		// stored conversation. The compaction decision must use the larger value.
+		expect(compactionContextTokens(20_000, 90_000)).toBe(90_000);
+	});
+
+	it("keeps provider usage when it already exceeds the local estimate", () => {
+		// Without compression the provider count is ground truth and typically >= the
+		// cl100k local estimate; the floor must never lower it.
+		expect(compactionContextTokens(85_000, 80_000)).toBe(85_000);
+	});
+
+	it("clamps negative inputs to zero", () => {
+		expect(compactionContextTokens(-5, -10)).toBe(0);
+		expect(compactionContextTokens(-5, 100)).toBe(100);
+	});
+
+	it("lets a deflated provider count still trigger compaction via the floor", () => {
+		const settings: CompactionSettings = { enabled: true, reserveTokens: 10000, keepRecentTokens: 20000 };
+		// Post-compression provider count is under threshold — raw, it would NOT compact.
+		expect(shouldCompact(20_000, 100_000, settings)).toBe(false);
+		// Floored by the real stored-conversation estimate (95k) it correctly compacts.
+		expect(shouldCompact(compactionContextTokens(20_000, 95_000), 100_000, settings)).toBe(true);
+	});
+});
+
+describe("estimateTokens excludeEncryptedReasoning (compaction floor)", () => {
+	it("drops encrypted reasoning from the floor estimate but counts it by default", () => {
+		const blob = "blob ".repeat(8_000); // large opaque encrypted-reasoning payload
+		const msg: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "short", thinkingSignature: blob },
+				{ type: "text", text: "done" },
+			],
+			usage: createMockUsage(0, 0),
+			stopReason: "stop",
+			timestamp: Date.now(),
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5.5",
+		};
+		const withBlob = estimateTokens(msg);
+		const flooredEstimate = estimateTokens(msg, { excludeEncryptedReasoning: true });
+		// Default counts the blob (providers bill it on replay); the floor excludes it,
+		// so a thinking-heavy turn can't falsely trip compaction on local byte size.
+		expect(withBlob).toBeGreaterThan(flooredEstimate + 1_000);
+		expect(flooredEstimate).toBeLessThan(50); // just "short" + "done"
+	});
+
+	it("still counts tool-result text (the content on-wire compression shrinks)", () => {
+		const big = "alpha beta gamma ".repeat(2_000);
+		const toolMsg = {
+			role: "toolResult",
+			toolCallId: "t1",
+			toolName: "read",
+			content: [{ type: "text", text: big }],
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		// Even with the floor option, tool-result content is fully counted — that is
+		// exactly what a before_provider_request compressor (e.g. Headroom) shrinks,
+		// so the floor must still see its real size.
+		expect(estimateTokens(toolMsg, { excludeEncryptedReasoning: true })).toBeGreaterThan(1_000);
+	});
+});
+
+describe("bigint tool arguments", () => {
+	it("preserves exact values through local compaction estimation and summary rendering", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected anthropic/claude-sonnet-4-5 model to exist");
+
+		const toolCallMessage: AssistantMessage = {
+			...createAssistantMessage("", createMockUsage(1_000, 100)),
+			content: [
+				{
+					type: "toolCall",
+					id: "call_bigint",
+					name: "lookup",
+					arguments: { rowId: 9_007_199_254_740_993n },
+				},
+			],
+			stopReason: "toolUse",
+		};
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("Look up the row")),
+			createMessageEntry(toolCallMessage),
+			createMessageEntry({
+				role: "toolResult",
+				toolCallId: "call_bigint",
+				toolName: "lookup",
+				content: [{ type: "text", text: "found" }],
+				isError: false,
+				timestamp: Date.now(),
+			}),
+			createMessageEntry(createUserMessage("Continue")),
+			createMessageEntry(createAssistantMessage("Done", createMockUsage(2_000, 100))),
+		];
+		const preparation = prepareCompaction(entries, {
+			...DEFAULT_COMPACTION_SETTINGS,
+			keepRecentTokens: 1,
+		});
+		if (!preparation) throw new Error("Expected compaction preparation");
+
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantMessage("summary"));
+		const result = await compact(preparation, model, "test-api-key");
+
+		let renderedPrompts = "";
+		for (const call of completeSpy.mock.calls) {
+			for (const message of call[1].messages) {
+				if (typeof message.content === "string") {
+					renderedPrompts += message.content;
+					continue;
+				}
+				for (const block of message.content) {
+					if (block.type === "text") renderedPrompts += block.text;
+				}
+			}
+		}
+		expect(renderedPrompts).toContain('"9007199254740993"');
+		expect(result.summary).toContain("summary");
+	});
+});
+
+/**
+ * `compaction.remoteEndpoint` is an operator-configured external summarizer for
+ * the `summary` strategy (llama.cpp, vLLM, a purpose-built summarizer host). It
+ * returns summary TEXT that veyyon stores like any local summary.
+ *
+ * It did not replace anything and it is not the server-side path. OpenAI
+ * server-side compaction (`POST /responses/compact`) is a separate mechanism,
+ * live today: the transport is `packages/ai/src/providers/openai-compaction.ts`,
+ * the engine is `@veyyon/agent-core/compaction/remote-compaction`, and the
+ * operator reaches it through `compaction.remote`. It is single-window, so it
+ * stores the provider's window and no summary text at all. The two share only
+ * the word "remote". The suite below covers the summarizer transport, which
+ * must still produce a real, readable summary.
+ */
+/** Minimal preparation for a summary-strategy compaction. */
+function makeSummarizerPreparation(settings?: Partial<CompactionSettings>) {
+	return {
+		firstKeptEntryId: "kept-1",
+		messagesToSummarize: [createUserMessage("earlier work"), createAssistantMessage("earlier reply")],
+		turnPrefixMessages: [],
+		recentMessages: [createUserMessage("recent work")],
+		isSplitTurn: false,
+		tokensBefore: 200_000,
+		fileOps: { read: new Set<string>(), edited: new Set<string>(), written: new Set<string>() },
+		settings: { ...DEFAULT_COMPACTION_SETTINGS, ...settings },
+	};
+}
+
+function getSummarizerModel(): Model {
+	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	return model;
+}
+
+describe("compaction.remoteEndpoint summarizer", () => {
+	/**
+	 * The endpoint's returned text must land in the compaction entry verbatim.
+	 * If this regresses to a placeholder, the session log stops recording what
+	 * was actually kept — the exact defect that motivated removing the native
+	 * path.
+	 */
+	it("stores the endpoint's summary text in the compaction entry", async () => {
+		const fetchHandler = vi.fn(async () =>
+			Response.json({ summary: "## Goal\nFinish the release script.", shortSummary: "release script" }),
+		);
+		const preparation = makeSummarizerPreparation({ remoteEndpoint: "https://summarizer.test/compact" });
+
+		const result = await compact(preparation, getSummarizerModel(), "test-api-key", undefined, undefined, {
+			fetch: fetchHandler as unknown as typeof fetch,
+		});
+
+		expect(result.summary).toContain("Finish the release script.");
+		expect(result.summary).not.toContain("provider-native history");
+		expect(fetchHandler).toHaveBeenCalled();
+	});
+
+	/**
+	 * With no endpoint configured the summary is generated locally. No provider
+	 * may be handed a private compaction route in its place.
+	 */
+	it("summarizes locally when no endpoint is configured", async () => {
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantMessage("Local summary text"));
+		const fetchSpy = vi.fn();
+
+		const result = await compact(
+			makeSummarizerPreparation(),
+			getSummarizerModel(),
+			"test-api-key",
+			undefined,
+			undefined,
+			{
+				fetch: fetchSpy as unknown as typeof fetch,
+			},
+		);
+
+		expect(result.summary).toContain("Local summary text");
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+});
+
+describe("findCutPoint", () => {
+	it("should find cut point based on actual token differences", () => {
+		// Create entries with cumulative token counts
+		const entries: SessionEntry[] = [];
+		for (let i = 0; i < 10; i++) {
+			entries.push(createMessageEntry(createUserMessage(`User ${i}`)));
+			entries.push(
+				createMessageEntry(createAssistantMessage(`Assistant ${i}`, createMockUsage(0, 100, (i + 1) * 1000, 0))),
+			);
+		}
+
+		// 20 entries, last assistant has 10000 tokens
+		// keepRecentTokens = 2500: keep entries where diff < 2500
+		const result = findCutPoint(entries, 0, entries.length, 2500);
+
+		// Should cut at a valid cut point (user or assistant message)
+		expect(entries[result.firstKeptEntryIndex].type).toBe("message");
+		const role = (entries[result.firstKeptEntryIndex] as SessionMessageEntry).message.role;
+		expect(role === "user" || role === "assistant").toBe(true);
+	});
+
+	it("should return startIndex if no valid cut points in range", () => {
+		const entries: SessionEntry[] = [createMessageEntry(createAssistantMessage("a"))];
+		const result = findCutPoint(entries, 0, entries.length, 1000);
+		expect(result.firstKeptEntryIndex).toBe(0);
+	});
+
+	it("should keep everything if all messages fit within budget", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("1")),
+			createMessageEntry(createAssistantMessage("a", createMockUsage(0, 50, 500, 0))),
+			createMessageEntry(createUserMessage("2")),
+			createMessageEntry(createAssistantMessage("b", createMockUsage(0, 50, 1000, 0))),
+		];
+
+		const result = findCutPoint(entries, 0, entries.length, 50000);
+		expect(result.firstKeptEntryIndex).toBe(0);
+	});
+
+	it("should indicate split turn when cutting at assistant message", () => {
+		// Create a scenario where we cut at an assistant message mid-turn
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("Turn 1")),
+			createMessageEntry(createAssistantMessage("A1", createMockUsage(0, 100, 1000, 0))),
+			createMessageEntry(createUserMessage("Turn 2")), // index 2
+			createMessageEntry(createAssistantMessage("A2-1", createMockUsage(0, 100, 5000, 0))), // index 3
+			createMessageEntry(createAssistantMessage("A2-2", createMockUsage(0, 100, 8000, 0))), // index 4
+			createMessageEntry(createAssistantMessage("A2-3", createMockUsage(0, 100, 10000, 0))), // index 5
+		];
+
+		// With keepRecentTokens = 3000, should cut somewhere in Turn 2
+		const result = findCutPoint(entries, 0, entries.length, 3000);
+
+		// If cut at assistant message (not user), should indicate split turn
+		const cutEntry = entries[result.firstKeptEntryIndex] as SessionMessageEntry;
+		if (cutEntry.message.role === "assistant") {
+			expect(result.isSplitTurn).toBe(true);
+			expect(result.turnStartIndex).toBe(2); // Turn 2 starts at index 2
+		}
+	});
+});
+
+describe("buildSessionContext", () => {
+	it("should load all messages when no compaction", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("1")),
+			createMessageEntry(createAssistantMessage("a")),
+			createMessageEntry(createUserMessage("2")),
+			createMessageEntry(createAssistantMessage("b")),
+		];
+
+		const loaded = buildSessionContext(entries);
+		expect(loaded.messages.length).toBe(4);
+		expect(loaded.thinkingLevel).toBe("off");
+		expect(loaded.models.default).toBe("anthropic/claude-sonnet-4-5");
+	});
+
+	it("should handle single compaction", () => {
+		// IDs: u1=test-id-0, a1=test-id-1, u2=test-id-2, a2=test-id-3, compaction=test-id-4, u3=test-id-5, a3=test-id-6
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const a2 = createMessageEntry(createAssistantMessage("b"));
+		const compaction = createCompactionEntry("Summary of 1,a,2,b", u2.id); // keep from u2 onwards
+		const u3 = createMessageEntry(createUserMessage("3"));
+		const a3 = createMessageEntry(createAssistantMessage("c"));
+
+		const entries: SessionEntry[] = [u1, a1, u2, a2, compaction, u3, a3];
+
+		const loaded = buildSessionContext(entries);
+		// summary + kept (u2, a2) + after (u3, a3) = 5
+		expect(loaded.messages.length).toBe(5);
+		expect(loaded.messages[0].role).toBe("compactionSummary");
+		expect((loaded.messages[0] as any).summary).toContain("Summary of 1,a,2,b");
+	});
+
+	/**
+	 * Removed provider-native compaction entries contain only an unreadable
+	 * provider blob and a placeholder summary. Resume must immediately replay
+	 * the original persisted messages instead of waiting for another compaction.
+	 */
+	it("re-expands original messages behind an unusable legacy provider compaction on resume", () => {
+		const u1 = createMessageEntry(createUserMessage("pre-compaction user evidence"));
+		const a1 = createMessageEntry(createAssistantMessage("pre-compaction assistant evidence"));
+		const u2 = createMessageEntry(createUserMessage("retained request"));
+		const legacyCompaction: CompactionEntry = {
+			...createCompactionEntry("Remote compaction preserved provider-native history for this session.", u2.id),
+			preserveData: { openaiRemoteCompaction: { provider: "openai-codex", replacementHistory: [{}] } },
+		};
+		const u3 = createMessageEntry(createUserMessage("post-compaction continuation"));
+
+		const loaded = buildSessionContext([u1, a1, u2, legacyCompaction, u3]);
+		const contextText = JSON.stringify(loaded.messages);
+
+		expect(loaded.messages.map(message => message.role)).toEqual(["user", "assistant", "user", "user"]);
+		expect(contextText).toContain("pre-compaction user evidence");
+		expect(contextText).toContain("pre-compaction assistant evidence");
+		expect(contextText).toContain("post-compaction continuation");
+		expect(contextText).not.toContain("Remote compaction preserved provider-native history");
+	});
+
+	// The removed image-archive engine stored the full source under `text`
+	// alongside its (now-defunct) image frames. On rebuild that source must be
+	// recovered as a single text block and the frames must NEVER rehydrate as
+	// images — recovering the text is lossless, and re-imaging old frames is the
+	// oversized-payload hazard the removal eliminated.
+	it("recovers a legacy frame archive as a compaction summary text block, never as images", () => {
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const frame = { data: "ZmFrZQ==", mimeType: "image/png", cols: 64, rows: 40, chars: 4 };
+		const compaction: CompactionEntry = {
+			...createCompactionEntry("Filmed summary", u2.id),
+			preserveData: {
+				snapcompact: { frames: [frame], totalChars: 12, truncatedChars: 0, text: "Archived body" },
+			},
+		};
+		const u3 = createMessageEntry(createUserMessage("3"));
+
+		const loaded = buildSessionContext([u1, a1, u2, compaction, u3]);
+		const summaryMessage = loaded.messages[0] as {
+			role: string;
+			images?: unknown;
+			blocks?: Array<{ type: string; text?: string }>;
+		};
+		expect(summaryMessage.role).toBe("compactionSummary");
+		expect(summaryMessage.images ?? []).toEqual([]);
+		expect(summaryMessage.blocks?.every(block => block.type === "text")).toBe(true);
+		expect(summaryMessage.blocks?.map(block => block.text ?? "").join("")).toContain("Archived body");
+	});
+
+	it("transcript option keeps full history with every compaction inline at its position", () => {
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const compact1 = createCompactionEntry("First summary", u1.id);
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const frame = { data: "ZmFrZQ==", mimeType: "image/png", cols: 64, rows: 40, chars: 4 };
+		const compact2: CompactionEntry = {
+			...createCompactionEntry("Second summary", u2.id),
+			preserveData: {
+				snapcompact: { frames: [frame], totalChars: 12, truncatedChars: 0, text: "Archived body" },
+			},
+		};
+		const u3 = createMessageEntry(createUserMessage("3"));
+		const entries: SessionEntry[] = [u1, a1, compact1, u2, compact2, u3];
+
+		const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
+		// Nothing erased: every message survives, compactions sit where they fired.
+		expect(transcript.messages.map(m => m.role)).toEqual([
+			"user",
+			"assistant",
+			"compactionSummary",
+			"user",
+			"compactionSummary",
+			"user",
+		]);
+		const first = transcript.messages[2] as { summary: string };
+		const second = transcript.messages[4] as {
+			summary: string;
+			images?: unknown;
+			blocks?: Array<{ type: string; text?: string }>;
+		};
+		expect(first.summary).toContain("First summary");
+		expect(second.summary).toContain("Second summary");
+		// A legacy frame archive rides along in the transcript as recovered text, never as images.
+		expect(second.images ?? []).toEqual([]);
+		expect(second.blocks?.map(block => block.text ?? "").join("")).toContain("Archived body");
+
+		// LLM context is untouched by the option: latest compaction replaces history.
+		const llm = buildSessionContext(entries);
+		expect(llm.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "user"]);
+	});
+
+	it("transcript collapse option elides compacted display history", () => {
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const compact1 = createCompactionEntry("First summary", u1.id);
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const compact2 = createCompactionEntry("Second summary", u2.id);
+		const u3 = createMessageEntry(createUserMessage("3"));
+		const entries: SessionEntry[] = [u1, a1, compact1, u2, compact2, u3];
+
+		const transcript = buildSessionContext(entries, undefined, undefined, {
+			transcript: true,
+			collapseCompactedHistory: true,
+		});
+
+		expect(transcript.messages.map(m => m.role)).toEqual(["user", "compactionSummary", "user"]);
+		const summaryMsg = transcript.messages[1];
+		if (summaryMsg?.role !== "compactionSummary") throw new Error("Expected compaction summary at index 1");
+		expect(summaryMsg.summary).toContain("Second summary");
+		expect(transcript.cacheMissExplainedAt).toEqual([false, false, false]);
+	});
+
+	it("replays original turns when collapsing an unusable legacy provider compaction", () => {
+		const uOld = createMessageEntry(createUserMessage("old-before-keep"));
+		const uKept = createMessageEntry(createUserMessage("kept-user"));
+		const aKept = createMessageEntry(createAssistantMessage("kept-assistant"));
+		const compaction = createCompactionEntry("Remote summary", uKept.id);
+		compaction.preserveData = {
+			openaiRemoteCompaction: {
+				provider: "openai",
+				replacementHistory: [
+					{ type: "message", role: "user", content: [{ type: "input_text", text: "preserved" }] },
+					{ type: "compaction", encrypted_content: "enc" },
+				],
+				compactionItem: { type: "compaction", encrypted_content: "enc" },
+			},
+		};
+		const uAfter = createMessageEntry(createUserMessage("after-compact"));
+		const entries: SessionEntry[] = [uOld, uKept, aKept, compaction, uAfter];
+
+		const transcript = buildSessionContext(entries, undefined, undefined, {
+			transcript: true,
+			collapseCompactedHistory: true,
+		});
+
+		// The encrypted provider payload is unusable. Even collapsed resume must
+		// recover every original row and omit the placeholder summary.
+		expect(transcript.messages.map(m => m.role)).toEqual(["user", "user", "assistant", "user"]);
+		const dump = JSON.stringify(transcript.messages);
+		expect(dump).toContain("old-before-keep");
+		expect(dump).not.toContain("Remote summary");
+		expect(dump).toContain("kept-user");
+		expect(dump).toContain("kept-assistant");
+		expect(dump).toContain("after-compact");
+	});
+
+	it("should handle multiple compactions (only latest matters)", () => {
+		// First batch
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const compact1 = createCompactionEntry("First summary", u1.id);
+		// Second batch
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const b = createMessageEntry(createAssistantMessage("b"));
+		const u3 = createMessageEntry(createUserMessage("3"));
+		const c = createMessageEntry(createAssistantMessage("c"));
+		const compact2 = createCompactionEntry("Second summary", u3.id); // keep from u3 onwards
+		// After second compaction
+		const u4 = createMessageEntry(createUserMessage("4"));
+		const d = createMessageEntry(createAssistantMessage("d"));
+
+		const entries: SessionEntry[] = [u1, a1, compact1, u2, b, u3, c, compact2, u4, d];
+
+		const loaded = buildSessionContext(entries);
+		// summary + kept from u3 (u3, c) + after (u4, d) = 5
+		expect(loaded.messages.length).toBe(5);
+		expect((loaded.messages[0] as any).summary).toContain("Second summary");
+	});
+
+	it("should keep all messages when firstKeptEntryId is first entry", () => {
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const compact1 = createCompactionEntry("First summary", u1.id); // keep from first entry
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const b = createMessageEntry(createAssistantMessage("b"));
+
+		const entries: SessionEntry[] = [u1, a1, compact1, u2, b];
+
+		const loaded = buildSessionContext(entries);
+		// summary + all messages (u1, a1, u2, b) = 5
+		expect(loaded.messages.length).toBe(5);
+	});
+
+	it("should track model and thinking level changes", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("1")),
+			createModelChangeEntry("openai", "gpt-4"),
+			createMessageEntry(createAssistantMessage("a")),
+			createThinkingLevelEntry("high"),
+		];
+
+		const loaded = buildSessionContext(entries);
+		// Issue #849: explicit model_change wins over assistant-message inference.
+		expect(loaded.models.default).toBe("openai/gpt-4");
+		expect(loaded.thinkingLevel).toBe("high");
+	});
+});
+
+// ============================================================================
+// Integration tests over a full-size session
+// ============================================================================
+
+describe("Large session", () => {
+	it("should find cut point in large session", async () => {
+		const entries = buildLargeSessionEntries();
+		const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
+
+		// Interior, or the assertions below hold for free: index 0 is a user
+		// message in any session, so a cut point that never moved would pass the
+		// role check while proving nothing.
+		expect(result.firstKeptEntryIndex).toBeGreaterThan(0);
+		expect(result.firstKeptEntryIndex).toBeLessThan(entries.length - 1);
+
+		// Cut point should be at a message entry (user or assistant)
+		expect(entries[result.firstKeptEntryIndex].type).toBe("message");
+		const role = (entries[result.firstKeptEntryIndex] as SessionMessageEntry).message.role;
+		expect(role === "user" || role === "assistant").toBe(true);
+
+		// A cut that lands between a tool call and its result would resume a
+		// session whose first kept entry answers a call that is no longer there.
+		const kept = entries.slice(result.firstKeptEntryIndex);
+		const offered = new Set<string>();
+		for (const entry of kept) {
+			if (entry.type !== "message") continue;
+			const msg = (entry as SessionMessageEntry).message;
+			if (msg.role === "assistant") {
+				for (const block of msg.content) if (block.type === "toolCall") offered.add(block.id);
+			} else if (msg.role === "toolResult") {
+				expect(offered.has(msg.toolCallId)).toBe(true);
+			}
+		}
+	});
+});
+
+// ============================================================================
+// LLM integration tests (skipped without API key)
+// ============================================================================
+
+describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("LLM summarization", () => {
+	it("should produce valid session after compaction", async () => {
+		const entries = buildLargeSessionEntries();
+		const loaded = buildSessionContext(entries);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+
+		const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
+		expect(preparation).toBeDefined();
+
+		const compactionResult = await compact(preparation!, model, e2eApiKey("ANTHROPIC_API_KEY")!);
+
+		// Simulate appending compaction to entries by creating a proper entry
+		const lastEntry = entries[entries.length - 1];
+		const parentId = lastEntry.id;
+		const compactionEntry: CompactionEntry = {
+			type: "compaction",
+			id: "compaction-test-id",
+			parentId,
+			timestamp: new Date().toISOString(),
+			...compactionResult,
+		};
+		const newEntries = [...entries, compactionEntry];
+		const reloaded = buildSessionContext(newEntries);
+
+		// Should have summary + kept messages
+		expect(reloaded.messages.length).toBeLessThan(loaded.messages.length);
+		expect(reloaded.messages[0].role).toBe("compactionSummary");
+		expect((reloaded.messages[0] as any).summary).toContain(compactionResult.summary);
+
+		console.log("Original messages:", loaded.messages.length);
+		console.log("After compaction:", reloaded.messages.length);
+	}, 60000);
+});

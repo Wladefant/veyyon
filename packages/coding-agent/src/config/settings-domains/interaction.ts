@@ -1,0 +1,675 @@
+import { DEFAULT_RELAY_URL, DEFAULT_SHARE_URL } from "@veyyon/wire";
+import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../../speech/stt/models";
+import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../../speech/stt/submit-trigger";
+
+/** Interaction domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
+export const INTERACTION_SETTINGS = {
+	// ────────────────────────────────────────────────────────────────────────
+	// Interaction
+	// ────────────────────────────────────────────────────────────────────────
+
+	// Conversation flow
+	steeringMode: {
+		type: "enum",
+		values: ["all", "one-at-a-time"] as const,
+		default: "one-at-a-time",
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Steering Mode",
+			description: "How to process queued messages while agent is working",
+		},
+	},
+
+	followUpMode: {
+		type: "enum",
+		values: ["all", "one-at-a-time"] as const,
+		default: "one-at-a-time",
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Follow-Up Mode",
+			description: "How to drain follow-up messages after a turn completes",
+		},
+	},
+
+	interruptMode: {
+		type: "enum",
+		values: ["immediate", "wait"] as const,
+		default: "immediate",
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Interrupt Mode",
+			description: "When steering messages interrupt tool execution",
+		},
+	},
+
+	"loop.mode": {
+		type: "enum",
+		values: ["prompt", "compact", "reset"] as const,
+		default: "prompt",
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Loop Mode",
+			description: "What happens between /loop iterations before re-submitting the prompt",
+			options: [
+				{
+					value: "prompt",
+					label: "Prompt",
+					description: "Re-submit the prompt as a follow-up message (current behavior)",
+				},
+				{
+					value: "compact",
+					label: "Compact",
+					description: "Compact the session context, then re-submit the prompt",
+				},
+				{ value: "reset", label: "Reset", description: "Start a new session, then re-submit the prompt" },
+			],
+		},
+	},
+
+	// Input and startup
+	doubleEscapeAction: {
+		type: "enum",
+		values: ["branch", "tree", "none"] as const,
+		default: "tree",
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Double-Escape Action",
+			description: "Action when pressing Escape twice with empty editor",
+		},
+	},
+
+	treeFilterMode: {
+		type: "enum",
+		values: ["default", "no-tools", "user-only", "labeled-only", "all"] as const,
+		default: "default",
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Session Tree Filter",
+			description: "Default filter mode when opening the session tree",
+		},
+	},
+
+	autocompleteMaxVisible: {
+		type: "number",
+		default: 5,
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Autocomplete Items",
+			description: "Max visible items in autocomplete dropdown (3-20)",
+			options: [
+				{ value: "3", label: "3 items" },
+				{ value: "5", label: "5 items" },
+				{ value: "7", label: "7 items" },
+				{ value: "10", label: "10 items" },
+				{ value: "15", label: "15 items" },
+				{ value: "20", label: "20 items" },
+			],
+		},
+	},
+
+	emojiAutocomplete: {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Emoji Autocomplete",
+			description: "Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`",
+		},
+	},
+
+	"paste.largeMenuThreshold": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Large Paste Menu",
+			description:
+				"When a paste reaches this many lines, offer a menu to wrap it in a code block, wrap it in XML tags, or save it to a file. 0 disables the menu (large pastes still collapse to a [Paste] marker).",
+			options: [
+				{ value: "0", label: "Off" },
+				{ value: "100", label: "100 lines" },
+				{ value: "250", label: "250 lines" },
+				{ value: "500", label: "500 lines" },
+				{ value: "1000", label: "1000 lines" },
+			],
+		},
+	},
+
+	"composer.predictions.mode": {
+		type: "enum",
+		values: ["off", "chatgpt-pro", "custom"] as const,
+		default: "off",
+		ui: {
+			tab: "interaction",
+			group: "Composer Predictions",
+			label: "Suggest Next Message",
+			description:
+				"After each turn, suggest the message you are likely to send next as dim text in the empty composer. Tab inserts it; typing replaces it. Nothing is sent without Enter.",
+			options: [
+				{ value: "off", label: "Off", description: "No predictions." },
+				{
+					value: "chatgpt-pro",
+					label: "ChatGPT Pro included",
+					description:
+						"The ChatGPT Codex prediction service on GPT-6 Astra or GPT-6.1 Sol, sent with a linked OpenAI Codex account on a ChatGPT Pro plan. OpenAI states that predictions in its Codex app use no Codex usage limits or credits during the beta; that statement does not cover Veyyon, and these requests may count against the account's limits. Without a Pro account, or when an API key replaces the Codex login, no prediction is requested.",
+				},
+				{
+					value: "custom",
+					label: "Custom (choose model)",
+					description: "Predictions from the model chosen in Prediction Model, from any provider.",
+				},
+			],
+		},
+	},
+
+	"composer.predictions.model": {
+		type: "modelChain",
+		default: undefined,
+		ui: {
+			tab: "interaction",
+			group: "Composer Predictions",
+			label: "Prediction Model",
+			description:
+				"Models that write predictions in Custom mode, from any provider, tried in order: the first one with credentials is used. A :level suffix sets its thinking level. Inherit: the session's model.",
+			condition: "composerPredictionsCustom",
+		},
+	},
+
+	"startup.quiet": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Quiet Startup",
+			description: "Skip welcome screen and startup status messages",
+		},
+	},
+
+	"startup.showSplash": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Show Startup Splash",
+			description:
+				"Show the full animated setup splash on normal interactive startup without rerunning setup. Quiet Startup still suppresses it.",
+		},
+	},
+
+	// Off by default on purpose. The on state emits ED 3, which erases the
+	// terminal's saved scrollback: not just what veyyon drew, but the shell
+	// history and command output that were there before launch, with no undo.
+	// A cleared viewport is enough for the welcome frame to look right, and the
+	// first paint already does that (ED 2) whatever this is set to.
+	"startup.clearScrollback": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Clear Scrollback on Startup",
+			description:
+				"Erase the terminal's saved scrollback when veyyon starts, so the session begins on an empty terminal. This also erases what was on screen before you launched, such as your shell history and any command output, and it cannot be undone. Off still starts you on a clear screen; it just leaves your history reachable by scrolling up.",
+		},
+	},
+
+	"startup.setupWizard": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Setup Wizard",
+			description: "Run onboarding on first install only (updates never re-run it)",
+		},
+	},
+
+	"startup.checkUpdate": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Check for Updates",
+			description: "Check for Veyyon updates on startup",
+		},
+	},
+
+	"marketplace.autoUpdate": {
+		type: "enum",
+		values: ["off", "notify", "auto"] as const,
+		default: "notify",
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Marketplace Auto-Update",
+			description: "Check for plugin updates on startup",
+			options: [
+				{ value: "off", label: "Off", description: "Don't check for plugin updates" },
+				{ value: "notify", label: "Notify", description: "Check on startup and notify when updates are available" },
+				{ value: "auto", label: "Auto", description: "Check on startup and auto-install updates" },
+			],
+		},
+	},
+
+	// Depends on startup.checkUpdate: the check is what finds the release to
+	// install, so turning the check off turns automatic updating off with it.
+	"startup.autoUpdate": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Automatic Updates",
+			// The off state is spelled out because the setting reads as "updates
+			// on/off" otherwise, and somebody who wants to stop updates landing on
+			// their own needs to know they still get them on demand rather than
+			// being stranded on whatever version they are on.
+			description: "Install a newer version in the background; off means updates only when you run `veyyon update`",
+		},
+	},
+
+	"updates.auto": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Automatic Updates (updates.auto)",
+			description: "Install a newer version in the background; off means updates only when you run `veyyon update`",
+		},
+	},
+
+	"startup.updateNotice": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Update Notice",
+			description: "Show a one-line notice on the first launch after an update",
+		},
+	},
+
+	"magicKeywords.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Magic Keywords",
+			label: "Enable Magic Keywords",
+			description: "Enable hidden notices for standalone ultrathink, orchestratez, and workflowz keywords",
+		},
+	},
+
+	"magicKeywords.ultrathink": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Magic Keywords",
+			label: "Ultrathink Keyword",
+			description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
+		},
+	},
+
+	"magicKeywords.orchestrate": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Magic Keywords",
+			label: "Orchestrate Keyword",
+			description: "Let standalone orchestratez append its hidden multi-agent orchestration notice",
+		},
+	},
+
+	"magicKeywords.workflow": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Magic Keywords",
+			label: "Workflow Keyword",
+			description: "Let standalone workflowz append its hidden eval workflow notice",
+		},
+	},
+
+	"magicKeywords.turnBudget": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Magic Keywords",
+			label: "Turn Budget Directive",
+			description:
+				"Let a standalone +500k or +2m set this turn's output-token budget; when off, +Nk in a message is treated as ordinary text",
+		},
+	},
+
+	// Notifications.
+	//
+	// The two are not the same kind of event, and they no longer default the same way. A toast is an
+	// interruption, so it is worth one only when the session cannot continue without the operator.
+	// Both shipped on, and completion fired at the end of EVERY turn, dozens per session, announcing
+	// what was already on the screen in front of whoever was watching it.
+	"completion.notify": {
+		type: "enum",
+		values: ["on", "off"] as const,
+		default: "off",
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Completion Notification",
+			description: "Notify when the agent finishes a turn.",
+		},
+	},
+
+	"ask.timeout": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Ask Timeout",
+			description: "Auto-select the recommended ask option after this many seconds (0 disables)",
+			options: [
+				{ value: "0", label: "Disabled" },
+				{ value: "15", label: "15 seconds" },
+				{ value: "30", label: "30 seconds" },
+				{ value: "60", label: "60 seconds" },
+				{ value: "120", label: "120 seconds" },
+			],
+		},
+	},
+
+	"ask.notify": {
+		type: "enum",
+		values: ["on", "off"] as const,
+		// ON, and the one notification that earns it: the turn has stopped and will not continue until
+		// the operator answers. Nothing else in the session is waiting on them like this, and the
+		// window-focus gate already withholds it while they are looking at the terminal, so it can only
+		// arrive when they are somewhere else.
+		default: "on",
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Ask Notification",
+			description: "Notify when the agent is blocked on a question you have not answered",
+		},
+	},
+
+	// The desktop window announces a refusal or a waiting decision on its own
+	// stack, which is silent and inside the window. These two say what else
+	// that announcement does: a sound, and a notification the desktop itself
+	// draws. Both default off, because an announcement the operator is
+	// already looking at needs neither.
+	"notify.sound": {
+		type: "enum",
+		values: ["on", "off"] as const,
+		default: "off",
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Announcement Sound",
+			description: "Play the desktop alert sound when the window announces something",
+		},
+	},
+
+	"notify.system": {
+		type: "enum",
+		values: ["on", "off"] as const,
+		default: "off",
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "System Notification",
+			description: "Post an announcement to the desktop notification service as well as the window",
+		},
+	},
+
+	"recap.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Idle Recap",
+			description: "Generate a brief LLM recap of where things stand after the terminal has been idle",
+		},
+	},
+
+	"recap.idleSeconds": {
+		type: "number",
+		default: 240,
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Idle Recap Delay",
+			description: "Seconds to wait while idle before showing the recap",
+			options: [
+				{ value: "60", label: "1 minute" },
+				{ value: "120", label: "2 minutes" },
+				{ value: "240", label: "4 minutes" },
+				{ value: "300", label: "5 minutes" },
+				{ value: "600", label: "10 minutes" },
+			],
+		},
+	},
+
+	// Collab
+	"collab.relayUrl": {
+		type: "string",
+		default: DEFAULT_RELAY_URL,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Relay URL",
+			description: "Relay used by /collab (wss://host[:port])",
+		},
+	},
+
+	"collab.webUrl": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Web UI URL",
+			description:
+				"Browser UI used by /collab links; empty derives from collab.relayUrl; explicit http:// is localhost-only",
+		},
+	},
+
+	"collab.displayName": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Display Name",
+			description: "Name shown to other collab participants (default: OS username)",
+		},
+	},
+
+	"profile.displayName": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "interaction",
+			group: "Profile",
+			label: "Profile Name",
+			description:
+				'Display name for the active profile, shown in /profile list and resolvable by /profile <name>. Stored per profile; empty falls back to the profile\'s directory name ("default" for the base profile).',
+		},
+	},
+	"session.workdir": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "interaction",
+			group: "Profile",
+			label: "Default Working Directory",
+			description:
+				"Working directory a session starts in when --cwd is not given. --cwd takes precedence, then this setting, then the directory the command was run from. Absolute or ~-relative; a relative path or a missing directory fails the launch. set_cwd and /cwd change the directory for one session without writing this.",
+		},
+	},
+
+	/**
+	 * What `/new` does to a turn that is still streaming.
+	 *
+	 * Two outcomes, and the difference is money: keeping the old conversation
+	 * alive finishes work that would otherwise be thrown away mid-turn, and it
+	 * also keeps spending tokens on a screen nobody is reading. Both are
+	 * defensible, so this states which one happens rather than leaving it to
+	 * whether a turn happened to be in flight.
+	 *
+	 * Default is `false`: `/new` stops the old turn and closes its provider
+	 * stream. A conversation that leaves the screen stops costing money, which
+	 * is what an operator reaching for a clean prompt expects, and it is the
+	 * behavior `/new` had before a background conversation was possible at all.
+	 * Turning it on keeps the old turn running and is the deliberate choice:
+	 * the status line counts the background conversation, which is the only
+	 * surface it has.
+	 *
+	 * A change takes effect on the next launch, not in the running session, so
+	 * the description says so rather than letting the next `/new` disagree with
+	 * the value on screen (issue #928).
+	 */
+	"session.newKeepsBackground": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Session",
+			label: "/new Keeps The Old Session",
+			description:
+				"What /new does while a response is still streaming. On: the old conversation keeps running in the background and the screen attaches to a new one; the status line counts background conversations. Off: the old turn is stopped and its provider stream closed before the new session starts. Takes effect at the next start.",
+		},
+	},
+
+	"session.backgroundLimit": {
+		type: "number",
+		default: 3,
+		ui: {
+			tab: "interaction",
+			group: "Session",
+			label: "Background Session Limit",
+			description:
+				"Most conversations this process keeps running in the background at once (1-20), whether /new, an RPC new_session with background, or the ACP _veyyon/sessions/background method moved them there. A handoff past the limit stops the oldest background conversation and closes its provider stream.",
+			min: 1,
+			max: 20,
+			options: [
+				{ value: "1", label: "1 conversation" },
+				{ value: "2", label: "2 conversations" },
+				{ value: "3", label: "3 conversations" },
+				{ value: "5", label: "5 conversations" },
+				{ value: "10", label: "10 conversations" },
+			],
+		},
+	},
+
+	"share.serverUrl": {
+		type: "string",
+		default: DEFAULT_SHARE_URL,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Share Server",
+			description:
+				"Share viewer/upload base used by /share (encrypted blob upload + viewer; links are <base>/<id>#<key>)",
+		},
+	},
+
+	"share.store": {
+		type: "enum",
+		values: ["blob", "gist"] as const,
+		default: "blob",
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Share Store",
+			description: "Where /share uploads the encrypted session blob",
+			options: [
+				{
+					value: "blob",
+					label: "Encrypted Blob",
+					description: "Upload to the share server (no GitHub account needed; avoids gist API rate limits)",
+				},
+				{
+					value: "gist",
+					label: "GitHub Gist",
+					description: "Push to a secret gist (needs authenticated gh), falling back to the share server",
+				},
+			],
+		},
+	},
+
+	"share.redactSecrets": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Share Secret Redaction",
+			description: "Run the secret obfuscator over /share snapshots before upload (uses the secrets.* config)",
+		},
+	},
+
+	// Speech-to-text
+	"stt.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Speech",
+			label: "Speech-to-Text",
+			description: "Enable speech-to-text input via microphone",
+		},
+	},
+
+	"stt.language": {
+		type: "string",
+		default: "en",
+	},
+
+	"stt.modelName": {
+		type: "enum",
+		values: STT_MODEL_VALUES,
+		default: DEFAULT_STT_MODEL_KEY,
+		ui: {
+			tab: "interaction",
+			group: "Speech",
+			label: "Speech Model",
+			description:
+				"Local on-device speech model. Parakeet TDT v3 (sherpa-onnx) is the SoTA default; Whisper base/small/large-v3-turbo tiers (transformers.js) trade size for multilingual coverage. Downloaded on first use.",
+			options: STT_MODEL_OPTIONS,
+			condition: "sttEnabled",
+		},
+	},
+	"stt.submitTrigger": {
+		type: "enum",
+		values: STT_SUBMIT_TRIGGER_VALUES,
+		default: "never",
+		ui: {
+			tab: "interaction",
+			group: "Speech",
+			label: "Speech-to-Text Submit Trigger",
+			description:
+				"Choose when speech dictation automatically submits: Never, Release (2+ words), Release with complete sentence, or When I Say Submit.",
+			options: STT_SUBMIT_TRIGGER_OPTIONS,
+			condition: "sttEnabled",
+		},
+	},
+} as const;

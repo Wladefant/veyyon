@@ -1,0 +1,226 @@
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
+import {
+	MCP_CONNECTION_STATUS_EVENT_CHANNEL,
+	type McpConnectionStatusEvent,
+} from "@veyyon/coding-agent/mcp/startup-events";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
+import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { logger, TempDir } from "@veyyon/utils";
+
+const MCP_FIXTURE = path.join(import.meta.dirname, "fixtures", "many-tools-mcp.ts");
+
+/**
+ * Behavioral wiring guard for MCP startup status (mirrors
+ * interactive-mode-lsp-startup.test.ts). The SDK emits connection lifecycle
+ * events, and InteractiveMode renders boot health in the location line's right
+ * zone — a quiet fixed home, not a floating transcript status. This pins the
+ * constructor-time subscription and the zone's update path as servers connect
+ * and fail.
+ */
+
+/** MCP boot health lives at the right edge of the composer's one metadata
+ * footline (the location line merged into it in the composer redesign). */
+function locationText(mode: InteractiveMode): string {
+	return stripVTControlCharacters(mode.capabilityLine.render(140).join("\n"));
+}
+describe("InteractiveMode MCP connection status", () => {
+	let authStorage: AuthStorage;
+	let eventBus: EventBus;
+	let mode: InteractiveMode;
+	let session: AgentSession;
+	let tempDir: TempDir;
+
+	beforeAll(() => {
+		initTheme();
+	});
+
+	beforeEach(async () => {
+		// Keep ProcessTerminal.start() from probing the real terminal; the test
+		// only drives the event bus and spies on showStatus.
+		vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
+		if (typeof process.stdin.setRawMode === "function") {
+			vi.spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
+		}
+
+		resetSettingsForTest();
+		tempDir = TempDir.createSync("@pi-interactive-mode-mcp-connecting-");
+		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		// The footline ships on (`statusLine.enabled`, see `the-composer-footline-ships-on.test.ts`),
+		// and the MCP boot-health zone lives on it. Set explicitly: this suite is about what the zone
+		// says once there is a row to say it on.
+		await Settings.instance.set("statusLine.enabled", true);
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!model) {
+			throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+		}
+
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated(),
+			modelRegistry,
+		});
+		eventBus = new EventBus();
+		mode = new InteractiveMode(session, "test", () => {}, [], undefined, eventBus);
+		// This contract is the banner wiring, not git branch watching; a real
+		// fs.watch in a parallel Bun worker can trip an unrelated-worker SIGTRAP.
+		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
+	});
+
+	afterEach(async () => {
+		mode?.stop();
+		vi.restoreAllMocks();
+		await session?.dispose();
+		authStorage?.close();
+		tempDir?.removeSync();
+		resetSettingsForTest();
+	});
+
+	it("routes a mcp:connection-status event through the constructor-registered subscriber, before init()", () => {
+		eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, {
+			type: "connecting",
+			serverNames: ["sequential", "critic", "shannon"],
+		} satisfies McpConnectionStatusEvent);
+
+		expect(locationText(mode)).toContain("mcp 0/3");
+	});
+
+	it("does not surface MCP boot health when startup.quiet is enabled", () => {
+		session.settings.set("startup.quiet", true);
+
+		eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, {
+			type: "connecting",
+			serverNames: ["sequential", "critic"],
+		} satisfies McpConnectionStatusEvent);
+
+		// Assert the absence of the boot-health *status token* (`mcp 0/2`), not the
+		// bare substring "mcp": the tempDir prefix above ("…-mcp-connecting-…") puts
+		// "mcp" into the cwd the location line always renders, so `not.toContain("mcp")`
+		// can never hold. The status token is what quiet mode must suppress.
+		expect(locationText(mode)).not.toContain("mcp 0/2");
+	});
+
+	it("updates the zone as servers connect and fail, ending on a failure count", () => {
+		const emit = (event: McpConnectionStatusEvent) => eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, event);
+
+		emit({ type: "connecting", serverNames: ["alpha", "broken", "slow"] });
+		expect(locationText(mode)).toContain("mcp 0/3");
+		emit({ type: "connected", serverName: "alpha" });
+		expect(locationText(mode)).toContain("mcp 1/3");
+		emit({ type: "failed", serverName: "broken", error: "missing command" });
+		emit({ type: "connected", serverName: "slow" });
+
+		// Settled with one failure: a loud-enough count plus the detail pointer.
+		// The raw error text never reaches the zone — it lives in `/mcp list`.
+		// The cross routes through `theme.status.error` (not a raw `✗` literal), so
+		// it degrades with the symbol preset instead of emitting a glyph an ascii
+		// terminal cannot render; build the expected token from the symbol to prove
+		// the routing rather than hardcode the unicode glyph.
+		const text = locationText(mode);
+		expect(text).toContain(`mcp ${theme.status.error}1 · /mcp list`);
+		expect(text).not.toContain("missing command");
+	});
+
+	it("retries one server without erasing other startup outcomes", () => {
+		const emit = (event: McpConnectionStatusEvent) => eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, event);
+
+		emit({
+			type: "connecting",
+			serverNames: ["alpha", "retry", "broken"],
+		});
+		expect(locationText(mode)).toContain("mcp 0/3");
+
+		emit({
+			type: "connected",
+			serverName: "alpha",
+		});
+		expect(locationText(mode)).toContain("mcp 1/3");
+
+		emit({
+			type: "failed",
+			serverName: "broken",
+			error: "bad config",
+		});
+		expect(locationText(mode)).toContain("mcp 1/3");
+
+		emit({
+			type: "failed",
+			serverName: "retry",
+			error: "timed out",
+		});
+		expect(locationText(mode)).toContain(`mcp ${theme.status.error}2 · /mcp list`);
+
+		emit({
+			type: "reconnecting",
+			serverName: "retry",
+		});
+		expect(locationText(mode)).toContain("mcp 1/3");
+
+		emit({
+			type: "connected",
+			serverName: "retry",
+		});
+		expect(locationText(mode)).toContain(`mcp ${theme.status.error}1 · /mcp list`);
+	});
+
+	it("rejects a malformed mcp:connection-status payload via the guard instead of letting it throw", () => {
+		const showStatusSpy = vi.spyOn(mode, "showStatus").mockImplementation(() => {});
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+		eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, { wrong: "shape" });
+
+		expect(showStatusSpy).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalled();
+		expect(errorSpy).not.toHaveBeenCalled();
+	});
+
+	it("repaints the zone when a live transport drops, with no bus event behind it", async () => {
+		// A real manager and a real stdio server: the drop lands long after the startup
+		// `onStatus` callback returned, so nothing on the bus carries it and only the
+		// manager's own subscription can reach this mode.
+		const manager = new MCPManager(tempDir.path());
+		const live = new InteractiveMode(session, "test", () => {}, [], manager, eventBus);
+		vi.spyOn(live.statusLine, "watchGitState").mockImplementation(() => {});
+		const paint = vi.spyOn(live.ui, "requestRender").mockImplementation(() => {});
+		try {
+			await manager.connectServers({ alpha: { type: "stdio", command: process.execPath, args: [MCP_FIXTURE] } }, {});
+			// The connect itself answers on the startup `onStatus` callback, which this
+			// mode never sees: nothing to paint.
+			await manager.waitForConnection("alpha");
+			paint.mockClear();
+
+			// `onClose` reports the drop synchronously, before the reconnect starts, so the
+			// pending verdict is on screen the moment the wire is gone. Which text the
+			// handler leaves in the zone is pinned by the bus cases above — one handler,
+			// and this case proves the manager's own transitions reach it.
+			manager.getConnection("alpha")?.transport.onClose?.();
+			expect(paint.mock.calls).toHaveLength(1);
+		} finally {
+			live.stop();
+			await manager.disconnectAll();
+		}
+	}, 30_000);
+});

@@ -1,0 +1,315 @@
+import { describe, expect, it } from "bun:test";
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
+import { type Args, parseArgs } from "../src/cli/args";
+import {
+	BOOLEAN_FLAGS,
+	flagConsumesValue,
+	isUnknownLongValueCandidate,
+	MODE_VALUES,
+	OPTIONAL_VALUE_FLAGS,
+	STRING_VALUE_FLAGS,
+} from "../src/cli/flag-tables";
+import { CLI_THINKING_LEVELS } from "../src/thinking";
+import { APPROVAL_MODE_VALUES } from "../src/tools/core/approval-modes";
+import { BUILTIN_TOOL_NAMES } from "../src/tools/core/builtin-names";
+
+/**
+ * Catches the set → args.ts direction of drift between
+ * `cli/flag-tables.ts` and `cli/args.ts`:
+ *
+ * - If `STRING_VALUE_FLAGS` claims a flag consumes a value but
+ *   `parseArgs` treats it as boolean (or doesn't handle it), then
+ *   `<flag> --profile work` would leave `--profile` standing — and
+ *   parseArgs would activate the profile branch. We assert
+ *   `result.profile` is undefined: the only way that's true is if the
+ *   flag actually swallowed `--profile` as its value.
+ *
+ * - If `OPTIONAL_VALUE_FLAGS` claims a flag releases `-`-prefixed
+ *   tokens but `parseArgs` swallows them anyway, then
+ *   `<flag> --profile work` would suppress the profile activation. We
+ *   assert `result.profile === "work"`: the flag must NOT have eaten
+ *   `--profile`, so parseArgs sees and activates it.
+ *
+ * The reverse direction (args.ts handler missing from the set) cannot
+ * be reflected on without parsing args.ts source — it's covered by
+ * per-flag regression tests in `profile-bootstrap.test.ts` and by
+ * user-facing scenarios in `profile-cli.test.ts`.
+ */
+describe("STRING_VALUE_FLAGS table is honored by args.ts parseArgs", () => {
+	for (const flag of STRING_VALUE_FLAGS) {
+		it(`${flag} consumes the next token unconditionally`, () => {
+			try {
+				const result = parseArgs([flag, "--profile", "work"]);
+				expect(
+					result.profile,
+					`parseArgs should treat --profile as the value of ${flag}, not as a profile activation`,
+				).toBeUndefined();
+			} catch (error) {
+				// Value-validating flags (e.g. --max-time) reject "--profile" as their
+				// value; consuming-and-rejecting still proves the flag swallowed the
+				// token instead of activating the profile.
+				expect(error).toBeInstanceOf(CliUsageError);
+			}
+		});
+	}
+});
+
+describe("OPTIONAL_VALUE_FLAGS table is honored by args.ts parseArgs", () => {
+	for (const flag of OPTIONAL_VALUE_FLAGS) {
+		it(`${flag} releases tokens that start with -`, () => {
+			const result = parseArgs([flag, "--profile", "work"]);
+			expect(
+				result.profile,
+				`parseArgs should release --profile back to its own handler when it follows ${flag}`,
+			).toBe("work");
+		});
+	}
+});
+
+/**
+ * `parseArgs` dispatches value-less flags through `BOOLEAN_FLAGS`, the same table the profile
+ * bootstrap reads as `VALUELESS_FLAGS`. Each entry must set its own field, consume nothing, and drop
+ * an `=value` rather than leak it into the prompt. A field name that is not the flag's own name
+ * (an alias) is pinned by exact equality, so a mis-mapped entry or a new alias fails here.
+ */
+describe("BOOLEAN_FLAGS table is honored by args.ts parseArgs", () => {
+	const camel = (flag: string) => flag.replace(/^--/, "").replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+
+	it("maps every flag to the field of its own name, except the pinned aliases", () => {
+		const aliases = Object.fromEntries([...BOOLEAN_FLAGS].filter(([flag, field]) => camel(flag) !== field));
+		expect(aliases).toEqual({
+			"-h": "help",
+			"-v": "version",
+			"-c": "continue",
+			"-p": "print",
+			"--yolo": "autoApprove",
+		});
+	});
+
+	for (const [flag, field] of BOOLEAN_FLAGS) {
+		it(`${flag} sets ${field} alone and leaves its successor to the parser`, () => {
+			const result = parseArgs([flag, "--profile", "work", "hello"]);
+			const set = Object.entries(result).filter(([, value]) => value === true);
+			expect(set).toEqual([[field, true]]);
+			expect(result.profile).toBe("work");
+			expect(result.messages).toEqual(["hello"]);
+			expect(result.unrecognizedFlags).toEqual([]);
+		});
+	}
+
+	for (const flag of [...BOOLEAN_FLAGS.keys()].filter(flag => flag.startsWith("--"))) {
+		it(`${flag}=value drops the value instead of reading it as a message`, () => {
+			const result = parseArgs([`${flag}=stray`, "hello"]);
+			expect(result.messages).toEqual(["hello"]);
+			expect(result.unrecognizedFlags).toEqual([]);
+		});
+	}
+});
+
+describe("--tools argument parsing", () => {
+	it("accepts canonical tool names", () => {
+		const result = parseArgs(["--tools", "search,read"]);
+
+		expect(result.tools).toEqual(["search", "read"]);
+	});
+});
+
+/**
+ * Every enum-valued flag rejects a bad value with a message that NAMES the
+ * accepted set. That message is only useful if the set it prints is the set the
+ * parser will actually take, so this walks each printed value back through the
+ * parser.
+ *
+ * `--thinking` is the reason this exists. Its rejection message lists
+ * `CLI_THINKING_LEVELS` (`[off, auto, ...THINKING_EFFORTS]`), while the value is
+ * validated by `parseCliThinkingLevel` against a separately maintained selector
+ * map. Add a level to `@veyyon/catalog/effort` and it appears in the MESSAGE
+ * without becoming parseable, so the error would confidently advertise a level
+ * the parser refuses. The other three read their list from the same table they
+ * validate against and are here to stay that way.
+ */
+describe("a rejection message only names values the parser accepts", () => {
+	const ACCEPTED_BY_FLAG: Record<string, readonly string[]> = {
+		"--mode": MODE_VALUES,
+		"--approval-mode": APPROVAL_MODE_VALUES,
+		"--thinking": CLI_THINKING_LEVELS,
+		"--tools": BUILTIN_TOOL_NAMES,
+	};
+
+	/**
+	 * Where each flag's value lands, and a value it must always advertise.
+	 *
+	 * WHY the landing site and not just the absence of a throw: a value that
+	 * parses without taking effect is the failure this suite exists to catch. The
+	 * message would name a level the parser silently drops, and the run would go
+	 * ahead on the default while the operator's evidence that the flag worked is
+	 * that they typed it. The canonical member is the non-vacuity guard: an
+	 * advertised set that had gone empty would satisfy the loop below and print
+	 * "Expected one of: ." to the operator.
+	 */
+	const LANDING_BY_FLAG: Record<string, { canonical: string; read: (result: Args, value: string) => unknown }> = {
+		"--mode": { canonical: "text", read: result => result.mode },
+		"--approval-mode": { canonical: "ask", read: result => result.approvalMode },
+		"--thinking": { canonical: "off", read: result => result.thinking },
+		"--tools": { canonical: "read", read: result => result.tools?.join(",") },
+	};
+
+	for (const [flag, accepted] of Object.entries(ACCEPTED_BY_FLAG)) {
+		const { canonical, read } = LANDING_BY_FLAG[flag]!;
+
+		it(`accepts every value ${flag} advertises, and keeps it`, () => {
+			expect(accepted).toContain(canonical);
+			for (const value of accepted) {
+				expect(read(parseArgs([flag, value]), value), `${flag} ${value} must reach the parsed args`).toBe(value);
+			}
+		});
+	}
+
+	it("names the accepted values, and the flag, when it refuses one", () => {
+		expect(() => parseArgs(["--mode", "banana"])).toThrow(CliUsageError);
+		expect(() => parseArgs(["--mode", "banana"])).toThrow(
+			'Invalid --mode value: "banana". Expected one of: text, json, rpc, acp, rpc-ui.',
+		);
+		// Derived, not retyped: the message is built from APPROVAL_MODE_VALUES, so
+		// a literal sentence here would just be a second copy free to drift.
+		expect(() => parseArgs(["--approval-mode", "nonsense"])).toThrow(
+			`Invalid --approval-mode value: "nonsense". Expected one of: ${APPROVAL_MODE_VALUES.join(", ")}.`,
+		);
+		expect(() => parseArgs(["--thinking", "banana"])).toThrow(
+			'Invalid --thinking value: "banana". Expected one of: off, auto, minimal, low, medium, high, xhigh, max.',
+		);
+	});
+
+	/**
+	 * A single typo used to be dropped name-by-name, leaving `tools` EMPTY, so the
+	 * session started with no tools and only the model mentioned it mid-answer.
+	 * `--no-tools` is the way to ask for that.
+	 */
+	it("refuses an unknown --tools name instead of silently emptying the toolset", () => {
+		expect(() => parseArgs(["--tools", "raed"])).toThrow('Unknown tool passed to --tools: "raed"');
+		expect(() => parseArgs(["--tools", "read,raed"])).toThrow('Unknown tool passed to --tools: "raed"');
+		expect(parseArgs(["--tools", "read,bash"]).tools).toEqual(["read", "bash"]);
+	});
+});
+
+describe("OPTIONAL_FLAGS per-flag quirks", () => {
+	it("treats empty string as bare resume for --resume", () => {
+		const result = parseArgs(["--resume", ""]);
+		expect(result.resume).toBe(true);
+		expect(result.messages).toEqual([""]);
+	});
+
+	it("treats empty string as bare resume for -r", () => {
+		const result = parseArgs(["-r", ""]);
+		expect(result.resume).toBe(true);
+		expect(result.messages).toEqual([""]);
+	});
+
+	it("treats empty string as bare resume for --session", () => {
+		const result = parseArgs(["--session", ""]);
+		expect(result.resume).toBe(true);
+		expect(result.messages).toEqual([""]);
+	});
+});
+
+describe("parseArgs end-of-options (--)", () => {
+	it("treats tokens after -- as literal messages, not flags", () => {
+		const result = parseArgs(["--", "--profile", "work"]);
+		expect(result.profile).toBeUndefined();
+		expect(result.messages).toEqual(["--profile", "work"]);
+	});
+
+	it("does not interpret @ args or known value flags after --", () => {
+		const result = parseArgs(["--", "@file.md", "--model", "opus"]);
+		expect(result.model).toBeUndefined();
+		expect(result.fileArgs).toEqual([]);
+		expect(result.messages).toEqual(["@file.md", "--model", "opus"]);
+	});
+
+	it("parses flags before -- and forwards the rest as text", () => {
+		const result = parseArgs(["--print", "hello", "--", "--no-tools"]);
+		expect(result.print).toBe(true);
+		expect(result.noTools).toBeUndefined();
+		expect(result.messages).toEqual(["hello", "--no-tools"]);
+	});
+});
+
+describe("parseArgs @file parsing with quotes", () => {
+	it("parses unquoted @file arguments normally", () => {
+		const result = parseArgs(["@foo.png"]);
+		expect(result.fileArgs).toEqual(["foo.png"]);
+	});
+
+	it('parses double-quoted @"file" arguments', () => {
+		const result = parseArgs(['@"foo bar.png"']);
+		expect(result.fileArgs).toEqual(["foo bar.png"]);
+	});
+
+	it("parses single-quoted @'file' arguments", () => {
+		const result = parseArgs(["@'foo bar.png'"]);
+		expect(result.fileArgs).toEqual(["foo bar.png"]);
+	});
+});
+
+/**
+ * isUnknownLongValueCandidate and flagConsumesValue are the pure predicates that decide, during
+ * the subcommand pre-scan (cli-commands.ts) and the launch parser, whether the next argv token is
+ * swallowed as a flag value. They had no direct test (only the parseArgs integration around them).
+ * These pin the exact value-consumption contract so a refactor of the flag tables cannot silently
+ * change how many tokens a flag eats.
+ */
+describe("isUnknownLongValueCandidate", () => {
+	it("flags only an unrecognized --long option with no inline value", () => {
+		expect(isUnknownLongValueCandidate("--unknown")).toBe(true);
+		expect(isUnknownLongValueCandidate("--k=v")).toBe(false); // inline value
+		expect(isUnknownLongValueCandidate("-x")).toBe(false); // short flag
+	});
+
+	it("excludes every known flag (string, optional, or valueless)", () => {
+		expect(isUnknownLongValueCandidate("--cwd")).toBe(false); // string-value flag
+		expect(isUnknownLongValueCandidate("--resume")).toBe(false); // optional-value flag
+		expect(isUnknownLongValueCandidate("--help")).toBe(false); // valueless flag
+	});
+});
+
+describe("flagConsumesValue", () => {
+	it("never consumes when the flag carries an inline value or there is no next token", () => {
+		expect(flagConsumesValue("--foo=bar", "next")).toBe(false);
+		expect(flagConsumesValue("--cwd", undefined)).toBe(false);
+	});
+
+	it("makes a known string-value flag consume any successor, even a flag-looking one", () => {
+		// `--cwd --foo` => cwd is literally "--foo".
+		expect(flagConsumesValue("--cwd", "--foo")).toBe(true);
+		expect(flagConsumesValue("--cwd", "")).toBe(true); // string flags accept an empty value
+	});
+
+	it("makes an unknown --long flag consume only a value-like successor", () => {
+		expect(flagConsumesValue("--unknown", "value")).toBe(true);
+		expect(flagConsumesValue("--unknown", "--x")).toBe(false);
+	});
+
+	it("makes an optional-value flag consume a value-like non-empty successor only", () => {
+		expect(flagConsumesValue("--resume", "sess-1")).toBe(true);
+		expect(flagConsumesValue("--resume", "--x")).toBe(false); // flag-like
+		expect(flagConsumesValue("--resume", "")).toBe(false); // rejectEmpty
+	});
+
+	it("never consumes for a valueless flag", () => {
+		expect(flagConsumesValue("--help", "value")).toBe(false);
+		expect(flagConsumesValue("--help", "--x")).toBe(false);
+	});
+
+	it("gates --plan (an extension-shadowable string flag) on a value-like successor only", () => {
+		// Locks the fix for FINDING-FLAGCONSUMESVALUE-SHADOWABLE-BRANCH-DEAD. --plan is both a
+		// STRING_SETTERS key and the sole EXTENSION_SHADOWABLE_STRING_FLAGS member; the shadowable
+		// branch is now checked BEFORE the broad STRING_VALUE_FLAGS branch so `--plan opus` consumes
+		// the plan name but `--plan --profile work` leaves `--profile` a fresh flag. This must match
+		// profile-bootstrap's needsBoundaryAfterGlobalStrip: if these two paths ever disagree on
+		// whether --plan swallows a flag-looking successor, subcommand detection and the launch parser
+		// carve argv differently and a profile silently stops being selected.
+		expect(flagConsumesValue("--plan", "myplan")).toBe(true);
+		expect(flagConsumesValue("--plan", "--x")).toBe(false);
+		expect(flagConsumesValue("--plan", "")).toBe(true); // empty is value-like (does not start with "-")
+	});
+});

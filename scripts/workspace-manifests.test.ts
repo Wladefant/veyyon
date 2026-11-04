@@ -1,0 +1,222 @@
+/**
+ * The workspace manifest contract: one version, one pin per shared dependency.
+ *
+ * WHY THIS SUITE EXISTS. Cargo lets a workspace member opt out of
+ * `[workspace.package]` and `[workspace.dependencies]` silently, and three
+ * crates here did: `veyyon-uu-diff`, `veyyon-uu-grep` and `veyyon-uutils-ctx`
+ * carried their own versions (0.8.0 and 0.1.0 against the workspace's 1.0.37),
+ * their own `clap`, `ignore`, `globset`, `libc` and `grep-*` pins, and package
+ * names spelled with underscores while every other crate and every directory
+ * used hyphens. The skew was not theoretical. `veyyon-uu-grep` declared
+ * `serde_json = "1"` where the workspace declares it with `preserve_order`, and
+ * because feature unification depends on which crates are in the build, the JSON
+ * summary record that builtin prints had one key order in a single-crate build
+ * and another in a workspace build.
+ *
+ * A `cargo build` cannot fail on any of that, so these tests read the manifests
+ * as data and assert the contract directly. Each one names the failure it
+ * prevents rather than restating the rule.
+ */
+import { describe, expect, it } from "bun:test";
+import {
+	firstPartyCrateDirs,
+	pinsItsOwnVersion,
+	readCrateManifest,
+	workspaceDependencyNames,
+} from "./workspace-manifests";
+
+/** Crates that shared dependencies with the workspace before they were folded in, by package name. */
+const FOLDED_IN = ["veyyon-uu-diff", "veyyon-uu-grep", "veyyon-uutils-ctx"];
+
+/**
+ * Every first-party crate: the package name cargo resolves, and where the crate sits.
+ *
+ * WHY THIS IS A RECORDED TABLE. The rule used to be a string relation — the package name equals the
+ * directory name — and it held while every crate sat flat under one directory. The Rust tree is now
+ * grouped by purpose, and the grouping took part of each crate's identity into its parent directory:
+ * `veyyon-grep-kernel` is `natives/search/grep-kernel`, and `veyyon-text` is `natives/text/measure`,
+ * where the group holds the word the flat name carried. No string relation covers that set without
+ * either renaming crates or restoring the flat directory names.
+ *
+ * So the mapping is written down and asserted by exact equality in both directions. A crate that
+ * arrives, moves, or is renamed turns this suite red until its row is recorded, which is the property
+ * the old relation gave for free. What it no longer proves is that `cargo test -p <last path segment>`
+ * works: it does not, and the package name is the only spelling cargo accepts.
+ */
+const CRATE_PATHS: ReadonlyMap<string, string> = new Map([
+	["veyyon-ast", "natives/code/ast"],
+	["veyyon-conformance", "tests/conformance"],
+	["veyyon-desktop", "crates/veyyon-desktop"],
+	["veyyon-desktop-kit", "crates/veyyon-desktop-kit"],
+	["veyyon-desktop-model", "crates/veyyon-desktop-model"],
+	["veyyon-desktop-motion", "crates/veyyon-desktop-motion"],
+	["veyyon-desktop-scene", "crates/veyyon-desktop-scene"],
+	["veyyon-desktop-surface", "crates/veyyon-desktop-surface"],
+	["veyyon-desktop-tokens", "crates/veyyon-desktop-tokens"],
+	["veyyon-diff-kernel", "natives/diff/kernel"],
+	["veyyon-glob", "natives/search/glob"],
+	["veyyon-gpui", "crates/veyyon-gpui"],
+	["veyyon-grep-kernel", "natives/search/grep-kernel"],
+	["veyyon-iso", "natives/fs/iso"],
+	["veyyon-keys", "natives/text/keys"],
+	["veyyon-natives", "natives/bridge/addon"],
+	["veyyon-session-skim", "natives/text/session-skim"],
+	["veyyon-shell", "natives/shell"],
+	["veyyon-test-scratch", "natives/testing/scratch"],
+	["veyyon-text", "natives/text/measure"],
+	["veyyon-uu-diff", "natives/diff/uu-diff"],
+	["veyyon-uu-grep", "natives/search/uu-grep"],
+	["veyyon-uutils-ctx", "natives/fs/uutils-ctx"],
+	["veyyon-walker", "natives/search/walker"],
+]);
+
+/** Where a crate named in a contract lives, or a failure naming the crate that is not recorded. */
+function crateDir(name: string): string {
+	const dir = CRATE_PATHS.get(name);
+	if (dir === undefined) throw new Error(`${name} is not recorded in CRATE_PATHS`);
+	return dir;
+}
+
+describe("every first-party crate inherits the workspace version", () => {
+	/**
+	 * The version skew itself. A crate on its own version stays on it through
+	 * every workspace bump, and nothing reports that: `cargo metadata` resolves,
+	 * the build passes, and the release carries two version numbers.
+	 */
+	it("declares version.workspace = true and never a literal", () => {
+		const offenders = firstPartyCrateDirs()
+			.map(readCrateManifest)
+			.filter(crate => crate.version !== "workspace = true")
+			.map(crate => `${crate.dir} pins ${crate.version}`);
+
+		expect(offenders).toEqual([]);
+	});
+
+	/**
+	 * The three crates that were outside, checked BY NAME so the test above cannot
+	 * pass by finding no crates at all. This is the non-vacuity guard for the
+	 * whole suite: a broken directory scan or a parser that returns nothing would
+	 * make every other assertion here trivially true.
+	 */
+	it("includes the three crates this contract was written for", () => {
+		for (const name of FOLDED_IN) {
+			const crate = readCrateManifest(crateDir(name));
+			expect(crate.version).toBe("workspace = true");
+		}
+	});
+});
+
+describe("a package name is recorded against the directory that holds it", () => {
+	/**
+	 * `veyyon_uu_grep` in a directory called `veyyon-uu-grep` is not a style nit: it is what forced
+	 * `tests/fuzz/Cargo.toml` to carry a `package = "veyyon_uu_grep"` remap, and it means
+	 * `cargo test -p veyyon-uu-grep` fails with "did not match any packages" for anybody who spells the
+	 * crate the way the tree does. The underscore half of that rule is universal and stays here; the
+	 * directory half is the table.
+	 */
+	it("names every crate in hyphenated lower case under one prefix", () => {
+		const offenders = firstPartyCrateDirs()
+			.map(readCrateManifest)
+			.filter(crate => !/^veyyon(-[a-z0-9]+)+$/.test(crate.name))
+			.map(crate => `${crate.dir} is packaged as ${crate.name}`);
+
+		expect(offenders).toEqual([]);
+	});
+
+	/**
+	 * The mapping itself, both directions at once: a crate missing from the table and a table row for a
+	 * crate that no longer exists are the same failure, and `toEqual` over the sorted name/path pairs
+	 * reports either.
+	 */
+	it("records exactly the crates the workspace resolves", () => {
+		const resolved = firstPartyCrateDirs()
+			.map(dir => [readCrateManifest(dir).name, dir] as const)
+			.sort((a, b) => a[0].localeCompare(b[0]));
+
+		expect(resolved).toEqual([...CRATE_PATHS].sort((a, b) => a[0].localeCompare(b[0])));
+	});
+});
+
+describe("a shared dependency is pinned in one place", () => {
+	/**
+	 * The `serde_json` bug generalized. Any dependency the root declares must be
+	 * inherited rather than re-declared, because a local copy is free to specify a
+	 * different version OR a different feature set, and the feature half is the
+	 * one that changes behaviour without changing a version number anywhere.
+	 */
+	it("inherits every dependency the root workspace declares", () => {
+		const shared = workspaceDependencyNames();
+		const offenders: string[] = [];
+		for (const dir of firstPartyCrateDirs()) {
+			const crate = readCrateManifest(dir);
+			for (const [name, declaration] of crate.dependencies) {
+				if (shared.has(name) && pinsItsOwnVersion(declaration)) {
+					offenders.push(`${crate.dir} re-declares ${name} as ${declaration.trim()}`);
+				}
+			}
+		}
+
+		expect(offenders).toEqual([]);
+	});
+
+	/**
+	 * Adding a feature on top of the inherited pin is allowed, and this pins that
+	 * it is: `veyyon-uu-diff` needs clap's `wrap_help` where the workspace asks
+	 * only for `derive`. The version still comes from one place, which is the
+	 * property that matters, so a rule that banned the whole shape would push the
+	 * crate back to its own pin and lose more than it gained.
+	 */
+	it("allows extra features on top of an inherited pin", () => {
+		const clap = readCrateManifest(crateDir("veyyon-uu-diff")).dependencies.get("clap");
+
+		expect(clap).toBeDefined();
+		expect(clap).toContain("wrap_help");
+		expect(pinsItsOwnVersion(clap ?? "")).toBe(false);
+	});
+
+	/**
+	 * The predicate itself, on both shapes it must separate. It is the only piece
+	 * of judgment in this file, and a mistake in it would silently pass every
+	 * offender in the test above.
+	 */
+	it("tells an inherited pin from a local one", () => {
+		expect(pinsItsOwnVersion(".workspace = true")).toBe(false);
+		expect(pinsItsOwnVersion(' = { workspace = true, features = ["x"] }')).toBe(false);
+		expect(pinsItsOwnVersion(' = "0.4"')).toBe(true);
+		expect(pinsItsOwnVersion(' = { version = "4", features = ["derive"] }')).toBe(true);
+	});
+});
+
+describe("an internal crate is reachable as a workspace dependency", () => {
+	/**
+	 * A path dep spelled out in each consumer is the same duplication one level
+	 * up: three consumers, three `{ path = "../x" }` strings, and no single place
+	 * to change when the crate moves. Every first-party crate that another crate
+	 * depends on has an entry under `[workspace.dependencies]`, so a consumer says
+	 * `x.workspace = true` and nothing else.
+	 */
+	it("lists every internally depended-on crate under [workspace.dependencies]", () => {
+		const declared = workspaceDependencyNames();
+		const crates = firstPartyCrateDirs().map(readCrateManifest);
+		const names = new Set(crates.map(crate => crate.name));
+		const missing = new Set<string>();
+		for (const crate of crates) {
+			for (const name of crate.dependencies.keys()) {
+				if (names.has(name) && !declared.has(name)) missing.add(name);
+			}
+		}
+
+		expect([...missing].sort()).toEqual([]);
+	});
+
+	/**
+	 * And the three folded-in crates are among them, by name, for the same
+	 * non-vacuity reason as above.
+	 */
+	it("includes the three folded-in crates", () => {
+		const declared = workspaceDependencyNames();
+		for (const name of FOLDED_IN) {
+			expect(declared.has(name)).toBe(true);
+		}
+	});
+});

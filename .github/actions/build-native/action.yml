@@ -1,0 +1,264 @@
+name: Build native addon
+description: >
+   Build the veyyon_natives cdylib for one platform/arch/variant and upload it as a
+   hash-tagged artifact. Runs on GitHub-hosted runners: installs the toolchains,
+   uses the Swatinem target/ cache, and the GitHub Actions sccache backend.
+
+inputs:
+   hash:
+      description: Rust source hash used in the artifact name
+      required: true
+   platform:
+      description: Target platform (linux, darwin, win32)
+      required: true
+   arch:
+      description: Target arch (x64, arm64)
+      required: true
+   variant:
+      description: Optional build variant (baseline, modern); required for native x64 builds.
+      required: false
+      default: ""
+   target:
+      description: Optional rustc target triple for cross-compilation
+      required: false
+      default: ""
+   glibc:
+      description: >
+         Optional glibc floor (e.g. "2.17") for linux-gnu builds. Routes the build
+         through cargo-zigbuild against that floor without affecting the rustup
+         target or the host-arch native test steps. Combine with `target` to pin a
+         cross-arch linux build, or set alone for a host-arch (x64) linux build.
+      required: false
+      default: ""
+   save_cache:
+      description: Whether Swatinem/rust-cache should write a cache entry
+      required: false
+      default: "false"
+
+runs:
+   using: composite
+   steps:
+      - name: Resolve build targets
+        id: resolve
+        shell: bash
+        env:
+           TARGET: ${{ inputs.target }}
+           GLIBC: ${{ inputs.glibc }}
+           ARCH: ${{ inputs.arch }}
+        run: |
+           set -euo pipefail
+           # `cross_target` is what the napi build feeds cargo: cargo-zigbuild reads
+           # the glibc floor as a `.<major>.<minor>` triple suffix. `bare_target` is
+           # what rustup needs — never glibc-suffixed (rustup rejects the suffix)
+           # and empty for host-arch builds whose target is already installed.
+           base="$TARGET"
+           if [ -z "$base" ]; then
+             case "$ARCH" in
+               x64) base="x86_64-unknown-linux-gnu" ;;
+               arm64) base="aarch64-unknown-linux-gnu" ;;
+             esac
+           fi
+           cross_target=""
+           if [ -n "$GLIBC" ]; then
+             if [ -z "$base" ]; then
+               echo "::error::glibc floor '$GLIBC' set but no linux-gnu base triple for arch '$ARCH'"
+               exit 1
+             fi
+             cross_target="${base}.${GLIBC}"
+           elif [ -n "$TARGET" ]; then
+             cross_target="$TARGET"
+           fi
+           bare_target="${TARGET%%.*}"
+           {
+             echo "cross_target=$cross_target"
+             echo "bare_target=$bare_target"
+           } >> "$GITHUB_OUTPUT"
+           echo "Resolved cross_target='$cross_target' bare_target='$bare_target'"
+
+      # --- Rust toolchain -----------------------------------------------------
+      - name: Install Rust toolchain
+        # The explicit `toolchain:` input below selects the compiler, so the ref
+        # here is only the action version — sha-pinned like every other action.
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-24
+        with:
+           toolchain: nightly-2026-04-29
+           components: ""
+           targets: ${{ steps.resolve.outputs.bare_target }}
+      - name: Install Linux build prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+           sudo apt-get update
+           sudo apt-get install -y build-essential
+      - name: Prepend rustup toolchain bin to PATH
+        shell: bash
+        run: |
+           # Homebrew on macOS runners ships rustup-init with shadow proxies for
+           # `cargo`/`rustc`/etc. that error out as the installer ("unexpected
+           # argument 'metadata' found"). Force the real toolchain binaries to win
+           # on PATH.
+           toolchain_bin="$(dirname "$(rustup which cargo)")"
+           echo "$toolchain_bin" >> "$GITHUB_PATH"
+           echo "Prepended $toolchain_bin to PATH"
+
+      # --- Rust flags (shared) ------------------------------------------------
+      - name: Configure native Rust flags
+        if: inputs.target == ''
+        shell: bash
+        env:
+           TARGET_ARCH: ${{ inputs.arch }}
+           TARGET_VARIANT: ${{ inputs.variant }}
+        run: |
+           case "$TARGET_ARCH:$TARGET_VARIANT" in
+             x64:modern)
+               rustflags="-C target-cpu=x86-64-v3"
+               ;;
+             x64:baseline)
+               rustflags="-C target-cpu=x86-64-v2"
+               ;;
+             x64:*)
+               echo "::error::x64 native builds require variant=modern or variant=baseline"
+               exit 1
+               ;;
+             *)
+               if [ -n "${RUSTFLAGS:-}" ]; then
+                 echo "Using caller-provided RUSTFLAGS=$RUSTFLAGS"
+                 exit 0
+               fi
+               rustflags="-C target-cpu=native"
+               ;;
+           esac
+
+           echo "RUSTFLAGS=$rustflags" >> "$GITHUB_ENV"
+           echo "Configured RUSTFLAGS=$rustflags"
+
+      # --- target/ cache ------------------------------------------------------
+      # Swatinem keys target/ off its restore-time environment, so it must run
+      # after RUSTFLAGS is set: if x64 target-cpu were only selected later, cargo
+      # would invalidate the restored target/ while rust-cache saw an exact key
+      # and refused to save the rebuilt artifacts (macOS x64 baseline rebuilds
+      # forever). The native source hash is in the shared key too: rust-cache's
+      # lockfile scan misses the workspace-root Cargo.toml version Cargo
+      # fingerprints, so a version bump could otherwise get an exact hit for
+      # artifacts Cargo must rebuild.
+      - name: Cache Rust target/
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+           shared-key: native-${{ inputs.platform }}-${{ inputs.arch }}-${{ inputs.variant || 'default' }}-h${{ inputs.hash }}
+           cache-on-failure: true
+           save-if: ${{ inputs.save_cache == 'true' }}
+           cache-workspace-crates: true
+
+      # --- sccache ------------------------------------------------------------
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Enable sccache for cargo
+        # CARGO_INCREMENTAL=0 is required: sccache silently skips caching when
+        # incremental is enabled, turning the wrapper into a no-op. The cache is
+        # an optimization, not a build dependency: preflight its GitHub backend,
+        # retry transient network failures, then compile without the wrapper if
+        # the backend remains unavailable.
+        shell: bash
+        run: |
+           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+           export SCCACHE_GHA_ENABLED=true
+           attempt=1
+           while ! sccache "$(rustup which rustc)" -vV; do
+             if [ "$attempt" -ge 3 ]; then
+               echo "::warning title=sccache disabled::GitHub Actions cache stayed unavailable after $attempt attempts; compiling without sccache" >&2
+               echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+               exit 0
+             fi
+             echo "::warning title=sccache retry::cache preflight failed on attempt $attempt; retrying" >&2
+             sleep "$attempt"
+             attempt=$((attempt + 1))
+           done
+           {
+             echo "RUSTC_WRAPPER=sccache"
+             echo "SCCACHE_GHA_ENABLED=true"
+           } >> "$GITHUB_ENV"
+           echo "sccache backend: GitHub Actions cache"
+
+      # --- cargo-nextest (native test runner; non-cross builds only) ----------
+      - name: Install cargo-nextest
+        if: inputs.target == ''
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+           tool: nextest
+
+      - uses: ./.github/actions/bun-install
+
+      # --- Cross-compile toolchains -------------------------------------------
+      # Non-MSVC targets (e.g. aarch64-unknown-linux-gnu) build with
+      # cargo-zigbuild (needs zig); MSVC targets (e.g. x86_64-pc-windows-msvc)
+      # build with cargo-xwin (needs clang/lld/llvm). The napi CLI's
+      # --cross-compile flag picks the backend; we just install what it needs.
+      - name: Setup zig (non-MSVC cross)
+        if: steps.resolve.outputs.cross_target != '' && !endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+           version: 0.16.0
+      - name: Install cargo-zigbuild (non-MSVC cross)
+        if: steps.resolve.outputs.cross_target != '' && !endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+           tool: cargo-zigbuild
+      - name: Install LLVM tooling (MSVC cross)
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        shell: bash
+        run: |
+           sudo apt-get update
+           sudo apt-get install -y clang lld llvm
+      - name: Install cargo-xwin (MSVC cross)
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+           tool: cargo-xwin
+      - name: Cache cargo-xwin Windows SDK
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+           path: ~/.cache/cargo-xwin
+           key: cargo-xwin-${{ runner.os }}-v1
+      - name: Accept xwin license
+        if: endsWith(steps.resolve.outputs.cross_target, '-msvc')
+        shell: bash
+        run: echo "XWIN_ACCEPT_LICENSE=1" >> "$GITHUB_ENV"
+
+      # --- Build and upload (shared) ------------------------------------------
+      # `check:rs` used to run here, on the one matrix entry that set
+      # `rust_checks`. That put the repo's cheapest gate at the end of its
+      # slowest path: a `cargo fmt` diff was reported roughly 70 minutes into a
+      # CI run, after an artifact lookup, a toolchain install, an apt update and
+      # a runner queue, and it failed the job every TypeScript test bucket needs.
+      # Rust format and clippy now run as their own job in checks.yml, which
+      # gates every push and PR to main before a native build starts. A native
+      # job builds.
+      - uses: ./.github/actions/setup-system-deps
+        if: inputs.target == '' && inputs.platform == 'linux'
+      - name: Test workspace (Rust)
+        # macOS has no `#[cfg(target_os = "macos")]` tests in the workspace, and
+        # Windows-only tests are no longer exercised in CI (win32-x64 cross-builds
+        # on Linux). Skipping the duplicate Linux runs on macOS saves ~10 min of
+        # parallel runner time.
+        if: inputs.target == '' && inputs.platform != 'darwin'
+        shell: bash
+        run: bun run test:rs
+      - name: Build native addon(s)
+        shell: bash
+        env:
+           CROSS_TARGET: ${{ steps.resolve.outputs.cross_target }}
+           TARGET_PLATFORM: ${{ inputs.platform }}
+           TARGET_ARCH: ${{ inputs.arch }}
+           TARGET_VARIANTS: ${{ inputs.variant }}
+        run: bun run ci:build:native
+      - name: Upload native addon(s)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+           name: veyyon-natives-${{ inputs.platform }}-${{ inputs.arch }}${{ inputs.variant && format('-{0}', inputs.variant) || '' }}-h${{ inputs.hash }}
+           path: natives/bridge/bindings/native/veyyon_natives.${{ inputs.platform }}-${{ inputs.arch }}*.node
+           if-no-files-found: error
+           # Explicit so the native_artifact_lookup canary keeps working even if
+           # org defaults shift; bump if Rust source ever stays stable for >90 days
+           # of main pushes and you want to avoid rebuilds.
+           retention-days: 90

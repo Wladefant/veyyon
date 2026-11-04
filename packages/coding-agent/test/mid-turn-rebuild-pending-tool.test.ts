@@ -1,0 +1,208 @@
+/**
+ * A transcript rebuild while a tool is still executing (agent focus
+ * attach/unfocus, overlay close) must not hide the in-flight call: the
+ * assistant turn is persisted at message_end but its toolResult is not, so a
+ * rebuild used to strip the dangling toolCall and the agent looked idle while
+ * still waiting on the tool.
+ *
+ * Contracts under test:
+ *  - renderSessionContext renders a dangling toolCall as a pending block and,
+ *    while the viewed session streams, keeps it tracked in `pendingTools` so
+ *    the live event stream lands the result in the SAME component.
+ *  - Idle rebuilds seal leftover danglers instead of pinning the transcript
+ *    live region with a spinner that can never resolve.
+ *  - A result received after focus attachment recovers arguments from the
+ *    attached session, including messages persisted after attachment, never
+ *    from the main session with a colliding call ID.
+ */
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import type { AgentMessage } from "@veyyon/agent-core";
+import type { AssistantMessage } from "@veyyon/ai";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
+import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
+import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import type { SessionContext } from "@veyyon/kernel/session/session-context";
+
+const usage = {
+	input: 1,
+	output: 1,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 2,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+/** Assistant turn persisted mid-execution: toolCall present, no toolResult. */
+const danglingAssistant = {
+	role: "assistant",
+	content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "sleep 60" } }],
+	api: "anthropic-messages",
+	provider: "anthropic",
+	model: "claude-sonnet-4-5",
+	stopReason: "toolUse",
+	usage,
+	timestamp: Date.now(),
+} as unknown as AgentMessage;
+
+function createFixture(opts: { isStreaming: boolean }) {
+	const chatContainer = new TranscriptContainer();
+	const session = {
+		retryAttempt: 0,
+		getToolByName: () => undefined,
+		sessionManager: { getCwd: () => process.cwd() },
+		isStreaming: opts.isStreaming,
+	};
+	let helpers!: UiHelpers;
+	const ctx = {
+		isInitialized: true,
+		init: vi.fn(async () => {}),
+		chatContainer,
+		pendingTools: new Map(),
+		settledToolCalls: new Set<string>(),
+		ui: { requestRender: vi.fn() },
+		statusLine: { invalidate: vi.fn() },
+		updateEditorBorderColor: vi.fn(),
+		settings: { get: () => false },
+		addMessageToChat: (message: AgentMessage) => helpers.addMessageToChat(message),
+		session,
+		viewSession: session,
+		toolOutputExpanded: false,
+		hideThinkingBlock: false,
+		lastAssistantUsage: undefined,
+		clearTransientSessionUi: () => {},
+		ensureLoadingAnimation: vi.fn(),
+		loadingAnimation: undefined,
+		autoCompactionLoader: undefined,
+		retryLoader: undefined,
+		setTodos: vi.fn(),
+		showWarning: vi.fn(),
+		// Required members of the context. Omitting them used to be tolerated by
+		// `?.()` calls in the controller, which meant production silently skipped
+		// the composer refresh and the welcome dismissal whenever either was
+		// missing. The calls are unconditional now, so the stub supplies them.
+		refreshComposerShortcuts: vi.fn(),
+		dismissWelcome: vi.fn(),
+	} as unknown as InteractiveModeContext;
+	helpers = new UiHelpers(ctx);
+	return { ctx, helpers, chatContainer };
+}
+
+function pendingComponents(chatContainer: TranscriptContainer): ToolExecutionComponent[] {
+	return chatContainer.children.filter(
+		(child): child is ToolExecutionComponent => child instanceof ToolExecutionComponent,
+	);
+}
+
+describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
+	const created: ToolExecutionComponent[] = [];
+
+	beforeAll(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+		await initTheme();
+	});
+
+	afterEach(() => {
+		for (const component of created.splice(0)) component.seal();
+		vi.restoreAllMocks();
+	});
+
+	it("renders a dangling toolCall as pending, tracks it, and routes the live result into it", async () => {
+		const { ctx, helpers, chatContainer } = createFixture({ isStreaming: true });
+
+		helpers.renderSessionContext({ messages: [danglingAssistant] } as SessionContext);
+
+		const [component] = pendingComponents(chatContainer);
+		expect(component).toBeDefined();
+		created.push(component);
+		// Still awaiting its result: the block stays in the live region and the
+		// map keeps routing events into it after the rebuild.
+		expect(component.isTranscriptBlockFinalized()).toBe(false);
+		expect(ctx.pendingTools.get("call-1")).toBe(component);
+
+		// The tool finishes after the rebuild: the result must land in the same
+		// rebuilt component instead of being dropped.
+		const controller = new EventController(ctx);
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "call-1",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "done" }], details: {} },
+			isError: false,
+		});
+
+		expect(component.isTranscriptBlockFinalized()).toBe(true);
+		expect(ctx.pendingTools.size).toBe(0);
+	});
+
+	it.each(["persisted-before-attach", "persisted-after-attach"])(
+		"recovers read arguments from the focused session: %s",
+		async timing => {
+			const { ctx, chatContainer } = createFixture({ isStreaming: false });
+			const readMessage = (path: string): AssistantMessage => ({
+				role: "assistant",
+				content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: { path } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopReason: "toolUse",
+				usage,
+				timestamp: 1,
+			});
+			Object.assign(ctx.session, { messages: [readMessage("main-session.txt")] });
+			let receive: ((event: AgentSessionEvent) => Promise<void>) | undefined;
+			const messages: AgentMessage[] = [];
+			const target = {
+				messages,
+				subscribe(listener: (event: AgentSessionEvent) => Promise<void>) {
+					receive = listener;
+					return () => {
+						receive = undefined;
+					};
+				},
+			} as unknown as AgentSession;
+			const controller = new EventController(ctx);
+			try {
+				if (timing === "persisted-before-attach") messages.push(readMessage("focused-session.txt"));
+				controller.attachTo(target);
+				if (timing === "persisted-after-attach") messages.push(readMessage("focused-session.txt"));
+				if (!receive) throw new Error("Session subscription was not installed");
+				await receive({
+					type: "tool_execution_end",
+					toolCallId: "shared-call",
+					toolName: "read",
+					result: { content: [{ type: "text", text: "file contents" }], details: {} },
+					isError: false,
+				});
+				const rendered = chatContainer.render(120).join("\n");
+				expect(rendered).toContain("focused-session.txt");
+				expect(rendered).not.toContain("main-session.txt");
+				expect(ctx.pendingTools.size).toBe(0);
+			} finally {
+				ctx.unsubscribe?.();
+				controller.dispose();
+				chatContainer.disposeChildren();
+			}
+		},
+	);
+
+	it("seals dangling toolCalls on idle rebuilds instead of leaving a live spinner", () => {
+		const { ctx, helpers, chatContainer } = createFixture({ isStreaming: false });
+
+		helpers.renderSessionContext({ messages: [danglingAssistant] } as SessionContext);
+
+		const [component] = pendingComponents(chatContainer);
+		expect(component).toBeDefined();
+		created.push(component);
+		// No result is coming: the block freezes as history and live tracking
+		// stays empty so historical components never receive live events.
+		expect(component.isTranscriptBlockFinalized()).toBe(true);
+		expect(ctx.pendingTools.size).toBe(0);
+	});
+});

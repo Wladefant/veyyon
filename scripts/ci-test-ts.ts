@@ -1,0 +1,2358 @@
+#!/usr/bin/env bun
+
+import * as nodeFs from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+// THE OTHER DOOR, closed on purpose rather than by luck. This script SPAWNS every `bun
+// test` chunk itself, so running it on the host runs the whole suite on the host. The gate
+// exits the process when isolation is not proven, once, here, instead of the per-chunk
+// preload refusing thousands of children one at a time.
+//
+// It refuses rather than wrapping each chunk the way `scripts/preflight.ts` does, and the
+// difference is real: chunks run with `cwd` set to a package directory, so wrapping them
+// individually would mean one sandbox per chunk, each with its own working directory, and a
+// rung whose start-up cost is paid hundreds of times. Running this whole script inside one
+// sandbox is cheaper AND a stronger boundary, because the children inherit it and cannot be
+// spawned outside it.
+//
+// Imported BY NAME even though `./temp-dir-janitor` below already reaches it through
+// `sandbox-home`. That transitive path is an accident of what this file happens to need
+// today, and a refusal that depends on an unrelated import is one cleanup away from
+// silently reopening the door.
+import "../packages/utils/test/helpers/sandbox-gate";
+import {
+	STALE_TEMP_DIR_AGE_MS,
+	sweepStaleTempDirs,
+	TEST_TEMP_DIR_PREFIXES,
+} from "../packages/utils/test/helpers/temp-dir-janitor";
+import {
+	type AffectedWorkspaceInspection,
+	type CiContractTestTarget,
+	ciContractTestsForPaths,
+	headTrackedFiles,
+	inspectAffectedWorkspaceSelection,
+	workingTreeDrift,
+} from "./affected-workspace-tests";
+import { isCI } from "./ci-signal";
+import { ensureToolViewsGenerated } from "./ensure-tool-views";
+
+type Mode =
+	| "all"
+	| "local"
+	| "local-ts"
+	| "workspace"
+	| "workspace-cloudflare"
+	| "scripts"
+	| "native"
+	| "coding-agent-singleton"
+	| "coding-agent-ui"
+	| "coding-agent-runtime"
+	| "coding-agent-native"
+	| "coding-agent-heavy";
+
+type CodingAgentBucket = "singleton" | "ui" | "runtime" | "native";
+
+export interface TestCommand {
+	label: string;
+	cwd: string;
+	command: string[];
+	env?: Record<string, string>;
+	/** Set for `node --test` contract commands, whose totals come from TAP instead of Bun's summary. */
+	runner?: "node";
+}
+
+type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
+
+const repoRoot = path.join(import.meta.dir, "..");
+
+// The real veyyon data directory, captured BEFORE any child is spawned with a
+// sandboxed HOME. Once HOME is redirected there is no way back to this value from
+// inside a child: Bun's os.homedir() and os.userInfo().homedir both follow HOME.
+// The parent resolves it once, hands it down, and the tripwire uses it to know
+// exactly what to forbid.
+const REAL_CONFIG_ROOT = path.join(os.homedir(), ".veyyon");
+
+// Absolute path to the real-data tripwire preload, passed to every spawned
+// `bun test`. Chunks run with their package directory as cwd, and Bun reads
+// bunfig.toml from the cwd only, so the repository-root preload is invisible from
+// packages/<name>. Relying on the root bunfig alone left every chunk of a real run
+// unprotected, which surfaced when the tripwire's own suite wrote its probe files
+// into the real config root.
+const TRIPWIRE_PRELOAD = path.join(repoRoot, "packages", "utils", "test", "helpers", "real-data-tripwire.ts");
+// The second tripwire: a suite that replaces a provider module process-wide and never restores it
+// answers every later file in the same bucket, so the failure lands on an innocent suite. It fails
+// the test that ends with an override it did not inherit, and puts the inherited value back so one
+// leak is one failure.
+const PROVIDER_OVERRIDE_PRELOAD = path.join(
+	repoRoot,
+	"packages",
+	"ai",
+	"test",
+	"helpers",
+	"provider-override-tripwire.ts",
+);
+const preloadArgs = ["--preload", TRIPWIRE_PRELOAD, "--preload", PROVIDER_OVERRIDE_PRELOAD];
+
+// A disposable HOME handed to every test child. This is PREVENTION, and it is
+// structural rather than advisory: config, credential and session paths are all
+// built from os.homedir(), so a child that starts life with a temp home cannot
+// name real data whatever its own isolation code forgets to do. It must be set at
+// spawn time because Bun resolves os.homedir() once at process start, which is
+// exactly why a suite assigning process.env.HOME in beforeEach once wrote rows
+// into the real credential store while believing it was sandboxed.
+export const SANDBOX_HOME = (() => {
+	const sandbox = path.join(os.tmpdir(), `veyyon-test-home-${process.pid}`);
+	nodeFs.mkdirSync(sandbox, { recursive: true });
+	return sandbox;
+})();
+
+// Every run used to leave that sandbox behind, and a CLI spawned with a fresh HOME stages
+// about 290 MB of native addon into it, so a few hundred runs filled a 915 GB disk: /tmp
+// held 38,600 stranded veyyon-* directories totalling 240 GB and the root filesystem hit
+// 100% full. Removing it here covers a run that finishes. The sweep below covers the runs
+// that did not, on this machine and on every machine that already has the backlog.
+process.on("exit", () => {
+	try {
+		nodeFs.rmSync(SANDBOX_HOME, { recursive: true, force: true });
+	} catch {
+		// A sandbox that cannot be removed is worth no noise at the very end of a run; the
+		// age-bounded sweep at the start of the next one will collect it.
+	}
+});
+
+{
+	// Every prefix, not just `veyyon-`: the coding-agent suite names its scratch `pi-`, and
+	// sweeping one prefix left 14,364 of those behind while reporting a clean reclaim.
+	let reclaimed = 0;
+	for (const prefix of TEST_TEMP_DIR_PREFIXES) {
+		const swept = sweepStaleTempDirs({ prefix });
+		reclaimed += swept.removed.length;
+		for (const failure of swept.failed) {
+			process.stderr.write(`could not reclaim ${failure.dir}: ${failure.reason}\n`);
+		}
+	}
+	if (reclaimed > 0) {
+		process.stderr.write(
+			`reclaimed ${reclaimed} stranded test directories in ${os.tmpdir()} ` +
+				`(older than ${STALE_TEMP_DIR_AGE_MS / 3_600_000} hours)\n`,
+		);
+	}
+}
+
+// argv carries at most one mode, an optional `--changed-since <sha>` for related selection, and
+// any number of `*.test.ts(x)` paths for an explicit target run. Explicit paths take the place of
+// a mode: only the implicit `all` mode may accompany them, and they never combine with a SHA.
+export interface RunnerArguments {
+	mode: string;
+	changedSince: string | undefined;
+	explicitTestFiles: string[];
+}
+
+function isExplicitTestTarget(argument: string): boolean {
+	return /\.test\.tsx?$/.test(argument);
+}
+
+export function parseRunnerArguments(argv: readonly string[]): RunnerArguments {
+	let changedSince: string | undefined;
+	const positionals: string[] = [];
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index] ?? "";
+		if (argument === "--changed-since") {
+			if (changedSince !== undefined) throw new Error("--changed-since may only be supplied once");
+			const value = argv[++index];
+			if (value === undefined || value.startsWith("--")) {
+				throw new Error("--changed-since requires a full commit SHA");
+			}
+			changedSince = value;
+		} else if (argument.startsWith("--changed-since=")) {
+			if (changedSince !== undefined) throw new Error("--changed-since may only be supplied once");
+			changedSince = argument.slice("--changed-since=".length);
+		} else if (!argument.startsWith("--")) {
+			positionals.push(argument);
+		}
+	}
+	if (changedSince !== undefined && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(changedSince)) {
+		throw new Error("--changed-since requires a full 40- or 64-character commit SHA");
+	}
+	const explicitTestFiles = positionals.filter(isExplicitTestTarget);
+	const modes = positionals.filter(argument => !isExplicitTestTarget(argument));
+	if (modes.length > 1) throw new Error(`Unexpected positional argument: ${modes[1]}`);
+	const mode = modes[0] ?? "all";
+	if (explicitTestFiles.length > 0) {
+		if (mode !== "all") throw new Error("explicit test files cannot be combined with a mode other than all");
+		if (changedSince !== undefined) throw new Error("explicit test files cannot be combined with --changed-since");
+	} else if (changedSince !== undefined && mode !== "all") {
+		throw new Error("--changed-since is supported only with the all mode");
+	}
+	return { mode, changedSince, explicitTestFiles };
+}
+
+const args = process.argv.slice(2);
+const isDryRun = args.includes("--dry-run");
+const runnerArguments = import.meta.main ? parseRunnerArguments(args) : parseRunnerArguments([]);
+const requestedMode = runnerArguments.mode;
+const changedSince = runnerArguments.changedSince;
+const explicitTestFiles = runnerArguments.explicitTestFiles;
+const junitReportDirArg = args.find(arg => arg.startsWith("--junit-report-dir="));
+const junitReportDirValue = junitReportDirArg?.slice("--junit-report-dir=".length);
+if (junitReportDirValue === "") {
+	throw new Error("--junit-report-dir requires a path");
+}
+const junitReportDir = junitReportDirValue ? path.resolve(junitReportDirValue) : null;
+// `--only-failures` is Bun's output filter — it hides passing tests within each
+// chunk, keeping the log terse, and is the default here (CI and the root
+// `test:ts` aggregate append it). It does NOT skip tests or share any
+// cross-process cache, so chunks are safe to run concurrently. The package-level
+// `test` script passes `--full` for verbose output (every test line); an explicit
+// `--only-failures` still wins.
+const onlyFailures = args.includes("--only-failures") || !args.includes("--full");
+const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
+// Quiet mode (the default) collapses each parallel chunk to a one-line pass/fail
+// progress entry and replays full stdout/stderr only for chunks that failed, so
+// the failure is never buried under thousands of passing-chunk lines. `--full`
+// opts back into inline replay of every chunk. Tied to `onlyFailures` so the
+// quiet path is whatever the verbose filter is not.
+const quiet = onlyFailures;
+
+export const validModes: Record<Mode, true> = {
+	all: true,
+	local: true,
+	"local-ts": true,
+	workspace: true,
+	"workspace-cloudflare": true,
+	scripts: true,
+	native: true,
+	"coding-agent-singleton": true,
+	"coding-agent-ui": true,
+	"coding-agent-runtime": true,
+	"coding-agent-native": true,
+	"coding-agent-heavy": true,
+};
+
+// `chunkSize` splits a bucket's file list into that-many-file groups, each run as a
+// separate `bun test` child process. A fresh process per chunk resets Bun's
+// heap and reaps any dangling spawned children between groups, keeping peak RSS
+// under the CI runner's OOM ceiling (a single 170–370-file invocation gets
+// SIGKILLed at 137). EVERY bucket is chunked, including singleton/global-state,
+// which is why `chunkSize` has no unchunked spelling: it was left whole on the
+// theory that its suites have to co-locate in one process to exercise
+// process-wide state, and that theory is wrong. The isolation a global-state
+// suite needs is that NOTHING runs beside it, which is `parallel: 1`; a chunk
+// boundary is a stronger guarantee than a shared heap, not a weaker one, and
+// chunks are contiguous slices of the sorted file list run in order, so relative
+// order is unchanged. Left whole the bucket reached 555 files, far past the
+// ceiling the previous sentence names, and was SIGKILLed at 137 on every run —
+// taking main red and reporting it as a handful of unrelated TUI and MCP suites
+// timing out under memory pressure at 30-40s apiece, all of which pass alone.
+//
+// The UI/TUI bucket uses a smaller chunk (5) than the others: its suites build up
+// native ghostty-vt cells, and bun 1.3.14's GC aborts (SIGTRAP/SIGABRT, exit
+// 133/134 inside DOMGCOutputConstraint marking) once ~10 such files share a heap,
+// even with the GC-marker knobs below. Bisection showed no single file is at
+// fault — the crash is cumulative heap volume. Under a 256MB-forced heap, a
+// 10-file chunk aborts ~50% of runs while either 5-file half is 0/20; halving the
+// chunk keeps each process under the threshold.
+interface CodingAgentBucketPlan {
+	label: string;
+	parallel: number;
+	// Required, with no unchunked spelling: see the comment above.
+	chunkSize: number;
+}
+
+export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
+	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
+};
+
+// Smaller workspace packages stay separate from native/TUI/integration suites so
+// their short TS suites can run together. CI still downloads the Linux x64 native
+// addon before this bucket: shared utility barrels may load native-backed modules.
+export const fastWorkspacePackages = [
+	"plugins/hashline",
+	"contracts/wire",
+	"contracts/settings",
+	"contracts/model",
+	"kernel",
+	// The graphical host draws the view contract into strings and touches neither a
+	// terminal nor a socket, so its suites belong in the fast bucket beside the
+	// contract they check.
+	"hosts/gui",
+	"packages/utils",
+	"packages/catalog",
+	"packages/ai",
+	"packages/agent",
+	// The six below ran in NO mode at all until 2026-07-25 — not in CI's `all`, not
+	// in `local-ts`. They were never removed; they were simply never added when the
+	// `bun run --workspaces test` fan-out was replaced by these hand-kept lists, and
+	// each reads as covered from every angle (a working `test` script, ordinary test
+	// files, a comment above claiming this covers what the fan-out covered). That is
+	// why `workspaceTestPackages` below is now checked against the tree by
+	// `scripts/workspace-test-coverage.test.ts` instead of maintained by hand alone.
+	"plugins/argot",
+	"apps/stats",
+	"packages/tool-render",
+	"plugins/mode-swarm",
+	// mnemopi ran in NO CI job until this entry existed. It sat in
+	// `localOnlyWorkspacePackages` below, excluded as a whole package because "its
+	// embedding suites depend on a ~270MB fastembed model absent from CI runners".
+	// That was a property of a subset, recorded as a property of the package, and
+	// never checked against the suites. Every one of them passes with the model
+	// cache empty and the network unreachable: most never produce a vector at all,
+	// the ones that do inject a fake provider or a fake initializer, and
+	// `getLocalModel` returns null outright under the test runner. So the triple
+	// store, the schema, the migrations, the query paths and the recall ranking
+	// were all skipped for a hazard none of them run into, and 1041 tests ran
+	// nowhere while the buckets reported green.
+	//
+	// The hazard was real, so it is refused at the download instead of by omitting
+	// a package: `plugins/mnemopi/test/helpers/fastembed-model-tripwire.ts` is
+	// preloaded into every mnemopi test process and throws from
+	// `FlagEmbedding.init`, the call that fetches the weights. A suite that starts
+	// needing the real model fails by name, here and locally, rather than pulling
+	// 270MB into a runner and turning this bucket slow and flaky.
+	"plugins/mnemopi",
+	// Simulations drive a real AgentSession but need no native artifact, so they
+	// stay in the fast workspace job. Their 300ms watchdogs run sequentially
+	// inside the package through `workspaceTestParallelism` below.
+	"tests/simulations",
+	// The scraper suites drive their handlers against a mocked `fetch` and never open a
+	// socket, so they need neither the native addon nor the network.
+	"plugins/web",
+];
+
+// These suites cover the native package, TUI/browser-ish behavior, local servers,
+// or coding-agent-adjacent benchmark paths. Keep them low-concurrency and in jobs
+// that have downloaded the Linux x64 native addon artifacts.
+export const nativeAndIntegrationPackages = [
+	"natives/bridge/bindings",
+	"hosts/terminal/engine",
+	// Same omission as above. These two belong in this bucket rather than the fast
+	// one for the reason the comment gives: evals starts local servers and drives
+	// agent sessions against benchmark fixtures, and collab-web is browser-ish.
+	"tests/evals",
+	"clients/web",
+];
+
+// Packages the CI buckets deliberately skip but a local full run should still
+// cover. One entry, and its reason is structural rather than circumstantial:
+// veybot-web lives under clients/python/veybot, outside every CI TS bucket.
+//
+// mnemopi was the other entry, and it is the warning this list carries. A whole
+// package was skipped for something true of a handful of its suites, the reason
+// read as settled, and nobody measured it again for as long as it stood. An entry
+// here costs a package its entire CI run, so it has to name a property of the
+// package. When only some suites cannot run in CI, exclude those suites by name
+// with the reason attached to them and leave the rest of the package running.
+export const localOnlyWorkspacePackages = ["clients/python/veybot/web"];
+
+/**
+ * Every package whose test suite this runner executes, across all three buckets.
+ *
+ * The one list `scripts/workspace-test-coverage.test.ts` checks against the tree,
+ * so a package that ships tests cannot go unrun and a bucket entry cannot outlive
+ * the package it names. `packages/coding-agent` is absent on purpose: its suites
+ * are discovered by walking the package (`codingAgentTestCommands`) rather than
+ * by being listed, so it needs no entry here.
+ */
+export const workspaceTestPackages = [
+	...fastWorkspacePackages,
+	...nativeAndIntegrationPackages,
+	...localOnlyWorkspacePackages,
+];
+
+// Repo-level script tests. This is the ONE list of them, and `scriptTestCommand`
+// below is its only consumer, so it cannot be half-updated.
+//
+// It used to be two lists. `case "workspace"` carried its own hardcoded copy of 15
+// entries, and because that bucket is the only one CI ever invoked, the other 69
+// suites in this array ran nowhere. They were not skipped loudly. They were simply
+// never named by a workflow, so 79 assertions sat red on main while CI reported
+// green, including a stale installer contract and an every-script-has-an-owner
+// gate that had been failing since the demos landed. The second list is gone and a
+// dedicated `test_scripts` job now runs this one, which is the only arrangement
+// where adding an entry here means it actually runs.
+//
+// The irony is on the record two comments below: `case "scripts"` already warned
+// that two hand-maintained lists is how one goes stale, and noted the stale one
+// had 7 of 32 entries. The workspace copy was that same mistake, reintroduced.
+//
+// (A `ci-test-ts.test.ts` entry used to sit here but the file never existed. Bun
+// silently ignores unmatched filters when at least one other filter matches, so a
+// typo'd path in this array is invisible rather than fatal. Check the file exists.)
+export const repoScriptTests = [
+	"scripts/ovh-process-group.test.ts",
+	"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
+	"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
+	"scripts/settings-doc-coherence.test.ts",
+	"scripts/a-local-action-is-called-with-everything-it-requires.test.ts",
+	"scripts/a-module-is-imported-at-the-top-of-its-file.test.ts",
+	"scripts/a-package-exports-its-public-surface.test.ts",
+	"scripts/an-export-floor-only-grows.test.ts",
+	"scripts/a-package-module-loads-through-one-build.test.ts",
+	"scripts/arktype-values-load-through-the-deferred-module.test.ts",
+	"scripts/a-package-is-added-only-when-an-existing-one-cannot-serve.test.ts",
+	"scripts/a-package-module-loads-through-one-build.test.ts",
+	"scripts/a-shipped-module-arrives-with-a-test-that-names-it.test.ts",
+	"scripts/a-suite-is-named-for-the-behavior-it-defends.test.ts",
+	"scripts/a-test-proves-behavior-not-that-a-spy-was-called.test.ts",
+	"scripts/a-test-preload-points-at-a-file-that-exists.test.ts",
+	"scripts/a-production-site-deploy-has-one-owner.test.ts",
+	"scripts/a-startup-bench-ceiling-fails-a-slow-or-unmeasured-arm.test.ts",
+	"scripts/a-third-party-action-is-pinned-in-one-place.test.ts",
+	"scripts/a-type-is-named-not-derived-from-a-function.test.ts",
+	"scripts/ci-concurrency.test.ts",
+	"scripts/ci-test-partitioning-preserves-global-state-isolation.test.ts",
+	"scripts/simulation-watchdogs-do-not-run-under-test-fanout.test.ts",
+	"scripts/every-workflow-job-has-a-deadline.test.ts",
+	"scripts/every-workflow-pipeline-sets-pipefail.test.ts",
+	"scripts/every-workflow-runs-bun-test-in-the-sandbox.test.ts",
+	"scripts/gh-repo-context.test.ts",
+	"scripts/gpui-consumers-share-one-pinned-framework.test.ts",
+	"scripts/ci-build-native.test.ts",
+	"scripts/bun-install-action.test.ts",
+	"scripts/the-bun-pin-has-one-owner.test.ts",
+	"scripts/ensure-rust-toolchain-action.test.ts",
+	"scripts/native-artifact-lookup.test.ts",
+	"scripts/workflow-source-codegen.test.ts",
+	"scripts/ci-release-notes.test.ts",
+	"scripts/ci-release-build-binaries.test.ts",
+	"scripts/release-version.test.ts",
+	"scripts/release-version-authorities.test.ts",
+	"scripts/release-request.test.ts",
+	"scripts/release-policy.test.ts",
+	"scripts/release-ship.test.ts",
+	"scripts/link-veyyon.test.ts",
+	"scripts/docs-book-pin.test.ts",
+	"scripts/handbook-summary-covers-every-page.test.ts",
+	"scripts/internal-docs-are-tracked.test.ts",
+	"scripts/install-methods-coverage.test.ts",
+	"scripts/read-if-present.test.ts",
+	"scripts/fuzz.test.ts",
+	"scripts/magick-tmpdir.test.ts",
+	"scripts/fuzz-triage.test.ts",
+	"scripts/a-source-file-that-reads-as-binary-is-invisible.test.ts",
+	"scripts/barrel-files-are-imported.test.ts",
+	"scripts/class-privacy-is-the-hash.test.ts",
+	"scripts/a-test-reads-a-module-through-its-graph-not-its-bytes.test.ts",
+	"scripts/handbook-built-pages-contain-source-contracts.test.ts",
+	"scripts/prompt-formatter-checks-current-tree.test.ts",
+	"scripts/workspace-layout.test.ts",
+	"scripts/workspace-typecheck-coverage.test.ts",
+	"scripts/workspace-test-coverage.test.ts",
+	"scripts/tool-renderer-coverage.test.ts",
+	"scripts/workspace-catalog-pins.test.ts",
+	"scripts/workspace-manifests.test.ts",
+	"scripts/chunk-composition.test.ts",
+	"scripts/no-coding-agent-bucket-runs-as-one-process.test.ts",
+	"scripts/package-map-coverage.test.ts",
+	"scripts/root-layout.test.ts",
+	"scripts/sync-root-changelog.test.ts",
+	"scripts/dependency-overrides.test.ts",
+	"scripts/installer-alias-parity.test.ts",
+	"scripts/installer-completions-parity.test.ts",
+	"scripts/installer-doctor-parity.test.ts",
+	"scripts/installer-help-parity.test.ts",
+	"scripts/installer-never-clones.test.ts",
+	"scripts/installer-no-clobber.test.ts",
+	"scripts/installer-legacy-bun-uninstall.test.ts",
+	"scripts/installer-uninstall-parity.test.ts",
+	// Runs the installer for real, once per environment in
+	// scripts/install-tests/environments.toml, so it is slower than the parity
+	// suites above and belongs in the same gate rather than a nightly.
+	"scripts/posix-shell-portability.test.ts",
+	"scripts/installer-environment-matrix.test.ts",
+	// The same environments, updated rather than installed. Same reasoning: it
+	// runs the real installer once per case and then the real binary swap over
+	// it, so it is slow, and it gates the same product surface.
+	"scripts/update-environment-matrix.test.ts",
+	"scripts/pre-push-hook.test.ts",
+	"scripts/inline-functions.test.ts",
+	"scripts/differential-conformance.test.ts",
+	"scripts/record-conformance.test.ts",
+	"scripts/ci-test-real-data-guard.test.ts",
+	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/affected-workspace-selection-keeps-safe-coverage.test.ts",
+	"scripts/a-cloudflare-bucket-selection-preserves-test-files.test.ts",
+	"scripts/a-failing-test-chunk-does-not-stop-the-sequential-run.test.ts",
+	"scripts/a-file-open-waits-out-a-lease.test.ts",
+	"scripts/release-binaries-bytecode.test.ts",
+	"scripts/fix-changelogs.test.ts",
+	"scripts/require-changelog.test.ts",
+	"scripts/changelog-version-headings-are-unique.test.ts",
+	"scripts/run-rs-task.test.ts",
+	"scripts/verify-deployed-installers.test.ts",
+	"scripts/verify-deployed-changelog.test.ts",
+	"scripts/verify-scene.test.ts",
+	"scripts/a-mark-cannot-capture-a-duplicate-frame.test.ts",
+	"scripts/installer-brand-parity.test.ts",
+	"scripts/upstream-radar.test.ts",
+	"scripts/upstream-status-reports-only-what-evidence-shows.test.ts",
+	"scripts/upstream-sync-never-records-or-posts-a-commit-twice.test.ts",
+	"scripts/release-sentinel.test.ts",
+	"scripts/release-changelog.test.ts",
+	"scripts/release-bump-subject.test.ts",
+	"apps/site/tools/gen-changelog.test.ts",
+	"scripts/tracked-but-deleted-paths.test.ts",
+	"scripts/every-referenced-source-file-is-tracked.test.ts",
+	"apps/site/tools/undocumented-release-ratchet.test.ts",
+	"apps/site/tools/nav.test.ts",
+	"scripts/demos/lib/png.test.ts",
+	"scripts/demos/lib/ansi-grid.test.ts",
+	"scripts/demos/lib/ansi-raster.test.ts",
+	"scripts/every-script-has-an-owner.test.ts",
+	"scripts/there-is-only-one-capture-path.test.ts",
+	"scripts/a-recorder-container-can-reach-a-model-served-by-its-host.test.ts",
+	"scripts/a-capture-runs-on-the-bun-the-product-requires.test.ts",
+	"scripts/check-doc-paths.test.ts",
+	"scripts/check-doc-links.test.ts",
+	"scripts/first-party-docs-are-indexed.test.ts",
+	"scripts/script-tests-coverage.test.ts",
+	// The startup benchmark suites (`startup-is-measured-after-the-screen-settles`,
+	// `a-startup-benchmark-keeps-its-executable-and-config-isolated`,
+	// `a-startup-benchmark-terminates-child-trees-and-honors-cwd`) import `@veyyon/natives` for a
+	// value, so they load the addon at import time. The `test_scripts` job in checks.yml runs
+	// this list without one and reported all twelve of their cases as a failed addon load;
+	// ci.yml's `test_ts_native` job, which downloads the addon, runs them by path instead, and
+	// `script-tests-coverage.test.ts` reads that step as their runner. No quoted string in
+	// this comment: the deleted-suite lock reads the array's string literals from source.
+	"scripts/a-package-script-runs-in-an-existing-directory.test.ts",
+	"scripts/stray-output-path.test.ts",
+	// The leak tracer's own contract tests. Also run by the `test-leaks` job in
+	// checks.yml and by the nightly leak sweep, but listed here too because those jobs
+	// gate the TRACER, and this list is what proves no script suite runs nowhere.
+	"scripts/test-sandbox/find-test-leaks.test.ts",
+	// The sandbox driver's own refusal contract: a pinned unavailable rung, no rung
+	// at all, and the marker plus host-home proof read from inside whichever guest
+	// is running this bucket.
+	"scripts/test-sandbox/rung-contract.test.ts",
+	"scripts/find-order-polluter.test.ts",
+	// This one was in no runner. It looked covered only because the coverage lock
+	// regexed the raw workflow YAML, so a path named in a COMMENT in ci.yml counted
+	// as run. Scanning the parsed document instead exposes it.
+	"scripts/release-train-alert-watches-the-train.test.ts",
+	// The two gates on the wiring itself. Registering them here is not ceremony: the
+	// first commit of them left both out, so the suites that keep every script suite
+	// running were themselves running nowhere, which is the exact hole they exist to
+	// close. script-tests-coverage caught it.
+	"scripts/every-script-suite-actually-runs.test.ts",
+	"scripts/no-install-jobs-resolve-their-imports.test.ts",
+	// Landed on disk without being wired, so the gate that keeps a suite from
+	// touching the operator's real home was itself running nowhere.
+	"scripts/tests-never-touch-real-home.test.ts",
+	// Reads manifests against shipped imports, so it catches a break that only an
+	// installer outside this workspace would ever see.
+	"scripts/a-published-package-declares-what-it-imports.test.ts",
+	// The privacy scrub's gate: no source comment, doc, or changelog line credits, quotes, or dates a
+	// chat message. It landed on disk unwired, which for a scan-the-whole-tree gate means the scrub it
+	// enforces silently stops being enforced on the next commit.
+	"scripts/no-attribution-in-the-tree.test.ts",
+	// The same privacy contract for paths rather than prose: no tracked file spells out the home
+	// directory of the machine it was written on. Two recording scripts and a tape shipped one as a
+	// default value, which published the account and made the default unrunnable anywhere else.
+	"scripts/no-tracked-file-names-the-authors-home.test.ts",
+	// Seven suites that were on disk, tracked, and in no runner. They are all
+	// release and changelog gates, which is the worst place for a suite to be
+	// silently unrun: the thing they guard is only exercised on the day a release
+	// is cut, so nobody would have noticed until it mattered.
+	"scripts/changelog-unreleased.test.ts",
+	"scripts/changelog-version-headings-have-one-owner.test.ts",
+	"scripts/write-root-changelog-refuses-to-delete-entries.test.ts",
+	"scripts/rolling-a-changelog-entry-into-a-version-is-not-deleting-it.test.ts",
+	"scripts/release-cut-prepares-without-pushing.test.ts",
+	"scripts/release-native-artifacts-match-ci.test.ts",
+	"scripts/release-recut-recovery-message.test.ts",
+	"scripts/a-release-bump-moves-no-third-party-lock-entry.test.ts",
+	"scripts/session-stats/audit.test.ts",
+	// Runs in whatever rung the harness picked, and asserts that rung can execute
+	// a file a suite just wrote. Docker's tmpfs defaults could not.
+	"scripts/test-sandbox/the-guest-tmpdir-can-execute.test.ts",
+	// The admissibility gate for visual evidence: an off-screen raster may be a
+	// debugging aid and may never reach `assets/`, a README, or the handbook. It
+	// landed on disk unwired, which for a scan-the-whole-tree gate means the rule
+	// it enforces stops being enforced the moment nobody reruns it by hand.
+	"scripts/an-off-screen-raster-never-enters-assets.test.ts",
+	"scripts/one-owner-answers-a-command-lookup.test.ts",
+	// A plugin never imports another plugin: the derived gate behind the `plugins/*`
+	// root. Unwired it enforces nothing, because the coupling it forbids is added by
+	// an ordinary import that type-checks.
+	"scripts/a-plugin-never-imports-another-plugin.test.ts",
+	// The kernel names no tool and no host. Reads the tree's import graph across members, so no
+	// package bucket covers it.
+	"scripts/the-kernel-names-no-tool-and-no-host.test.ts",
+	// The ChatGPT Codex compaction route has been broken and re-fixed 50+ times, and
+	// each break falls back to paid local compaction that busts the prompt cache. The
+	// suite hashes the file, so editing it at all fails CI until an operator records
+	// the new hash.
+	"scripts/the-codex-compaction-route-is-locked.test.ts",
+	// Owner gates that sweep the tree across members, so no package bucket covers them.
+	"scripts/a-stale-tool-views-bundle-is-rebuilt-before-it-is-served.test.ts",
+	"scripts/an-exponential-retry-delay-is-computed-only-by-the-backoff-helper.test.ts",
+	"scripts/one-owner-calls-bun-strip-ansi.test.ts",
+	// No source file the build reads is ignored, and no unanchored pattern names
+	// a directory that holds source.
+	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
+	// Shared tool budget and admission for the cloud worker. No package bucket
+	// reaches cloud/, so these three suites run only through this list.
+	"cloud/shared-tools/a-tool-budget-survives-restart.test.ts",
+	"cloud/shared-tools/admission-stops-unauthorized-tool-dispatch.test.ts",
+	"cloud/shared-tools/only-admitted-users-can-use-their-own-secrets.test.ts",
+];
+
+/**
+ * The one command that runs every repo-level script suite. Both `local-ts` (the
+ * full local run) and `scripts` (that set alone) call this, so `repoScriptTests`
+ * has exactly one consumer and cannot be half-updated.
+ *
+ * The timeout is explicit because bun's 5 second default is a unit-test budget and
+ * these are not unit tests. They shell out: repo-wide git greps, and installer
+ * suites that run real installs into disposable HOMEs. Under `--parallel=4` those
+ * heavy suites saturate the machine and the light ones stall behind them.
+ * first-party-docs-are-indexed runs in 0.10 seconds on its own and still blew
+ * through 5 seconds in the bucket, which is contention, not slowness, and it
+ * failed on the clock rather than on anything it asserts.
+ *
+ * This buys patience, not leniency. Every assertion is unchanged, and a suite that
+ * genuinely hangs still fails, 30 seconds later. Raising it further would start
+ * hiding real hangs, so fix the suite rather than this number.
+ */
+function scriptTestCommand(): TestCommand {
+	return {
+		label: "scripts",
+		cwd: ".",
+		command: [
+			"bun",
+			"test",
+			...preloadArgs,
+			"--parallel=4",
+			"--timeout",
+			"30000",
+			...onlyFailuresArgs,
+			...repoScriptTests,
+		],
+	};
+}
+
+const codingAgentNativePathPatterns = [
+	/(^|\/)[^/]*(bash|native|browser|cmux|mnemopi|hindsight|memory)[^/]*\.test\.ts$/i,
+	/^test\/[^/]*(ask|gh|irc|task|eval|search|read|write|edit|ast|resolve|sqlite|web-search|fetch|image|ssh|tool)[^/]*\.test\.ts$/,
+	/^test\/core\/python-[^/]*\.test\.ts$/,
+	/^test\/core\/[^/]*executor[^/]*\.test\.ts$/,
+	/^test\/tools\/[^/]*(ask|gh|irc|task|eval|search|read|edit|ast|resolve|sqlite|web-search|fetch|image|ssh)[^/]*\.test\.ts$/,
+	/^test\/tools\/web-scrapers\//,
+	/^test\/web\//,
+	/^test\/ssh\//,
+	/^test\/tools\.test\.ts$/,
+];
+
+const codingAgentSingletonPathPatterns = [
+	/^test\/(settings|config|fast-mode-scope|autocomplete-max-visible)[^/]*\.test\.ts$/,
+	/^test\/(?:.*\/)?[^/]*(singleton|global-state|fake-timer)[^/]*\.test\.ts$/,
+	// The converted-card differential suites install the settings singleton and the process-wide ANSI
+	// policy through `test/differential/harness.ts`, so the content scan below -- which reads each test
+	// file's own text and nothing it imports -- sees none of the markers that would place them here.
+	// Classified by path instead: the state is real whether or not it is spelled in the file.
+	/^test\/differential\//,
+];
+
+const codingAgentUiPathPatterns = [
+	/^test\/modes\//,
+	/^test\/(interactive-mode|main-interactive|input-controller|streaming|status-line|keybindings|editor|hook|theme|setup-wizard|tool-args-reveal|tool-execution)[^/]*\.test\.ts$/,
+	/^src\/modes\/components\//,
+];
+
+const codingAgentRuntimePathPatterns = [
+	/^test\/agent-session[^/]*\.test\.ts$/,
+	/^test\/(acp|mcp|rpc|sdk)[^/]*\.test\.ts$/,
+	/^test\/(session|session-manager|task|collab|internal-urls)\//,
+	/^test\/session[^/]*\.test\.ts$/,
+	/^test\/session-manager[^/]*\.test\.ts$/,
+	/^test\/(extensions?|plugin|autolearn|skills|marketplace|oauth)[^/]*\.test\.ts$/,
+	/^test\/[^/]*oauth[^/]*\.test\.ts$/,
+	/^test\/(extensibility|discovery|tool-discovery|goals|marketplace)\//,
+	/^test\/(model|model-|model-registry|model-resolver|compaction)[^/]*\.test\.ts$/,
+];
+
+const codingAgentNativeContentMarkers = [
+	"@veyyon/natives",
+	"veyyon-natives",
+	"readImageMetadata",
+	"Bun.spawn",
+	"Bun.spawnSync",
+	"child_process",
+	"Bun.serve",
+	"new Worker",
+	"Worker(",
+	"puppeteer",
+	"bun:sqlite",
+	"Redis",
+	"redis",
+	"WebSocket",
+];
+
+const codingAgentSingletonContentMarkers = [
+	"Settings.init(",
+	"Settings.instance",
+	"resetSettingsForTest",
+	"setAgentDir(",
+	"vi.useFakeTimers(",
+	"vi.useRealTimers(",
+	"vi.stubEnv(",
+	"vi.unstubAllEnvs(",
+];
+
+const codingAgentSingletonContentPatterns = [
+	/(^|[^\w$.])(process\.env|Bun\.env)\.[A-Za-z0-9_]+\s*=/,
+	/(^|[^\w$.])(process\.env|Bun\.env)\[[^\]]+\]\s*=/,
+	/delete\s+(process\.env|Bun\.env)(\.[A-Za-z0-9_]+|\[[^\]]+\])/,
+	/Object\.assign\((process\.env|Bun\.env),/,
+];
+
+const codingAgentUiContentMarkers = [
+	"@veyyon/tui",
+	"InteractiveMode",
+	"InputController",
+	"StatusLine",
+	"ToolExecutionComponent",
+	"render(",
+	"renderToString",
+];
+
+const codingAgentRuntimeContentMarkers = ["AgentSession", "SessionManager", "AuthStorage", "Bun.sleep", "setTimeout("];
+
+let codingAgentTestPartitionPromise: Promise<CodingAgentTestPartition> | null = null;
+
+function shellQuote(value: string): string {
+	if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
+		return value;
+	}
+	return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+// Per-package bun-test args applied in every mode. hashline's large-base scale
+// suites (`apply-edits-past-6000-*`) do an O(range) operation per sampled anchor
+// — a `DEL 1.=k` prefix delete expands to k edits — so a single `it` can run a
+// few seconds on a slow CI runner, above bun's 5s per-test default. packages/ai
+// carries several `numRuns: 10_000` fast-check property suites (tool-argument
+// normalization/idempotence): a synchronous `fc.assert` blocks the event loop
+// for the whole run, so bun's default 5s timeout is only checked after the run
+// completes and cannot interrupt it — under `--parallel=8` on a loaded runner a
+// 10k-run property that is ~1.5s uncontended is CPU-starved past 5s and fails
+// the bucket, which skips the release publish. A larger per-test timeout gives
+// those legitimately-heavy tests headroom without masking a hang: the ci-test-ts
+// 600s bucket watchdog still bounds the whole run. (The single extreme outlier,
+// the 10k deeply-nested-tree idempotence property that hit ~20s, carries its own
+// explicit 120s per-test override in the suite; this floor covers the rest.)
+const workspacePackageExtraArgs: Record<string, string[]> = {
+	"plugins/hashline": ["--timeout", "20000"],
+	"packages/ai": ["--timeout", "20000"],
+};
+
+const workspacePackageParallelism: Readonly<Record<string, number>> = {
+	"tests/simulations": 1,
+};
+
+export function workspaceTestParallelism(pkg: string, requested: number): number {
+	return workspacePackageParallelism[pkg] ?? requested;
+}
+
+const catalogExpensiveTestFiles: readonly string[] = [
+	"test/a-reference-lookup-parses-only-the-models-it-reaches.test.ts",
+	"test/classifying-a-model-id-retains-nothing.test.ts",
+	"test/a-resolved-model-keeps-the-compat-its-sources-declared.test.ts",
+];
+
+const engineExpensiveTestFiles: readonly string[] = ["test/editor-wordwrap-fuzz.test.ts"];
+
+function workspaceTestCommand(
+	pkg: string,
+	parallel: number,
+	options: { env?: Record<string, string>; extraArgs?: string[]; smol?: boolean } = {},
+): TestCommand {
+	const { env, extraArgs = [], smol = false } = options;
+	// `--smol` runs the test process with a smaller heap. The native/TUI/integration
+	// bucket asks for it because those suites load the native addon and browser-ish
+	// modules; without it a fat single invocation can OOM-kill (reported as exit 137).
+	const perPackageArgs = workspacePackageExtraArgs[pkg] ?? [];
+	return {
+		label: pkg,
+		cwd: pkg,
+		env,
+		command: [
+			"bun",
+			"test",
+			...preloadArgs,
+			...(smol ? ["--smol"] : []),
+			`--parallel=${workspaceTestParallelism(pkg, parallel)}`,
+			...perPackageArgs,
+			...extraArgs,
+		],
+	};
+}
+
+// The Rust suite as one pooled command, so root `bun run test` reports TS and
+// Rust under the same progress stream / failure report. Delegates to
+// run-rs-task.ts, which self-skips when no Rust-affecting files changed locally
+// (printing a one-line notice) and resolves the cargo/nextest invocation.
+function rustTestCommand(): TestCommand {
+	return {
+		label: "rust (cargo nextest; skipped if no Rust changes)",
+		cwd: ".",
+		command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
+	};
+}
+
+async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
+	const entries = await fs.readdir(root, { withFileTypes: true });
+	const files: string[] = [];
+	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+		const filePath = path.join(root, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...(await collectTestsUnder(filePath, baseDir)));
+			continue;
+		}
+		if (!entry.isFile() || !entry.name.endsWith(".test.ts")) {
+			continue;
+		}
+		files.push(path.relative(baseDir, filePath).split(path.sep).join("/"));
+	}
+	return files;
+}
+
+function hasAnyMarker(content: string, markers: string[]): boolean {
+	return markers.some(marker => content.includes(marker));
+}
+
+function matchesAnyPath(testFile: string, patterns: RegExp[]): boolean {
+	return patterns.some(pattern => pattern.test(testFile));
+}
+
+function matchesAnyContentPattern(content: string, patterns: RegExp[]): boolean {
+	return patterns.some(pattern => pattern.test(content));
+}
+// Isolation is semantic, so singleton/global-state tests win every collision:
+// batching one beside another test can leak process-wide state. UI follows
+// because its five-file heap bound is stricter than the ten-file native and
+// runtime buckets. All buckets have the native addon in CI, so needing the
+// addon never justifies weakening either stronger constraint.
+export function classifyCodingAgentTest(testFile: string, content: string): CodingAgentBucket {
+	if (
+		matchesAnyPath(testFile, codingAgentSingletonPathPatterns) ||
+		hasAnyMarker(content, codingAgentSingletonContentMarkers) ||
+		matchesAnyContentPattern(content, codingAgentSingletonContentPatterns)
+	) {
+		return "singleton";
+	}
+	if (matchesAnyPath(testFile, codingAgentUiPathPatterns) || hasAnyMarker(content, codingAgentUiContentMarkers)) {
+		return "ui";
+	}
+	if (
+		matchesAnyPath(testFile, codingAgentNativePathPatterns) ||
+		hasAnyMarker(content, codingAgentNativeContentMarkers)
+	) {
+		return "native";
+	}
+	if (
+		matchesAnyPath(testFile, codingAgentRuntimePathPatterns) ||
+		hasAnyMarker(content, codingAgentRuntimeContentMarkers)
+	) {
+		return "runtime";
+	}
+	return "native";
+}
+
+async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> {
+	codingAgentTestPartitionPromise ??= (async () => {
+		const codingAgentDir = path.join(repoRoot, "packages/coding-agent");
+		const testFiles = [
+			...(await collectTestsUnder(path.join(codingAgentDir, "test"), codingAgentDir)),
+			...(await collectTestsUnder(path.join(codingAgentDir, "src"), codingAgentDir)),
+		].sort();
+		const partition: CodingAgentTestPartition = {
+			singleton: [],
+			ui: [],
+			runtime: [],
+			native: [],
+		};
+
+		for (const testFile of testFiles) {
+			const content = await Bun.file(path.join(codingAgentDir, testFile)).text();
+			partition[classifyCodingAgentTest(testFile, content)].push(testFile);
+		}
+
+		return partition;
+	})();
+	return codingAgentTestPartitionPromise;
+}
+
+async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
+	const partition = await getCodingAgentTestPartition();
+	const testFiles = partition[bucket];
+	if (testFiles.length === 0) {
+		throw new Error(`No coding-agent ${bucket} tests matched`);
+	}
+	const plan = codingAgentBucketPlans[bucket];
+	const chunkSize = plan.chunkSize;
+	const chunkCount = Math.ceil(testFiles.length / chunkSize);
+	const commands: TestCommand[] = [];
+	for (let i = 0; i < testFiles.length; i += chunkSize) {
+		const chunk = testFiles.slice(i, i + chunkSize);
+		const chunkLabel = chunkCount > 1 ? ` chunk ${commands.length + 1}/${chunkCount}` : "";
+		commands.push({
+			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
+			cwd: "packages/coding-agent",
+			command: ["bun", "test", ...preloadArgs, `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunk],
+		});
+	}
+	return commands;
+}
+
+export async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
+	switch (mode) {
+		// Only the Cloudflare bwrap lane uses this mode. Keep the source test in
+		// every other workspace mode; Bun aborts in this guest while that one test
+		// requests a native allocation of 16 GiB.
+		case "workspace-cloudflare":
+			return fastWorkspacePackages.flatMap(pkg => {
+				if (pkg === "packages/catalog") {
+					return [
+						workspaceTestCommand(pkg, 8, {
+							extraArgs: [
+								...onlyFailuresArgs,
+								...catalogExpensiveTestFiles.flatMap(file => ["--path-ignore-patterns", file]),
+							],
+						}),
+						{
+							label: `${pkg} (isolated)`,
+							cwd: pkg,
+							command: [
+								"bun",
+								"test",
+								...preloadArgs,
+								"--parallel=1",
+								...onlyFailuresArgs,
+								...catalogExpensiveTestFiles,
+							],
+						},
+					];
+				}
+				return [
+					workspaceTestCommand(pkg, 8, {
+						env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
+						extraArgs: [
+							...onlyFailuresArgs,
+							...(pkg === "packages/utils"
+								? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
+								: []),
+						],
+					}),
+				];
+			});
+		// `workspace` is packages only. It used to append its own hardcoded list of 15
+		// script tests, which made it the only bucket CI ran that touched scripts at all,
+		// and left the other 69 in `repoScriptTests` running nowhere. The dedicated
+		// `test_scripts` job runs the full list now, so this bucket no longer keeps a
+		// second copy to go stale.
+		case "workspace":
+			return fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8));
+		case "native":
+			return nativeAndIntegrationPackages.flatMap(pkg => {
+				if (pkg === "hosts/terminal/engine") {
+					return [
+						workspaceTestCommand(pkg, 4, {
+							smol: true,
+							extraArgs: [
+								...onlyFailuresArgs,
+								...engineExpensiveTestFiles.flatMap(file => ["--path-ignore-patterns", file]),
+							],
+						}),
+						{
+							label: `${pkg} (isolated)`,
+							cwd: pkg,
+							command: [
+								"bun",
+								"test",
+								...preloadArgs,
+								"--smol",
+								"--parallel=1",
+								...onlyFailuresArgs,
+								...engineExpensiveTestFiles,
+							],
+						},
+					];
+				}
+				return [workspaceTestCommand(pkg, 4, { smol: true })];
+			});
+		case "coding-agent-singleton":
+			return await codingAgentTestCommands("singleton");
+		case "coding-agent-ui":
+			return await codingAgentTestCommands("ui");
+		case "coding-agent-runtime":
+			return await codingAgentTestCommands("runtime");
+		case "coding-agent-native":
+			return await codingAgentTestCommands("native");
+		case "coding-agent-heavy":
+			return [
+				...(await codingAgentTestCommands("singleton")),
+				...(await codingAgentTestCommands("ui")),
+				...(await codingAgentTestCommands("runtime")),
+				...(await codingAgentTestCommands("native")),
+			];
+		// `all` has to mean all. It previously reached the 15 script tests only as a
+		// side effect of `workspace` carrying them, so pulling that copy out would have
+		// quietly emptied scripts from `all` as well. It names the bucket directly now.
+		case "all":
+			return [
+				...(await commandsForMode("workspace")),
+				...(await commandsForMode("native")),
+				...(await commandsForMode("coding-agent-heavy")),
+				...(await commandsForMode("scripts")),
+			];
+		// `local-ts` is the full local TypeScript run that root `bun run test:ts`
+		// drives: every package the old `--workspaces` fan-out covered (the CI
+		// `all` set PLUS veybot-web, which CI omits) and every repo
+		// script test, routed through this one quiet runner so the whole suite
+		// shares one progress stream and one failure report.
+		// `scripts` runs only the repo-level script suites. Root `test:scripts`
+		// delegates here rather than repeating the file list: two hand-maintained
+		// lists of which script tests to run is how one of them goes stale, and the
+		// stale one had 7 of the 32 entries.
+		case "scripts":
+			return [scriptTestCommand()];
+		case "local-ts":
+			return [
+				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
+				...nativeAndIntegrationPackages.map(pkg =>
+					workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs, smol: true }),
+				),
+				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
+				...(await commandsForMode("coding-agent-heavy")),
+				scriptTestCommand(),
+			];
+		// `local` is what root `bun run test` drives: the full TS suite plus the
+		// Rust task, so a single invocation reports TS and Rust together. The Rust
+		// command self-skips when no Rust-affecting files changed (see run-rs-task).
+		case "local":
+			return [...(await commandsForMode("local-ts")), rustTestCommand()];
+	}
+}
+
+// A CI runner or dev host may carry sccache S3 credentials (`AWS_*`) and config
+// (`SCCACHE_*`) in the environment, GitHub Actions injects `GITHUB_TOKEN`, and a
+// host may carry provider API keys. Any of these make env-sensitive code
+// non-deterministic in tests — e.g. leaked AWS creds make `amazon-bedrock` look
+// authenticated and win the provider startup fallback over `anthropic`. Run the
+// suites in a hermetic environment with all credential / cloud-config variables
+// stripped so resolution depends only on the test's own fixtures.
+const SCRUBBED_ENV_PREFIXES = ["AWS_", "SCCACHE_", "GOOGLE_CLOUD_"];
+const SCRUBBED_ENV_NAMES = new Set([
+	"RUSTC_WRAPPER",
+	"GITHUB_TOKEN",
+	"GH_TOKEN",
+	"COPILOT_GITHUB_TOKEN",
+	"GOOGLE_APPLICATION_CREDENTIALS",
+	"ANTHROPIC_OAUTH_TOKEN",
+	"XAI_OAUTH_TOKEN",
+	"CLOUDFLARE_API_TOKEN",
+	"VEYYON_NATIVE_CACHE_CREDENTIALS",
+	"VEYYON_NATIVE_CACHE_WRITE_CREDENTIALS",
+]);
+
+function isScrubbedEnvVar(key: string): boolean {
+	if (SCRUBBED_ENV_NAMES.has(key)) {
+		return true;
+	}
+	if (SCRUBBED_ENV_PREFIXES.some(prefix => key.startsWith(prefix))) {
+		return true;
+	}
+	// Any provider credential, e.g. ANTHROPIC_API_KEY / XAI_OAUTH_TOKEN / bedrock bearer.
+	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
+}
+
+function commandWithJUnitReport(testCommand: TestCommand): string[] {
+	if (!junitReportDir || testCommand.command[1] !== "test") {
+		return testCommand.command;
+	}
+	nodeFs.mkdirSync(junitReportDir, { recursive: true });
+	const scope = testCommand.cwd === "." ? "root" : testCommand.cwd.replaceAll("/", "__");
+	const label = testCommand.label.replaceAll(/[^A-Za-z0-9_.-]/g, "_");
+	const reportPath = path.join(junitReportDir, `${scope}--${label}.xml`);
+	return [...testCommand.command, "--reporter=junit", `--reporter-outfile=${reportPath}`];
+}
+
+/** Run one command with inherited output; returns the failure message, or `undefined` when it passed. */
+async function runTestCommand(testCommand: TestCommand, nodeTotals: NodeTestTotals): Promise<string | undefined> {
+	const cwd = path.join(repoRoot, testCommand.cwd);
+	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
+	console.log(`\n==> ${testCommand.label}`);
+	console.log(`$ ${renderedCommand}`);
+
+	if (isDryRun) {
+		return undefined;
+	}
+
+	// Node runs are piped so their TAP summary can be counted; Bun runs keep inherited output.
+	const captured = testCommand.runner === "node";
+	const env = buildChildEnv();
+	const proc = Bun.spawn(testCommand.command, {
+		cwd,
+		env,
+		stdout: captured ? "pipe" : "inherit",
+		stderr: captured ? "pipe" : "inherit",
+	});
+	const killTimer = setTimeout(() => proc.kill("SIGKILL"), chunkTimeoutMs());
+	const output = captured
+		? (await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])).join("")
+		: "";
+	if (captured) process.stdout.write(output);
+	let exitCode = await proc.exited;
+	clearTimeout(killTimer);
+	if (captured && !recordNodeRun(nodeTotals, testCommand.command, output)) {
+		if (exitCode === 0) exitCode = 1;
+		process.stdout.write(NODE_FAIL_CLOSED_NOTE);
+	}
+	if (exitCode === 0) return undefined;
+	const files = chunkTestFiles(renderedCommand);
+	const composition = files.length > 1 ? `\n${files.length} files in this chunk:\n  ${files.join("\n  ")}` : "";
+	return `${testCommand.label} failed with exit code ${exitCode}: ${renderedCommand}${composition}`;
+}
+
+/**
+ * Run every command in order, one at a time, then fail the process when any of them failed. A failing
+ * chunk does not stop the run, so one CI job reports every broken chunk in its bucket instead of the
+ * first. One process at a time keeps a memory-capped runner bounded.
+ */
+export async function runTestCommandsInSequence(commands: TestCommand[]): Promise<void> {
+	const failures: string[] = [];
+	const nodeTotals: NodeTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, files: 0, runs: 0 };
+	for (const testCommand of commands) {
+		const failure = await runTestCommand(testCommand, nodeTotals);
+		if (failure !== undefined) failures.push(failure);
+	}
+	reportNodeTestTotals(nodeTotals);
+	if (failures.length === 0) return;
+	process.exitCode = 1;
+	const header = `${failures.length} of ${commands.length} test chunk(s) FAILED`;
+	console.log(`\n${style.bold(style.red(`━━━ ${header} ━━━`))}`);
+	for (const failure of failures) console.log(`\n${style.red("✗")} ${failure}`);
+	console.log(`\n${style.red(header)}`);
+}
+
+// Child env shared by every spawned test process: the parent env with all CI
+// credential / cloud-config variables scrubbed (see SCRUBBED_ENV_* above) and
+// GITHUB_ACTIONS cleared so suites resolve only against their own fixtures.
+//
+// GC knobs (both needed — they gate different JSC mechanisms):
+// - `BUN_JSC_useConcurrentGC=0` stops the collector from marking concurrently
+//   with the mutator (868789972, an earlier GC crash under bun test).
+// - `BUN_JSC_numberOfGCMarkers=1` removes the ParallelHelperPool marker
+//   threads. Bun 1.3.14 segfaults/aborts inside parallel marking
+//   (`DOMGCOutputConstraint::executeImplImpl` → `visitOutputConstraints` on a
+//   dead cell; also "Pure virtual function called!") on heap-heavy
+//   coding-agent chunks (~1.3GB RSS, native ghostty-vt cells). Repro: UI
+//   bucket chunk crashed ~25% of runs with `BUN_JSC_forceRAMSize=256MB`,
+//   0/10 with markers=1, at zero measured wall-time cost. useConcurrentGC=0
+//   alone did not prevent it — the crash predates this knob.
+function buildChildEnv(overrides: Record<string, string> = {}): Record<string, string | undefined> {
+	const env: Record<string, string | undefined> = {
+		...process.env,
+		...overrides,
+		GITHUB_ACTIONS: "",
+		BUN_JSC_useConcurrentGC: "0",
+		BUN_JSC_numberOfGCMarkers: "1",
+		HOME: SANDBOX_HOME,
+		VEYYON_TEST_REAL_CONFIG_ROOT: REAL_CONFIG_ROOT,
+	};
+	for (const key of Object.keys(env)) {
+		if (isScrubbedEnvVar(key)) {
+			delete env[key];
+		}
+	}
+	return env;
+}
+
+// Per-chunk watchdog. A bun child that wedges (e.g. the panic handler
+// deadlocking after a GC crash) would otherwise stall the whole run: the
+// parallel path awaits the child's stdout/stderr pipes, which stay open as
+// long as the wedged process — or any grandchild that inherited them — lives.
+// After this many seconds the child is SIGKILLed and reported as a failure.
+// Override with VEYYON_TEST_CHUNK_TIMEOUT (seconds).
+function chunkTimeoutMs(): number {
+	const raw = Number(Bun.env.VEYYON_TEST_CHUNK_TIMEOUT?.trim());
+	if (Number.isFinite(raw) && raw >= 1) return raw * 1000;
+	return 600_000;
+}
+
+// The standard `CI` signal is authoritative. In CI each bucket is its own
+// memory-capped runner job (a single fat invocation gets OOM-killed at 137), so
+// chunks run sequentially within a job and parallelism happens across jobs.
+// Locally we trade memory for wall-clock and fan the chunks out across cores.
+
+// Fan-out width for the local parallel path, clamped to the command count.
+// Defaults to the machine's available parallelism; `VEYYON_TEST_CONCURRENCY`
+// overrides it — a positive integer to pick an exact width (dial down on a
+// memory-constrained laptop), or `all`/`max` to launch every chunk at once.
+export function testConcurrency(total: number): number {
+	const raw = Bun.env.VEYYON_TEST_CONCURRENCY?.trim().toLowerCase();
+	if (raw === "all" || raw === "max") {
+		return total;
+	}
+	const override = Number(raw);
+	if (Number.isFinite(override) && override >= 1) {
+		return Math.min(Math.floor(override), total);
+	}
+	// Sequential by DEFAULT, including on a developer machine. This used to fan out
+	// to os.availableParallelism() chunks, and each chunk is itself a `bun test`
+	// process that spawns further children, so on a many-core workstation a full run
+	// drove the load average past 80 and made the machine unusable while it ran.
+	// Saturating every core is the wrong default for a command someone runs while
+	// still working on that same machine. Opt into fanout with
+	// VEYYON_TEST_CONCURRENCY=<n> (or `all`), which is what CI should set.
+	return 1;
+}
+
+export interface CiTestShard {
+	index: number;
+	count: number;
+}
+
+export function parseCiTestShard(value: string | undefined): CiTestShard | undefined {
+	if (value === undefined) return undefined;
+	const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value.trim());
+	if (!match) throw new Error(`Invalid VEYYON_CI_TEST_SHARD ${JSON.stringify(value)}; expected <index>/<count>`);
+	const index = Number(match[1]);
+	const count = Number(match[2]);
+	if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count) || index > count) {
+		throw new Error(`Invalid VEYYON_CI_TEST_SHARD ${JSON.stringify(value)}; shard index must be within its count`);
+	}
+	return { index, count };
+}
+
+export function resolveCiTestShard(
+	env: Record<string, string | undefined> = Bun.env,
+): CiTestShard | undefined {
+	const testShardVal = env.VEYYON_CI_TEST_SHARD;
+	const vShard = env.VEYYON_CI_SHARD;
+	const vShards = env.VEYYON_CI_SHARDS;
+	const cfIndex = env.CF_SHARD_INDEX;
+	const cfCount = env.CF_SHARD_COUNT;
+
+	const hasTestShard = testShardVal !== undefined && testShardVal.trim() !== "";
+	const hasVeyyonShard = vShard !== undefined && vShard.trim() !== "";
+	const hasVeyyonShards = vShards !== undefined && vShards.trim() !== "";
+	const hasCfIndex = cfIndex !== undefined && cfIndex.trim() !== "";
+	const hasCfCount = cfCount !== undefined && cfCount.trim() !== "";
+
+	const hasVeyyon = hasVeyyonShard || hasVeyyonShards;
+	const hasCf = hasCfIndex || hasCfCount;
+
+	if (!hasTestShard && !hasVeyyon && !hasCf) {
+		return undefined;
+	}
+
+	let parsedFromTestShard: CiTestShard | undefined;
+	if (hasTestShard) {
+		parsedFromTestShard = parseCiTestShard(testShardVal);
+	}
+
+	let normA: CiTestShard | undefined;
+	if (hasVeyyon) {
+		if (!hasVeyyonShard || !hasVeyyonShards) {
+			throw new Error("Both VEYYON_CI_SHARD and VEYYON_CI_SHARDS must be set together");
+		}
+		const countNum = Number(vShards);
+		const shardNum = Number(vShard);
+		if (!Number.isSafeInteger(countNum) || countNum <= 0) {
+			throw new Error(`Invalid VEYYON_CI_SHARDS ${JSON.stringify(vShards)}; expected positive integer`);
+		}
+		if (!Number.isSafeInteger(shardNum) || shardNum < 1 || shardNum > countNum) {
+			throw new Error(`Invalid VEYYON_CI_SHARD ${JSON.stringify(vShard)}; must be between 1 and ${countNum}`);
+		}
+		normA = { index: shardNum, count: countNum };
+	}
+
+	let normB: CiTestShard | undefined;
+	if (hasCf) {
+		if (!hasCfIndex || !hasCfCount) {
+			throw new Error("Both CF_SHARD_INDEX and CF_SHARD_COUNT must be set together");
+		}
+		const countNum = Number(cfCount);
+		const indexNum = Number(cfIndex);
+		if (!Number.isSafeInteger(countNum) || countNum <= 0) {
+			throw new Error(`Invalid CF_SHARD_COUNT ${JSON.stringify(cfCount)}; expected positive integer`);
+		}
+		if (!Number.isSafeInteger(indexNum) || indexNum < 0 || indexNum >= countNum) {
+			throw new Error(
+				`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`,
+			);
+		}
+		normB = { index: indexNum + 1, count: countNum };
+	}
+
+	const candidates = [parsedFromTestShard, normA, normB].filter((c): c is CiTestShard => c !== undefined);
+	if (candidates.length > 1) {
+		const first = candidates[0];
+		for (let i = 1; i < candidates.length; i++) {
+			if (candidates[i].index !== first.index || candidates[i].count !== first.count) {
+				throw new Error(
+					`Conflicting shard configuration: shard ${first.index}/${first.count} conflicts with shard ${candidates[i].index}/${candidates[i].count}`,
+				);
+			}
+		}
+	}
+
+	return candidates[0];
+}
+
+export function partitionTestCommands<T>(commands: readonly T[], shard: CiTestShard): T[] {
+	return commands.filter((_, index) => index % shard.count === shard.index - 1);
+}
+
+const WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES: Readonly<Record<string, number>> = {
+	"plugins/hashline": 1,
+	"tests/simulations": 3,
+	"packages/ai": 1,
+	"packages/agent": 1,
+	"packages/catalog": 1,
+	"plugins/argot": 2,
+	"apps/stats": 3,
+	"packages/tool-render": 1,
+	"plugins/mode-swarm": 2,
+	"plugins/mnemopi": 3,
+	"plugins/web": 2,
+	"packages/utils": 1,
+};
+
+function extractCommandLabel(command: unknown): string {
+	if (typeof command === "string") {
+		return command;
+	}
+	if (command && typeof command === "object") {
+		if ("label" in command && typeof command.label === "string") {
+			return command.label;
+		}
+		if ("cwd" in command && typeof command.cwd === "string") {
+			return command.cwd;
+		}
+	}
+	return "";
+}
+
+function resolveWorkspaceCloudflareOverride(label: string): number | undefined {
+	if (label in WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES) {
+		return WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES[label];
+	}
+	for (const [key, shardNumber] of Object.entries(WORKSPACE_CLOUDFLARE_SHARD_OVERRIDES)) {
+		if (label.startsWith(`${key} `) || label.startsWith(`${key}/`)) {
+			return shardNumber;
+		}
+	}
+	return undefined;
+}
+
+export function allocateCloudflareTestCommands<T>(
+	mode: string,
+	commands: readonly T[],
+	shard: CiTestShard,
+): T[] {
+	if (shard.count !== 3) {
+		return partitionTestCommands(commands, shard);
+	}
+
+	if (mode === "workspace-cloudflare") {
+		return commands.filter((command, index) => {
+			const label = extractCommandLabel(command);
+			const override = resolveWorkspaceCloudflareOverride(label);
+			if (override !== undefined) {
+				return override === shard.index;
+			}
+			return index % shard.count === shard.index - 1;
+		});
+	}
+
+	if (mode === "native") {
+		return commands.filter((command, index) => {
+			const label = extractCommandLabel(command);
+			const isBinding =
+				label === "natives/bridge/bindings" ||
+				label.startsWith("natives/bridge/bindings ") ||
+				label.startsWith("natives/bridge/bindings/");
+			if (isBinding) {
+				return shard.index === 1 || shard.index === 2;
+			}
+			if (label.startsWith("hosts/terminal/engine")) {
+				return shard.index === 2;
+			}
+			if (label.startsWith("tests/evals")) {
+				return shard.index === 2;
+			}
+			if (label.startsWith("tests/simulations")) {
+				return false;
+			}
+			return shard.index === 1 ? index % shard.count === 0 : shard.index === 2 && index % shard.count !== 0;
+		});
+	}
+
+	if (mode.startsWith("coding-agent-")) {
+		return commands.filter((_, index) =>
+			shard.index === 1 ? index % shard.count === 0 : shard.index === 2 && index % shard.count !== 0,
+		);
+	}
+	if (mode === "scripts") {
+		return shard.index === 1 ? [...commands] : [];
+	}
+	return partitionTestCommands(commands, shard);
+}
+
+// ANSI styling for interactive runs only; disabled when stdout is not a TTY or
+// NO_COLOR is set, so CI logs and piped/aggregated output stay plain text.
+const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+const paint = (code: string, value: string): string => (useColor ? `\x1b[${code}m${value}\x1b[0m` : value);
+const style = {
+	green: (s: string) => paint("32", s),
+	red: (s: string) => paint("31", s),
+	bold: (s: string) => paint("1", s),
+	dim: (s: string) => paint("2", s),
+};
+
+// Outcome of one finished chunk. `output` is the chunk's combined stdout+stderr,
+// buffered so it can be withheld during a quiet run and replayed only on failure.
+interface ChunkOutcome {
+	label: string;
+	command: string;
+	exitCode: number;
+	seconds: number;
+	output: string;
+}
+
+export interface BunTestTotals {
+	pass: number;
+	fail: number;
+	skip: number;
+	todo: number;
+	reportedTests: number;
+	files: number;
+	runs: number;
+}
+
+export function addBunTestTotals(totals: BunTestTotals, output: string): void {
+	const runPattern = /^Ran (\d+) tests? across (\d+) files?\./gm;
+	let summary: RegExpMatchArray | undefined;
+	for (const match of output.matchAll(runPattern)) summary = match;
+	if (!summary || summary.index === undefined) return;
+	const current: BunTestTotals = {
+		pass: 0,
+		fail: 0,
+		skip: 0,
+		todo: 0,
+		reportedTests: Number(summary[1]),
+		files: Number(summary[2]),
+		runs: 1,
+	};
+	for (const count of output.slice(0, summary.index).matchAll(/^\s*(\d+) (pass|fail|skip|todo)\s*$/gm)) {
+		current[count[2] as "pass" | "fail" | "skip" | "todo"] = Number(count[1]);
+	}
+	totals.pass += current.pass;
+	totals.fail += current.fail;
+	totals.skip += current.skip;
+	totals.todo += current.todo;
+	totals.reportedTests += current.reportedTests;
+	totals.files += current.files;
+	totals.runs += current.runs;
+}
+
+export function formatBunTestTotals(totals: BunTestTotals): string {
+	const tests = totals.pass + totals.fail + totals.skip + totals.todo;
+	return `CLOUDFLARE_CI_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} reported=${totals.reportedTests} files=${totals.files} runs=${totals.runs}`;
+}
+
+export interface NodeTestTotals {
+	pass: number;
+	fail: number;
+	skip: number;
+	todo: number;
+	files: number;
+	runs: number;
+}
+
+// `node --test` argv prefix. TAP is the reporter whose end-of-run summary `parseNodeTapSummary` reads.
+export const NODE_TEST_PREFIX = ["node", "--test", "--test-reporter=tap"];
+
+const NODE_FAIL_CLOSED_NOTE =
+	"[node-tap] TAP summary missing, invalid, or not green; node contract chunk fails closed\n";
+
+interface NodeTapSummary {
+	tests: number;
+	pass: number;
+	fail: number;
+	skipped: number;
+	todo: number;
+	cancelled: number;
+}
+
+// `node --test` ends a run with `# <name> <count>` lines. The last `# tests` block is the run total.
+// A missing field, a zero test count, or counts that do not add up to `tests` returns undefined.
+export function parseNodeTapSummary(output: string): NodeTapSummary | undefined {
+	const last = [...output.matchAll(/^# tests /gm)].at(-1);
+	if (last?.index === undefined) return undefined;
+	const counts = new Map<string, number>();
+	for (const match of output.slice(last.index).matchAll(/^# (tests|pass|fail|skipped|todo|cancelled) (\d+)\s*$/gm)) {
+		counts.set(match[1], Number(match[2]));
+	}
+	const names = ["tests", "pass", "fail", "skipped", "todo", "cancelled"];
+	const values = names.map(name => counts.get(name));
+	if (!values.every((value): value is number => Number.isSafeInteger(value))) return undefined;
+	const [tests, pass, fail, skipped, todo, cancelled] = values;
+	if (tests === 0 || pass + fail + skipped + todo + cancelled !== tests) return undefined;
+	return { tests, pass, fail, skipped, todo, cancelled };
+}
+
+// Adds one node run to `totals`. Returns false when the summary is missing, inconsistent, or not green.
+export function recordNodeRun(totals: NodeTestTotals, command: readonly string[], output: string): boolean {
+	totals.runs += 1;
+	totals.files += command.length - NODE_TEST_PREFIX.length;
+	const summary = parseNodeTapSummary(output);
+	if (summary === undefined) return false;
+	totals.pass += summary.pass;
+	totals.fail += summary.fail + summary.cancelled;
+	totals.skip += summary.skipped;
+	totals.todo += summary.todo;
+	return summary.fail === 0 && summary.cancelled === 0;
+}
+
+export function reportNodeTestTotals(totals: NodeTestTotals): void {
+	if (totals.runs === 0) return;
+	const tests = totals.pass + totals.fail + totals.skip + totals.todo;
+	process.stdout.write(
+		`CLOUDFLARE_CI_NODE_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} files=${totals.files} runs=${totals.runs}\n`,
+	);
+}
+
+
+// Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
+// above. Used by the progress line and footer so timings read like `bun test`.
+function formatDuration(seconds: number): string {
+	return seconds < 1 ? `${Math.round(seconds * 1000)}ms` : `${seconds.toFixed(1)}s`;
+}
+
+// One-line live progress entry in `bun test` style: `✓ <label> [time]` for a
+// pass, `✗ <label> [time]` for a failure (bold red so the eye lands on it in a
+// long scroll). A failure also names the first failing test parsed from the
+// captured output — `— file > test (+N more)` — so the exact break is visible
+// in the stream without waiting for the end-of-run report. Emitted in completion
+// order as each chunk finishes.
+export function formatProgressLine(outcome: ChunkOutcome): string {
+	const time = style.dim(`[${formatDuration(outcome.seconds)}]`);
+	if (outcome.exitCode === 0) {
+		return `${style.green("✓")} ${outcome.label} ${time}`;
+	}
+	const failing = extractFailingTests(outcome.output);
+	const first = failing[0]?.name;
+	const more = failing.length > 1 ? style.dim(` (+${failing.length - 1} more)`) : "";
+	const detail = first ? ` ${style.dim("—")} ${style.red(first)}${more}` : "";
+	return `${style.bold(style.red(`✗ ${outcome.label}`))} ${time}${detail}`;
+}
+
+// Closing tally in `bun test` style, but counting test *chunks* (child commands), not individual tests.
+// Node and Bun test totals print on their own lines, before this footer.
+// `N chunks passed` line, a `N failed` line (red when non-zero, dim when clean),
+// then the total wall time. Printed after the failure report so a run always
+// ends on an at-a-glance verdict.
+export function formatSummaryFooter(
+	passed: number,
+	failed: number,
+	totalSeconds: number,
+	testTotals: BunTestTotals,
+): string {
+	const failLine = failed > 0 ? style.red(`${failed} failed chunks`) : style.dim("0 failed chunks");
+	return [
+		"",
+		` ${style.green(`${passed} chunks passed`)}`,
+		` ${failLine}`,
+		formatBunTestTotals(testTotals),
+		style.dim(`Ran ${passed + failed} test command(s) in ${formatDuration(totalSeconds)}.`),
+	].join("\n");
+}
+
+// A single failing test pulled from a chunk's captured bun output: its
+// `file > test` identifier and the verbatim failure block bun printed for it
+// (source frame, `error:` line, received/expected) — the detail a developer
+// needs to act without re-running.
+export interface FailingTest {
+	name: string;
+	detail: string;
+}
+
+// Parse the failing tests + their detail blocks out of a chunk's captured bun
+// output. Bun emits, per failure, a source code frame and `error:` block
+// *followed by* its `(fail) <name> [<time>]` marker, all under the most recent
+// `<relative/path>.test.ts:` header. We track the current header, buffer the
+// lines since the last marker/header (that's the pending failure's frame), and
+// flush them when the `(fail)` line arrives. ANSI is stripped only to classify
+// lines; the detail keeps bun's original bytes (incl. color). Returns `[]` when
+// the chunk died without per-test markers (e.g. a compile/import crash), so the
+// caller can fall back to replaying the raw log.
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const FILE_HEADER_RE = /^(\S.*\.test\.[cm]?[jt]sx?):$/;
+const FAIL_MARKER_RE = /^\(fail\)\s+(.*?)(?:\s+\[[\d.]+\s*m?s\])?$/;
+export function extractFailingTests(output: string): FailingTest[] {
+	const failing: FailingTest[] = [];
+	let currentFile = "";
+	let buffer: string[] = [];
+	for (const raw of output.split("\n")) {
+		const line = raw.replace(ANSI_RE, "").trim();
+		const header = FILE_HEADER_RE.exec(line);
+		if (header) {
+			currentFile = header[1];
+			buffer = [];
+			continue;
+		}
+		const fail = FAIL_MARKER_RE.exec(line);
+		if (fail) {
+			failing.push({
+				name: currentFile ? `${currentFile} > ${fail[1]}` : fail[1],
+				detail: buffer.join("\n").trim(),
+			});
+			buffer = [];
+			continue;
+		}
+		buffer.push(raw);
+	}
+	return failing;
+}
+
+// Final report for the chunks that failed. Each chunk lists its failing tests,
+// and under each test name bun's own failure block (source frame + `error:` +
+// received/expected) is reproduced verbatim — caret alignment and diffs intact —
+// so it reads like a direct `bun test` failure. In quiet mode (`replayOutput`)
+// the blocks are shown because the run withheld them; in verbose mode they
+// already streamed inline, so only the names are listed. When a chunk crashed
+// without per-test markers (no parseable failures) the raw log is replayed as a
+// fallback in quiet mode. The banner repeats below so it stays visible whether
+// you scroll to the top or the bottom of the failures.
+/**
+ * The test files a command was given, extracted from the command itself.
+ *
+ * A chunk is a slice of a bucket's sorted file list, and WHICH files landed in it
+ * is the first thing an investigation needs: a suite that passes alone and fails
+ * in chunk 109 is failing because of what else is in that process. The runner used
+ * to print the whole command on one line, so recovering the composition meant
+ * reconstructing the partition by hand from the runner source, which cost an hour
+ * on the mupdf-warnings suite (see the PDF chunk row in BACKLOG.md). The command
+ * already carries the answer; nothing needed to be threaded through, only printed.
+ */
+export function chunkTestFiles(command: string): string[] {
+	// Two alternatives because `shellQuote` wraps a path holding a shell character:
+	// quoted paths may contain spaces, bare ones may not.
+	const pattern = /(?:^|\s)(?:'([^']+\.test\.tsx?)'|([\w./@-]+\.test\.tsx?))(?=\s|$)/g;
+	return [...command.matchAll(pattern)].map(match => match[1] ?? match[2]);
+}
+
+export function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): string {
+	const lines: string[] = [];
+	lines.push(
+		"",
+		style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)),
+		style.dim(`$ ${failure.command}`),
+	);
+	const files = chunkTestFiles(failure.command);
+	// The composition, not just the command: a suite that passes alone and fails here
+	// is failing because of what shares its process, and that list is the whole lead.
+	if (files.length > 1) {
+		lines.push(style.dim(`  ${files.length} files in this chunk:`));
+		for (const file of files) lines.push(style.dim(`    ${file}`));
+	}
+	const failing = extractFailingTests(failure.output);
+	// Fully attributed only when every failure carries its own bun block;
+	// otherwise (no markers, or a marker with no preceding frame — timeouts,
+	// crashes) name what we can and replay the raw log so no error is lost.
+	const fullyAttributed = failing.length > 0 && failing.every(test => test.detail.length > 0);
+	for (const test of failing) {
+		lines.push("", `  ${style.red("✗")} ${style.bold(test.name)}`);
+		// Flush-left and verbatim so bun's caret/diff alignment is preserved.
+		if (replayOutput && fullyAttributed) {
+			lines.push(test.detail);
+		}
+	}
+	if (replayOutput && !fullyAttributed && failure.output.trim().length > 0) {
+		lines.push("", failure.output.trimEnd());
+	}
+	return lines.join("\n");
+}
+
+export function formatFailureReport(failures: ChunkOutcome[], total: number, replayOutput: boolean): string {
+	const header = `${failures.length} of ${total} test chunk(s) FAILED`;
+	const lines: string[] = ["", style.bold(style.red(`━━━ ${header} ━━━`))];
+	for (const failure of failures) {
+		lines.push(formatChunkFailure(failure, replayOutput));
+	}
+	lines.push("", style.red(header));
+	return lines.join("\n");
+}
+
+// Run every command through a fixed-width worker pool. Each child's stdout and
+// stderr are drained concurrently (so a chatty test never deadlocks on a full
+// pipe) and buffered. Quiet mode (the default) prints one progress line per
+// finished chunk and replays full output only for failures, in a single report
+// at the end; `--full` streams every chunk's output inline as it completes. All
+// failures are collected and reported together instead of failing fast, so one
+// run surfaces every broken chunk and exits non-zero without a runner stack trace.
+export async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
+	const queue = [...commands];
+	const failures: ChunkOutcome[] = [];
+	const testTotals: BunTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, reportedTests: 0, files: 0, runs: 0 };
+	const nodeTotals: NodeTestTotals = { pass: 0, fail: 0, skip: 0, todo: 0, files: 0, runs: 0 };
+	let completed = 0;
+	console.log(
+		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
+			`(VEYYON_TEST_CONCURRENCY=<n>|all to change).`,
+	);
+
+	// Incremental, cancellable drain into a mutable sink, so a watchdog-killed
+	// chunk still reports whatever the child managed to print before it wedged.
+	function drainInto(
+		stream: ReadableStream<Uint8Array>,
+		sink: { text: string },
+	): { done: Promise<void>; cancel: () => void } {
+		const decoder = new TextDecoder();
+		const reader = stream.getReader();
+		const done = (async () => {
+			try {
+				for (;;) {
+					const { done: ended, value } = await reader.read();
+					if (ended) break;
+					sink.text += decoder.decode(value, { stream: true });
+				}
+			} catch {
+				// cancelled or broken pipe — keep what was captured
+			}
+			sink.text += decoder.decode();
+		})();
+		return { done, cancel: () => void reader.cancel().catch(() => {}) };
+	}
+
+	// Wait for `promise` at most `ms`; resolves `true` when it settled in time.
+	// Never rejects.
+	async function settleWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+		const { promise: expired, resolve } = Promise.withResolvers<boolean>();
+		const timer = setTimeout(() => resolve(false), ms);
+		const settled = await Promise.race([
+			promise.then(
+				() => true,
+				() => true,
+			),
+			expired,
+		]);
+		clearTimeout(timer);
+		return settled;
+	}
+
+	async function worker(): Promise<void> {
+		for (;;) {
+			const testCommand = queue.shift();
+			if (!testCommand) {
+				return;
+			}
+			const env = buildChildEnv(testCommand.env);
+			const command = commandWithJUnitReport(testCommand);
+			const renderedCommand = command.map(shellQuote).join(" ");
+			const startedAt = performance.now();
+			const proc = Bun.spawn(command, {
+				cwd: path.join(repoRoot, testCommand.cwd),
+				env,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const stdout = { text: "" };
+			const stderr = { text: "" };
+			const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
+			const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
+			const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
+			// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
+			// after a GC crash) would otherwise hang this worker forever.
+			let timedOut = false;
+			const killTimer = setTimeout(() => {
+				timedOut = true;
+				proc.kill("SIGKILL");
+			}, chunkTimeoutMs());
+			let exitCode = await proc.exited;
+			clearTimeout(killTimer);
+			// Cap the post-exit drain: a leaked grandchild that inherited the
+			// pipes keeps them open indefinitely, and a pending read would keep
+			// the runner's event loop alive — cancel the readers instead.
+			if (!(await settleWithin(drains, 5000))) {
+				stdoutDrain.cancel();
+				stderrDrain.cancel();
+				await drains;
+			}
+			completed += 1;
+			let output = `${stdout.text}${stderr.text}${timedOut ? `\n[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (VEYYON_TEST_CHUNK_TIMEOUT to change)\n` : ""}`;
+			if (testCommand.runner === "node" && !recordNodeRun(nodeTotals, testCommand.command, output)) {
+				if (exitCode === 0) exitCode = 1;
+				output += NODE_FAIL_CLOSED_NOTE;
+			}
+			const outcome: ChunkOutcome = {
+				label: testCommand.label,
+				command: renderedCommand,
+				exitCode,
+				seconds: (performance.now() - startedAt) / 1000,
+				output,
+			};
+			if (testCommand.runner !== "node") addBunTestTotals(testTotals, outcome.output);
+			if (quiet) {
+				let msg = `${formatProgressLine(outcome)}\n`;
+				if (exitCode !== 0 || timedOut) {
+					msg += `${formatChunkFailure(outcome, true)}\n`;
+				}
+				process.stdout.write(msg);
+			} else {
+				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
+				process.stdout.write(
+					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
+				);
+			}
+			if (exitCode !== 0 || timedOut) {
+				failures.push(outcome);
+			}
+		}
+	}
+
+	const runStartedAt = performance.now();
+	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+	if (quiet) {
+		const totalSeconds = (performance.now() - runStartedAt) / 1000;
+		process.stdout.write(
+			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds, testTotals)}\n`,
+		);
+
+	} else if (failures.length > 0) {
+		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
+	}
+	reportNodeTestTotals(nodeTotals);
+	if (failures.length > 0) {
+		process.exitCode = 1;
+	}
+}
+
+/**
+ * Paths under the real config root that a LIVE veyyon session writes to as a
+ * matter of course: rotating logs, session transcripts, caches. Excluded on
+ * purpose, because the developer often has veyyon running while the suite runs
+ * and its ordinary logging would report a violation on every run. A guard that
+ * cries wolf is a guard that gets ignored. What stays watched is the surface
+ * whose loss is unrecoverable: credential stores, the global config, the install
+ * id, and the per-profile databases.
+ */
+const LIVE_APP_CHURN = ["logs", path.join("agent", "sessions"), "cache", path.join("agent", "cache")];
+
+export function isLiveAppChurn(target: string, root: string = REAL_CONFIG_ROOT): boolean {
+	const rel = path.relative(root, target);
+	const posix = rel.split(path.sep).join("/");
+	if (/^profiles\/[^/]+\/run\/daemons(?:\/|$)/.test(posix)) return true;
+	return LIVE_APP_CHURN.some(segment => {
+		const seg = segment.split(path.sep).join("/");
+		return posix === seg || posix.startsWith(`${seg}/`) || posix.includes(`/${seg}/`) || posix.endsWith(`/${seg}`);
+	});
+}
+
+export interface LiveVeyyonProcessOwnership {
+	pid: number;
+	openRealPaths: ReadonlySet<string>;
+}
+
+export interface LiveVeyyonOwnershipSnapshot {
+	supported: boolean;
+	external: readonly LiveVeyyonProcessOwnership[];
+	testOwned: readonly LiveVeyyonProcessOwnership[];
+}
+
+interface RealConfigDiffOptions {
+	/** Boundary snapshots used to prove exact external ownership of SQLite sidecars. */
+	ownership?: readonly LiveVeyyonOwnershipSnapshot[];
+}
+
+type RealConfigChange = {
+	kind: "CREATED" | "DELETED" | "MODIFIED";
+	target: string;
+};
+
+function sqliteDatabaseForSidecar(target: string): string | undefined {
+	const match = /^(.*\.db)-(?:journal|shm|wal)$/.exec(target);
+	return match?.[1];
+}
+
+function processOwnsDatabaseSidecar(process: LiveVeyyonProcessOwnership, target: string): boolean {
+	const database = sqliteDatabaseForSidecar(target);
+	return database !== undefined && process.openRealPaths.has(target) && process.openRealPaths.has(database);
+}
+
+/**
+ * True only when an external Veyyon process held both the exact changed SQLite
+ * sidecar and its primary database at a run boundary, with no test-owned process
+ * holding the same pair.
+ */
+export function isExternallyOwnedDatabaseSidecar(
+	target: string,
+	ownership: readonly LiveVeyyonOwnershipSnapshot[],
+): boolean {
+	if (ownership.some(snapshot => snapshot.testOwned.some(process => processOwnsDatabaseSidecar(process, target)))) {
+		return false;
+	}
+	return ownership.some(snapshot => snapshot.external.some(process => processOwnsDatabaseSidecar(process, target)));
+}
+
+function collectRealConfigChanges(
+	before: Map<string, string>,
+	after: Map<string, string>,
+	options: RealConfigDiffOptions = {},
+): RealConfigChange[] {
+	const changes: RealConfigChange[] = [];
+	for (const [target, fingerprint] of after) {
+		const previous = before.get(target);
+		if (previous === undefined) changes.push({ kind: "CREATED", target });
+		else if (previous !== fingerprint) changes.push({ kind: "MODIFIED", target });
+	}
+	for (const target of before.keys()) {
+		if (!after.has(target)) changes.push({ kind: "DELETED", target });
+	}
+	return changes
+		.filter(change => !options.ownership || !isExternallyOwnedDatabaseSidecar(change.target, options.ownership))
+		.sort((left, right) => formatRealConfigChange(left).localeCompare(formatRealConfigChange(right)));
+}
+
+function formatRealConfigChange(change: RealConfigChange): string {
+	const separator = change.kind === "MODIFIED" ? " " : "  ";
+	return `${change.kind}${separator}${change.target}`;
+}
+
+/**
+ * A fingerprint of every FILE under the real veyyon data directory: path, size and
+ * modification time. Contents are deliberately not read; the point is to detect
+ * change, and reading real credential files into memory to prove they were not
+ * touched would be its own small violation. Directories are not recorded, since
+ * creating an empty one is not damage and recording them would flag the parent
+ * chain of an ignored churn directory on every run.
+ */
+export function snapshotRealConfigRoot(root: string = REAL_CONFIG_ROOT): Map<string, string> {
+	const snapshot = new Map<string, string>();
+	const walk = (dir: string): void => {
+		let entries: nodeFs.Dirent[];
+		try {
+			entries = nodeFs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const full = path.join(dir, entry.name);
+			if (isLiveAppChurn(full, root)) continue;
+			if (entry.isDirectory()) {
+				walk(full);
+				continue;
+			}
+			try {
+				const stat = nodeFs.statSync(full);
+				snapshot.set(full, `${stat.size}:${stat.mtimeMs}`);
+			} catch {
+				snapshot.set(full, "unstattable");
+			}
+		}
+	};
+	walk(root);
+	return snapshot;
+}
+
+function readProcFields(target: string): string[] | undefined {
+	try {
+		return nodeFs.readFileSync(target, "utf8").split("\0").filter(Boolean);
+	} catch {
+		return undefined;
+	}
+}
+
+function isVeyyonCommand(args: readonly string[]): boolean {
+	return args.some(arg => {
+		const basename = path.basename(arg).toLowerCase();
+		const normalized = arg.split(path.sep).join("/");
+		return (
+			basename === "vey" ||
+			basename === "veyyon" ||
+			normalized.endsWith("/coding-agent/scripts/veyyon.ts") ||
+			normalized.endsWith("/coding-agent/src/cli.ts")
+		);
+	});
+}
+
+function openRealPaths(procDir: string, pid: number, root: string): ReadonlySet<string> {
+	const paths = new Set<string>();
+	let descriptors: string[];
+	try {
+		descriptors = nodeFs.readdirSync(path.join(procDir, String(pid), "fd"));
+	} catch {
+		return paths;
+	}
+	let cwd: string | undefined;
+	try {
+		cwd = nodeFs.readlinkSync(path.join(procDir, String(pid), "cwd"));
+	} catch {
+		cwd = undefined;
+	}
+	for (const descriptor of descriptors) {
+		let target: string;
+		try {
+			target = nodeFs.readlinkSync(path.join(procDir, String(pid), "fd", descriptor));
+		} catch {
+			continue;
+		}
+		if (target.endsWith(" (deleted)")) target = target.slice(0, -" (deleted)".length);
+		if (!path.isAbsolute(target)) {
+			if (!cwd) continue;
+			target = path.resolve(cwd, target);
+		}
+		const rel = path.relative(root, target);
+		if (rel === "" || (!path.isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${path.sep}`))) {
+			paths.add(path.resolve(target));
+		}
+	}
+	return paths;
+}
+
+/**
+ * Capture exact real-data files held by external Veyyon and test-owned processes.
+ *
+ * Test ownership comes from the runner's exact environment markers, never from a
+ * substring in argv. An unreadable `/proc` yields no ownership proof.
+ */
+export function scanLiveVeyyonOwnership(
+	procDir = "/proc",
+	root: string = REAL_CONFIG_ROOT,
+	selfPid = process.pid,
+	sandboxHome: string = SANDBOX_HOME,
+): LiveVeyyonOwnershipSnapshot {
+	let entries: string[];
+	try {
+		entries = nodeFs.readdirSync(procDir);
+	} catch {
+		return { supported: false, external: [], testOwned: [] };
+	}
+	const external: LiveVeyyonProcessOwnership[] = [];
+	const testOwned: LiveVeyyonProcessOwnership[] = [];
+	for (const entry of entries) {
+		const pid = Number(entry);
+		if (!Number.isInteger(pid) || pid === selfPid) continue;
+		const args = readProcFields(path.join(procDir, entry, "cmdline"));
+		const environment = readProcFields(path.join(procDir, entry, "environ")) ?? [];
+		const ownedByTest =
+			environment.includes(`HOME=${sandboxHome}`) || environment.includes(`VEYYON_TEST_REAL_CONFIG_ROOT=${root}`);
+		if (!ownedByTest && (!args || !isVeyyonCommand(args))) continue;
+		const process = { pid, openRealPaths: openRealPaths(procDir, pid, root) };
+		(ownedByTest ? testOwned : external).push(process);
+	}
+	return { supported: true, external, testOwned };
+}
+
+/** Number of external Veyyon processes visible to the ownership scanner. */
+export function liveVeyyonProcessCount(procDir = "/proc", selfPid = process.pid): number {
+	const ownership = scanLiveVeyyonOwnership(procDir, REAL_CONFIG_ROOT, selfPid);
+	return ownership.supported ? ownership.external.length : 1;
+}
+
+/** Every relevant path added, removed or modified between two snapshots. */
+export function diffRealConfigRoot(
+	before: Map<string, string>,
+	after: Map<string, string>,
+	options: RealConfigDiffOptions = {},
+): string[] {
+	return collectRealConfigChanges(before, after, options).map(formatRealConfigChange);
+}
+
+const TARGET_TRACKED_TEST_FILES: readonly string[] = [
+	"packages/utils/test/math.test.ts",
+	"hosts/terminal/engine/test/editor-wordwrap-fuzz.test.ts",
+	"packages/utils/test/an-idle-process-samples-its-stack-ten-times-less-often.test.ts",
+	"scripts/ci-test-concurrency-default.test.ts",
+	"scripts/a-cloudflare-bucket-selection-preserves-test-files.test.ts",
+];
+
+interface FileTestReceipt {
+	file: string;
+	tests: number;
+	pass: number;
+	fail: number;
+	skip: number;
+	time: number;
+}
+
+function reportTrackedFileCounts(junitDir: string | null): void {
+	if (!junitDir) return;
+	let entries: string[];
+	try {
+		entries = nodeFs.readdirSync(junitDir);
+	} catch {
+		return;
+	}
+	const results = new Map<string, FileTestReceipt>();
+	const testsuiteRegex = /<testsuite\b([^>]*)>/gi;
+	for (const entry of entries) {
+		if (!entry.endsWith(".xml")) continue;
+		const full = path.join(junitDir, entry);
+		let content: string;
+		try {
+			content = nodeFs.readFileSync(full, "utf8");
+		} catch {
+			continue;
+		}
+		for (const match of content.matchAll(testsuiteRegex)) {
+			const attrs = match[1];
+			const nameMatch = /\b(?:name|file)="([^"]*)"/.exec(attrs);
+			if (!nameMatch) continue;
+			const suiteName = nameMatch[1];
+			const testsMatch = /\btests="(\d+)"/.exec(attrs);
+			const failuresMatch = /\bfailures="(\d+)"/.exec(attrs);
+			const errorsMatch = /\berrors="(\d+)"/.exec(attrs);
+			const skippedMatch = /\bskipped="(\d+)"/.exec(attrs);
+			const timeMatch = /\btime="([^"]*)"/.exec(attrs);
+
+			const tests = testsMatch ? Number.parseInt(testsMatch[1], 10) : 0;
+			const failures = failuresMatch ? Number.parseInt(failuresMatch[1], 10) : 0;
+			const errors = errorsMatch ? Number.parseInt(errorsMatch[1], 10) : 0;
+			const skipped = skippedMatch ? Number.parseInt(skippedMatch[1], 10) : 0;
+			const time = timeMatch ? Number.parseFloat(timeMatch[1]) : 0;
+			const fail = failures + errors;
+			const pass = Math.max(0, tests - fail - skipped);
+
+			for (const tracked of TARGET_TRACKED_TEST_FILES) {
+				const baseName = path.basename(tracked);
+				if (suiteName === tracked || suiteName.endsWith(`/${baseName}`) || suiteName === baseName) {
+					results.set(tracked, { file: tracked, tests, pass, fail, skip: skipped, time });
+				}
+			}
+		}
+	}
+	for (const [file, receipt] of results) {
+		console.log(
+			`CLOUDFLARE_TEST_FILE_COUNTS file="${file}" pass=${receipt.pass} fail=${receipt.fail} ` +
+				`skip=${receipt.skip} todo=0 tests=${receipt.tests} duration=${receipt.time.toFixed(3)}s`,
+		);
+	}
+}
+
+// Repo-relative form of a listed explicit target. A missing or escaping path throws, so a listed
+// target that does not exist fails the run instead of falling back to a wider set.
+function normalizeExplicitTarget(file: string): string {
+	const normalized = path.posix.normalize(file.replaceAll("\\", "/")).replace(/^\.\//, "");
+	if (normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+		throw new Error(`Explicit test target is outside the repository: ${file}`);
+	}
+	if (!nodeFs.existsSync(path.join(repoRoot, normalized))) {
+		throw new Error(`Explicit test target not found: ${file}`);
+	}
+	return normalized;
+}
+
+// Explicit paths run as `bun test` commands grouped by their nearest package.json, so bun
+// resolves each file under the same root the matching bucket uses. A missing or escaping path
+// throws: a listed target that does not exist must fail the run, never fall back to a wider set.
+export function explicitTestCommands(files: readonly string[]): TestCommand[] {
+	const targetsByCwd = new Map<string, string[]>();
+	for (const file of files) {
+		const normalized = normalizeExplicitTarget(file);
+		let cwd = path.posix.dirname(normalized);
+		while (cwd !== "." && !nodeFs.existsSync(path.join(repoRoot, cwd, "package.json"))) {
+			cwd = path.posix.dirname(cwd);
+		}
+		targetsByCwd.set(cwd, [...(targetsByCwd.get(cwd) ?? []), path.posix.relative(cwd, normalized)]);
+	}
+	return [...targetsByCwd].map(([cwd, targets]) => ({
+		label: `targets ${cwd}`,
+		cwd,
+		command: ["bun", "test", ...preloadArgs, ...onlyFailuresArgs, ...targets],
+	}));
+}
+
+// Node contract targets run as one `node --test` command at the repository root, so one TAP summary covers the set.
+export function explicitNodeTestCommands(files: readonly string[]): TestCommand[] {
+	if (files.length === 0) return [];
+	const targets = files.map(normalizeExplicitTarget);
+	return [{ label: "node contract tests", cwd: ".", runner: "node", command: [...NODE_TEST_PREFIX, ...targets] }];
+}
+
+// Related selection asks the affected-workspace selector which members a change reaches, then
+// runs each member only through the bucket that already owns it. Every doubt throws: a drifted
+// working tree, a full-mode answer, or an unowned member. An empty selection with no Bun contract
+// target is a green no-op. The selector never widens to a full run here; a full run is the
+// nightly's job (CI_NIGHTLY=1 routes it).
+export interface RelatedSelectionInput {
+	inspection: AffectedWorkspaceInspection;
+	drift: readonly string[];
+	headTrackedPaths: ReadonlySet<string>;
+	ownedCommands: readonly TestCommand[];
+}
+
+export interface RelatedSelection {
+	selectedMembers: readonly string[];
+	contractTargets: readonly CiContractTestTarget[];
+	commands: TestCommand[];
+}
+
+/** Pure composition behind related selection: fail-closed checks, owned buckets, then Bun contract targets. */
+export function composeRelatedSelection(input: RelatedSelectionInput): RelatedSelection {
+	const failClosed = (reason: string): never => {
+		throw new Error(`CLOUDFLARE_RELATED_SELECTION_UNAVAILABLE fallback=${reason}`);
+	};
+	if (input.drift.length > 0) failClosed(`working tree differs from HEAD: ${input.drift.join(", ")}`);
+	const { inspection } = input;
+	if (inspection.mode !== "affected") {
+		failClosed(inspection.fallbackReason ?? "selector requested full coverage");
+	}
+	const contractTargets = ciContractTestsForPaths(inspection.changedPaths, input.headTrackedPaths);
+	const workspaceCommands = inspection.selectedMembers.flatMap(member => {
+		const commands = input.ownedCommands.filter(command => command.cwd === member);
+		if (commands.length === 0) failClosed(`selected member has no owning test bucket: ${member}`);
+		return commands;
+	});
+	const bunContractTargets = contractTargets.filter(target => target.runner === "bun").map(target => target.path);
+	const nodeContractTargets = contractTargets.filter(target => target.runner === "node").map(target => target.path);
+	return {
+		selectedMembers: inspection.selectedMembers,
+		contractTargets,
+		commands: [
+			...workspaceCommands,
+			...explicitTestCommands(bunContractTargets),
+			...explicitNodeTestCommands(nodeContractTargets),
+		],
+	};
+}
+
+async function relatedTestCommands(baseSha: string): Promise<TestCommand[]> {
+	const inspection = await inspectAffectedWorkspaceSelection(baseSha);
+	const drift = await workingTreeDrift(["."], isExplicitTestTarget);
+	const headTrackedPaths = await headTrackedFiles(["scripts"]);
+	const ownedCommands = [
+		...(await commandsForMode("workspace")),
+		...(await commandsForMode("native")),
+		...(await commandsForMode("coding-agent-heavy")),
+	];
+	const selection = composeRelatedSelection({ inspection, drift, headTrackedPaths, ownedCommands });
+	console.log(
+		`CLOUDFLARE_AFFECTED_SELECTION ${JSON.stringify({
+			selectorId: inspection.selectorId,
+			baseSha: inspection.baseSha,
+			headSha: inspection.headSha,
+			selectedMembers: selection.selectedMembers,
+		})}`,
+	);
+	for (const target of selection.contractTargets) {
+		console.log(`CLOUDFLARE_CI_CONTRACT_TEST runner=${target.runner} path=${target.path}`);
+	}
+	if (selection.commands.length === 0) {
+		console.log(
+			`CLOUDFLARE_RELATED_NO_TESTS no related tests: ${inspection.baseSha}..${String(inspection.headSha)} selects no workspace member or contract test`,
+		);
+	}
+	return selection.commands;
+}
+
+// Skipped when imported (e.g. by the runner's own unit tests), where
+// `process.argv` carries test-file paths rather than a mode/flags.
+if (import.meta.main) {
+	if (!(requestedMode in validModes)) {
+		throw new Error(
+			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
+		);
+	}
+
+	await ensureToolViewsGenerated();
+	// Explicit targets and related selections are single selections, not shards of a mode, so
+	// the shard split does not apply to them. CI runs an explicit target list on one shard only.
+	const targeted = explicitTestFiles.length > 0 || changedSince !== undefined;
+	const availableTestCommands =
+		explicitTestFiles.length > 0
+			? explicitTestCommands(explicitTestFiles)
+			: changedSince !== undefined
+				? await relatedTestCommands(changedSince)
+				: await commandsForMode(requestedMode as Mode);
+	const testShard = resolveCiTestShard(Bun.env);
+	const testCommands =
+		testShard && !targeted
+			? allocateCloudflareTestCommands(requestedMode, availableTestCommands, testShard)
+			: availableTestCommands;
+	if (testShard && testCommands.length === 0) {
+		console.log(
+			`CLOUDFLARE_CI_TEST_SHARD_DEFERRED mode=${requestedMode} shard=${testShard.index}/${testShard.count} ` +
+				`available_commands=${availableTestCommands.length}`,
+		);
+	}
+	// Outside CI, fan the independent chunk processes out across cores; CI keeps the
+	// sequential, fail-fast path so each memory-capped runner job stays bounded.
+	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
+	// child, and the tripwire preload) are meant to make real-data writes
+	// impossible, but a safety mechanism believed to work and never checked is how
+	// the original incident happened. Record the real Veyyon directory before the
+	// suite and compare it afterwards. Only SQLite sidecars exactly owned by an
+	// external Veyyon process at a boundary are attributable. Every other change
+	// remains a failure or an explicit unattributable result.
+	const ownershipBefore = scanLiveVeyyonOwnership();
+	const before = snapshotRealConfigRoot();
+
+	const bucketStartedAt = performance.now();
+	try {
+		if (
+			!isDryRun &&
+			testCommands.length > 0 &&
+			(junitReportDir !== null || (!isCI() && testCommands.length > 1))
+		) {
+			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
+		} else {
+			await runTestCommandsInSequence(testCommands);
+		}
+	} finally {
+		// In `finally` on purpose: a failing or interrupted run is exactly when a
+		// half-finished suite is most likely to have left damage behind.
+		const bucketSeconds = (performance.now() - bucketStartedAt) / 1000;
+		reportTrackedFileCounts(junitReportDir);
+		console.log(
+			`CLOUDFLARE_TEST_BUCKET_TIMING mode=${requestedMode} duration=${formatDuration(bucketSeconds)} ` +
+				`seconds=${bucketSeconds.toFixed(3)}`,
+		);
+		const ownershipAfter = scanLiveVeyyonOwnership();
+		const ownershipEvidenceAvailable = ownershipBefore.supported && ownershipAfter.supported;
+		const liveProcessCount = Math.max(
+			ownershipBefore.supported ? ownershipBefore.external.length : 1,
+			ownershipAfter.supported ? ownershipAfter.external.length : 1,
+		);
+		const changes = diffRealConfigRoot(before, snapshotRealConfigRoot(), {
+			ownership: [ownershipBefore, ownershipAfter],
+		});
+		if (changes.length > 0) {
+			const listing = changes.map(change => `  ${change}\n`).join("");
+			if (liveProcessCount > 0) {
+				// Exact externally owned SQLite sidecars have already been removed.
+				// Anything left cannot be attributed safely, so report it in full
+				// without blaming the tests. The preload remains the enforcing layer
+				// for writes attempted by a test process.
+				process.stderr.write(
+					`\nREAL-DATA DIFF (UNATTRIBUTABLE): ${changes.length} path(s) inside ${REAL_CONFIG_ROOT} changed ` +
+						(ownershipEvidenceAvailable
+							? "while another Veyyon session was running.\n"
+							: "and exact process ownership is unavailable on this platform.\n") +
+						`${listing}These paths were not exactly owned by an external Veyyon process. ` +
+						`Close every Veyyon session and re-run to make the writer unambiguous. ` +
+						`A test write through a guarded API also fails immediately in ` +
+						`packages/utils/test/helpers/real-data-tripwire.ts.\n`,
+				);
+			} else {
+				process.exitCode = 1;
+				process.stderr.write(
+					`\nREAL-DATA VIOLATION: the test run modified ${changes.length} path(s) inside ${REAL_CONFIG_ROOT}\n` +
+						`${listing}` +
+						`No other veyyon session was running, so the tests did this. ` +
+						`Tests may only write to temp directories. Find the suite that resolved a real path ` +
+						`(see packages/utils/test/helpers/real-data-tripwire.ts) and fix it before trusting these results.\n`,
+				);
+			}
+		}
+	}
+}

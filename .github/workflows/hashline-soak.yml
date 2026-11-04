@@ -1,0 +1,47 @@
+# Hashline seed-fuzz soak: runs the FULL ~3,000,000-seed corpus of the
+# apply-edits-past-6000-seeds-* walks, which the per-commit gate only samples
+# (see plugins/hashline/test/support/seed-band.ts). Sampling keeps the gate
+# under the 600s bucket watchdog; this scheduled job keeps the exhaustive
+# crash-fuzz coverage genuinely exercised, not merely theoretical.
+name: Hashline soak
+
+on:
+  schedule:
+    # Nightly at 08:00 UTC. Off the release path, so a slow soak never blocks a cut.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: "hashline-soak-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  seed-soak:
+    name: Full seed corpus (HASHLINE_SEED_SOAK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HASHLINE_SEED_SOAK: "1"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # The composite also generates src/export/html/tool-views.generated.js. The soak
+      # names hashline suites today, but the path list is an argument: one job that runs
+      # `bun test` on a bare install is one widened glob away from a parse-time death.
+      - uses: ./.github/actions/bun-install
+      - name: Build the test sandbox image
+        # `bun test` refuses to run unless it can prove the operator's home is
+        # unreachable, so the boundary has to exist before the soak starts.
+        # This nightly was green until that gate landed and would otherwise
+        # fail on the refusal without running a single seed.
+        run: bash scripts/test-sandbox/run.sh --build
+      - name: Run the full seed corpus
+        # hashline is pure TypeScript (no native addon), so no build step is
+        # needed. The soak env makes seedBand yield every seed in every band.
+        # The paths are repo-root relative because every rung runs the command
+        # at the repo root, so a `working-directory` on this step would not
+        # reach the process inside the sandbox.
+        run: bash scripts/test-sandbox/run.sh bun test --timeout 120000 ./plugins/hashline/test/apply-edits-past-6000-seeds-*.test.ts ./plugins/hashline/test/support/seed-band.test.ts

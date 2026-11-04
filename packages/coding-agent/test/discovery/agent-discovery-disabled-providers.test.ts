@@ -1,0 +1,103 @@
+/**
+ * Regression test for #1075:
+ * discoverAgents() must skip Claude plugin roots when claude-plugins is disabled.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import {
+	captureRegistryForTests,
+	disableProvider,
+	enableProvider,
+	initializeWithSettings,
+	type RegistrySnapshot,
+	restoreRegistryForTests,
+} from "@veyyon/coding-agent/discovery/capability";
+import { clearCache as clearFsCache } from "@veyyon/coding-agent/discovery/capability/fs";
+import { clearClaudePluginRootsCache } from "@veyyon/coding-agent/discovery/helpers";
+import { discoverAgents } from "@veyyon/coding-agent/task/discovery";
+import { removeSyncWithRetries } from "@veyyon/utils";
+
+const PLUGIN_AGENT_MD = [
+	"---",
+	"name: simplifier",
+	"description: A code simplifier agent from a Claude plugin",
+	"---",
+	"Simplify code.",
+].join("\n");
+
+describe("discoverAgents — claude-plugins disabled provider", () => {
+	let tempHome: string;
+	let registrySnapshot: RegistrySnapshot | undefined;
+
+	beforeEach(() => {
+		tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-disco-home-"));
+
+		// Build a fake Claude plugin install with an agents/ subdirectory.
+		const pluginInstallPath = path.join(tempHome, "plugin-cache", "code-simplifier");
+		const agentsDir = path.join(pluginInstallPath, "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "simplifier.md"), PLUGIN_AGENT_MD);
+
+		// Register the plugin in the Claude registry so listClaudePluginRoots picks it up.
+		const claudePluginsDir = path.join(tempHome, ".claude", "plugins");
+		fs.mkdirSync(claudePluginsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(claudePluginsDir, "installed_plugins.json"),
+			JSON.stringify({
+				version: 2,
+				plugins: {
+					"code-simplifier@claude-plugins-official": [
+						{
+							installPath: pluginInstallPath,
+							version: "1.0.0",
+							scope: "user",
+							installedAt: "2025-01-01T00:00:00Z",
+							lastUpdated: "2025-01-01T00:00:00Z",
+						},
+					],
+				},
+			}),
+		);
+
+		// claude-plugins is a foreign provider, gated behind the (default-off)
+		// importForeignConfig master toggle. Turn it on so this test exercises the
+		// per-provider enable/disable path rather than the master gate.
+		//
+		// The snapshot below is what puts BOTH the gate and the disabled-provider set
+		// back. The old teardown re-ran `initializeWithSettings(false)` plus
+		// `enableProvider`, which happened to cover this file only because the first of
+		// those clears the disabled set as a side effect; removing both at once showed
+		// the file leaving `state.disabledProviders: (none) -> claude-plugins` behind.
+		registrySnapshot = captureRegistryForTests();
+		initializeWithSettings(Settings.isolated({ "discovery.importForeignConfig": true }));
+
+		// Start each test with a clean provider + cache state.
+		enableProvider("claude-plugins");
+		clearFsCache();
+		clearClaudePluginRootsCache();
+	});
+
+	afterEach(() => {
+		removeSyncWithRetries(tempHome);
+		// Restore global state so other files are not affected.
+		if (registrySnapshot) restoreRegistryForTests(registrySnapshot);
+		registrySnapshot = undefined;
+		clearFsCache();
+		clearClaudePluginRootsCache();
+	});
+
+	test("includes plugin agents when claude-plugins is enabled", async () => {
+		const { agents } = await discoverAgents(tempHome, tempHome);
+		expect(agents.map(a => a.name)).toContain("simplifier");
+	});
+
+	test("excludes plugin agents when claude-plugins is disabled", async () => {
+		disableProvider("claude-plugins");
+		clearClaudePluginRootsCache();
+		const { agents } = await discoverAgents(tempHome, tempHome);
+		expect(agents.map(a => a.name)).not.toContain("simplifier");
+	});
+});

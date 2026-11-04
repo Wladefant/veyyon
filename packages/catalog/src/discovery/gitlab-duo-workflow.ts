@@ -1,0 +1,926 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { errorMessage } from "@veyyon/utils/type-guards";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
+import { GITLAB_SAAS_URL } from "../provider-endpoints";
+import type { FetchImpl, ModelSpec } from "../types";
+import { discoveryFetch, isRecord } from "../utils";
+import type { DiscoveryHooks } from "./failure";
+
+const GRAPHQL_PATH = "/api/graphql";
+const PROJECTS_PATH = "/api/v4/projects";
+const GROUPS_PATH = "/api/v4/groups";
+const FALLBACK_MODEL_ID = "claude_sonnet_4_6_vertex";
+const FALLBACK_MODEL_NAME = "Claude Sonnet 4.6 - Vertex";
+// Bound the top-level group pagination so a misbehaving server cannot loop forever.
+// 50 pages × 100/page covers 5000 top-level groups, far beyond any realistic account.
+const GITLAB_DUO_WORKFLOW_MAX_GROUP_PAGES = 50;
+
+// GitLab Duo Workflow does not expose a context window via the model catalog GraphQL.
+// The Duo Workflow Service streams the real per-agent window in each checkpoint's
+// `agent_context_usage` (claude_opus_4_8 observed at 1_000_000), but Veyyon's context
+// panel / auto-compaction read `model.contextWindow` from the catalog ModelSpec, which
+// the provider cannot backfill at runtime. Match the model ref to a static window the
+// same way other providers ship static values; DWS' own global fallback is 200_000
+// (duo_workflow_service/conversation/trimmer.py).
+const GITLAB_DUO_WORKFLOW_DEFAULT_CONTEXT_WINDOW = 200_000;
+const GITLAB_DUO_WORKFLOW_CONTEXT_WINDOW_RULES: readonly { pattern: RegExp; contextWindow: number }[] = [
+	{ pattern: /claude[_-]?opus/i, contextWindow: 1_000_000 },
+	{ pattern: /claude[_-]?sonnet/i, contextWindow: 1_000_000 },
+	{ pattern: /claude[_-]?haiku/i, contextWindow: 200_000 },
+	{ pattern: /gemini/i, contextWindow: 1_000_000 },
+	{ pattern: /gpt[_-]?5/i, contextWindow: 400_000 },
+];
+
+function resolveGitLabDuoWorkflowContextWindow(modelRef: string): number {
+	for (const rule of GITLAB_DUO_WORKFLOW_CONTEXT_WINDOW_RULES) {
+		if (rule.pattern.test(modelRef)) return rule.contextWindow;
+	}
+	return GITLAB_DUO_WORKFLOW_DEFAULT_CONTEXT_WINDOW;
+}
+
+const AI_CHAT_AVAILABLE_MODELS_QUERY = `query lsp_aiChatAvailableModels($rootNamespaceId: GroupID!) {
+  aiChatAvailableModels(rootNamespaceId: $rootNamespaceId) {
+    defaultModel { name ref }
+    selectableModels { name ref }
+    pinnedModel { name ref }
+  }
+}`;
+
+const ProjectRootNamespaceQuery = `query veyyon_gitlabDuoWorkflowProjectRootNamespace($fullPath: ID!) {
+  project(fullPath: $fullPath) {
+    namespace {
+      id
+      rootAncestor { id }
+    }
+  }
+}`;
+
+type GitLabDuoWorkflowCandidateSource = "override" | "project" | "remote" | "group";
+
+export interface GitLabDuoWorkflowModelRef {
+	name: string;
+	ref: string;
+}
+
+interface GitLabDuoWorkflowAvailability {
+	defaultModel: GitLabDuoWorkflowModelRef | null;
+	selectableModels: readonly GitLabDuoWorkflowModelRef[];
+	pinnedModel: GitLabDuoWorkflowModelRef | null;
+}
+
+interface GitLabDuoWorkflowCandidate {
+	rootNamespaceId: string;
+	namespacePath?: string;
+	// The concrete GitLab project (full path) this namespace was resolved from, when
+	// the candidate came from an explicit project id/path or the workspace git remote.
+	// Carried forward so runtime scoping uses the actual repository project instead of
+	// a generic group project.
+	projectPath?: string;
+	source: GitLabDuoWorkflowCandidateSource;
+}
+
+interface GitLabDuoWorkflowNamespaceSelectionWithModels extends GitLabDuoWorkflowNamespaceSelection {
+	models: GitLabDuoWorkflowAvailability;
+}
+
+/**
+ * GitLab Duo Workflow model/namespace discovery configuration.
+ */
+export interface GitLabDuoWorkflowDiscoveryConfig {
+	apiKey: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+	namespaceId?: string;
+	projectId?: string;
+	projectPath?: string;
+	cwd?: string;
+	/**
+	 * Called with the reason when a step of the handshake produces nothing usable.
+	 *
+	 * The same channel every reader in this package uses. This reader is the one that needs it most: reaching
+	 * a model list takes a namespace lookup, a project lookup, a paginated group walk and two GraphQL queries,
+	 * and EVERY one of them answered `null` with no reason, so a wrong token and a namespace without Duo
+	 * access produced the same empty picker. More than one reason can arrive, because the handshake really
+	 * does try more than one candidate, and which candidate failed is the diagnosis.
+	 */
+	onFailure?: DiscoveryHooks["onFailure"];
+	/**
+	 * Deadline for every request of the handshake.
+	 *
+	 * The runtime entry point (`discoverGitLabDuoWorkflowRuntimeNamespace`) runs on
+	 * the turn path, before a single assistant event exists, and the handshake is a
+	 * namespace lookup, a project lookup, a paginated group walk and two GraphQL
+	 * queries in series. With no signal each of those waited on the platform's own
+	 * socket timeout, so an endpoint that accepted the connection and answered
+	 * nothing held the turn open indefinitely — no watchdog downstream can see a
+	 * phase that has not produced a stream yet. The caller passes the signal that
+	 * carries its declared first-event budget; a catalog refresh may pass none.
+	 */
+	signal?: AbortSignal;
+}
+
+export interface GitLabDuoWorkflowNamespaceSelection {
+	rootNamespaceId: string;
+	namespacePath?: string;
+	// Concrete GitLab project (full path) the namespace was resolved from, when known
+	// (explicit project config or the workspace git remote). The runtime prefers this
+	// over a generic group project so the workflow scopes to the active repository.
+	projectPath?: string;
+	source: GitLabDuoWorkflowCandidateSource;
+}
+
+export async function discoverGitLabDuoWorkflowNamespace(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+): Promise<GitLabDuoWorkflowNamespaceSelection> {
+	const selection = await selectGitLabDuoWorkflowNamespace(config);
+	return {
+		rootNamespaceId: selection.rootNamespaceId,
+		...(selection.namespacePath ? { namespacePath: selection.namespacePath } : {}),
+		...(selection.projectPath ? { projectPath: selection.projectPath } : {}),
+		source: selection.source,
+	};
+}
+
+export async function discoverGitLabDuoWorkflowRuntimeNamespace(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+): Promise<GitLabDuoWorkflowNamespaceSelection> {
+	const baseUrl = normalizeGitLabBaseUrl(config.baseUrl);
+	const selection = await selectGitLabDuoWorkflowCandidate(config, baseUrl, resolveRuntimeNamespaceCandidate, true);
+	if (selection) {
+		return selection;
+	}
+	throw new Error(
+		"Unable to find a GitLab Duo Workflow namespace. Set GITLAB_DUO_NAMESPACE_ID to a root namespace or GITLAB_DUO_PROJECT_ID to a GitLab project.",
+	);
+}
+
+export async function fetchGitLabDuoWorkflowModels(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+): Promise<readonly ModelSpec<"gitlab-duo-agent">[] | null> {
+	const baseUrl = normalizeGitLabBaseUrl(config.baseUrl);
+	// `discoverGitLabDuoWorkflowNamespace` THROWS when no candidate has Duo access, which is right for the
+	// runtime entry point that has to stop, and wrong here: every reader in this package answers `null` for
+	// "no catalog", and a throw reaches the manager's catch instead, where it is labelled a reader bug
+	// (`unhandled`) rather than the configuration answer it actually is. The individual requests behind the
+	// handshake have already reported their own reasons; this adds the conclusion drawn from them.
+	let selection: GitLabDuoWorkflowNamespaceSelection;
+	try {
+		selection = await discoverGitLabDuoWorkflowNamespace(config);
+	} catch (error) {
+		config.onFailure?.({ stage: "payload", url: `${baseUrl}${GRAPHQL_PATH}`, detail: errorMessage(error) });
+		return null;
+	}
+	const availability = await fetchAiChatAvailableModels(config, baseUrl, selection.rootNamespaceId);
+	if (!availability) {
+		// The request itself has already reported. What is added here is WHICH namespace the handshake settled
+		// on, because the same failure means different things for an override the user configured and for a
+		// group that was picked by walking their memberships.
+		config.onFailure?.({
+			stage: "payload",
+			url: `${baseUrl}${GRAPHQL_PATH}`,
+			detail: `namespace ${selection.rootNamespaceId} (from ${selection.source}) returned no model availability`,
+		});
+		return null;
+	}
+	const modelRefs = resolveModelRefs(availability);
+	if (modelRefs.length === 0) {
+		config.onFailure?.({
+			stage: "payload",
+			url: `${baseUrl}${GRAPHQL_PATH}`,
+			detail: `namespace ${selection.rootNamespaceId} (from ${selection.source}) lists no usable models`,
+		});
+		return null;
+	}
+	return modelRefs.map(model => buildGitLabDuoWorkflowModelSpec(model, baseUrl, selection.rootNamespaceId));
+}
+
+export function buildGitLabDuoWorkflowModelSpec(
+	model: GitLabDuoWorkflowModelRef,
+	baseUrl = GITLAB_SAAS_URL,
+	rootNamespaceId?: string,
+): ModelSpec<"gitlab-duo-agent"> {
+	const normalizedBaseUrl = normalizeGitLabBaseUrl(baseUrl);
+	return {
+		id: model.ref,
+		name: model.name,
+		api: "gitlab-duo-agent",
+		provider: "gitlab-duo-agent",
+		baseUrl: normalizedBaseUrl,
+		// The Duo Agent Platform path exposes no client-controllable thinking knob
+		// (Anthropic model params are server-fixed; see provider notes), so reasoning
+		// is off — this also hides Veyyon's thinking-effort selector for these models.
+		reasoning: false,
+		input: ["text"],
+		// This endpoint publishes no pricing, so the zeros mean "not told", not "free".
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		pricing: "unknown",
+		contextWindow: resolveGitLabDuoWorkflowContextWindow(model.ref),
+		maxTokens: null,
+		supportsTools: true,
+		...(rootNamespaceId ? { gitlabDuoWorkflowRootNamespaceId: rootNamespaceId } : undefined),
+	};
+}
+
+export { buildGitLabDuoWorkflowFallbackModel } from "../provider-models/special";
+
+
+async function selectGitLabDuoWorkflowNamespace(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+): Promise<GitLabDuoWorkflowNamespaceSelectionWithModels> {
+	const baseUrl = normalizeGitLabBaseUrl(config.baseUrl);
+	const selection = await selectGitLabDuoWorkflowCandidate(config, baseUrl, candidate =>
+		validateNamespaceCandidate(config, baseUrl, candidate),
+	);
+	if (selection) {
+		return selection;
+	}
+	throw new Error(
+		"Unable to find a GitLab Duo Workflow namespace with available models. Set GITLAB_DUO_NAMESPACE_ID to a root namespace with Duo model access.",
+	);
+}
+
+type GitLabDuoWorkflowCandidateResolver<TSelection> = (
+	candidate: GitLabDuoWorkflowCandidate,
+) => Promise<TSelection | null> | TSelection | null;
+
+async function selectGitLabDuoWorkflowCandidate<TSelection>(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	resolveCandidate: GitLabDuoWorkflowCandidateResolver<TSelection>,
+	enrichNamespaceOverride = false,
+): Promise<TSelection | null> {
+	const namespaceId = normalizeIdentifier(config.namespaceId) ?? normalizeIdentifier(Bun.env.GITLAB_DUO_NAMESPACE_ID);
+	if (namespaceId) {
+		const candidate = enrichNamespaceOverride
+			? ((await fetchNamespaceOverrideCandidate(config, baseUrl, namespaceId)) ?? {
+					rootNamespaceId: namespaceId,
+					source: "override" as const,
+				})
+			: { rootNamespaceId: namespaceId, source: "override" as const };
+		const selected = await resolveCandidate(candidate);
+		if (selected) {
+			return selected;
+		}
+	}
+
+	const projectId =
+		normalizeIdentifier(config.projectId) ??
+		normalizeIdentifier(config.projectPath) ??
+		normalizeIdentifier(Bun.env.GITLAB_DUO_PROJECT_ID) ??
+		normalizeIdentifier(Bun.env.GITLAB_DUO_PROJECT_PATH);
+	if (projectId) {
+		const projectNamespace = await fetchProjectRootNamespace(config, baseUrl, projectId);
+		if (projectNamespace) {
+			const selected = await resolveCandidate({
+				rootNamespaceId: projectNamespace,
+				// Only a full path (group/project) is meaningful as a runtime project
+				// scope; a bare numeric id resolves the namespace but is not carried.
+				...(projectId.includes("/") ? { projectPath: projectId } : {}),
+				source: "project",
+			});
+			if (selected) {
+				return selected;
+			}
+		}
+	}
+
+	const remoteProjectPath = await discoverGitLabRemoteProjectPath(config.cwd, baseUrl);
+	if (remoteProjectPath) {
+		const remoteNamespace = await fetchProjectRootNamespace(config, baseUrl, remoteProjectPath);
+		if (remoteNamespace) {
+			const selected = await resolveCandidate({
+				rootNamespaceId: remoteNamespace,
+				projectPath: remoteProjectPath,
+				source: "remote",
+			});
+			if (selected) {
+				return selected;
+			}
+		}
+	}
+
+	for (const groupNamespace of await fetchTopLevelGroupNamespaceCandidates(config, baseUrl)) {
+		const selected = await resolveCandidate(groupNamespace);
+		if (selected) {
+			return selected;
+		}
+	}
+
+	return null;
+}
+
+function resolveRuntimeNamespaceCandidate(
+	candidate: GitLabDuoWorkflowCandidate,
+): GitLabDuoWorkflowNamespaceSelection | null {
+	const rootNamespaceId = normalizeIdentifier(candidate.rootNamespaceId);
+	const namespacePath = normalizeIdentifier(candidate.namespacePath);
+	const projectPath = normalizeIdentifier(candidate.projectPath);
+	return rootNamespaceId
+		? {
+				rootNamespaceId,
+				...(namespacePath ? { namespacePath } : {}),
+				...(projectPath ? { projectPath } : {}),
+				source: candidate.source,
+			}
+		: null;
+}
+
+async function validateNamespaceCandidate(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	candidate: GitLabDuoWorkflowCandidate,
+): Promise<GitLabDuoWorkflowNamespaceSelectionWithModels | null> {
+	const rootNamespaceId = normalizeIdentifier(candidate.rootNamespaceId);
+	if (!rootNamespaceId) {
+		return null;
+	}
+	const models = await fetchAiChatAvailableModels(config, baseUrl, rootNamespaceId);
+	if (!models || resolveModelRefs(models).length === 0) {
+		return null;
+	}
+	const namespacePath = normalizeIdentifier(candidate.namespacePath);
+	return { rootNamespaceId, ...(namespacePath ? { namespacePath } : {}), source: candidate.source, models };
+}
+
+async function fetchAiChatAvailableModels(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	rootNamespaceId: string,
+): Promise<GitLabDuoWorkflowAvailability | null> {
+	const payload = await postGraphQL(config, baseUrl, AI_CHAT_AVAILABLE_MODELS_QUERY, {
+		rootNamespaceId: toGraphQLRootNamespaceId(rootNamespaceId),
+	});
+	if (!payload) {
+		return null;
+	}
+	const data = getRecord(payload, "data");
+	const rawModels = data?.aiChatAvailableModels;
+	if (rawModels === null || rawModels === undefined) {
+		return null;
+	}
+	return parseAvailability(rawModels);
+}
+
+async function fetchNamespaceOverrideCandidate(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	namespaceId: string,
+): Promise<GitLabDuoWorkflowCandidate | null> {
+	const restNamespaceId = toRestNamespaceId(namespaceId);
+	if (!restNamespaceId) {
+		return null;
+	}
+	const result = await requestGitLabJson(config, `${baseUrl}${GROUPS_PATH}/${encodeURIComponent(restNamespaceId)}`, {
+		method: "GET",
+	});
+	if (!result) {
+		return null;
+	}
+	const payload = result.payload;
+	const rootNamespaceId = extractRootNamespaceId(payload) ?? namespaceId;
+	const namespacePath = extractNamespacePath(payload);
+	return {
+		rootNamespaceId,
+		...(namespacePath ? { namespacePath } : {}),
+		source: "override",
+	};
+}
+
+function toRestNamespaceId(namespaceId: string): string | null {
+	const gidMatch = namespaceId.match(/^gid:\/\/gitlab\/(?:Group|Namespace)\/(\d+)$/);
+	if (gidMatch?.[1]) return gidMatch[1];
+	return /^\d+$/.test(namespaceId) ? namespaceId : null;
+}
+
+async function fetchProjectRootNamespace(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	projectIdOrPath: string,
+): Promise<string | null> {
+	const rest = await fetchProjectRootNamespaceViaRest(config, baseUrl, projectIdOrPath);
+	if (rest?.rootNamespaceId) {
+		return rest.rootNamespaceId;
+	}
+	// A normal GitLab project payload exposes only the immediate `namespace`, not
+	// the root ancestor, so a leaf project under a subgroup yields no explicit
+	// root above. Resolve the root via GraphQL `rootAncestor`, keyed by the
+	// project's full path. For a numeric id the path is unknown until the REST
+	// payload returns it (`path_with_namespace`); fall back to the literal value
+	// only when it is already a path.
+	const fullPath = rest?.pathWithNamespace ?? (projectIdOrPath.includes("/") ? projectIdOrPath : null);
+	if (!fullPath) {
+		return null;
+	}
+	return fetchProjectRootNamespaceViaGraphQL(config, baseUrl, fullPath);
+}
+
+interface GitLabDuoWorkflowRestProject {
+	rootNamespaceId: string | null;
+	pathWithNamespace: string | null;
+}
+
+async function fetchProjectRootNamespaceViaRest(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	projectIdOrPath: string,
+): Promise<GitLabDuoWorkflowRestProject | null> {
+	const result = await requestGitLabJson(config, `${baseUrl}${PROJECTS_PATH}/${encodeURIComponent(projectIdOrPath)}`, {
+		method: "GET",
+	});
+	if (!result) {
+		return null;
+	}
+	return {
+		rootNamespaceId: extractExplicitRootNamespaceId(result.payload),
+		pathWithNamespace: extractProjectFullPath(result.payload),
+	};
+}
+
+async function fetchProjectRootNamespaceViaGraphQL(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	projectPath: string,
+): Promise<string | null> {
+	const payload = await postGraphQL(config, baseUrl, ProjectRootNamespaceQuery, { fullPath: projectPath });
+	if (!payload) {
+		return null;
+	}
+	const data = getRecord(payload, "data");
+	const project = getRecord(data, "project");
+	return extractExplicitRootNamespaceId(project);
+}
+
+async function fetchTopLevelGroupNamespaceCandidates(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+): Promise<GitLabDuoWorkflowCandidate[]> {
+	const candidates: (GitLabDuoWorkflowCandidate & { preferred: boolean })[] = [];
+	// GitLab paginates `/groups`; a token can belong to more than one page of top-level
+	// groups, and a usable Duo namespace may live on a later page. Follow the keyset/
+	// offset pages (via the `x-next-page` header GitLab sends) until exhausted, bounded
+	// so a misbehaving server cannot loop forever.
+	let nextPage: string | undefined = "1";
+	for (let page = 0; page < GITLAB_DUO_WORKFLOW_MAX_GROUP_PAGES && nextPage; page++) {
+		const url = new URL(`${baseUrl}${GROUPS_PATH}`);
+		url.searchParams.set("top_level_only", "true");
+		url.searchParams.set("per_page", "100");
+		url.searchParams.set("order_by", "name");
+		url.searchParams.set("sort", "asc");
+		url.searchParams.set("page", nextPage);
+
+		const result = await requestGitLabJson(config, url, { method: "GET" });
+		if (!result) {
+			// The reason has already been reported by the one place that makes the request. The walk stops
+			// rather than skipping the page, because a page that cannot be read makes the rest of the sequence
+			// meaningless: GitLab's paging is positional and the next page number came from THIS response.
+			break;
+		}
+		const payload = result.payload;
+		if (!Array.isArray(payload)) {
+			config.onFailure?.({
+				stage: "payload",
+				url: url.toString(),
+				detail: `expected an array of groups, received ${payload === null ? "null" : typeof payload}`,
+			});
+			break;
+		}
+		for (const group of payload) {
+			const rootNamespaceId = extractRootNamespaceId(group);
+			if (!rootNamespaceId) {
+				continue;
+			}
+			const namespacePath = extractNamespacePath(group);
+			candidates.push({
+				rootNamespaceId,
+				...(namespacePath ? { namespacePath } : {}),
+				source: "group",
+				preferred: hasDuoFeatureFlag(group),
+			});
+		}
+		nextPage = result.nextPage;
+	}
+	candidates.sort((left, right) => Number(right.preferred) - Number(left.preferred));
+	return candidates.map(candidate => ({
+		rootNamespaceId: candidate.rootNamespaceId,
+		...(candidate.namespacePath ? { namespacePath: candidate.namespacePath } : {}),
+		source: candidate.source,
+	}));
+}
+
+function nonEmptyHeader(value: string | null): string | undefined {
+	return value && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/** A GitLab JSON response, with the pagination header the group walk needs. */
+interface GitLabJsonResponse {
+	payload: unknown;
+	nextPage: string | undefined;
+}
+
+/**
+ * The ONE place this reader turns a GitLab request into JSON, and the one place it reports why it could not.
+ *
+ * Every step of the Duo handshake -- the namespace override, the project lookup, the paginated group walk,
+ * and every GraphQL query -- used to spell this out itself: a `try` around the fetch, an `if (!response.ok)`,
+ * a `try` around `response.json()`, and `return null` from all three with no reason. Four copies of the same
+ * three-way decision meant four places to get it wrong and four places a reason had to be added, so they are
+ * one function now. `null` still means "this step produced nothing usable", and the caller still keeps the
+ * distinction from a namespace that answers with no models, but now the reason travels with it.
+ */
+async function requestGitLabJson(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	url: string | URL,
+	init: { method: "GET" | "POST"; body?: string },
+): Promise<GitLabJsonResponse | null> {
+	const reportedUrl = url.toString();
+	const fetchImpl = discoveryFetch(config.fetch);
+	let response: Response;
+	try {
+		response = await fetchImpl(url, {
+			method: init.method,
+			headers: buildGitLabJsonHeaders(config.apiKey),
+			...(init.body === undefined ? {} : { body: init.body }),
+			...(config.signal ? { signal: config.signal } : {}),
+		});
+	} catch (error) {
+		config.onFailure?.({ stage: "request", url: reportedUrl, detail: errorMessage(error) });
+		// An abort is not "this candidate produced nothing usable", it is the end of
+		// the phase, and swallowing it made the handshake walk the remaining
+		// candidates against an already-dead signal and then conclude with
+		// "set GITLAB_DUO_NAMESPACE_ID" — a configuration remedy for a stalled
+		// network. Rethrow so the caller reports the deadline it set. A catalog
+		// refresh still degrades: `fetchGitLabDuoWorkflowModels` catches and
+		// answers `null`.
+		if (config.signal?.aborted) throw error;
+		return null;
+	}
+	if (!response.ok) {
+		// A 401 says the token is wrong and a 404 says this candidate is not a namespace the token can see.
+		// Both were the same silence before, and they call for entirely different things from an operator.
+		config.onFailure?.({
+			stage: "status",
+			url: reportedUrl,
+			detail: `HTTP ${response.status} ${response.statusText}`.trim(),
+		});
+		// A status about the CALLER ends the phase, for the same reason an abort
+		// does: no other candidate improves it, and walking the rest concluded with
+		// "set GITLAB_DUO_NAMESPACE_ID" — a configuration remedy for a credential
+		// the server refused, or for a rate limit that asked the caller to wait.
+		// A 403 or a 404 is about the CANDIDATE: that namespace is not one this
+		// token can see, and the next one may well be.
+		if (response.status === 401) {
+			throw new Error(
+				`GitLab refused the token: HTTP 401 ${response.statusText || "Unauthorized"}. The token is missing, expired, or lacks the api scope.`,
+			);
+		}
+		if (response.status === 429) {
+			throw new Error(
+				`GitLab rate-limited the request: HTTP 429 ${response.statusText || "Too Many Requests"}. Retry after the window the server states.`,
+			);
+		}
+		return null;
+	}
+	try {
+		return { payload: await response.json(), nextPage: nonEmptyHeader(response.headers.get("x-next-page")) };
+	} catch (error) {
+		// Same rule as the request catch above, and the sibling this class needed:
+		// headers can arrive and the body never can, and calling that "response is
+		// not JSON" sent the reader on to the next candidate with a dead signal and
+		// a wrong diagnosis.
+		if (config.signal?.aborted) {
+			config.onFailure?.({ stage: "body", url: reportedUrl, detail: errorMessage(error) });
+			throw error;
+		}
+		config.onFailure?.({ stage: "body", url: reportedUrl, detail: `response is not JSON: ${errorMessage(error)}` });
+		return null;
+	}
+}
+
+async function postGraphQL(
+	config: GitLabDuoWorkflowDiscoveryConfig,
+	baseUrl: string,
+	query: string,
+	variables: Record<string, string>,
+): Promise<unknown | null> {
+	const result = await requestGitLabJson(config, `${baseUrl}${GRAPHQL_PATH}`, {
+		method: "POST",
+		body: JSON.stringify({ query, variables }),
+	});
+	return result?.payload ?? null;
+}
+
+/** The availability record a GraphQL answer holds; a `selectableModels` that is not an array reads as none. */
+function parseAvailability(value: unknown): GitLabDuoWorkflowAvailability | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const selectableModels = Array.isArray(value.selectableModels) ? value.selectableModels : [];
+	return {
+		defaultModel: parseModelRef(value.defaultModel),
+		selectableModels: selectableModels.flatMap(model => {
+			const parsedModel = parseModelRef(model);
+			return parsedModel ? [parsedModel] : [];
+		}),
+		pinnedModel: parseModelRef(value.pinnedModel),
+	};
+}
+
+/** A model reference whose `ref` is a non-blank string; a `name` that is not one falls back to the ref. */
+function parseModelRef(value: unknown): GitLabDuoWorkflowModelRef | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const ref = typeof value.ref === "string" ? normalizeIdentifier(value.ref) : null;
+	if (!ref) {
+		return null;
+	}
+	const name = (typeof value.name === "string" ? normalizeIdentifier(value.name) : null) ?? ref;
+	return { name, ref };
+}
+
+function resolveModelRefs(availability: GitLabDuoWorkflowAvailability): readonly GitLabDuoWorkflowModelRef[] {
+	if (availability.pinnedModel) {
+		return [availability.pinnedModel];
+	}
+	if (availability.selectableModels.length > 0) {
+		return availability.selectableModels;
+	}
+	return availability.defaultModel ? [availability.defaultModel] : [];
+}
+
+/** The root namespace id a record declares directly or through its root namespace/ancestor record. */
+function declaredRootNamespaceId(value: Record<string, unknown>): string | null {
+	const direct = normalizeIdentifier(value.root_namespace_id) ?? normalizeIdentifier(value.rootNamespaceId);
+	if (direct) {
+		return direct;
+	}
+	const rootNamespace =
+		getRecord(value.root_namespace, "") ??
+		getRecord(value.rootNamespace, "") ??
+		getRecord(value.root_ancestor, "") ??
+		getRecord(value.rootAncestor, "");
+	return rootNamespace
+		? (normalizeIdentifier(rootNamespace.id) ??
+				normalizeIdentifier(rootNamespace.full_path) ??
+				normalizeIdentifier(rootNamespace.fullPath))
+		: null;
+}
+
+function extractExplicitRootNamespaceId(value: unknown): string | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const declared = declaredRootNamespaceId(value);
+	if (declared) {
+		return declared;
+	}
+	const namespace = getRecord(value.namespace, "");
+	return namespace ? extractExplicitRootNamespaceId(namespace) : null;
+}
+
+function extractRootNamespaceId(value: unknown): string | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const nestedRoot = declaredRootNamespaceId(value);
+	if (nestedRoot) {
+		return nestedRoot;
+	}
+	const namespace = getRecord(value.namespace, "");
+	if (namespace) {
+		return (
+			extractRootNamespaceId(namespace) ??
+			normalizeIdentifier(namespace.id) ??
+			normalizeIdentifier(namespace.full_path) ??
+			normalizeIdentifier(namespace.fullPath)
+		);
+	}
+	return normalizeIdentifier(value.id) ?? normalizeIdentifier(value.full_path) ?? normalizeIdentifier(value.fullPath);
+}
+
+function extractNamespacePath(value: unknown): string | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	return (
+		normalizeIdentifier(value.full_path) ?? normalizeIdentifier(value.fullPath) ?? normalizeIdentifier(value.path)
+	);
+}
+
+function extractProjectFullPath(value: unknown): string | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	return normalizeIdentifier(value.path_with_namespace) ?? normalizeIdentifier(value.fullPath);
+}
+
+function hasDuoFeatureFlag(value: unknown): boolean {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return value.duo_features_enabled === true || value.duo_core_features_enabled === true;
+}
+
+function getRecord(value: unknown, key: string): Record<string, unknown> | null {
+	const target = key ? (isRecord(value) ? value[key] : undefined) : value;
+	return isRecord(target) ? target : null;
+}
+
+function normalizeIdentifier(value: unknown): string | null {
+	if (typeof value !== "string" && typeof value !== "number") {
+		return null;
+	}
+	const trimmed = String(value).trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+function toGraphQLRootNamespaceId(rootNamespaceId: string): string {
+	return /^\d+$/.test(rootNamespaceId) ? `gid://gitlab/Group/${rootNamespaceId}` : rootNamespaceId;
+}
+
+function normalizeGitLabBaseUrl(baseUrl: string | undefined): string {
+	const raw = baseUrl?.trim() || GITLAB_SAAS_URL;
+	return trimTrailingSlashes(raw) || GITLAB_SAAS_URL;
+}
+
+function buildGitLabJsonHeaders(apiKey: string): Headers {
+	const headers = new Headers();
+	headers.set("Accept", "application/json");
+	headers.set("Content-Type", "application/json");
+	headers.set("Authorization", `Bearer ${apiKey}`);
+	return headers;
+}
+
+async function discoverGitLabRemoteProjectPath(cwd: string | undefined, baseUrl: string): Promise<string | null> {
+	const gitConfigText = await readGitConfigText(cwd ?? process.cwd());
+	if (!gitConfigText) {
+		return null;
+	}
+	const remoteUrls = parseGitRemoteUrls(gitConfigText);
+	const baseHost = parseUrlHost(baseUrl);
+	const basePath = parseUrlBasePath(baseUrl);
+	for (const remoteUrl of remoteUrls) {
+		const projectPath = parseGitLabRemoteProjectPath(remoteUrl, baseHost, basePath);
+		if (projectPath) {
+			return projectPath;
+		}
+	}
+	return null;
+}
+
+async function readGitConfigText(startCwd: string): Promise<string | null> {
+	let current = path.resolve(startCwd);
+	while (true) {
+		const gitPath = path.join(current, ".git");
+		const configText = await readGitConfigFromDotGit(gitPath);
+		if (configText) {
+			return configText;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) {
+			return null;
+		}
+		current = parent;
+	}
+}
+
+async function readGitConfigFromDotGit(gitPath: string): Promise<string | null> {
+	const directConfig = await readTextFile(path.join(gitPath, "config"));
+	if (directConfig !== null) {
+		return directConfig;
+	}
+	const dotGitFile = await readTextFile(gitPath);
+	if (dotGitFile === null) {
+		return null;
+	}
+	const gitDir = parseGitDirFile(dotGitFile);
+	if (!gitDir) {
+		return null;
+	}
+	const gitDirPath = path.isAbsolute(gitDir) ? gitDir : path.resolve(path.dirname(gitPath), gitDir);
+	// In a linked worktree, `.git` points at `.git/worktrees/<name>` whose `config`
+	// holds no remotes — those live in the common dir named by the `commondir` file.
+	const commonDir = await readTextFile(path.join(gitDirPath, "commondir"));
+	if (commonDir) {
+		const trimmed = commonDir.trim();
+		const commonDirPath = path.isAbsolute(trimmed) ? trimmed : path.resolve(gitDirPath, trimmed);
+		const commonConfig = await readTextFile(path.join(commonDirPath, "config"));
+		if (commonConfig !== null) {
+			return commonConfig;
+		}
+	}
+	return readTextFile(path.join(gitDirPath, "config"));
+}
+
+async function readTextFile(filePath: string): Promise<string | null> {
+	try {
+		return await fs.readFile(filePath, "utf8");
+	} catch {
+		// Null here means this step of the GitLab Duo handshake produced nothing usable, and the caller treats the
+		// provider as unavailable rather than as empty. The reason is not carried back yet; see the README section
+		// on failures travelling back and the tracked task to extend that channel.
+		return null;
+	}
+}
+
+function parseGitDirFile(value: string): string | null {
+	const match = value.match(/^gitdir:\s*(.+)$/im);
+	return match?.[1]?.trim() || null;
+}
+
+function parseGitRemoteUrls(configText: string): string[] {
+	const urls: string[] = [];
+	let inRemoteSection = false;
+	for (const line of configText.split(/\r?\n/)) {
+		const section = line.match(/^\s*\[([^\]]+)\]/);
+		if (section) {
+			inRemoteSection = /^remote\s+"[^"]+"$/.test(section[1].trim());
+			continue;
+		}
+		if (!inRemoteSection) {
+			continue;
+		}
+		const match = line.match(/^\s*url\s*=\s*(.+?)\s*$/);
+		if (match?.[1]) {
+			urls.push(match[1]);
+		}
+	}
+	return urls;
+}
+
+function parseGitLabRemoteProjectPath(remoteUrl: string, expectedHost: string | null, basePath: string): string | null {
+	const parsed = parseRemoteUrl(remoteUrl);
+	if (!parsed) {
+		return null;
+	}
+	if (expectedHost && !gitLabRemoteHostMatches(parsed.host, parsed.portInsensitive, expectedHost)) {
+		return null;
+	}
+	// A self-managed GitLab under a relative install path (e.g. https://host/gitlab) yields
+	// remotes like https://host/gitlab/group/project.git, but project full paths stay
+	// group/project. Strip the matching base path so the lookup keys off the real full path.
+	let projectPath = parsed.projectPath.replace(/^\/+/, "");
+	if (basePath && (projectPath === basePath || projectPath.startsWith(`${basePath}/`))) {
+		projectPath = projectPath.slice(basePath.length);
+	}
+	projectPath = projectPath.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+	return projectPath.includes("/") ? projectPath : null;
+}
+
+// Match a remote's host against the configured GitLab `baseUrl` host. HTTP(S) URL
+// remotes compare host:port strictly so a self-managed GitLab on a non-default port
+// is not confused with another service on the same hostname. `ssh://` and SCP-style
+// `git@host:path` remotes name the SSH port (commonly distinct from the web UI port)
+// or carry none, so they compare on the bare hostname only — stripping any port the
+// base URL carried — instead of being rejected for a port mismatch.
+function gitLabRemoteHostMatches(remoteHost: string, portInsensitive: boolean, expectedHost: string): boolean {
+	if (!portInsensitive) {
+		return remoteHost.toLowerCase() === expectedHost.toLowerCase();
+	}
+	const remoteHostname = remoteHost.split(":")[0] ?? remoteHost;
+	const expectedHostname = expectedHost.split(":")[0] ?? expectedHost;
+	return remoteHostname.toLowerCase() === expectedHostname.toLowerCase();
+}
+
+function parseRemoteUrl(remoteUrl: string): { host: string; projectPath: string; portInsensitive: boolean } | null {
+	try {
+		const url = new URL(remoteUrl);
+		// `host` (not `hostname`) keeps any explicit port so a self-managed GitLab on a
+		// non-default HTTP(S) port is not confused with another service on the same
+		// hostname. An `ssh://` remote, however, names the SSH port (commonly distinct
+		// from the web UI port), so it must compare on the bare hostname only.
+		const portInsensitive = url.protocol === "ssh:";
+		return { host: url.host, projectPath: url.pathname, portInsensitive };
+	} catch {
+		// SCP-style `git@host:path` has no port concept; bare host is the only key.
+		const scpMatch = remoteUrl.match(/^(?:[^@]+@)?([^:]+):(.+)$/);
+		if (scpMatch?.[1] && scpMatch[2]) {
+			return { host: scpMatch[1], projectPath: scpMatch[2], portInsensitive: true };
+		}
+		return null;
+	}
+}
+
+function parseUrlHost(url: string): string | null {
+	try {
+		// Match `parseRemoteUrl`: include the port so host comparison is port-aware.
+		return new URL(url).host;
+	} catch {
+		// Null here means this step of the GitLab Duo handshake produced nothing usable, and the caller treats the
+		// provider as unavailable rather than as empty. The reason is not carried back yet; see the README section
+		// on failures travelling back and the tracked task to extend that channel.
+		return null;
+	}
+}
+
+function parseUrlBasePath(url: string): string {
+	try {
+		return new URL(url).pathname.replace(/^\/+|\/+$/g, "");
+	} catch {
+		// Null here means this step of the GitLab Duo handshake produced nothing usable, and the caller treats the
+		// provider as unavailable rather than as empty. The reason is not carried back yet; see the README section
+		// on failures travelling back and the tracked task to extend that channel.
+		return "";
+	}
+}

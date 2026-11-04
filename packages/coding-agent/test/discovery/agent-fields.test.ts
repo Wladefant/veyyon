@@ -1,0 +1,179 @@
+import { describe, expect, test } from "bun:test";
+import { Effort } from "@veyyon/catalog/effort";
+import { parseAgentFields } from "@veyyon/coding-agent/discovery/helpers";
+import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
+
+describe("parseAgentFields", () => {
+	test("parses blocking from boolean frontmatter", () => {
+		const fields = parseAgentFields({
+			name: "reviewer",
+			description: "desc",
+			blocking: true,
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.blocking).toBe(true);
+	});
+
+	test("parses blocking from string frontmatter", () => {
+		const fields = parseAgentFields({
+			name: "reviewer",
+			description: "desc",
+			blocking: "false",
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.blocking).toBe(false);
+	});
+
+	test("ignores invalid blocking values", () => {
+		const fields = parseAgentFields({
+			name: "reviewer",
+			description: "desc",
+			blocking: "sometimes",
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.blocking).toBeUndefined();
+	});
+	test("parses legacy thinking key", () => {
+		const fields = parseAgentFields({
+			name: "reviewer",
+			description: "desc",
+			thinking: "medium",
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.thinkingLevel).toBe(Effort.Medium);
+	});
+
+	test("prefers thinking-level over legacy thinking", () => {
+		const fields = parseAgentFields({
+			name: "reviewer",
+			description: "desc",
+			thinking: "minimal",
+			thinkingLevel: Effort.High,
+		});
+
+		expect(fields?.thinkingLevel).toBe(Effort.High);
+	});
+	test("accepts the auto thinking selector", () => {
+		const fields = parseAgentFields({
+			name: "worker",
+			description: "desc",
+			thinkingLevel: "auto",
+		});
+
+		expect(fields?.thinkingLevel).toBe(AUTO_THINKING);
+	});
+
+	test("rejects unknown thinking selectors", () => {
+		const fields = parseAgentFields({
+			name: "worker",
+			description: "desc",
+			thinkingLevel: "turbo",
+		});
+
+		expect(fields?.thinkingLevel).toBeUndefined();
+	});
+
+	/**
+	 * YAML null is the persisted spelling of an unset child effort. Normalizing
+	 * it to undefined lets the executor apply the omitted-level inheritance rule.
+	 */
+	test("normalizes a null thinking selector to omitted", () => {
+		const fields = parseAgentFields({
+			name: "worker",
+			description: "desc",
+			thinkingLevel: null,
+		});
+
+		expect(fields?.thinkingLevel).toBeUndefined();
+	});
+
+	test("lowercases tool names", () => {
+		const fields = parseAgentFields({
+			name: "reviewer",
+			description: "desc",
+			tools: ["Read", "Search"],
+		});
+
+		expect(fields?.tools).toEqual(["read", "search", "yield"]);
+	});
+
+	test("deduplicates tool names", () => {
+		const fields = parseAgentFields({
+			name: "reviewer",
+			description: "desc",
+			tools: ["Search", "search", "Read"],
+		});
+
+		expect(fields?.tools).toEqual(["search", "read", "yield"]);
+	});
+
+	test("parses autoloadSkills from array frontmatter", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+			autoloadSkills: ["user-created-skill-a", "user-created-skill-b"],
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toEqual(["user-created-skill-a", "user-created-skill-b"]);
+	});
+
+	test("parses autoloadSkills from CSV string", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+			autoloadSkills: "user-created-skill-a, user-created-skill-b",
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toEqual(["user-created-skill-a", "user-created-skill-b"]);
+	});
+
+	test("returns undefined autoloadSkills when field absent", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toBeUndefined();
+	});
+
+	test("returns undefined autoloadSkills for empty array", () => {
+		const fields = parseAgentFields({
+			name: "oracle",
+			description: "desc",
+			autoloadSkills: [],
+		});
+
+		expect(fields).toBeDefined();
+		expect(fields?.autoloadSkills).toBeUndefined();
+	});
+
+	test("parses readSummarize from boolean frontmatter", () => {
+		expect(parseAgentFields({ name: "explore", description: "desc", readSummarize: false })?.readSummarize).toBe(
+			false,
+		);
+		expect(parseAgentFields({ name: "explore", description: "desc", readSummarize: true })?.readSummarize).toBe(true);
+	});
+
+	test("parses readSummarize from string frontmatter", () => {
+		expect(parseAgentFields({ name: "explore", description: "desc", readSummarize: "false" })?.readSummarize).toBe(
+			false,
+		);
+	});
+
+	test("ignores invalid readSummarize values", () => {
+		expect(
+			parseAgentFields({ name: "explore", description: "desc", readSummarize: "nope" })?.readSummarize,
+		).toBeUndefined();
+	});
+
+	test("returns undefined readSummarize when field absent", () => {
+		expect(parseAgentFields({ name: "explore", description: "desc" })?.readSummarize).toBeUndefined();
+	});
+});

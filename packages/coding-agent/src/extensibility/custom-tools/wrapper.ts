@@ -1,0 +1,51 @@
+/**
+ * CustomToolAdapter wraps CustomTool instances into AgentTool for use with the agent.
+ */
+import type { AgentTool, AgentToolUpdateCallback } from "@veyyon/agent-core";
+import type { Static, TSchema } from "@veyyon/ai";
+import { applyToolProxy } from "@veyyon/kernel/registry/tool-proxy";
+import type { Theme } from "../../theme/theme";
+import type { CustomTool, CustomToolContext } from "./types";
+
+export class CustomToolAdapter<TParams extends TSchema = TSchema, TDetails = any, TTheme extends Theme = Theme>
+	implements AgentTool<TParams, TDetails, TTheme>
+{
+	declare name: string;
+	declare label: string;
+	declare description: string;
+	declare parameters: TParams;
+	readonly strict: boolean | undefined;
+
+	constructor(
+		private tool: CustomTool<TParams, TDetails>,
+		private getContext: () => CustomToolContext,
+	) {
+		applyToolProxy(tool, this);
+		this.strict = tool.strict;
+	}
+
+	execute(
+		toolCallId: string,
+		params: Static<TParams>,
+		signal?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback<TDetails, TParams>,
+		context?: CustomToolContext,
+	) {
+		// The one place the agent's argument order is translated into
+		// `CustomTool.execute`'s order: onUpdate third, context fourth, signal LAST.
+		// An extension tool (`ToolDefinition.execute`) keeps the agent's order
+		// instead. `test/tool-adapter-argument-order.test.ts` pins both.
+		return this.tool.execute(toolCallId, params, onUpdate, context ?? this.getContext(), signal);
+	}
+
+	/**
+	 * Backward-compatible export of factory function for existing callers.
+	 * Prefer CustomToolAdapter constructor directly.
+	 */
+	static wrap<TParams extends TSchema = TSchema, TDetails = any, TTheme extends Theme = Theme>(
+		tool: CustomTool<TParams, TDetails>,
+		getContext: () => CustomToolContext,
+	): AgentTool<TParams, TDetails, TTheme> {
+		return new CustomToolAdapter(tool, getContext);
+	}
+}

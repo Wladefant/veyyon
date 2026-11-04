@@ -1,0 +1,117 @@
+/**
+ * A displayed path collapses the operator's home directory to `~`, and only when the path is really
+ * under it.
+ *
+ * WHY THIS SUITE EXISTS. `src/tools/core/shorten-path.ts` is the node-side owner of that collapse: the
+ * launch card's status row and every tool renderer reach it, and a leaked absolute path carries the
+ * operator's username into a transcript, an export and a shared session. Nothing named the module.
+ * It was covered only through whatever a status-row suite happened to render, so the boundary case
+ * that makes the rule correct -- a sibling directory whose name merely starts with the home path --
+ * was asserted nowhere.
+ *
+ * WHAT IT DOES NOT CATCH. Whether a caller uses it. The browser packages have their own owner in
+ * `@veyyon/tool-render`, deliberately, and this says nothing about that one.
+ */
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as os from "node:os";
+import { shortenPath as reExported, shortenEmbeddedPaths } from "@veyyon/coding-agent/tools/core/render-utils";
+import { shortenPath } from "@veyyon/coding-agent/tools/core/shorten-path";
+
+describe("a displayed path hides the home directory", () => {
+	it("shows a path under the home directory as a tilde path", () => {
+		expect(shortenPath("/home/operator/src/app.ts", "/home/operator")).toBe("~/src/app.ts");
+	});
+
+	it("shows the home directory itself as a bare tilde", () => {
+		expect(shortenPath("/home/operator", "/home/operator")).toBe("~");
+	});
+
+	/**
+	 * THE boundary. `/home/operator2` starts with `/home/operator` and is a different account, so a
+	 * prefix test alone would rewrite it to `~2` -- a path that resolves nowhere and still leaks the
+	 * name it claimed to hide.
+	 */
+	it("leaves a sibling directory whose name starts with the home path alone", () => {
+		expect(shortenPath("/home/operator2/src/app.ts", "/home/operator")).toBe("/home/operator2/src/app.ts");
+	});
+
+	it("collapses a Windows home directory and reports forward slashes", () => {
+		expect(shortenPath("C:\\Users\\operator\\src\\app.ts", "C:\\Users\\operator")).toBe("~/src/app.ts");
+	});
+
+	it("collapses a Windows home directory written in another case", () => {
+		// Windows paths are case-insensitive: the shell, the drive and the provider each hand back
+		// whatever case they like for one directory, so a case-sensitive prefix test shows the
+		// operator's account name in full instead of `~`.
+		expect(shortenPath("c:\\users\\operator\\src\\app.ts", "C:\\Users\\Operator")).toBe("~/src/app.ts");
+	});
+
+	it("collapses a UNC home directory written in another case", () => {
+		// The second Windows dialect: a UNC home carries no drive letter, so the case-insensitive
+		// rule has to key off the leading `\\` rather than a `C:` prefix.
+		expect(shortenPath("\\\\SERVER\\Share\\src\\app.ts", "\\\\server\\share")).toBe("~/src/app.ts");
+	});
+
+	it("still leaves a case-insensitive sibling that shares the home prefix", () => {
+		// Case-insensitive matching must not weaken the separator boundary: `/users/operator2`
+		// shares every character of the home path up to the last one and is another account.
+		expect(shortenPath("c:\\users\\operator2\\src\\app.ts", "C:\\Users\\Operator")).toBe(
+			"c:\\users\\operator2\\src\\app.ts",
+		);
+	});
+
+	it("leaves a win32 sibling that merely shares the prefix", () => {
+		// The boundary rule holds in the backslash dialect too, where a separator check written for
+		// `/` alone would rewrite a second account to `~2`. A path that is not collapsed is returned
+		// as it arrived, separators included.
+		expect(shortenPath("C:\\Users\\operator2\\src\\app.ts", "C:\\Users\\operator")).toBe(
+			"C:\\Users\\operator2\\src\\app.ts",
+		);
+	});
+
+	it("collapses nothing when the home directory is empty", () => {
+		// An empty home matches the start of every path, so a bare prefix test would answer `~` for
+		// all of them.
+		expect(shortenPath("/srv/veyyon/app.ts", "")).toBe("/srv/veyyon/app.ts");
+	});
+
+	it("is the same binding the render-utils barrel re-exports", () => {
+		// One owner: a second copy behind the barrel drifts from the boundary rule above.
+		expect(reExported).toBe(shortenPath);
+	});
+
+	it("answers with the empty string for input that is not a path", () => {
+		// The status row calls this with whatever a tool put in its arguments, which is not always a
+		// string. Throwing there would take the frame down over a cosmetic field.
+		expect(shortenPath(undefined, "/home/operator")).toBe("");
+		expect(shortenPath(42, "/home/operator")).toBe("");
+	});
+
+	it("leaves a path outside the home directory unchanged", () => {
+		expect(shortenPath("/srv/veyyon/app.ts", "/home/operator")).toBe("/srv/veyyon/app.ts");
+	});
+
+	describe("without an explicit home", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		// The home is read once per `os.homedir` function, so a frame does not build the string for
+		// every span it shortens. A replaced `os.homedir` is a different function, and the collapse
+		// follows the home it returns rather than the one read before it.
+		it("collapses the home the current os.homedir returns, in a path and in embedded text", () => {
+			vi.spyOn(os, "homedir").mockImplementation(() => "/home/first");
+			expect(shortenPath("/home/first/a.ts")).toBe("~/a.ts");
+			expect(shortenEmbeddedPaths("at /home/first/a.ts:3")).toBe("at ~/a.ts:3");
+			vi.restoreAllMocks();
+			vi.spyOn(os, "homedir").mockImplementation(() => "/home/second");
+			expect([shortenPath("/home/second/a.ts"), shortenPath("/home/first/a.ts")]).toEqual([
+				"~/a.ts",
+				"/home/first/a.ts",
+			]);
+			expect(shortenEmbeddedPaths("at /home/second/a.ts:3 and /home/first/a.ts:3")).toBe(
+				"at ~/a.ts:3 and /home/first/a.ts:3",
+			);
+		});
+	});
+});
