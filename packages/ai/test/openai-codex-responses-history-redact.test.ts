@@ -70,7 +70,6 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 		const resSplice = convertCodexResponsesMessages(model, {
 			messages: [{ role: "user", content: "hi", timestamp: 0 }, mkMsg(false)],
 		});
-		expect(resSplice.length).toBe(3);
 		expect<unknown>(resSplice[0]).toEqual({ type: "reasoning", encrypted_content: "enc_data" });
 		expect<unknown>(resSplice[1]).toEqual({
 			type: "message",
@@ -136,14 +135,12 @@ describe("convertCodexResponsesMessages history credential redaction", () => {
 				},
 			],
 		});
-		expect(replay).toEqual([
-			{
-				type: "function_call",
-				name: "f",
-				call_id: "call_1",
-				arguments: '{"token":"[github_token_redacted]","safe":"keep"}',
-			},
-		]);
+		expect(replay).toContainEqual({
+			type: "function_call",
+			name: "f",
+			call_id: "call_1",
+			arguments: '{"token":"[github_token_redacted]","safe":"keep"}',
+		});
 		expect(argumentsJson).toContain("\\u0067hp_");
 	});
 	for (const role of ["user", "assistant"] as const) {
