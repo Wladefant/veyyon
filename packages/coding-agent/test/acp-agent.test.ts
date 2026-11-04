@@ -1521,23 +1521,25 @@ describe("ACP agent", () => {
 		const harness = await createHarness();
 		const loadedSessionIds: string[] = [];
 		try {
-			const original = await harness.createSession(harness.cwdA);
+			const original = new FakeAgentSession(harness.cwdA);
+			harness.sessions.push(original);
 			original.sessionManager.appendMessage({ role: "user", content: "loaded source", timestamp: Date.now() });
 			await original.sessionManager.ensureOnDisk();
-			await original.sessionManager.flush();
+			await original.sessionManager.close();
 			await harness.agent.loadSession({ sessionId: original.sessionId, cwd: harness.cwdA, mcpServers: [] });
 			loadedSessionIds.push(original.sessionId);
 
-			const copy = await harness.createSession(harness.cwdB);
+			const copy = new FakeAgentSession(harness.cwdB);
+			harness.sessions.push(copy);
 			copy.sessionManager.appendMessage({ role: "user", content: "copied source", timestamp: Date.now() });
 			await copy.sessionManager.ensureOnDisk();
-			await copy.sessionManager.flush();
-			const lines = (await fs.readFile(copy.sessionManager.getSessionFile()!, "utf8")).split("\n");
+			await copy.sessionManager.close();
+			const lines = fs.readFileSync(copy.sessionManager.getSessionFile()!, "utf8").split("\n");
 			lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), id: original.sessionId });
-			await fs.writeFile(copy.sessionManager.getSessionFile()!, lines.join("\n"));
-			await fs.utimes(original.sessionManager.getSessionFile()!, new Date(1_000), new Date(1_000));
+			fs.writeFileSync(copy.sessionManager.getSessionFile()!, lines.join("\n"));
+			fs.utimesSync(original.sessionManager.getSessionFile()!, new Date(1_000), new Date(1_000));
 			const newer = new Date(Date.now() + 60_000);
-			await fs.utimes(copy.sessionManager.getSessionFile()!, newer, newer);
+			fs.utimesSync(copy.sessionManager.getSessionFile()!, newer, newer);
 
 			const forked = await harness.agent.unstable_forkSession({
 				sessionId: original.sessionId,
@@ -1563,14 +1565,15 @@ describe("ACP agent", () => {
 			it(`rejects an unknown stored ID during ${operation} (${missingId ? "absent" : "empty"})`, async () => {
 				const harness = await createHarness();
 				try {
-					const unrelated = await harness.createSession(harness.cwdB);
+					const unrelated = new FakeAgentSession(harness.cwdB);
+					harness.sessions.push(unrelated);
 					unrelated.sessionManager.appendMessage({
 						role: "user",
 						content: "unrelated history",
 						timestamp: Date.now(),
 					});
 					await unrelated.sessionManager.ensureOnDisk();
-					await unrelated.sessionManager.flush();
+					await unrelated.sessionManager.close();
 					const sessionsBefore = harness.sessions.length;
 					const updatesBefore = harness.updates.length;
 					const request = { sessionId: missingId, cwd: harness.cwdA, mcpServers: [] };
