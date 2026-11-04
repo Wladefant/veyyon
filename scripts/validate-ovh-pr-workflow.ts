@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 interface Step {
+	id?: string;
 	run?: string;
 	shell?: string;
 	name?: string;
@@ -16,8 +17,11 @@ interface Step {
 }
 
 interface Job {
+	name?: string;
+	needs?: string | string[];
 	if?: string;
 	"runs-on": string[];
+	outputs?: Record<string, string>;
 	steps: Step[];
 }
 
@@ -80,6 +84,8 @@ function context({
 	focusedTests = "",
 	workflowChanged = "true",
 	installed = "success",
+	native = false,
+	nativeReady = "false",
 }: {
 	event?: string;
 	draft?: boolean;
@@ -92,6 +98,8 @@ function context({
 	focusedTests?: string;
 	workflowChanged?: string;
 	installed?: string;
+	native?: boolean;
+	nativeReady?: string;
 } = {}): Record<string, unknown> {
 	return {
 		github: {
@@ -99,6 +107,10 @@ function context({
 			event_name: event,
 			sha: mergeCommit,
 			workflow_sha: workflowCommit,
+			run_id: "12345",
+			run_attempt: "1",
+			ref: "refs/heads/main",
+			workflow: "OVH CI",
 			event:
 				event === "pull_request"
 					? {
@@ -112,13 +124,19 @@ function context({
 		},
 		inputs:
 			event === "workflow_dispatch"
-				? { typecheck, target_sha: target, base_sha: pinnedBase, test_files: focusedTests }
+				? { typecheck, target_sha: target, base_sha: pinnedBase, test_files: focusedTests, native }
 				: {},
 		vars: admission ? { OVH_CI_PR_ADMISSION: admission } : {},
-		needs: { prepare: { result: prepared } },
+		needs: {
+			prepare: {
+				result: prepared,
+				outputs: { native_ready: nativeReady },
+			},
+		},
 		steps: {
 			changed: { outputs: { workflow_changed: workflowChanged } },
 			install: { outcome: installed },
+			native: { outputs: { native_ready: nativeReady } },
 		},
 	};
 }
@@ -280,6 +298,88 @@ function validate(workflow: Workflow): void {
 			equal(evaluate(step?.if, fixture), expected);
 		});
 	}
+	check("build in prepare on any nonempty selection", () => {
+		equal(workflow.jobs.prepare.outputs?.native_ready !== undefined, true);
+		equal(evaluate(workflow.jobs.prepare.outputs?.native_ready, context({ nativeReady: "true" })), "true");
+		equal(evaluate(workflow.jobs.prepare.outputs?.native_ready, context({ nativeReady: "false" })), "false");
+		equal(workflow.jobs.prepare.outputs?.rust_changed, undefined);
+
+		const steps = workflow.jobs.prepare.steps;
+		const selectionIndex = steps.findIndex(step => step.id === "selection");
+		const nativeIndex = steps.findIndex(step => step.id === "native");
+		const plannerIndex = steps.findIndex(step => step.id === "planner");
+		equal(nativeIndex > selectionIndex, true);
+		equal(nativeIndex < plannerIndex, true);
+
+		const nativeStep = steps[nativeIndex];
+		equal(nativeStep?.env?.CARGO_BUILD_JOBS, "2");
+		equal(nativeStep?.run?.includes("bun run ci:build:native"), true);
+		equal(nativeStep?.run?.includes("-s \"$RELATED_TESTS\"") || nativeStep?.run?.includes("-s $RELATED_TESTS"), true);
+		equal(nativeStep?.run?.includes("native_ready=true"), true);
+
+		const shardNativeBuild = workflow.jobs.test.steps.find(step => step.run?.includes("ci:build:native"));
+		equal(shardNativeBuild, undefined);
+	});
+
+	check("clear missing-binding failure", () => {
+		const nativeStep = workflow.jobs.prepare.steps.find(step => step.id === "native");
+		equal(nativeStep !== undefined, true);
+		equal(nativeStep?.run?.includes("natives/bridge/bindings/native/veyyon_natives.linux-x64*.node"), true);
+		equal(nativeStep?.run?.includes("::error::"), true);
+		equal(nativeStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'), true);
+
+		const verifyStep = workflow.jobs.test.steps.find(step =>
+			step.name === "Verify native addon" ||
+			(typeof step.run === "string" && step.run.includes("@veyyon/natives") && step.run.includes("getSupportedLanguages")),
+		);
+		equal(verifyStep !== undefined, true);
+		equal(verifyStep?.run?.includes("::error::"), true);
+		equal(verifyStep?.run?.includes("exit 1"), true);
+		equal(verifyStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'), true);
+	});
+
+	check("artifact handoff", () => {
+		const uploadStep = workflow.jobs.prepare.steps.find(step =>
+			step.uses?.startsWith("actions/upload-artifact@") && step.with?.name?.includes("ovh-native-"),
+		);
+		equal(uploadStep !== undefined, true);
+		equal(uploadStep?.with?.name, "ovh-native-${{ github.run_id }}-${{ github.run_attempt }}");
+		equal(uploadStep?.with?.path, "natives/bridge/bindings/native/veyyon_natives.linux-x64*.node");
+		equal(uploadStep?.with?.["if-no-files-found"], "error");
+		equal(uploadStep?.with?.["retention-days"], 7);
+		equal(evaluate(uploadStep?.if, context({ nativeReady: "true" })), true);
+		equal(evaluate(uploadStep?.if, context({ nativeReady: "false" })), false);
+
+		const downloadStep = workflow.jobs.test.steps.find(step =>
+			step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
+		);
+		equal(downloadStep !== undefined, true);
+		equal(downloadStep?.with?.name, "ovh-native-${{ github.run_id }}-${{ github.run_attempt }}");
+		equal(uploadStep?.with?.name, downloadStep?.with?.name);
+		equal(downloadStep?.with?.path, "natives/bridge/bindings/native");
+		equal(evaluate(downloadStep?.if, context({ nativeReady: "true" })), true);
+		equal(evaluate(downloadStep?.if, context({ nativeReady: "false" })), false);
+	});
+
+	check("shard preflight order", () => {
+		const steps = workflow.jobs.test.steps;
+		const installIndex = steps.findIndex(step => step.id === "install" || step.uses?.includes("bun-install"));
+		const downloadIndex = steps.findIndex(step =>
+			step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
+		);
+		const verifyIndex = steps.findIndex(step =>
+			step.name === "Verify native addon" ||
+			(typeof step.run === "string" && step.run.includes("@veyyon/natives") && step.run.includes("getSupportedLanguages")),
+		);
+		const bwrapIndex = steps.findIndex(step => step.id === "bwrap" || step.name === "Prepare bwrap runtime");
+		const testIndex = steps.findIndex(step => step.name === "Run selected tests serially");
+
+		equal(installIndex !== -1, true);
+		equal(downloadIndex > installIndex, true);
+		equal(verifyIndex > downloadIndex, true);
+		equal(bwrapIndex > verifyIndex, true);
+		equal(testIndex > bwrapIndex, true);
+	});
 }
 
 // An optional YAML path supports an old-workflow negative control without
