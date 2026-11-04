@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Serialize in-process encrypted auth-broker snapshot writes across case-only cache-path aliases before the file exists, retaining independent file contents on case-sensitive volumes ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Serialize encrypted auth-broker cache writes across real-path and symlink aliases to the same destination, preventing delayed stale snapshot publication ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Serialize in-process encrypted auth-broker full-snapshot cache writes by path to prevent an older delayed write from replacing newer broker state, and continue after failed writes ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Explicit remote auth-broker snapshot refresh rejects an unexpected unconditional HTTP 304 rather than reporting its cached credential view as a successful refresh ([#602](https://github.com/Wladefant/veyyon/issues/602)).
