@@ -657,6 +657,13 @@ async function runPreparedSpawn(
 		checkpoint = await claimSuccessorCheckpoint(spawn.artifacts.dir, params.successorOf, agentId, workflow);
 		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint, ownershipLease);
 	}
+	if (ownershipLease && Date.parse(ownershipLease.expiresAt) <= Date.now()) {
+		return spawnRefusal(
+			"ownership-lease: lease expired before child execution",
+			projectAgentsDir,
+			Date.now() - startTime,
+		);
+	}
 	let result: SingleResult;
 	let mergeSummary = "";
 	if (isolation) {
