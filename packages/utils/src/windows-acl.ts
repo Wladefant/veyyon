@@ -5,7 +5,15 @@ import { errorMessage } from "./type-guards";
 import { verifyNativeOwnerOnlyWindowsAcl } from "./windows-acl-native";
 
 const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024;
-export const WINDOWS_ACL_TIMEOUT_MS = 15_000;
+export const WINDOWS_ACL_TIMEOUT_MS = 60_000;
+
+/** Reject values Node would truncate or turn into a one-millisecond timer. */
+export function getWindowsAclTimeoutMs(): number {
+	const configured = process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
+	if (configured === undefined || !/^[0-9]+$/.test(configured)) return WINDOWS_ACL_TIMEOUT_MS;
+	const timeout = Number(configured);
+	return Number.isInteger(timeout) && timeout > 0 && timeout <= 2_147_483_647 ? timeout : WINDOWS_ACL_TIMEOUT_MS;
+}
 
 export interface WindowsAclCommandResult {
 	exitCode: number;
@@ -270,9 +278,10 @@ async function defaultWindowsAclRunner(
 	});
 	timer = setTimeout(() => {
 		fail(new Error("The Windows ACL command timed out."), true);
-	}, WINDOWS_ACL_TIMEOUT_MS);
+	}, getWindowsAclTimeoutMs());
 	return await promise;
 }
+
 
 function boundedDiagnostic(value: string): string {
 	const inert = escapeTerminalText(value);

@@ -6,8 +6,11 @@ import * as utils from "@veyyon/utils";
 import { assertNotTerminalOwned } from "../src/session/terminal-ownership";
 
 const roots: string[] = [];
+const originalAclTimeout = process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 afterEach(async () => {
 	vi.restoreAllMocks();
+	if (originalAclTimeout === undefined) delete process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
+	else process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = originalAclTimeout;
 	for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -25,6 +28,7 @@ describe("terminal ownership failure diagnostics", () => {
 	for (const step of ["open", "ACL #1 (parent)", "ACL #2 (record)", "identity"]) {
 		it(`names the record, ${step}, code and elapsed time without losing the cause`, async () => {
 			const { root, sessionFile, record } = await claim();
+			delete process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 			const cause = Object.assign(new Error("access denied"), { code: "EPERM" });
 			const read = vi.spyOn(utils, "readOwnerOnlyFile").mockImplementation(async (_file, options) => {
 				options?.onStep?.(step);
@@ -43,6 +47,13 @@ describe("terminal ownership failure diagnostics", () => {
 			expect(read).toHaveBeenCalledTimes(1);
 		});
 	}
+
+	it("reports the configured command deadline, not the default", async () => {
+		process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = "123456";
+		const { root, sessionFile } = await claim();
+		vi.spyOn(utils, "readOwnerOnlyFile").mockRejectedValue(new Error("access denied"));
+		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("ACL deadline=123456ms per command");
+	});
 
 	it("names parse failures and keeps their original SyntaxError", async () => {
 		const { root, sessionFile, record } = await claim();
