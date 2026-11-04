@@ -167,12 +167,12 @@ interface GoogleWireTraits {
 	readonly sendsPartId: boolean;
 	/**
 	 * What a tool call with no usable signature sends. Gemini 3 requires a thought signature on
-	 * function calls across conversation history. For calls not produced by Gemini (e.g. cross-model
-	 * fallback/replay), Google documents `skip_thought_signature_validator` as the bypass sentinel.
+	 * function calls across conversation history. An imported turn's first function call may
+	 * carry Google's `skip_thought_signature_validator` bypass sentinel.
 	 *
 	 * - Public Gemini API (`google-generative-ai`): sends sentinel on all unsigned calls.
-	 * - Cloud Code Assist (`google-gemini-cli`): sends sentinel on foreign (non-Gemini) calls;
-	 *   Gemini-produced parallel calls only sign the first call and omit subsequent signatures. (#9638, #844)
+	 * - Cloud Code Assist (`google-gemini-cli`): sends sentinel only on the first imported call
+	 *   per model turn; same-model unsigned parallel calls stay unsigned. (#9638, #844)
 	 * - Vertex AI: omits signatures on unsigned calls.
 	 */
 	readonly unsignedCallSignature: string | undefined;
@@ -290,6 +290,7 @@ class GoogleContentWriter {
 		// Signatures are replayed only to the provider and model that minted them.
 		const sameModel = message.provider === this.model.provider && message.model === this.model.id;
 		const parts: Part[] = [];
+		let firstFunctionCall = true;
 		for (const block of message.content) {
 			let part: Part | undefined;
 			switch (block.type) {
@@ -300,7 +301,8 @@ class GoogleContentWriter {
 					part = this.#thinkingPart(block, messageIndex, sameModel);
 					break;
 				case "toolCall":
-					part = this.#functionCallPart(block, messageIndex, sameModel);
+					part = this.#functionCallPart(block, messageIndex, sameModel, firstFunctionCall);
+					firstFunctionCall = false;
 					break;
 			}
 			if (part) parts.push(part);
@@ -322,7 +324,12 @@ class GoogleContentWriter {
 		return { text: renderDemotedThinking(this.model.id, block.thinking) };
 	}
 
-	#functionCallPart(block: ToolCall, messageIndex: number, sameModel: boolean): Part {
+	#functionCallPart(
+		block: ToolCall,
+		messageIndex: number,
+		sameModel: boolean,
+		firstFunctionCall: boolean,
+	): Part {
 		this.#emittedToolCallNames.set(block.id, block.name);
 		// Elided by either signature rule means the call falls through the same path as one
 		// that never had a signature: it sends the transport's unsigned-call signature.
@@ -335,7 +342,9 @@ class GoogleContentWriter {
 		const part: Part = { functionCall };
 		const effectiveSignature =
 			thoughtSignature ||
-			(sameModel ? this.traits.unsignedCallSignature : this.traits.unsignedForeignCallSignature);
+			(!sameModel && firstFunctionCall
+				? this.traits.unsignedForeignCallSignature
+				: this.traits.unsignedCallSignature);
 		if (effectiveSignature) part.thoughtSignature = effectiveSignature;
 		return part;
 	}
