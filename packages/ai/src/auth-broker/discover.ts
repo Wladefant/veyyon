@@ -81,14 +81,15 @@ export function getAuthBrokerTokenFilePath(): string {
 }
 
 /**
- * Default resolver for config values: checks `process.env` first, then treats
- * the value as a literal. Does NOT execute `!command` syntax; such values are
- * left unresolved so the caller can fall back to the token file.
+ * Default resolver for config values: a defined `process.env` entry wins,
+ * including an empty value that the caller treats as unset. Otherwise the
+ * config value is treated as a literal. Does NOT execute `!command` syntax;
+ * such values are left unresolved so the caller can fall back to the token file.
  */
 async function defaultResolveConfigValue(config: string): Promise<string | undefined> {
 	if (config.startsWith("!")) return undefined;
 	const envValue = process.env[config];
-	return envValue || config;
+	return envValue === undefined ? config : envValue;
 }
 
 async function readTokenFile(): Promise<string | null> {
