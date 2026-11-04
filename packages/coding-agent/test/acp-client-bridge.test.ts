@@ -216,3 +216,77 @@ it("still reports a client transport rejection while the caller remains active",
 	expect(controller.signal.aborted).toBe(false);
 	expect(calls).toBe(1);
 }, 8_000);
+
+it.each(["abort first", "reply first"])("refuses a stale permission selection when %s precedes continuation", async order => {
+	const entered = Promise.withResolvers<void>();
+	const reply = Promise.withResolvers<{ outcome: { outcome: "selected"; optionId: string } }>();
+	const connection = {
+		requestPermission(_request: RequestPermissionRequest) {
+			entered.resolve();
+			return reply.promise;
+		},
+	} as unknown as AgentSideConnection;
+	const bridge = createAcpClientBridge(connection, "session-stale-selection", {});
+	const controller = new AbortController();
+	const permission = bridge.requestPermission!(
+		{ toolCallId: "stale-selection", toolName: "bash", title: "synthetic command" },
+		[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+		controller.signal,
+	);
+	try {
+		await withinPermissionAbortPhase(entered.promise, "stale selection RPC entry");
+		if (order === "abort first") controller.abort();
+		reply.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
+		if (order === "reply first") controller.abort();
+		expect(await withinPermissionAbortPhase(permission, "stale selection cancellation")).toEqual({
+			outcome: "cancelled",
+		});
+	} finally {
+		controller.abort();
+		reply.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
+	}
+}, 10_000);
+
+it("does not contact the editor for an already-aborted permission request", async () => {
+	let requests = 0;
+	const connection = {
+		async requestPermission(_request: RequestPermissionRequest) {
+			requests++;
+			return { outcome: { outcome: "selected" as const, optionId: "allow_once" } };
+		},
+	} as unknown as AgentSideConnection;
+	const controller = new AbortController();
+	controller.abort();
+	const bridge = createAcpClientBridge(connection, "session-pre-aborted", {});
+	expect(
+		await withinPermissionAbortPhase(
+			bridge.requestPermission!(
+				{ toolCallId: "pre-aborted", toolName: "bash", title: "synthetic command" },
+				[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+				controller.signal,
+			),
+			"pre-aborted permission result",
+		),
+	).toEqual({ outcome: "cancelled" });
+	expect(requests).toBe(0);
+});
+
+it("preserves the selected permission option and kind while the caller remains active", async () => {
+	const connection = {
+		async requestPermission(_request: RequestPermissionRequest) {
+			return { outcome: { outcome: "selected" as const, optionId: "allow_once" } };
+		},
+	} as unknown as AgentSideConnection;
+	const bridge = createAcpClientBridge(connection, "session-active-selection", {});
+	const controller = new AbortController();
+	expect(
+		await withinPermissionAbortPhase(
+			bridge.requestPermission!(
+				{ toolCallId: "active-selection", toolName: "bash", title: "synthetic command" },
+				[{ optionId: "allow_once", name: "Allow once", kind: "allow_once" }],
+				controller.signal,
+			),
+			"active permission selection",
+		),
+	).toEqual({ outcome: "selected", optionId: "allow_once", kind: "allow_once" });
+});

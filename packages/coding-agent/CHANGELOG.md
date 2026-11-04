@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP permission requests ignore selections returned after cancellation and retain active selection behavior ([Refs #879](https://github.com/Wladefant/veyyon/pull/879)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
