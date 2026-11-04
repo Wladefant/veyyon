@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP HTTP SSE diagnostics no longer include malformed peer JSON fragments ([#929](https://github.com/Wladefant/veyyon/issues/929)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
