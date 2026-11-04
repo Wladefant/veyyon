@@ -33,6 +33,7 @@ function visibleTranscript(entries: SessionEntry[]): string {
 }
 
 interface Project {
+	email?: string;
 	directory: string;
 	team_id: string;
 	repo_id: string;
@@ -57,7 +58,11 @@ export default function sageox(
 ) {
 	const { z } = pi.zod;
 	const statusShape = z.object({
-		auth: z.object({ authenticated: z.literal(true), endpoint: z.literal("sageox.ai") }),
+		auth: z.object({
+			authenticated: z.literal(true),
+			endpoint: z.literal("sageox.ai"),
+			email: z.string().optional(),
+		}),
 		project: z.object({
 			initialized: z.literal(true),
 			directory: z.string(),
@@ -122,21 +127,23 @@ export default function sageox(
 		) {
 			throw new Error("SageOx account, project or local team context does not match the enrolled team.");
 		}
-		return result.data.project;
+		return { ...result.data.project, email: result.data.auth.email?.trim().toLowerCase() };
 	}
 
 	async function confirmTarget(ctx: ExtensionCommandContext, repo: Project, message: string) {
 		const id = ctx.sessionManager.getSessionId();
 		const leaf = ctx.sessionManager.getLeafId();
+		if (!repo.email) throw new Error("Sign in to SageOx as an individual coworker before publishing.");
 		if (!(await ctx.ui.confirm(`Share to ${repo.team_id} / ${repo.repo_id}?`, message))) return false;
 		const current = await project(ctx.cwd);
 		if (
 			ctx.sessionManager.getSessionId() !== id ||
 			ctx.sessionManager.getLeafId() !== leaf ||
 			current.directory !== repo.directory ||
-			current.repo_id !== repo.repo_id
+			current.repo_id !== repo.repo_id ||
+			current.email !== repo.email
 		) {
-			throw new Error("Session or project changed during review. Run the command again.");
+			throw new Error("Session, account or project changed during review. Run the command again.");
 		}
 		return true;
 	}
@@ -331,7 +338,10 @@ export default function sageox(
 							status: z.literal("imported"),
 							team_id: z.literal(repo.team_id),
 							source_oid: z.literal(`sha256:${digest}`),
-							path: z.string().min(1),
+							path: z
+								.string()
+								.regex(/^data\/docs\/\d{4}\/\d{2}\/\d{2}\/[^/]+$/)
+								.endsWith(`/veyyon-capture-${digest.slice(0, 16)}`),
 						}),
 						z.object({ status: z.literal("already_imported"), id: z.string().min(1) }),
 					])

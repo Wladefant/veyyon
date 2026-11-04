@@ -19,6 +19,7 @@ function fixture(wsl = false) {
 	const tools = new Map<string, (params: object) => Promise<{ content: { text: string }[] }>>();
 	const state = {
 		team: TEAM,
+		email: "operator@example.invalid",
 		id: session,
 		leaf,
 		consent: true,
@@ -100,7 +101,7 @@ function fixture(wsl = false) {
 			let stdout = "";
 			if (args[0] === "status")
 				stdout = JSON.stringify({
-					auth: { authenticated: true, endpoint: "sageox.ai" },
+					auth: { authenticated: true, endpoint: "sageox.ai", email: state.email },
 					project: { initialized: true, directory: "/repo", team_id: state.team, repo_id: REPO },
 					team_contexts: [{ team_id: state.team, is_repo_team: true, exists: true }],
 				});
@@ -115,7 +116,7 @@ function fixture(wsl = false) {
 					status: "imported",
 					team_id: TEAM,
 					source_oid: `sha256:${createHash("sha256").update(state.imported).digest("hex")}`,
-					path: "data/docs/accepted",
+					path: `data/docs/2026/11/04/veyyon-capture-${createHash("sha256").update(state.imported).digest("hex").slice(0, 16)}`,
 				});
 			}
 			if (args[0] === "murmur")
@@ -147,7 +148,7 @@ test("publishes only the edited visible branch under the confirmed team, then re
 	expect(f.state.draft).not.toMatch(/private thought|internal prompt|tool secret|tool output/);
 	expect(f.state.imported).toBe(f.state.accepted);
 	expect(f.calls.at(-1)).toContain(TEAM);
-	expect(f.state.receipt).toContain("data/docs/accepted");
+	expect(f.state.receipt).toContain("data/docs/2026/11/04/veyyon-capture-");
 	expect(await Bun.file(f.state.path).exists()).toBe(false);
 });
 
@@ -159,11 +160,13 @@ test("an import failure removes the private draft and cannot acknowledge a publi
 	expect(await Bun.file(f.state.path).exists()).toBe(false);
 });
 
-test("decline, session switch and destination change never call import", async () => {
-	for (const change of ["decline", "switch", "team"]) {
+test("decline, session, account and destination changes never call import", async () => {
+	for (const change of ["decline", "switch", "team", "account", "no-identity"]) {
 		const f = fixture();
 		f.ctx.ui.confirm = async () => {
 			if (change === "switch") f.state.id = "other";
+			if (change === "account") f.state.email = "colleague@example.invalid";
+			if (change === "no-identity") f.state.email = "";
 			if (change === "team") f.state.team = "team_other";
 			return change !== "decline";
 		};
@@ -219,7 +222,7 @@ test("native Windows uses one named WSL distribution for status, path conversion
 	const f = fixture(true);
 	await f.run("sageox-capture");
 	expect(f.state.imported).toBe(f.state.accepted);
-	expect(f.state.receipt).toContain("data/docs/accepted");
+	expect(f.state.receipt).toContain("data/docs/2026/11/04/veyyon-capture-");
 	expect(await Bun.file(f.state.path).exists()).toBe(false);
 });
 
