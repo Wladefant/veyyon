@@ -7,6 +7,7 @@ import { describe, expect, it, spyOn } from "bun:test";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	CURRENT_SESSION_VERSION,
 	type SessionHeader,
@@ -511,7 +512,9 @@ describe("SessionManager.forkFrom preserves inherited artifact evidence", () => 
 			// reached its real artifact-copy boundary. Without an atomic
 			// reservation it can publish the same named destination first.
 			const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
-				if (from === path.dirname(sourceArtifact) && to === destinationArtifacts && !competitorAttempted) {
+				const fromPath = typeof from === "string" ? from : fileURLToPath(from);
+				const toPath = typeof to === "string" ? to : fileURLToPath(to);
+				if (path.dirname(fromPath) === path.dirname(sourceArtifact) && path.dirname(toPath) === destinationArtifacts && !competitorAttempted) {
 					competitorAttempted = true;
 					try {
 						competing = await SessionManager.forkFrom(sourceFile, cwd, sessions, undefined, {
@@ -756,8 +759,10 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       // copy: length and regular-file checks alone cannot detect this.
       const cpSpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
         await originalCopy(source, destination, options);
-        if (source === path.dirname(sourceArtifact)) {
-          await fs.writeFile(path.join(destination, path.basename(sourceArtifact)), changedBytes);
+        const sourcePath = typeof source === "string" ? source : fileURLToPath(source);
+        const destPath = typeof destination === "string" ? destination : fileURLToPath(destination);
+        if (sourcePath === sourceArtifact) {
+          await fs.writeFile(destPath, changedBytes);
         }
       });
       try {
@@ -814,8 +819,10 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       const genuineCopy = nodeFs.promises.cp.bind(nodeFs.promises);
       const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
         await genuineCopy(source, destination, options);
-        if (source === sourceDir) {
-          await fs.writeFile(path.join(destination, "unreferenced-notes", "audit.log"), alteredBytes);
+        const sourcePath = typeof source === "string" ? source : fileURLToPath(source);
+        const destPath = typeof destination === "string" ? destination : fileURLToPath(destination);
+        if (sourcePath === nestedDir) {
+          await fs.writeFile(path.join(destPath, "audit.log"), alteredBytes);
         }
       });
       try {
@@ -866,8 +873,10 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         const genuineCopy = nodeFs.promises.cp.bind(nodeFs.promises);
         const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
           await genuineCopy(source, destination, options);
-          if (source !== sourceDir) return;
-          const copiedNotes = path.join(destination, "unreferenced-notes");
+          const sourcePath = typeof source === "string" ? source : fileURLToPath(source);
+          const destPath = typeof destination === "string" ? destination : fileURLToPath(destination);
+          if (sourcePath !== sourceNotes) return;
+          const copiedNotes = destPath;
           if (fault === "missing") await fs.unlink(path.join(copiedNotes, "audit.log"));
           else await fs.writeFile(path.join(copiedNotes, "extra.log"), "SYNTHETIC UNEXPECTED FILE");
         });
@@ -1004,9 +1013,15 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
 
       // A hard link added after the genuine copy must fail destination validation too.
       const originalCp = nodeFs.promises.cp.bind(nodeFs.promises);
+      let linked = false;
       const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
         await originalCp(src, dst, options);
-        if (src === artifactDir) await fs.link(outside, path.join(dst, "79.unreferenced.log"));
+        const srcPath = typeof src === "string" ? src : fileURLToPath(src);
+        const dstPath = typeof dst === "string" ? dst : fileURLToPath(dst);
+        if (!linked && path.dirname(srcPath) === artifactDir) {
+          linked = true;
+          await fs.link(outside, path.join(path.dirname(dstPath), "79.unreferenced.log"));
+        }
       });
       try {
         await expect(manager.fork()).rejects.toThrow(/unsafe artifact entry/i);
@@ -1061,9 +1076,14 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         let swappedDir: string | undefined;
         const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
           await realCopy(src, dst, options);
-          if (src === sourceDir) copiedDir = String(dst);
+          const srcPath = typeof src === "string" ? src : fileURLToPath(src);
+          const dstPath = typeof dst === "string" ? dst : fileURLToPath(dst);
+          if (path.dirname(srcPath) === sourceDir) copiedDir = path.dirname(dstPath);
         });
-        const statSpy = spyOn(nodeFs.promises, "lstat").mockImplementation(async target => {
+        async function statMock(target: nodeFs.PathLike, opts?: (nodeFs.StatOptions & { bigint?: false }) | undefined): Promise<nodeFs.Stats>;
+        async function statMock(target: nodeFs.PathLike, opts: nodeFs.StatOptions & { bigint: true }): Promise<nodeFs.BigIntStats>;
+        async function statMock(target: nodeFs.PathLike, opts?: nodeFs.StatOptions | undefined): Promise<nodeFs.Stats | nodeFs.BigIntStats>;
+        async function statMock(target: nodeFs.PathLike, opts?: nodeFs.StatOptions | undefined): Promise<nodeFs.Stats | nodeFs.BigIntStats> {
           const leaf = side === "source"
             ? sourceNestedFile
             : copiedDir && path.join(copiedDir, "nested", "trace.txt");
@@ -1078,8 +1098,10 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
             }
             swappedDir = directory;
           }
+          if (opts) return realLstat(target, opts);
           return realLstat(target);
-        });
+        }
+        const statSpy = spyOn(nodeFs.promises, "lstat").mockImplementation(statMock);
         try {
           await expect(manager.fork()).rejects.toThrow(
             /artifact changed during digest read|artifact directory changed during verification/i,
@@ -1148,7 +1170,8 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         let substituted = false;
         const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
           await realCopy(src, dst, options);
-          if (src === path.dirname(sourceArtifact)) copied = true;
+          const srcPath = typeof src === "string" ? src : fileURLToPath(src);
+          if (path.dirname(srcPath) === path.dirname(sourceArtifact)) copied = true;
         });
         const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
           if (copied && String(file) === sourceArtifact && !substituted) {
@@ -1212,7 +1235,9 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       let swapped = false;
       const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (src, dst, options) => {
         await realCopy(src, dst, options);
-        if (src === path.dirname(sourceArtifact)) copiedPath = path.join(dst, "0.bash.log");
+        const srcPath = typeof src === "string" ? src : fileURLToPath(src);
+        const dstPath = typeof dst === "string" ? dst : fileURLToPath(dst);
+        if (srcPath === sourceArtifact) copiedPath = dstPath;
       });
       // The source and destination have both passed inventory/size checks.
       // Replace only the copied file just before its hash-open, not the real
@@ -1272,10 +1297,14 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
 
       // Exercise destination validation, not merely pre-copy source validation.
       const originalCp = nodeFs.promises.cp.bind(nodeFs.promises);
+      let injected = false;
       const cpSpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (source, destination, options) => {
         await originalCp(source, destination, options);
-        if (source === path.dirname(sourceArtifact)) {
-          await fs.symlink(outside, path.join(destination, "88.unreferenced.log"), "file");
+        const sourcePath = typeof source === "string" ? source : fileURLToPath(source);
+        const destPath = typeof destination === "string" ? destination : fileURLToPath(destination);
+        if (!injected && path.dirname(sourcePath) === path.dirname(sourceArtifact)) {
+          injected = true;
+          await fs.symlink(outside, path.join(path.dirname(destPath), "88.unreferenced.log"), "file");
         }
       });
       try {

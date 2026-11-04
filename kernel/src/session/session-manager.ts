@@ -2163,13 +2163,15 @@ export class SessionManager {
 			// A failed copy leaves the old session and its original evidence usable.
 			// Never overwrite a newly created destination with another fork's data.
 			await reserveDestination();
-			await fs.promises.cp(oldArtifactDir, nextArtifactDir, {
-				recursive: true, force: false, errorOnExist: true,
-				filter: async source => {
-					await assertSafeEntry(source);
-					return true;
-				},
-			});
+			for (const name of sourceNames) {
+				await fs.promises.cp(path.join(oldArtifactDir, name), path.join(nextArtifactDir, name), {
+					recursive: true, force: false, errorOnExist: true,
+					filter: async source => {
+						await assertSafeEntry(source);
+						return true;
+					},
+				});
+			}
 			const copiedTree = await assertRegularTree(nextArtifactDir);
 			if (
 				sourceTree.entries.length !== copiedTree.entries.length ||
