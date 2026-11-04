@@ -6494,10 +6494,7 @@ export class AgentSession {
 		// identity, while this agent still routes requests and memory on the old one.
 		// Restore the last durable transcript instead of leaving a split identity.
 		const beforeFork = this.sessionManager.captureState();
-		let forkResult: Awaited<ReturnType<SessionManager["fork"]>>;
-		try {
-			forkResult = await this.sessionManager.fork();
-		} catch (error) {
+		const forkResult = await this.sessionManager.fork().catch((error: unknown) => {
 			if (
 				this.sessionManager.getSessionId() !== beforeFork.sessionId ||
 				this.sessionManager.getSessionFile() !== beforeFork.sessionFile
@@ -6508,11 +6505,14 @@ export class AgentSession {
 					// any foreign writer's tail, before writing to it again.
 					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
 				} catch (restoreError) {
-					throw new AggregateError([error, restoreError], "Fork failed and could not restore its original session");
+					throw new AggregateError(
+						[error, restoreError],
+						"Fork failed and could not restore its original session",
+					);
 				}
 			}
 			throw error;
-		}
+		});
 		if (!forkResult) {
 			return false;
 		}

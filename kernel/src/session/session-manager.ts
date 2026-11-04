@@ -383,9 +383,9 @@ export class SessionManager {
 	#lifecycleStarted = false;
 	#lifecycleEnded = false;
 	/**
-	 * A rejected source-writer close can leave this fork's own terminal marker
-	 * appended to the old JSONL. Exclude only those exact IDs from foreign-writer
-	 * preservation until the original file is successfully republished.
+	 * A rejected source close or new-file publication can leave this fork's own
+	 * terminal marker appended to the old JSONL. Exclude only those exact IDs
+	 * from foreign-writer preservation until the source is republished.
 	 */
 	#abortedForkLifecycleIdsByFile = new Map<string, Set<string>>();
 
@@ -989,9 +989,7 @@ export class SessionManager {
 	 */
 	#adoptForeignLines(text: string): void {
 		const foreign: string[] = [];
-		const abortedForkIds = this.#sessionFile
-			? this.#abortedForkLifecycleIdsByFile.get(this.#sessionFile)
-			: undefined;
+		const abortedForkIds = this.#sessionFile ? this.#abortedForkLifecycleIdsByFile.get(this.#sessionFile) : undefined;
 		let liveWriterEntries = 0;
 		for (const raw of text.split("\n")) {
 			// Most entry lines open with their id, so a line this manager wrote is known
@@ -1964,12 +1962,17 @@ export class SessionManager {
 	}
 
 	/** Shared local-vs-explicit-foreign artifact URL scanner for forks and synchronous branches. */
-	static #localArtifactReferences(retainedEntries: readonly FileEntry[], parentSessionId: string | undefined): Set<string> {
+	static #localArtifactReferences(
+		retainedEntries: readonly FileEntry[],
+		parentSessionId: string | undefined,
+	): Set<string> {
 		const referencedIds = new Set<string>();
 		for (const entry of retainedEntries) {
 			// Artifact IDs are per session. An explicit foreign-session reference
 			// must not be checked or copied from this session's artifact store.
-			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi)) {
+			for (const match of JSON.stringify(entry).matchAll(
+				/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi,
+			)) {
 				let id = match[1];
 				if (!id) continue;
 				// The internal URL parser percent-decodes rawHost before checking
@@ -1988,7 +1991,8 @@ export class SessionManager {
 						sessions.length === 1 &&
 						/^[A-Za-z0-9_.:-]{1,128}$/.test(sessions[0]!) &&
 						sessions[0] !== parentSessionId
-					) continue;
+					)
+						continue;
 				}
 				referencedIds.add(id);
 			}
@@ -2164,7 +2168,9 @@ export class SessionManager {
 			// Never overwrite a newly created destination with another fork's data.
 			await reserveDestination();
 			await fs.promises.cp(oldArtifactDir, nextArtifactDir, {
-				recursive: true, force: false, errorOnExist: true,
+				recursive: true,
+				force: false,
+				errorOnExist: true,
 				filter: async source => {
 					await assertSafeEntry(source);
 					return true;
@@ -2184,7 +2190,10 @@ export class SessionManager {
 			// opens it. Hash through one pinned descriptor, refusing a symlink,
 			// special file, hard link or substituted inode before reading bytes.
 			const sha256File = async (
-				filename: string, expected: fs.Stats, root: string, directories: Map<string, fs.Stats>,
+				filename: string,
+				expected: fs.Stats,
+				root: string,
+				directories: Map<string, fs.Stats>,
 			): Promise<string> => {
 				const changed = () => new Error("Cannot fork session: artifact changed during digest read");
 				const verifyAncestors = async () => {
@@ -2206,7 +2215,8 @@ export class SessionManager {
 							!actualDirectory.isDirectory() ||
 							actualDirectory.dev !== expectedDirectory.dev ||
 							actualDirectory.ino !== expectedDirectory.ino
-						) throw changed();
+						)
+							throw changed();
 					}
 				};
 				const matches = (actual: fs.Stats): boolean =>
@@ -2225,9 +2235,7 @@ export class SessionManager {
 				// This does not prove safety against all Windows reparse races.
 				const flags =
 					fs.constants.O_RDONLY |
-					(process.platform === "win32"
-						? 0
-						: (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+					(process.platform === "win32" ? 0 : (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
 				const file = await fs.promises.open(filename, flags);
 				try {
 					// O_NOFOLLOW covers only the leaf; refuse a changed parent
@@ -2260,7 +2268,8 @@ export class SessionManager {
 						afterRead.ctimeMs !== opened.ctimeMs ||
 						pathAfterRead.mtimeMs !== before.mtimeMs ||
 						pathAfterRead.ctimeMs !== before.ctimeMs
-					) throw changed();
+					)
+						throw changed();
 					await verifyAncestors();
 					return digest.digest("hex");
 				} finally {
@@ -2276,9 +2285,12 @@ export class SessionManager {
 				const original = sourceTree.files.get(filename);
 				const copied = copiedTree.files.get(filename);
 				if (
-					!original || !copied ||
-					!original.isFile() || !copied.isFile() ||
-					original.nlink > 1 || copied.nlink > 1 ||
+					!original ||
+					!copied ||
+					!original.isFile() ||
+					!copied.isFile() ||
+					original.nlink > 1 ||
+					copied.nlink > 1 ||
 					original.size !== copied.size
 				) {
 					throw new Error(
@@ -2306,10 +2318,8 @@ export class SessionManager {
 			] as const) {
 				for (const [relative, expected] of directories) {
 					const actual = await fs.promises.lstat(path.join(root, relative));
-					if (
-						!actual.isDirectory() || actual.dev !== expected.dev ||
-						actual.ino !== expected.ino
-					) throw new Error("Cannot fork session: artifact directory changed during verification");
+					if (!actual.isDirectory() || actual.dev !== expected.dev || actual.ino !== expected.ino)
+						throw new Error("Cannot fork session: artifact directory changed during verification");
 				}
 			}
 		}
@@ -2332,7 +2342,8 @@ export class SessionManager {
 		const sessionArtifactDir = artifactsDirectoryFor(oldSessionFile);
 		const effectiveArtifactDir = this.getArtifactsDir();
 		if (
-			!sessionArtifactDir || !effectiveArtifactDir ||
+			!sessionArtifactDir ||
+			!effectiveArtifactDir ||
 			path.resolve(effectiveArtifactDir) !== path.resolve(sessionArtifactDir)
 		) {
 			throw new Error("Cannot fork session: adopted artifact scope differs from session sidecar");
@@ -2348,12 +2359,7 @@ export class SessionManager {
 			sessionFileName(`${fileSafeTimestamp(timestamp)}_${nextSessionId}`),
 		);
 		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
-		await SessionManager.#copyForkArtifactEvidence(
-			oldSessionFile,
-			nextSessionFile,
-			retainedEntries,
-			parentSessionId,
-		);
+		await SessionManager.#copyForkArtifactEvidence(oldSessionFile, nextSessionFile, retainedEntries, parentSessionId);
 
 		const beforeSwitch = this.captureState();
 		try {
@@ -2381,6 +2387,14 @@ export class SessionManager {
 			}
 			throw error;
 		}
+		const sourceEndEntry = this.#entries.at(-1);
+		const sourceEndId =
+			this.#entries.length > beforeSwitch.entries.length &&
+			sourceEndEntry?.type === "session_lifecycle" &&
+			sourceEndEntry.state === "ended" &&
+			sourceEndEntry.reason === "session_switched"
+				? sourceEndEntry.id
+				: undefined;
 		this.#clearDiskError();
 		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
@@ -2423,7 +2437,18 @@ export class SessionManager {
 		// keeps the old recovery pointer, while a later successful retry promotes
 		// the new one only after its JSONL is actually published.
 		this.#breadcrumbFresh = true;
-		await this.#rewriteAtomically();
+		try {
+			await this.#rewriteAtomically();
+		} catch (error) {
+			// AgentSession restores the source snapshot after a publication error.
+			// Its own flushed end marker must not return as a foreign writer tail.
+			if (sourceEndId) {
+				const aborted = this.#abortedForkLifecycleIdsByFile.get(oldSessionFile) ?? new Set<string>();
+				aborted.add(sourceEndId);
+				this.#abortedForkLifecycleIdsByFile.set(oldSessionFile, aborted);
+			}
+			throw error;
+		}
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
@@ -3839,12 +3864,7 @@ export class SessionManager {
 		if (path.resolve(nextSessionFile) === path.resolve(sourcePath)) {
 			throw new Error("Cannot fork session: destination must differ from source");
 		}
-		await SessionManager.#copyForkArtifactEvidence(
-			sourcePath,
-			nextSessionFile,
-			history,
-			sourceHeader?.id,
-		);
+		await SessionManager.#copyForkArtifactEvidence(sourcePath, nextSessionFile, history, sourceHeader?.id);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;

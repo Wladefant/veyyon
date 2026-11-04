@@ -15,7 +15,7 @@
 - Named session forks atomically reserve their destination artifact directory before copying or publishing, refusing concurrent forks targeting the same session path ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A named session fork refuses pre-existing destination JSONL or artifact sidecar paths before publication, protecting unrelated history and evidence from replacement or adoption ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
-- A refused source-writer close during session fork restores the active session lifecycle and prevents its abandoned terminal marker from overwriting separately appended history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Session fork rollback removes its abandoned terminal marker after source-close or publication failure while preserving foreign history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Fork artifact copying now refuses symbolic links and other unsafe entries anywhere in the source or copied tree before a new session is published ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Session forks reject referenced local artifact copies whose contents differ from their source, including same-byte-length corruption, before publishing a new session ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - `SessionManager.fork()` and `forkFrom()` verify inherited local recovery artifacts and copy them before publishing a new session, refuse missing or nonregular evidence, keep later artifact IDs distinct, and preserve explicit foreign-session links without local lookup ([#774](https://github.com/Wladefant/veyyon/issues/774)).
