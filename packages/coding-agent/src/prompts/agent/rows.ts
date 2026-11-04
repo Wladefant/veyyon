@@ -29,6 +29,7 @@ import agentUserPrompt from "./user-prompt.md" with { type: "text" };
 import agentWorkflowNotice from "./workflow-notice.md" with { type: "text" };
 import agentYieldReminder from "./yield-reminder.md" with { type: "text" };
 import agentYieldSchemaRepair from "./yield-schema-repair.md" with { type: "text" };
+import agentStallRecovery from "./stall-recovery.md" with { type: "text" };
 
 /** Every prompt under `src/prompts/agent/`, keyed by its id (the path under `src/prompts/`). */
 export const agentPrompts = definePromptRows({
@@ -86,5 +87,9 @@ export const agentPrompts = definePromptRows({
 	"agent/yield-reminder": {
 		text: agentYieldReminder,
 		purpose: "forces an agent to yield when its budget or turn limit is spent",
+	},
+	"agent/stall-recovery": {
+		text: agentStallRecovery,
+		purpose: "resumes the same assignment after a stalled turn is stopped",
 	},
 } satisfies Record<string, PromptEntry>);
