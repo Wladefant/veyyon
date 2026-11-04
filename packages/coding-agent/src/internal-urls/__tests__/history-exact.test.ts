@@ -421,6 +421,22 @@ describe("history exact record lookup", () => {
 			});
 			expect(exact.status).toBe("ok");
 			expect(accepted.matches[0]?.revision).toBe(exact.revision);
+
+			const nested = {
+				...root,
+				message: { id: "nested", type: "message", content: [{ type: "text", text: "trusted atlas" }] },
+			};
+			const titleChange = { type: "title_change", id: "renamed", parentId: "root", title: "updated title" };
+			await fs.writeFile(file, [title, header, nested, titleChange].map(record => JSON.stringify(record)).join("\n") + "\n");
+			const nestedRead = await readStoredHistoryEntry(file, { entryId: "root", offset: 0, limit: 256 });
+			expect(nestedRead.status).toBe("ok");
+			expect(nestedRead.fragment).toContain("trusted atlas");
+			const titleRead = await readStoredHistoryEntry(file, { entryId: "renamed", offset: 0, limit: 256 });
+			expect(titleRead.status).toBe("ok");
+			expect(titleRead.recordType).toBe("title_change");
+			const nestedSearch = await searchStoredHistoryEntries(file, { query: "trusted atlas", limit: 5 });
+			expect(nestedSearch.status).toBe("ok");
+			expect(nestedSearch.matches.map(match => match.entryId)).toEqual(["root"]);
 		} finally {
 			await dir.remove();
 		}
