@@ -155,14 +155,16 @@ export async function withOwnerOnlyWindowsAclVerification<T>(
 	let terminating = false;
 	let failure: Error | undefined;
 	let nextId = 0;
-	let pending: {
-		id: number;
-		output: string;
-		bytes: number;
-		timer: NodeJS.Timeout;
-		resolve: (result: WindowsAclCommandResult) => void;
-		reject: (error: Error) => void;
-	} | undefined;
+	let pending:
+		| {
+				id: number;
+				output: string;
+				bytes: number;
+				timer: NodeJS.Timeout;
+				resolve: (result: WindowsAclCommandResult) => void;
+				reject: (error: Error) => void;
+		  }
+		| undefined;
 	const completion = Promise.withResolvers<void>();
 	const fail = (error: Error, terminate: boolean): void => {
 		failure ??= error;
@@ -174,7 +176,9 @@ export async function withOwnerOnlyWindowsAclVerification<T>(
 		}
 		if (terminate && child !== undefined && !closed && !terminating) {
 			terminating = true;
-			try { child.kill(); } catch {}
+			try {
+				child.kill();
+			} catch {}
 		}
 	};
 	const onStdout = (chunk: Buffer): void => {
@@ -203,14 +207,17 @@ export async function withOwnerOnlyWindowsAclVerification<T>(
 		}
 		clearTimeout(request.timer);
 		pending = undefined;
-		request.resolve(detail === undefined
-			? { exitCode: 0, stdout: "OK", stderr: "" }
-			: { exitCode: 1, stdout: "", stderr: detail.toString("utf8") });
+		request.resolve(
+			detail === undefined
+				? { exitCode: 0, stdout: "OK", stderr: "" }
+				: { exitCode: 1, stdout: "", stderr: detail.toString("utf8") },
+		);
 	};
 	const onError = (error: Error): void => fail(error, true);
 	const onStderr = (): void => fail(new Error("The Windows ACL verifier wrote unexpected stderr."), true);
 	const run: WindowsAclCommandRunner = (script, filePath) => {
-		if (closing || failure !== undefined) return Promise.reject(failure ?? new Error("The Windows ACL verifier scope ended."));
+		if (closing || failure !== undefined)
+			return Promise.reject(failure ?? new Error("The Windows ACL verifier scope ended."));
 		if (script !== VERIFY_SCRIPT || pending !== undefined) {
 			fail(new Error("The Windows ACL verifier only accepts sequential verification requests."), true);
 			return Promise.reject(failure);
@@ -218,15 +225,29 @@ export async function withOwnerOnlyWindowsAclVerification<T>(
 		const result = Promise.withResolvers<WindowsAclCommandResult>();
 		const id = ++nextId;
 		pending = {
-			id, output: "", bytes: 0, resolve: result.resolve, reject: result.reject,
+			id,
+			output: "",
+			bytes: 0,
+			resolve: result.resolve,
+			reject: result.reject,
 			timer: setTimeout(() => fail(new Error("The Windows ACL command timed out."), true), getWindowsAclTimeoutMs()),
 		};
 		try {
 			if (child === undefined) {
 				const { executable, env } = trustedPowerShell("");
-				child = (options.spawn ?? spawn)(executable,
-					["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", VERIFY_STREAM_SCRIPT],
-					{ env, cwd: path.win32.dirname(executable), stdio: "pipe", windowsHide: true });
+				child = (options.spawn ?? spawn)(
+					executable,
+					[
+						"-NoLogo",
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-Command",
+						VERIFY_STREAM_SCRIPT,
+					],
+					{ env, cwd: path.win32.dirname(executable), stdio: "pipe", windowsHide: true },
+				);
 				child.stdout.on("data", onStdout);
 				child.stderr.on("data", onStderr);
 				child.stdin.on("error", onError);
@@ -249,39 +270,39 @@ export async function withOwnerOnlyWindowsAclVerification<T>(
 		}
 		return result.promise;
 	};
-	let operationFailed = false;
+	let outcome: { ok: true; value: T } | { ok: false; error: unknown };
 	try {
-		return await operation({ ...options, run });
+		outcome = { ok: true, value: await operation({ ...options, run }) };
 	} catch (error) {
-		operationFailed = true;
-		throw error;
-	} finally {
-		closing = true;
-		if (child !== undefined) {
-			let timer: NodeJS.Timeout | undefined;
-			try {
-				if (pending !== undefined) fail(new Error("The Windows ACL verifier has an unfinished request."), true);
-				if (!closed) {
-					child.stdin.end();
-					await Promise.race([
-						completion.promise,
-						new Promise<never>((_resolve, reject) => {
-							timer = setTimeout(() => {
-								const error = new Error("The Windows ACL verifier did not exit.");
-								fail(error, true);
-								reject(error);
-							}, getWindowsAclTimeoutMs());
-						}),
-					]);
-				}
-				if (failure !== undefined) throw failure;
-			} catch (error) {
-				if (!operationFailed) throw error;
-			} finally {
-				clearTimeout(timer);
+		outcome = { ok: false, error };
+	}
+	closing = true;
+	if (child !== undefined) {
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			if (pending !== undefined) fail(new Error("The Windows ACL verifier has an unfinished request."), true);
+			if (!closed) {
+				child.stdin.end();
+				await Promise.race([
+					completion.promise,
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(() => {
+							const error = new Error("The Windows ACL verifier did not exit.");
+							fail(error, true);
+							reject(error);
+						}, getWindowsAclTimeoutMs());
+					}),
+				]);
 			}
+			if (failure !== undefined) throw failure;
+		} catch (error) {
+			if (outcome.ok) outcome = { ok: false, error };
+		} finally {
+			clearTimeout(timer);
 		}
 	}
+	if (outcome.ok) return outcome.value;
+	throw outcome.error;
 }
 
 /** Apply a protected DACL granting full control only to the current user and LocalSystem. */
@@ -293,7 +314,6 @@ export async function applyOwnerOnlyWindowsAcl(filePath: string, options: Window
 export async function verifyOwnerOnlyWindowsAcl(filePath: string, options: WindowsAclOptions = {}): Promise<void> {
 	await runOwnerOnlyAcl(VERIFY_SCRIPT, filePath, options);
 }
-
 
 /**
  * Synchronous {@link verifyOwnerOnlyWindowsAcl} for a reader that cannot await. It runs the same

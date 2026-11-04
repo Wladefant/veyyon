@@ -73,16 +73,18 @@ afterEach(async () => {
 it("bounds a discovery read when the file grows after stat", async () => {
 	const file = await tempRecord(0o600);
 	let grew = false;
-	await expect(readOwnerOnlyFile(file, {
-		platform: "win32",
-		windowsAcl: { run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }) },
-		onStep: step => {
-			if (step === "read") {
-				grew = true;
-				fs.writeFileSync(file, Buffer.alloc(65537));
-			}
-		},
-	})).rejects.toThrow("larger than a discovery record");
+	await expect(
+		readOwnerOnlyFile(file, {
+			platform: "win32",
+			windowsAcl: { run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }) },
+			onStep: step => {
+				if (step === "read") {
+					grew = true;
+					fs.writeFileSync(file, Buffer.alloc(65537));
+				}
+			},
+		}),
+	).rejects.toThrow("larger than a discovery record");
 	expect(grew).toBe(true);
 });
 
@@ -164,8 +166,6 @@ describe.skipIf(!posix)("owner-only discovery reads on POSIX", () => {
 		}
 	});
 
-
-
 	// WHY: a directory named like a record is not a claim. The reader must refuse it, not throw a raw EISDIR
 	// that a caller could mistake for an ordinary unreadable file.
 	it("refuses a path that is not a regular file", async () => {
@@ -180,18 +180,22 @@ describe.skipIf(!posix)("owner-only discovery reads on POSIX", () => {
 	// WHY: a FIFO with no writer makes a blocking open wait forever. The reader must refuse it on its
 	// descriptor, so the open returns and the refusal is "not a regular file". The reader runs in a child
 	// with a hard deadline: a blocking open shows up as a timeout (result.error), not a stuck test run.
-	it.each(["sync", "async"] as const)("refuses a FIFO without blocking the %s reader", mode => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "owner-only-read-"));
-		tempDirs.push(dir);
-		const fifo = path.join(dir, "record.json");
-		const made = spawnSync("mkfifo", [fifo], { encoding: "utf8", timeout: 5_000, windowsHide: true });
-		expect(made.status).toBe(0);
-		const result = readInChild(fifo, mode);
-		expect(result.error).toBeUndefined();
-		expect(result.status).toBe(3);
-		expect(result.stdout).toBe("");
-		expect(result.stderr).toContain("not a regular file");
-	}, 30_000);
+	it.each(["sync", "async"] as const)(
+		"refuses a FIFO without blocking the %s reader",
+		mode => {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "owner-only-read-"));
+			tempDirs.push(dir);
+			const fifo = path.join(dir, "record.json");
+			const made = spawnSync("mkfifo", [fifo], { encoding: "utf8", timeout: 5_000, windowsHide: true });
+			expect(made.status).toBe(0);
+			const result = readInChild(fifo, mode);
+			expect(result.error).toBeUndefined();
+			expect(result.status).toBe(3);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("not a regular file");
+		},
+		30_000,
+	);
 
 	// WHY: a record larger than any a build writes is not one it published. The reader must refuse it before
 	// reading the whole file into memory.
@@ -261,7 +265,6 @@ describe.skipIf(posix)("owner-only discovery reads on Windows", () => {
 		expect(() => readOwnerOnlyFileSync(file)).toThrow("owner-only Windows ACL operation failed");
 	});
 
-
 	// WHY: the Windows control. A record written through the owner-only writer must read back, so the refusal
 	// above is the ACL and not a reader that refuses everything.
 	it("reads a record written through the owner-only Windows ACL", async () => {
@@ -284,24 +287,21 @@ describe("Windows owner-only discovery path policy", () => {
 		"C:\\temp\\CON .txt",
 		"C:\\CON\\record.json",
 		"C:\\temp\\record.json:secret",
-	] as const)(
-		"refuses Windows DOS device path %s before opening it",
-		async file => {
-			await expect(readOwnerOnlyFile(file, { platform: "win32" })).rejects.toThrow("Windows device path");
-			expect(() => readOwnerOnlyFileSync(file, { platform: "win32" })).toThrow("Windows device path");
+	] as const)("refuses Windows DOS device path %s before opening it", async file => {
+		await expect(readOwnerOnlyFile(file, { platform: "win32" })).rejects.toThrow("Windows device path");
+		expect(() => readOwnerOnlyFileSync(file, { platform: "win32" })).toThrow("Windows device path");
 
-			const allowed = await tempRecord(0o600, '{"version":1}');
-			const options = {
-				platform: "win32" as const,
-				windowsAcl: {
-					run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
-					runSync: () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
-				},
-			};
-			await expect(readOwnerOnlyFile(allowed, options)).resolves.toBe('{"version":1}');
-			expect(readOwnerOnlyFileSync(allowed, options)).toBe('{"version":1}');
-		},
-	);
+		const allowed = await tempRecord(0o600, '{"version":1}');
+		const options = {
+			platform: "win32" as const,
+			windowsAcl: {
+				run: async () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
+				runSync: () => ({ exitCode: 0, stdout: "OK", stderr: "" }),
+			},
+		};
+		await expect(readOwnerOnlyFile(allowed, options)).resolves.toBe('{"version":1}');
+		expect(readOwnerOnlyFileSync(allowed, options)).toBe('{"version":1}');
+	});
 
 	// WHY: a record ACL cannot protect a record in an unsafe parent. Readers must refuse it before parsing.
 	it("refuses an unsafe containing directory and reads when both ACLs pass", async () => {
@@ -343,10 +343,18 @@ describe("Windows owner-only discovery path policy", () => {
 
 		await expect(readOwnerOnlyFile(file, options)).resolves.toBe('{"version":1}');
 		expect(checked).toEqual([dir, file]);
-		expect(steps).toEqual(["path", "ACL #1 (parent)", "lstat", "open", "stat", "ACL #2 (record)", "identity", "read"]);
+		expect(steps).toEqual([
+			"path",
+			"ACL #1 (parent)",
+			"lstat",
+			"open",
+			"stat",
+			"ACL #2 (record)",
+			"identity",
+			"read",
+		]);
 		checked.length = 0;
 		expect(readOwnerOnlyFileSync(file, options)).toBe('{"version":1}');
 		expect(checked).toEqual([dir, file]);
 	});
-
 });

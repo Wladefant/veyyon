@@ -34,11 +34,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { isFsError } from "./fs-error";
-import {
-	verifyOwnerOnlyWindowsAcl,
-	verifyOwnerOnlyWindowsAclSync,
-	type WindowsAclOptions,
-} from "./windows-acl";
+import { verifyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAclSync, type WindowsAclOptions } from "./windows-acl";
 
 /** A discovery record is a few hundred bytes. A larger file is not one this build published. */
 const MAX_DISCOVERY_RECORD_BYTES = 64 * 1024;
@@ -131,6 +127,19 @@ function assertSameFile(filePath: string, checked: fs.Stats, opened: fs.Stats): 
 	}
 }
 
+/** Keep the discovery-record limit even when a publisher grows the file after stat. */
+async function readBoundedRecord(filePath: string, handle: fsp.FileHandle): Promise<string> {
+	const buffer = Buffer.allocUnsafe(MAX_DISCOVERY_RECORD_BYTES + 1);
+	let length = 0;
+	while (length < buffer.length) {
+		const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+		if (bytesRead === 0) break;
+		length += bytesRead;
+	}
+	if (length > MAX_DISCOVERY_RECORD_BYTES) throw refuse(filePath, "larger than a discovery record");
+	return buffer.toString("utf8", 0, length);
+}
+
 /**
  * Read a discovery record that only the current user can have written. Rejects, and returns no content,
  * when the record is refused. A missing file rejects with its `ENOENT` error, as a plain read does.
@@ -156,7 +165,7 @@ export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyRead
 			options.onStep?.("identity");
 			assertSameFile(filePath, await fsp.lstat(filePath), opened);
 			options.onStep?.("read");
-			return await handle.readFile({ encoding: "utf8" });
+			return await readBoundedRecord(filePath, handle);
 		} finally {
 			await handle.close();
 		}
@@ -170,12 +179,11 @@ export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyRead
 		options.onStep?.("stat");
 		assertRecordStats(filePath, await handle.stat(), platform);
 		options.onStep?.("read");
-		return await handle.readFile({ encoding: "utf8" });
+		return await readBoundedRecord(filePath, handle);
 	} finally {
 		await handle.close();
 	}
 }
-
 
 /** Synchronous {@link readOwnerOnlyFile}, with the same refusals and the same missing-file error. */
 export function readOwnerOnlyFileSync(filePath: string, options: OwnerOnlyReadOptions = {}): string {

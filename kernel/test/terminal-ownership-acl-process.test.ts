@@ -31,12 +31,13 @@ it("uses one PowerShell process for a scan while checking every parent and recor
 			let input = "";
 			child.stdin.on("data", (chunk: Buffer) => {
 				input += chunk.toString("utf8");
-				let end: number;
-				while ((end = input.indexOf("\n")) !== -1) {
+				let end = input.indexOf("\n");
+				while (end !== -1) {
 					const [id, encodedPath] = input.slice(0, end).split("\t");
 					input = input.slice(end + 1);
 					checked.push(Buffer.from(encodedPath, "base64").toString("utf8"));
 					queueMicrotask(() => child.stdout.write(`${id}\tOK\n`));
+					end = input.indexOf("\n");
 				}
 			});
 			child.stdin.on("finish", () => queueMicrotask(() => child.emit("close", 0, null)));
@@ -52,15 +53,22 @@ it("uses one PowerShell process for a scan while checking every parent and recor
 	try {
 		await fs.mkdir(directory, { recursive: true });
 		for (const name of ["a", "b"]) {
-			await fs.writeFile(path.join(directory, `${name}.json`), JSON.stringify({
-				version: 1, pid: process.pid, sessionFile: path.join(root, `${name}.jsonl`),
-			}));
+			await fs.writeFile(
+				path.join(directory, `${name}.json`),
+				JSON.stringify({
+					version: 1,
+					pid: process.pid,
+					sessionFile: path.join(root, `${name}.jsonl`),
+				}),
+			);
 		}
 		await assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
-			platform: "win32", windowsAcl: { spawn: spawnProcess },
+			platform: "win32",
+			windowsAcl: { spawn: spawnProcess },
 		});
 		expect(checked.filter(target => target !== directory).sort()).toEqual([
-			path.join(directory, "a.json"), path.join(directory, "b.json"),
+			path.join(directory, "a.json"),
+			path.join(directory, "b.json"),
 		]);
 		expect(checked[0]).toBe(directory);
 		expect(checked[2]).toBe(directory);

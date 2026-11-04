@@ -202,18 +202,22 @@ describe("terminal ownership claims", () => {
 		const directory = path.join(root, "run", "terminals");
 		const sessionFile = path.join(root, "wanted.jsonl");
 		await fsp.mkdir(directory, { recursive: true });
-		await fsp.writeFile(path.join(directory, `${deadPid()}-${crypto.randomUUID()}.json`), JSON.stringify({ sessionFile }));
-		await expect(assertNotTerminalOwned(sessionFile, root, {
-			platform: "win32",
-			windowsAcl: {
-				run: async (_script: string, target: string) => {
-					if (target === directory) return { exitCode: 0, stdout: "OK", stderr: "" };
-					throw new Error("The Windows ACL command timed out.");
+		await fsp.writeFile(
+			path.join(directory, `${deadPid()}-${crypto.randomUUID()}.json`),
+			JSON.stringify({ sessionFile }),
+		);
+		await expect(
+			assertNotTerminalOwned(sessionFile, root, {
+				platform: "win32",
+				windowsAcl: {
+					run: async (_script: string, target: string) => {
+						if (target === directory) return { exitCode: 0, stdout: "OK", stderr: "" };
+						throw new Error("The Windows ACL command timed out.");
+					},
 				},
-			},
-		})).resolves.toBeUndefined();
+			}),
+		).resolves.toBeUndefined();
 	});
-
 
 	it("ignores malformed publisher-shaped records for dead pids without matching unrelated sessions", async () => {
 		const root = await tempRoot();
@@ -276,10 +280,12 @@ describe("terminal ownership Windows ACL scan", () => {
 		const calls: string[] = [];
 		await assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
 			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				calls.push(target);
-				return { exitCode: 0, stdout: "OK", stderr: "" };
-			} },
+			windowsAcl: {
+				run: async (_script, target) => {
+					calls.push(target);
+					return { exitCode: 0, stdout: "OK", stderr: "" };
+				},
+			},
 		});
 		expect(calls).toHaveLength(14);
 		expect(calls.filter(target => target !== directory).sort()).toEqual(records);
@@ -294,15 +300,19 @@ describe("terminal ownership Windows ACL scan", () => {
 		await fsp.mkdir(directory, { recursive: true });
 		await fsp.writeFile(record, JSON.stringify({ version: 1, pid: process.pid, sessionFile }));
 		const calls: string[] = [];
-		await expect(assertNotTerminalOwned(sessionFile, root, {
-			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				calls.push(target);
-				return target === record
-					? { exitCode: 1, stdout: "", stderr: "ACL grants access to another user" }
-					: { exitCode: 0, stdout: "OK", stderr: "" };
-			} },
-		})).rejects.toMatchObject({
+		await expect(
+			assertNotTerminalOwned(sessionFile, root, {
+				platform: "win32",
+				windowsAcl: {
+					run: async (_script, target) => {
+						calls.push(target);
+						return target === record
+							? { exitCode: 1, stdout: "", stderr: "ACL grants access to another user" }
+							: { exitCode: 0, stdout: "OK", stderr: "" };
+					},
+				},
+			}),
+		).rejects.toMatchObject({
 			message: expect.stringContaining("Cannot establish terminal writer ownership"),
 			cause: expect.objectContaining({ message: expect.stringContaining("ACL grants access to another user") }),
 		});
@@ -315,16 +325,20 @@ describe("terminal ownership Windows ACL scan", () => {
 		await fsp.mkdir(directory, { recursive: true });
 		await fsp.writeFile(path.join(directory, "claim.json"), "{}");
 		let attempts = 0;
-		await expect(assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
-			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				if (target !== directory) {
-					attempts++;
-					throw new Error("transient ACL runner failure");
-				}
-				return { exitCode: 0, stdout: "OK", stderr: "" };
-			} },
-		})).rejects.toThrow("transient ACL runner failure");
+		await expect(
+			assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
+				platform: "win32",
+				windowsAcl: {
+					run: async (_script, target) => {
+						if (target !== directory) {
+							attempts++;
+							throw new Error("transient ACL runner failure");
+						}
+						return { exitCode: 0, stdout: "OK", stderr: "" };
+					},
+				},
+			}),
+		).rejects.toThrow("transient ACL runner failure");
 		expect(attempts).toBe(1);
 	});
 
@@ -334,16 +348,20 @@ describe("terminal ownership Windows ACL scan", () => {
 		const record = path.join(directory, "claim.json");
 		await fsp.mkdir(directory, { recursive: true });
 		await fsp.writeFile(record, "{}");
-		await expect(assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
-			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				if (target === record) {
-					await fsp.rm(record);
-					throw new Error("ACL provider could not find its target");
-				}
-				return { exitCode: 0, stdout: "OK", stderr: "" };
-			} },
-		})).rejects.toThrow("Cannot establish terminal writer ownership");
+		await expect(
+			assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
+				platform: "win32",
+				windowsAcl: {
+					run: async (_script, target) => {
+						if (target === record) {
+							await fsp.rm(record);
+							throw new Error("ACL provider could not find its target");
+						}
+						return { exitCode: 0, stdout: "OK", stderr: "" };
+					},
+				},
+			}),
+		).rejects.toThrow("Cannot establish terminal writer ownership");
 	});
 
 	for (const matching of [false, true]) {
@@ -355,16 +373,20 @@ describe("terminal ownership Windows ACL scan", () => {
 			await fsp.mkdir(directory, { recursive: true });
 			const content = JSON.stringify({ sessionFile: matching ? sessionFile : path.join(root, "other.jsonl") });
 			await fsp.writeFile(record, content);
-			await expect(assertNotTerminalOwned(sessionFile, root, {
-				platform: "win32",
-				windowsAcl: { run: async (_script, target) => {
-					if (target === record) {
-						await fsp.rename(record, `${record}.held`);
-						await fsp.writeFile(record, content);
-					}
-					return { exitCode: 0, stdout: "OK", stderr: "" };
-				} },
-			})).rejects.toThrow("replaced while it was checked");
+			await expect(
+				assertNotTerminalOwned(sessionFile, root, {
+					platform: "win32",
+					windowsAcl: {
+						run: async (_script, target) => {
+							if (target === record) {
+								await fsp.rename(record, `${record}.held`);
+								await fsp.writeFile(record, content);
+							}
+							return { exitCode: 0, stdout: "OK", stderr: "" };
+						},
+					},
+				}),
+			).rejects.toThrow("replaced while it was checked");
 		});
 	}
 
@@ -378,10 +400,12 @@ describe("terminal ownership Windows ACL scan", () => {
 		const calls: string[] = [];
 		await assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
 			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				calls.push(target);
-				return { exitCode: 0, stdout: "OK", stderr: "" };
-			} },
+			windowsAcl: {
+				run: async (_script, target) => {
+					calls.push(target);
+					return { exitCode: 0, stdout: "OK", stderr: "" };
+				},
+			},
 		});
 		expect(calls).toHaveLength(66);
 		expect(new Set(calls.filter(target => target !== directory)).size).toBe(33);
@@ -394,13 +418,17 @@ describe("terminal ownership Windows ACL scan", () => {
 		await fsp.mkdir(directory, { recursive: true });
 		await fsp.writeFile(record, "{");
 		const calls: string[] = [];
-		await expect(assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
-			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				calls.push(target);
-				return { exitCode: 0, stdout: "OK", stderr: "" };
-			} },
-		})).rejects.toThrow("step=parse");
+		await expect(
+			assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
+				platform: "win32",
+				windowsAcl: {
+					run: async (_script, target) => {
+						calls.push(target);
+						return { exitCode: 0, stdout: "OK", stderr: "" };
+					},
+				},
+			}),
+		).rejects.toThrow("step=parse");
 		expect(calls).toEqual([directory, record]);
 	});
 
@@ -410,13 +438,17 @@ describe("terminal ownership Windows ACL scan", () => {
 		await fsp.mkdir(directory, { recursive: true });
 		await fsp.writeFile(path.join(directory, "claim.json"), "{}");
 		const calls: string[] = [];
-		await expect(assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
-			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				calls.push(target);
-				return { exitCode: 1, stdout: "", stderr: "parent ACL is loose" };
-			} },
-		})).rejects.toThrow("parent ACL is loose");
+		await expect(
+			assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
+				platform: "win32",
+				windowsAcl: {
+					run: async (_script, target) => {
+						calls.push(target);
+						return { exitCode: 1, stdout: "", stderr: "parent ACL is loose" };
+					},
+				},
+			}),
+		).rejects.toThrow("parent ACL is loose");
 		expect(calls).toEqual([directory]);
 	});
 
@@ -424,14 +456,21 @@ describe("terminal ownership Windows ACL scan", () => {
 		const root = await tempRoot();
 		const directory = path.join(root, "run", "terminals");
 		await fsp.mkdir(directory, { recursive: true });
-		await fsp.writeFile(path.join(directory, "claim.json"), JSON.stringify({ sessionFile: path.join(root, "other.jsonl") }));
-		await expect(assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
-			platform: "win32",
-			windowsAcl: { run: async (_script, target) => {
-				if (target !== directory) throw new Error("The Windows ACL command timed out.");
-				return { exitCode: 0, stdout: "OK", stderr: "" };
-			} },
-		})).rejects.toMatchObject({
+		await fsp.writeFile(
+			path.join(directory, "claim.json"),
+			JSON.stringify({ sessionFile: path.join(root, "other.jsonl") }),
+		);
+		await expect(
+			assertNotTerminalOwned(path.join(root, "wanted.jsonl"), root, {
+				platform: "win32",
+				windowsAcl: {
+					run: async (_script, target) => {
+						if (target !== directory) throw new Error("The Windows ACL command timed out.");
+						return { exitCode: 0, stdout: "OK", stderr: "" };
+					},
+				},
+			}),
+		).rejects.toMatchObject({
 			message: expect.stringContaining("Cannot establish terminal writer ownership"),
 			cause: expect.objectContaining({ message: expect.stringContaining("The Windows ACL command timed out.") }),
 		});

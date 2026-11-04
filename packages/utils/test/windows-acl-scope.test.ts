@@ -13,14 +13,24 @@ afterEach(() => {
 	else process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = originalTimeout;
 });
 
-type FakeProcess = EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kills: number; closed: boolean };
+type FakeProcess = EventEmitter & {
+	stdin: PassThrough;
+	stdout: PassThrough;
+	stderr: PassThrough;
+	kills: number;
+	closed: boolean;
+};
 function verifier(respond: (child: FakeProcess, id: string, target: string) => void, closeOnEnd = true) {
 	process.env.SystemRoot = "C:\\Windows";
 	const children: FakeProcess[] = [];
 	const paths: string[] = [];
 	const spawnProcess = (() => {
 		const child = Object.assign(new EventEmitter(), {
-			stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kills: 0, closed: false,
+			stdin: new PassThrough(),
+			stdout: new PassThrough(),
+			stderr: new PassThrough(),
+			kills: 0,
+			closed: false,
 			kill() {
 				child.kills++;
 				queueMicrotask(() => child.emit("close", null, "SIGTERM"));
@@ -28,7 +38,9 @@ function verifier(respond: (child: FakeProcess, id: string, target: string) => v
 			},
 		});
 		children.push(child);
-		child.once("close", () => { child.closed = true; });
+		child.once("close", () => {
+			child.closed = true;
+		});
 		child.stdin.on("data", (chunk: Buffer) => {
 			const [id, encodedPath] = chunk.toString("utf8").trimEnd().split("\t");
 			const target = Buffer.from(encodedPath, "base64").toString("utf8");
@@ -64,7 +76,10 @@ describe("scan-scoped Windows ACL verifier", () => {
 		await withOwnerOnlyWindowsAclVerification(async () => {}, fixture.options);
 		expect(fixture.children).toHaveLength(0);
 		for (const target of ["C:\\one", "C:\\two"]) {
-			await withOwnerOnlyWindowsAclVerification(options => verifyOwnerOnlyWindowsAcl(target, options), fixture.options);
+			await withOwnerOnlyWindowsAclVerification(
+				options => verifyOwnerOnlyWindowsAcl(target, options),
+				fixture.options,
+			);
 		}
 		expect(fixture.children).toHaveLength(2);
 		expect(fixture.children.every(child => child.closed)).toBe(true);
@@ -72,9 +87,11 @@ describe("scan-scoped Windows ACL verifier", () => {
 
 	it("keeps per-path ACL refusal separate from a broken verifier", async () => {
 		const fixture = verifier((child, id, target) => {
-			child.stdout.write(target.endsWith("bad")
-				? `${id}\tERR\t${Buffer.from("ACL grants another identity access").toString("base64")}\n`
-				: `${id}\tOK\n`);
+			child.stdout.write(
+				target.endsWith("bad")
+					? `${id}\tERR\t${Buffer.from("ACL grants another identity access").toString("base64")}\n`
+					: `${id}\tOK\n`,
+			);
 		});
 		await withOwnerOnlyWindowsAclVerification(async options => {
 			await expect(verifyOwnerOnlyWindowsAcl("C:\\bad", options)).rejects.toThrow("another identity");
@@ -94,9 +111,12 @@ describe("scan-scoped Windows ACL verifier", () => {
 	] as const) {
 		it(`fails closed on ${name}`, async () => {
 			const fixture = verifier(response);
-			await expect(withOwnerOnlyWindowsAclVerification(
-				options => verifyOwnerOnlyWindowsAcl("C:\\record", options), fixture.options,
-			)).rejects.toThrow("Windows ACL");
+			await expect(
+				withOwnerOnlyWindowsAclVerification(
+					options => verifyOwnerOnlyWindowsAcl("C:\\record", options),
+					fixture.options,
+				),
+			).rejects.toThrow("Windows ACL");
 			expect(fixture.children).toHaveLength(1);
 			expect(fixture.children[0].closed).toBe(true);
 		});
@@ -107,20 +127,24 @@ describe("scan-scoped Windows ACL verifier", () => {
 			child.stdout.write(`${id}\tOK\n`);
 			child.stdout.write(`${id}\tOK\n`);
 		});
-		await expect(withOwnerOnlyWindowsAclVerification(async options => {
-			await verifyOwnerOnlyWindowsAcl("C:\\first", options);
-			await verifyOwnerOnlyWindowsAcl("C:\\second", options);
-		}, fixture.options)).rejects.toThrow("unsolicited");
+		await expect(
+			withOwnerOnlyWindowsAclVerification(async options => {
+				await verifyOwnerOnlyWindowsAcl("C:\\first", options);
+				await verifyOwnerOnlyWindowsAcl("C:\\second", options);
+			}, fixture.options),
+		).rejects.toThrow("unsolicited");
 		expect(fixture.paths).toEqual(["C:\\first"]);
 	});
 
 	it("uses the configured timeout and never respawns after it", async () => {
 		process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = "20";
 		const fixture = verifier(() => {});
-		await expect(withOwnerOnlyWindowsAclVerification(async options => {
-			await expect(verifyOwnerOnlyWindowsAcl("C:\\first", options)).rejects.toThrow("timed out");
-			await expect(verifyOwnerOnlyWindowsAcl("C:\\second", options)).rejects.toThrow("timed out");
-		}, fixture.options)).rejects.toThrow("timed out");
+		await expect(
+			withOwnerOnlyWindowsAclVerification(async options => {
+				await expect(verifyOwnerOnlyWindowsAcl("C:\\first", options)).rejects.toThrow("timed out");
+				await expect(verifyOwnerOnlyWindowsAcl("C:\\second", options)).rejects.toThrow("timed out");
+			}, fixture.options),
+		).rejects.toThrow("timed out");
 		expect(fixture.children).toHaveLength(1);
 		expect(fixture.children[0].kills).toBe(1);
 		expect(fixture.children[0].closed).toBe(true);
@@ -128,28 +152,40 @@ describe("scan-scoped Windows ACL verifier", () => {
 
 	it("rejects concurrent requests rather than mixing their results", async () => {
 		const fixture = verifier(() => {});
-		await expect(withOwnerOnlyWindowsAclVerification(options => Promise.all([
-			verifyOwnerOnlyWindowsAcl("C:\\first", options), verifyOwnerOnlyWindowsAcl("C:\\second", options),
-		]), fixture.options)).rejects.toThrow("sequential");
+		await expect(
+			withOwnerOnlyWindowsAclVerification(
+				options =>
+					Promise.all([
+						verifyOwnerOnlyWindowsAcl("C:\\first", options),
+						verifyOwnerOnlyWindowsAcl("C:\\second", options),
+					]),
+				fixture.options,
+			),
+		).rejects.toThrow("sequential");
 		expect(fixture.children[0].kills).toBe(1);
 	});
 
 	it("preserves a callback failure while closing its process", async () => {
 		const fixture = verifier((child, id) => child.stdout.write(`${id}\tOK\n`));
 		const failure = new Error("caller refused the record");
-		await expect(withOwnerOnlyWindowsAclVerification(async options => {
-			await verifyOwnerOnlyWindowsAcl("C:\\record", options);
-			throw failure;
-		}, fixture.options)).rejects.toBe(failure);
+		await expect(
+			withOwnerOnlyWindowsAclVerification(async options => {
+				await verifyOwnerOnlyWindowsAcl("C:\\record", options);
+				throw failure;
+			}, fixture.options),
+		).rejects.toBe(failure);
 		expect(fixture.children[0].closed).toBe(true);
 	});
 
 	it("bounds process shutdown and terminates only its own child", async () => {
 		process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = "20";
 		const fixture = verifier((child, id) => child.stdout.write(`${id}\tOK\n`), false);
-		await expect(withOwnerOnlyWindowsAclVerification(
-			options => verifyOwnerOnlyWindowsAcl("C:\\record", options), fixture.options,
-		)).rejects.toThrow("did not exit");
+		await expect(
+			withOwnerOnlyWindowsAclVerification(
+				options => verifyOwnerOnlyWindowsAcl("C:\\record", options),
+				fixture.options,
+			),
+		).rejects.toThrow("did not exit");
 		expect(fixture.children[0].kills).toBe(1);
 	});
 });

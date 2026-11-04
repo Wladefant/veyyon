@@ -12,11 +12,10 @@ import { PassThrough } from "node:stream";
 import {
 	applyOwnerOnlyWindowsAcl,
 	verifyOwnerOnlyWindowsAcl,
-	withOwnerOnlyWindowsAclVerification,
 	type WindowsAclCommandRunner,
 	type WindowsAclOptions,
+	withOwnerOnlyWindowsAclVerification,
 } from "@veyyon/utils";
-
 
 let cleanupPath: string | undefined;
 const originalSystemRoot = process.env.SystemRoot;
@@ -375,9 +374,10 @@ describe("owner-only Windows ACL helpers", () => {
 				await fs.writeFile(filePath, "{}");
 				await applyOwnerOnlyWindowsAcl(filePath);
 			}
-			const verify = () => withOwnerOnlyWindowsAclVerification(async options => {
-				for (const filePath of files) await verifyOwnerOnlyWindowsAcl(filePath, options);
-			});
+			const verify = () =>
+				withOwnerOnlyWindowsAclVerification(async options => {
+					for (const filePath of files) await verifyOwnerOnlyWindowsAcl(filePath, options);
+				});
 
 			await expect(verify()).resolves.toBeUndefined();
 			for (const filePath of files) {
