@@ -33,7 +33,7 @@ function cacheWriteTargetKey(filePath: string): string {
 	let target = path.resolve(filePath);
 	const visited = new Set<string>();
 	for (;;) {
-		let stats: ReturnType<typeof fsSync.lstatSync>;
+		let stats: fsSync.Stats;
 		try {
 			stats = fsSync.lstatSync(target);
 		} catch (error) {
