@@ -16,6 +16,11 @@ describe("resolveMemoryBackend", () => {
 		expect((await resolveMemoryBackend(settings)).id).toBe("hindsight");
 	});
 
+	it("routes explicit basic-memory selection without falling back to a legacy backend", async () => {
+		const settings = Settings.isolated({ "memory.backend": "basic-memory" } as never);
+		expect((await resolveMemoryBackend(settings)).id).toBe("basic-memory");
+	});
+
 	it("exposes inactive status when no session is available", async () => {
 		const memory = createMemoryRuntimeContext({ agentDir: "/tmp/agent", cwd: "/tmp/project" });
 
