@@ -112,6 +112,75 @@ describe("auth-broker snapshot cache", () => {
 		});
 	});
 
+	test("serializes an encrypted revocation across a basename symlink alias and target", async () => {
+		await withCachePath(async cachePath => {
+			const aliasPath = path.join(path.dirname(cachePath), "alias.enc");
+			// The target does not exist yet: the queue must canonicalize a
+			// dangling basename symlink to the same destination as the real path.
+			await fs.symlink(path.basename(cachePath), aliasPath);
+			const old = makeSnapshot(1_000_000);
+			const revoked: SnapshotResponse = { ...old, generation: 8, credentials: [] };
+			const otherPath = path.join(path.dirname(cachePath), "unrelated.enc");
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const nativeEncrypt = globalThis.crypto.subtle.encrypt.bind(globalThis.crypto.subtle);
+			let encryptions = 0;
+			const spy = spyOn(globalThis.crypto.subtle, "encrypt").mockImplementation(async (algorithm, key, bytes) => {
+				if (++encryptions === 1) {
+					started.resolve();
+					await release.promise;
+				}
+				return nativeEncrypt(algorithm, key, bytes);
+			});
+			const first = writeAuthBrokerSnapshotCache({ path: cachePath, token: TOKEN, url: URL, snapshot: old });
+			let second: Promise<void> | undefined;
+			let unrelated: Promise<void> | undefined;
+			try {
+				await started.promise;
+				second = writeAuthBrokerSnapshotCache({ path: aliasPath, token: TOKEN, url: URL, snapshot: revoked });
+				unrelated = writeAuthBrokerSnapshotCache({
+					path: otherPath, token: TOKEN, url: URL, snapshot: revoked,
+				});
+				await unrelated;
+				// If alias and target have separate FIFO keys, the second
+				// encryption starts before we release the delayed old write.
+				expect(encryptions).toBe(2);
+				release.resolve();
+				await Promise.all([first, second]);
+				for (const cacheFile of [cachePath, aliasPath]) {
+					expect(await readAuthBrokerSnapshotCache({
+						path: cacheFile, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
+					})).toEqual(revoked);
+				}
+				expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o600);
+				expect(new TextDecoder().decode(await fs.readFile(cachePath))).not.toContain("secret-api-key");
+			} finally {
+				release.resolve();
+				await Promise.allSettled([first, ...(second ? [second] : []), ...(unrelated ? [unrelated] : [])]);
+				spy.mockRestore();
+			}
+		});
+	});
+
+	test("rejects cyclic symlinks and nonregular cache targets without replacing them", async () => {
+		await withCachePath(async cachePath => {
+			const otherPath = path.join(path.dirname(cachePath), "cycle.enc");
+			await fs.symlink(path.basename(otherPath), cachePath);
+			await fs.symlink(path.basename(cachePath), otherPath);
+			await expect(writeAuthBrokerSnapshotCache({
+				path: cachePath, token: TOKEN, url: URL, snapshot: makeSnapshot(1_000_000),
+			})).rejects.toMatchObject({ code: "ELOOP" });
+			expect((await fs.lstat(cachePath)).isSymbolicLink()).toBe(true);
+			await fs.unlink(cachePath);
+			await fs.unlink(otherPath);
+			await fs.mkdir(cachePath);
+			await expect(writeAuthBrokerSnapshotCache({
+				path: cachePath, token: TOKEN, url: URL, snapshot: makeSnapshot(1_000_000),
+			})).rejects.toThrow("Refusing to write");
+			expect((await fs.stat(cachePath)).isDirectory()).toBe(true);
+		});
+	});
+
 	test("a failed cache encryption does not poison the next accepted snapshot write", async () => {
 		await withCachePath(async cachePath => {
 			const old = makeSnapshot(1_000_000);
