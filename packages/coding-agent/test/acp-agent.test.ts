@@ -1499,7 +1499,9 @@ describe("ACP agent", () => {
 				try {
 					const request = { sessionId: first.sessionId, cwd: harness.cwdB, mcpServers: [] };
 					await expect(
-						operation === "load" ? harness.agent.loadSession(request) : harness.agent.unstable_forkSession(request),
+						operation === "load"
+							? harness.agent.loadSession(request)
+							: harness.agent.unstable_forkSession(request),
 					).rejects.toThrow("ACP session ID is ambiguous");
 					expect(harness.sessions).toHaveLength(2);
 					expect(harness.updates).toHaveLength(updatesBefore);
