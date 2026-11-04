@@ -25,22 +25,18 @@ import {
 	applyShakeRegions,
 	collectRedundantToolResultRegions,
 	collectShakeRegions,
-	estimateTokens,
 	type ShakeConfig,
 	type ShakeRegion,
 } from "@veyyon/agent-core/compaction";
-import { resolveCompactionBoundaryIndex } from "@veyyon/agent-core/compaction/entries";
 import {
 	DEFAULT_PRUNE_CONFIG,
 	pruneSupersededToolResults,
 	pruneToolOutputs,
 	readToolSupersedeKey,
-	USELESS_NOTICE,
 } from "@veyyon/agent-core/compaction/pruning";
 import type { ProtectedToolMatcher } from "@veyyon/agent-core/compaction/tool-protection";
 import { countTokens } from "@veyyon/agent-core/tokenizer";
 import type { Model } from "@veyyon/ai";
-import { getOpenAIResponsesHistoryPayload } from "@veyyon/ai/utils";
 import {
 	PRUNE_CACHE_WARM_SUFFIX_TOKENS,
 	PRUNE_IDLE_FLUSH_MS,
@@ -98,8 +94,6 @@ export interface HistoryRewritesHost {
 
 export class HistoryRewrites {
 	readonly #host: HistoryRewritesHost;
-	/** Do not keep writing recovery artifacts for unchanged results that cannot shrink the context. */
-	readonly #unprofitableRecoveryCandidates = new WeakMap<SessionEntry, string>();
 
 	constructor(host: HistoryRewritesHost) {
 		this.#host = host;
@@ -113,10 +107,8 @@ export class HistoryRewrites {
 	async pruneOverflow(): Promise<PruneOutcome | undefined> {
 		const host = this.#host;
 		const branchEntries = host.sessionStore.getBranch();
-		const keepBoundaryId = host.keepBoundaryId(branchEntries);
-		const staged = this.#stageToolResults(branchEntries, keepBoundaryId);
 		const result = pruneToolOutputs(
-			staged,
+			branchEntries,
 			host.withPlanProtection({
 				...DEFAULT_PRUNE_CONFIG,
 				pruneUseless: host.settings.getGroup("compaction").dropUseless,
@@ -124,15 +116,14 @@ export class HistoryRewrites {
 				// compaction summarized away. A preserved-thinking model binds each thinking block to
 				// the bytes before it, so a rewrite anywhere in the sent region also costs the
 				// reasoning chain behind it: the window is held to entries whose suffix is empty.
-				keepBoundaryId,
+				keepBoundaryId: host.keepBoundaryId(branchEntries),
 				cacheWarmSuffixTokens: host.model()?.thinking?.prefixBinding === true ? 0 : PRUNE_CACHE_WARM_SUFFIX_TOKENS,
 			}),
 		);
 		if (result.prunedCount === 0) return undefined;
-		const committed = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-overflow");
-		if (committed.changedCount === 0) return undefined;
+		await this.#commit(result.prunedEntries);
 		host.syncTodos();
-		return { prunedCount: committed.changedCount, tokensSaved: Math.max(0, committed.tokensSaved) };
+		return result;
 	}
 
 	/**
@@ -149,16 +140,14 @@ export class HistoryRewrites {
 		const { supersedeReads, dropUseless } = host.settings.getGroup("compaction");
 		if (!supersedeReads && !dropUseless) return undefined;
 		const branchEntries = host.sessionStore.getBranch();
-		const keepBoundaryId = host.keepBoundaryId(branchEntries);
-		const staged = this.#stageToolResults(branchEntries, keepBoundaryId);
 		const result = pruneSupersededToolResults(
-			staged,
+			branchEntries,
 			host.withPlanProtection({
 				supersedeKey: supersedeReads ? readToolSupersedeKey : undefined,
 				pruneUseless: dropUseless,
 				protectedTools: [...DEFAULT_PRUNE_CONFIG.protectedTools],
 				// The whole sent region is flushed only once the cache is cold (idle past the 1h TTL).
-				keepBoundaryId,
+				keepBoundaryId: host.keepBoundaryId(branchEntries),
 				idleFlushMs: PRUNE_IDLE_FLUSH_MS,
 				// As in `pruneOverflow`: a prefix-bound model pays for an in-place rewrite with the
 				// thinking blocks recorded after it, which the cache math cannot price, so eligibility
@@ -167,10 +156,9 @@ export class HistoryRewrites {
 			}),
 		);
 		if (result.prunedCount === 0) return undefined;
-		const committed = await this.#archiveAndCommit(branchEntries, result.prunedEntries, "prune-stale");
-		if (committed.changedCount === 0) return undefined;
+		await this.#commit(result.prunedEntries);
 		host.syncTodos();
-		return { prunedCount: committed.changedCount, tokensSaved: Math.max(0, committed.tokensSaved) };
+		return result;
 	}
 
 	/**
@@ -184,12 +172,10 @@ export class HistoryRewrites {
 		const updated: SessionEntry[] = [];
 		for (const entry of branchEntries) {
 			if (entry.type === "message") {
-				const message = this.#stageImageMessage(entry.message);
-				if (!message) continue;
-				const stripped = stripImagesFromMessage(message);
+				const stripped = stripImagesFromMessage(entry.message);
 				if (stripped > 0) {
 					removed += stripped;
-					updated.push({ ...entry, message });
+					updated.push(entry);
 				}
 				continue;
 			}
@@ -202,54 +188,15 @@ export class HistoryRewrites {
 				}
 				if (dropped > 0) {
 					if (kept.length === 0) kept.push({ type: "text", text: "[image removed]" });
+					entry.content = kept;
 					removed += dropped;
-					updated.push({ ...entry, content: kept });
+					updated.push(entry);
 				}
 			}
 		}
 		if (removed === 0) return { removed: 0 };
-		await this.#archiveAndCommit(branchEntries, updated, "drop-images");
+		await this.#commit(updated);
 		return { removed };
-	}
-
-	/** Copy exactly the containers the existing image stripper mutates. */
-	#stageImageMessage(message: AgentMessage): AgentMessage | undefined {
-		switch (message.role) {
-			case "user":
-			case "developer":
-			case "custom":
-			case "hookMessage": {
-				if (typeof message.content === "string" || !message.content.some(part => part.type === "image")) {
-					return undefined;
-				}
-				if (
-					(message.role === "user" || message.role === "developer") &&
-					getOpenAIResponsesHistoryPayload(message.providerPayload, message.providerPayload?.provider ?? "")
-				) {
-					throw new Error("Cannot remove images: native OpenAI Responses history cannot be rewritten safely");
-				}
-				return { ...message };
-			}
-			case "toolResult": {
-				const details = message.details as { images?: unknown } | null | undefined;
-				const hasDetailImages = Array.isArray(details?.images) && details.images.some(
-					(part: unknown) => !!part && typeof part === "object" && "type" in part && part.type === "image",
-				);
-				if (!hasDetailImages && !message.content.some(part => part.type === "image")) return undefined;
-				if (hasDetailImages && message.details && typeof message.details === "object") {
-					return {
-						...message,
-						details: Array.isArray(message.details) ? [...message.details] : { ...message.details },
-					};
-				}
-				return { ...message };
-			}
-			case "fileMention":
-				if (!message.files.some(file => file.image)) return undefined;
-				return { ...message, files: message.files.map(file => file.image ? { ...file } : file) };
-			default:
-				return undefined;
-		}
 	}
 
 	/**
@@ -320,33 +267,7 @@ export class HistoryRewrites {
 	 * rewrite. `regions` is non-empty.
 	 */
 	async offloadAndApply(regions: ShakeRegion[]): Promise<ElisionOutcome> {
-		// A shake region was selected against this branch. An async artifact write must not
-		// let a newer tool result be elided using a recovery file containing older bytes.
-		const branch = this.#host.sessionStore.getBranch();
-		const branchEntries = new Set(branch);
-		const selected = new Map<SessionEntry, string>();
-		for (const region of regions) {
-			if (!branchEntries.has(region.entry)) {
-				throw new Error("Cannot elide history: selected entry is no longer on the branch");
-			}
-			selected.set(region.entry, JSON.stringify(region.entry));
-		}
-		const leaf = branch.at(-1);
 		const artifactId = await this.#saveArtifact(regions);
-		// Never mutate or persist elided messages without an addressable copy of
-		// their exact originals. Keeping the bytes in context is preferable to an
-		// apparently successful reduction that cannot be recovered after restart.
-		if (!artifactId) {
-			throw new Error("Cannot elide session history: recovery artifact was not saved");
-		}
-		const currentBranch = this.#host.sessionStore.getBranch();
-		const currentEntries = new Set(currentBranch);
-		if (
-			currentBranch.at(-1) !== leaf ||
-			[...selected].some(([entry, original]) => !currentEntries.has(entry) || JSON.stringify(entry) !== original)
-		) {
-			throw new Error("History changed while saving shake artifact; retry the rewrite");
-		}
 		let toolResultsDropped = 0;
 		let blocksDropped = 0;
 		let originalTokens = 0;
@@ -359,20 +280,8 @@ export class HistoryRewrites {
 			if (replacement.length > 0) replacementTokens += countTokens(replacement);
 			return { region, replacement };
 		});
-		// A rejected transcript write must not strand live placeholders whose originals remain on disk.
-		// Revert only our unchanged publication; a concurrent edit belongs to its other writer.
-		const originals = [...selected.keys()].map(entry => ({ entry, before: structuredClone(entry) }));
 		applyShakeRegions(items);
-		const applied = new Map(originals.map(({ entry }) => [entry, JSON.stringify(entry)]));
-		try {
-			await this.#host.sessionStore.rewriteEntries(regions.map(region => region.entry));
-		} catch (error) {
-			for (const { entry, before } of originals) {
-				if (JSON.stringify(entry) === applied.get(entry)) Object.assign(entry, before);
-			}
-			throw error;
-		}
-		this.#refreshContext();
+		await this.#commit(regions.map(region => region.entry));
 		return {
 			toolResultsDropped,
 			blocksDropped,
@@ -382,147 +291,18 @@ export class HistoryRewrites {
 	}
 
 	/**
-	 * Pruning mutates message containers, so run its selector on copies. Leave the cold prefix
-	 * untouched: even reading a cooled entry's message would rehydrate historical payloads.
+	 * The epilogue of every in-place rewrite: persist the new shape, rebuild the agent's context from
+	 * it, reset the advisor runtimes, close the provider sessions that cache message identity, and
+	 * mark the context report.
+	 *
+	 * Provider usage from this turn was computed over a prompt the rewrite shortened. Without the
+	 * mark, the report counts the removed bytes until a response that describes the new shape
+	 * arrives, and the compaction decision, which takes the larger of the provider figure and a local
+	 * estimate, never skips a summarization that the rewrite made unnecessary.
 	 */
-	#stageToolResults(branch: SessionEntry[], keepBoundaryId: string | undefined): SessionEntry[] {
-		const first = resolveCompactionBoundaryIndex(branch, keepBoundaryId);
-		return branch.map((entry, index) =>
-			index >= first && entry.type === "message" && entry.message.role === "toolResult"
-				? { ...entry, message: { ...entry.message } }
-				: entry,
-		);
-	}
-
-	/**
-	 * Save the selected original entries before publishing staged replacements. A concurrent append
-	 * or rewrite invalidates the selection; a rejected file rewrite restores the live originals.
-	 * The archive is intentionally retained after a failed publish, since it is valid evidence.
-	 */
-	async #archiveAndCommit(
-		branch: SessionEntry[],
-		updated: SessionEntry[],
-		operation: string,
-	): Promise<{ changedCount: number; tokensSaved: number }> {
-		const byId = new Map(branch.map(entry => [entry.id, entry]));
-		const changes = updated.map(replacement => {
-			const original = byId.get(replacement.id);
-			if (!original || original === replacement) throw new Error("History rewrite requires staged replacements");
-			return {
-				original,
-				replacement,
-				previous: { ...original },
-				serialized: JSON.stringify(original),
-				appliedSerialized: "",
-			};
-		}).filter(change =>
-			operation === "drop-images" || this.#unprofitableRecoveryCandidates.get(change.original) !== change.serialized,
-		);
-		// This memo is a pruning cost decision, not an image-removal permission.
-		// An unchanged image-bearing result must still be archived and stripped.
-		if (changes.length === 0) return { changedCount: 0, tokensSaved: 0 };
-		const archive = JSON.stringify({
-			version: 1,
-			operation,
-			branchLeafId: branch.at(-1)?.id ?? null,
-			entries: changes.map(change => change.original),
-		});
-		const artifactId = await this.#host.sessionStore.saveArtifact(archive, operation);
-		if (!artifactId) throw new Error("Cannot rewrite history: recovery artifact was not saved");
-		const currentBranch = this.#host.sessionStore.getBranch();
-		const currentEntries = new Set(currentBranch);
-		if (
-			currentBranch.at(-1) !== branch.at(-1) ||
-			changes.some(change => !currentEntries.has(change.original) || JSON.stringify(change.original) !== change.serialized)
-		) {
-			throw new Error("History changed while preserving original entries; retry the rewrite");
-		}
-		let tokensSaved = 0;
-		const committed = changes.filter(({ original, replacement, serialized }) => {
-			const notice = replacement.type === "message" && replacement.message.role === "toolResult"
-				? replacement.message.content[0]
-				: undefined;
-			const useless = operation !== "drop-images" && notice?.type === "text" && notice.text === USELESS_NOTICE;
-			const reference = `\n[recover: artifact://${artifactId} (entry ${original.id})]`;
-			this.#appendRecoveryReference(original, replacement, reference);
-			if (operation !== "drop-images" && original.type === "message" && replacement.type === "message") {
-				const savings = estimateTokens(original.message) - estimateTokens(replacement.message);
-				// A useless result has no correctness reason to grow the prompt. Price its complete
-				// referenced replacement, not just the notice used by the upstream selector.
-				if (useless && savings <= 0) {
-					this.#unprofitableRecoveryCandidates.set(original, serialized);
-					return false;
-				}
-				tokensSaved += savings;
-			}
-			return true;
-		});
-		if (committed.length === 0) return { changedCount: 0, tokensSaved: 0 };
-		for (const change of committed) {
-			const { original, replacement } = change;
-			Object.assign(original, replacement);
-			change.appliedSerialized = JSON.stringify(original);
-		}
-		try {
-			await this.#host.sessionStore.rewriteEntries(committed.map(change => change.original));
-		} catch (error) {
-			for (const { original, previous, replacement, appliedSerialized } of committed) {
-				// Never roll back a record another owner changed during persistence.
-				if (JSON.stringify(original) !== appliedSerialized) continue;
-				if (original.type === "message" && replacement.type === "message" && original.message === replacement.message) {
-					Object.assign(original, previous);
-				}
-				if (original.type === "custom_message" && replacement.type === "custom_message" && original.content === replacement.content) {
-					Object.assign(original, previous);
-				}
-			}
-			throw error;
-		}
-		this.#refreshContext();
-		return { changedCount: committed.length, tokensSaved };
-	}
-
-	#appendRecoveryReference(original: SessionEntry, replacement: SessionEntry, reference: string): void {
-		if (replacement.type === "custom_message") {
-			replacement.content = typeof replacement.content === "string"
-				? replacement.content + reference
-				: [...replacement.content, { type: "text", text: reference }];
-			return;
-		}
-		if (replacement.type !== "message") return;
-		const message = replacement.message;
-		switch (message.role) {
-			case "toolResult":
-				message.content = [...message.content, { type: "text", text: reference }];
-				return;
-			case "user":
-			case "developer":
-			case "custom":
-			case "hookMessage": {
-				const content = typeof message.content === "string"
-					? message.content + reference
-					: [...message.content, { type: "text" as const, text: reference }];
-				// These roles share this content shape; the cast mirrors stripImagesFromMessage.
-				(message as { content: typeof content }).content = content;
-				return;
-			}
-			case "fileMention": {
-				if (original.type !== "message" || original.message.role !== "fileMention") return;
-				for (let index = 0; index < message.files.length; index++) {
-					if (original.message.files[index]?.image) {
-						message.files[index].content += reference;
-					}
-				}
-				return;
-			}
-			default:
-				return;
-		}
-	}
-
-	/** Rebuild cached context and provider sessions only after the transcript commit succeeds. */
-	#refreshContext(): void {
+	async #commit(updated: Iterable<SessionEntry>): Promise<void> {
 		const host = this.#host;
+		await host.sessionStore.rewriteEntries(updated);
 		host.agent.replaceMessages(host.rebuiltMessages());
 		host.resetAdvisorRuntimes();
 		host.closeCodexSessions();
@@ -532,7 +312,7 @@ export class HistoryRewrites {
 	/**
 	 * Concatenate the regions' original contents into one session artifact, readable as
 	 * `artifact://<id>`. `undefined` when the session is not persisted or the write fails; the
-	 * callers must refuse to replace the originals when no artifact id is returned.
+	 * placeholders then link nothing.
 	 */
 	async #saveArtifact(regions: ShakeRegion[]): Promise<string | undefined> {
 		const parts: string[] = [];
@@ -561,4 +341,3 @@ function shakeElidePlaceholder(region: ShakeRegion, index: number, artifactId: s
 		: `[${verb} ~${region.tokens} tokens]`;
 	return truncated ? `\n${marker}\n` : marker;
 }
-

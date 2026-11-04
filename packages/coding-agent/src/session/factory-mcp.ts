@@ -14,10 +14,9 @@ import {
 	MCPToolCache,
 	parseMCPToolName,
 } from "../mcp";
-import type { MCPWebhookControl } from "../mcp/events-webhook";
-import type { RuntimeMCPConfig } from "../mcp/runtime-config";
-import { MCP_CONNECTION_STATUS_EVENT_CHANNEL } from "../mcp/startup-events";
 import type { MCPEventOccurrence } from "../mcp/types";
+import type { MCPWebhookControl } from "../mcp/events-webhook";
+import { MCP_CONNECTION_STATUS_EVENT_CHANNEL } from "../mcp/startup-events";
 import type { Tool } from "../tools";
 import type { EventBus } from "../utils/event-bus";
 import type { AgentSession } from "./agent-session";
@@ -200,7 +199,6 @@ export type StartDeferredMCPDiscovery = (
 ) => void;
 
 export interface SessionMCPStartupInputs {
-	runtimeConfig?: RuntimeMCPConfig;
 	cwd: string;
 	/** The profile whose `mcp.json` the session reads, matching its rules, commands and skills. */
 	agentDir: string;
@@ -226,7 +224,6 @@ export async function startSessionMCP(inputs: SessionMCPStartupInputs): Promise<
 	const { settings } = inputs;
 	const startupQuiet = settings.get("startup.quiet");
 	const discoverOptions: MCPDiscoverOptions = {
-		runtimeConfig: inputs.runtimeConfig,
 		onStatus: event => {
 			if (!inputs.hasUI || startupQuiet) return;
 			if (event.type === "connecting" && event.serverNames.length === 0) return;
@@ -259,15 +256,6 @@ export async function startSessionMCP(inputs: SessionMCPStartupInputs): Promise<
 		authStorage: inputs.authStorage,
 	});
 	if (settings.get("mcp.notifications")) result.manager.setNotificationsEnabled(true);
-	const runtimeFailures = result.errors.filter(error =>
-		Object.hasOwn(inputs.runtimeConfig?.configs ?? {}, error.path.replace(/^mcp:/, "")),
-	);
-	if (runtimeFailures.length > 0) {
-		await result.manager.disconnectAll();
-		throw new Error(
-			`Run-only MCP connection failed: ${runtimeFailures.map(error => `${error.path}: ${error.error}`).join("; ")}`,
-		);
-	}
 	applyMCPEnvironment(result);
 	for (const { path, error } of result.errors) {
 		logger.error("MCP tool load failed", { path, error });
@@ -283,10 +271,7 @@ export interface SessionMCPInputs extends Omit<SessionMCPStartupInputs, "deferre
 	 * discovery connects. A top-level session installs its manager as the process-wide one; a spawned
 	 * agent already has its parent's.
 	 */
-	options: Pick<
-		CreateAgentSessionOptions,
-		"mcpManager" | "enableMCP" | "hasUI" | "toolNames" | "parentTaskPrefix" | "runtimeMCPConfig"
-	>;
+	options: Pick<CreateAgentSessionOptions, "mcpManager" | "enableMCP" | "hasUI" | "toolNames" | "parentTaskPrefix">;
 	/** The MCP tool selection the restored session recorded, pending the same way. */
 	restoredSelectedToolNames: readonly string[];
 }
@@ -319,9 +304,9 @@ export async function openSessionMCP(inputs: SessionMCPInputs): Promise<SessionM
 	let started: SessionMCPStartup | undefined;
 	const hasUI = options.hasUI === true;
 	const create = (options.enableMCP ?? true) && !manager;
-	const deferred = create && hasUI && !options.runtimeMCPConfig;
+	const deferred = create && hasUI;
 	if (create) {
-		started = await startSessionMCP({ ...inputs, hasUI, deferred, runtimeConfig: options.runtimeMCPConfig });
+		started = await startSessionMCP({ ...inputs, hasUI, deferred });
 		manager = started.manager;
 	}
 	if (manager && !isInProcessChildSession(options)) MCPManager.setInstance(manager);

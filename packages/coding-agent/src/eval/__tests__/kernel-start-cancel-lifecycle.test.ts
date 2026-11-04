@@ -33,13 +33,12 @@ test("cancelled startup releases its late kernel instead of losing ownership", a
 	expect(pool.startingSessions.size).toBe(0);
 });
 
-function fakeKernel(counter: { shutdowns: number }, release?: Promise<void>, onShutdown?: () => void): SessionKernel {
+function fakeKernel(counter: { shutdowns: number }, release?: Promise<void>): SessionKernel {
 	return {
 		execute: async () => ({ status: "ok", cancelled: false, timedOut: false, stdinRequested: false }),
 		isAlive: () => true,
 		shutdown: async () => {
 			counter.shutdowns++;
-			onShutdown?.();
 			await release;
 			return { confirmed: true };
 		},
@@ -71,9 +70,8 @@ test("a cancelled waiter keeps the kernel while another waiter of the same owner
 test("a caller arriving while an abandoned startup is being released gets a fresh kernel", async () => {
 	const first = Promise.withResolvers<SessionKernel>();
 	const releaseGate = Promise.withResolvers<void>();
-	const shutdownStarted = Promise.withResolvers<void>();
 	const counter = { shutdowns: 0 };
-	const lateKernel = fakeKernel(counter, releaseGate.promise, () => shutdownStarted.resolve());
+	const lateKernel = fakeKernel(counter, releaseGate.promise);
 	const freshKernel = fakeKernel(counter);
 	let starts = 0;
 	const pool = new KernelSessionPool({
@@ -87,21 +85,12 @@ test("a caller arriving while an abandoned startup is being released gets a fres
 	abort.abort(new Error("lane cancelled"));
 	await expect(cancelled).rejects.toThrow();
 	first.resolve(lateKernel);
-	await shutdownStarted.promise;
+	await Bun.sleep(0);
 	expect(counter.shutdowns).toBe(1);
-	let acquired = false;
-	const acquiring = pool.acquireSession("key", "session", process.cwd(), { kernelOwnerId: "b" }).then(session => {
-		acquired = true;
-		return session;
-	});
-	await Promise.resolve();
-	expect(acquired).toBe(false);
-	expect(starts).toBe(1);
+	const next = await pool.acquireSession("key", "session", process.cwd(), { kernelOwnerId: "b" });
+	expect(next.kernel).toBe(freshKernel);
 	releaseGate.resolve();
 	await starting;
-	const next = await acquiring;
-	expect(next.kernel).toBe(freshKernel);
-	expect(starts).toBe(2);
 	expect(counter.shutdowns).toBe(1);
 	expect(pool.sessions.get("key")).toBe(next);
 });

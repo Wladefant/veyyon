@@ -178,16 +178,12 @@ describe("python executor owner cleanup", () => {
 		});
 
 		const disposal = disposeKernelSessionsByOwner("owner-a");
-		const nextExecution = executePython("2 + 2", {
+		await executePython("2 + 2", {
 			cwd: "/tmp/disposal-race-kernel",
 			sessionId: "race-session",
 			kernelMode: "session",
 			kernelOwnerId: "owner-b",
 		});
-
-		shutdownDeferred.resolve({ confirmed: true });
-		await disposal;
-		await nextExecution;
 
 		expect(startSpy).toHaveBeenCalledTimes(2);
 		expect(disposingKernel.execute).toHaveBeenCalledTimes(1);
@@ -195,6 +191,8 @@ describe("python executor owner cleanup", () => {
 		expect(disposingKernel.shutdown).toHaveBeenCalledTimes(1);
 		expect(replacementKernel.shutdown).not.toHaveBeenCalled();
 
+		shutdownDeferred.resolve({ confirmed: true });
+		await disposal;
 
 		await disposeKernelSessionsByOwner("owner-b");
 		expect(replacementKernel.shutdown).toHaveBeenCalledTimes(1);
@@ -343,14 +341,14 @@ describe("python executor owner cleanup", () => {
 		await disposeAllKernelSessions();
 		expect(unconfirmedShutdown).toHaveBeenCalledTimes(1);
 
-		// A retained, unconfirmed teardown is not a reusable interpreter.
-		await expect(executePython("2", {
+		// Re-executing the same session must reuse the retained kernel (no new start).
+		await executePython("2", {
 			cwd: "/tmp/unconfirmed-shutdown",
 			sessionId: "unconfirmed-shutdown-session",
 			kernelMode: "session",
-		})).rejects.toThrow("shutdown was not confirmed");
+		});
 		expect(startSpy).toHaveBeenCalledTimes(1);
-		expect(kernel.execute).toHaveBeenCalledTimes(1);
+		expect(kernel.execute).toHaveBeenCalledTimes(2);
 
 		// Swap to a confirmed shutdown so afterEach can drain the retained session.
 		const confirmedShutdown = vi.fn(async (): Promise<KernelShutdownResult> => ({ confirmed: true }));

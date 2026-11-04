@@ -27,7 +27,7 @@ const TITLE_CONTEXT: Context = {
 	],
 };
 
-describe("Kimi Code thinking policy", () => {
+describe("Kimi K2.7 Code thinking policy", () => {
 	it("omits disabled thinking for title-generator-style Kimi Code requests", () => {
 		const model = getBundledModel<"openai-completions">("kimi-code", "kimi-for-coding");
 		const policy = resolveOpenAICompatPolicy(model, {
@@ -67,8 +67,7 @@ describe("Kimi Code thinking policy", () => {
 
 		await stream.result();
 
-		expect(payload?.thinking).toEqual({ type: "adaptive", display: "summarized" });
-		expect(payload?.output_config?.effort).toBe("low");
+		expect(payload?.thinking?.type).toBe("enabled");
 		expect(payload?.tool_choice).toEqual({ type: "auto" });
 	});
 

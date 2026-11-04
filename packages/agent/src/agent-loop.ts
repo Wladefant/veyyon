@@ -23,6 +23,8 @@ import type {
 // but the other ten had been arriving with the catalogue, the providers and the usage backends
 // attached. Types stay on the entry point, which is free.
 import { isApiKeyResolver, resolveApiKeyOnce, seedApiKeyResolver } from "@veyyon/ai/auth-retry";
+import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
+import { INTENT_FIELD } from "@veyyon/wire";
 import {
 	type Dialect,
 	encodeInbandToolHistory,
@@ -57,12 +59,9 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@veyyon/ai/utils/harmony-leak";
-import { carryRequiredToolCall } from "@veyyon/ai/utils/tool-choice";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage } from "@veyyon/catalog/models";
 import {
-	type ConsumedTelegramTrace,
-	consumeTelegramTrace,
 	errorMessage,
 	estimateTokensFromText,
 	formatCount,
@@ -70,10 +69,8 @@ import {
 	isRecord,
 	LoopRace,
 	logger,
-	logTelegramDeliveryTrace,
 	sanitizeText,
 	structuredCloneJSON,
-	transferTelegramTrace,
 } from "@veyyon/utils";
 import { type AgentPauseGate, agentPauseGate } from "./pause";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
@@ -666,10 +663,7 @@ export function normalizeMessagesForProvider(
 			return message;
 		}
 		const filtered = message.content.filter(block => block.type !== "thinking");
-		if (filtered.length === message.content.length) return message;
-		const next = { ...message, content: filtered };
-		transferTelegramTrace(message, next);
-		return next;
+		return filtered.length === message.content.length ? message : { ...message, content: filtered };
 	});
 }
 
@@ -787,7 +781,6 @@ interface LoopState {
 	hasMoreToolCalls: boolean;
 	/** Steering, asides and follow-ups injected before the next assistant response. */
 	pendingMessages: AgentMessage[];
-	activeTelegramTraces: ConsumedTelegramTrace[];
 	harmonyRetryAttempt: number;
 	harmonyTruncateResumeCount: number;
 	pausedTurnContinuations: number;
@@ -877,7 +870,6 @@ async function driveLoop(run: LoopRun): Promise<void> {
 		firstTurn: true,
 		hasMoreToolCalls: true,
 		pendingMessages: await initialSteeringMessages(run),
-		activeTelegramTraces: [],
 		harmonyRetryAttempt: 0,
 		harmonyTruncateResumeCount: 0,
 		pausedTurnContinuations: 0,
@@ -918,25 +910,12 @@ async function runTurn(run: LoopRun, state: LoopState): Promise<boolean> {
 	if (await parkWhilePaused(run)) return true;
 	if (!state.firstTurn) {
 		run.stream.push({ type: "turn_start" });
-	} else {
-		for (const prompt of run.newMessages) {
-			const trace = consumeTelegramTrace(prompt, run.config.sessionId);
-			if (trace) {
-				state.activeTelegramTraces.push(trace);
-			}
-		}
 	}
 	state.firstTurn = false;
 
 	// Process pending messages (inject before next assistant response)
 	if (state.pendingMessages.length > 0) {
-		for (const message of state.pendingMessages) {
-			const trace = consumeTelegramTrace(message, run.config.sessionId);
-			if (trace) {
-				state.activeTelegramTraces.push(trace);
-			}
-			injectMessage(run, message);
-		}
+		for (const message of state.pendingMessages) injectMessage(run, message);
 		state.pendingMessages = [];
 	}
 
@@ -1389,16 +1368,10 @@ interface ProviderTurn {
 	readonly ownedDialect: Dialect | undefined;
 	/** Set when the owned dialect rendered tools into the prompt. */
 	readonly inband: InbandToolCalling | undefined;
-	/** The native `tool_choice` the call sends; unset under an owned dialect, which sends no native tools. */
-	readonly toolChoice: ToolChoice | undefined;
 }
 
 /** Build the provider context of one call. This is where AgentMessage[] gets transformed to Message[] for the LLM. */
-async function buildProviderTurn(
-	run: LoopRun,
-	model: Model,
-	toolChoice: ToolChoice | undefined,
-): Promise<ProviderTurn> {
+async function buildProviderTurn(run: LoopRun, model: Model): Promise<ProviderTurn> {
 	const { context, config } = run;
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	const messages = config.transformContext
@@ -1428,26 +1401,19 @@ async function buildProviderTurn(
 		llmContext = await config.transformProviderContext(llmContext, model);
 	}
 	const tools = llmContext.tools;
-	if (!ownedDialect) return { llmContext, ownedDialect, inband: undefined, toolChoice };
-	if (!tools || tools.length === 0) return { llmContext, ownedDialect, inband: undefined, toolChoice: undefined };
+	if (!ownedDialect || !tools || tools.length === 0) return { llmContext, ownedDialect, inband: undefined };
 	// Owned tool calling: take tool calls away from the provider and run them through the selected in-band prompt
 	// dialect. `VEYYON_DIALECT=1` still force-enables GLM; `VEYYON_DIALECT=<dialect>` force-enables that dialect.
-	// The catalog is prompt text, so no wire field can force a call: a required one rides the conversation as text.
 	return {
-		llmContext: carryRequiredToolCall(
-			{
-				...llmContext,
-				systemPrompt: (llmContext.systemPrompt ?? []).concat(renderInbandToolPrompt(tools, ownedDialect)),
-				messages: encodeInbandToolHistory(llmContext.messages, ownedDialect, tools),
-				tools: undefined,
-			},
-			toolChoice,
-			"open",
-			{ tools },
-		),
+		llmContext: {
+			...llmContext,
+			systemPrompt: (llmContext.systemPrompt ?? []).concat(renderInbandToolPrompt(tools, ownedDialect)),
+			messages: encodeInbandToolHistory(llmContext.messages, ownedDialect, tools),
+			tools: undefined,
+
+		},
 		ownedDialect,
 		inband: { dialect: ownedDialect, tools, abort: new AbortController() },
-		toolChoice: undefined,
 	};
 }
 
@@ -1484,7 +1450,8 @@ async function resolveTurnOptions(
 		// Re-resolved after credential selection so the per-request value reflects the credential actually used, not
 		// the snapshot from AgentLoopConfig construction.
 		metadata: config.metadataResolver ? config.metadataResolver(model.provider) : config.metadata,
-		toolChoice: turn.toolChoice,
+		// Owned tool calling sends no native tools, so any tool_choice would error.
+		toolChoice: turn.ownedDialect ? undefined : (state.hostToolChoice ?? state.forcedToolChoice ?? config.toolChoice),
 		reasoning,
 		disableReasoning,
 		temperature:
@@ -1509,17 +1476,7 @@ async function openTurnResponse(
 	model: Model,
 	turn: ProviderTurn,
 	options: SimpleStreamOptions,
-	state?: LoopState,
 ): Promise<AssistantMessageEventStream> {
-	if (state?.activeTelegramTraces && state.activeTelegramTraces.length > 0) {
-		for (const entry of state.activeTelegramTraces) {
-			logTelegramDeliveryTrace(entry.trace, {
-				stage: "provider_call_start",
-				sessionId: entry.sessionId ?? run.config.sessionId,
-			});
-		}
-		state.activeTelegramTraces = [];
-	}
 	const response = await (run.streamFn ?? streamSimple)(model, turn.llmContext, options);
 	const inband = turn.inband;
 	if (!inband) return response;
@@ -1541,11 +1498,7 @@ async function streamAssistantResponse(run: LoopRun, state: LoopState): Promise<
 	// fallback — must apply on the next call instead of the run silently finishing on the stale model captured at run
 	// start.
 	const model = config.getModel?.() ?? config.model;
-	const turn = await buildProviderTurn(
-		run,
-		model,
-		state.hostToolChoice ?? state.forcedToolChoice ?? config.toolChoice,
-	);
+	const turn = await buildProviderTurn(run, model);
 	// Wrap the user-supplied onResponse so we always observe response headers for telemetry
 	// (`ChatUsageEvent.headers`, gateway auto-detection) without stealing them from the configured hook.
 	let responseHeaders: Readonly<Record<string, string>> | undefined;
@@ -1586,7 +1539,7 @@ async function streamAssistantResponse(run: LoopRun, state: LoopState): Promise<
 	try {
 		return await runInActiveSpan(chatSpan, async () => {
 			const reader = new AssistantTurnStream(run, model, options, finishChat);
-			return reader.read(await openTurnResponse(run, model, turn, options, state));
+			return reader.read(await openTurnResponse(run, model, turn, options));
 		});
 	} catch (err) {
 		failChatSpan(telemetry, chatSpan, { errorObject: err, responseHeaders, baseUrl: model.baseUrl });
@@ -2603,6 +2556,7 @@ class ToolBatch {
 			return false;
 		}
 	}
+
 
 	/** Answers a call whose own signal fired before it started with the abort placeholder. */
 	#answerAbortedBeforeStart(record: ToolCallRecord): void {

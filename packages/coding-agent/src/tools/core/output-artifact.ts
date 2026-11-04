@@ -3,7 +3,6 @@ import { writeArtifactAtomically } from "@veyyon/kernel/session/artifacts";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { Settings } from "../../config/settings";
-import { producerRedactText } from "../../secrets/producer-owner";
 import { DEFAULT_MAX_BYTES, type InlineByteCapOptions, resolveInlineCap } from "../../session/streaming-output";
 import type { ToolSession } from "../index";
 
@@ -147,7 +146,7 @@ export async function saveOutputArtifact(
 	try {
 		const alloc = await session.allocateOutputArtifact?.(toolType);
 		if (!alloc?.path || !alloc.id) return undefined;
-		await writeArtifactAtomically(alloc.path, producerRedactText(text));
+		await writeArtifactAtomically(alloc.path, text);
 		return alloc.id;
 	} catch (error) {
 		// Undefined is how the caller learns not to print a footer; the report is how the operator learns

@@ -8,8 +8,8 @@
  */
 
 import type { Effort } from "@veyyon/catalog/effort";
-import { rejectsForcedToolChoice } from "@veyyon/catalog/identity";
 import { isAnthropicOpus55Model } from "@veyyon/catalog/identity/family";
+import { rejectsForcedToolChoice } from "@veyyon/catalog/identity";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@veyyon/catalog/model-thinking";
 import { calculateCost } from "@veyyon/catalog/models";
 import { $env, $flag } from "@veyyon/utils/env";
@@ -53,7 +53,6 @@ import { fetchProviderWithRetry } from "../utils/provider-fetch";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { toolWireSchema } from "../utils/schema/wire";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
-import { carryRequiredToolCall } from "../utils/tool-choice";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
 import { decodeEventStream, type EventStreamMessage } from "./aws-eventstream";
 import { type AwsCredentials, signRequest } from "./aws-sigv4";
@@ -448,31 +447,33 @@ class BedrockTurn {
 
 	async #buildRequest(): Promise<ConverseStreamRequest> {
 		const model = this.#model;
+		const context = this.#context;
 		const options = this.#options;
+		const cacheRetention = resolveCacheRetention(options.cacheRetention);
+		const messages = convertMessages(context, model, cacheRetention);
+		const { toolConfig: rawToolConfig, sentinelInjected } = planToolConfig(
+			context.tools,
+			resolveBedrockToolChoice(options.toolChoice, model.id),
+			messages,
+		);
+		this.#sentinelInjected = sentinelInjected;
+		let toolConfig = rawToolConfig;
+		let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
+
+		// Some models (Opus/Sonnet 5.5) reject forced tool use outright; keep the
+		// tools offered under `auto` and leave thinking intact.
+		const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
 		const id = model.id.toLowerCase();
 		const isOpusOrSonnet55 =
-			isAnthropicOpus55Model(model.id) || id.includes("claude-sonnet-5-5") || id.includes("claude-3-7-sonnet-5-5");
+			isAnthropicOpus55Model(model.id) ||
+			id.includes("claude-sonnet-5-5") ||
+			id.includes("claude-3-7-sonnet-5-5");
 		const supportsForcedToolChoice =
 			(model.compat as { supportsForcedToolChoice?: boolean } | undefined)?.supportsForcedToolChoice ??
 			!isOpusOrSonnet55;
-		const requestedToolChoice = resolveBedrockToolChoice(options.toolChoice, model.id);
-		const toolChoice =
-			!supportsForcedToolChoice && (requestedToolChoice === "any" || typeof requestedToolChoice === "object")
-				? "auto"
-				: requestedToolChoice;
-		const context = carryRequiredToolCall(
-			this.#context,
-			options.toolChoice,
-			typeof toolChoice === "object" ? "named" : toolChoice === "any" ? "any" : "open",
-		);
-		const cacheRetention = resolveCacheRetention(options.cacheRetention);
-		const messages = convertMessages(context, model, cacheRetention);
-		const { toolConfig, sentinelInjected } = planToolConfig(context.tools, toolChoice, messages);
-		this.#sentinelInjected = sentinelInjected;
-		let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
-
-		const forcedChoice = toolConfig?.toolChoice?.any || toolConfig?.toolChoice?.tool;
-		if (toolConfig && forcedChoice && additionalModelRequestFields) {
+		if (toolConfig && forcedChoice && !supportsForcedToolChoice) {
+			toolConfig = { ...toolConfig, toolChoice: { auto: {} } };
+		} else if (toolConfig && forcedChoice && additionalModelRequestFields) {
 			// Bedrock rejects thinking + forced tool_choice.
 			additionalModelRequestFields = undefined;
 		}
@@ -746,34 +747,6 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 /** Shared across events: every payload decode is a complete, non-streaming call. */
 const PAYLOAD_DECODER = new TextDecoder();
 
-/**
- * Event-stream failures arrive inside HTTP 200 responses. Preserve the service
- * status so retry classification can distinguish transient failures from rejection.
- * Unknown shapes stay terminal. Names are case-insensitive across frame dialects.
- */
-function bedrockStreamExceptionStatus(code: string): number {
-	switch (code.trim().toLowerCase()) {
-		case "accessdeniedexception":
-			return 403;
-		case "internalserverexception":
-			return 500;
-		case "modelerrorexception":
-		case "modelstreamerrorexception":
-			return 424;
-		case "modelnotreadyexception":
-		case "throttlingexception":
-			return 429;
-		case "modeltimeoutexception":
-			return 408;
-		case "resourcenotfoundexception":
-			return 404;
-		case "serviceunavailableexception":
-			return 503;
-		default:
-			return 400;
-	}
-}
-
 /** The error an `exception` or `error` frame reports, or undefined for any other frame. */
 function frameError(frame: EventStreamMessage): AIError.BedrockApiError | undefined {
 	switch (frame.headers[":message-type"]) {
@@ -781,18 +754,12 @@ function frameError(frame: EventStreamMessage): AIError.BedrockApiError | undefi
 			const exceptionType = frame.headers[":exception-type"] || "Exception";
 			const payload = safeParsePayload(frame.payload) as { message?: string } | undefined;
 			const message = payload?.message || PAYLOAD_DECODER.decode(frame.payload);
-			return new AIError.BedrockApiError(
-				`${exceptionType}: ${message}`,
-				bedrockStreamExceptionStatus(exceptionType),
-				{
-					code: exceptionType,
-				},
-			);
+			return new AIError.BedrockApiError(`${exceptionType}: ${message}`, 400, { code: exceptionType });
 		}
 		case "error": {
 			const code = frame.headers[":error-code"] || "UnknownError";
 			const message = frame.headers[":error-message"] || PAYLOAD_DECODER.decode(frame.payload);
-			return new AIError.BedrockApiError(`${code}: ${message}`, bedrockStreamExceptionStatus(code), { code });
+			return new AIError.BedrockApiError(`${code}: ${message}`, 400, { code });
 		}
 		default:
 			return undefined;
@@ -830,6 +797,7 @@ function safeParsePayload(payload: Uint8Array): unknown {
 		return undefined;
 	}
 }
+
 
 /**
  * Serialize the system blocks, anchoring the stable prefix separately from the
@@ -975,7 +943,10 @@ function convertMessages(
  * in it survives: Bedrock rejects a message with an empty content array, which
  * is what an aborted request or a whitespace-only prompt leaves behind.
  */
-function convertMessage(message: Exclude<Message, ToolResultMessage>, modelId: string): WireMessage | undefined {
+function convertMessage(
+	message: Exclude<Message, ToolResultMessage>,
+	modelId: string,
+): WireMessage | undefined {
 	switch (message.role) {
 		case "developer":
 		case "user":
@@ -999,7 +970,10 @@ function convertUserMessage(content: UserMessage["content"]): WireMessage | unde
 	return blocks.length > 0 ? { role: "user", content: blocks } : undefined;
 }
 
-function convertAssistantMessage(content: AssistantMessage["content"], modelId: string): WireMessage | undefined {
+function convertAssistantMessage(
+	content: AssistantMessage["content"],
+	modelId: string,
+): WireMessage | undefined {
 	const blocks: AssistantContent[] = [];
 	for (const block of content) {
 		const converted = convertAssistantBlock(block, modelId);
@@ -1059,6 +1033,7 @@ function convertAssistantBlock(
 			throw new AIError.ValidationError("Unknown assistant content type");
 	}
 }
+
 
 function messagesHaveToolBlocks(messages: WireMessage[]): boolean {
 	for (const message of messages) {

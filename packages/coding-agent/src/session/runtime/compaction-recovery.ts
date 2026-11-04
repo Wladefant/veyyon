@@ -317,7 +317,7 @@ export class CompactionRecovery {
 		const branchEntries = this.#session.sessionManager.getBranch();
 		const config = this.#host.withPlanProtection({
 			...AGGRESSIVE_SHAKE_CONFIG,
-			keepBoundaryId: contextCompaction(branchEntries, this.#session.model?.provider)?.firstKeptEntryId,
+			keepBoundaryId: contextCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		const regions = collectOversizedTextRegions(branchEntries, {
 			excessTokens,

@@ -5,6 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import { VERSION } from "@veyyon/utils";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -37,7 +38,6 @@ import {
 	postmortem,
 	setInteractiveHost,
 	setProjectDir,
-	VERSION,
 } from "@veyyon/utils";
 import { IdleTrim } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
@@ -88,7 +88,6 @@ import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketpla
 import { formatBuildIdentity, getLoadedBuildIdentity } from "./launch/build-info";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
-import { loadRuntimeMCPConfig, type RuntimeMCPConfig } from "./mcp/runtime-config";
 import type { PrintModeOptions } from "./modes/print-mode";
 import type { RpcModeOptions } from "./modes/rpc/rpc-mode";
 import { CURRENT_SETUP_VERSION, resolveOnboardingGeneration } from "./modes/setup-version";
@@ -116,11 +115,7 @@ import { initTheme, stopThemeWatcher } from "./theme/theme";
 import { decideUpdateNotice, readLastChangelogVersion, writeLastChangelogVersion } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
 
-type RunAcpMode = (
-	createSession: AcpSessionFactory,
-	initialSession?: AgentSession,
-	runtimeMCPConfig?: RuntimeMCPConfig,
-) => Promise<never>;
+type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
 type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<void>;
 type RunRpcMode = (attached: AttachableSession, options: RpcModeOptions) => Promise<never>;
 
@@ -462,11 +457,7 @@ export async function submitInteractiveInput(
 				userInitiated: input.userInitiated,
 			});
 		} else {
-			await session.prompt(input.text, {
-				images: input.images,
-				streamingBehavior,
-				telegramTrace: input.telegramTrace,
-			});
+			await session.prompt(input.text, { images: input.images, streamingBehavior });
 		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -493,14 +484,12 @@ export interface AcpSessionFactoryOptions {
 /**
  * Build the per-`session/new` factory used by ACP mode.
  *
- * Discovered MCP servers in ACP sessions are owned by the ACP client, which
+ * MCP servers in ACP sessions are owned exclusively by the ACP client, which
  * supplies them through `session/new.mcpServers` and re-applies them via
  * {@link AcpAgent#configureMcpServers}. We therefore force `enableMCP: false`
  * on every session created here so {@link createAgentSession} skips the on-disk
- * `.mcp.json` discovery path. Explicit `--mcp-config` servers are handed to
- * the ACP mode separately and merged with each client list. Otherwise host MCP
- * tools land in the session's tool registry and shadow the client-supplied servers
- * (issue #1234).
+ * `.mcp.json` discovery path — otherwise host MCP tools land in the session's
+ * tool registry and shadow the client-supplied servers (issue #1234).
  */
 export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSessionFactory {
 	return async cwd => {
@@ -1954,9 +1943,6 @@ async function buildLaunchSessionOptions(
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.hasUI = launch.isInteractive || launch.mode === "rpc-ui";
 	sessionOptions.settings = launch.settings;
-	if (parsedArgs.mcpConfig !== undefined) {
-		sessionOptions.runtimeMCPConfig = await loadRuntimeMCPConfig(parsedArgs.mcpConfig);
-	}
 
 	// OTEL: register the global OTLP trace exporter when an OTLP endpoint is
 	// configured via env, then switch on the agent loop's telemetry so its
@@ -2024,7 +2010,7 @@ async function runAcpLaunch(
 	// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 	const runAcpMode = launch.deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
 	stopStartupWatchdog();
-	await runAcpMode(createAcpSession, undefined, sessionOptions.runtimeMCPConfig);
+	await runAcpMode(createAcpSession);
 }
 
 /** The extensions loaded ahead of the session, and the launch flags re-read against the flags they register. */

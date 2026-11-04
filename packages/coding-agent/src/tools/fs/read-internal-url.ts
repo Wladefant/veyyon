@@ -48,7 +48,7 @@ export async function handleInternalUrl(
 		const hasQueryExtraction = queryParam !== null && queryParam !== "";
 		hasExtraction = hasPathExtraction || hasQueryExtraction;
 	}
-	if (scheme === "artifact" && !urlMeta.searchParams.has("view")) {
+	if (scheme === "artifact") {
 		return readArtifactFile(ctx, urlMeta, parsedSel, signal);
 	}
 

@@ -23,8 +23,7 @@ import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bu
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";
 import { removeWithRetries } from "../../utils/src/temp";
 

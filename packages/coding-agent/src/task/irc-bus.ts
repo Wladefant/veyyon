@@ -32,17 +32,6 @@ export interface IrcMessage {
 	ts: number;
 	/** Message id being answered. */
 	replyTo?: string;
-	/** Only the native continuation outbox sets this, never the IRC tool schema. */
-	completion?: { version: 1; id: string; handle: string; phaseId: string; resultSource: "agent" | "harness" };
-	/** Runtime-stamped identity; absent on legacy records, never inferred from body text. */
-	actor?: {
-		source: "agent";
-		relation: "self" | "parent" | "ancestor" | "peer" | "unknown";
-		selfId: string;
-		parentId?: string;
-		ancestorIds: string[];
-		scope?: string;
-	};
 }
 
 export interface IrcDeliveryReceipt {
@@ -176,8 +165,6 @@ export interface IrcLogEntry {
 
 interface IrcWaiter {
 	from?: string;
-	/** Native completions already durable when this waiter was armed are replays, not replies. */
-	visibleCompletionIds: Set<string>;
 	resolve: (msg: IrcMessage) => void;
 	cancel: () => void;
 }
@@ -293,24 +280,14 @@ export class IrcBus {
 	 * incoming card, so relaying the sibling legs would duplicate it.
 	 */
 	async send(
-		msg: Omit<IrcMessage, "id" | "ts" | "actor" | "completion">,
-		opts?: { expectsReply?: boolean; suppressRelay?: boolean; completion?: IrcMessage["completion"] },
+		msg: Omit<IrcMessage, "id" | "ts">,
+		opts?: { expectsReply?: boolean; suppressRelay?: boolean },
 	): Promise<IrcDeliveryReceipt> {
 		// One wrapper around the whole delivery, so the log gets every leg exactly
 		// once. `#send` returns from seven places -- three refusals, the waiter
 		// hand-off, the live delivery, and two failure paths -- and recording at
 		// each of them is how a log silently loses the cases nobody tested.
-		const message: IrcMessage = {
-			...msg,
-			id: Snowflake.next(),
-			ts: Date.now(),
-			actor: {
-				source: "agent",
-				relation: this.#registry.relationTo(msg.to, msg.from),
-				...this.#registry.actorContext(msg.to),
-			},
-			...(opts?.completion ? { completion: opts.completion } : {}),
-		};
+		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
 		let attempt: IrcDeliveryAttempt;
 		try {
 			attempt = await this.#send(message, opts);
@@ -581,7 +558,7 @@ export class IrcBus {
 		}
 		// Checked after the recipient is known to exist and be messageable, so a
 		// loop refusal never masks the more specific reason a send was doomed.
-		if (!message.completion && this.#pingPongLength(message.from, message.to) >= PING_PONG_CAP) {
+		if (this.#pingPongLength(message.from, message.to) >= PING_PONG_CAP) {
 			return {
 				to: message.to,
 				outcome: "failed",
@@ -615,7 +592,7 @@ export class IrcBus {
 		// A pending `wait` from the recipient consumes the message directly —
 		// it is returned from their irc tool call and never hits the inbox or
 		// the session injection path.
-		const waiter = message.completion ? undefined : this.#takeMatchingWaiter(message.to, message.from);
+		const waiter = this.#takeMatchingWaiter(message.to, message.from);
 		if (waiter) {
 			waiter.resolve(message);
 			if (!opts?.suppressRelay) this.#relayToMainUi(message, this.#scopeOf(message));
@@ -642,8 +619,6 @@ export class IrcBus {
 
 		try {
 			const delivery = await session.deliverIrcMessage(message, opts);
-			if (message.completion) this.#takeMatchingWaiter(message.to, message.from, message.completion.id)?.resolve(message);
-			// A native result must reach durable context before a blocked caller consumes it.
 			if (!opts?.suppressRelay) this.#relayToMainUi(message, this.#scopeOf(message));
 			return {
 				to: message.to,
@@ -657,7 +632,7 @@ export class IrcBus {
 			// the message so a later `wait`/`inbox` from the recipient can still
 			// pick it up. The receipt stays "failed" — the recipient has not
 			// seen it.
-			if (!message.completion) this.#enqueue(message);
+			this.#enqueue(message);
 			return {
 				to: message.to,
 				outcome: "failed",
@@ -727,17 +702,8 @@ export class IrcBus {
 			unsubscribeLiveness?.();
 		};
 
-		const visibleCompletionIds = new Set(
-			(this.#registry.get(agentId)?.session?.sessionManager?.getEntries() ?? []).flatMap(entry =>
-				entry.type === "custom_message" && entry.customType === "task:continuation" &&
-				typeof Reflect.get(entry.details ?? {}, "completionId") === "string"
-					? [Reflect.get(entry.details ?? {}, "completionId") as string]
-					: [],
-			),
-		);
 		const waiter: IrcWaiter = {
 			from: filter.from,
-			visibleCompletionIds,
 			resolve: msg => settle({ kind: "message", msg }),
 			// Settles, not merely cleans up. `cancel` had no caller until
 			// `forgetAgents` gained one, and it was written as `cleanup()` alone:
@@ -834,19 +800,12 @@ export class IrcBus {
 	}
 
 	/** Resolve the OLDEST waiter for `agentId` whose from-filter accepts `from`. */
-	#takeMatchingWaiter(agentId: string, from: string, completionId?: string): IrcWaiter | undefined {
+	#takeMatchingWaiter(agentId: string, from: string): IrcWaiter | undefined {
 		const waiters = this.#waiters.get(agentId);
 		if (!waiters) return undefined;
-		const index = waiters.findIndex(
-			waiter =>
-				(!waiter.from || waiter.from === from) &&
-				(completionId === undefined || !waiter.visibleCompletionIds.has(completionId)),
-		);
+		const index = waiters.findIndex(waiter => !waiter.from || waiter.from === from);
 		if (index === -1) return undefined;
 		const [waiter] = waiters.splice(index, 1);
-		if (completionId !== undefined) {
-			for (const remaining of waiters) remaining.visibleCompletionIds.add(completionId);
-		}
 		if (waiters.length === 0) this.#waiters.delete(agentId);
 		return waiter;
 	}

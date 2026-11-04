@@ -22,7 +22,6 @@ import {
 	MacOSPowerAssertion,
 	matchesKey,
 	Process,
-	ProcessStatus,
 	PtySession,
 	parseKey,
 	summarizeCode,
@@ -837,7 +836,7 @@ describe("veyyon-natives", () => {
 			expect(root).toBeInstanceOf(Process);
 			if (!(root instanceof Process)) throw new Error("PTY session did not publish a stable process handle");
 			expect(root.pid).toBe(childPid);
-			expect(root.status()).toBe(ProcessStatus.Running);
+			expect(root.status()).toBe("running");
 
 			session.kill();
 			const result = await run;
@@ -848,7 +847,7 @@ describe("veyyon-natives", () => {
 			// Process handles settle asynchronously after PTY completion; wait on the handle, not a reused PID.
 			const exitDeadline = Date.now() + 5_000;
 			while (root.status() === "running" && Date.now() < exitDeadline) await Bun.sleep(25);
-			expect(root.status()).toBe(ProcessStatus.Exited);
+			expect(root.status()).toBe("exited");
 		});
 
 		it("should time out detached background workloads without hanging", async () => {

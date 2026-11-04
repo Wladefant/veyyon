@@ -70,8 +70,8 @@ import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic-session-state";
 import { streamSimple } from "@veyyon/ai/stream";
 import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../checkpoints/session-ownership-marker";
 import { SynchronizedSession } from "../checkpoints/synchronized-session";
+import { persistSessionResumeCapability, readSessionOwnershipMarker } from "../checkpoints/session-ownership-marker";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
@@ -108,11 +108,7 @@ import {
 	contextCompaction,
 	type SessionContext,
 } from "@veyyon/kernel/session/session-context";
-import {
-	EPHEMERAL_MODEL_CHANGE_ROLE,
-	type NewSessionOptions,
-	type SessionEntry,
-} from "@veyyon/kernel/session/session-entries";
+import { EPHEMERAL_MODEL_CHANGE_ROLE, type NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -124,7 +120,6 @@ import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import {
-	attachTelegramTrace,
 	errorMessage,
 	getActiveAuthDbPath,
 	isEnoent,
@@ -132,7 +127,6 @@ import {
 	postmortem,
 	prompt,
 	Snowflake,
-	type TelegramDeliveryTraceData,
 	withTimeout,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
@@ -144,7 +138,6 @@ import type { ArgotSession } from "argot";
 import type { AdvisorConfig } from "../advisor";
 import {
 	ArgotStreamDisplayDecoder,
-	expandAgentReturn,
 	expandAssistantContent,
 	expandSessionContext,
 	expandSessionMessageEntries,
@@ -234,18 +227,14 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
-import type { YieldItem } from "../task/types";
-import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { buildResolveReminderMessage } from "../tools/agent/resolve";
 import type { TodoPhase } from "../tools/agent/todo";
-import type { YieldDetails } from "../tools/agent/yield";
 import { validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
 import { TOOL } from "../tools/core/builtin-names";
 import { reportLostOutputArtifact } from "../tools/core/output-artifact";
 import { outputMeta } from "../tools/core/output-meta";
-import { buildOutputValidator, summarizeValidationFailure } from "../tools/core/output-schema-validator";
 import { shortenPath } from "../tools/core/render-utils";
 import { clampTimeout } from "../tools/core/tool-timeouts";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
@@ -303,7 +292,6 @@ import {
 	type SessionSpend,
 	type SessionStats,
 	type SetSessionNameWithTrigger,
-	type SteerOptions,
 	TOOL_SHAPE_SETTING_PATHS,
 } from "./agent-session-types";
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
@@ -335,7 +323,7 @@ import { ContextAccounting } from "./runtime/context-accounting";
 import { ExtensionEventForwarder } from "./runtime/extension-event-forwarder";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
-import { IrcContinuationOutbox, IrcInbox } from "./runtime/irc-inbox";
+import { IrcInbox } from "./runtime/irc-inbox";
 import { LoopGuards } from "./runtime/loop-guards";
 import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
 import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
@@ -364,7 +352,7 @@ import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { removeAssistantMessageFromActiveContext, TurnContextCheck } from "./runtime/turn-context-check";
 import { TurnsInFlight } from "./runtime/turns-in-flight";
 import { UserExecutions } from "./runtime/user-executions";
-import { isTerminalYieldToolResult, YieldTracker } from "./runtime/yield-tracker";
+import { YieldTracker } from "./runtime/yield-tracker";
 import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
@@ -843,7 +831,6 @@ export class AgentSession {
 		effectiveServiceTier: model => this.#effectiveServiceTier(model),
 		baseSystemPrompt: () => this.#toolActivation.baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
-		nonMessageBreakdown: () => computeNonMessageBreakdown(this),
 		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
@@ -1098,9 +1085,6 @@ export class AgentSession {
 	readonly #checkpoint = new CheckpointRuntime();
 	/** The `yield` call that ended the run and whether the run is terminal. */
 	readonly #yields = new YieldTracker();
-	#ircContinuations: IrcContinuationOutbox | undefined;
-	#ircActivePhase: string | undefined;
-	#ircWakeSettled: Promise<void> | undefined;
 	/**
 	 * Recent raw SSE traffic for the debug viewer and the report bundle, which read the session the
 	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
@@ -1162,20 +1146,16 @@ export class AgentSession {
 		if (this.#isDisposed || this.isStreaming) return;
 		if (this.#ircInbox.isEmpty) return;
 		if (this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
-		const completionWake = this.#ircInbox.completionWake;
 		const records = this.#takeIrcRecords();
-		if (completionWake) records.push(completionWake);
 		if (this.#planMode.enabled) {
 			// Plan mode: fold stranded IRC asides into context without waking an
 			// autonomous turn. Convergence to ask/resolve stays user-driven.
 			for (const record of records) {
-				if (record.customType !== "task:continuation") this.#appendCustomMessageToContext(record);
+				this.#appendCustomMessageToContext(record);
 			}
 			return;
 		}
-		void this.#wakeForIrc(records).catch(error =>
-			logger.warn("Persisting an IRC wake failed", { error: errorMessage(error) }),
-		);
+		this.#wakeForIrc(records);
 	}
 
 	/** Fire-and-forget wake turn for incoming IRC — idle delivery and stranded-aside resume both
@@ -1185,124 +1165,7 @@ export class AgentSession {
 	 *  it, so park the follow-up queue across the wake and restore it after. It stays queued post-wake
 	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
 	 *  in effect, even though the wake left a provider-valid tail. */
-	#wakeForIrc(records: CustomMessage[], recovering = false): Promise<void> {
-		const selfId = this.#config.agentId;
-		const parentRecord = records.find(
-			record =>
-				record.customType === "task:continuation" ||
-				(record.customType === "irc:incoming" && Reflect.get(record.details ?? {}, "relation") === "parent"),
-		);
-		const completionId =
-			parentRecord?.customType === "task:continuation"
-				? Reflect.get(parentRecord.details ?? {}, "completionId")
-				: undefined;
-		const phaseId =
-			typeof completionId === "string"
-				? `completion:${completionId}`
-				: parentRecord
-					? Reflect.get(parentRecord.details ?? {}, "id")
-					: undefined;
-		const parentId =
-			parentRecord?.customType === "task:continuation" && selfId
-				? AgentRegistry.global().actorContext(selfId).parentId
-				: parentRecord
-					? Reflect.get(parentRecord.details ?? {}, "from")
-					: undefined;
-		if (!this.#ircContinuations) {
-			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
-		}
-		const outbox = this.#ircContinuations;
-		if (typeof phaseId === "string" && selfId) {
-			if (this.#ircActivePhase === phaseId) return Promise.resolve();
-			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord))
-				return Promise.resolve();
-			this.#ircActivePhase = phaseId;
-		}
-		const yields: YieldItem[] = [];
-		let terminal = false;
-		let published = false;
-		let phaseEnd: number | undefined;
-		const unsubscribe = this.subscribe(event => {
-			if (event.type !== "tool_execution_end" || event.toolName !== "yield" || event.isError) return;
-			const details = event.result?.details as YieldDetails | undefined;
-			if (!details || (details.status !== "success" && details.status !== "aborted")) return;
-			yields.push(details);
-			terminal ||= isTerminalYieldToolResult(event);
-		});
-		const publish = async (failure?: unknown): Promise<void> => {
-			if (!selfId || typeof parentId !== "string" || typeof phaseId !== "string") return;
-			const last = yields.at(-1);
-			let lastAssistantText: string | undefined;
-			for (
-				let index = Math.min(this.agent.state.messages.length, phaseEnd ?? this.agent.state.messages.length) - 1;
-				index >= phaseStart;
-				index--
-			) {
-				const message = this.agent.state.messages[index];
-				if (message?.role !== "assistant") continue;
-				const text = contentText(message.content, { separator: "" });
-				if (text.trim()) {
-					lastAssistantText = text;
-					break;
-				}
-			}
-			const init = this.sessionManager.getEntries().findLast(entry => entry.type === "session_init");
-			const assembled =
-				terminal && last?.status !== "aborted"
-					? assembleYieldResult(
-							yields,
-							lastAssistantText,
-							init?.outputSchema === undefined ? undefined : arrayValuedLabels(init.outputSchema),
-						)
-					: undefined;
-			let resultSource: "agent" | "harness" =
-				failure !== undefined || !terminal || (!assembled && last?.status !== "aborted") || assembled?.missingData
-					? "harness"
-					: "agent";
-			let output =
-				failure !== undefined || !terminal
-					? JSON.stringify({
-							error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure),
-							source: "harness",
-						})
-					: last?.status === "aborted"
-						? JSON.stringify({ error: last.error ?? "Agent ended the phase without success", source: "agent" })
-						: !assembled || assembled.missingData
-							? JSON.stringify({ error: "Phase yielded no result data", source: "harness" })
-							: assembled.rawText
-								? String(assembled.data)
-								: JSON.stringify(assembled.data);
-			if (
-				terminal &&
-				failure === undefined &&
-				last?.status !== "aborted" &&
-				assembled &&
-				!assembled.missingData &&
-				init?.outputSchema !== undefined
-			) {
-				const { validator, error } = buildOutputValidator(init.outputSchema);
-				const validation = validator?.validate(assembled.data);
-				if (error) {
-					output = JSON.stringify({ error, source: "harness" });
-					resultSource = "harness";
-				} else if (validator && validation && !validation.success) {
-					resultSource = "harness";
-					output = JSON.stringify({
-						error: "schema_violation",
-						source: "harness",
-						...summarizeValidationFailure(validation, assembled.data, validator.requiredFields),
-					});
-				}
-			}
-			await outbox.complete(
-				selfId,
-				parentId,
-				phaseId,
-				expandAgentReturn(this.getArgotSession(), output),
-				resultSource,
-			);
-			await this.replayIrcContinuations();
-		};
+	#wakeForIrc(records: CustomMessage[]): void {
 		// Park only a *blocked* follow-up (one a user interrupt is intentionally holding); an
 		// already-resumable follow-up can ride the wake turn normally without reordering.
 		const parkedFollowUps =
@@ -1316,90 +1179,20 @@ export class AgentSession {
 		}
 		this.#resetPromptMaintenanceState();
 		this.#inFlight.begin();
-		const retainedIndex = parentRecord
-			? this.agent.state.messages.findIndex(
-					message =>
-						message.role === "custom" &&
-						message.customType === parentRecord.customType &&
-						Reflect.get(message.details ?? {}, "id") === Reflect.get(parentRecord.details ?? {}, "id"),
-				)
-			: -1;
-		const phaseStart = retainedIndex >= 0 ? retainedIndex + 1 : this.agent.state.messages.length;
-		if (retainedIndex >= 0) {
-			// A crash after native yield persistence must publish B, not execute the phase again.
-			for (let index = retainedIndex + 1; index < this.agent.state.messages.length; index++) {
-				const message = this.agent.state.messages[index]!;
-				if (
-					message.role === "custom" &&
-					(message.customType === "task:continuation" ||
-						(message.customType === "irc:incoming" &&
-							Reflect.get(message.details ?? {}, "relation") === "parent"))
-				) {
-					phaseEnd = index;
-					break;
-				}
-				if (message.role !== "toolResult" || message.toolName !== "yield" || message.isError) continue;
-				const details = message.details as YieldDetails | undefined;
-				if (!details || (details.status !== "success" && details.status !== "aborted")) continue;
-				yields.push(details);
-				terminal ||= isTerminalYieldToolResult({ toolName: "yield", result: { details } });
-				if (terminal) {
-					phaseEnd = index + 1;
-					break;
-				}
-			}
-		}
-		const ready =
-			this.#ircActivePhase === phaseId && typeof phaseId === "string"
-				? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
-				: Promise.resolve();
-		const settled = ready
-			.then(() =>
-				terminal
-					? undefined
-					: records.length > 0 && retainedIndex < 0
-						? this.agent.prompt(records)
-						: this.agent.continue(),
-			)
-			.then(
-				() => publish(),
-				error => publish(error),
-			)
-			.then(async () => {
-				if (typeof completionId === "string") {
-					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
-					this.sessionManager.flushSync();
-					await this.sessionManager.sync();
-				}
-				published = true;
-			})
+		void this.agent
+			.prompt(records)
 			.catch(error => {
-				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", {
-					error: errorMessage(error),
-				});
+				logger.warn("IRC wake turn failed", { error: errorMessage(error) });
 			})
-			.finally(async () => {
-				unsubscribe();
-				if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
+			.finally(() => {
 				if (parkedFollowUps.length > 0) {
 					this.agent.replaceQueues(
 						this.agent.peekSteeringQueue().slice(),
 						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
 					);
 				}
-				// Claim the next retained phase before dropping this turn's idle accounting.
-				if (published) {
-					await this.replayIrcContinuations(true).catch(error =>
-						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
-					);
-				}
 				this.#endInFlight();
 			});
-		this.#ircWakeSettled = settled;
-		void settled.finally(() => {
-			if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
-		});
-		return ready;
 	}
 
 	/**
@@ -1736,12 +1529,9 @@ export class AgentSession {
 						}
 					}
 					if (!persisted) {
-						logger.warn(
-							"MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event",
-							{
-								error: errorMessage(lastError),
-							},
-						);
+						logger.warn("MCP event receipt sync failed after prompt delivery; event was delivered to the active session, but on-disk journal could not be synced and process restart may duplicate the event", {
+							error: errorMessage(lastError),
+						});
 					}
 				}
 			},
@@ -1777,34 +1567,14 @@ export class AgentSession {
 			thunks.push(() => this.#ttsr.takePendingToolReminders());
 			return thunks;
 		});
-		// A tool the agent started with is protected, except one the session file restored through
-		// discovery: the SDK puts the restored selection into the agent's initial tools, and
-		// protecting those would make every reloaded discovered tool immune to the cap and to pruning.
-		const restoredByDiscovery = new Set(config.initialSelectedMCPToolNames ?? []);
-		const requestedNames = new Set(config.requestedToolNames ?? []);
-		const protectedToolNames =
-			config.protectedToolNames ??
-			new Set(
-				[...requestedNames, ...this.agent.state.tools.map(t => t.name)].filter(
-					name => !isMCPToolName(name) && (requestedNames.has(name) || !restoredByDiscovery.has(name)),
-				),
-			);
 		this.#discovery = new ToolDiscovery(
 			{
 				registry: this.#toolRegistry,
 				activeToolNames: () => this.getActiveToolNames(),
 				discoveryModeFor: toolCount => resolveEffectiveToolDiscoveryMode(this.settings, toolCount),
-				maxDiscoveredTools: () => this.settings.get("tools.maxDiscoveredTools"),
-				sessionMessages: () => this.messages,
 			},
-			{
-				...config,
-				protectedToolNames,
-			},
+			config,
 		);
-		if (this.#discovery.restoredCapDrops.size > 0) {
-			this.agent.setTools(this.agent.state.tools.filter(tool => !this.#discovery.restoredCapDrops.has(tool.name)));
-		}
 		this.#toolActivation = new ToolActivation(this, {
 			registry: this.#toolRegistry,
 			discovery: this.#discovery,
@@ -1815,7 +1585,7 @@ export class AgentSession {
 		});
 		const persistInitialMCPToolSelection =
 			config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0;
-		if (this.#discovery.mcpEnabled && (persistInitialMCPToolSelection || this.#discovery.restoredCapDrops.size > 0)) {
+		if (this.#discovery.mcpEnabled && persistInitialMCPToolSelection) {
 			const currentSelectedMCPToolNames = this.getSelectedMCPToolNames();
 			if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], currentSelectedMCPToolNames)) {
 				this.sessionManager.appendMCPToolSelection(currentSelectedMCPToolNames);
@@ -1825,7 +1595,6 @@ export class AgentSession {
 		this.#streamingEdit = new StreamingEditGuard({
 			abortTurn: () => this.agent.abort(),
 			streamingAbortEnabled: () => this.settings.get("edit.streamingAbort"),
-			blockAutoGenerated: () => this.settings.get("edit.blockAutoGenerated"),
 			fuzzyMatch: () => ({
 				allowFuzzy: this.settings.get("edit.fuzzyMatch"),
 				fuzzyThreshold: this.settings.get("edit.fuzzyThreshold"),
@@ -1878,7 +1647,7 @@ export class AgentSession {
 			settings: this.settings,
 			withPlanProtection: config => this.#planMode.withProtection(config),
 			model: () => this.model,
-			keepBoundaryId: branch => contextCompaction(branch, this.model?.provider)?.firstKeptEntryId,
+			keepBoundaryId: branch => contextCompaction(branch)?.firstKeptEntryId,
 			rebuiltMessages: () => this.buildDisplaySessionContext().messages,
 			resetAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 			closeCodexSessions: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
@@ -4205,11 +3974,6 @@ export class AgentSession {
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
-		while (this.#ircWakeSettled) {
-			await this.#ircWakeSettled;
-			await this.agent.waitForIdle();
-			await this.#waitForPostPromptRecovery();
-		}
 	}
 
 	/**
@@ -4393,7 +4157,6 @@ export class AgentSession {
 	 * variant forced the rebuild.
 	 */
 	async #syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
-		this.#compaction.resetAutoCompactionGuard("model_change");
 		const currentEditMode = resolveActiveEditMode(this.settings, this.model);
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes(TOOL.edit);
 		// The system prompt selects model-specific policy even when it does not display the model id.
@@ -4425,7 +4188,10 @@ export class AgentSession {
 	}
 
 	async activateDiscoveredMCPTools(toolNames: string[]): Promise<string[]> {
-		return this.activateDiscoveredTools(toolNames.filter(isMCPToolName));
+		const activation = this.#discovery.planMCPActivation(toolNames);
+		if (!activation) return [];
+		await this.setActiveToolsByName(activation.nextActive);
+		return activation.activated;
 	}
 
 	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
@@ -4447,45 +4213,26 @@ export class AgentSession {
 	}
 
 	async activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
-		const plan = this.#discovery.planActivation(toolNames, {
-			messages: this.messages,
-		});
-		if (!plan.changed) return [];
-		this.#discovery.applyActivation(plan);
-		await this.setActiveToolsByName(plan.nextActive);
-		const selection = this.#discovery.selectedDiscovered();
-		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
-			this.sessionManager.appendMCPToolSelection(selection);
-		}
-		return plan.activated;
-	}
+		const mcpNames = toolNames.filter(isMCPToolName);
+		const nonMcpNames = toolNames.filter(name => !isMCPToolName(name));
+		const activated: string[] = [];
 
-	/** Apply a hot-reloaded lower cap to active schemas and the saved selection. */
-	async enforceDiscoveredToolCap(): Promise<void> {
-		const plan = this.#discovery.planCapReduction();
-		if (!plan.changed) return;
-		this.#discovery.applyPrune(plan);
-		await this.setActiveToolsByName(plan.nextActive);
-		const selection = this.#discovery.selectedDiscovered();
-		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
-			this.sessionManager.appendMCPToolSelection(selection);
+		if (mcpNames.length > 0) {
+			const activatedMcp = await this.activateDiscoveredMCPTools(mcpNames);
+			activated.push(...activatedMcp);
 		}
-	}
 
-	/**
-	 * Prune search-activated tools after history compaction that were not called in `messages`.
-	 * Default, config, and protected tools are never pruned.
-	 * Persists the reduced selection through `mcp_tool_selection`.
-	 */
-	async pruneDiscoveredToolsAfterCompaction(messages: readonly AgentMessage[]): Promise<void> {
-		const plan = this.#discovery.planCompactionPrune(messages);
-		if (!plan.changed) return;
-		this.#discovery.applyPrune(plan);
-		await this.setActiveToolsByName(plan.nextActive);
-		const selection = this.#discovery.selectedDiscovered();
-		if (!sameToolNames(this.sessionManager.getMCPToolSelection() ?? [], selection)) {
-			this.sessionManager.appendMCPToolSelection(selection);
+		// Built-ins and custom tools that are in the registry but not currently active.
+		if (nonMcpNames.length > 0) {
+			const newlyAdded = this.#discovery.selectLocal(nonMcpNames);
+			activated.push(...newlyAdded);
+			if (newlyAdded.length > 0) {
+				await this.setActiveToolsByName(this.getActiveToolNames().concat(newlyAdded));
+				this.#discovery.invalidate();
+			}
 		}
+
+		return [...new Set(activated)];
 	}
 
 	/** The approval rung this session enforces; see {@link SessionApprovals.effectiveMode}. */
@@ -4646,9 +4393,7 @@ export class AgentSession {
 		// history rewrite or a session switch, so a throw here does not fail one
 		// render, it fails the session. Degrades per string; never throws.
 		return this.#expandArgot(
-			this.#secrets.deobfuscateSessionContextForDisplay(
-				this.sessionManager.buildSessionContext({ activeProvider: this.model?.provider }),
-			),
+			this.#secrets.deobfuscateSessionContextForDisplay(this.sessionManager.buildSessionContext()),
 		);
 	}
 
@@ -5141,12 +4886,12 @@ export class AgentSession {
 		text: string,
 		images: ImageContent[] | undefined,
 	): Promise<{
-		content: (TextContent | ImageContent | VideoContent)[];
+		content: (TextContent | ImageContent)[];
 		images: ImageContent[] | undefined;
 		imageDescriptionNotice: CustomMessage | undefined;
 	}> {
 		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text }];
+		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (!normalizedImages?.length) return { content, images: normalizedImages, imageDescriptionNotice: undefined };
 		content.push(...normalizedImages);
 		return {
@@ -5211,7 +4956,12 @@ export class AgentSession {
 					undefined,
 					ownershipMarker && ownershipPath
 						? (resumeToken, epoch) =>
-								persistSessionResumeCapability(ownershipPath, ownershipMarker, resumeToken, epoch)
+								persistSessionResumeCapability(
+									ownershipPath,
+									ownershipMarker,
+									resumeToken,
+									epoch,
+								)
 						: undefined,
 				);
 				const previous = this.agent.beforeToolCall;
@@ -5219,9 +4969,7 @@ export class AgentSession {
 					if (this.sessionManager.getSessionId() !== cloudSessionId) {
 						await this.#cloudOwnership!.close();
 						if (ownershipMarker)
-							throw new ToolAdmissionFatalError(
-								"Transferred session identity changed; tool admission is blocked",
-							);
+							throw new ToolAdmissionFatalError("Transferred session identity changed; tool admission is blocked");
 						return previous?.(context, signal);
 					}
 					try {
@@ -5321,9 +5069,9 @@ export class AgentSession {
 				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
 			if (options.streamingBehavior === "followUp") {
-				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "followUp", options);
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "followUp");
 			} else {
-				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "steer", options);
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "steer");
 			}
 			return true;
 		}
@@ -5347,9 +5095,6 @@ export class AgentSession {
 		const message = options?.synthetic
 			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
 			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
-		if (options?.telegramTrace) {
-			attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
-		}
 
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
@@ -5713,47 +5458,16 @@ export class AgentSession {
 	/**
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
-	async steer(
-		text: string,
-		imagesOrOptions?: ImageContent[] | SteerOptions,
-		videosOrOptions?: VideoContent[] | SteerOptions,
-		options?: SteerOptions,
-	): Promise<void> {
+	async steer(text: string, images?: ImageContent[], videos?: VideoContent[]): Promise<void> {
 		if (text.startsWith("/")) {
 			throwIfExtensionCommand(this.#config.extensionRunner, text);
 		}
-
-		let images: ImageContent[] | undefined;
-		let videos: VideoContent[] | undefined;
-		let opts: SteerOptions | undefined;
-
-		if (Array.isArray(imagesOrOptions)) {
-			images = imagesOrOptions;
-			if (Array.isArray(videosOrOptions)) {
-				videos = videosOrOptions;
-				opts = options;
-			} else if (videosOrOptions && typeof videosOrOptions === "object") {
-				opts = videosOrOptions;
-			} else {
-				opts = options;
-			}
-		} else if (imagesOrOptions && typeof imagesOrOptions === "object") {
-			opts = imagesOrOptions;
-		} else if (Array.isArray(videosOrOptions)) {
-			videos = videosOrOptions;
-			opts = options;
-		} else if (videosOrOptions && typeof videosOrOptions === "object") {
-			opts = videosOrOptions;
-		} else {
-			opts = options;
-		}
-
 		if (videos?.length && !this.model?.input.includes("video")) {
 			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueUserMessage(expandedText, images, videos, "steer", opts);
+		await this.#queueUserMessage(expandedText, images, videos, "steer");
 	}
 
 	/**
@@ -5791,7 +5505,7 @@ export class AgentSession {
 		const expandedText =
 			opts?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
 		if (!opts?.synthetic) {
-			await this.#queueUserMessage(expandedText, images, videos, "followUp", opts);
+			await this.#queueUserMessage(expandedText, images, videos, "followUp");
 			return;
 		}
 		// Synthetic branch: agent-initiated hidden developer message. Bypass
@@ -5817,7 +5531,6 @@ export class AgentSession {
 		images: ImageContent[] | undefined,
 		videos: VideoContent[] | undefined,
 		mode: "steer" | "followUp",
-		options?: { telegramTrace?: TelegramDeliveryTraceData },
 	): Promise<void> {
 		if (videos?.length && !this.model?.input.includes("video")) {
 			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
@@ -5832,29 +5545,21 @@ export class AgentSession {
 		}
 		if (mode === "followUp") {
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
-			const message: AgentMessage = {
+			this.agent.followUp({
 				role: "user",
 				content,
 				attribution: "user",
 				timestamp: Date.now(),
-			};
-			if (options?.telegramTrace) {
-				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
-			}
-			this.agent.followUp(message);
+			});
 		} else {
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
-			const message: AgentMessage = {
+			this.agent.steer({
 				role: "user",
 				content,
 				steering: true,
 				attribution: "user",
 				timestamp: Date.now(),
-			};
-			if (options?.telegramTrace) {
-				attachTelegramTrace(message, options.telegramTrace, this.sessionManager.getSessionId());
-			}
-			this.agent.steer(message);
+			});
 		}
 		this.#scheduleIdleQueueDrain();
 	}
@@ -7641,31 +7346,6 @@ export class AgentSession {
 		if (this.#isDisposed) {
 			throw new Error("Recipient session is disposed.");
 		}
-		if (msg.completion) {
-			const completionId = msg.completion.id;
-			if (
-				this.sessionManager
-					.getEntries()
-					.some(
-						entry =>
-							entry.type === "custom_message" &&
-							entry.customType === "task:continuation" &&
-							Reflect.get(entry.details ?? {}, "completionId") === completionId,
-					)
-			) {
-				await this.sessionManager.ensureOnDisk();
-				await this.sessionManager.sync();
-				return "injected";
-			}
-		}
-		if (!this.#ircContinuations) {
-			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
-		}
-		if (!msg.completion && this.#ircContinuations.hasPhase(msg.id)) {
-			await this.sessionManager.ensureOnDisk();
-			await this.sessionManager.sync();
-			return "injected";
-		}
 		// Auto-reply eligibility: the sender is blocked on an answer and this
 		// session cannot produce a real reply turn in time — either mid-turn with
 		// async execution disabled (no step boundary until the sender's own batch
@@ -7673,88 +7353,29 @@ export class AgentSession {
 		const planModeIdle = !this.isStreaming && this.#planMode.enabled;
 		const autoReply =
 			(opts?.expectsReply ?? false) && ((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
-		const registry = AgentRegistry.global();
-		const identity = registry.actorContext(msg.to);
-		const relation = registry.relationTo(msg.to, msg.from);
 		const record: CustomMessage = {
 			role: "custom",
-			customType: msg.completion ? "task:continuation" : "irc:incoming",
+			customType: "irc:incoming",
 			content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
 				from: msg.from,
 				message: msg.body,
-				source: "agent",
 				replyTo: msg.replyTo ?? "",
 				autoReplied: autoReply,
 				interrupting: this.isStreaming,
-				...identity,
-				parentId: identity.parentId ?? "unknown",
-				ancestorIds: identity.ancestorIds.join(", ") || "none verified",
-				relation,
-				parentUpdate: relation === "parent",
-				phaseId: msg.id,
-				completionHandle: msg.completion?.handle,
-				completionSource: msg.completion?.resultSource,
 			}),
 			display: true,
-			details: {
-				id: msg.id,
-				from: msg.from,
-				message: msg.body,
-				source: "agent",
-				relation,
-				...identity,
-				actor: { source: "agent", relation, ...identity },
-				...(msg.completion
-					? {
-							completionId: msg.completion.id,
-							phaseId: msg.completion.phaseId,
-							handle: msg.completion.handle,
-							resultSource: msg.completion.resultSource,
-						}
-					: {}),
-				...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
-			},
+			details: { id: msg.id, from: msg.from, message: msg.body, ...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
 			attribution: "agent",
 			timestamp: msg.ts,
 		};
-		if (msg.completion) {
-			// Persist before acknowledging delivery. A sender crash may replay the same result.
-			this.#appendCustomMessageToContext(record);
-			this.sessionManager.flushSync();
-			await this.sessionManager.ensureOnDisk();
-			await this.sessionManager.sync();
-			void this.#emitSessionEvent({ type: "irc_message", message: record });
-			if (this.isStreaming) {
-				this.#ircInbox.queueCompletionWake(record);
-				return "injected";
-			}
-			if (this.#planMode.enabled) return "injected";
-			// The record is already in context; wake on it without persisting a second copy.
-			await this.#wakeForIrc([record]);
-			return "woken";
-		}
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
-		if (relation === "parent") {
-			if (!this.#ircContinuations) {
-				this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
-			}
-			const outbox = this.#ircContinuations;
-			if (this.#ircActivePhase || outbox.unfinished().length > 0) {
-				// Preserve both phase boundaries and the order of input retained across a restart.
-				outbox.begin(msg.id, record);
-				await this.sessionManager.ensureOnDisk();
-				await this.sessionManager.sync();
-				if (!this.#ircActivePhase) await this.replayIrcContinuations();
-				return "injected";
-			}
-		}
 		if (this.isStreaming) {
-			if (relation === "parent") {
+			const recipientParentId = AgentRegistry.global().get(msg.to)?.parentId;
+			if (recipientParentId === msg.from) {
 				this.agent.steer({
 					role: "user",
 					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
 						from: msg.from,
-						selfId: msg.to,
 						message: msg.body,
 					}),
 					attribution: "agent",
@@ -7774,86 +7395,8 @@ export class AgentSession {
 			return "injected";
 		}
 		// Idle: wake a real turn so the recipient responds (shared with the stranded-aside resume).
-		await this.#wakeForIrc([record]);
+		this.#wakeForIrc([record]);
 		return "woken";
-	}
-
-	/** Replay durable result deliveries on a retained agent's next native activation. */
-	async replayIrcContinuations(settling = false): Promise<void> {
-		if (!this.#ircContinuations) {
-			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
-		}
-		const outbox = this.#ircContinuations;
-		await outbox.flush(async completion => {
-			const registry = AgentRegistry.global();
-			const context = registry.actorContext(completion.agentId);
-			// Only this agent's verified lineage can receive its result, never a foreign peer.
-			for (const parentId of context.ancestorIds) {
-				const parent = registry.get(parentId);
-				if (!parent || parent.status === "aborted") continue;
-				const receipt = await IrcBus.global().send(
-					{ from: completion.agentId, to: parentId, body: completion.output },
-					{
-						completion: {
-							version: 1,
-							id: completion.id,
-							handle: completion.handle,
-							phaseId: completion.phaseId,
-							resultSource: completion.resultSource,
-						},
-					},
-				);
-				if (receipt.outcome !== "failed") return true;
-			}
-			return false;
-		});
-		if (
-			this.agent.state.isStreaming ||
-			(!settling && this.isStreaming) ||
-			this.#planMode.enabled ||
-			this.#ircActivePhase
-		)
-			return;
-		const consumed = new Set(
-			this.sessionManager
-				.getEntries()
-				.flatMap(entry =>
-					entry.type === "custom" &&
-					entry.customType === "irc:completion-consumed" &&
-					typeof entry.data === "string"
-						? [entry.data]
-						: [],
-				),
-		);
-		const pendingCompletion = this.agent.state.messages.find(
-			message =>
-				message.role === "custom" &&
-				message.customType === "task:continuation" &&
-				typeof Reflect.get(message.details ?? {}, "completionId") === "string" &&
-				!consumed.has(Reflect.get(message.details ?? {}, "completionId")),
-		);
-		if (pendingCompletion?.role === "custom") {
-			const from = Reflect.get(pendingCompletion.details ?? {}, "from");
-			const selfId = this.#config.agentId;
-			if (
-				selfId &&
-				typeof from === "string" &&
-				AgentRegistry.global().actorContext(from).ancestorIds.includes(selfId)
-			) {
-				await this.#wakeForIrc([pendingCompletion], true);
-				return;
-			}
-		}
-		const retained = outbox.unfinished().find(record => {
-			const from = Reflect.get(record.details ?? {}, "from");
-			const selfId = this.#config.agentId;
-			if (typeof from !== "string" || selfId === undefined) return false;
-			const registry = AgentRegistry.global();
-			return record.customType === "task:continuation"
-				? registry.actorContext(from).ancestorIds.includes(selfId)
-				: registry.relationTo(selfId, from) === "parent";
-		});
-		if (retained) await this.#wakeForIrc([retained], true);
 	}
 
 	/**
@@ -7867,17 +7410,9 @@ export class AgentSession {
 	 */
 	async #runIrcAutoReply(msg: IrcMessage): Promise<void> {
 		try {
-			const registry = AgentRegistry.global();
-			const identity = registry.actorContext(msg.to);
-			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
 					from: msg.from,
-					...identity,
-					parentId: identity.parentId ?? "unknown",
-					ancestorIds: identity.ancestorIds.join(", ") || "none verified",
-					relation,
-					parentUpdate: relation === "parent",
 					message: msg.body,
 					replyTo: msg.replyTo ?? "",
 				}),
@@ -8018,11 +7553,12 @@ export class AgentSession {
 
 	/**
 	 * Claim the notices other sessions queued for this one (`launch/session-notices.ts`) and hand each
-	 * to the addressed session as informational `session:notice` records, never as parent instructions
-	 * to its lanes. The addressed session can decide whether any verified information affects its work.
+	 * to the model as a `session:notice` record, plus to every running lane over the IrcBus: a notice
+	 * addressed to a session is for the lanes it runs too.
 	 *
 	 * Runs at the start of every prompt and, at most once a second, at each step boundary. Only the
-	 * driving session reads its queue. A claim offered again is dropped here by notice id.
+	 * driving session reads its queue; a spawned one gets the notice from the bus. Delivery is at least
+	 * once: a claim offered again is dropped here by notice id.
 	 */
 	#pullSessionNotices(force: boolean): void {
 		if (this.#isDisposed || this.#isSpawned) return;
@@ -8038,6 +7574,7 @@ export class AgentSession {
 			logger.warn("Reading session notices failed", { error: errorMessage(error) });
 			return;
 		}
+		const agentId = this.#config.agentId;
 		for (const notice of notices) {
 			if (this.#noticesInInbox.has(notice.id)) continue; // claimed again while still waiting for its turn
 			if (this.#noticesSeen.has(notice.id)) {
@@ -8049,25 +7586,23 @@ export class AgentSession {
 			const record: CustomMessage = {
 				role: "custom",
 				customType: "session:notice",
-				content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
-					from: notice.from,
-					message: formatNoticeMessage(notice, Date.now()),
-					source: "external-session notice",
-					selfId: this.#config.agentId ?? sessionId,
-					relation: "external-session notice",
-					parentId: "not agent lineage",
-					ancestorIds: "not agent lineage",
-					parentUpdate: false,
-					phaseId: notice.id,
-				}),
+				content: formatNoticeMessage(notice, Date.now()),
 				display: true,
-				details: { id: notice.id, from: notice.from, message: notice.body, source: "external-session-notice" },
+				details: { id: notice.id, from: notice.from, message: notice.body },
 				attribution: "agent",
 				timestamp: notice.ts,
 			};
 			void this.#emitSessionEvent({ type: "irc_message", message: record });
 			this.#ircInbox.queueAside(record);
 			this.#noticesInInbox.add(notice.id);
+			if (!agentId) continue;
+			const registry = AgentRegistry.global();
+			for (const lane of registry.listVisibleTo(agentId)) {
+				if (lane.status !== "running" || lane.kind === "main") continue;
+				void IrcBus.global()
+					.send({ from: agentId, to: lane.id, body: record.content as string })
+					.catch(error => logger.warn("Session notice relay failed", { to: lane.id, error: errorMessage(error) }));
+			}
 		}
 	}
 
@@ -8085,37 +7620,6 @@ export class AgentSession {
 		const sessionFile = this.sessionFile;
 		if (!sessionFile) return;
 		await this.switchSession(sessionFile);
-	}
-
-	/**
-	 * Adopt a finished turn from another writer into an idle session and return
-	 * the ids of the adopted entries. The Agent's steering and follow-up queues
-	 * stay untouched; the agent context, the checkpoint branch and the todo board
-	 * are rebuilt from the adopted branch. Hosts that report history to a client
-	 * call this before a prompt; the prompt itself never reads the disk.
-	 */
-	async refreshExternalTurn(): Promise<readonly string[]> {
-		if (this.isStreaming) return [];
-		const adopted = await this.sessionManager.refreshExternalTurn();
-		if (adopted.length === 0) return adopted;
-		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
-		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
-		this.#todo.syncFromBranch();
-		return adopted;
-	}
-
-	/**
-	 * The messages a client shows for one persisted entry, through the same
-	 * secret-withholding and argot-expansion path as {@link buildDisplaySessionContext}.
-	 * A custom message the transcript marks as hidden yields nothing.
-	 */
-	buildDisplayMessagesForEntry(entry: SessionEntry): AgentMessage[] {
-		const context = this.#expandArgot(
-			this.#secrets.deobfuscateSessionContextForDisplay(
-				this.sessionManager.buildEntryContext(entry, { activeProvider: this.model?.provider }),
-			),
-		);
-		return context.messages.filter(message => message.role !== "custom" || message.display);
 	}
 
 	/**

@@ -43,12 +43,6 @@ import {
 import { generateTaskName } from "./name-generator";
 import { classifyAgentOutcome } from "./outcome";
 import { AgentOutputManager } from "./output-manager";
-import {
-	claimSuccessorCheckpoint,
-	type SuccessorCheckpoint,
-	successorWorkflow,
-	writeSuccessorCheckpoint,
-} from "./successor-checkpoint";
 import type { AgentDefinition, AgentProgress, AgentSource, SingleResult, TaskParams, TaskToolDetails } from "./types";
 import { parseIsolationMode, type TaskIsolationMode } from "./worktree";
 
@@ -103,15 +97,9 @@ type SpawnModel = Pick<ExecutorOptions, "modelOverride" | "thinkingLevel">;
 /** Tools an agent declares that plan mode keeps beside its read-only base set. */
 const PLAN_MODE_AGENT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([TOOL.report_finding]);
 
-export function renderAgentUserPrompt(
-	assignment: string,
-	parentAgentId?: string,
-	checkpoint?: SuccessorCheckpoint,
-): string {
+export function renderAgentUserPrompt(assignment: string): string {
 	return prompt.render(agentPrompts["agent/user-prompt"].text, {
 		assignment: assignment.trim(),
-		parentAgentId,
-		checkpoint: checkpoint ? JSON.stringify(checkpoint) : undefined,
 	});
 }
 
@@ -178,14 +166,14 @@ export function formatResultOutputFallback(result: Pick<SingleResult, "output" |
  */
 export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string): Promise<string> {
 	const trimmed = typeof raw === "string" ? raw.trim() : "";
-	const inherited = !trimmed || trimmed === "inherit";
+	if (!trimmed || trimmed === "inherit") {
+		return parentCwd;
+	}
 	// A relative cwd is resolved against the parent agent's live cwd rather than
 	// rejected: spawning an agent in `libs/scanner/rulec` from the parent should
 	// behave like a `cd` there. Absolute paths already point where they point.
 	// This adds no new reach an absolute path did not already allow.
-	const resolved = inherited
-		? parentCwd
-		: path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(parentCwd, trimmed);
+	const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(parentCwd, trimmed);
 	try {
 		const st = await fs.stat(resolved);
 		if (!st.isDirectory()) {
@@ -195,9 +183,7 @@ export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string
 		if (err instanceof Error && err.message.startsWith("task cwd")) throw err;
 		// Name the relative input and what it resolved against, so a wrong parent
 		// cwd is diagnosable instead of showing only the joined absolute path.
-		const context = inherited || path.isAbsolute(trimmed)
-			? ""
-			: ` (resolved from relative "${trimmed}" against ${parentCwd})`;
+		const context = path.isAbsolute(trimmed) ? "" : ` (resolved from relative "${trimmed}" against ${parentCwd})`;
 		throw new Error(`task cwd does not exist: ${resolved}${context}`);
 	}
 	if (!(await directoryExists(resolved))) {
@@ -212,11 +198,7 @@ function spawnRefusal(
 	projectAgentsDir: string | null,
 	totalDurationMs: number,
 ): AgentToolResult<TaskToolDetails> {
-	return {
-		content: [{ type: "text", text }],
-		isError: true,
-		details: { projectAgentsDir, results: [], totalDurationMs },
-	};
+	return { content: [{ type: "text", text }], details: { projectAgentsDir, results: [], totalDurationMs } };
 }
 
 /**
@@ -572,7 +554,7 @@ async function runPreparedSpawn(
 		...inheritSpawnLayers(session, spawnCwd, spawn.agentName, spawn.agent.autoloadSkills),
 		cwd: spawnCwd,
 		agent: spawn.runAgent,
-		task: renderAgentUserPrompt(assignment, session.getAgentId?.() ?? MAIN_AGENT_ID),
+		task: renderAgentUserPrompt(assignment),
 		assignment,
 		context: session.settings.get("agent.batch") ? params.context?.trim() || undefined : undefined,
 		planReference: spawn.planReference,
@@ -601,33 +583,6 @@ async function runPreparedSpawn(
 	};
 
 	const { isolation } = spawn;
-	const workflow = successorWorkflow({
-		agent: spawn.runAgent,
-		assignment,
-		context: options.context,
-		cwd: spawnCwd,
-		outputSchema: options.outputSchema,
-	});
-	let checkpoint: SuccessorCheckpoint | undefined;
-	if (params.successorOf !== undefined) {
-		if (isolation || !spawn.sessionFile) {
-			return spawnRefusal(
-				"successor-unsupported: successors require a non-isolated task with a persisted parent session",
-				projectAgentsDir,
-				Date.now() - startTime,
-			);
-		}
-		const predecessor = AgentRegistry.global().get(params.successorOf);
-		if (predecessor?.status === "running") {
-			return spawnRefusal(
-				`successor-predecessor-active: ${params.successorOf} has not stopped`,
-				projectAgentsDir,
-				Date.now() - startTime,
-			);
-		}
-		checkpoint = await claimSuccessorCheckpoint(spawn.artifacts.dir, params.successorOf, agentId, workflow);
-		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint);
-	}
 	let result: SingleResult;
 	let mergeSummary = "";
 	if (isolation) {
@@ -648,16 +603,6 @@ async function runPreparedSpawn(
 	}
 
 	recordSpawn(session, result, spawn.artifacts.dir, isolation);
-	if (!isolation) {
-		try {
-			await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
-		} catch (error) {
-			result = {
-				...result,
-				error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
-			};
-		}
-	}
 	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 }
 

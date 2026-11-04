@@ -44,10 +44,6 @@ When context is rebuilt (`buildSessionContext`):
 4. `branch_summary` entries are converted to `branchSummary` messages.
 5. `custom_message` entries are converted to `custom` messages.
 
-Live session rebuilds select replayable remote compactions using the active
-provider, even when it differs from the persisted default model. Offline readers
-without an active-provider override retain the default-model behavior.
-
 `convertToLlm()` transforms these custom roles into LLM-facing messages, through these static
 templates:
 
@@ -193,21 +189,6 @@ rewritten from the earliest pruned entry on; the lines before it are copied as t
    after the `compaction.enabled` / strategy check and after error turns are skipped, and only once
    the turn has usable usage data. Its savings feed `postMaintenanceContextTokens`, which is the
    trigger figure reported to the compaction it may schedule.
-
-The threshold prune stages replacements away from the live branch and saves a versioned recovery
-artifact containing the exact original entries before applying them. Each changed result keeps its
-usual notice followed by an `artifact://` recovery reference and original entry ID. A missing or
-failed artifact save leaves the live messages and transcript unchanged; a failed transcript rewrite
-restores the original live entries. If the branch or selected entries change while the archive is
-being written, the pass aborts without replacing newer evidence. An in-memory session can recover
-its archive only while that session remains alive. Reported savings exclude recovery-reference text.
-
-Shake and dedup elision also verify that the selected branch and original entries still match after
-saving their recovery artifact. If another operation changes the selected evidence during that
-asynchronous save, the old selection aborts instead of replacing newer bytes with a pointer to
-the wrong archived text. If transcript persistence then fails, unchanged live elisions are
-rolled back without overwriting a concurrent edit. The previously saved recovery artifact remains
-available, and a fresh selection may archive and elide the new result.
 
 Both passes, and the shake, dedup and truncation collectors, scan only the live tail: the entries
 from the effective compaction's `firstKeptEntryId` to the leaf. Entries before it are summarized
@@ -608,40 +589,3 @@ From `settings-schema.ts`:
 - `branchSummary.reserveTokens` = `16384`
 
 These values are consumed at runtime by `AgentSession` and compaction/branch summarization modules.
-
-
-### Stale-result recovery
-
-The per-turn stale-read and useless-result pass stages changes before saving originals, as threshold pruning does.
-Its `prune-stale` envelope retains each complete original entry.
-Each retained marker names its archive and entry, so a newer read does not discard the earlier bytes.
-Archive failure leaves live entries and the transcript unchanged.
-Persistence failure restores only records that still match this pass's published snapshot.
-The pass never overwrites concurrent edits while handling that failure.
-
-Useless-result pruning prices the complete replacement, including its actual recovery reference.
-It keeps a result when that replacement would save no tokens.
-It reports the number of entries actually changed and their net estimated savings, clamped at zero.
-The saved archive may also contain selected originals that remain unchanged after this cost check.
-
-### Image recovery
-
-`dropImages`, including shake image mode, stages supported message, tool-result detail, file-mention and custom-message images.
-It saves complete original entries in a `drop-images` recovery envelope before publishing removals.
-Retained text names the archive and entry.
-Each affected file mention carries its own reference.
-A previous cost-negative useless-result prune never suppresses explicit image removal:
-still-present images in tool-result details are archived and stripped even when the text was too short to prune.
-
-Archive failure leaves live entries and persisted bytes unchanged.
-Persistence failure restores unchanged records, but never overwrites concurrent edits.
-Repeating a successful pass does not archive placeholders again.
-The pass does not load cold assistant content.
-
-#### Provider-native image limitation
-
-The pass does not rewrite user or developer records with preserved native OpenAI Responses history.
-If a selected image record has this payload, the whole image pass fails before saving an archive or changing history.
-Canonical content, native payloads and persisted bytes remain unchanged.
-Provider serializers can replay native items instead of canonical content, so deleting only the canonical image is unsafe.
-This pass does not edit native images.

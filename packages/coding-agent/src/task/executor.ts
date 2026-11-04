@@ -32,8 +32,8 @@ import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelSelectorValue,
 	formatModelStringWithRouting,
-	resolveAgentModelChain,
 	resolveModelOverride,
+	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, resolveAgentServiceTier } from "../config/service-tier";
@@ -224,9 +224,10 @@ function installAgentRetryFallbackChain(args: {
 	settings: Settings;
 	candidates: AgentRetryFallbackCandidate[];
 	model: Model<Api> | undefined;
+	authFallbackUsed: boolean;
 }): string | undefined {
-	const { settings, candidates, model } = args;
-	if (!model || candidates.length === 0) return undefined;
+	const { settings, candidates, model, authFallbackUsed } = args;
+	if (!model || authFallbackUsed || candidates.length === 0) return undefined;
 
 	const selectedIndex = candidates.findIndex(
 		candidate => candidate.model.provider === model.provider && candidate.model.id === model.id,
@@ -1909,16 +1910,31 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 	throwIfRunAborted(monitor.abortSignal);
 	const modelRegistry = await openModelRegistry(options, monitor.abortSignal, ctx.awaitAbortable);
 	const resolution = await ctx.awaitAbortable(
-		resolveAgentModelChain(modelPatterns, modelRegistry, settings, options.id),
+		resolveModelOverrideWithAuthFallback(
+			modelPatterns,
+			options.parentActiveModelPattern,
+			modelRegistry,
+			settings,
+			options.id,
+		),
 	);
-	const { model } = resolution;
+	const { model, authFallbackUsed } = resolution;
 	if (resolution.warning) {
 		logger.warn("Agent model resolution warning", { warning: resolution.warning, requested: modelPatterns });
+	}
+	if (authFallbackUsed && model) {
+		logger.warn("Agent model has no working credentials; falling back to parent session model", {
+			requested: modelPatterns,
+			parentModel: options.parentActiveModelPattern,
+			resolvedProvider: model.provider,
+			resolvedModel: model.id,
+		});
 	}
 	const retryFallbackKey = installAgentRetryFallbackChain({
 		settings,
 		candidates: resolveAgentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
 		model,
+		authFallbackUsed,
 	});
 	if (retryFallbackKey) {
 		logger.debug("Configured agent runtime model fallback chain", {
@@ -1980,13 +1996,11 @@ function deriveAgentTelemetry(options: ExecutorOptions): AgentTelemetryConfig | 
 export type AgentPromptInputs = Pick<
 	ExecutorOptions,
 	"agent" | "context" | "planReference" | "worktree" | "outputSchema" | "outputSchemaOverridesAgent"
-> & Partial<Pick<ExecutorOptions, "id" | "parentAgentId">>;
+>;
 
 /** The agent's own system prompt section; it depends only on the run's fixed inputs. */
 export function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: boolean): string {
 	const { normalized: normalizedOutputSchema } = normalizeSchema(options.outputSchema);
-	const registry = AgentRegistry.global();
-	const parent = options.parentAgentId ? registry.get(options.parentAgentId) : undefined;
 	return prompt.render(agentPrompts["agent/system-prompt"].text, {
 		agent: options.agent.systemPrompt,
 		context: options.context?.trim() ?? "",
@@ -1996,9 +2010,6 @@ export function renderAgentSystemPrompt(options: AgentPromptInputs, ircEnabled: 
 		outputSchema: normalizedOutputSchema,
 		outputSchemaOverridesAgent: options.outputSchemaOverridesAgent === true,
 		ircEnabled,
-		selfId: options.id,
-		parentId: parent?.id,
-		ancestorIds: parent ? [parent.id, ...registry.actorContext(parent.id).ancestorIds].join(", ") : "",
 	});
 }
 
@@ -2020,14 +2031,15 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 	// lifecycle reviver keeps the builder for as long as the agent is parked. Every field is read out
 	// of `ctx` here, so neither closure holds `ctx`, whose run monitor keeps every assistant text of the
 	// run, nor `ctx.options`, whose `onProgress` and `signal` belong to the spawning tool call.
-	const { options, marks, toolNames, spawnsEnv, childDepth, maxNestedSpawnDepth, ircEnabled } = ctx;
+	const { options, marks, modelPatterns, toolNames, spawnsEnv, childDepth, maxNestedSpawnDepth, ircEnabled } = ctx;
 	const { modelRegistry, model, thinkingLevel } = runModel;
 	const id = options.id;
+	// A requested pattern that resolved to no model is handed to the session to resolve itself, with
+	// the parent's model as its auth fallback and the run's retry chain as its fallback chain.
+	const deferredPattern = !model && options.modelOverride !== undefined;
 	const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 	const promptInputs: AgentPromptInputs = {
 		agent: options.agent,
-		id: options.id,
-		parentAgentId: options.parentAgentId,
 		context: options.context,
 		planReference: options.planReference,
 		worktree: options.worktree,
@@ -2044,7 +2056,10 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		bypassAllApprovals: options.bypassAllApprovals,
 		parentApprovalBypassed: options.parentApprovalBypassed,
 		model,
+		modelPattern: deferredPattern ? modelPatterns : undefined,
+		modelPatternAuthFallback: deferredPattern ? options.parentActiveModelPattern : undefined,
 		modelPatternFallbackKey: runModel.retryFallbackKey,
+		modelPatternFallbackChain: deferredPattern,
 		thinkingLevel,
 		toolNames,
 		requireYieldTool: true,

@@ -1,7 +1,7 @@
-export function makeAssistantMessage(text = "ok") {
+export function makeAssistantMessage() {
 	return {
 		role: "assistant" as const,
-		content: [{ type: "text" as const, text }],
+		content: [{ type: "text" as const, text: "ok" }],
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-20250514",

@@ -439,7 +439,7 @@ export class Settings extends SettingsStore {
 		return settingsOrThrow();
 	}
 
-	/** Reload spawn routing, compaction and the discovered-tool cap without rebinding Main or existing workers. */
+	/** Reload spawn routing and compaction settings without rebinding Main or existing workers. */
 	reloadConfig() {
 		return this.reloadSelectedConfig(
 			[
@@ -451,7 +451,6 @@ export class Settings extends SettingsStore {
 				"agent.thinkingLevel",
 				"agent.maxConcurrency",
 				...groupSettingPaths("compaction"),
-				"tools.maxDiscoveredTools",
 			],
 			{
 				defaultEffort:

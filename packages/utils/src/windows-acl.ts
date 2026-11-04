@@ -4,7 +4,7 @@ import { escapeTerminalText } from "./terminal-safe";
 import { errorMessage } from "./type-guards";
 
 const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024;
-export const WINDOWS_ACL_TIMEOUT_MS = 15_000;
+const WINDOWS_ACL_TIMEOUT_MS = 15_000;
 
 export interface WindowsAclCommandResult {
 	exitCode: number;
@@ -93,9 +93,7 @@ foreach ($principal in @($identity, $system)) {
   )
   [void]$acl.AddAccessRule($rule)
 }
-# Set-Acl refuses to rewrite a DACL it already protected, demanding SeSecurityPrivilege for the SACL it
-# never changes; SetAccessControl persists only the owner and DACL sections this object modified.
-$item.SetAccessControl($acl)
+Set-Acl -LiteralPath $target -AclObject $acl -ErrorAction Stop
 ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
@@ -109,6 +107,7 @@ if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'ACL targe
 ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
+
 
 /** Apply a protected DACL granting full control only to the current user and LocalSystem. */
 export async function applyOwnerOnlyWindowsAcl(filePath: string, options: WindowsAclOptions = {}): Promise<void> {

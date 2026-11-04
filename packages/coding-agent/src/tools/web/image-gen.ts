@@ -6,10 +6,6 @@ import type { ApiKey, FetchImpl, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { ProviderHttpError } from "@veyyon/ai/error";
-import {
-	type CodexAccessPrograms,
-	resolveCodexAccessPrograms,
-} from "@veyyon/ai/providers/openai-codex/access-programs";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { fetchAntigravityImageModel } from "@veyyon/catalog/discovery/antigravity";
 import {
@@ -21,7 +17,6 @@ import {
 } from "@veyyon/catalog/provider-endpoints";
 import {
 	CODEX_BASE_URL,
-	codexRoutingHint,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
@@ -233,7 +228,6 @@ interface OpenAIHostedImageRequest {
 	tool_choice: { type: "image_generation" };
 	store: false;
 	stream?: boolean;
-	access_programs?: CodexAccessPrograms;
 }
 
 interface OpenAIImageGenerationCall {
@@ -984,12 +978,7 @@ function getOpenAIResponsesUrl(model: Model): string {
 		.replace(URL_PATHS.RESPONSES, URL_PATHS.CODEX_RESPONSES);
 }
 
-function buildOpenAIImageHeaders(
-	model: Model,
-	apiKey: string,
-	sessionId: string | undefined,
-	requestBody: OpenAIHostedImageRequest,
-): Headers {
+function buildOpenAIImageHeaders(model: Model, apiKey: string, sessionId: string | undefined): Headers {
 	const headers = new Headers(model.headers ?? {});
 	headers.set("Content-Type", "application/json");
 	headers.set("Authorization", `Bearer ${apiKey}`);
@@ -1007,10 +996,6 @@ function buildOpenAIImageHeaders(
 			headers.set(OPENAI_HEADERS.CONVERSATION_ID, sessionId);
 			headers.set(OPENAI_HEADERS.SESSION_ID, sessionId);
 		}
-		// The hint states the model of the body sent, as a Codex turn's does.
-		const routingHint = codexRoutingHint(requestBody);
-		if (routingHint) headers.set(OPENAI_HEADERS.ROUTING_HINT, routingHint);
-		else headers.delete(OPENAI_HEADERS.ROUTING_HINT);
 	}
 
 	return headers;
@@ -1060,14 +1045,9 @@ async function generateOpenAIHostedImage(
 ): Promise<OpenAIHostedImageResult> {
 	const stream = model.api === "openai-codex-responses" || model.provider === "openai-codex";
 	const requestBody = buildOpenAIHostedImageRequest(model, promptText, params, inputImages, stream);
-	if (stream) {
-		// A Codex image request is a Codex turn and is judged under the account's program like one.
-		const accessPrograms = await resolveCodexAccessPrograms(model, apiKey, { fetch: fetchImpl, signal });
-		if (accessPrograms) requestBody.access_programs = accessPrograms;
-	}
 	const response = await fetchImpl(getOpenAIResponsesUrl(model), {
 		method: "POST",
-		headers: buildOpenAIImageHeaders(model, apiKey, sessionId, requestBody),
+		headers: buildOpenAIImageHeaders(model, apiKey, sessionId),
 		body: JSON.stringify(requestBody),
 		signal,
 	});

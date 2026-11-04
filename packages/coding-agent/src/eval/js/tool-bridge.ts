@@ -1,7 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
-import { schemaDefinesProperty } from "@veyyon/agent-core/tool-normalization";
 import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
-import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { errorMessage, isRecord } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
@@ -60,14 +58,6 @@ function normalizeArgs(args: unknown): unknown {
 	return record;
 }
 
-function executionArgsForTool(tool: AgentTool, args: unknown): unknown {
-	if (!isRecord(args) || schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD) || !Object.hasOwn(args, INTENT_FIELD)) {
-		return args;
-	}
-	const { [INTENT_FIELD]: _intent, ...executionArgs } = args;
-	return executionArgs;
-}
-
 /**
  * Validate cell-authored tool arguments against the tool's own schema.
  *
@@ -93,12 +83,11 @@ function validateEvalToolArguments(tool: AgentTool, name: string, toolCallId: st
 			`Tool "${name}" expects an object of arguments, received ${args === null ? "null" : typeof args}.`,
 		);
 	}
-	// Intent belongs to the tool contract only when the tool's own schema declares it.
-	// Otherwise it is bridge metadata: keep it for status, but exclude it from validation.
-	const declaresIntent = schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD);
-	const intent = args[INTENT_FIELD];
-	const { [INTENT_FIELD]: _intent, ...argsWithoutIntent } = args;
-	const schemaArgs = declaresIntent ? args : argsWithoutIntent;
+	// The harness injects the intent field into the WIRE schema the model sees,
+	// not into the tool's own parameters, so a tool that never declared `i` would
+	// see it as an unrecognized key. Validate without it, then put it back: the
+	// status events and renderers downstream read it off the executed args.
+	const { [INTENT_FIELD]: intent, ...schemaArgs } = args;
 	try {
 		const validated = validateToolArguments(tool, {
 			type: "toolCall",
@@ -106,7 +95,7 @@ function validateEvalToolArguments(tool: AgentTool, name: string, toolCallId: st
 			name,
 			arguments: schemaArgs,
 		});
-		return declaresIntent || intent === undefined ? validated : { ...validated, [INTENT_FIELD]: intent };
+		return intent === undefined ? validated : { ...validated, [INTENT_FIELD]: intent };
 	} catch (error) {
 		if (tool.lenientArgValidation) return args;
 		throw new ToolError(errorMessage(error));
@@ -196,8 +185,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		// deny; no plan mode; no cwd or secret boundary; no standing session
 		// denial. An eval snippet is model-authored text, which is exactly the
 		// caller those controls exist for.
-		const statusArgs = validateEvalToolArguments(tool, name, toolCallId, normalizedArgs);
-		const executionArgs = executionArgsForTool(tool, statusArgs);
+		const executionArgs = validateEvalToolArguments(tool, name, toolCallId, normalizedArgs);
 		const result = await entry.invoke(tool, toolCallId, executionArgs, options.signal, undefined, context);
 		const textBlocks = result.content.filter(
 			(content): content is { type: "text"; text: string } =>
@@ -209,7 +197,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		);
 		const text = textBlocks.map(block => block.text).join("");
 		const hasError = toolResultHasError(result);
-		options.emitStatus?.(summarizeToolResult(name, statusArgs, result, text, hasError));
+		options.emitStatus?.(summarizeToolResult(name, executionArgs, result, text, hasError));
 		if (result.details === undefined && imageBlocks.length === 0 && !hasError) {
 			return text;
 		}

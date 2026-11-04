@@ -31,13 +31,9 @@ import type { FileSlashCommand } from "../extensibility/slash-commands";
 import type { LocalProtocolOptions } from "../internal-urls";
 import type { LspStartupServerInfo } from "../lsp";
 import type { MCPManager } from "../mcp";
-import type { RuntimeMCPConfig } from "../mcp/runtime-config";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { AgentRegistry } from "../registry/agent-registry";
-import type { ProtectedCredentialResource } from "../secrets/protected-resources";
-import type { SecretIntakeHostConfiguration } from "../secrets/intake-host";
-
 import type { ClaimedTicket, TopicReplenishmentEngine } from "../task/topic-replenishment";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { EventBus } from "../utils/event-bus";
@@ -51,14 +47,8 @@ export interface CreateAgentSessionOptions {
 	cwd?: string;
 	/** Agent config directory for this session. Default: `getAgentDir()`, i.e. `~/.veyyon/profiles/<active profile>/agent`. */
 	agentDir?: string;
-	/** Global config root override for isolated session storage and secret discovery. */
+	/** Cross-profile vault/key root override for isolated SDK hosts. Default: getGlobalConfigRootDir() */
 	globalConfigRoot?: string;
-	/** Host-approved secret intake operations for native root sessions. */
-	secretIntake?: SecretIntakeHostConfiguration;
-	/** Additional resources that agent tools may not read as plain files. */
-	protectedCredentialResources?: readonly ProtectedCredentialResource[];
-	/** Metadata indexes used to derive additional protected credential paths. */
-	protectedCredentialMetadataIndexes?: readonly string[];
 	/** Spawns to allow. Default: "*" */
 	spawns?: string;
 
@@ -206,8 +196,6 @@ export interface CreateAgentSessionOptions {
 
 	/** Enable MCP server discovery from .mcp.json files. Default: true */
 	enableMCP?: boolean;
-	/** Explicit servers supplied for this launch; never persisted to a profile. */
-	runtimeMCPConfig?: RuntimeMCPConfig;
 	/** Existing MCP manager to reuse (skips discovery, propagates to toolSession). */
 	mcpManager?: MCPManager;
 	/**

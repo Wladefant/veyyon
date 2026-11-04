@@ -1,19 +1,5 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import { logTelegramDeliveryTrace } from "@veyyon/utils";
-import type { TerminalSecretRequest } from "../../launch/terminal-control";
-import {
-	serveTerminalControl,
-	type TerminalDeliveryOptions,
-	TerminalNotReadyError,
-} from "../../launch/terminal-control";
-import type { SecretIntakeResult } from "../../secrets/intake-broker";
-import {
-	getSessionSecretIntake,
-	getSessionSecretIntakeContext,
-	registerSessionSecretIntakeActor,
-} from "../../secrets/intake-session";
-import { parseSecretSubmission } from "../../secrets/intake-wire";
-import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
+import { serveTerminalControl, TerminalNotReadyError } from "../../launch/terminal-control";
 import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
 import type { InteractiveMode } from "./interactive-mode";
 
@@ -81,7 +67,7 @@ type TerminalTranscriptText = {
 };
 
 /** Deliver to the existing REPL, never create a second AgentSession or transcript writer. */
-export async function startTerminalControl(mode: InteractiveMode): Promise<() => void> {
+export function startTerminalControl(mode: InteractiveMode): Promise<() => void> {
 	let revision = "";
 	let entries: TerminalTranscriptText[] = [];
 	// Cursor into the journal: how many entries were converted and the id of the last one. A leaf
@@ -119,24 +105,6 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 		if (appended.length || !intact) entries = entries.concat(appended);
 		return entries;
 	};
-	const answers = new OperatorAnswerInbox(
-		() => mode.sessionManager,
-		async (text, behavior, traceOptions) => {
-			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
-			if (mode.session.isStreaming && behavior === "followUp") {
-				await mode.session.followUp(text, undefined, undefined, traceOptions);
-				return "queued";
-			}
-			// Steer also drains an idle session. Recovery must not depend on a REPL input callback.
-			await mode.session.steer(text, undefined, undefined, traceOptions);
-			return mode.session.isStreaming ? "steered" : "queued";
-		},
-		questionId => {
-			const queued = mode.session.getQueuedMessages();
-			return [...queued.steering, ...queued.followUp].some(text => operatorAnswerQuestionId(text) === questionId);
-		},
-	);
-	await answers.recover();
 	return serveTerminalControl({
 		identity: () => ({
 			sessionId: mode.sessionManager.getSessionId(),
@@ -144,33 +112,21 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			sessionFile: mode.sessionManager.getSessionFile() ?? "",
 		}),
 		history,
-		async deliver(text, behavior, options?: TerminalDeliveryOptions) {
+		async deliver(text, behavior) {
 			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
-			if (options?.telegramTrace) {
-				logTelegramDeliveryTrace(options.telegramTrace, {
-					stage: "terminal_delivery_start",
-					sessionId: mode.sessionManager.getSessionId(),
-				});
-			}
-			const answer = await answers.accept(
-				text,
-				behavior,
-				options?.telegramTrace ? { telegramTrace: options.telegramTrace } : undefined,
-			);
-			if (answer !== undefined) return answer;
 			if (mode.session.isStreaming) {
 				if (behavior === "followUp") {
-					await mode.session.followUp(text, undefined, undefined, { telegramTrace: options?.telegramTrace });
+					await mode.session.followUp(text);
 					return "queued";
 				}
-				await mode.session.steer(text, undefined, undefined, { telegramTrace: options?.telegramTrace });
+				await mode.session.steer(text);
 				return "steered";
 			}
 			const submit = mode.onInputCallback;
 			if (!submit) throw new TerminalNotReadyError("Terminal is not ready for input; delivery not accepted");
 			// A promise resolver accepts only one input. Reserve it synchronously before acknowledging.
 			mode.onInputCallback = undefined;
-			submit(mode.startPendingSubmission({ text, telegramTrace: options?.telegramTrace }));
+			submit(mode.startPendingSubmission({ text }));
 			return "started";
 		},
 		async abort() {
@@ -178,76 +134,11 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			await mode.session.abort();
 			return true;
 		},
-		async registerSecretIntake(registration) {
-			try {
-				return await registerSessionSecretIntakeActor(
-					mode.session,
-					registration.actorId,
-					registration.ownerSessionId,
-				);
-			} catch {
-				throw new Error("Secret intake registration refused");
-			}
-		},
-		secretIntakeContext() {
-			const broker = getSessionSecretIntake(mode.session);
-			const context = getSessionSecretIntakeContext(mode.session);
-			return broker && context ? context : undefined;
-		},
-		async secretRequest(request: TerminalSecretRequest) {
-			const broker = getSessionSecretIntake(mode.session);
-			const bound = getSessionSecretIntakeContext(mode.session);
-			if (
-				!broker ||
-				!bound ||
-				request.context.actorId !== bound.actorId ||
-				request.context.ownerSessionId !== bound.ownerSessionId ||
-				request.context.projectId !== bound.projectId ||
-				(request.action === "submit" && request.submission.requestId !== request.requestId)
-			) {
-				throw new Error("Secret intake request refused");
-			}
-			try {
-				switch (request.action) {
-					case "get":
-						return broker.get(bound, request.requestId).request;
-					case "decline":
-						return broker.decline(bound, request.requestId).request;
-					case "cancel":
-						return broker.cancel(bound, request.requestId).request;
-					case "submit":
-						return (await broker.submit(bound, parseSecretSubmission(request.submission))).request;
-				}
-			} catch {
-				throw new Error("Secret intake request refused");
-			}
-		},
 		subscribe(listener) {
 			let sessionId = mode.sessionManager.getSessionId();
 			let previous = history();
 			let seen = new Set(previous.map(entry => entry.entryId));
 			let active = mode.session.isStreaming;
-			const attachSecretEvents = (): (() => void) => {
-				const broker = getSessionSecretIntake(mode.session);
-				const context = getSessionSecretIntakeContext(mode.session);
-				if (!broker || !context) return () => {};
-				const publishSecretRequest = (result: SecretIntakeResult): void => {
-					const { request } = result;
-					if (request.ownerSessionId !== context.ownerSessionId || request.projectId !== context.projectId) return;
-					listener({
-						kind: request.status === "pending" ? "secret_request_created" : "secret_request_updated",
-						sessionId: mode.sessionManager.getSessionId(),
-						request,
-					});
-				};
-				const stop = broker.subscribe(publishSecretRequest);
-				for (const request of broker.listPending(context)) publishSecretRequest(request);
-				return stop;
-			};
-			let stopSecretEvents = attachSecretEvents();
-			if (active) {
-				listener({ kind: "streaming", sessionId, active: true });
-			}
 			// Observe persisted owner entries, never JSONL or uncommitted provider deltas.
 			// An unchanged journal costs only two identity reads, not a transcript copy or expansion.
 			const timer = setInterval(() => {
@@ -258,8 +149,6 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 					previous = next;
 					seen = new Set(next.map(entry => entry.entryId));
 					active = mode.session.isStreaming;
-					stopSecretEvents();
-					stopSecretEvents = attachSecretEvents();
 					return;
 				}
 				if (next !== previous) {
@@ -274,10 +163,7 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 				}
 			}, 250);
 			timer.unref();
-			return () => {
-				clearInterval(timer);
-				stopSecretEvents();
-			};
+			return () => clearInterval(timer);
 		},
 	});
 }

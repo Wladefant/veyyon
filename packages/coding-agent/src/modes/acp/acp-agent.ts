@@ -1,5 +1,4 @@
 import * as path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import {
 	type Agent,
 	type AgentSideConnection,
@@ -65,8 +64,6 @@ import { loadSlashCommands } from "../../extensibility/slash-commands";
 // handler and reaches hundreds of modules.
 import { listLocalPlanFileUrls } from "../../internal-urls/local-protocol";
 import { MCPManager } from "../../mcp/manager";
-import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "../../mcp/runtime-config";
-import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
 import type { MCPServerConfig } from "../../mcp/types";
 import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
@@ -185,8 +182,6 @@ type ManagedSessionRecord = {
 	promptTurn: PromptTurnState | undefined;
 	promptQueue: PromptQueueState;
 	liveMessageId: string | undefined;
-	/** Adopted external entries whose replay a client has not yet accepted, in branch order. */
-	pendingExternalEntryIds: Set<string>;
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	toolArgsById: Map<string, unknown>;
 	extensionsConfigured: boolean;
@@ -489,7 +484,6 @@ export class AcpAgent implements Agent {
 	#connection: AgentSideConnection;
 	#initialSession: AgentSession | undefined;
 	#createSession: CreateAcpSession;
-	#runtimeMCPConfig: RuntimeMCPConfig | undefined;
 	#sessions = new Map<string, ManagedSessionRecord>();
 	/** Sessions this connection moved to the background, by ACP session id, until reclaimed or ended. */
 	#backgrounded = new Map<string, BackgroundRecord>();
@@ -499,16 +493,10 @@ export class AcpAgent implements Agent {
 	#cancelCleanupTimeoutMs = ACP_CANCEL_CLEANUP_TIMEOUT_MS;
 	#blobs = new BlobStore(getBlobsDir());
 
-	constructor(
-		connection: AgentSideConnection,
-		createSession: CreateAcpSession,
-		initialSession?: AgentSession,
-		runtimeMCPConfig?: RuntimeMCPConfig,
-	) {
+	constructor(connection: AgentSideConnection, createSession: CreateAcpSession, initialSession?: AgentSession) {
 		this.#connection = connection;
 		this.#initialSession = initialSession;
 		this.#createSession = createSession;
-		this.#runtimeMCPConfig = runtimeMCPConfig;
 	}
 
 	setCancelCleanupTimeoutForTesting(timeoutMs: number): void {
@@ -588,7 +576,7 @@ export class AcpAgent implements Agent {
 
 	async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
 		assertAbsoluteCwd(params.cwd);
-		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers, true);
+		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers);
 		await this.#replaySessionHistory(record);
 		const response: LoadSessionResponse = {
 			configOptions: this.#buildConfigOptions(record.session),
@@ -721,10 +709,7 @@ export class AcpAgent implements Agent {
 				await this.#closeManagedSession(params.sessionId, record);
 			});
 		}
-		const pendingPrompt = Promise.withResolvers<PromptResponse>();
-		// A cancel response must not wait for preflight I/O. The queue still holds
-		// the next prompt until that I/O and the cancelled turn have drained.
-		this.#queuePrompt(record, async () => {
+		return await this.#queuePrompt(record, async () => {
 			const previousTurn = record.promptTurn;
 			if (previousTurn) {
 				// Wait for any prompt that's still settling or whose cancel cleanup is
@@ -738,6 +723,7 @@ export class AcpAgent implements Agent {
 			throwIfRecordClosed(record);
 
 			const converted = convertPromptBlocks(params.prompt);
+			const pendingPrompt = Promise.withResolvers<PromptResponse>();
 			record.promptTurn = {
 				cancelRequested: false,
 				settled: false,
@@ -749,19 +735,6 @@ export class AcpAgent implements Agent {
 				reject: pendingPrompt.reject,
 				promise: pendingPrompt.promise,
 			};
-			const promptTurn = record.promptTurn;
-			try {
-				for (const id of await record.session.refreshExternalTurn()) record.pendingExternalEntryIds.add(id);
-				// Adoption commits session usage before replay can yield to cancellation.
-				promptTurn.usageBaseline = cloneUsageStatistics(record.session.sessionManager.getUsageStatistics());
-				if (!promptTurn.settled) await this.#replayPendingExternalHistory(record);
-				throwIfRecordClosed(record);
-			} catch (error: unknown) {
-				finishPrompt(record, undefined, error);
-				return await pendingPrompt.promise;
-			}
-			// Cancellation also applies while the disk refresh is in flight.
-			if (promptTurn.settled) return await pendingPrompt.promise;
 
 			record.promptTurn.unsubscribe = record.session.subscribe(event => {
 				this.#trackPromptEvent(record, event);
@@ -772,8 +745,7 @@ export class AcpAgent implements Agent {
 			});
 
 			return await pendingPrompt.promise;
-		}).catch(pendingPrompt.reject);
-		return await pendingPrompt.promise;
+		});
 	}
 
 	async #queuePrompt(record: ManagedSessionRecord, run: () => Promise<PromptResponse>): Promise<PromptResponse> {
@@ -1052,12 +1024,7 @@ export class AcpAgent implements Agent {
 		return await this.#registerPreparedSession(session, mcpServers);
 	}
 
-	async #loadManagedSession(
-		sessionId: string,
-		cwd: string,
-		mcpServers: McpServer[],
-		searchAcrossCwds = false,
-	): Promise<ManagedSessionRecord> {
+	async #loadManagedSession(sessionId: string, cwd: string, mcpServers: McpServer[]): Promise<ManagedSessionRecord> {
 		const existing = this.#sessions.get(sessionId) ?? this.#reclaimBackgrounded(sessionId, cwd);
 		if (existing) {
 			assertMatchingCwd(existing.session, cwd);
@@ -1068,9 +1035,7 @@ export class AcpAgent implements Agent {
 		// released and its transcript closed, then open it from disk like any stored session.
 		await this.#backgrounded.get(sessionId)?.released;
 
-		const storedSession = searchAcrossCwds
-			? await this.#findStoredSessionById(sessionId)
-			: (await listStoredSessions(cwd)).find(session => session.id === sessionId);
+		const storedSession = await this.#findStoredSession(sessionId, cwd);
 		if (!storedSession) {
 			throw new Error(`ACP session not found: ${sessionId}`);
 		}
@@ -1262,7 +1227,6 @@ export class AcpAgent implements Agent {
 					cwd: record.session.sessionManager.getCwd(),
 					resolveImageData: resolveImageDataForAcp,
 				});
-		clearLiveAssistantMessageAfterEvent(record, event);
 		for (const notification of notifications) {
 			const delivery = this.#connection.sessionUpdate(notification);
 			if (streamedAssistantError) {
@@ -1280,6 +1244,7 @@ export class AcpAgent implements Agent {
 		if (event.type === "tool_execution_end") {
 			record.toolArgsById.delete(event.toolCallId);
 		}
+		clearLiveAssistantMessageAfterEvent(record, event);
 
 		if (event.type === "agent_end") {
 			if (!record.background) {
@@ -1759,6 +1724,11 @@ export class AcpAgent implements Agent {
 		});
 	}
 
+	async #findStoredSession(sessionId: string, cwd: string): Promise<StoredSessionInfo | undefined> {
+		const sessions = await listStoredSessions(cwd);
+		return sessions.find(session => session.id === sessionId);
+	}
+
 	async #findStoredSessionById(sessionId: string): Promise<StoredSessionInfo | undefined> {
 		const sessions = await listStoredSessions();
 		return sessions.find(session => session.id === sessionId);
@@ -1768,19 +1738,7 @@ export class AcpAgent implements Agent {
 		const cwd = record.session.sessionManager.getCwd();
 		const replayedToolCallIds = new Set<string>();
 		const replayedToolCallArgs = new Map<string, unknown>();
-		const messages = record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[];
-		const representedPendingIds = record.session.sessionManager
-			.getBranch()
-			.filter(entry => {
-				if (!record.pendingExternalEntryIds.has(entry.id)) return false;
-				const projected = record.session.sessionManager.buildEntryContext(entry).messages;
-				return (
-					projected.length > 0 &&
-					projected.every(message => messages.some(full => isDeepStrictEqual(full, message)))
-				);
-			})
-			.map(entry => entry.id);
-		for (const message of messages) {
+		for (const message of record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[]) {
 			for (const notification of this.#messageToReplayNotifications(
 				record.session.sessionId,
 				message,
@@ -1790,39 +1748,6 @@ export class AcpAgent implements Agent {
 			)) {
 				await this.#connection.sessionUpdate(notification);
 			}
-		}
-		// Only acknowledge the snapshot represented by this successful full replay.
-		for (const id of representedPendingIds) record.pendingExternalEntryIds.delete(id);
-	}
-
-	/**
-	 * Deliver the adopted entries a client has not been sent. An entry leaves the
-	 * pending set only after every notification for it was accepted, so a failed
-	 * delivery or a cancelled prompt leaves it for the next prompt.
-	 */
-	async #replayPendingExternalHistory(record: ManagedSessionRecord): Promise<void> {
-		const pending = record.pendingExternalEntryIds;
-		if (pending.size === 0) return;
-		const sessionId = record.session.sessionId;
-		const cwd = record.session.sessionManager.getCwd();
-		const branch = new Map(record.session.sessionManager.getBranch().map(entry => [entry.id, entry]));
-		const replayedToolCallIds = new Set<string>();
-		const replayedToolCallArgs = new Map<string, unknown>();
-		for (const id of [...pending]) {
-			const entry = branch.get(id);
-			if (!entry) continue;
-			for (const message of record.session.buildDisplayMessagesForEntry(entry)) {
-				for (const notification of this.#messageToReplayNotifications(
-					sessionId,
-					message as ReplayableMessage,
-					cwd,
-					replayedToolCallIds,
-					replayedToolCallArgs,
-				)) {
-					await this.#connection.sessionUpdate(notification);
-				}
-			}
-			pending.delete(id);
 		}
 	}
 
@@ -2086,10 +2011,19 @@ export class AcpAgent implements Agent {
 	}
 
 	async #configureMcpServers(record: ManagedSessionRecord, servers: McpServer[]): Promise<void> {
-		const configs: MCPConfigMap = Object.create(null);
-		const sources: MCPSourceMap = Object.create(null);
+		if (record.mcpManager) {
+			await record.mcpManager.disconnectAll();
+		}
+		if (servers.length === 0) {
+			record.mcpManager = undefined;
+			await record.session.refreshMCPTools([], { activateAll: true });
+			return;
+		}
+
+		const manager = new MCPManager(record.session.sessionManager.getCwd());
+		const configs: MCPConfigMap = {};
+		const sources: MCPSourceMap = {};
 		for (const server of servers) {
-			if (Object.hasOwn(configs, server.name)) throw new Error(`Duplicate ACP MCP server name: ${server.name}`);
 			configs[server.name] = this.#toMcpConfig(server);
 			sources[server.name] = {
 				provider: "acp",
@@ -2099,53 +2033,17 @@ export class AcpAgent implements Agent {
 			};
 		}
 
-		const merged = mergeRuntimeMCPConfig(configs, sources, this.#runtimeMCPConfig);
-		if (Object.keys(merged.configs).length === 0) {
-			await record.mcpManager?.disconnectAll();
-			record.mcpManager = undefined;
-			await record.session.refreshMCPTools([], { activateAll: true });
-			return;
-		}
-		const manager = new MCPManager(record.session.sessionManager.getCwd());
-		try {
-			const startupStatuses = new Map<
-				string,
-				{ promise: Promise<McpConnectionStatusEvent>; resolve: (event: McpConnectionStatusEvent) => void }
-			>();
-			for (const name of Object.keys(merged.configs)) {
-				const status = Promise.withResolvers<McpConnectionStatusEvent>();
-				startupStatuses.set(name, { promise: status.promise, resolve: status.resolve });
-			}
-			const result = await manager.connectServers(merged.configs, merged.sources, event => {
-				if (event.type === "connected" || event.type === "failed") {
-					startupStatuses.get(event.serverName)?.resolve(event);
-				}
-			});
-			if (result.errors.size > 0) {
-				throw new Error(
-					Array.from(result.errors.entries())
-						.map(([name, message]) => `${name}: ${message}`)
-						.join("; "),
-				);
-			}
-			const connectedServers = new Set(result.connectedServers);
-			await Promise.all(
-				Array.from(startupStatuses.entries())
-					.filter(([name]) => !connectedServers.has(name))
-					.map(async ([name, status]) => {
-						const event = await status.promise;
-						if (event.type === "failed") {
-							throw new Error(`${name}: ${event.error}`);
-						}
-					}),
+		const result = await manager.connectServers(configs, sources);
+		if (result.errors.size > 0) {
+			throw new Error(
+				Array.from(result.errors.entries())
+					.map(([name, message]) => `${name}: ${message}`)
+					.join("; "),
 			);
-			await record.mcpManager?.disconnectAll();
-			await record.session.refreshMCPTools(manager.getTools(), { activateAll: true });
-			record.mcpManager = manager;
-		} catch (error) {
-			await manager.disconnectAll();
-			throw error;
 		}
+
+		record.mcpManager = manager;
+		await record.session.refreshMCPTools(result.tools, { activateAll: true });
 	}
 
 	#toMcpConfig(server: McpServer): MCPServerConfig {
@@ -2310,7 +2208,6 @@ function createManagedSessionRecord(session: AgentSession): ManagedSessionRecord
 		promptTurn: undefined,
 		promptQueue: { promise: Promise.resolve(), release: undefined },
 		liveMessageId: undefined,
-		pendingExternalEntryIds: new Set(),
 		liveMessageProgress: undefined,
 		toolArgsById: new Map(),
 		extensionsConfigured: false,
@@ -2348,22 +2245,20 @@ function prepareLiveAssistantMessage(record: ManagedSessionRecord, event: AgentS
 	if (
 		(event.type === "message_start" || event.type === "message_update" || event.type === "message_end") &&
 		event.message.role === "assistant" &&
-		(!record.liveMessageId || !record.liveMessageProgress)
+		(event.type === "message_start" || !record.liveMessageId || !record.liveMessageProgress)
 	) {
-		// Extension forwarding can delay message_start until after the first delta.
-		// Keep that delta's identity; message_end clears it for the next message.
 		record.liveMessageId = crypto.randomUUID();
 		record.liveMessageProgress = { textEmitted: false, thoughtEmitted: false };
 	}
 }
 
 /**
- * Reset live-message tracking after the assistant `message_end` has been
- * mapped, before notification delivery can yield to a later event. The
- * `agent_end` reset stays inside its branch, after
- * `#flushMissedFinalAssistantText`, so a `message_end` during end-of-turn
- * waits maps against real progress instead of resurrecting it and emitting
- * the final answer twice.
+ * Reset live-message tracking once the assistant `message_end` is handled.
+ * The `agent_end` reset happens inside the `agent_end` branch of
+ * `#handlePromptEvent` — after `#flushMissedFinalAssistantText` — so a
+ * `message_end` that arrives during the end-of-turn waits maps against the
+ * real progress instead of resurrecting a fresh one (which would double-emit
+ * the final answer).
  */
 function clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
 	if (event.type === "message_end" && event.message.role === "assistant") {
@@ -2667,10 +2562,6 @@ function wrapReplayContent(
 
 function extractReplayContent(content: unknown, errorMessage: string | undefined): PromptRequest["prompt"] {
 	const replay: PromptRequest["prompt"] = [];
-	// Raw session entries retain string user content; context replay uses blocks.
-	if (typeof content === "string" && content.length > 0) {
-		replay.push({ type: "text", text: content });
-	}
 	if (Array.isArray(content)) {
 		for (const item of content) {
 			if (typeof item !== "object" || item === null || !("type" in item)) {

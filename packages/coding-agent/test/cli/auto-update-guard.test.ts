@@ -74,17 +74,13 @@ describe("auto-update guard and opt-out controls", () => {
 	});
 
 	describe("isCurrentProcessLocalOrCustom", () => {
-		it("does not classify the local build flag or -local tags as custom", () => {
+		it("detects local/custom build via VEYYON_BUILD_LOCAL", () => {
 			process.env.VEYYON_BUILD_LOCAL = "true";
-			expect(isCurrentProcessLocalOrCustom()).toBe(false);
-			delete process.env.VEYYON_BUILD_LOCAL;
-
-			process.env.VEYYON_BUILD_TAG = "sha-local";
-			expect(isCurrentProcessLocalOrCustom()).toBe(false);
+			expect(isCurrentProcessLocalOrCustom()).toBe(true);
 		});
 
-		it("continues to classify explicit custom tags as custom", () => {
-			process.env.VEYYON_BUILD_TAG = "sha-custom";
+		it("detects local/custom build via VEYYON_BUILD_TAG", () => {
+			process.env.VEYYON_BUILD_TAG = "a19ab2a13-local";
 			expect(isCurrentProcessLocalOrCustom()).toBe(true);
 		});
 	});
@@ -92,13 +88,14 @@ describe("auto-update guard and opt-out controls", () => {
 	describe("replaceBinaryForUpdate custom build guard", () => {
 		const okVerifier = () => Promise.resolve({ ok: true as const, actual: "9.9.9" });
 
-		it("refuses to replace an explicit custom build when force is false", async () => {
+		it("refuses to replace custom build when force is false", async () => {
 			const target = path.join(tempDir, "veyyon");
 			const temp = path.join(tempDir, "veyyon.new");
 			const backup = path.join(tempDir, "veyyon.bak");
 
-			process.env.VEYYON_BUILD_TAG = "sha-custom";
-			writeFileSync(target, "#!/bin/sh\necho '1.4.1 (a19ab2a13-custom)'\n", { mode: 0o755 });
+			// Set env so isCurrentProcessLocalOrCustom() detects custom build
+			process.env.VEYYON_BUILD_LOCAL = "true";
+			writeFileSync(target, "#!/bin/sh\necho '1.4.1 (a19ab2a13-local)'\n", { mode: 0o755 });
 			writeFileSync(temp, "NEW-BINARY-PAYLOAD");
 
 			await expect(
@@ -110,32 +107,11 @@ describe("auto-update guard and opt-out controls", () => {
 					verifyInstalledVersion: okVerifier,
 					force: false,
 				}),
-			).rejects.toThrow(/Refusing to replace.*custom build/);
+			).rejects.toThrow(/Refusing to replace.*custom or local build/);
 
+			// Ensure target binary was NOT replaced
 			const content = await fs.readFile(target, "utf8");
-			expect(content).toContain("1.4.1 (a19ab2a13-custom)");
-		});
-		it("allows replacement of a local-tagged release binary without force", async () => {
-			const target = path.join(tempDir, "veyyon");
-			const temp = path.join(tempDir, "veyyon.new");
-			const backup = path.join(tempDir, "veyyon.bak");
-
-			writeFileSync(target, "#!/bin/sh\nprintf '%s\\n' 'veyyon/1.6.3 (4294e2c89f-local; linux-x64)'\n", {
-				mode: 0o755,
-			});
-			writeFileSync(temp, "NEW-BINARY-PAYLOAD");
-
-			const result = await replaceBinaryForUpdate({
-				targetPath: target,
-				tempPath: temp,
-				backupPath: backup,
-				expectedVersion: "9.9.9",
-				verifyInstalledVersion: okVerifier,
-				force: false,
-			});
-
-			expect(result.ok).toBe(true);
-			expect(await fs.readFile(target, "utf8")).toBe("NEW-BINARY-PAYLOAD");
+			expect(content).toContain("1.4.1 (a19ab2a13-local)");
 		});
 
 		it("allows replacement when force is true", async () => {
@@ -143,9 +119,11 @@ describe("auto-update guard and opt-out controls", () => {
 			const temp = path.join(tempDir, "veyyon.new");
 			const backup = path.join(tempDir, "veyyon.bak");
 
-			process.env.VEYYON_BUILD_TAG = "sha-custom";
 			writeFileSync(target, "CUSTOM-BINARY");
 			writeFileSync(temp, "NEW-BINARY-PAYLOAD");
+
+			process.env.VEYYON_BUILD_LOCAL = "true";
+
 			// Replacement with force: true succeeds
 			const result = await replaceBinaryForUpdate({
 				targetPath: target,
@@ -200,7 +178,7 @@ describe("auto-update guard and opt-out controls", () => {
 			});
 		});
 
-		it("skips and records history when target is an explicit custom build", async () => {
+		it("skips and records history when target is a custom/local build", async () => {
 			const statePath = path.join(tempDir, "auto-update.json");
 			const historyPath = path.join(tempDir, "update-history.json");
 			let installCalled = false;
@@ -235,45 +213,6 @@ describe("auto-update guard and opt-out controls", () => {
 				status: "skipped",
 				reason: "custom-build",
 			});
-		});
-		it("updates a local build to a newer published release using the default classifier", async () => {
-			const installed: string[] = [];
-			const statePath = path.join(tempDir, "auto-update.json");
-			const historyPath = path.join(tempDir, "update-history.json");
-			process.env.VEYYON_BUILD_TAG = "sha-local";
-
-			const outcome = await runAutoUpdate(
-				"1.6.3-local",
-				{ tag: "v1.6.4", version: "1.6.4" },
-				statePath,
-				() => "binary",
-				async version => {
-					installed.push(version);
-					return { warnings: [] };
-				},
-				historyPath,
-			);
-
-			expect(outcome.status).toBe("updated");
-			expect(installed).toEqual(["1.6.4"]);
-		});
-
-		it("updates a local prerelease label to its same-version published release", async () => {
-			const installed: string[] = [];
-			const outcome = await runAutoUpdate(
-				"1.6.3-local",
-				{ tag: "v1.6.3", version: "1.6.3" },
-				path.join(tempDir, "same-version-auto-update.json"),
-				() => "binary",
-				async version => {
-					installed.push(version);
-					return { warnings: [] };
-				},
-				path.join(tempDir, "same-version-update-history.json"),
-			);
-
-			expect(outcome.status).toBe("updated");
-			expect(installed).toEqual(["1.6.3"]);
 		});
 
 		it("skips and records history when method is source install", async () => {

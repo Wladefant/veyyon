@@ -609,8 +609,7 @@ export async function validateReleaseVersionAuthorities(
 	}
 }
 
-/** A caller may omit local checks only when it gates the committed bump SHA before tagging. */
-export async function prepareReleaseTree(version: string, runChecks = true): Promise<void> {
+export async function prepareReleaseTree(version: string): Promise<void> {
 	console.log(`Updating package versions to ${version}…`);
 	const pkgJsonPaths = await memberFiles("package.json");
 	const publicPkgPaths: string[] = [];
@@ -733,11 +732,9 @@ export async function prepareReleaseTree(version: string, runChecks = true): Pro
 	}
 	console.log("  Updated CHANGELOG.md (repo root)\n");
 
-	if (runChecks) {
-		console.log("Running checks...");
-		await $`bun run check`;
-		console.log();
-	}
+	console.log("Running checks...");
+	await $`bun run check`;
+	console.log();
 }
 
 /**

@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-28
-
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.

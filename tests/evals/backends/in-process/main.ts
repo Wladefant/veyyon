@@ -23,7 +23,6 @@ import type {
 	VariantAxis,
 } from "../../engine/contracts";
 import { runsDir as defaultRunsDir } from "../../engine/package-paths";
-import type { FrozenSkillArm } from "../../engine/skills/arms";
 import {
 	type DiscoverSharedInfraOptions,
 	discoverSharedInfra,
@@ -199,7 +198,6 @@ export class InProcessBackend implements ExecutionBackend {
 			const loaded = await loadAndValidatePromptOverlay(promptVariantPath, context.workDir);
 			promptOverrides = loaded.overrides;
 		}
-		const skillArm = (variant as typeof variant & { readonly skillArm?: FrozenSkillArm }).skillArm;
 
 		const clientOptions: InProcessClientOptions = {
 			cwd: trialDir,
@@ -212,7 +210,6 @@ export class InProcessBackend implements ExecutionBackend {
 			shared: this.#sharedInfra ?? undefined,
 			configPath: resolvedConfigPath,
 			promptOverrides,
-			skillArm,
 		};
 
 		const startTime = Date.now();
@@ -225,7 +222,6 @@ export class InProcessBackend implements ExecutionBackend {
 		let trialError: string | null = null;
 		let state: InProcessSessionState | undefined;
 		let timedOut = false;
-		let cancelled = false;
 		let teardownReason: string | null = null;
 		const timeoutAbort = new AbortController();
 
@@ -244,10 +240,8 @@ export class InProcessBackend implements ExecutionBackend {
 
 		// One run's signal outlives every trial in it, so a listener this trial leaves behind holds
 		// this trial's client and session state for the rest of the run.
-		const onCancel = (): void => {
-			cancelled = true;
-			interrupt("Trial aborted by context signal");
-		};
+		const onCancel = (): void => interrupt("Trial aborted by context signal");
+		context.signal?.addEventListener("abort", onCancel, { once: true });
 		if (context.signal?.aborted) onCancel();
 
 		const runClient = async (): Promise<{
@@ -316,31 +310,10 @@ export class InProcessBackend implements ExecutionBackend {
 				durationSec,
 				sessionStats,
 				error: trialError,
-				infrastructureError: trialError,
 				// A teardown that was abandoned is reported beside the score it could not affect.
 				teardownReason,
-				skillArm: state?.skillArm
-					? {
-							id: state.skillArm.id,
-							kind: state.skillArm.kind,
-							contentHash: state.skillArm.contentHash,
-							sourceHash: state.skillArm.sourceHash,
-							recipeHash: state.skillArm.recipeHash,
-							omittedComponents: state.skillArm.omittedComponents,
-						}
-					: undefined,
-				resolvedModel: state?.model
-					? {
-							provider: state.model.provider,
-							id: state.model.id,
-							version: (state.model as typeof state.model & { version?: string }).version ?? null,
-						}
-					: undefined,
-				observedSkillHashes: state?.observedSkillHashes,
-				observedSkillPrompt: state?.observedSkillPrompt,
-				editableCanary: state?.editableCanary,
 				timedOut,
-				cancelled,
+				infrastructureError: timedOut ? trialError : undefined,
 				timeoutSec,
 				systemPrompt: state?.systemPrompt,
 				settings: state?.settings,

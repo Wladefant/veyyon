@@ -28,7 +28,6 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { openBoundedFirstEventBudget } from "../utils/first-event-budget";
 import { toolWireSchema } from "../utils/schema/wire";
-import { carryRequiredToolCall } from "../utils/tool-choice";
 import {
 	extractGitLabDuoWorkflowAction,
 	extractGitLabDuoWorkflowCheckpoint,
@@ -222,10 +221,9 @@ export interface GitLabDuoWorkflowOptions extends StreamOptions {
 	/** Idle WebSocket deadline (ms) before aborting and resuming; defaults to {@link GITLAB_DUO_WORKFLOW_IDLE_TIMEOUT_MS}. */
 	idleTimeoutMs?: number;
 	/**
-	 * Tool-choice override forwarded from the stream layer. `"none"` keeps the tool
-	 * definitions in the cache prefix but stops advertising them to Duo (a handoff
-	 * side-request). A required call is sent as text, since a workflow has no
-	 * tool-choice field.
+	 * Tool-choice override forwarded from the stream layer. Only `"none"` is
+	 * acted on: a side-request (e.g. handoff) keeps tool definitions in the cache
+	 * prefix but disables tool use, so the provider must not advertise them to Duo.
 	 */
 	toolChoice?: ToolChoice;
 }
@@ -1043,9 +1041,7 @@ async function runGitLabDuoWorkflow(
 	state.providerSessionState = providerSessionState;
 	const request: GitLabDuoWorkflowRequest = {
 		model,
-		// A workflow start or resume has no tool-choice field, so a required call rides the
-		// goal (or the tool result a live socket resumes with) as text.
-		context: carryRequiredToolCall(context, options.toolChoice, "open"),
+		context,
 		options,
 		state,
 		apiKey,

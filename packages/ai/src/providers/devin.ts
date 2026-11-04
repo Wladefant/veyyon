@@ -42,7 +42,6 @@ import { calculateCost, discardAttemptUsage } from "@veyyon/catalog/models";
 import { DEVIN_CASCADE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { isAbortError } from "@veyyon/utils/abortable";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
-import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import { tryParseJson } from "@veyyon/utils/json";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
@@ -63,7 +62,6 @@ import type {
 	ThinkingContent,
 	Tool,
 	ToolCall,
-	ToolChoice,
 	ToolResultMessage,
 	Usage,
 	UserMessage,
@@ -82,7 +80,6 @@ import {
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toolWireSchema } from "../utils/schema/wire";
-import { carryRequiredToolCall } from "../utils/tool-choice";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { NON_VIDEO_MODEL_PLACEHOLDER } from "./vision-content";
 
@@ -98,8 +95,6 @@ export { DEVIN_CASCADE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 export interface DevinOptions extends StreamOptions {
 	/** Wire model uid selected after thinking-effort routing. */
 	chatModelUid?: string;
-	/** A tool call the turn requires. Cascade is always sent `auto`, so the requirement is sent as text. */
-	toolChoice?: ToolChoice;
 	/**
 	 * Which provider-level retry this is, counted from 0. Internal.
 	 *
@@ -663,11 +658,7 @@ function buildDevinChatRequest(
 			locale: "en",
 		}),
 		prompt: normalizeSystemPrompts(context.systemPrompt).join("\n\n"),
-		// Cascade sends auto, so a required call rides the conversation as text.
-		chatMessagePrompts: buildChatMessagePrompts(
-			carryRequiredToolCall(context, options?.toolChoice, "open").messages,
-			cascadeId,
-		),
+		chatMessagePrompts: buildChatMessagePrompts(context.messages, cascadeId),
 		chatModelUid: options?.chatModelUid ?? model.requestModelId ?? model.id,
 		requestType: ChatMessageRequestType.CASCADE,
 		plannerMode: ConversationalPlannerMode.DEFAULT,
@@ -714,10 +705,9 @@ function buildChatMessagePrompts(messages: Message[], cascadeId: string): ChatMe
 }
 
 /** The text parts of a user turn or a tool result joined in order, and its images. */
-function promptTextAndImages(content: string | (TextContent | ImageContent | VideoContent)[]): {
-	text: string;
-	images: ImageData[];
-} {
+function promptTextAndImages(
+	content: string | (TextContent | ImageContent | VideoContent)[],
+): { text: string; images: ImageData[] } {
 	if (typeof content === "string") return { text: content, images: [] };
 	let text = "";
 	const images: ImageData[] = [];
@@ -725,7 +715,8 @@ function promptTextAndImages(content: string | (TextContent | ImageContent | Vid
 		if (part.type === "text") text += part.text;
 		else if (part.type === "image")
 			images.push(create(ImageDataSchema, { base64Data: part.data, mimeType: part.mimeType }));
-		else if (part.type === "video") text += (text ? "\n" : "") + NON_VIDEO_MODEL_PLACEHOLDER;
+		else if (part.type === "video")
+			text += (text ? "\n" : "") + NON_VIDEO_MODEL_PLACEHOLDER;
 	}
 	return { text, images };
 }
@@ -814,6 +805,28 @@ function readConnectTrailerError(text: string): DevinTrailerError | null {
 }
 
 /**
+ * How long Cascade says to wait, read out of the sentence it says it in.
+ *
+ * There is no `retry-after` header on a Connect trailer, so the only machine-usable signal is the
+ * server's own English: "Your limit will reset in 1 minute", "in 40 minutes". Honoring it matters
+ * in both directions. Retrying sooner than the server asked is a guaranteed failure that burns the
+ * retry budget, and a window far longer than any backoff (the 40-minute case is real) means the
+ * turn must fail now rather than sit in a doomed sleep.
+ *
+ * Exported for tests: the parse is the part that decides whether a retry is even attempted.
+ */
+export function parseDevinRateLimitResetMs(message: string): number | undefined {
+	const match =
+		/\breset(?:s)?\s+(?:in|after)\s+(?:about\s+|approximately\s+|~)?(\d+)\s*(second|minute|hour)s?\b/i.exec(message);
+	if (!match?.[1] || !match[2]) return undefined;
+	const amount = Number(match[1]);
+	if (!Number.isFinite(amount) || amount < 0) return undefined;
+	const unit = match[2].toLowerCase();
+	const scale = unit === "second" ? 1_000 : unit === "minute" ? 60_000 : 3_600_000;
+	return amount * scale;
+}
+
+/**
  * How long to wait before re-running a failed turn, or `undefined` when it must not be re-run.
  *
  * WHY EVERY CONDITION IS HERE. Each one is a way a retry does harm rather than good:
@@ -842,9 +855,7 @@ function devinRetryDelayMs(
 	if (!AIError.isProviderRetryableError(error)) return undefined;
 
 	const message = errorMessage(error);
-	// Cascade sends no `retry-after` header on a Connect trailer; the window is in its sentence:
-	// "Your limit will reset in 1 minute".
-	const statedResetMs = extractRetryHint(undefined, message);
+	const statedResetMs = parseDevinRateLimitResetMs(message);
 	if (statedResetMs !== undefined) {
 		// One second of slack, because waiting until the exact stated instant races the server's own
 		// clock and a retry that lands a moment early just burns an attempt.

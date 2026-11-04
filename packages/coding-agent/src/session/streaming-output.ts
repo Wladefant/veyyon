@@ -9,8 +9,7 @@ export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from 
 import { formatBytes } from "@veyyon/utils/format";
 import { DEFAULT_INLINE_FLOOR_FRACTION, DEFAULT_INLINE_OUTPUT_MAX_BYTES } from "../config/settings-domains/shared";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
-import { currentProducerSecretOwner } from "../secrets/producer-owner";
-import { ProducerOutputGuard } from "../secrets/producer-output";
+import type { ProducerOutputGuard } from "../secrets/producer-output";
 
 // =============================================================================
 // Constants
@@ -910,9 +909,7 @@ export class OutputSink {
 			artifactHeadBytes = ARTIFACT_DEFAULT_HEAD_BYTES,
 		} = options ?? {};
 		this.#artifactPath = artifactPath;
-		const producerOwner = currentProducerSecretOwner();
-		this.#outputGuard =
-			options?.outputGuard ?? (producerOwner ? new ProducerOutputGuard(producerOwner.redact) : undefined);
+		this.#outputGuard = options?.outputGuard;
 		this.#artifactId = artifactId;
 		this.#spillThreshold = spillThreshold;
 		this.#headLimit = Math.max(0, headBytes);
@@ -1450,8 +1447,7 @@ export class OutputSink {
 
 	async #dumpInternal(notice: string | undefined, strict: boolean): Promise<OutputSummary> {
 		if (this.#outputGuard) this.#pushFiltered(this.#outputGuard.finish());
-		const safeNotice = notice ? this.#outputGuard?.sanitize(notice) ?? notice : undefined;
-		const noticeLine = safeNotice ? `[${safeNotice}]\n` : "";
+		const noticeLine = notice ? `[${notice}]\n` : "";
 
 		// Flush any chunk still held back by the throttle so the live preview
 		// ends with the complete stream. A throwing onChunk must not skip the

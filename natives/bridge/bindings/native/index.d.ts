@@ -155,8 +155,6 @@ export declare class PtySession {
   resize(cols: number, rows: number): void
   /** Force-kill the active PTY command. */
   kill(): void
-  /** Stable process handle for the child spawned by the latest accepted run. */
-  get process(): Process | null
 }
 
 /** Persistent brush-core shell session. */
@@ -243,7 +241,7 @@ export declare function __veyyonInstallTokioRuntime(): void
  * `natives/bridge/bindings/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __veyyonNativesV1_7_8(): void
+export declare function __veyyonNativesV1_5_8(): void
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -1702,9 +1700,7 @@ export interface ShellRunResult {
   cancelled: boolean
   /** Whether the command timed out before completion. */
   timedOut: boolean
-  /** Whether output capture stopped before EOF. */
   outputIncomplete: boolean
-  /** Retained raw output prefix, present only for incomplete buffered capture. */
   capturedOutput?: string
   /**
    * When the minimizer rewrote the captured output, this carries the

@@ -4,6 +4,7 @@ import { resolveReasoningSelection } from "@veyyon/catalog/model-thinking";
 import { calculateCost, emptyCost } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 import { $env } from "@veyyon/utils/env";
+import { tryParseJson } from "@veyyon/utils/json";
 import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
@@ -56,12 +57,7 @@ import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, normalizeSchemaForMoonshot, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent, resolveOpenAiSseEventName } from "../utils/sse-debug";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
-import {
-	carryRequiredToolCall,
-	isForcedToolChoice,
-	mapToOpenAICompletionsToolChoice,
-	openAIToolCallForce,
-} from "../utils/tool-choice";
+import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
 import { parseAzureDeploymentNameMap } from "./azure-deployment-names";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
@@ -1210,11 +1206,7 @@ function buildParams(
 		toolChoice: params.tool_choice,
 	});
 	const compat = finalPolicy.compat as ResolvedOpenAICompat;
-	const messages = convertMessages(
-		model,
-		carryRequiredToolCall(context, options?.toolChoice, openAIToolCallForce(params.tool_choice)),
-		compat,
-	);
+	const messages = convertMessages(model, context, compat);
 	maybeAddAnthropicCacheControl(compat, messages, resolveCacheRetention(options?.cacheRetention));
 	params.messages = messages;
 	applyOpenAICompletionsOutputTokens(params, model, compat, options);
@@ -1848,5 +1840,4 @@ function convertTools(
 			(toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && adaptedTools.some(tool => tool.strict))),
 	};
 }
-
 export { convertMessages as convertOpenAICompletionsMessages };

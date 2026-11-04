@@ -15,7 +15,6 @@ import type { BackgroundConversation, BackgroundHandoff } from "../../session/ba
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type { AgentEventPayload, AgentLifecyclePayload, AgentProgress, AgentProgressPayload } from "../../task";
 import type { TodoPhase } from "../../tools/agent/todo";
-import type { SecretRequestMetadata, SecretSubmission } from "../../secrets/intake-wire";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -39,8 +38,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_subagent_subscription"; level: RpcAgentSubscriptionLevel }
 	| { id?: string; type: "get_subagents" }
 	| { id?: string; type: "get_subagent_messages"; agentId?: string; sessionFile?: string; fromByte?: number }
-	| { id?: string; type: "secret_request"; action: "get" | "decline" | "cancel"; requestId: string }
-	| { id?: string; type: "secret_request"; action: "submit"; requestId: string; submission: SecretSubmission }
+
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model" }
@@ -112,8 +110,6 @@ export interface RpcSessionState {
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
 	/** Current context window usage. */
 	contextUsage?: ContextUsage;
-	/** Present only when this session has a trusted intake broker. */
-	secretIntake?: { version: 1; sealed: true };
 }
 
 export interface RpcAvailableSlashCommand {
@@ -195,7 +191,6 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
-	| { id?: string; type: "response"; command: "secret_request"; success: true; data: { request: SecretRequestMetadata } }
 	| {
 			id?: string;
 			type: "response";
@@ -353,11 +348,7 @@ export interface RpcAgentEventFrame {
 
 export type RpcAgentFrame = RpcAgentLifecycleFrame | RpcAgentProgressFrame | RpcAgentEventFrame;
 
-export type RpcSessionEventFrame = AgentSessionEvent | RpcAgentFrame | RpcSecretRequestFrame;
-export interface RpcSecretRequestFrame {
-	type: "secret_request_created" | "secret_request_updated";
-	request: SecretRequestMetadata;
-}
+export type RpcSessionEventFrame = AgentSessionEvent | RpcAgentFrame;
 
 // ============================================================================
 // Extension UI Events (stdout)

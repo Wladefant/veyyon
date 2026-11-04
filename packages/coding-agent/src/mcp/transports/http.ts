@@ -5,7 +5,7 @@
  * Based on MCP spec 2025-03-26.
  */
 import * as AIError from "@veyyon/ai/error";
-import { isAbortError, logger, readSseEvents, readSseJson, Snowflake, untilAborted } from "@veyyon/utils";
+import { isAbortError, logger, readSseJson, Snowflake, untilAborted } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
 import {
 	createMCPTimeout,
@@ -20,9 +20,9 @@ import type {
 	JsonRpcResponse,
 	MCPHttpServerConfig,
 	MCPRequestOptions,
-	MCPSseServerConfig,
 	MCPStreamRequest,
 	MCPStreamRequestOptions,
+	MCPSseServerConfig,
 	MCPTransport,
 	ServerRequestResponse,
 } from "../types";
@@ -37,7 +37,6 @@ import {
 } from "./transport-failure";
 
 const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
-
 
 const mcpToolArgsAttemptFactory = Symbol("mcpToolArgsAttemptFactory");
 
@@ -89,25 +88,6 @@ export function resolveSSEConnectTimeoutMs(configTimeout?: number): number {
 	if (!isMCPTimeoutEnabled(requestTimeout)) return 0;
 	const boundedTimeout = Math.min(HTTP_SSE_CONNECT_TIMEOUT_MS, Math.floor(requestTimeout / 4));
 	return Math.max(1, boundedTimeout);
-}
-
-/** Narrow untrusted stream frames before routing their notification or response fields. */
-function isStreamMessage(value: unknown): value is JsonRpcMessage {
-	if (!isRecord(value) || value.jsonrpc !== "2.0") return false;
-	if ("method" in value) {
-		if (typeof value.method !== "string" || (value.params !== undefined && !isRecord(value.params))) return false;
-		return !("id" in value) || typeof value.id === "string" || typeof value.id === "number";
-	}
-	if (value.id !== null && typeof value.id !== "string" && typeof value.id !== "number") return false;
-	if (("result" in value) === ("error" in value)) return false;
-	if ("error" in value) {
-		return (
-			isRecord(value.error) &&
-			typeof value.error.code === "number" &&
-			typeof value.error.message === "string"
-		);
-	}
-	return "result" in value;
 }
 /**
  * HTTP transport for MCP servers.
@@ -280,7 +260,9 @@ export class HttpTransport implements MCPTransport {
 		const requestParams = {
 			...(params ?? {}),
 			_meta: {
-				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta) ? params._meta : {}),
+				...(params?._meta && typeof params._meta === "object" && !Array.isArray(params._meta)
+					? params._meta
+					: {}),
 				"io.modelcontextprotocol/subscriptionId": id,
 			},
 		};
@@ -327,34 +309,14 @@ export class HttpTransport implements MCPTransport {
 					resolve();
 					return;
 				}
-				if (
-					!response.ok ||
-					!response.body ||
-					!response.headers.get("Content-Type")?.includes("text/event-stream")
-				) {
+				if (!response.ok || !response.body || !response.headers.get("Content-Type")?.includes("text/event-stream")) {
 					await response.body?.cancel();
-					throw new Error(
-						mcpHttpFailureMessage(this.config.url, response.status, "Event stream response required"),
-					);
+					throw new Error(mcpHttpFailureMessage(this.config.url, response.status, "Event stream response required"));
 				}
-				for await (const frame of readSseEvents(response.body, signal)) {
-					if (frame.data === "") continue;
-					if (frame.data === "[DONE]") break;
-					let raw: unknown;
-					try {
-						raw = JSON.parse(frame.data);
-					} catch {
-						logger.warn("Skipping invalid JSON in MCP event stream", { url: this.config.url });
-						continue;
-					}
+				for await (const raw of readSseJson<JsonRpcMessage | JsonRpcMessage[]>(response.body, signal)) {
 					const messages = Array.isArray(raw) ? raw : [raw];
-					for (const value of messages) {
-						if (!isStreamMessage(value)) {
-							logger.warn("Skipping invalid MCP event stream message", { url: this.config.url });
-							continue;
-						}
-						const message = value;
-						if (!("method" in message) && message.id === id && ("result" in message || "error" in message)) {
+					for (const message of messages) {
+						if ("id" in message && message.id === id && ("result" in message || "error" in message)) {
 							if (message.error) {
 								throw Object.assign(new Error(`MCP error ${message.error.code}: ${message.error.message}`), {
 									code: message.error.code,
@@ -364,7 +326,7 @@ export class HttpTransport implements MCPTransport {
 							resolve();
 							return;
 						}
-						if ("method" in message && typeof message.method === "string" && !("id" in message)) {
+						if ("method" in message && !("id" in message)) {
 							const params = message.params;
 							const meta = params && typeof params === "object" && "_meta" in params ? params._meta : undefined;
 							const subscriptionId =
@@ -373,10 +335,7 @@ export class HttpTransport implements MCPTransport {
 									: undefined;
 							if (subscriptionId === id) {
 								onNotification(message);
-							} else if (
-								subscriptionId === undefined &&
-								message.method === "notifications/events/list_changed"
-							) {
+							} else if (subscriptionId === undefined && message.method === "notifications/events/list_changed") {
 								this.onNotification?.(message.method, message.params);
 							}
 						}

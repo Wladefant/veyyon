@@ -437,7 +437,6 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			throwNonMissing: true,
 		});
 		if (!resolved) throw new ToolError(`Path '${target.path}' not found`);
-		await this.session.assertCredentialReadAllowed?.(resolved.absolutePath);
 		if (resolved.stat.isDirectory()) {
 			return this.#readResolvedDirectory(resolved, parsed, params);
 		}
@@ -460,7 +459,6 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 	): Promise<AgentToolResult<ReadToolDetails> | undefined> {
 		const archivePath = await resolveArchiveReadPath(this.session.cwd, readPath, suffixSearch, signal);
 		if (archivePath) {
-			await this.session.assertCredentialReadAllowed?.(archivePath.absolutePath);
 			const archiveSubPath =
 				promotedSelector === undefined
 					? splitPathAndSel(archivePath.archiveSubPath)
@@ -477,7 +475,6 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 
 		const sqlitePath = await resolveSqliteReadPath(this.session.cwd, readPath, suffixSearch, signal);
 		if (sqlitePath) {
-			await this.session.assertCredentialReadAllowed?.(sqlitePath.absolutePath);
 			return readSqlite(this.session, sqlitePath, signal);
 		}
 
@@ -493,7 +490,6 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			},
 		);
 		if (!resolved) throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' not found`);
-		await this.session.assertCredentialReadAllowed?.(resolved.absolutePath);
 		if (resolved.stat.isDirectory()) {
 			throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' is a directory, not a PDF file`);
 		}

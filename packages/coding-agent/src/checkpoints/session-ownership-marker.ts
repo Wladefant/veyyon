@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type FileHandle, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isCheckpointNodeLabel, type SessionHandoffIdentity } from "@veyyon/session/checkpoint-ownership";
 
@@ -43,14 +43,7 @@ async function readNativeHandoffIdentity(
 	sessionFile: string,
 	sessionId: string,
 ): Promise<SessionHandoffIdentity | undefined> {
-	let file: FileHandle;
-	try {
-		file = await open(sessionFile, "r");
-	} catch (error) {
-		// A lazily created session has no file until its first persisted entry, so there is no handoff identity yet.
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-		throw error;
-	}
+	const file = await open(sessionFile, "r");
 	const bytes = Buffer.alloc(64 * 1024);
 	let text: string;
 	try {

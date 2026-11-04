@@ -125,7 +125,6 @@ describe("variant matrix declared axis contracts", () => {
 				promptVariants: axis.id === "promptVariants" ? [] : ["concise"],
 				models: axis.id === "models" ? [] : ["claude-3-7-sonnet"],
 				attachments: axis.id === "attachments" ? [] : undefined,
-				skillArms: axis.id === "skillArms" ? [] : undefined,
 				builds: axis.id === "builds" ? [] : undefined,
 			};
 

@@ -1,5 +1,4 @@
 import { errorMessage, exponentialBackoffDelay, logger, settleWithin } from "@veyyon/utils";
-import { currentProducerSecretOwner, runWithProducerSecretOwner, type ProducerSecretOwner } from "../secrets/producer-owner";
 
 const DELIVERY_RETRY_BASE_MS = 500;
 const DELIVERY_RETRY_MAX_MS = 30_000;
@@ -46,8 +45,6 @@ export interface AsyncJob {
 	label: string;
 	abortController: AbortController;
 	promise: Promise<void>;
-	/** Redaction authority captured when the job is registered. */
-	producerSecretOwner?: ProducerSecretOwner;
 	resultText?: string;
 	errorText?: string;
 	/**
@@ -94,7 +91,6 @@ interface AsyncJobDelivery {
 	nextAttemptAt: number;
 	lastError?: string;
 	ownerId?: string;
-	producerSecretOwner?: ProducerSecretOwner;
 	/** Keep routing identity alive after the inspection entry expires. */
 	job?: AsyncJob;
 	promise?: Promise<void>;
@@ -208,33 +204,30 @@ export class AsyncJobManager {
 			);
 		}
 
-		const producerSecretOwner = currentProducerSecretOwner();
 		const id = this.#resolveJobId(options?.id);
 		this.#suppressedDeliveries.delete(id);
 		const abortController = new AbortController();
 		const startTime = Date.now();
+
 		const job: AsyncJob = {
 			id,
 			type,
 			status: "running",
 			startTime,
-			label: producerSecretOwner?.redact(label) ?? label,
+			label,
 			abortController,
 			promise: Promise.resolve(),
 			ownerId: options?.ownerId,
 			agentId: options?.agentId,
 			toolCallId: options?.toolCallId,
 			queued: options?.queued === true,
-			producerSecretOwner,
 		};
 
 		const reportProgress = async (text: string, details?: Record<string, unknown>): Promise<void> => {
-			const safeText = producerSecretOwner?.redact(text) ?? text;
-			const safeDetails = producerSecretOwner ? redactDetails(details, producerSecretOwner) : details;
-			if (safeDetails) job.latestDetails = safeDetails;
+			if (details) job.latestDetails = details;
 			if (!options?.onProgress) return;
 			try {
-				await options.onProgress(safeText, safeDetails);
+				await options.onProgress(text, details);
 			} catch (error) {
 				logger.warn("Async job progress callback failed", {
 					jobId: id,
@@ -244,44 +237,32 @@ export class AsyncJobManager {
 		};
 		job.promise = (async () => {
 			try {
-				const text = await (producerSecretOwner
-					? runWithProducerSecretOwner(producerSecretOwner, () =>
-							run({
-								jobId: id,
-								signal: abortController.signal,
-								reportProgress,
-								markRunning: () => {
-									job.queued = false;
-								},
-							}),
-						)
-					: run({
-							jobId: id,
-							signal: abortController.signal,
-							reportProgress,
-							markRunning: () => {
-								job.queued = false;
-							},
-						}));
-				const safeText = producerSecretOwner?.redact(text) ?? text;
+				const text = await run({
+					jobId: id,
+					signal: abortController.signal,
+					reportProgress,
+					markRunning: () => {
+						job.queued = false;
+					},
+				});
 				if (job.status === "cancelled") {
-					job.resultText = safeText;
+					job.resultText = text;
 					this.#scheduleEviction(id);
 					return;
 				}
 				job.status = "completed";
-				job.resultText = safeText;
-				this.#enqueueDelivery(id, safeText);
+				job.resultText = text;
+				this.#enqueueDelivery(id, text);
 				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0 || this.#released.has(id)) {
 					this.#scheduleEviction(id);
 				}
 			} catch (error) {
-				const errorText = producerSecretOwner?.redact(errorMessage(error)) ?? errorMessage(error);
 				if (job.status === "cancelled") {
-					job.errorText = errorText;
+					job.errorText = errorMessage(error);
 					this.#scheduleEviction(id);
 					return;
 				}
+				const errorText = errorMessage(error);
 				job.status = "failed";
 				job.errorText = errorText;
 				this.#enqueueDelivery(id, errorText);
@@ -294,7 +275,6 @@ export class AsyncJobManager {
 		this.#jobs.set(id, job);
 		return id;
 	}
-
 
 	/**
 	 * Cancel a single job by id. When `filter.ownerId` is set and does not
@@ -738,7 +718,6 @@ export class AsyncJobManager {
 			attempt: 0,
 			nextAttemptAt: Date.now(),
 			ownerId: this.#jobs.get(jobId)?.ownerId,
-			producerSecretOwner: this.#jobs.get(jobId)?.producerSecretOwner,
 			job: this.#jobs.get(jobId),
 		});
 		this.#ensureDeliveryLoop();
@@ -789,10 +768,7 @@ export class AsyncJobManager {
 		const promise = (async () => {
 			this.#inFlightDeliveries.push(delivery);
 			try {
-				const operation = () => this.#onJobComplete(delivery.jobId, delivery.text, delivery.job);
-				await (delivery.producerSecretOwner
-					? runWithProducerSecretOwner(delivery.producerSecretOwner, operation)
-					: operation());
+				await this.#onJobComplete(delivery.jobId, delivery.text, delivery.job);
 			} catch (error) {
 				delivery.attempt += 1;
 				delivery.lastError = errorMessage(error);
@@ -850,40 +826,4 @@ function getRetryDelay(attempt: number): number {
 	});
 	const jitterMs = Math.floor(Math.random() * DELIVERY_RETRY_JITTER_MS);
 	return Math.min(DELIVERY_RETRY_MAX_MS, backoffMs + jitterMs);
-}
-function redactDetails(
-	details: Record<string, unknown> | undefined,
-	owner: ProducerSecretOwner,
-): Record<string, unknown> | undefined {
-	if (!details) return details;
-	return redactValue(details, owner, new WeakMap()) as Record<string, unknown>;
-}
-
-function redactValue(value: unknown, owner: ProducerSecretOwner, seen: WeakMap<object, object>): unknown {
-	if (typeof value === "string") return owner.redact(value);
-	if (!value || typeof value !== "object") return value;
-	const prototype = Object.getPrototypeOf(value);
-	if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
-	const prior = seen.get(value);
-	if (prior) return prior;
-	if (Array.isArray(value)) {
-		const result: unknown[] = [];
-		seen.set(value, result);
-		let changed = false;
-		for (const item of value) {
-			const safeItem = redactValue(item, owner, seen);
-			result.push(safeItem);
-			if (safeItem !== item) changed = true;
-		}
-		return changed ? result : value;
-	}
-	const result: Record<string, unknown> = {};
-	seen.set(value, result);
-	let changed = false;
-	for (const [key, item] of Object.entries(value)) {
-		const safeItem = redactValue(item, owner, seen);
-		result[key] = safeItem;
-		if (safeItem !== item) changed = true;
-	}
-	return changed ? result : value;
 }

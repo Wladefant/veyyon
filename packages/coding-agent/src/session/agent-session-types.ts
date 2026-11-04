@@ -26,7 +26,7 @@ import type { Effort } from "@veyyon/catalog/effort";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import type { SessionTitleSource } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import type { postmortem, TelegramDeliveryTraceData } from "@veyyon/utils";
+import type { postmortem } from "@veyyon/utils";
 import type { ArgotSession } from "argot";
 import type { AdvisorConfig, AdvisorContextFile } from "../advisor";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
@@ -287,8 +287,6 @@ export interface AgentSessionConfig {
 	/** Rebuild the SSH tool from current capability discovery results. */
 	reloadSshTool?: () => Promise<AgentTool | null>;
 	requestedToolNames?: ReadonlySet<string>;
-	/** Tool names that are protected from eviction or pruning. */
-	protectedToolNames?: Iterable<string>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
 	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
@@ -445,8 +443,6 @@ export interface PromptOptions {
 	attribution?: MessageAttribution;
 	/** Skip pre-send compaction checks for this prompt (internal use for maintenance flows). */
 	skipCompactionCheck?: boolean;
-	/** Optional Telegram delivery trace metadata */
-	telegramTrace?: TelegramDeliveryTraceData;
 }
 
 /** Options for AgentSession.followUp() */
@@ -457,13 +453,6 @@ export interface FollowUpOptions {
 	expandPromptTemplates?: boolean;
 	/** Explicit billing/initiator attribution. Defaults to `agent` for synthetic follow-ups. */
 	attribution?: MessageAttribution;
-	/** Optional Telegram delivery trace metadata */
-	telegramTrace?: TelegramDeliveryTraceData;
-}
-/** Options for AgentSession.steer() */
-export interface SteerOptions {
-	/** Optional Telegram delivery trace metadata */
-	telegramTrace?: TelegramDeliveryTraceData;
 }
 
 /** Result from a handoff operation. */
@@ -653,7 +642,6 @@ export interface SecretRuntimeLease {
 	/** True when the redaction-only authority still holds live values or tombstones. */
 	readonly hasRedactions: boolean;
 	obfuscateText(text: string): string;
-	pendingRedactionPrefixLength(text: string): number;
 	obfuscateMessages(messages: Message[]): Message[];
 	obfuscateContext(context: Context): Context;
 	obfuscatePayload(payload: unknown): unknown;

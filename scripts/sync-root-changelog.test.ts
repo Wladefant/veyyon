@@ -108,17 +108,15 @@ describe("the root changelog covers every package", () => {
 	});
 
 	/**
-	 * A shared fix recorded by two packages in one release is duplicate noise. The same wording
-	 * under two different release headings is history: keep both occurrences to show when it shipped.
+	 * Merging must not replay the same fix twice. Packages that share a change
+	 * sometimes record identical wording, and a root that listed it once per
+	 * package would read as noise and make the reader distrust the rest.
 	 */
-	it("lists each distinct entry once per release", () => {
+	it("lists each distinct entry once", () => {
 		const md = buildRootChangelog();
-		const releases = md.split(/^## \[/m).slice(1);
-		expect(releases.length).toBeGreaterThan(0);
-		for (const release of releases) {
-			const bullets = release.split("\n").filter(line => line.startsWith("- "));
-			expect(new Set(bullets).size).toBe(bullets.length);
-		}
+		const bullets = md.split("\n").filter(line => line.startsWith("- "));
+		expect(bullets.length).toBeGreaterThan(0);
+		expect(new Set(bullets).size).toBe(bullets.length);
 	});
 
 	/**
