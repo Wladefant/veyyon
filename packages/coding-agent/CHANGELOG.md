@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Config hot reload now includes `github.enabled` in the reloaded whitelist, so disk changes take effect without restart and propagate to child forks, and an explicit tool allowlist cannot bypass a disabled setting (Refs Wladefant/superboard#2203).
 - MCP stdio validates peer request and notification envelopes and preserves valid batch replies after malformed members ([Refs #935](https://github.com/Wladefant/veyyon/issues/935)).
 
 - ACP bash terminal output now withholds environment inventories from previews, final reads, and persisted artifacts ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).

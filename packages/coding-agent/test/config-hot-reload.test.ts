@@ -15,6 +15,7 @@ import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtin
 import type { SlashCommandRuntime } from "../src/slash-commands/types";
 import { resolveAgentModel } from "../src/task/agent-settings";
 import { createSubagentSettingsForCwd } from "../src/task/executor";
+import * as git from "../src/utils/git";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
 
 const dirs = useTrackedTempDirs("config-reload-");
@@ -747,7 +748,9 @@ describe("config hot reload", () => {
 	);
 
 	it("reloads github.enabled from disk, propagates to fork settings, and explicit allowlist cannot bypass disabled state", async () => {
-		const dir = dirs();
+		const ghAvailable = spyOn(git.github, "available").mockReturnValue(true);
+		try {
+			const dir = dirs();
 		const file = path.join(dir, "config.yml");
 		await fs.writeFile(file, "github:\n  enabled: true\n");
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
@@ -794,5 +797,8 @@ describe("config hot reload", () => {
 			["github", "read"],
 		);
 		expect(explicitTools2.some(t => t.name === "github")).toBe(true);
+		} finally {
+			ghAvailable.mockRestore();
+		}
 	});
 });
