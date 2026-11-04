@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP Streamable HTTP rejects malformed or mismatched JSON-RPC replies before accepting results or initialization session identifiers ([Refs #862](https://github.com/Wladefant/veyyon/issues/862)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
