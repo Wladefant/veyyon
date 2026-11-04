@@ -1,0 +1,24 @@
+{
+  "$schema": "workflows/portable/feature_map.schema.json",
+  "version": "1.0.0",
+  "repository": "Wladefant/veyyon",
+  "description": "Feature map for Veyyon coding-agent capabilities.",
+  "features": {
+    "sage-approved-context": {
+      "name": "Sage approved context",
+      "description": "Portable Sage context records with explicit approval, validation, and provider authorization.",
+      "entry_files": [
+        "packages/coding-agent/examples/extensions/sageox.ts",
+        "packages/coding-agent/examples/extensions/team-context.ts",
+        "packages/coding-agent/examples/extensions/team-context-sageox.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/approved-context.test.ts",
+        "packages/coding-agent/test/sageox-handoff.test.ts"
+      ],
+      "owning_issue": "2397",
+      "risk": "high",
+      "components": ["coding-agent", "SageOx"]
+    }
+  }
+}
