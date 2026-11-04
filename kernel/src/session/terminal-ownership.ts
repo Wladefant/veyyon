@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { getConfigRootDir, getWindowsAclTimeoutMs, type OwnerOnlyReadOptions, readOwnerOnlyFile } from "@veyyon/utils";
+import { getConfigRootDir, getWindowsAclTimeoutMs, type OwnerOnlyReadOptions, readOwnerOnlyFile, withOwnerOnlyWindowsAclVerification } from "@veyyon/utils";
 
 /** Windows recycles PIDs fast, so a live pid is not proof: the owner's pipe must answer. */
 async function isEndpointServing(endpoint: string): Promise<boolean> {
@@ -61,6 +61,7 @@ export async function assertNotTerminalOwned(
 	}
 	const resolved = path.resolve(sessionFile);
 	const target = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+	await withOwnerOnlyWindowsAclVerification(async windowsAcl => {
 	for (const file of files) {
 		if (!file.endsWith(".json")) continue;
 		let owner: { version?: unknown; sessionFile?: unknown; pid?: unknown; endpoint?: unknown };
@@ -71,6 +72,7 @@ export async function assertNotTerminalOwned(
 		try {
 			const contents = await readOwnerOnlyFile(record, {
 				...options,
+				windowsAcl,
 				onStep: current => {
 					step = current;
 					options.onStep?.(current);
@@ -106,4 +108,5 @@ export async function assertNotTerminalOwned(
 		if (typeof owner.endpoint === "string" && !(await isEndpointServing(owner.endpoint))) continue;
 		throw new Error("Session is owned by a live terminal; use its authenticated terminal control endpoint");
 	}
+	}, { ...options.windowsAcl, platform: options.platform ?? process.platform });
 }
