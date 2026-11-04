@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { REMOTE_REFRESH_SENTINEL } from "@veyyon/ai";
 import { discoverAuthStorage, resolveAuthBrokerConfig, type SnapshotResponse } from "@veyyon/ai/auth-broker";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { removeWithRetries } from "../../utils/src/temp";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { withEnv } from "./helpers";
@@ -51,7 +52,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 	// a per-test sandbox — otherwise a developer's real ~/.veyyon broker entry
 	// would leak into (or break) these assertions.
 	let suppressEnv: Record<string, string | undefined> = {};
-	let activeStorage: Awaited<ReturnType<typeof discoverAuthStorage>> | undefined;
+	let activeStorage: AuthStorage | undefined;
 	let stopBrokerServer: (() => Promise<void>) | undefined;
 
 	beforeEach(async () => {
