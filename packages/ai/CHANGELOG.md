@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Auth-broker malformed or schema-invalid successful REST JSON replies omit credential-bearing response contents and parser/schema details from protocol errors, preserving status and valid reply handling ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Auth-broker SSE protocol errors omit credential-bearing frame contents and parser/schema details while retaining explicit failure messages ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Auth-broker snapshot clients reject conflicting HTTP 200 ETag and body generations before installing remote broker state, while preserving missing-ETag fallback ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
