@@ -3,6 +3,7 @@
 // This proves runtime scope and context delivery, not a model's decision to follow the context.
 import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs/promises";
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,12 +122,15 @@ test("an ancestor hands a dirty path to its child with a durable runtime receipt
 		paths: [join(canonicalRoot, "owned.txt")],
 		expiresAt,
 	});
+	const contextLease = prompt.split("\n").find(line => line.startsWith("{")) ?? "";
+	expect(JSON.parse(contextLease)).toEqual(lease);
 });
 
 for (const [name, paths, expiry] of [
 	["expired", ["owned.txt"], "2000-01-01T00:00:00.000Z"],
 	["out-of-scope", ["../other-writer.txt"], "2099-01-01T00:00:00.000Z"],
 	["empty", [], "2099-01-01T00:00:00.000Z"],
+	["blank-path", ["   "], "2099-01-01T00:00:00.000Z"],
 	["invalid-expiry", ["owned.txt"], "not-a-date"],
 ] as const) {
 	test(`a ${name} lease cannot authorize a child`, async () => {
@@ -234,7 +238,7 @@ for (const batchEnabled of [false, true]) {
 }
 
 test("a lease that expires during path resolution cannot start its child", async () => {
-	const { root, run, tool } = await fixture();
+	const { run, tool } = await fixture();
 	let clock = Date.now();
 	const expiry = clock + 60_000;
 	const canonicalPath = isolationOwnership.canonicalIsolationPath;
@@ -279,4 +283,24 @@ test("a stale receipt cannot authorize a spawn or be overwritten", async () => {
 	expect(run).not.toHaveBeenCalled();
 	expect(result.isError).toBe(true);
 	expect(JSON.parse(await readFile(receipt, "utf8"))).toEqual(stale);
+});
+
+test("a lease that expires while its receipt is persisted cannot start its child", async () => {
+	const { run, tool } = await fixture();
+	let clock = Date.now();
+	const expiry = clock + 60_000;
+	const persist = fs.writeFile;
+	vi.spyOn(Date, "now").mockImplementation(() => clock);
+	vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+		await persist(file, data, options);
+		if (String(file).endsWith(".ownership-lease.json")) clock = expiry + 1;
+	});
+	const result = await tool.execute("lease-during-persistence", {
+		agent: "task",
+		name: "Child",
+		task: "Continue",
+		ownershipLease: { paths: ["owned.txt"], expiresAt: new Date(expiry).toISOString() },
+	});
+	expect(run).not.toHaveBeenCalled();
+	expect(result.isError).toBe(true);
 });
