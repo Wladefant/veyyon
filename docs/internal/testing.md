@@ -63,6 +63,8 @@ leaving workspace imports such as `@veyyon/catalog/models` unresolved in Linux.
 The manifest's Bun version must be available outside the hidden home, normally at
 `/usr/local/bin/bun`. WSL must also provide Git, sh, and bwrap.
 
+Save the external `.sh` file with LF line endings, not CRLF.
+
 Save this script outside the repository, replacing both example paths:
 
 ```sh
