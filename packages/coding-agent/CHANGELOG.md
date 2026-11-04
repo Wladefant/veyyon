@@ -6,6 +6,31 @@
 
 - Eval console output withholds inventories after bracketed labels and preserves serialized diagnostic strings with later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
 - Eval console output withholds inventories after unmatched label quotes and inside labeled arrays, while preserving array diagnostics and later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
+- JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
+- Reconnected operator-answer inboxes reject stale or unreadable journals before accepting or replaying an answer ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+- JS eval timeout and cancellation withhold incomplete structured environment inventories ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- JS eval timeout, thrown-error and PTY error explanations now follow a withheld incomplete inventory instead of disappearing with it ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- Complete output that prints a RegExp such as `{ pattern: /\{/ }` streams unchanged instead of being withheld as an unfinished structure ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- Error explanations withhold embedded incomplete inventories, and JS eval preserves RegExp output after object or array console arguments ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- Error explanations withhold complete prefixed inventories, and JS eval preserves RegExp output after scalar console arguments ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+- JS eval only treats a top-level RegExp as a console argument when its closing slash and flags end at whitespace or the line boundary ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
+## [1.7.9] - 2026-11-04
+- Config hot reload now includes `github.enabled` in the reloaded whitelist, so disk changes take effect without restart and propagate to child forks, and an explicit tool allowlist cannot bypass a disabled setting (Refs Wladefant/superboard#2203).
+- MCP stdio validates peer request and notification envelopes and preserves valid batch replies after malformed members ([Refs #935](https://github.com/Wladefant/veyyon/issues/935)).
+
+### Fixed
+
+- MCP stdio validates peer request and notification envelopes and preserves valid batch replies after malformed members ([Refs #935](https://github.com/Wladefant/veyyon/issues/935)).
+- ACP bash terminal output now withholds environment inventories from previews, final reads, and persisted artifacts ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
+- ACP bash terminal output withholds a truncated client snapshot whole, because the cut-off start can hold the context that marks the rest as an inventory ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
+
+## [1.7.8] - 2026-11-03
+
+### Fixed
+
+- ACP clients receive each completed external turn once before the next prompt, replay string-content messages, and return cancellation while a disk refresh is pending without starting provider work ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
+- ACP external-turn reconciliation preserves cancelled or failed history delivery, excludes imported usage from prompt totals, and refreshes todo and display projections ([Refs #926](https://github.com/Wladefant/veyyon/pull/926)).
+- ACP rejects unfinished external turns, excludes imported usage during cancelled replay, and acknowledges imported history after a successful full load ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
 
 ## [1.7.7] - 2026-11-02
 

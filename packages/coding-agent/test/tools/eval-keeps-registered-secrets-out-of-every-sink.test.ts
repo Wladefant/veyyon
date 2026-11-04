@@ -16,7 +16,9 @@ import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { makeToolSession } from "../helpers/tool-session";
+import "@veyyon/coding-agent/tools/index";
 
 const CANARY = "synthetic-eval-\n\nregistered-value-6c84f1";
 const obfuscator = new SecretObfuscator([{ type: "plain", origin: "config", content: CANARY, name: "EVAL_CANARY" }]);
@@ -381,5 +383,63 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const output = (result.details as EvalToolDetails).cells?.[0]?.output ?? "";
 		expect(output).toContain('"Expected response { HTTP: 200, RETRY: 1, STATUS: pending }"');
 		expect(output).toContain("completed");
+	});
+
+	it("withholds log and phase inventories from live status, result details, and session entries", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-status-inventory-"));
+		const session = makeSession(path.join(directory, "eval-output.txt"));
+		const progress: AgentToolResult[] = [];
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const inventoryParts = ["ALPHA=fake-a", "BETA=fake-b", "GAMMA=fake-c"];
+		const encodedParts = inventoryParts.map(part => [...part].map(char => char.charCodeAt(0)).join(","));
+		const code = [
+			`const values = [${encodedParts.map(part => `String.fromCharCode(${part})`).join(", ")}];`,
+			`log("safe status"); phase("safe phase");`,
+			`log(values.join("\\n")); phase(values.join("\\n"));`,
+			`log(values[0]); phase(values[1]); log(values[2]);`,
+		].join("\n");
+		const result = await tool.execute(
+			"synthetic-eval-status-call",
+			{
+				language: "js",
+				code,
+				reset: true,
+			},
+			undefined,
+			update => progress.push(update),
+		);
+		const retained = [JSON.stringify(progress), JSON.stringify(result.content), JSON.stringify(result.details)];
+		for (const sink of retained) {
+			for (const sentinel of inventoryParts) expect(sink).not.toContain(sentinel);
+		}
+		expect(result.details?.statusEvents).toEqual([
+			{ op: "log", message: "safe status" },
+			{ op: "phase", title: "safe phase" },
+			{ op: "log", message: "[credential output withheld]" },
+			{ op: "phase", title: "[credential output withheld]" },
+			{ op: "log", message: "[credential output withheld]" },
+			{ op: "phase", title: "[credential output withheld]" },
+			{ op: "log", message: "[credential output withheld]" },
+		]);
+
+		const manager = SessionManager.create(directory, path.join(directory, "sessions"));
+		await manager.ensureOnDisk();
+		manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "synthetic-eval-status-call",
+			toolName: "eval",
+			content: result.content,
+			details: result.details,
+			isError: result.isError ?? false,
+			timestamp: Date.now(),
+		});
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const persisted = fs.readFileSync(sessionFile!, "utf8");
+		for (const sentinel of inventoryParts) expect(persisted).not.toContain(sentinel);
+		const reopened = await SessionManager.open(sessionFile!);
+		const reopenedText = JSON.stringify(reopened.getBranch());
+		for (const sentinel of inventoryParts) expect(reopenedText).not.toContain(sentinel);
 	});
 });

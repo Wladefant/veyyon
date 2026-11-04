@@ -421,7 +421,7 @@ export async function runInteractiveBashPty(
 				)
 				.then(finalize)
 				.catch(error => {
-					sink.push(`PTY error: ${errorMessage(error)}\n`);
+					sink.pushHostText(`PTY error: ${errorMessage(error)}\n`);
 					finalize({ exitCode: undefined, cancelled: false, timedOut: false });
 				});
 			return component;

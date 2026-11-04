@@ -102,6 +102,29 @@ function isInventory(text: string): boolean {
 	return hasInventoryKeys(text);
 }
 
+// util.inspect prints a RegExp bare (`{ pattern: /\{/ }`), so a delimiter it escapes or
+// holds in a class is not structure. Only a value position that closes on its own line
+// counts; any other slash is ordinary text, so a lone path segment cannot hide a brace.
+const REGEX_LITERAL = /\/(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\[])+\/[dgimsuvy]*/y;
+const REGEX_VALUE_START = ":,[{>";
+
+/** Characters after `start` that a RegExp literal opening there covers, or 0. */
+function regexLiteralLength(line: string, start: number, depth: number): number {
+	let previous = start - 1;
+	while (previous >= 0 && (line[previous] === " " || line[previous] === "\t")) previous--;
+	// Console arguments are flattened with spaces, so later RegExp arguments may
+	// follow a scalar or another RegExp; the complete-literal check below still
+	// rejects a lone slash or division operator.
+	const consoleArgument = depth === 0 && previous < start - 1;
+	if (previous >= 0 && !REGEX_VALUE_START.includes(line[previous]) && !consoleArgument) return 0;
+	REGEX_LITERAL.lastIndex = start;
+	const match = REGEX_LITERAL.exec(line);
+	if (!match) return 0;
+	const end = start + match[0].length;
+	if (consoleArgument && end < line.length && line[end] !== " " && line[end] !== "\t") return 0;
+	return match[0].length - 1;
+}
+
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
 export class ProducerOutputGuard {
 	#pending = "";
@@ -138,6 +161,16 @@ export class ProducerOutputGuard {
 		} catch {
 			return BLOCKED_OUTPUT_RECORD;
 		}
+	}
+
+	/** Validate a separate, complete payload without reopening this producer stream. */
+	sanitizeComplete(text: string): string {
+		if (this.sanitize(text) === BLOCKED_OUTPUT_RECORD) return BLOCKED_OUTPUT_RECORD;
+		const guard = new ProducerOutputGuard(
+			value => this.#redact?.(value) ?? value,
+			value => this.#pendingPrefixLength?.(value) ?? 0,
+		);
+		return guard.push(text) + guard.finish();
 	}
 
 	#block(): string {
@@ -199,6 +232,8 @@ export class ProducerOutputGuard {
 						else if (character === this.#quote) this.#quote = "";
 					} else if (isQuote(character)) {
 						this.#quote = character;
+					} else if (character === "/") {
+						index += regexLiteralLength(line, index, this.#depth);
 					} else if (character === "{" || character === "[") {
 						this.#depth++;
 					} else if (character === "}" || character === "]") {
@@ -283,6 +318,7 @@ export class ProducerOutputGuard {
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#dropping = false;
+		if (!this.#withholding && this.#structured && this.#depth > 0) return text + this.#block();
 		const output = text + (this.#withholding ? "" : this.#flushCandidate());
 		if (pendingPrefix > 0) this.#withholding = true;
 		return output;
