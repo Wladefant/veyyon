@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Withhold unattributable kernel stderr bytes instead of logging raw ownerless chunks ([Refs #941](https://github.com/Wladefant/veyyon/issues/941)).
 - JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
 - Reconnected operator-answer inboxes reject stale or unreadable journals before accepting or replaying an answer ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 - JS eval timeout and cancellation withhold incomplete structured environment inventories ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
