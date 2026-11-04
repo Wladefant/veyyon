@@ -337,6 +337,29 @@ describe("MCP persistent HTTP SSE frame validation", () => {
 		});
 	}, 15_000);
 
+	// Oversized valid requests cannot disappear while the connection remains
+	// healthy. Closing with a static error accounts for the rejected batch
+	// without starting one callback or response POST for every request.
+	it.each([257, 300])("fails the transport for an oversized batch of %i valid requests", async count => {
+		await withLiveSSE([], async (transport, sendFrame) => {
+			const closed = Promise.withResolvers<void>();
+			const errors: string[] = [];
+			let requests = 0;
+			transport.onClose = closed.resolve;
+			transport.onError = error => errors.push(error.message);
+			transport.onRequest = async () => {
+				requests++;
+				return { roots: [] };
+			};
+			await bounded(transport.startSSEListener(), "oversized request fixture GET");
+			sendFrame(Array.from({ length: count }, (_, id) => ({ jsonrpc: "2.0", id, method: "roots/list" })));
+			await bounded(closed.promise, "explicit oversized batch transport failure");
+			expect(errors).toEqual(["MCP HTTP SSE batch exceeds the 256-member limit"]);
+			expect(transport.connected).toBe(false);
+			expect(requests).toBe(0);
+		});
+	}, 15_000);
+
 	// Reject an oversized frame as a whole, including valid messages inside
 	// that frame, while keeping the immediately adjacent legal-size frame
 	// and a later event usable on the exact same open connection.
