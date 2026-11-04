@@ -90,11 +90,10 @@ describe("owner-only Windows ACL helpers", () => {
 		const child = createFakeChild();
 		const fake = createFakeSpawn(child);
 		const operation = verifyOwnerOnlyWindowsAcl("C:\\safe", { platform: "win32", spawn: fake.spawn });
-		const rejected = expect(operation).rejects.toThrow(/timed out/);
 		vi.advanceTimersByTime(deadline - 1);
 		expect(child.killCalls).toBe(0);
 		vi.advanceTimersByTime(1);
-		await rejected;
+		await expect(operation).rejects.toThrow(/timed out/);
 		expect(child.killCalls).toBe(1);
 	});
 
