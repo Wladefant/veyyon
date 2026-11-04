@@ -275,7 +275,7 @@ async function openBrokerStorage(
 	});
 	return new AuthStorage(store, {
 		configValueResolver: options.configValueResolver,
-		sourceLabel: options.sourceLabel ?? `broker ${brokerConfig.url}`,
+		sourceLabel: options.sourceLabel ?? "remote broker",
 		loadBalancing: options.loadBalancing,
 	});
 }
