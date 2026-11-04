@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { REMOTE_REFRESH_SENTINEL } from "@veyyon/ai";
@@ -11,33 +11,34 @@ import { withEnv } from "./helpers";
 
 type LoopbackHandler = (request: IncomingMessage, response: ServerResponse) => void;
 
+async function closeLoopbackServer(server: Server): Promise<void> {
+	const closed = Promise.withResolvers<void>();
+	server.close(error => (error ? closed.reject(error) : closed.resolve()));
+	return closed.promise;
+}
+
 async function startLoopbackServer(
 	handler: LoopbackHandler,
 ): Promise<{ url: string; close: () => Promise<void> }> {
 	const server = createServer(handler);
-	await new Promise<void>((resolve, reject) => {
-		const onError = (error: Error) => reject(error);
-		server.once("error", onError);
-		server.listen(0, "127.0.0.1", () => {
-			server.off("error", onError);
-			resolve();
-		});
+	const listening = Promise.withResolvers<void>();
+	const onError = (error: Error) => listening.reject(error);
+	server.once("error", onError);
+	server.listen(0, "127.0.0.1", () => {
+		server.off("error", onError);
+		listening.resolve();
 	});
+	await listening.promise;
 
 	const address = server.address();
 	if (!address || typeof address === "string") {
-		await new Promise<void>((resolve, reject) => {
-			server.close(error => (error ? reject(error) : resolve()));
-		});
+		await closeLoopbackServer(server);
 		throw new Error("expected loopback server address");
 	}
 
 	return {
 		url: `http://127.0.0.1:${address.port}`,
-		close: () =>
-			new Promise<void>((resolve, reject) => {
-				server.close(error => (error ? reject(error) : resolve()));
-			}),
+		close: () => closeLoopbackServer(server),
 	};
 }
 
