@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -63,6 +63,77 @@ describe("auth-broker snapshot cache", () => {
 				now: () => 1_001_000,
 			});
 			expect(decoded).toEqual(snapshot);
+		});
+	});
+
+
+	test("publishes the latest full snapshot even when an older AES write is delayed", async () => {
+		await withCachePath(async cachePath => {
+			const old = makeSnapshot(1_000_000);
+			const latest: SnapshotResponse = { ...old, generation: 8, credentials: [] };
+			const otherPath = path.join(path.dirname(cachePath), "other.enc");
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const nativeEncrypt = globalThis.crypto.subtle.encrypt.bind(globalThis.crypto.subtle);
+			let encryptions = 0;
+			const spy = spyOn(globalThis.crypto.subtle, "encrypt").mockImplementation(async (algorithm, key, bytes) => {
+				if (++encryptions === 1) {
+					started.resolve();
+					await release.promise;
+				}
+				return nativeEncrypt(algorithm, key, bytes);
+			});
+			const first = writeAuthBrokerSnapshotCache({ path: cachePath, token: TOKEN, url: URL, snapshot: old });
+			let second: Promise<void> | undefined;
+			let unrelated: Promise<void> | undefined;
+			try {
+				await started.promise;
+				second = writeAuthBrokerSnapshotCache({ path: cachePath, token: TOKEN, url: URL, snapshot: latest });
+				unrelated = writeAuthBrokerSnapshotCache({ path: otherPath, token: TOKEN, url: URL, snapshot: latest });
+				await unrelated;
+				// The second same-path encryption cannot start until the first
+				// finishes; an independent cache path must not share its queue.
+				expect(encryptions).toBe(2);
+				release.resolve();
+				await Promise.all([first, second]);
+				expect(await readAuthBrokerSnapshotCache({
+					path: cachePath, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
+				})).toEqual(latest);
+				expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o600);
+				expect(new TextDecoder().decode(await fs.readFile(cachePath))).not.toContain("secret-api-key");
+				expect(await readAuthBrokerSnapshotCache({
+					path: otherPath, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
+				})).toEqual(latest);
+			} finally {
+				release.resolve();
+				await Promise.allSettled([first, ...(second ? [second] : []), ...(unrelated ? [unrelated] : [])]);
+				spy.mockRestore();
+			}
+		});
+	});
+
+	test("a failed cache encryption does not poison the next accepted snapshot write", async () => {
+		await withCachePath(async cachePath => {
+			const old = makeSnapshot(1_000_000);
+			const latest: SnapshotResponse = { ...old, generation: 9, credentials: [] };
+			const nativeEncrypt = globalThis.crypto.subtle.encrypt.bind(globalThis.crypto.subtle);
+			let calls = 0;
+			const spy = spyOn(globalThis.crypto.subtle, "encrypt").mockImplementation(async (algorithm, key, bytes) => {
+				if (++calls === 1) throw new Error("synthetic encryption failure");
+				return nativeEncrypt(algorithm, key, bytes);
+			});
+			try {
+				const failed = writeAuthBrokerSnapshotCache({ path: cachePath, token: TOKEN, url: URL, snapshot: old });
+				const next = writeAuthBrokerSnapshotCache({ path: cachePath, token: TOKEN, url: URL, snapshot: latest });
+				await expect(failed).rejects.toThrow("synthetic encryption failure");
+				await next;
+				expect(await readAuthBrokerSnapshotCache({
+					path: cachePath, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
+				})).toEqual(latest);
+				expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o600);
+			} finally {
+				spy.mockRestore();
+			}
 		});
 	});
 

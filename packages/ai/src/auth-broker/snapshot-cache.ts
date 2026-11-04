@@ -23,6 +23,9 @@ const AES_ALGORITHM = "AES-GCM";
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
 
+/** FIFO per target path, before encryption/rename: the atomic writer alone cannot order snapshots. */
+const pendingCacheWrites = new Map<string, Promise<void>>();
+
 export interface ReadAuthBrokerSnapshotCacheOptions {
 	path: string;
 	token: string;
@@ -93,9 +96,23 @@ export async function readAuthBrokerSnapshotCache(
 	}
 }
 
-export async function writeAuthBrokerSnapshotCache(opts: WriteAuthBrokerSnapshotCacheOptions): Promise<void> {
-	const payload = await encryptCachePayload(opts.snapshot, opts.token, opts.url);
-	await atomicWriteFile(opts.path, payload, { mode: 0o600 });
+/**
+ * Accepted full snapshots must publish in call order. This queue covers a
+ * single process and cache path, not simultaneous writes from other processes.
+ */
+export function writeAuthBrokerSnapshotCache(opts: WriteAuthBrokerSnapshotCacheOptions): Promise<void> {
+	const preceding = pendingCacheWrites.get(opts.path);
+	const write = async (): Promise<void> => {
+		const payload = await encryptCachePayload(opts.snapshot, opts.token, opts.url);
+		await atomicWriteFile(opts.path, payload, { mode: 0o600 });
+	};
+	const pending = preceding ? preceding.then(write, write) : write();
+	pendingCacheWrites.set(opts.path, pending);
+	const clear = (): void => {
+		if (pendingCacheWrites.get(opts.path) === pending) pendingCacheWrites.delete(opts.path);
+	};
+	void pending.then(clear, clear);
+	return pending;
 }
 
 async function encryptCachePayload(snapshot: SnapshotResponse, token: string, url: string): Promise<Uint8Array> {

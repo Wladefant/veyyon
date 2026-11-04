@@ -13,6 +13,8 @@ Transport security between operator, broker, and gateway is delegated to the ope
 
 Source: `packages/ai/src/auth-broker/`, `packages/ai/src/auth-gateway/`, `packages/coding-agent/src/cli/auth-broker-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-cli.ts`, `packages/coding-agent/src/session/auth-broker-config.ts`.
 
+**Full-snapshot encrypted cache publication (in-process).** `writeAuthBrokerSnapshotCache` sequences each target cache path by invocation time, before AES-GCM encryption and atomic rename. A delayed older full snapshot can no longer replace a newer accepted one within the same process; failed writes release the queue and other cache paths are independent. This preserves encrypted format, mode `0600`, broker token/URL binding, offline TTL and broker-only OAuth refresh. Separate processes can still race, incremental SSE-only changes are not made durable, and cross-host clock skew is not resolved.
+
 ## Data flow
 
 ```

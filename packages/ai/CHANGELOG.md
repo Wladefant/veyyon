@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Serialize in-process encrypted auth-broker full-snapshot cache writes by path to prevent an older delayed write from replacing newer broker state, and continue after failed writes ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Explicit remote auth-broker snapshot refresh rejects an unexpected unconditional HTTP 304 rather than reporting its cached credential view as a successful refresh ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Auth-broker malformed or schema-invalid successful REST JSON replies omit credential-bearing response contents and parser/schema details from protocol errors, preserving status and valid reply handling ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Auth-broker SSE protocol errors omit credential-bearing frame contents and parser/schema details while retaining explicit failure messages ([#602](https://github.com/Wladefant/veyyon/issues/602)).
