@@ -127,7 +127,7 @@ export class AuthBrokerClient {
 			if (sse.event === null && sse.data === "") continue; // keepalive comment frames
 			const event = parseStreamEvent(sse.data);
 			if (!sawFirstEvent && event.kind !== "snapshot") {
-				throw new AuthBrokerError("Auth broker stream did not start with snapshot", { body: sse.data });
+				throw new AuthBrokerError("Auth broker stream did not start with snapshot");
 			}
 			sawFirstEvent = true;
 			yield event;
@@ -358,14 +358,16 @@ function parseStreamEvent(data: string): SnapshotStreamEvent {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(data);
-	} catch (err) {
-		throw new AuthBrokerError("Auth broker stream returned malformed JSON", { body: data, cause: err });
+	} catch {
+		// JSON parse errors may quote credential-bearing input fragments.
+		throw new AuthBrokerError("Auth broker stream returned malformed JSON");
 	}
-	return validateWire<SnapshotStreamEvent>(
-		wireSchemas().snapshotStreamEventSchema,
-		parsed,
-		"Auth broker stream event failed schema validation",
-	);
+	const event = wireSchemas().snapshotStreamEventSchema(parsed);
+	if (event instanceof type.errors) {
+		// Schema error summaries may echo rejected access-token or key values.
+		throw new AuthBrokerError("Auth broker stream event failed schema validation");
+	}
+	return event as SnapshotStreamEvent;
 }
 
 function parseJson(text: string, status: number): unknown {
