@@ -2783,7 +2783,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			client,
 			initialSnapshot: before,
 			streamSnapshots: false,
-			onSnapshot: () => { callbacks += 1; },
+			onSnapshot: () => {
+				callbacks += 1;
+			},
 		});
 		await expect(remote.refreshSnapshot()).rejects.toThrow(
 			"Unconditional broker snapshot verification returned no snapshot",
