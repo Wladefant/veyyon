@@ -5,6 +5,7 @@
 ### Fixed
 
 - JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
+- Reconnected operator-answer inboxes reject stale or unreadable journals before accepting or replaying an answer ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 ## [1.7.9] - 2026-11-04
 
 ### Fixed
