@@ -5,6 +5,7 @@
 ### Fixed
 
 - JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
+- Kernel IPC tracing logs request length instead of payload content ([Refs #943](https://github.com/Wladefant/veyyon/issues/943)).
 - Reconnected operator-answer inboxes reject stale or unreadable journals before accepting or replaying an answer ([#705](https://github.com/Wladefant/veyyon/issues/705)).
 - JS eval timeout and cancellation withhold incomplete structured environment inventories ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 - JS eval timeout, thrown-error and PTY error explanations now follow a withheld incomplete inventory instead of disappearing with it ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).

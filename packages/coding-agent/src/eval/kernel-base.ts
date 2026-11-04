@@ -947,7 +947,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			throw new Error(`${this.#options.languageName} kernel stdin is not open`);
 		}
 		if (this.#options.traceIpc) {
-			logger.debug(`${this.#options.languageName}Kernel send`, { preview: line.slice(0, 120) });
+			logger.debug(`${this.#options.languageName}Kernel send`, { characters: line.length });
 		}
 		this.#stdin.write(`${line}\n`);
 		// Execution cancellation must not wait for pipe backpressure to clear.
