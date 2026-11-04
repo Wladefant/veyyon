@@ -144,7 +144,12 @@ export function writeAuthBrokerSnapshotCache(opts: WriteAuthBrokerSnapshotCacheO
 	try {
 		// Resolve synchronously before registration: asynchronous key lookups can
 		// themselves reorder two calls while an older encryption is in flight.
-		targetKey = cacheWriteTargetKey(opts.path);
+		// Case variants of a not-yet-created basename can be the same file on
+		// case-insensitive NTFS/APFS. Fold the canonical queue identity before
+		// admission so a delayed older snapshot cannot publish after revocation.
+		// On case-sensitive volumes this conservatively serializes case-only
+		// distinct paths; it does not alter the path passed to the writer.
+		targetKey = cacheWriteTargetKey(opts.path).toLowerCase();
 	} catch (error) {
 		return Promise.reject(error);
 	}
