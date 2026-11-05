@@ -189,6 +189,55 @@ describe("a response body its schema rejects", () => {
 	});
 });
 
+describe("credential-bearing successful REST JSON parse failures", () => {
+	// A disposable, visibly synthetic value: neither a real account nor a credential-store access.
+	const marker = "SYNTHETIC_ONLY_BROKER_REST_602_NOT_A_REAL_KEY";
+	test.each([
+		{
+			name: "malformed HTTP 200 JSON",
+			body: `{"access_token":"${marker}",`,
+			message: "Auth broker returned malformed JSON",
+		},
+		{
+			name: "schema-invalid HTTP 200 JSON",
+			body: JSON.stringify({ generation: marker, credentials: [{ access_token: marker }] }),
+			message: "Auth broker response failed schema validation",
+		},
+	])("does not retain $name on an error object", async ({ body, message }) => {
+		const broker = fakeBroker(() => new Response(body, { status: 200, headers: { "content-type": "application/json" } }));
+		const error = await rejection(brokerClient(broker.fetchImpl).fetchSnapshot());
+		expect(error.message).toBe(message);
+		expect(error.status).toBe(200);
+		expect(error.body).toBeUndefined();
+		expect(error.cause).toBeUndefined();
+		expect(JSON.stringify(error)).not.toContain(marker);
+		expect(broker.requests).toEqual(["GET /v1/snapshot"]);
+	});
+});
+
+describe("the full snapshot generation header", () => {
+	const { kind: _kind, ...snapshot } = SNAPSHOT_EVENT;
+
+	test("rejects a schema-valid snapshot whose strong ETag names a different generation", async () => {
+		const broker = fakeBroker(() => Response.json(snapshot, { headers: { etag: '"2"' } }));
+		const error = await rejection(brokerClient(broker.fetchImpl).fetchSnapshot());
+		expect(error.message).toBe("Auth broker snapshot ETag generation disagrees with response body");
+		expect(broker.requests).toEqual(["GET /v1/snapshot"]);
+	});
+
+	test.each([
+		{ name: "matching strong ETag", etag: '"1"' },
+		{ name: "absent ETag", etag: undefined },
+	])("accepts a $name and returns the body generation", async ({ etag }) => {
+		const broker = fakeBroker(() => Response.json(snapshot, {
+			headers: etag === undefined ? {} : { etag },
+		}));
+		const result = await brokerClient(broker.fetchImpl).fetchSnapshot();
+		expect(result).toEqual({ status: 200, generation: snapshot.generation, snapshot });
+		expect(broker.requests).toEqual(["GET /v1/snapshot"]);
+	});
+});
+
 describe("a long poll", () => {
 	afterEach(() => {
 		vi.useRealTimers();
@@ -259,6 +308,45 @@ describe("the snapshot stream", () => {
 		const result = await drain(brokerClient(broker.fetchImpl).openSnapshotStream());
 		expect(result.events).toEqual(events);
 		expect(result.error.message).toBe(message);
+		expect(broker.requests).toEqual(["GET /v1/snapshot/stream"]);
+	});
+
+	const syntheticCredentialMarker = "SYNTHETIC_ONLY_BROKER_SSE_602_NOT_A_REAL_KEY";
+	test.each([
+		{
+			name: "a credential-bearing entry before the initial snapshot",
+			frames: [dataFrame({
+				kind: "entry",
+				generation: 2,
+				serverNowMs: 0,
+				refresher: REFRESHER,
+				entry: {
+					id: 7,
+					provider: "synthetic",
+					credential: { type: "api_key", key: syntheticCredentialMarker },
+					identityKey: null,
+					rotatesInMs: null,
+				},
+			})],
+			message: "Auth broker stream did not start with snapshot",
+		},
+		{
+			name: "malformed JSON containing a credential marker",
+			frames: [dataFrame(SNAPSHOT_EVENT), `data: {"access":"${syntheticCredentialMarker}"\n\n`],
+			message: "Auth broker stream returned malformed JSON",
+		},
+		{
+			name: "a schema-invalid event with a credential marker",
+			frames: [dataFrame(SNAPSHOT_EVENT), dataFrame({ ...REMOVED_EVENT, id: syntheticCredentialMarker })],
+			message: "Auth broker stream event failed schema validation",
+		},
+	])("does not expose payload contents on $name", async ({ frames, message }) => {
+		const broker = fakeBroker(() => sse(...frames));
+		const { error } = await drain(brokerClient(broker.fetchImpl).openSnapshotStream());
+		expect(error.message).toBe(message);
+		expect(error.body).toBeUndefined();
+		expect(error.cause).toBeUndefined();
+		expect(JSON.stringify(error)).not.toContain(syntheticCredentialMarker);
 		expect(broker.requests).toEqual(["GET /v1/snapshot/stream"]);
 	});
 

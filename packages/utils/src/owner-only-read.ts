@@ -1,7 +1,7 @@
 /**
  * Reads of discovery records: small JSON files a process publishes under the config root so a peer can
  * find a live session or terminal. A record counts as evidence only when the current user wrote it.
- * A reader refuses any record another user could have written or can read, before it parses one.
+ * Readers refuse unsafe records before using their content as ownership or non-ownership evidence.
  *
  * WHY: a record that is broadly readable or writable is not proof of ownership. Another local user can
  * plant one (a live pid, a socket path that answers), and a reader that trusts it refuses a session it
@@ -127,6 +127,19 @@ function assertSameFile(filePath: string, checked: fs.Stats, opened: fs.Stats): 
 	}
 }
 
+/** Keep the discovery-record limit even when a publisher grows the file after stat. */
+async function readBoundedRecord(filePath: string, handle: fsp.FileHandle): Promise<string> {
+	const buffer = Buffer.allocUnsafe(MAX_DISCOVERY_RECORD_BYTES + 1);
+	let length = 0;
+	while (length < buffer.length) {
+		const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+		if (bytesRead === 0) break;
+		length += bytesRead;
+	}
+	if (length > MAX_DISCOVERY_RECORD_BYTES) throw refuse(filePath, "larger than a discovery record");
+	return buffer.toString("utf8", 0, length);
+}
+
 /**
  * Read a discovery record that only the current user can have written. Rejects, and returns no content,
  * when the record is refused. A missing file rejects with its `ENOENT` error, as a plain read does.
@@ -152,7 +165,7 @@ export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyRead
 			options.onStep?.("identity");
 			assertSameFile(filePath, await fsp.lstat(filePath), opened);
 			options.onStep?.("read");
-			return await handle.readFile({ encoding: "utf8" });
+			return await readBoundedRecord(filePath, handle);
 		} finally {
 			await handle.close();
 		}
@@ -166,7 +179,7 @@ export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyRead
 		options.onStep?.("stat");
 		assertRecordStats(filePath, await handle.stat(), platform);
 		options.onStep?.("read");
-		return await handle.readFile({ encoding: "utf8" });
+		return await readBoundedRecord(filePath, handle);
 	} finally {
 		await handle.close();
 	}

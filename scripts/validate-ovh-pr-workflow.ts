@@ -31,6 +31,7 @@ interface Workflow {
 		workflow_dispatch?: { inputs: Record<string, unknown> };
 		push?: unknown;
 	};
+	concurrency?: { group: string; "cancel-in-progress": string };
 	jobs: Record<string, Job>;
 }
 
@@ -85,6 +86,8 @@ function context({
 	workflowChanged = "true",
 	installed = "success",
 	native = false,
+	headRef = "feature/example",
+	ref = "refs/heads/main",
 	nativeReady = "false",
 }: {
 	event?: string;
@@ -99,6 +102,8 @@ function context({
 	workflowChanged?: string;
 	installed?: string;
 	native?: boolean;
+	headRef?: string;
+	ref?: string;
 	nativeReady?: string;
 } = {}): Record<string, unknown> {
 	return {
@@ -109,14 +114,15 @@ function context({
 			workflow_sha: workflowCommit,
 			run_id: "12345",
 			run_attempt: "1",
-			ref: "refs/heads/main",
+			ref,
+			ref_name: ref.replace(/^refs\/heads\//, ""),
 			workflow: "OVH CI",
 			event:
 				event === "pull_request"
 					? {
 							pull_request: {
 								draft,
-								head: { sha: head, repo: { full_name: fork ? "fork/veyyon" : repository } },
+								head: { sha: head, ref: headRef, repo: { full_name: fork ? "fork/veyyon" : repository } },
 								base: { sha: base },
 							},
 						}
@@ -138,6 +144,9 @@ function context({
 			install: { outcome: installed },
 			native: { outputs: { native_ready: nativeReady } },
 		},
+		startsWith: (value: string, prefix: string) => value?.startsWith(prefix) ?? false,
+		format: (pattern: string, ...values: string[]) =>
+			pattern.replace(/\{(\d+)\}/g, (_, index: string) => values[Number(index)] ?? ""),
 	};
 }
 
@@ -157,6 +166,23 @@ function validate(workflow: Workflow): void {
 		]);
 		equal(workflow.on.push, undefined);
 		equal(typeof workflow.on.workflow_dispatch?.inputs, "object");
+	});
+
+	check("only superseded tmp runs cancel on the same source ref", () => {
+		const tmpPr = context({ headRef: "tmp/branch", ref: "refs/pull/123/merge" });
+		const nextTmpPr = context({ headRef: "tmp/branch", ref: "refs/pull/123/merge" });
+		const anotherTmpPr = context({ headRef: "tmp/other", ref: "refs/pull/124/merge" });
+		const normalPr = context({ headRef: "feature/example", ref: "refs/pull/125/merge" });
+		const tmpDispatch = context({ event: "workflow_dispatch", ref: "refs/heads/tmp/branch", target: head });
+		const normalDispatch = context({ event: "workflow_dispatch", target: head });
+		equal(evaluate(workflow.concurrency?.group, tmpPr), evaluate(workflow.concurrency?.group, nextTmpPr));
+		equal(evaluate(workflow.concurrency?.group, tmpPr), evaluate(workflow.concurrency?.group, tmpDispatch));
+		equal(evaluate(workflow.concurrency?.group, tmpPr) === evaluate(workflow.concurrency?.group, anotherTmpPr), false);
+		equal(evaluate(workflow.concurrency?.group, normalDispatch), `OVH CI-${head}`);
+		equal(evaluate(workflow.concurrency?.["cancel-in-progress"], tmpPr), true);
+		equal(evaluate(workflow.concurrency?.["cancel-in-progress"], tmpDispatch), true);
+		equal(evaluate(workflow.concurrency?.["cancel-in-progress"], normalPr), false);
+		equal(evaluate(workflow.concurrency?.["cancel-in-progress"], normalDispatch), false);
 	});
 
 	check("draft allocates no job even after admission is activated", () => {

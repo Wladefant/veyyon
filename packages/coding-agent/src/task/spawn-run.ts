@@ -43,6 +43,7 @@ import {
 import { generateTaskName } from "./name-generator";
 import { classifyAgentOutcome } from "./outcome";
 import { AgentOutputManager } from "./output-manager";
+import { createOwnershipLease, type OwnershipLease } from "./ownership-lease";
 import {
 	claimSuccessorCheckpoint,
 	type SuccessorCheckpoint,
@@ -107,11 +108,13 @@ export function renderAgentUserPrompt(
 	assignment: string,
 	parentAgentId?: string,
 	checkpoint?: SuccessorCheckpoint,
+	ownershipLease?: OwnershipLease,
 ): string {
 	return prompt.render(agentPrompts["agent/user-prompt"].text, {
 		assignment: assignment.trim(),
 		parentAgentId,
 		checkpoint: checkpoint ? JSON.stringify(checkpoint) : undefined,
+		ownershipLease: ownershipLease ? JSON.stringify(ownershipLease) : undefined,
 	});
 }
 
@@ -185,7 +188,9 @@ export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string
 	// This adds no new reach an absolute path did not already allow.
 	const resolved = inherited
 		? parentCwd
-		: path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(parentCwd, trimmed);
+		: path.isAbsolute(trimmed)
+			? path.resolve(trimmed)
+			: path.resolve(parentCwd, trimmed);
 	try {
 		const st = await fs.stat(resolved);
 		if (!st.isDirectory()) {
@@ -195,9 +200,8 @@ export async function resolveSpawnCwd(raw: string | undefined, parentCwd: string
 		if (err instanceof Error && err.message.startsWith("task cwd")) throw err;
 		// Name the relative input and what it resolved against, so a wrong parent
 		// cwd is diagnosable instead of showing only the joined absolute path.
-		const context = inherited || path.isAbsolute(trimmed)
-			? ""
-			: ` (resolved from relative "${trimmed}" against ${parentCwd})`;
+		const context =
+			inherited || path.isAbsolute(trimmed) ? "" : ` (resolved from relative "${trimmed}" against ${parentCwd})`;
 		throw new Error(`task cwd does not exist: ${resolved}${context}`);
 	}
 	if (!(await directoryExists(resolved))) {
@@ -327,6 +331,13 @@ async function prepareSpawn(
 
 	let isolation: SpawnIsolation | null = null;
 	if (isolationMode !== "none" && params.isolated === true) {
+		if (params.ownershipLease) {
+			return spawnRefusal(
+				"ownership-lease: isolated spawns cannot inherit dirty-path ownership",
+				projectAgentsDir,
+				0,
+			);
+		}
 		try {
 			isolation = {
 				mode: isolationMode,
@@ -565,6 +576,24 @@ async function runPreparedSpawn(
 	} catch (err) {
 		return spawnRefusal(errorMessage(err), projectAgentsDir, Date.now() - startTime);
 	}
+	let ownershipLease: OwnershipLease | undefined;
+	if (params.ownershipLease) {
+		try {
+			ownershipLease = await createOwnershipLease(
+				params.ownershipLease,
+				session.getAgentId?.() ?? MAIN_AGENT_ID,
+				agentId,
+				spawnCwd,
+			);
+			await fs.writeFile(
+				path.join(spawn.artifacts.dir, `${encodeURIComponent(agentId)}.ownership-lease.json`),
+				`${JSON.stringify(ownershipLease, null, 2)}\n`,
+				{ flag: "wx", mode: 0o600 },
+			);
+		} catch (err) {
+			return spawnRefusal(`ownership-lease: ${errorMessage(err)}`, projectAgentsDir, Date.now() - startTime);
+		}
+	}
 
 	const options: ExecutorOptions = {
 		...parentRunOptions(session, parentApprovalBypassed),
@@ -572,7 +601,7 @@ async function runPreparedSpawn(
 		...inheritSpawnLayers(session, spawnCwd, spawn.agentName, spawn.agent.autoloadSkills),
 		cwd: spawnCwd,
 		agent: spawn.runAgent,
-		task: renderAgentUserPrompt(assignment, session.getAgentId?.() ?? MAIN_AGENT_ID),
+		task: renderAgentUserPrompt(assignment, session.getAgentId?.() ?? MAIN_AGENT_ID, undefined, ownershipLease),
 		assignment,
 		context: session.settings.get("agent.batch") ? params.context?.trim() || undefined : undefined,
 		planReference: spawn.planReference,
@@ -626,7 +655,14 @@ async function runPreparedSpawn(
 			);
 		}
 		checkpoint = await claimSuccessorCheckpoint(spawn.artifacts.dir, params.successorOf, agentId, workflow);
-		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint);
+		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint, ownershipLease);
+	}
+	if (ownershipLease && Date.parse(ownershipLease.expiresAt) <= Date.now()) {
+		return spawnRefusal(
+			"ownership-lease: lease expired before child execution",
+			projectAgentsDir,
+			Date.now() - startTime,
+		);
 	}
 	let result: SingleResult;
 	let mergeSummary = "";
