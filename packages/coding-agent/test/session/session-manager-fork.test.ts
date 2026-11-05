@@ -1917,6 +1917,75 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       }
     }
   });
+
+  it("reports both failures when the rejected fork cannot repair its original journal", async () => {
+    using temp = TempDir.createSync("@veyyon-agent-fork-double-refusal-");
+    const storage = new SyntheticForkJsonlRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
+    let session: AgentSession | undefined;
+    try {
+      manager.appendMessage({
+        role: "user", content: "Original history survives both failures", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const originalFile = manager.getSessionFile();
+      if (!originalFile) throw new Error("expected persisted source");
+      const originalId = manager.getSessionId();
+
+      const agent = new Agent({
+        initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
+      });
+      session = new AgentSession({
+        agent,
+        sessionManager: manager,
+        settings: Settings.isolated({ "async.enabled": false }),
+        modelRegistry: new ModelRegistry(authStorage, path.join(temp.path(), "models.yml")),
+      });
+      const providerId = agent.sessionId;
+      storage.protectedSourceFile = originalFile;
+      storage.rejectNewSession = true;
+      storage.rejectSourceRepair = true;
+      let failure: unknown;
+      try {
+        await session.fork();
+      } catch (error) {
+        failure = error;
+      }
+      // Never silently claim a safe rollback when the repair itself failed.
+      expect(failure).toBeInstanceOf(AggregateError);
+      const errors = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(errors.some(error => error.includes("synthetic new fork JSONL publication refusal"))).toBe(true);
+      expect(errors.some(error => error.includes("synthetic original-source rollback refusal"))).toBe(true);
+      expect(manager.getSessionId()).toBe(originalId);
+      expect(manager.getSessionFile()).toBe(originalFile);
+      expect(agent.sessionId).toBe(providerId);
+
+      // The active source must be repaired before it is treated as reloadable.
+      // This is explicit recovery after the caller observed the aggregate error.
+      storage.rejectSourceRepair = false;
+      storage.rejectNewSession = false;
+      await manager.flush();
+      const repaired = await loadEntriesFromFile(originalFile);
+      expect(repaired.some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+      expect(repaired.some(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content === "Original history survives both failures"
+      )).toBe(true);
+    } finally {
+      storage.rejectNewSession = false;
+      storage.rejectSourceRepair = false;
+      try { await session?.dispose(); } finally {
+        authStorage.close();
+        if (!session) await manager.close();
+      }
+    }
+  });
 });
 
 describe("AgentSession fork pre-switch writer-close failure", () => {
