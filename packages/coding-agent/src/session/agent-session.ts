@@ -5224,18 +5224,20 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		// identity, while this agent still routes requests and memory on the old one.
 		// Restore the last durable transcript instead of leaving a split identity.
 		const beforeFork = this.sessionManager.captureState();
-		const forkResult = await this.sessionManager.fork().catch((error: unknown) => {
+		const forkResult = await this.sessionManager.fork().catch(async (error: unknown) => {
 			if (
 				this.sessionManager.getSessionId() !== beforeFork.sessionId ||
 				this.sessionManager.getSessionFile() !== beforeFork.sessionFile
 			) {
 				try {
-					// The failed fork abandoned its published-file layout. The next
-					// persistence operation must revalidate the original file, including
-					// any foreign writer's tail, before writing to it again.
+					// The failed fork abandoned its published-file layout. Revalidate
+					// the source, including any genuine foreign writer's tail, then
+					// durably remove our own aborted session_switched before rejecting.
+					// A restart must not require an extra caller-initiated flush.
 					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
+					await this.sessionManager.flush();
 				} catch (restoreError) {
-					throw new AggregateError([error, restoreError], "Fork failed and could not restore its original session");
+					throw new AggregateError([error, restoreError], "Fork failed and could not durably restore its original session");
 				}
 			}
 			throw error;
