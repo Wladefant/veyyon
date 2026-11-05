@@ -11,6 +11,7 @@
 
 - Native worker claims preserve each request's accountable owner and reject stale or malformed execution identities ([#802](https://github.com/Wladefant/veyyon/issues/802)).
 
+- Withhold startup text and parser error reflections from invalid kernel frame diagnostics ([Refs #942](https://github.com/Wladefant/veyyon/issues/942)).
 - Legacy SSE parse diagnostics omit malformed peer frame data, and unattributable peer warnings omit peer-supplied messages while caller errors stay unchanged ([Refs #866](https://github.com/Wladefant/veyyon/issues/866)).
 
 - Native Mainplane session and operation identities reject malformed Unicode before hashing ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
