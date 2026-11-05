@@ -132,6 +132,10 @@
 
 - IRC rosters show the current runtime model, and lane prompts allow reversible peer coordination within the parent's assigned scope without granting permissions ([Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
 
+### Fixed
+
+- ACP permission requests ignore selections returned after cancellation and retain active selection behavior ([Refs #879](https://github.com/Wladefant/veyyon/pull/879)).
+
 ## [1.7.3] - 2026-11-01
 
 ### Fixed
