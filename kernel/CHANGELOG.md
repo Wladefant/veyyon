@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed session fork repairs its own aborted `session_switched` marker on the original JSONL before the rejected fork returns, so reopening without a later caller flush cannot mistake the source for a completed switch; keep genuine foreign-writer tails and original history intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.8.0] - 2026-11-05
 
 ### Breaking Changes
