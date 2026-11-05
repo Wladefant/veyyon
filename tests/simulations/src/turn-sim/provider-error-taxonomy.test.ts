@@ -20,13 +20,12 @@
  * assert the classifier agrees with itself; here the expectation is written down
  * independently and the run says whether the product matches it.
  *
- * Two axes, because a stream that has already emitted content takes a different
- * path from one that fails before its first event: the partial answer has to
- * survive in the transcript, and the retry decision must not change because of
- * it.
+ * Two axes: an empty transient failure can be resampled, but visible partial
+ * text must survive in the transcript without automatic replay. A user can
+ * start a new turn after that terminal failure.
  *
- * Determinism: no sleeps. The harness's retry backoff is 1-2ms and the budget is
- * two attempts, so a cell that retries forever fails as a test timeout.
+ * Determinism: no sleeps. The harness shrinks retry delays and bounds retries.
+ * A test timeout catches an unbounded retry or stalled turn.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
@@ -109,10 +108,9 @@ describe("a provider failure is resampled only when resampling could help", () =
 				const cell = `${row.name} / ${arrival}`;
 				sim = await createSimulation({
 					settings: { "retry.enabled": true },
-					// Fails once, then answers. A resampleable error must reach the
-					// second turn; a permanent one must never be given the chance,
-					// which is why the success is scripted for every cell rather than
-					// only for the ones expected to get there.
+					// Only an empty transient failure may reach the recovery turn.
+					// Keep recovery scripted for every cell so an unintended replay
+					// after visible output or a permanent failure is observable.
 					script: turn => {
 						if (turn.call === 1) {
 							if (arrival === "after partial text") turn.text("partial answer. ");
@@ -127,7 +125,7 @@ describe("a provider failure is resampled only when resampling could help", () =
 				await sim.session.prompt("go");
 
 				expect(describeViolations(cell, turnViolations(sim))).toEqual([]);
-				if (row.resampleable) {
+				if (row.resampleable && arrival === "before any content") {
 					expect(sim.providerCalls()).toBe(2);
 					expect(lastAssistantText(sim.session)).toContain(ANSWER);
 					expect(lastAssistant(sim).stopReason).toBe("stop");
@@ -139,6 +137,9 @@ describe("a provider failure is resampled only when resampling could help", () =
 				expect(sim.providerCalls()).toBe(1);
 				expect(lastAssistant(sim).stopReason).toBe("error");
 				expect(lastAssistant(sim).errorMessage ?? "").toContain(reasonFragment(row));
+				if (arrival === "after partial text") {
+					expect(lastAssistantText(sim.session)).toContain("partial answer.");
+				}
 			});
 		}
 	}
@@ -166,12 +167,8 @@ describe("a provider failure is resampled only when resampling could help", () =
 	}
 
 	it("keeps the partial answer a terminally failed turn had already streamed", async () => {
-		// Positive control for the second axis, and the distinction the axis turns
-		// on. A turn that is RETRIED discards its partial on purpose (the retry
-		// replaces the answer, so keeping both would show the operator two halves
-		// of one reply). A turn that runs out of budget does not get replaced, so
-		// whatever streamed is all the context a follow-up has and throwing it away
-		// leaves the same transcript as a turn that never started.
+		// Visible output ends automatic replay even for a transient failure.
+		// Keep that partial in the transcript so a later user turn can use it.
 		sim = await createSimulation({
 			settings: { "retry.enabled": true },
 			script: turn => {
@@ -182,7 +179,9 @@ describe("a provider failure is resampled only when resampling could help", () =
 
 		await sim.session.prompt("go");
 
-		expect(sim.providerCalls()).toBe(RETRY_BUDGET + 1);
+		expect(sim.providerCalls()).toBe(1);
+		expect(sim.session.isStreaming).toBe(false);
+		expect(sim.session.isRetrying).toBe(false);
 		const streamed = sim.session.messages
 			.filter((message): message is AssistantMessage => message.role === "assistant")
 			.flatMap(message => message.content)
@@ -193,10 +192,9 @@ describe("a provider failure is resampled only when resampling could help", () =
 		expect(lastAssistant(sim).stopReason).toBe("error");
 	});
 
-	it("discards the partial of a turn that a retry replaced", async () => {
-		// The other half of that decision, stated so a change in either direction
-		// is visible: after a successful resample the transcript carries the answer
-		// and not the abandoned half-reply.
+	it("keeps a failed partial when the user starts a recovery turn", async () => {
+		// A new user turn may recover after a partial failure. It must not erase
+		// the visible text from the failed turn.
 		sim = await createSimulation({
 			settings: { "retry.enabled": true },
 			script: turn => {
@@ -211,15 +209,21 @@ describe("a provider failure is resampled only when resampling could help", () =
 		});
 
 		await sim.session.prompt("go");
+		expect(sim.providerCalls()).toBe(1);
+		expect(lastAssistantText(sim.session)).toContain("abandoned half-reply.");
+		expect(lastAssistant(sim).stopReason).toBe("error");
+
+		await sim.session.prompt("continue");
 
 		expect(sim.providerCalls()).toBe(2);
 		expect(lastAssistantText(sim.session)).toContain(ANSWER);
+		expect(lastAssistant(sim).stopReason).toBe("stop");
 		const streamed = sim.session.messages
 			.filter((message): message is AssistantMessage => message.role === "assistant")
 			.flatMap(message => message.content)
 			.filter(block => block.type === "text")
 			.map(block => block.text)
 			.join(" ");
-		expect(streamed).not.toContain("abandoned half-reply");
+		expect(streamed).toContain("abandoned half-reply");
 	});
 });

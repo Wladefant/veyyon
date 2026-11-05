@@ -273,6 +273,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	if ("isolated" in params) item.isolated = params.isolated;
 	if (params.cwd !== undefined) item.cwd = params.cwd;
 	if (params.successorOf !== undefined) item.successorOf = params.successorOf;
+	if (params.ownershipLease !== undefined) item.ownershipLease = params.ownershipLease;
 	return [item];
 }
 
