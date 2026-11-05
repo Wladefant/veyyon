@@ -44,6 +44,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema.val
 				const result = await searchBasicMemory(
 					this.session.settings,
 					this.session.cwd,
+					params.query,
 					{ signal },
 				);
 				if (result.items.length === 0) {

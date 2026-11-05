@@ -28,8 +28,8 @@ async function withBasicMemory<T>(
 	signal: AbortSignal | undefined,
 	operation: (connection: MCPServerConnection, project: string, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
-	const command = settings.get("memory.basicMemory.command").trim();
-	const project = settings.get("memory.basicMemory.project").trim();
+	const command = settings.get("memory.basicMemory.command")?.trim();
+	const project = settings.get("memory.basicMemory.project")?.trim();
 	const timeout = settings.get("memory.basicMemory.timeoutMs");
 	if (!command || !project || !Number.isInteger(timeout) || timeout < 1_000 || timeout > 300_000) {
 		throw new Error("Basic Memory requires a nonempty command and project, and timeoutMs between 1000 and 300000.");
@@ -37,14 +37,14 @@ async function withBasicMemory<T>(
 	throwIfAborted(signal);
 	const deadline = AbortSignal.timeout(timeout);
 	const operationSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
-	const configDir = settings.get("memory.basicMemory.configDir").trim();
+	const configDir = settings.get("memory.basicMemory.configDir")?.trim();
 	let connection: MCPServerConnection;
 	try {
 		connection = await connectToServer(
 			"basic-memory",
 			{
 				command,
-				args: ["mcp", "--local", "--project", project],
+				args: ["mcp", "--project", project],
 				cwd,
 				timeout,
 				env: {
