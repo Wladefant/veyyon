@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import { logTelegramDeliveryTrace } from "@veyyon/utils";
 import type { TerminalSecretRequest } from "../../launch/terminal-control";
 import {
@@ -93,7 +94,8 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 	const convert = (entry: SessionEntry): TerminalTranscriptText[] => {
 		const turn = projector.observe(entry);
 		if (entry.type !== "message" || entry.message.role !== "assistant") return [];
-		const content = mode.session.displayAssistantContent(entry.message.content);
+		const readable = readColdEntry(entry) ?? entry;
+		const content = mode.session.displayAssistantContent(readable.message.content);
 		const text = content
 			.filter(block => block.type === "text")
 			.map(block => block.text)
