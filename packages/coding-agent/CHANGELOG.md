@@ -39,6 +39,9 @@
 ### Fixed
 
 - MCP Streamable HTTP rejects malformed or mismatched JSON-RPC replies before accepting results or initialization session identifiers ([Refs #862](https://github.com/Wladefant/veyyon/issues/862)).
+### Fixed
+
+- MCP stdio diagnostics omit malformed frame payloads and peer-controlled parse-error messages from persistent logs ([Refs #858](https://github.com/Wladefant/veyyon/issues/858)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
