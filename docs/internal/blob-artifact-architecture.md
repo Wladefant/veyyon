@@ -47,6 +47,8 @@ Artifact types share this directory:
 
 Agents can adopt the parent `ArtifactManager`; in that case parent and agent tree share one artifact directory and numeric artifact ID space.
 
+A live `SessionManager.fork()` refuses before publishing when the effective (possibly adopted) artifact directory is different from the current JSONL file's own sidecar. A child JSONL nested in its parent's artifact tree must not copy a stale, same-numbered child sidecar as though it were the parent's evidence, or recursively copy the parent's tree into its own descendant. This is a conservative **unsupported-adopted-fork** boundary, not a promise to import shared-parent artifacts. Historical `forkFrom()` has only the persisted source filename, not the running `ArtifactManager` ownership; resolving that separate provenance contract requires explicit mapping and qualification rather than guessing a parent directory.
+
 ## ID and name allocation schemes
 
 ### Blob IDs: content hash
@@ -193,21 +195,31 @@ Read tool integration:
 
 ### Fork
 
-`SessionManager.fork()` creates a new session file with new session ID and `parentSession` link, then returns old/new file paths. Artifact copying is handled by `AgentSession.fork()`:
+`AgentSession.fork()` flushes the original session first. `SessionManager.fork()` then preflights the inherited `artifact://N` references and copies the original session's artifact directory into a fresh, non-overwriting destination **before** changing the active session ID, writing the new file or emitting a successful session switch.
 
-- flushes current session first,
-- attempts recursive copy of old artifact directory to new artifact directory,
-- missing old directory is tolerated,
-- non-ENOENT copy errors are logged as warnings and fork still completes.
+- Every inherited **local** referenced artifact (`artifact://N` or an explicit `?session=` equal to the source execution session ID) must exist unambiguously in the source directory; the copied directory must contain the original filenames and byte-identical contents (full-tree relative-path/type equality, regular-file/length checks and a streaming SHA-256 comparison of every copied regular file, including unreferenced nested evidence) before switching. A same-size but altered copy refuses publication; an unreferenced foreign-session link is not imported or examined. Original bytes remain in place.
+- Full-tree content verification reads copied evidence again with bounded memory, increasing read I/O in proportion to copied artifact size. File and ancestor-directory identities are captured during inventory; detected intermediate-directory replacements are refused during descriptor-pinned hashing, and even empty directories are rechecked before publication. This is **not** an atomic snapshot against arbitrary noncooperating writers, and Windows reparse-point races remain separately unqualified.
+- The **entire** copied artifact tree is fail-closed against symbolic links, multiply-linked regular files (hard links), and other non-regular filesystem entries, including unreferenced and nested paths; valid single-link regular evidence files and ordinary reservation directories remain eligible for copying. The source tree is screened before copying, every copy input is checked, and the destination tree is checked before the new JSONL is published. This limits unsafe entry propagation by forks; the existing artifact reader's separate no-follow/confinement behavior is not modified here.
+- A valid explicit `?session=<other-execution-session-id>` reference is retained verbatim without looking up or copying its numeric ID from the current session. Its future availability depends on the foreign owner; a fork does not promise that another execution session is online.
+- Missing old artifact directories are tolerated **only when no inherited local references exist**. A missing local referenced artifact, an inaccessible or non-directory source, an incomplete copy or a non-ENOENT copy error rejects the fork without switching the original session.
+- A failed preflight can leave an orphaned *new* destination directory; it never deletes the original and never reports an exact-evidence fork as successful. Cleanup of orphaned data needs separate owned verification, not an automatic destructive fallback.
+- On success, the new session's `ArtifactManager` rescans the copied `{id}.*.log` files and starts new output IDs after the highest inherited ID, preventing old `artifact://N` links from resolving to unrelated new output.
 
-ID implications after fork:
+`SessionManager.forkFrom(sourcePath, ...)` uses the same source-owned artifact preflight and non-overwriting copy before it publishes a new JSONL. An inherited local `artifact://N` keeps its original bytes and reserves its ID against later unrelated output. A missing local reference refuses publication without changing the source; explicit foreign-session links remain unchanged and do not require copying another session's files. An explicitly supplied destination equal to the source path is rejected. An explicitly pinned fork destination nested inside the source artifact directory is refused **before** a new sidecar can be reserved there, so a failed recursive copy does not mutate the source evidence tree. The pre-reservation containment check rejects both lexical nesting and a destination parent already aliased into an existing source artifact directory through a symlink or Windows junction, using their resolved filesystem paths before any sidecar mkdir. It does not close concurrent symlink substitutions or other Windows reparse-point races. A terminal breadcrumb for the new fork is written only after its JSONL publishes successfully, so a refused preflight retains the previous live breadcrumb.
 
-- if copy succeeded, artifact counters in the new session continue after max copied ID when the new `ArtifactManager` first scans,
-- if copy failed/skipped, new session artifact IDs start from `0`.
+`SessionManager.fork()` follows the same **publish-before-breadcrumb** rule as `forkFrom()`: it writes the new terminal recovery pointer only after the new session's awaited JSONL publication succeeds. A failed final write after evidence preflight must not replace the last valid recovery pointer with a nonexistent fork file. This preserves recovery-pointer identity, not an automatic in-memory rollback or cleanup of an unreferenced destination. As with `fork()`, a failed copy may leave an unreferenced new destination that requires separately authorized cleanup.
+
+`SessionManager.fork()` still records the previous session as `parentSession`. Global content-addressed blobs remain shared and require no per-session copy.
 
 Blob implications after fork:
 
 - blobs are global and content-addressed, so no blob directory copy is required.
+
+### Synchronous session branching (`/branch` and `/btw`)
+
+Unlike the awaited `fork()` and `forkFrom()` paths above, `SessionManager.createBranchedSession(leafId)` is synchronous and cannot perform an evidence copy with asynchronous preflight and digest verification. For a persisted branch whose retained history contains a **locally owned** numeric `artifact://N` reference (including an encoded numeric ID or an explicit source-session ID), it **refuses before ending the original lifecycle or changing session identity** rather than publishing a new JSONL whose local evidence cannot be resolved. This is a fail-closed interim limitation, not support for branching a transcript with local recovery evidence. A valid explicit `?session=<other-session-id>` reference remains foreign and does not trigger a local copy or refusal.
+
+For an otherwise eligible branch with no retained local references, the existing synchronous branch still succeeds; on identity switch it discards any previously adopted parent `ArtifactManager`, so subsequent artifact output belongs only to the new session sidecar. The original parent evidence remains untouched. A full retained-local-evidence branch requires a separately owned asynchronous contract and caller migration; no automatic link reparenting, source pruning, or destructive recovery is performed here.
 
 ### Move to new cwd
 
@@ -244,7 +256,7 @@ The two systems intersect only indirectly: both reduce session JSONL bloat, but 
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): `BlobStore`/`ArtifactManager` construction, persistence-transform and blob-rehydration call sites, session fork/move interactions.
 - [`kernel/src/session/session-persistence.ts`](../../kernel/src/session/session-persistence.ts): `prepareEntryForPersistence()`: large-string externalization to `blobtext:` refs, transient-field stripping, and synchronous image-blob externalization.
 - [`kernel/src/session/session-loader.ts`](../../kernel/src/session/session-loader.ts): `resolveBlobRefsInEntries()`: blob-ref rehydration to base64 / data URLs on load.
-- [`src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts): artifact directory copy during interactive fork.
+- [`src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts): interactive fork coordination and session switch; artifact preservation is performed in the kernel.
 - [`src/internal-urls/artifact-protocol.ts`](../../packages/coding-agent/src/internal-urls/artifact-protocol.ts): `artifact://` resolver.
 - [`src/internal-urls/agent-protocol.ts`](../../packages/coding-agent/src/internal-urls/agent-protocol.ts): `agent://` resolver + JSON extraction.
 - [`src/internal-urls/router.ts`](../../packages/coding-agent/src/internal-urls/router.ts): internal URL router wiring.

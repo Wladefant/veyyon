@@ -98,6 +98,10 @@
 
 - History indexes and completions hide on-disk aliases shadowed by registered agent IDs ([Refs #881](https://github.com/Wladefant/veyyon/issues/881)).
 
+### Fixed
+- Agent session forks now restore the original session identity when publishing the new transcript fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

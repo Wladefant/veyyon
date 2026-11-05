@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
@@ -381,6 +382,12 @@ export class SessionManager {
 	#nextSequence = 1;
 	#lifecycleStarted = false;
 	#lifecycleEnded = false;
+	/**
+	 * A rejected source close or new-file publication can leave this fork's own
+	 * terminal marker appended to the old JSONL. Exclude only those exact IDs
+	 * from foreign-writer preservation until the source is republished.
+	 */
+	#abortedForkLifecycleIdsByFile = new Map<string, Set<string>>();
 
 	/** File reflects all current entries; appends can go incrementally. */
 	#fileIsCurrent = false;
@@ -987,6 +994,9 @@ export class SessionManager {
 	 */
 	#adoptForeignLines(text: string): void {
 		const foreign: string[] = [];
+		const abortedForkIds = this.#sessionFile
+			? this.#abortedForkLifecycleIdsByFile.get(this.#sessionFile)
+			: undefined;
 		let liveWriterEntries = 0;
 		for (const raw of text.split("\n")) {
 			// Most entry lines open with their id, so a line this manager wrote is known
@@ -1007,7 +1017,7 @@ export class SessionManager {
 			// and a header belongs to whoever owns the file's identity.
 			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE || parsed.type === "session") continue;
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
-			if (!id || this.#isOwnId(id)) continue;
+			if (!id || this.#isOwnId(id) || abortedForkIds?.has(id)) continue;
 			foreign.push(raw);
 			if (parsed.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries += 1;
 		}
@@ -1321,6 +1331,9 @@ export class SessionManager {
 			identity = undefined;
 		}
 		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
+		// The old file has now been durably republished without our cancelled
+		// lifecycle marker; later genuine foreign entries still remain intact.
+		this.#abortedForkLifecycleIdsByFile.delete(this.#sessionFile);
 	}
 
 	/**
@@ -1955,6 +1968,360 @@ export class SessionManager {
 		}
 	}
 
+	/** Shared local-vs-explicit-foreign artifact URL scanner for forks and synchronous branches. */
+	static #localArtifactReferences(retainedEntries: readonly FileEntry[], parentSessionId: string | undefined): Set<string> {
+		const referencedIds = new Set<string>();
+		for (const entry of retainedEntries) {
+			// Artifact IDs are per session. An explicit foreign-session reference
+			// must not be checked or copied from this session's artifact store.
+			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi)) {
+				let id = match[1];
+				if (!id) continue;
+				// The internal URL parser percent-decodes rawHost before checking
+				// the *whole* numeric ID. A valid artifact://%30 is local artifact 0
+				// and must not evade copy-before-fork validation.
+				try {
+					id = decodeURIComponent(id);
+				} catch {
+					// Keep malformed escapes unchanged, as parseInternalUrl does.
+				}
+				if (!/^\d+$/.test(id)) continue;
+				const query = match[2];
+				if (query !== undefined) {
+					const sessions = new URLSearchParams(query).getAll("session");
+					if (
+						sessions.length === 1 &&
+						/^[A-Za-z0-9_.:-]{1,128}$/.test(sessions[0]!) &&
+						sessions[0] !== parentSessionId
+					) continue;
+				}
+				referencedIds.add(id);
+			}
+		}
+		return referencedIds;
+	}
+
+	/**
+	 * Keep the original session's locally referenced artifact bytes available
+	 * before a fork publishes a new session. Both current-session forks and
+	 * imported historical forks must use the same identity and copy contract.
+	 */
+	static async #copyForkArtifactEvidence(
+		oldSessionFile: string,
+		nextSessionFile: string,
+		retainedEntries: readonly FileEntry[],
+		parentSessionId: string | undefined,
+	): Promise<void> {
+		const oldArtifactDir = artifactsDirectoryFor(oldSessionFile);
+		const nextArtifactDir = artifactsDirectoryFor(nextSessionFile);
+		if (!oldArtifactDir || !nextArtifactDir) throw new Error("Cannot fork session: artifact directory unavailable");
+		// Refuse a pinned destination inside the original evidence tree before
+		// reserving a sidecar. Otherwise mkdir mutates the source, and copying a
+		// directory into its own descendant can recurse or fail after the mutation.
+		const destinationInsideSource = (source: string, target: string): boolean => {
+			const relative = path.relative(source, target);
+			return (
+				relative === "" ||
+				(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+			);
+		};
+		if (destinationInsideSource(path.resolve(oldArtifactDir), path.resolve(nextArtifactDir))) {
+			throw new Error("Cannot fork session: destination inside source artifact tree");
+		}
+		// A pinned forkFrom() destination may be reached through a directory
+		// symlink/junction *outside* the source tree. Lexical containment alone
+		// misses the physical alias; reserving the child sidecar then modifies
+		// the source evidence before recursive copy even starts.
+		// Only existing directories can be realpathed. When the source has no
+		// sidecar, there is no source tree to copy; when the destination parent
+		// is absent, mkdir below will refuse without creating descendants.
+		let physicalSource: string | undefined;
+		try {
+			physicalSource = await fs.promises.realpath(oldArtifactDir);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		if (physicalSource) {
+			let physicalTargetParent: string | undefined;
+			try {
+				physicalTargetParent = await fs.promises.realpath(path.dirname(nextArtifactDir));
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+			if (
+				physicalTargetParent &&
+				destinationInsideSource(physicalSource, path.join(physicalTargetParent, path.basename(nextArtifactDir)))
+			) {
+				throw new Error("Cannot fork session: destination inside source artifact tree");
+			}
+		}
+
+		// A pinned forkFrom() target may name another persisted session, and a
+		// missing source artifact directory must not allow its pre-existing
+		// destination sidecar to become this fork's unrelated recovery evidence.
+		// Refuse both occupied paths before any copy or JSONL publication. This
+		// preflight protects known existing targets; it is not a cross-process
+		// exclusive reservation of a newly created destination path.
+		for (const destination of [nextSessionFile, nextArtifactDir]) {
+			try {
+				await fs.promises.lstat(destination);
+			} catch (error) {
+				if (isEnoent(error)) continue;
+				throw error;
+			}
+			throw new Error("Cannot fork session: destination transcript or artifact directory already exists");
+		}
+
+		// Preserve the original referenced bytes before mutating the active
+		// session identity, entries or file. A best-effort post-switch copy can
+		// otherwise leave inherited artifact://0 pointing at unrelated new output.
+		const referencedIds = SessionManager.#localArtifactReferences(retainedEntries, parentSessionId);
+		let sourceNames: string[] | undefined;
+		try {
+			const stat = await fs.promises.lstat(oldArtifactDir);
+			if (!stat.isDirectory()) throw new Error("Cannot fork session: source artifact path is not a directory");
+			sourceNames = await fs.promises.readdir(oldArtifactDir);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			// An absent directory is normal only if there is nothing to recover.
+			if (referencedIds.size > 0) throw new Error("Cannot fork session: referenced artifacts unavailable");
+		}
+		// The initial lstat checks are not an exclusive reservation: two
+		// forkFrom callers naming one empty target can otherwise publish over
+		// each other. Reserve its sidecar atomically before copying *or* publishing
+		// a JSONL, including when the source has no artifact directory.
+		// Keep the sidecar private; a failed later publication leaves the
+		// reservation/evidence in place for explicit owner recovery, not deletion.
+		const reserveDestination = async (): Promise<void> => {
+			try {
+				await fs.promises.mkdir(nextArtifactDir, { mode: 0o700 });
+			} catch (error) {
+				if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+					throw new Error("Cannot fork session: destination transcript or artifact directory already exists");
+				}
+				throw error;
+			}
+			// A non-cooperating writer may have created the JSONL since preflight;
+			// never overwrite it even after winning the sidecar reservation.
+			try {
+				await fs.promises.lstat(nextSessionFile);
+			} catch (error) {
+				if (isEnoent(error)) return;
+				throw error;
+			}
+			throw new Error("Cannot fork session: destination transcript or artifact directory already exists");
+		};
+		if (!sourceNames) {
+			await reserveDestination();
+			return;
+		}
+		if (sourceNames) {
+			// The full artifact tree is copied, not just files linked by retained
+			// messages. Refuse even an unrelated symlink (including a nested one):
+			// the ordinary artifact reader can otherwise follow the inherited link
+			// to bytes outside this session's evidence directory.
+			const assertSafeEntry = async (filename: string): Promise<fs.Stats> => {
+				const stat = await fs.promises.lstat(filename);
+				if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1) || (!stat.isFile() && !stat.isDirectory())) {
+					throw new Error("Cannot fork session: unsafe artifact entry");
+				}
+				return stat;
+			};
+			const assertRegularTree = async (directory: string) => {
+				const pending = [directory];
+				const entries: string[] = [];
+				// Pin the directory and file identities seen by each inventory
+				// before later pathname-based digest operations.
+				const directories = new Map<string, fs.Stats>();
+				const files = new Map<string, fs.Stats>();
+				while (pending.length > 0) {
+					const current = pending.pop()!;
+					const currentStat = await assertSafeEntry(current);
+					if (!currentStat.isDirectory()) {
+						throw new Error("Cannot fork session: unsafe artifact tree");
+					}
+					directories.set(path.relative(directory, current), currentStat);
+					for (const name of await fs.promises.readdir(current)) {
+						const child = path.join(current, name);
+						const childStat = await assertSafeEntry(child);
+						const isDirectory = childStat.isDirectory();
+						const relative = path.relative(directory, child);
+						entries.push(`${isDirectory ? "dir" : "file"}:${relative}`);
+						if (isDirectory) pending.push(child);
+						else files.set(relative, childStat);
+					}
+				}
+				return { entries: entries.sort(), directories, files };
+			};
+			// Check before copying to avoid publishing even a temporary linked
+			// destination on a known-bad input. The copy filter and destination
+			// check also reject links introduced during the copy itself.
+			const sourceTree = await assertRegularTree(oldArtifactDir);
+			const referencedNames = new Set<string>();
+			for (const id of referencedIds) {
+				const matches = sourceNames.filter(name => name.startsWith(`${id}.`) && name.endsWith(".log"));
+				if (matches.length !== 1) throw new Error("Cannot fork session: referenced artifact missing or ambiguous");
+				const original = await fs.promises.lstat(path.join(oldArtifactDir, matches[0]!));
+				if (!original.isFile()) throw new Error("Cannot fork session: referenced artifact is not a regular file");
+				referencedNames.add(matches[0]!);
+			}
+			// A failed copy leaves the old session and its original evidence usable.
+			// Never overwrite a newly created destination with another fork's data.
+			await reserveDestination();
+			for (const name of sourceNames) {
+				await fs.promises.cp(path.join(oldArtifactDir, name), path.join(nextArtifactDir, name), {
+					recursive: true, force: false, errorOnExist: true,
+					filter: async source => {
+						await assertSafeEntry(source);
+						return true;
+					},
+				});
+			}
+			const copiedTree = await assertRegularTree(nextArtifactDir);
+			if (
+				sourceTree.entries.length !== copiedTree.entries.length ||
+				sourceTree.entries.some((entry, index) => entry !== copiedTree.entries[index])
+			) {
+				throw new Error("Cannot fork session: artifact copy incomplete");
+			}
+			// A full-tree fork must preserve all regular evidence bytes, including
+			// unreferenced nested output. Stream each comparison to bound memory;
+			// a type/size-only check cannot detect equal-length corruption.
+			// A pathname checked by lstat can be replaced before createReadStream()
+			// opens it. Hash through one pinned descriptor, refusing a symlink,
+			// special file, hard link or substituted inode before reading bytes.
+			const sha256File = async (
+				filename: string, expected: fs.Stats, root: string, directories: Map<string, fs.Stats>,
+			): Promise<string> => {
+				const changed = () => new Error("Cannot fork session: artifact changed during digest read");
+				const verifyAncestors = async () => {
+					const parent = path.relative(root, path.dirname(filename));
+					if (parent === ".." || parent.startsWith(`..${path.sep}`) || path.isAbsolute(parent)) {
+						throw changed();
+					}
+					let current = root;
+					let relative = "";
+					for (const component of ["", ...parent.split(path.sep).filter(Boolean)]) {
+						if (component) {
+							current = path.join(current, component);
+							relative = relative ? path.join(relative, component) : component;
+						}
+						const expectedDirectory = directories.get(relative);
+						if (!expectedDirectory) throw changed();
+						const actualDirectory = await fs.promises.lstat(current);
+						if (
+							!actualDirectory.isDirectory() ||
+							actualDirectory.dev !== expectedDirectory.dev ||
+							actualDirectory.ino !== expectedDirectory.ino
+						) throw changed();
+					}
+				};
+				const matches = (actual: fs.Stats): boolean =>
+					actual.isFile() &&
+					actual.nlink === 1 &&
+					actual.dev === expected.dev &&
+					actual.ino === expected.ino &&
+					actual.size === expected.size;
+				await verifyAncestors();
+				const before = await fs.promises.lstat(filename);
+				if (!matches(before)) throw changed();
+				// NOFOLLOW prevents POSIX symlink substitution; NONBLOCK avoids
+				// hanging on a replaced FIFO where these flags are supported.
+				// Windows does not accept these open flags: retain its supported
+				// read-only open and refuse a descriptor/path identity mismatch.
+				// This does not prove safety against all Windows reparse races.
+				const flags =
+					fs.constants.O_RDONLY |
+					(process.platform === "win32"
+						? 0
+						: (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+				const file = await fs.promises.open(filename, flags);
+				try {
+					// O_NOFOLLOW covers only the leaf; refuse a changed parent
+					// before reading bytes through an already opened descriptor.
+					await verifyAncestors();
+					const opened = await file.stat();
+					const afterOpen = await fs.promises.lstat(filename);
+					if (!matches(opened) || !matches(afterOpen)) throw changed();
+					const digest = createHash("sha256");
+					const buffer = Buffer.alloc(64 * 1024);
+					let position = 0;
+					while (position < opened.size) {
+						const { bytesRead } = await file.read(
+							buffer,
+							0,
+							Math.min(buffer.length, opened.size - position),
+							position,
+						);
+						if (bytesRead === 0) throw changed();
+						digest.update(buffer.subarray(0, bytesRead));
+						position += bytesRead;
+					}
+					await verifyAncestors();
+					const afterRead = await file.stat();
+					const pathAfterRead = await fs.promises.lstat(filename);
+					if (
+						!matches(afterRead) ||
+						!matches(pathAfterRead) ||
+						afterRead.mtimeMs !== opened.mtimeMs ||
+						afterRead.ctimeMs !== opened.ctimeMs ||
+						pathAfterRead.mtimeMs !== before.mtimeMs ||
+						pathAfterRead.ctimeMs !== before.ctimeMs
+					) throw changed();
+					await verifyAncestors();
+					return digest.digest("hex");
+				} finally {
+					await file.close();
+				}
+			};
+			for (const entry of sourceTree.entries) {
+				if (!entry.startsWith("file:")) continue;
+				const filename = entry.slice("file:".length);
+				const referenced = referencedNames.has(filename);
+				const originalPath = path.join(oldArtifactDir, filename);
+				const copiedPath = path.join(nextArtifactDir, filename);
+				const original = sourceTree.files.get(filename);
+				const copied = copiedTree.files.get(filename);
+				if (
+					!original || !copied ||
+					!original.isFile() || !copied.isFile() ||
+					original.nlink > 1 || copied.nlink > 1 ||
+					original.size !== copied.size
+				) {
+					throw new Error(
+						referenced
+							? "Cannot fork session: referenced artifact copy incomplete"
+							: "Cannot fork session: artifact copy incomplete",
+					);
+				}
+				const [originalHash, copiedHash] = await Promise.all([
+					sha256File(originalPath, original, oldArtifactDir, sourceTree.directories),
+					sha256File(copiedPath, copied, nextArtifactDir, copiedTree.directories),
+				]);
+				if (originalHash !== copiedHash) {
+					throw new Error(
+						referenced
+							? "Cannot fork session: referenced artifact bytes differ from source"
+							: "Cannot fork session: unreferenced artifact bytes differ from source",
+					);
+				}
+			}
+			// Recheck empty directories too: they have no file hash operation.
+			for (const [root, directories] of [
+				[oldArtifactDir, sourceTree.directories],
+				[nextArtifactDir, copiedTree.directories],
+			] as const) {
+				for (const [relative, expected] of directories) {
+					const actual = await fs.promises.lstat(path.join(root, relative));
+					if (
+						!actual.isDirectory() || actual.dev !== expected.dev ||
+						actual.ino !== expected.ino
+					) throw new Error("Cannot fork session: artifact directory changed during verification");
+				}
+			}
+		}
+	}
+
 	/**
 	 * Fork the current conversation into a new file with fresh lifecycle metadata.
 	 * @returns the old and new session file paths, or undefined when not persisting.
@@ -1963,19 +2330,78 @@ export class SessionManager {
 		if (!this.#persist || !this.#sessionFile) return undefined;
 
 		const oldSessionFile = this.#sessionFile;
+		// Agents may inherit the parent's ArtifactManager and numeric IDs while
+		// persisting their JSONL beneath that parent's artifact tree. Copying the
+		// JSONL-derived child sidecar would then bind inherited artifact://N to
+		// unrelated same-ID bytes, even if every source/destination hash matches.
+		// Fail before reserving any destination until shared-parent provenance has
+		// an explicit, safely scoped copy contract. Never recurse into the parent.
+		const sessionArtifactDir = artifactsDirectoryFor(oldSessionFile);
+		const effectiveArtifactDir = this.getArtifactsDir();
+		if (
+			!sessionArtifactDir || !effectiveArtifactDir ||
+			path.resolve(effectiveArtifactDir) !== path.resolve(sessionArtifactDir)
+		) {
+			throw new Error("Cannot fork session: adopted artifact scope differs from session sidecar");
+		}
+		// A direct caller may retry fork without an AgentSession-level flush.
+		// Repair its still-active original JSONL before leaving that file behind.
+		if (this.#abortedForkLifecycleIdsByFile.has(oldSessionFile)) await this.flush();
 		const parentSessionId = this.#sessionId;
-		this.#endLifecycle("session_switched");
-		await this.#drainAndCloseWriter();
+		const timestamp = nowIso();
+		const nextSessionId = mintSessionId();
+		const nextSessionFile = path.join(
+			this.#sessionDir,
+			sessionFileName(`${fileSafeTimestamp(timestamp)}_${nextSessionId}`),
+		);
+		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
+		await SessionManager.#copyForkArtifactEvidence(
+			oldSessionFile,
+			nextSessionFile,
+			retainedEntries,
+			parentSessionId,
+		);
+
+		const beforeSwitch = this.captureState();
+		try {
+			this.#endLifecycle("session_switched");
+			await this.#drainAndCloseWriter();
+		} catch (error) {
+			// A close error may occur after the end marker has reached the old file,
+			// but before either identity or path changes. Ordinary AgentSession
+			// identity guards cannot detect that abandoned lifecycle transition.
+			const appended = this.#entries.at(-1);
+			if (
+				this.#entries.length > beforeSwitch.entries.length &&
+				appended?.type === "session_lifecycle" &&
+				appended.state === "ended" &&
+				appended.reason === "session_switched"
+			) {
+				const aborted = this.#abortedForkLifecycleIdsByFile.get(oldSessionFile) ?? new Set<string>();
+				aborted.add(appended.id);
+				this.#abortedForkLifecycleIdsByFile.set(oldSessionFile, aborted);
+			}
+			try {
+				this.restoreState({ ...beforeSwitch, needsRewrite: true });
+			} catch (restoreError) {
+				throw new AggregateError([error, restoreError], "Fork failed and could not restore the active source");
+			}
+			throw error;
+		}
+		const sourceEndEntry = this.#entries.at(-1);
+		const sourceEndId =
+			this.#entries.length > beforeSwitch.entries.length &&
+			sourceEndEntry?.type === "session_lifecycle" &&
+			sourceEndEntry.state === "ended" &&
+			sourceEndEntry.reason === "session_switched"
+				? sourceEndEntry.id
+				: undefined;
 		this.#clearDiskError();
-		this.#entries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
+		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
 
-		const timestamp = nowIso();
-		this.#setSessionId(mintSessionId());
-		this.#sessionFile = path.join(
-			this.#sessionDir,
-			sessionFileName(`${fileSafeTimestamp(timestamp)}_${this.#sessionId}`),
-		);
+		this.#setSessionId(nextSessionId);
+		this.#sessionFile = nextSessionFile;
 		this.#header = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
@@ -2001,12 +2427,29 @@ export class SessionManager {
 		this.#startLifecycle("created");
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
-		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
+		// Same-sidecar adoption was scoped to the original session. Later
+		// allocations must use the fork's newly copied artifact directory.
+		this.#adoptedArtifactManager = null;
 
 		// A new file, so another writer's tail on the old one is not ours to carry,
 		// and the history we brought along is.
 		this.#forgetForeignWriter();
-		await this.#rewriteAtomically();
+		// Arm the existing publish-time breadcrumb hook. A failed new-file write
+		// keeps the old recovery pointer, while a later successful retry promotes
+		// the new one only after its JSONL is actually published.
+		this.#breadcrumbFresh = true;
+		try {
+			await this.#rewriteAtomically();
+		} catch (error) {
+			// AgentSession restores the source snapshot after a publication error.
+			// Its own flushed end marker must not return as a foreign writer tail.
+			if (sourceEndId) {
+				const aborted = this.#abortedForkLifecycleIdsByFile.get(oldSessionFile) ?? new Set<string>();
+				aborted.add(sourceEndId);
+				this.#abortedForkLifecycleIdsByFile.set(oldSessionFile, aborted);
+			}
+			throw error;
+		}
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
@@ -3205,12 +3648,18 @@ export class SessionManager {
 	createBranchedSession(leafId: string): string | undefined {
 		const sourceSessionFile = this.#sessionFile;
 		if (!this.#index.has(leafId)) throw new Error(`Entry ${leafId} not found`);
-		this.#endLifecycle("session_switched");
 		const branchPath = this.getBranch(leafId);
 
 		// Labels are resolved afresh, and lifecycle/checkpoint entries belong to
 		// the source session identity rather than the child.
 		const entriesToKeep = branchPath.filter(entry => entry.type !== "label" && !isSessionIncarnationTelemetry(entry));
+		// This synchronous API cannot await the fork\x27s verified evidence copy.
+		// Refuse before mutating source lifecycle or session identity. A foreign
+		// ?session= link is not locally owned and need not be copied.
+		if (this.#persist && SessionManager.#localArtifactReferences(entriesToKeep, this.#sessionId).size > 0) {
+			throw new Error("Cannot branch session: retained local artifact evidence cannot be preserved synchronously");
+		}
+		this.#endLifecycle("session_switched");
 		const keptIds = new Set(entriesToKeep.map(entry => entry.id));
 		const labelsToCarry: Array<{ targetId: string; label: string }> = [];
 		for (const [targetId, label] of this.#index.labelsInEffect()) {
@@ -3270,6 +3719,8 @@ export class SessionManager {
 		this.#lifecycleEnded = false;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
+		// The new session must allocate into its own sidecar rather than a former parent's.
+		this.#adoptedArtifactManager = null;
 		this.#forceFileCreation = this.#persist;
 
 		if (!this.#persist) {
@@ -3386,7 +3837,27 @@ export class SessionManager {
 			options?.operatorNotices,
 			options?.instrumentation,
 		);
-		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		// Do not point the terminal at a future fork while evidence validation or
+		// JSONL publication can still fail. Keep the caller's last valid breadcrumb.
+		const suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		manager.#suppressBreadcrumb = true;
+
+		// forkFrom reads a transcript by pathname but derives its evidence
+		// sidecar from that SAME name. A directly symlinked or hardlinked
+		// transcript can therefore load somebody else's history and copy an
+		// unrelated alias sidecar with matching artifact IDs. Refuse before
+		// loading or reserving a destination; a hash of the wrong sidecar
+		// would not prove that its bytes belong to this transcript.
+		// An injected virtual SessionStorage may have no host file; retain
+		// its existing loader error/success behavior on a truly absent path.
+		try {
+			const sourceStat = await fs.promises.lstat(sourcePath);
+			if (sourceStat.isSymbolicLink() || (sourceStat.isFile() && sourceStat.nlink > 1)) {
+				throw new Error("Cannot fork session: source transcript alias cannot establish artifact provenance");
+			}
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
 
 		const sourceEntries = structuredClone(
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
@@ -3409,6 +3880,19 @@ export class SessionManager {
 			},
 			options?.sessionFile,
 		);
+		// Copy all required local evidence before the new JSONL can be written;
+		// forkFrom retains historic artifact://N links just like fork().
+		const nextSessionFile = manager.getSessionFile();
+		if (!nextSessionFile) throw new Error("Cannot fork session: destination unavailable");
+		if (path.resolve(nextSessionFile) === path.resolve(sourcePath)) {
+			throw new Error("Cannot fork session: destination must differ from source");
+		}
+		await SessionManager.#copyForkArtifactEvidence(
+			sourcePath,
+			nextSessionFile,
+			history,
+			sourceHeader?.id,
+		);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;
@@ -3420,6 +3904,8 @@ export class SessionManager {
 		manager.#startLifecycle("created");
 		manager.#forceFileCreation = true;
 		await manager.#rewriteAtomically();
+		manager.#suppressBreadcrumb = suppressBreadcrumb;
+		manager.#rememberBreadcrumb(manager.#cwd, nextSessionFile);
 		return manager;
 	}
 
