@@ -5,6 +5,11 @@
 ### Fixed
 
 - Eval and SSH output windows resolve their configured byte budgets, so live Python cells and remote commands no longer fail on missing runtime bindings.
+## [1.8.4] - 2026-11-05
+
+### Fixed
+
+- IRC messages from spawned agent lanes now import the registry used to deliver them, and IRC inbox ownership is unified ([#992](https://github.com/Wladefant/veyyon/pull/992)).
 
 ## [1.8.3] - 2026-11-05
 
