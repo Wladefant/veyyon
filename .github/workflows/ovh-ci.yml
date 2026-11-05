@@ -226,6 +226,8 @@ jobs:
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}
         env:
           CARGO_BUILD_JOBS: "2"
+          # Cache outside checkout survives clean; per-runner path avoids contention.
+          CARGO_TARGET_DIR: ${{ runner.tool_cache }}/veyyon-cargo/${{ runner.name }}
           RELATED_TESTS: ${{ runner.temp }}/ovh-related-tests
           NATIVE_INPUT: ${{ inputs.native }}
         run: |
