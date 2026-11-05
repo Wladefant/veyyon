@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as utils from "@veyyon/utils";
 import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
-import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 
@@ -349,11 +349,11 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		close: () => {},
 	};
 	expect(payloads.pin(reader.identity, () => reader, text => JSON.parse(text) as SessionEntry)).toBe(true);
-	const userEntry = JSON.parse(userLine) as SessionEntry;
-	const toolResultEntry = JSON.parse(toolResultLine) as SessionEntry;
-	const entry = JSON.parse(line) as SessionEntry;
-	const yieldEntry = JSON.parse(yieldLine) as SessionEntry;
-	const postYieldEntry = JSON.parse(postYieldLine) as SessionEntry;
+	const userEntry = JSON.parse(userLine) as SessionMessageEntry;
+	const toolResultEntry = JSON.parse(toolResultLine) as SessionMessageEntry;
+	const entry = JSON.parse(line) as SessionMessageEntry;
+	const yieldEntry = JSON.parse(yieldLine) as SessionMessageEntry;
+	const postYieldEntry = JSON.parse(postYieldLine) as SessionMessageEntry;
 	expect(payloads.cool(userEntry, userOffset, Buffer.byteLength(userLine))).toBe(true);
 	expect(payloads.cool(toolResultEntry, toolResultOffset, Buffer.byteLength(toolResultLine))).toBe(true);
 	expect(payloads.cool(entry, assistantOffset, Buffer.byteLength(line))).toBe(true);
@@ -375,7 +375,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		parentId: null,
 		timestamp: "2026-01-01T00:00:00.000Z",
 		message: { role: "assistant", content: [{ type: "text", text: "Warm historical answer" }] },
-	} as unknown as SessionEntry;
+	} as unknown as SessionMessageEntry;
 
 	const journal = [warmEntry, userEntry, toolResultEntry, entry, yieldEntry, postYieldEntry];
 	const mockMode = {
