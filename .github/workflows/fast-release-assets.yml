@@ -1,0 +1,185 @@
+name: Fast release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag at the exact merged main SHA
+        required: true
+        type: string
+      sha:
+        description: Full 40-character SHA of that merged main commit
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+
+env:
+  GLIBC_FLOOR: "2.17"
+
+jobs:
+  native:
+    name: Native ${{ matrix.id }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: linux-x64-baseline, os: ubuntu-22.04, platform: linux, arch: x64, variant: baseline, target: x86_64-unknown-linux-gnu, glibc: "2.17" }
+          - { id: linux-x64-modern, os: ubuntu-22.04, platform: linux, arch: x64, variant: modern, target: x86_64-unknown-linux-gnu, glibc: "2.17" }
+          - { id: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64, variant: "", target: aarch64-unknown-linux-gnu, glibc: "2.17" }
+          - { id: darwin-x64, os: macos-15-intel, platform: darwin, arch: x64, variant: baseline, target: "", glibc: "" }
+          - { id: darwin-arm64, os: macos-14, platform: darwin, arch: arm64, variant: "", target: "", glibc: "" }
+          - { id: win32-x64, os: ubuntu-22.04, platform: win32, arch: x64, variant: baseline, target: x86_64-pc-windows-msvc, glibc: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.sha }}
+      - name: Verify tag and SHA
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          git fetch origin main "refs/tags/$TAG:refs/tags/$TAG"
+          [[ "$(git rev-parse "$TAG^{commit}")" == "$EXPECTED_SHA" ]]
+          git merge-base --is-ancestor "$EXPECTED_SHA" FETCH_HEAD
+      - name: Resolve source hash
+        id: hash
+        shell: bash
+        run: echo "hash=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/build-native
+        with:
+          hash: ${{ steps.hash.outputs.hash }}
+          platform: ${{ matrix.platform }}
+          arch: ${{ matrix.arch }}
+          variant: ${{ matrix.variant }}
+          target: ${{ matrix.target }}
+          glibc: ${{ matrix.glibc }}
+      # Non-Darwin jobs provide explicit cross-target inputs, so the composite's
+      # native Rust-test branch (target == '') is skipped. Darwin skips that test
+      # branch by platform. The composite still builds real native artifacts.
+
+  binary:
+    name: Binary ${{ matrix.id }}
+    needs: native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: linux-x64, os: ubuntu-22.04, native: 'veyyon-natives-linux-x64-*-h*' }
+          - { id: linux-arm64, os: ubuntu-24.04-arm, native: 'veyyon-natives-linux-arm64-h*' }
+          - { id: darwin-x64, os: macos-15-intel, native: 'veyyon-natives-darwin-x64-baseline-h*' }
+          - { id: darwin-arm64, os: macos-14, native: 'veyyon-natives-darwin-arm64-h*' }
+          - { id: win32-x64, os: ubuntu-22.04, native: 'veyyon-natives-win32-x64-baseline-h*' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: ./.github/actions/bun-install
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ matrix.native }}
+          path: natives/bridge/bindings/native
+          merge-multiple: true
+      - name: Build exact release target
+        run: bun run ci:release:build-binaries
+        env:
+          RELEASE_TARGETS: ${{ matrix.id }}
+      - name: Verify binary identity and smoke start
+        if: matrix.id != 'win32-x64'
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+          BINARY: packages/coding-agent/binaries/veyyon-${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          actual=$("$BINARY" --version)
+          [[ "$actual" == *"${TAG#v}"* ]]
+          [[ "$actual" == *"${EXPECTED_SHA:0:10}"* ]]
+          "$BINARY" --smoke-test
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fast-release-binary-${{ matrix.id }}
+          path: packages/coding-agent/binaries/veyyon-*
+          if-no-files-found: error
+
+  verify-windows:
+    name: Verify Windows binary startup
+    needs: binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fast-release-binary-win32-x64
+          path: .
+      - name: Verify Windows version and smoke startup
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: |
+          $actual = (& .\veyyon-windows-x64.exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "--version failed: $LASTEXITCODE" }
+          $expectedVersion = $env:TAG.Substring(1)
+          if ($actual -notlike "*$expectedVersion*" -or $actual -notlike "*$($env:EXPECTED_SHA.Substring(0,10))*") { throw "Wrong version or source SHA: $actual" }
+          & .\veyyon-windows-x64.exe --smoke-test
+          if ($LASTEXITCODE -ne 0) { throw "--smoke-test failed: $LASTEXITCODE" }
+
+  upload-draft:
+    name: Upload complete asset set to existing draft
+    needs: [native, binary, verify-windows]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: fast-release-binary-*
+          path: packages/coding-agent/binaries
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: veyyon-natives-*-h*
+          path: packages/coding-agent/binaries
+          merge-multiple: true
+      - name: Create checksum sidecars and verify complete asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/coding-agent/binaries
+          for file in veyyon-* veyyon_natives.*; do
+            [ -f "$file" ] || continue
+            case "$file" in *.sha256) continue;; esac
+            sha256sum "$file" > "$file.sha256"
+          done
+          printf '%s\n' \
+            veyyon-linux-x64 veyyon-linux-arm64 veyyon-darwin-x64 veyyon-darwin-arm64 veyyon-windows-x64.exe \
+            veyyon_natives.linux-x64-baseline.node veyyon_natives.linux-x64-modern.node veyyon_natives.linux-arm64.node \
+            veyyon_natives.darwin-x64-baseline.node veyyon_natives.darwin-arm64.node veyyon_natives.win32-x64-baseline.node | sort > expected
+          printf '%s\n' veyyon-* veyyon_natives.* | grep -v '\.sha256$' | sort > actual
+          diff -u expected actual
+          for file in veyyon-* veyyon_natives.*; do case "$file" in *.sha256) continue;; esac; sha256sum -c "$file.sha256"; done
+      - name: Upload assets to existing draft and verify manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft == true) | .id")
+          test -n "$release_id"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" packages/coding-agent/binaries/veyyon-* packages/coding-agent/binaries/veyyon_natives.* --clobber
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq '.[].name' | sort > remote
+          (cd packages/coding-agent/binaries && printf '%s\n' veyyon-linux-x64 veyyon-linux-x64.sha256 veyyon-linux-arm64 veyyon-linux-arm64.sha256 veyyon-darwin-x64 veyyon-darwin-x64.sha256 veyyon-darwin-arm64 veyyon-darwin-arm64.sha256 veyyon-windows-x64.exe veyyon-windows-x64.exe.sha256 veyyon_natives.linux-x64-baseline.node veyyon_natives.linux-x64-baseline.node.sha256 veyyon_natives.linux-x64-modern.node veyyon_natives.linux-x64-modern.node.sha256 veyyon_natives.linux-arm64.node veyyon_natives.linux-arm64.node.sha256 veyyon_natives.darwin-x64-baseline.node veyyon_natives.darwin-x64-baseline.node.sha256 veyyon_natives.darwin-arm64.node veyyon_natives.darwin-arm64.node.sha256 veyyon_natives.win32-x64-baseline.node veyyon_natives.win32-x64-baseline.node.sha256 | sort) > expected
+          diff -u expected remote
+
+# Uploads assets to an existing draft; a separate authorized step controls publication.
