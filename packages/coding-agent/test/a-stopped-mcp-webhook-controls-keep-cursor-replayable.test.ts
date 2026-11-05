@@ -54,6 +54,10 @@ async function fixture(truncated: boolean, reentrantStop: boolean): Promise<Webh
 	let count = 0;
 	const server: Server = createServer((request, response) => {
 		void (async () => {
+			if (request.method !== "POST") {
+				response.writeHead(405).end();
+				return;
+			}
 			const json = JSON.parse(await text(request)) as { id?: string | number; method?: string };
 			if (json.id === undefined) {
 				response.writeHead(202).end();

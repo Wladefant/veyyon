@@ -1532,7 +1532,9 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		const manager = new MCPManager(process.cwd());
 		const recordedCursors: Array<string | null> = [];
-		manager.setOnEventCursor((_name, _key, cursor) => recordedCursors.push(cursor));
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			recordedCursors.push(cursor);
+		});
 		manager.setOnEvent(async (_name, occurrence) => {
 			if (occurrence.eventId !== "reentrant-original") return;
 			manager.setOnEvent(undefined);
@@ -1598,7 +1600,9 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		const manager = new MCPManager(process.cwd());
 		const cursors: Array<string | null> = [];
-		manager.setOnEventCursor((_name, _key, cursor) => cursors.push(cursor));
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			cursors.push(cursor);
+		});
 		manager.setOnEvent(async (_name, occurrence) => {
 			if (occurrence.eventId === "external-original") {
 				firstAcceptanceEntered.resolve();
@@ -1653,7 +1657,9 @@ describe("MCPManager event subscription contracts", () => {
 		});
 		const manager = new MCPManager(process.cwd());
 		const persistedCursors: Array<string | null> = [];
-		manager.setOnEventCursor((_name, _key, cursor) => persistedCursors.push(cursor));
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			persistedCursors.push(cursor);
+		});
 		manager.setOnEvent(async (_name, occurrence) => {
 			if (occurrence.eventId !== "obsolete-handler-event") return;
 			oldEntered.resolve();
@@ -1856,14 +1862,14 @@ describe("MCPManager event subscription contracts", () => {
 			});
 			manager.setOnEventCursor((_name, _key, cursor) => {
 				successorCursors.push(cursor);
-				if (cursor === "successor-occurrence-cursor") successorCursorPersisted.resolve();
+				if (cursor === "successor-page-cursor") successorCursorPersisted.resolve();
 			});
 			releaseOld.resolve();
 			await withinHandlerChange(staleSetterSettled.promise, "obsolete cursor setter completed");
 			await withinHandlerChange(successorDelivered.promise, "successor event delivery");
 			await withinHandlerChange(successorCursorPersisted.promise, "successor durable cursor callback");
 			expect(staleCursorWrites).toBe(0);
-			expect(successorCursors).toContain("successor-occurrence-cursor");
+			expect(successorCursors).toContain("successor-page-cursor");
 			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
 			expect(polls).toBe(2);
 		} finally {
@@ -2604,7 +2610,7 @@ describe("MCPManager event subscription contracts", () => {
 		const manager = new MCPManager(process.cwd());
 		manager.setOnEventCursor(() => {});
 		manager.addConnectionStatusListener(status => {
-			if (status.serverName === aName && status.type === "reconnecting") {
+			if (status.type === "reconnecting" && status.serverName === aName) {
 				spuriousReconnects.push(status.type);
 			}
 		});
@@ -2621,12 +2627,9 @@ describe("MCPManager event subscription contracts", () => {
 				await releaseFirst.promise;
 				// A callback may not join an external reconnect that is waiting for
 				// this very callback to finish its old-stream drain.
-				await withinHandlerChange(
-					expect(manager.reconnectServer(aName)).rejects.toThrow(
-						"An MCP event callback cannot await its server's in-flight reconnect",
-					),
-					"same-server reentrant reconnect refusal",
-				);
+				await expect(
+					withinHandlerChange(manager.reconnectServer(aName), "same-server reentrant reconnect refusal"),
+				).rejects.toThrow("An MCP event callback cannot await its server's in-flight reconnect");
 				// This callback belongs to the transport being replaced. It must
 				// not replace the handler shared by the new A and unrelated B.
 				manager.setOnEvent(() => { stolen++; });
@@ -2701,7 +2704,7 @@ describe("MCPManager event subscription contracts", () => {
 		const manager = new MCPManager(process.cwd());
 		const suspensions: string[] = [];
 		manager.addConnectionStatusListener(status => {
-			if (status.serverName === name && status.type === "failed" && status.error.includes("suspended after")) {
+			if (status.type === "failed" && status.serverName === name && status.error.includes("suspended after")) {
 				suspensions.push(status.error);
 			}
 		});
