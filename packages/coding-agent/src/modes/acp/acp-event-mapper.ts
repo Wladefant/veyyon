@@ -197,7 +197,7 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 		}
 		case "tool_execution_end": {
 			const resultContent = [
-				...extractDiffToolCallContent(event.result),
+				...extractDiffToolCallContent(event.result, options.cwd),
 				...extractToolCallContent(event.result, options),
 			];
 			const content = mergeToolUpdateContent(
@@ -560,13 +560,15 @@ function buildToolTitle(toolName: string, args: unknown, intent: string | undefi
  * file whose name ends in a colon and a line range. `splitPathAndSel` uses the
  * strict grammar, so a colon that is part of a real filename survives.
  */
-function toAcpLocationPath(value: string, cwd?: string): string {
+function toAcpLocationPath(value: string, cwd?: string): string | undefined {
 	const { path: bare } = splitPathAndSel(value);
 	if (!cwd) return bare;
 	try {
 		return resolveToCwd(bare, cwd);
 	} catch {
-		return bare;
+		// A failed filesystem-path validation must not become an editor
+		// navigation target. Raw tool arguments remain available separately.
+		return undefined;
 	}
 }
 
@@ -576,7 +578,7 @@ function extractToolLocations(args: unknown, cwd?: string): ToolCallLocation[] {
 	const pushPath = (raw: string | undefined) => {
 		if (!raw) return;
 		const path = toAcpLocationPath(raw, cwd);
-		if (seen.has(path)) return;
+		if (!path || seen.has(path)) return;
 		seen.add(path);
 		locations.push({ path });
 	};
@@ -604,7 +606,7 @@ function extractToolLocationsFromResult(result: unknown, cwd?: string): ToolCall
 		const raw = extractStringProperty<PathContainer>(entry, "path");
 		if (!raw) continue;
 		const path = toAcpLocationPath(raw, cwd);
-		if (seen.has(path)) continue;
+		if (!path || seen.has(path)) continue;
 		seen.add(path);
 		locations.push({ path });
 	}
@@ -612,7 +614,7 @@ function extractToolLocationsFromResult(result: unknown, cwd?: string): ToolCall
 }
 
 /** Emit a `diff` ToolCallContent for each per-file edit result that carries oldText/newText. */
-function extractDiffToolCallContent(result: unknown): ToolCallContent[] {
+function extractDiffToolCallContent(result: unknown, cwd?: string): ToolCallContent[] {
 	if (typeof result !== "object" || result === null) return [];
 	const details = (result as { details?: unknown }).details;
 	if (typeof details !== "object" || details === null) return [];
@@ -620,17 +622,22 @@ function extractDiffToolCallContent(result: unknown): ToolCallContent[] {
 	const perFile = (details as { perFileResults?: unknown }).perFileResults;
 	const entries: unknown[] = Array.isArray(perFile) ? perFile : [details];
 	for (const entry of entries) {
-		const block = buildDiffContent(entry);
+		const block = buildDiffContent(entry, cwd);
 		if (block) blocks.push(block);
 	}
 	return blocks;
 }
 
-function buildDiffContent(entry: unknown): ToolCallContent | undefined {
+function buildDiffContent(entry: unknown, cwd?: string): ToolCallContent | undefined {
 	if (typeof entry !== "object" || entry === null) return undefined;
 	const candidate = entry as { path?: unknown; oldText?: unknown; newText?: unknown; isError?: unknown };
 	if (candidate.isError === true) return undefined;
-	const path = typeof candidate.path === "string" && candidate.path.length > 0 ? candidate.path : undefined;
+	const rawPath = typeof candidate.path === "string" && candidate.path.length > 0 ? candidate.path : undefined;
+	if (!rawPath) return undefined;
+	// Diff.path is an editor navigation target. With a session cwd it must
+	// use the same validation and absolute-path contract as locations[].
+	// No-cwd legacy callers retain their original relative path bytes.
+	const path = cwd ? toAcpLocationPath(rawPath, cwd) : rawPath;
 	if (!path) return undefined;
 	const oldText = typeof candidate.oldText === "string" ? candidate.oldText : undefined;
 	const newText = typeof candidate.newText === "string" ? candidate.newText : undefined;

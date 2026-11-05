@@ -105,6 +105,10 @@
 - Agent session forks now restore the original session identity when publishing the new transcript fails ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 
+### Fixed
+
+- ACP tool-call locations omit paths rejected by session-cwd validation ([Refs #874](https://github.com/Wladefant/veyyon/issues/874)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
