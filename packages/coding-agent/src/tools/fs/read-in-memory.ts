@@ -95,16 +95,6 @@ export async function buildInMemoryTextResult(
 	const hasTrailingNewline = text.endsWith("\n");
 	const contentLines = hasTrailingNewline && allLines.length > 1 ? allLines.length - 1 : allLines.length;
 	const contextCeiling = requestedEnd > contentLines ? allLines.length : contentLines;
-	const expanded = expandRangeWithContext(
-		requestedStart,
-		requestedEnd,
-		contextCeiling,
-		!rawDisplay && offset !== undefined && offset > 1,
-		!rawDisplay && limit !== undefined,
-	);
-	const startLine = expanded.startLine;
-	const endLineExpanded = expanded.endLine;
-	const startLineDisplay = startLine + 1;
 
 	const resultBuilder = toolResult(details);
 	if (options.sourcePath) {
@@ -132,7 +122,7 @@ export async function buildInMemoryTextResult(
 		const expanded = expandRangeWithContext(
 			requestedStart,
 			requestedEnd,
-			allLines.length,
+			contextCeiling,
 			padStart && !rawDisplay && offset !== undefined && offset > 1,
 			!rawDisplay && limit !== undefined,
 		);

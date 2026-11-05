@@ -2,162 +2,36 @@
  * Component for displaying bash command execution with streaming output.
  */
 
-import { Container, ImageProtocol, Loader, TERMINAL, Text, type TUI } from "@veyyon/tui";
+import { ImageProtocol, TERMINAL, Text, type TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { theme } from "../../../../theme/theme-binding";
-import type { OutputMeta } from "../../../../tools/core/output-meta";
 import {
 	getSixelLineMask,
 	isSixelPassthroughEnabled,
 	sanitizeWithOptionalSixelPassthrough,
 } from "../../../../utils/sixel";
-import {
-	buildExecutionFrame,
-	buildStatusFooter,
-	clampExecutionDisplayLine,
-	createCollapsedPreview,
-	EXECUTION_PREVIEW_LINES,
-	type ExecutionStatus,
-	resolveExecutionStatus,
-	StreamedOutputLines,
-} from "./execution-shared";
+import { clampExecutionDisplayLine, ExecutionBlockComponent } from "./execution-shared";
 
-export class BashExecutionComponent extends Container {
-	#output = new StreamedOutputLines(clampLinesPreservingSixel);
-	#status: ExecutionStatus = "running";
-	#exitCode: number | undefined = undefined;
-	#signal?: string;
-	#loader: Loader;
-	#meta?: OutputMeta;
-	#expanded = false;
-	#displayDirty = false;
-	#contentContainer: Container;
-	#headerText: Text;
-
+export class BashExecutionComponent extends ExecutionBlockComponent {
 	constructor(
 		private readonly command: string,
 		ui: TUI,
 		excludeFromContext = false,
 	) {
-		// Dim header for excluded-from-context commands (`!!` prefix).
 		const colorKey = excludeFromContext ? "dim" : "bashMode";
-		const { contentContainer, loader } = buildExecutionFrame(this, ui, colorKey);
-		this.#contentContainer = contentContainer;
-		this.#loader = loader;
-
-		// Command header
-		this.#headerText = new Text(theme.fg(colorKey, theme.bold(`$ ${command}`)), 2, 0);
-		this.#contentContainer.addChild(this.#headerText);
-		this.#contentContainer.addChild(this.#loader);
+		super({
+			ui,
+			colorKey,
+			header: () => new Text(theme.fg(colorKey, theme.bold(`$ ${command}`)), 2, 0),
+			sanitize: output => sanitizeWithOptionalSixelPassthrough(output, sanitizeText),
+			clampLines: clampLinesPreservingSixel,
+			rawLineMask: lines =>
+				TERMINAL.imageProtocol === ImageProtocol.Sixel && isSixelPassthroughEnabled()
+					? getSixelLineMask(lines)
+					: undefined,
+		});
 	}
 
-	/**
-	 * Transcript finalization contract (see `FinalizableBlock`): the collapsed
-	 * streaming preview rewrites its tail window every chunk, so the block must
-	 * stay out of native scrollback until the command completes.
-	 */
-	isTranscriptBlockFinalized(): boolean {
-		return this.#status !== "running";
-	}
-
-	/**
-	 * Set whether the output is expanded (shows full output) or collapsed (preview only).
-	 */
-	setExpanded(expanded: boolean): void {
-		this.#expanded = expanded;
-		this.#updateDisplay();
-	}
-
-	override invalidate(): void {
-		super.invalidate();
-		this.#displayDirty = false;
-		this.#updateDisplay();
-	}
-
-	appendOutput(chunk: string): void {
-		this.#output.push(chunk);
-		this.#displayDirty = true;
-	}
-
-	setComplete(
-		exitCode: number | undefined,
-		cancelled: boolean,
-		options?: { output?: string; meta?: OutputMeta; signal?: string },
-	): void {
-		this.#exitCode = exitCode;
-		this.#signal = options?.signal;
-		this.#status = options?.signal !== undefined ? "error" : resolveExecutionStatus(exitCode, cancelled);
-		this.#meta = options?.meta;
-		if (options?.output !== undefined) {
-			this.#setOutput(options.output);
-		}
-		this.#loader.stop();
-		this.#updateDisplay();
-	}
-
-	setOutput(output: string): void {
-		this.#setOutput(output);
-		this.#updateDisplay();
-	}
-
-	override render(width: number): readonly string[] {
-		if (this.#displayDirty) {
-			this.#displayDirty = false;
-			this.#updateDisplay();
-		}
-		return super.render(width);
-	}
-
-	#updateDisplay(): void {
-		const availableLines = this.#output.lines();
-		const previewLogicalLines = availableLines.slice(-EXECUTION_PREVIEW_LINES);
-		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
-		const sixelLineMask =
-			TERMINAL.imageProtocol === ImageProtocol.Sixel && isSixelPassthroughEnabled()
-				? getSixelLineMask(availableLines)
-				: undefined;
-		const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
-		this.#contentContainer.clear();
-		this.#contentContainer.addChild(this.#headerText);
-		if (availableLines.length > 0) {
-			if (this.#expanded || hasSixelOutput) {
-				const displayText = availableLines
-					.map((line, index) => (sixelLineMask?.[index] ? line : theme.fg("muted", line)))
-					.join("\n");
-				this.#contentContainer.addChild(new Text(`\n${displayText}`, 2, 0));
-			} else {
-				const styledOutput = previewLogicalLines.map(line => theme.fg("muted", line)).join("\n");
-				this.#contentContainer.addChild(createCollapsedPreview(`\n${styledOutput}`, EXECUTION_PREVIEW_LINES));
-			}
-		}
-		if (this.#status === "running") {
-			this.#contentContainer.addChild(this.#loader);
-		} else {
-			const footer = buildStatusFooter({
-				status: this.#status,
-				exitCode: this.#exitCode,
-				signal: this.#signal,
-				meta: this.#meta,
-				hiddenLineCount,
-				droppedLineCount: this.#output.dropped(),
-				suppressHiddenCount: hasSixelOutput,
-			});
-			if (footer) this.#contentContainer.addChild(footer);
-		}
-	}
-
-	#setOutput(output: string): void {
-		const clean = sanitizeWithOptionalSixelPassthrough(output, sanitizeText);
-		this.#output.replace(clean ? clampLinesPreservingSixel(clean.split("\n")) : []);
-	}
-
-	getOutput(): string {
-		return this.#output.lines().join("\n");
-	}
-
-	/**
-	 * Get the command that was executed.
-	 */
 	getCommand(): string {
 		return this.command;
 	}

@@ -145,11 +145,10 @@ export class OutputMetaBuilder {
 	truncation(result: TruncationResult, options: TruncationOptions): this {
 		if (!result.truncated) return this;
 
-		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId, artifactElidedBytes } = options;
+		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId, artifactElidedBytes, maxBytes } = options;
 		if (artifactElidedBytes && artifactElidedBytes > 0) {
 			this.#meta.artifactElidedBytes = artifactElidedBytes;
 		}
-		const { direction, startLine = 1, totalFileLines, totalLinesUnknown, artifactId, maxBytes } = options;
 		const outputLines = result.outputLines ?? result.totalLines;
 		const outputBytes = result.outputBytes ?? result.totalBytes;
 		const isMiddle = direction === "middle" || result.truncatedBy === "middle";

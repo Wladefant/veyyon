@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows release builds compile merged kernel, transcript and read-output helpers without missing exports or duplicate declarations.
+- Provider finish errors use one exported formatter and classification pattern.
+
 ## [1.8.2] - 2026-11-05
 
 ### Fixed

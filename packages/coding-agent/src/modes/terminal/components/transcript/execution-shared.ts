@@ -324,7 +324,7 @@ export class ExecutionBlockComponent extends Container {
 	#status: ExecutionStatus = "running";
 	#exitCode: number | undefined;
 	#signal: string | undefined;
-	#truncation: TruncationMeta | undefined;
+	#meta: OutputMeta | undefined;
 	#expanded = false;
 	#displayDirty = false;
 
@@ -370,12 +370,12 @@ export class ExecutionBlockComponent extends Container {
 	setComplete(
 		exitCode: number | undefined,
 		cancelled: boolean,
-		options?: { output?: string; truncation?: TruncationMeta; signal?: string },
+		options?: { output?: string; meta?: OutputMeta; signal?: string },
 	): void {
 		this.#exitCode = exitCode;
 		this.#signal = options?.signal;
 		this.#status = options?.signal !== undefined ? "error" : resolveExecutionStatus(exitCode, cancelled);
-		this.#truncation = options?.truncation;
+		this.#meta = options?.meta;
 		if (options?.output !== undefined) {
 			this.#setOutput(options.output);
 		}
@@ -434,7 +434,7 @@ export class ExecutionBlockComponent extends Container {
 				status: this.#status,
 				exitCode: this.#exitCode,
 				signal: this.#signal,
-				truncation: this.#truncation,
+				meta: this.#meta,
 				hiddenLineCount,
 				droppedLineCount: this.#output.dropped(),
 			});

@@ -30,7 +30,7 @@ export function providerFinishErrorMessage(reason: string | undefined): string {
  * legacy alternatives would reclassify history.
  */
 export const PROVIDER_FINISH_ERROR_PATTERN =
-	/\bProvider (?:returned error finish_reason|finish_reason:\s*error)\b|\bGeneration failed with (?:stop|finish) reason:\s*error\b/i;
+	/\bProvider (?:returned error finish_reason|finish_reason:\s*(?:error|insufficient_system_resource))\b|\bGeneration failed with (?:stop|finish) reason:\s*error\b/i;
 
 /** Structured HTTP errors thrown by provider clients. */
 export interface ProviderHttpErrorOptions {

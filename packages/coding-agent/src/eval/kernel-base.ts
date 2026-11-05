@@ -647,6 +647,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#alive = true;
 	#disposed = false;
 	#shutdownConfirmed = false;
+	#stopReason: string | undefined;
 	#exitedPromise: Promise<number> | null = null;
 	#shutdownPromise: Promise<KernelShutdownResult> | null = null;
 	#ownedProcess: Process | null | undefined;
