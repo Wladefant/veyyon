@@ -4,6 +4,8 @@
  * drives the child session; this module watches it.
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 import type { AgentEvent } from "@veyyon/agent-core";
 import type { Usage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -50,7 +52,7 @@ import {
 	type TaskToolDetails,
 } from "./types";
 
-export type AbortReason = "signal" | "terminate" | "timeout" | "budget";
+export type AbortReason = "signal" | "terminate" | "timeout" | "budget" | "stalled";
 
 /** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */
 export const BUDGET_STOP_GRACE_REQUESTS = 5;
@@ -251,23 +253,26 @@ export interface RunMonitorArgs {
  * processing, abort/budget machinery, usage accumulation, and output capture
  * for one assignment run.
  */
+export type WatchdogPhase = "startup" | "streaming" | "tool-running" | "waiting-child";
+
+export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> = {
+	startup: 120_000,
+	streaming: 180_000,
+	"tool-running": 900_000,
+	"waiting-child": 1_800_000,
+};
+
 export interface AgentRunMonitor {
 	readonly progress: AgentProgress;
-	/** Fires when the run was asked to stop (caller signal, timeout, budget, terminate). */
 	readonly abortSignal: AbortSignal;
 	readonly accumulatedUsage: Usage;
 	hasUsage(): boolean;
 	yieldCalled(): boolean;
 	runtimeLimitExceeded(): boolean;
-	/** True once the soft-budget stop fired: the free-running turn was aborted and the run is being driven to a forced final yield. */
 	budgetStopRequested(): boolean;
-	/** Resolves when the budget-stop session abort has settled (immediately when no stop fired). */
 	waitForBudgetStop(): Promise<void>;
-	/** The abort kind for this run, when an abort was requested. */
 	abortKind(): AbortReason | undefined;
-	/** True when the abort carries a precise external reason (signal / wall-clock / budget). */
 	hasExplicitAbortReason(): boolean;
-	/** Whether the (attempted) abort counts as a cancelled run rather than an internal failure. */
 	isAbortedRun(): boolean;
 	requestAbort(reason: AbortReason): void;
 	abortActiveSession(): Promise<void>;
@@ -275,17 +280,16 @@ export interface AgentRunMonitor {
 	resolveSignalAbortReason(): string;
 	resolveAbortReasonText(): string;
 	setActiveSession(session: AgentSession | null): void;
-	/** Return and clear the active session reference. */
 	takeActiveSession(): AgentSession | null;
-	/** Subscribe the monitor to a session's events. Returns the unsubscribe function. */
 	attach(session: AgentSession): () => void;
-	/** Best-effort capture of the last assistant text for cancelled-run salvage. */
 	captureSalvage(session: AgentSession): void;
 	lastAssistantSalvageText(): string | undefined;
-	/** Final raw output: end-of-run assistant text when available, else accumulated chunks. */
 	rawOutput(): string;
 	scheduleProgress(flush?: boolean): void;
-	/** Stop processing events and clear listeners/timers. Call once the run settled. */
+	watchdogPhase(): WatchdogPhase;
+	stallRecoveryCount(): number;
+	prepareStallRecovery(): boolean;
+	abortCleanupSettled(): boolean;
 	finish(): void;
 }
 
@@ -359,10 +363,15 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	let runtimeLimitExceeded = false;
 	const listenerController = new AbortController();
 	const listenerSignal = listenerController.signal;
-	const abortController = new AbortController();
-	const abortSignal = abortController.signal;
+	let abortController = new AbortController();
+	let abortSignal = abortController.signal;
 	let activeSession: AgentSession | null = null;
 	let yieldCalled = false;
+	let watchdogPhase: WatchdogPhase = "startup";
+	let lastProgressEventAt = Date.now();
+	let watchdogTimer: NodeJS.Timeout | undefined;
+	let stallRecoveries = 0;
+	const activeWatchdogTools = new Map<string, string>();
 	let yieldCallPending = false;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
@@ -374,6 +383,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	let budgetStopAbortPromise: Promise<void> | undefined;
 	let lastAssistantSalvageText: string | undefined;
 	let activeSessionAbortPromise: Promise<void> | undefined;
+	let abortCleanupSettled = false;
 
 	// Expand the child's own shorthand at the RETURN boundary before its raw
 	// assistant text becomes the parent's tool result. See `expandAgentReturn`
@@ -389,16 +399,19 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			return text;
 		}
 	};
-
 	const abortActiveSession = (): Promise<void> => {
 		clearWaitHints();
 		const session = activeSession;
 		if (!session) return Promise.resolve();
-		activeSessionAbortPromise ??= session.abort().catch(error => {
-			logger.debug("Agent session abort cleanup failed", {
-				error: errorMessage(error),
-			});
-		});
+		activeSessionAbortPromise ??= session.abort().then(
+			() => {
+				abortCleanupSettled = true;
+			},
+			error => {
+				abortCleanupSettled = false;
+				logger.debug("Agent session abort cleanup failed", { error: errorMessage(error) });
+			},
+		);
 		return activeSessionAbortPromise;
 	};
 
@@ -425,6 +438,17 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		abortController.abort();
 		void abortActiveSession();
 	};
+	const armPhaseWatchdog = (): void => {
+		clearTimeout(watchdogTimer);
+		watchdogTimer = undefined;
+		if (resolved || abortSignal.aborted) return;
+		const limit = PHASE_WATCHDOG_LIMITS_MS[watchdogPhase];
+		watchdogTimer = setTimeout(() => {
+			if (resolved || abortSignal.aborted || Date.now() - lastProgressEventAt < limit) return;
+			requestAbort("stalled");
+		}, limit);
+	};
+	armPhaseWatchdog();
 
 	// Soft-budget stop: cancel the free-running turn WITHOUT aborting the
 	// monitor, so driveSessionToYield can still drive one forced final yield.
@@ -525,6 +549,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		if (budgetStopRequested) {
 			return `Soft request budget exceeded (${progress.requests} requests; budget ${softRequestBudget})`;
 		}
+		if (abortReason === "stalled") return `Agent stalled after ${stallRecoveries + 1} no-progress interval(s)`;
 		return resolveSignalAbortReason();
 	};
 	const PROGRESS_COALESCE_MS = 150;
@@ -972,13 +997,6 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 				return false;
 		}
 	};
-
-	const processEvent = (event: AgentEvent) => {
-		if (resolved) return;
-		scheduleProgress(applyAgentEvent(event));
-	};
-
-	/** Apply a session-level retry event to the progress state. True when the event was one. */
 	const applyRetryEvent = (event: AgentSessionEvent): boolean => {
 		switch (event.type) {
 			case "auto_retry_start":
@@ -1016,6 +1034,68 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			default:
 				return false;
 		}
+	};
+	const processEvent = (event: AgentEvent) => {
+		if (resolved) return;
+		if (event.type === "tool_execution_start") activeWatchdogTools.set(event.toolCallId, event.toolName);
+		else if (event.type === "tool_execution_end") activeWatchdogTools.delete(event.toolCallId);
+		let hasWaitingChild = false;
+		for (const toolName of activeWatchdogTools.values()) {
+			if (toolName === "task") {
+				hasWaitingChild = true;
+				break;
+			}
+		}
+		const phase = activeWatchdogTools.size === 0 ? "streaming" : hasWaitingChild ? "waiting-child" : "tool-running";
+		const phaseChanged = phase !== watchdogPhase;
+		const previousOutput = recentOutputTail;
+		const previousTaskDetails = progress.inflightTaskDetails;
+		watchdogPhase = phase;
+		const flush = applyAgentEvent(event);
+		const assistantEvent = event.type === "message_update" ? event.assistantMessageEvent : undefined;
+		const progressEvent =
+			event.type === "agent_start" ||
+			event.type === "turn_start" ||
+			event.type === "turn_end" ||
+			event.type === "message_start" ||
+			event.type === "message_end" ||
+			event.type === "tool_execution_start" ||
+			event.type === "tool_execution_end" ||
+			event.type === "agent_end" ||
+			(event.type === "message_update" &&
+				((assistantEvent?.type === "text_delta" &&
+					typeof assistantEvent.delta === "string" &&
+					assistantEvent.delta.length > 0) ||
+					recentOutputTail !== previousOutput)) ||
+			(event.type === "tool_execution_update" &&
+				!isDeepStrictEqual(previousTaskDetails, progress.inflightTaskDetails));
+		if (phaseChanged || progressEvent) {
+			lastProgressEventAt = Date.now();
+			armPhaseWatchdog();
+		}
+		scheduleProgress(flush);
+	};
+	const prepareStallRecovery = (): boolean => {
+		if (
+			yieldCalled ||
+			abortReason !== "stalled" ||
+			stallRecoveries >= 1 ||
+			!abortSignal.aborted ||
+			!abortCleanupSettled
+		)
+			return false;
+		activeWatchdogTools.clear();
+		stallRecoveries += 1;
+		abortController = new AbortController();
+		abortSignal = abortController.signal;
+		abortSent = false;
+		abortReason = undefined;
+		abortCleanupSettled = false;
+		activeSessionAbortPromise = undefined;
+		lastProgressEventAt = Date.now();
+		watchdogPhase = "startup";
+		armPhaseWatchdog();
+		return true;
 	};
 
 	const attach = (session: AgentSession): (() => void) => {
@@ -1071,20 +1151,30 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 
 	return {
 		progress,
-		abortSignal,
+		get abortSignal() {
+			return abortSignal;
+		},
 		accumulatedUsage,
 		hasUsage: () => hasUsage,
 		yieldCalled: () => yieldCalled,
 		runtimeLimitExceeded: () => runtimeLimitExceeded,
 		hasExplicitAbortReason: () =>
-			abortReason === "signal" || runtimeLimitExceeded || budgetLimitExceeded || budgetStopRequested,
+			abortReason === "signal" ||
+			abortReason === "stalled" ||
+			runtimeLimitExceeded ||
+			budgetLimitExceeded ||
+			budgetStopRequested,
 		budgetStopRequested: () => budgetStopRequested,
 		waitForBudgetStop: () => budgetStopAbortPromise ?? Promise.resolve(),
 		// A soft stop that never escalated still identifies as a budget abort so
 		// the lifecycle can park the agent as resumable instead of killing it.
 		abortKind: () => abortReason ?? (budgetStopRequested ? "budget" : undefined),
 		isAbortedRun: () =>
-			abortReason === "signal" || runtimeLimitExceeded || budgetLimitExceeded || abortReason === undefined,
+			abortReason === "signal" ||
+			abortReason === "stalled" ||
+			runtimeLimitExceeded ||
+			budgetLimitExceeded ||
+			abortReason === undefined,
 		requestAbort,
 		abortActiveSession,
 		waitForActiveSessionAbort,
@@ -1105,7 +1195,13 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		lastAssistantSalvageText: () => lastAssistantSalvageText,
 		rawOutput: () => (finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("")),
 		scheduleProgress,
+		watchdogPhase: () => watchdogPhase,
+		stallRecoveryCount: () => stallRecoveries,
+		prepareStallRecovery,
+		abortCleanupSettled: () => abortCleanupSettled,
 		finish: () => {
+			clearTimeout(watchdogTimer);
+			watchdogTimer = undefined;
 			resolved = true;
 			clearWaitHints();
 			listenerController.abort();

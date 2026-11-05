@@ -212,4 +212,18 @@ describe("run monitor idle-wait hints", () => {
 		aborted.monitor.finish();
 		replaced.monitor.finish();
 	});
+	it("keeps the child-wait limit while another concurrent tool finishes", async () => {
+		vi.useFakeTimers();
+		const harness = createMonitor("gpt-6.1-sol");
+		harness.emit(toolStart("task", {}, "child-call"));
+		harness.emit(toolStart("bash", { command: "build" }, "build-call"));
+		harness.emit({ type: "tool_execution_end", toolName: "bash", toolCallId: "build-call" } as AgentSessionEvent);
+		expect(harness.monitor.watchdogPhase()).toBe("waiting-child");
+		vi.advanceTimersByTime(900_001);
+		expect(harness.monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(900_000);
+		await flushMicrotasks();
+		expect(harness.monitor.abortKind()).toBe("stalled");
+		harness.monitor.finish();
+	});
 });

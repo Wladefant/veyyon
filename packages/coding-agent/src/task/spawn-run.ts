@@ -18,6 +18,7 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import { agentPrompts } from "../prompts/agent/rows";
 import { planModePrompts } from "../prompts/plan-mode/rows";
 import { toolsPrompts } from "../prompts/tools/rows";
+import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { TOOL } from "../tools/core/builtin-names";
 import {
@@ -46,6 +47,7 @@ import { AgentOutputManager } from "./output-manager";
 import { createOwnershipLease, type OwnershipLease } from "./ownership-lease";
 import {
 	claimSuccessorCheckpoint,
+	releasePreDispatchSuccessorClaim,
 	type SuccessorCheckpoint,
 	successorWorkflow,
 	writeSuccessorCheckpoint,
@@ -646,15 +648,38 @@ async function runPreparedSpawn(
 				Date.now() - startTime,
 			);
 		}
-		const predecessor = AgentRegistry.global().get(params.successorOf);
-		if (predecessor?.status === "running") {
+		const registry = AgentRegistry.global();
+		const predecessor = registry.get(params.successorOf);
+		if (predecessor && (predecessor.session !== null || !predecessor.terminalOutcome)) {
 			return spawnRefusal(
-				`successor-predecessor-active: ${params.successorOf} has not stopped`,
+				`successor-predecessor-active: ${params.successorOf} has not settled cancellation and cleanup`,
 				projectAgentsDir,
 				Date.now() - startTime,
 			);
 		}
+		const predecessorOutcome = predecessor?.terminalOutcome;
+		const predecessorStatus = predecessor?.status;
 		checkpoint = await claimSuccessorCheckpoint(spawn.artifacts.dir, params.successorOf, agentId, workflow);
+		const current = registry.get(params.successorOf);
+		if (
+			current !== predecessor ||
+			(current &&
+				(current.session !== null ||
+					!current.terminalOutcome ||
+					current.terminalOutcome !== predecessorOutcome ||
+					current.status !== predecessorStatus))
+		) {
+			const released = await releasePreDispatchSuccessorClaim(spawn.artifacts.dir, params.successorOf, agentId);
+			return spawnRefusal(
+				`successor-predecessor-active: ${params.successorOf} changed while its checkpoint was being claimed${released ? "" : "; its claim remains reserved"}`,
+				projectAgentsDir,
+				Date.now() - startTime,
+			);
+		}
+		if (current) {
+			registry.setStatus(params.successorOf, "aborted");
+			await AgentLifecycleManager.global().release(params.successorOf);
+		}
 		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint, ownershipLease);
 	}
 	if (ownershipLease && Date.parse(ownershipLease.expiresAt) <= Date.now()) {

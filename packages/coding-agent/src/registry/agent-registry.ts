@@ -56,6 +56,8 @@ export function mainAgentIdFor(sessionId: string): string {
  */
 export const AGENT_STATUSES = ["running", "idle", "parked", "aborted"] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
+export const AGENT_TERMINAL_OUTCOMES = ["completed", "failed", "startup-failed", "cancelled", "stalled"] as const;
+export type AgentTerminalOutcome = (typeof AGENT_TERMINAL_OUTCOMES)[number];
 
 /**
  * The status transitions a live process may perform, keyed by the current status.
@@ -185,6 +187,9 @@ export interface AgentRef {
 	 * time. The full exclusion is this total PLUS the open interval, if any.
 	 */
 	approvalWaitedMs?: number;
+	/** Final result of this assignment, retained on the ref for roster/history consumers. */
+	terminalOutcome?: AgentTerminalOutcome;
+	terminalOutcomeReason?: string;
 }
 
 /** Host-resolved lineage. Names and message bodies never establish a relationship. */
@@ -360,6 +365,12 @@ export class AgentRegistry {
 
 	#applyStatus(ref: AgentRef, status: AgentStatus): void {
 		ref.status = status;
+		if (status === "running") {
+			// A new turn is a new assignment; retain the prior outcome only until
+			// activity resumes, then accept the new run's terminal report.
+			ref.terminalOutcome = undefined;
+			ref.terminalOutcomeReason = undefined;
+		}
 		// Activity describes current work; it is meaningless once the agent
 		// leaves `running`, so drop it to avoid showing stale work in rosters.
 		if (status !== "running") ref.activity = undefined;
@@ -661,6 +672,15 @@ export class AgentRegistry {
 
 	get(id: string): AgentRef | undefined {
 		return this.#refs.get(id);
+	}
+	/** Record the assignment's final outcome; later reports cannot overwrite it. */
+	recordTerminalOutcome(id: string, outcome: AgentTerminalOutcome, reason?: string): void {
+		const ref = this.#refs.get(id);
+		if (!ref || ref.terminalOutcome !== undefined) return;
+		ref.terminalOutcome = outcome;
+		ref.terminalOutcomeReason = reason;
+		ref.lastActivity = Date.now();
+		this.#emit({ type: "status_changed", ref });
 	}
 
 	list(): AgentRef[] {

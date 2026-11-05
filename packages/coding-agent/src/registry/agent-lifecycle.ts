@@ -10,6 +10,7 @@
  * `parked` ↔ `idle`.
  */
 
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { clamp, errorMessage, logger } from "@veyyon/utils";
 import type { AgentSession } from "../session/agent-session";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID, type RegistryEvent } from "./agent-registry";
@@ -122,6 +123,8 @@ function adoption(
  * the agent was allowed to sit parked.
  */
 const REVIVE_RECHECK_MS = 1_000;
+const TERMINAL_PARKED_TTL_MS = 5 * 60_000;
+const PARKED_ORPHAN_RECHECK_MS = 30_000;
 
 /**
  * Report a session's turns to the registry: `agent_start` on an `idle` ref makes
@@ -178,6 +181,7 @@ export class AgentLifecycleManager {
 		this.#parking.clear();
 		this.#pinned.clear();
 		this.#persistedReviverFactory = undefined;
+		this.#orphanSweepDeadline = undefined;
 	}
 
 	readonly #registry: AgentRegistry;
@@ -198,6 +202,7 @@ export class AgentLifecycleManager {
 	#persistedReviverFactory: PersistedAgentReviverFactory | undefined;
 	/** One process-wide next-deadline timer; never one poller/timer per agent. */
 	#timer: NodeJS.Timeout | undefined;
+	#orphanSweepDeadline: number | undefined;
 	/** TTL policy applied when a cold-revived ref is adopted on demand. */
 	#persistedReviveTtl: number | PersistedAgentIdleTtlResolver = 0;
 	/**
@@ -215,6 +220,8 @@ export class AgentLifecycleManager {
 	constructor(registry: AgentRegistry = AgentRegistry.global()) {
 		this.#registry = registry;
 		this.#unsubscribe = registry.onChange(event => this.#onRegistryEvent(event));
+		this.#orphanSweepDeadline = Date.now() + PARKED_ORPHAN_RECHECK_MS;
+		this.#scheduleNext();
 	}
 
 	/**
@@ -475,6 +482,78 @@ export class AgentLifecycleManager {
 		}
 		this.#registry.unregister(id);
 	}
+	/**
+	 * Release parked task refs whose recorded parent has disappeared. Root sessions
+	 * and unattributed refs are intentionally outside this cleanup rule.
+	 */
+	async cleanupParkedOrphans(): Promise<void> {
+		for (const ref of this.#registry.list()) {
+			if (
+				ref.kind !== "sub" ||
+				ref.status !== "parked" ||
+				!ref.parentId ||
+				this.#registry.get(ref.parentId) ||
+				this.#parking.has(ref.id) ||
+				this.#revivals.has(ref.id)
+			) {
+				continue;
+			}
+			const reason = "Parent session no longer exists.";
+			if (!ref.terminalOutcome && !(await this.#reportStalled(ref, reason))) continue;
+			const current = this.#registry.get(ref.id);
+			if (
+				current !== ref ||
+				current.status !== "parked" ||
+				this.#parking.has(ref.id) ||
+				this.#revivals.has(ref.id) ||
+				this.#registry.get(ref.parentId)
+			) {
+				continue;
+			}
+			if (!ref.terminalOutcome) this.#registry.recordTerminalOutcome(ref.id, "stalled", reason);
+			await this.release(ref.id);
+		}
+	}
+
+	async #reportStalled(ref: AgentRef, reason: string): Promise<boolean> {
+		const parentSession = ref.parentId ? this.#registry.get(ref.parentId)?.session : undefined;
+		let manager = parentSession?.sessionManager;
+		let ownedManager = false;
+		try {
+			if (!manager) {
+				if (!ref.sessionFile) return false;
+				manager = await SessionManager.open(ref.sessionFile, undefined, undefined, { suppressBreadcrumb: true });
+				ownedManager = true;
+			}
+			const content = `Agent "${ref.id}" stalled: ${reason}`;
+			manager.appendCustomMessageEntry(
+				"agent-terminal-outcome",
+				content,
+				true,
+				{ agentId: ref.id, outcome: "stalled", reason },
+				"agent",
+			);
+			await manager.flush();
+			return true;
+		} catch (error) {
+			logger.warn("AgentLifecycleManager: stalled outcome could not be persisted; keeping agent registered", {
+				id: ref.id,
+				error: errorMessage(error),
+			});
+			return false;
+		} finally {
+			if (ownedManager) {
+				try {
+					await manager?.close();
+				} catch (error) {
+					logger.warn("AgentLifecycleManager: stalled outcome session close failed", {
+						id: ref.id,
+						error: errorMessage(error),
+					});
+				}
+			}
+		}
+	}
 
 	/**
 	 * Kill an agent and everything it spawned: abort the turn each one is in the
@@ -569,7 +648,7 @@ export class AgentLifecycleManager {
 	async prune(id: string): Promise<void> {
 		const ref = this.#registry.get(id);
 		const reviving = this.#revivals.has(id);
-		if (ref?.status !== "parked" || reviving) {
+		if (ref?.status !== "parked" || reviving || this.#parking.has(id)) {
 			const adopted = this.#adopted.get(id);
 			if (adopted) {
 				if (reviving) arm(adopted, Date.now() + REVIVE_RECHECK_MS, "prune");
@@ -583,6 +662,20 @@ export class AgentLifecycleManager {
 			waitingOnPeer: ref.waitingOnPeer === true,
 			parkedForMs: Date.now() - ref.lastActivity,
 		});
+		if (!ref.terminalOutcome) {
+			const reason = "Assignment was pruned before reporting a terminal outcome.";
+			if (!(await this.#reportStalled(ref, reason))) {
+				const adopted = this.#adopted.get(id);
+				if (adopted) arm(adopted, Date.now() + PARKED_ORPHAN_RECHECK_MS, "prune");
+				this.#scheduleNext();
+				return;
+			}
+			const current = this.#registry.get(id);
+			if (current !== ref || current.status !== "parked" || this.#revivals.has(id) || this.#parking.has(id)) return;
+			this.#registry.recordTerminalOutcome(id, "stalled", reason);
+		}
+		const current = this.#registry.get(id);
+		if (current !== ref || current.status !== "parked" || this.#revivals.has(id) || this.#parking.has(id)) return;
 		await this.release(id);
 	}
 
@@ -590,6 +683,7 @@ export class AgentLifecycleManager {
 	async dispose(): Promise<void> {
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
+		this.#orphanSweepDeadline = undefined;
 		this.#clearTimer();
 		const ids = Array.from(this.#adopted.keys());
 		await Promise.all(ids.map(id => this.release(id)));
@@ -660,7 +754,12 @@ export class AgentLifecycleManager {
 			return;
 		}
 		if (ref?.status === "parked") {
-			const budget = ref.waitingOnPeer === true ? adopted.pruneWaitingAfterMs : adopted.pruneAfterMs;
+			const budget =
+				ref.terminalOutcome !== undefined
+					? TERMINAL_PARKED_TTL_MS
+					: ref.waitingOnPeer === true
+						? adopted.pruneWaitingAfterMs
+						: adopted.pruneAfterMs;
 			if (budget > 0) {
 				arm(adopted, ref.lastActivity + budget, "prune");
 				return;
@@ -676,27 +775,21 @@ export class AgentLifecycleManager {
 
 	#scheduleNext(): void {
 		this.#clearTimer();
-		let nextDeadline = Number.POSITIVE_INFINITY;
+		let nextDeadline = this.#orphanSweepDeadline ?? Number.POSITIVE_INFINITY;
 		for (const adopted of this.#adopted.values()) {
 			if (adopted.deadline !== undefined) nextDeadline = Math.min(nextDeadline, adopted.deadline);
 		}
 		if (!Number.isFinite(nextDeadline)) return;
-		// Node clamps larger delays to 1 ms. Bound the single scheduler delay and
-		// re-evaluate later instead of accidentally expiring a long-lived cache.
 		const delay = clamp(nextDeadline - Date.now(), 0, 2_147_483_647);
 		this.#timer = setTimeout(() => {
 			this.#timer = undefined;
 			const now = Date.now();
-			// Stage is captured with the id: the expiry decides what to do, and reading
-			// it later could see a stage rewritten by a status change in between.
+			const sweepOrphans = this.#orphanSweepDeadline !== undefined && this.#orphanSweepDeadline <= now;
+			if (sweepOrphans) this.#orphanSweepDeadline = now + PARKED_ORPHAN_RECHECK_MS;
 			const due: Array<{ id: string; stage: "park" | "prune" }> = [];
 			for (const [id, adopted] of this.#adopted) {
 				if (adopted.deadline === undefined || adopted.deadline > now) continue;
 				const stage = adopted.stage;
-				// Clear before deciding. A due deadline left in place is one `#scheduleNext`
-				// immediately re-reads as the next wake, and since it is already in the past
-				// the delay is zero, so an entry nothing can act on would spin the scheduler
-				// forever instead of failing once. Re-derive it from the ref instead.
 				disarm(adopted);
 				if (stage === undefined) {
 					this.#refreshDeadline(id, adopted);
@@ -704,39 +797,32 @@ export class AgentLifecycleManager {
 				}
 				due.push({ id, stage });
 			}
-			this.#scheduleNext();
-			// Expiries are drained in order so a large idle cohort cannot trigger
-			// an unbounded burst of persistence and process teardown work. That
-			// serialization is also what makes a captured stage go stale: while an
-			// earlier agent's flush is in flight, a later one can be woken, run a turn
-			// and go idle again.
 			void (async () => {
+				if (sweepOrphans) await this.cleanupParkedOrphans();
 				for (const { id, stage } of due) {
 					const adopted = this.#adopted.get(id);
-					// Every due entry was disarmed above, so a deadline here means something
-					// re-derived one during the drain: a status change, or a re-adoption. That
-					// fresh deadline describes the agent as it is now, while the captured stage
-					// describes it as it was before the drain started, so the stage is dropped
-					// rather than applied. No action is lost; the scheduler already holds the
-					// newer one.
 					if (!adopted || adopted.deadline !== undefined) continue;
 					if (stage === "park") await this.park(id);
 					else await this.prune(id);
 				}
+				this.#scheduleNext();
 			})();
 		}, delay);
 		this.#timer.unref?.();
 	}
 
 	#onRegistryEvent(event: RegistryEvent): void {
-		const adopted = this.#adopted.get(event.ref.id);
-		if (!adopted) {
-			if (event.type === "registered") this.#adoptRestored(event.ref);
-			return;
-		}
 		if (event.type === "removed") {
 			this.#adopted.delete(event.ref.id);
 			this.#scheduleNext();
+			void this.cleanupParkedOrphans().catch(error =>
+				logger.warn("AgentLifecycleManager.cleanupParkedOrphans failed", { error: errorMessage(error) }),
+			);
+			return;
+		}
+		const adopted = this.#adopted.get(event.ref.id);
+		if (!adopted) {
+			if (event.type === "registered") this.#adoptRestored(event.ref);
 			return;
 		}
 		if (event.type !== "status_changed") return;
