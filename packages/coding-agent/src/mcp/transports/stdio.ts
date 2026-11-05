@@ -672,6 +672,33 @@ export class StdioTransport implements MCPTransport {
 			for (const m of message) this.#handleMessage(m);
 			return;
 		}
+		// JSONL can contain primitives; reject each member without losing its valid siblings.
+		if (message === null || typeof message !== "object") {
+			logger.warn("Ignored an unreadable message from an MCP server", {
+				server: this.config.command,
+				failureType: "type",
+				fix: "If a tool call from this server hangs, this is likely why. Check the server's own logs.",
+			});
+			return;
+		}
+		// Validate method-bearing peer frames before interpreting id:null errors:
+		// a request/error hybrid must not reject every pending client call.
+		// Correlated client replies have a separate validation path.
+		if ("method" in message) {
+			const params = message.params;
+			if (
+				message.jsonrpc !== "2.0" ||
+				typeof message.method !== "string" ||
+				(params !== undefined && (typeof params !== "object" || params === null || Array.isArray(params))) ||
+				("id" in message && typeof message.id !== "string" && typeof message.id !== "number") ||
+				"result" in message ||
+				"error" in message
+			) {
+				logger.warn("Ignored invalid MCP stdio peer method envelope");
+				return;
+			}
+		}
+
 		// An error the server could not attribute to a request (`"id": null`), which the spec
 		// requires for a parse error. It used to fall past every branch below and be dropped, so
 		// each caller waited out its timeout and reported that the server had not answered. The
