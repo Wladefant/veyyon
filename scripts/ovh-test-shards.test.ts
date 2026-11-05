@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseSelectedLines, planShards, runCli } from "./ovh-test-shards.mjs";
@@ -52,6 +52,44 @@ describe("OVH test shard planner", () => {
 		expect(parseSelectedLines("a\nb\n")).toEqual(["a", "b"]);
 		expect(parseSelectedLines("a\r\nb\r\n")).toEqual(["a", "b"]);
 		expect(() => parseSelectedLines("a\n\nb")).toThrow(/empty/);
+	});
+});
+
+// WHY: a valid planner invocation can emit a stale or incomplete shard plan while --verify stays green.
+// This checks every output that the workflow consumes; it does not measure the accuracy of duration estimates.
+describe("OVH shard planner writes the selected plan", () => {
+	let dir: string;
+	beforeEach(async () => {
+		dir = await mkdtemp(path.join(tmpdir(), "ovh-plan-"));
+	});
+	afterEach(async () => {
+		await rm(dir, { recursive: true, force: true });
+	});
+
+	it("writes shard files, plan JSON and the matching GitHub matrix", async () => {
+		const input = path.join(dir, "selected.txt");
+		const output = path.join(dir, "shards");
+		const githubOutput = path.join(dir, "github-output");
+		await writeFile(input, "b.test.ts\na.test.ts\n");
+		await writeFile(githubOutput, "previous=value\n");
+		const plan = await runCli(["--input", input, "--output", output], { GITHUB_OUTPUT: githubOutput });
+		expect(plan.shards.flatMap(shard => shard.files)).toEqual(["a.test.ts", "b.test.ts"]);
+		expect(JSON.parse(await readFile(path.join(output, "plan.json"), "utf8"))).toEqual(plan);
+		for (const shard of plan.shards) {
+			expect(await readFile(path.join(output, `shard-${shard.index}.txt`), "utf8"))
+				.toBe(shard.files.join("\n") + (shard.files.length ? "\n" : ""));
+		}
+		const lines = (await readFile(githubOutput, "utf8")).trimEnd().split("\n");
+		expect(lines[0]).toBe("previous=value");
+		expect(lines).toHaveLength(2);
+		expect(JSON.parse(lines[1]!.slice("matrix=".length))).toEqual({
+			include: plan.shards.map(shard => ({
+				index: shard.index,
+				count: plan.shardCount,
+				files: shard.files.length,
+				projected_ms: shard.durationMs,
+			})),
+		});
 	});
 });
 
