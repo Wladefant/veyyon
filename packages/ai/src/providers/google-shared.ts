@@ -167,13 +167,16 @@ interface GoogleWireTraits {
 	readonly sendsPartId: boolean;
 	/**
 	 * What a tool call with no usable signature sends. Gemini 3 requires a thought signature on
-	 * the function calls it makes; for calls we cannot sign (cross-model replay, secret-redacted
-	 * args, the secondary calls of a parallel turn) the public Gemini API accepts the
-	 * `skip_thought_signature_validator` sentinel as a bypass. Cloud Code Assist / Antigravity
-	 * and Vertex AI reject that sentinel with 400 INVALID_ARGUMENT, permanently wedging any
-	 * session whose history holds one, so those transports omit the field instead. (#9638)
+	 * function calls across conversation history. An imported turn's first function call may
+	 * carry Google's `skip_thought_signature_validator` bypass sentinel.
+	 *
+	 * - Public Gemini API (`google-generative-ai`): sends sentinel on all unsigned calls.
+	 * - Cloud Code Assist (`google-gemini-cli`): sends sentinel only on the first imported call
+	 *   per model turn; same-model unsigned parallel calls stay unsigned. (#9638, #844)
+	 * - Vertex AI: omits signatures on unsigned calls.
 	 */
 	readonly unsignedCallSignature: string | undefined;
+	readonly unsignedForeignCallSignature: string | undefined;
 	/**
 	 * Tool-result images nest inside `functionResponse.parts`. Gemini 3+ and the
 	 * non-Gemini models behind Cloud Code Assist / Antigravity accept that shape;
@@ -193,6 +196,10 @@ function googleWireTraits<T extends GoogleApiType>(model: Model<T>): GoogleWireT
 			model.provider !== "google-vertex" &&
 			(model.id.startsWith("claude-") || (model.api === "google-generative-ai" && gemini3)),
 		unsignedCallSignature: gemini3 && model.api === "google-generative-ai" ? SKIP_THOUGHT_SIGNATURE : undefined,
+		unsignedForeignCallSignature:
+			gemini3 && (model.api === "google-generative-ai" || model.api === "google-gemini-cli")
+				? SKIP_THOUGHT_SIGNATURE
+				: undefined,
 		multimodalFunctionResponse: geminiMajorVersion === undefined || geminiMajorVersion >= 3,
 	};
 }
@@ -283,6 +290,7 @@ class GoogleContentWriter {
 		// Signatures are replayed only to the provider and model that minted them.
 		const sameModel = message.provider === this.model.provider && message.model === this.model.id;
 		const parts: Part[] = [];
+		let firstFunctionCall = true;
 		for (const block of message.content) {
 			let part: Part | undefined;
 			switch (block.type) {
@@ -293,7 +301,8 @@ class GoogleContentWriter {
 					part = this.#thinkingPart(block, messageIndex, sameModel);
 					break;
 				case "toolCall":
-					part = this.#functionCallPart(block, messageIndex, sameModel);
+					part = this.#functionCallPart(block, messageIndex, sameModel, firstFunctionCall);
+					firstFunctionCall = false;
 					break;
 			}
 			if (part) parts.push(part);
@@ -315,7 +324,7 @@ class GoogleContentWriter {
 		return { text: renderDemotedThinking(this.model.id, block.thinking) };
 	}
 
-	#functionCallPart(block: ToolCall, messageIndex: number, sameModel: boolean): Part {
+	#functionCallPart(block: ToolCall, messageIndex: number, sameModel: boolean, firstFunctionCall: boolean): Part {
 		this.#emittedToolCallNames.set(block.id, block.name);
 		// Elided by either signature rule means the call falls through the same path as one
 		// that never had a signature: it sends the transport's unsigned-call signature.
@@ -326,7 +335,11 @@ class GoogleContentWriter {
 		const functionCall: FunctionCallPart = { name: block.name, args: block.arguments ?? {} };
 		if (this.traits.sendsPartId) functionCall.id = block.id;
 		const part: Part = { functionCall };
-		const effectiveSignature = thoughtSignature || this.traits.unsignedCallSignature;
+		const effectiveSignature =
+			thoughtSignature ||
+			(!sameModel && firstFunctionCall
+				? this.traits.unsignedForeignCallSignature
+				: this.traits.unsignedCallSignature);
 		if (effectiveSignature) part.thoughtSignature = effectiveSignature;
 		return part;
 	}

@@ -34,6 +34,8 @@
 - Keep credential-bearing broker URL details out of missing-token errors ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Use credential-safe broker provenance in source descriptions instead of echoing the configured endpoint ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
+- Cloud Code Assist Gemini 3 replay sends the bypass sentinel on each imported turn's first function call and leaves unsigned parallel calls unchanged ([#844](https://github.com/Wladefant/veyyon/issues/844)).
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed
