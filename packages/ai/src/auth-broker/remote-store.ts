@@ -8,6 +8,7 @@
  * runs isn't required.
  */
 import { scheduler } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import * as logger from "@veyyon/utils/logger";
 import {
@@ -43,9 +44,12 @@ import type {
  */
 const USAGE_CACHE_TTL_MS = 15_000;
 const CREDENTIAL_BLOCK_RECONCILE_DELAY_MS = 5 * 60_000;
+const MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS = 3;
 const WAIT_THRESHOLD_MS = 1_000;
 const MAX_WAIT_MS = 5_000;
 const BACKGROUND_WAIT_MS = 30_000;
+// Reconcile an idle but still-open SSE transport against the canonical broker.
+const SNAPSHOT_STREAM_IDLE_VERIFY_MS = 60_000;
 const BACKGROUND_BACKOFF = { baseMs: 500, maxMs: 30_000, jitter: 0 };
 
 function compareCredentialBlockSnapshots(a: CredentialBlockSnapshot, b: CredentialBlockSnapshot): number {
@@ -87,6 +91,20 @@ function credentialBlockSnapshotsEqual(
 		}
 	}
 	return true;
+}
+
+/**
+ * Only durable broker state can reset the SSE idle reconciliation deadline.
+ * These time-relative countdowns change on every server snapshot even with
+ * identical generation, grants, safety blocks, and refresh policy. Keep their
+ * original values in the stored snapshot; exclude them only from progress tests.
+ */
+function credentialSseProgressState(entry: SnapshotEntry): SnapshotEntry {
+	return { ...entry, rotatesInMs: null };
+}
+
+function refresherSseProgressState(schedule: RefresherSchedule): RefresherSchedule {
+	return { ...schedule, nextSweepInMs: 0 };
 }
 
 function snapshotBlocksChanged(previous: readonly SnapshotEntry[], next: readonly SnapshotEntry[]): boolean {
@@ -262,6 +280,8 @@ export interface RemoteAuthCredentialStoreOptions {
 	 * to long-poll permanently when the broker returns 404. Default `true`.
 	 */
 	streamSnapshots?: boolean;
+	/** Internal synthetic-test seam; production verifies idle SSE once per minute. */
+	snapshotStreamVerifyIntervalMs?: number;
 	/**
 	 * Called after broker-sourced full snapshots are applied. The constructor's
 	 * initial snapshot intentionally does not trigger this hook.
@@ -272,16 +292,27 @@ export interface RemoteAuthCredentialStoreOptions {
 export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	readonly #client: AuthBrokerClient;
 	readonly #streamSnapshots: boolean;
+	readonly #snapshotStreamVerifyIntervalMs: number;
 	readonly #onSnapshot?: (snapshot: SnapshotResponse, generation: number) => void;
 	#snapshot: SnapshotResponse = emptySnapshot();
+	/** Wall time remains necessary for broker-provided rotatesInMs deadlines. */
 	#snapshotReceivedAt = Date.now();
+	/** Inactivity is elapsed time and must survive backward system-clock steps. */
+	#snapshotReceivedMonotonicAt = performance.now();
 	#generation = 0;
+	/** Monotonic revision of accepted broker state AND local edits; fences stale GETs across restarts and disables. */
+	#appliedSnapshotRevision = 0;
 	#usageOverlays: Map<string, UsageReport> = new Map();
 	#backgroundAbort = new AbortController();
 	#cache: Map<string, CacheEntry> = new Map();
 	#usageCache?: UsageCacheEntry;
 	#usageInflight?: Promise<UsageReport[] | null>;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
+	#pendingCredentialBlockMutations = new Map<number, Set<symbol>>();
+	#credentialBlockReconciliationPending = new Set<number>();
+	#credentialBlockReconciliationInFlight = false;
+	/** Also fences GETs against non-speculative DELETE requests begun during the read. */
+	#credentialBlockMutationEpoch = 0;
 	#usageCacheEpoch = 0;
 	#closed = false;
 	/**
@@ -299,6 +330,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	constructor(opts: RemoteAuthCredentialStoreOptions) {
 		this.#client = opts.client;
 		this.#streamSnapshots = opts.streamSnapshots ?? true;
+		const intervalMs = opts.snapshotStreamVerifyIntervalMs ?? SNAPSHOT_STREAM_IDLE_VERIFY_MS;
+		if (!Number.isSafeInteger(intervalMs) || intervalMs < 1) {
+			throw new RangeError("Auth broker idle snapshot verification interval must be a positive integer");
+		}
+		this.#snapshotStreamVerifyIntervalMs = intervalMs;
 		this.#applySnapshot(opts.initialSnapshot ?? emptySnapshot(), opts.initialSnapshot?.generation ?? 0);
 		this.#onSnapshot = opts.onSnapshot;
 		void this.#runBackground();
@@ -315,12 +351,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#applySnapshot(snapshot: SnapshotResponse, generation: number, protectNewBlocks = true): void {
 		const nowMs = Date.now();
 		const previousCredentials = this.#snapshot.credentials;
-		const credentials = snapshot.credentials.map(entry => normalizeSnapshotEntryBlocks(entry, nowMs));
+		const previousById = new Map<number, SnapshotEntry>(previousCredentials.map(entry => [entry.id, entry] as const));
+		const credentials = snapshot.credentials.map(entry =>
+			this.#retainPendingCredentialBlocks(normalizeSnapshotEntryBlocks(entry, nowMs), previousById.get(entry.id)),
+		);
 		if (snapshotBlocksChanged(previousCredentials, credentials)) this.#invalidateUsageCache();
 		if (protectNewBlocks) this.#protectNewSnapshotBlocks(previousCredentials, credentials, nowMs);
 		this.#snapshot = { ...snapshot, credentials };
 		this.#generation = generation;
+		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = nowMs;
+		this.#snapshotReceivedMonotonicAt = performance.now();
 		const onSnapshot = this.#onSnapshot;
 		if (!onSnapshot) return;
 		try {
@@ -328,6 +369,52 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		} catch (error) {
 			this.#reportStaleSnapshot("snapshot-callback", error, { generation });
 		}
+	}
+
+	/**
+	 * A broker restart may reset the numeric generation. Only the local applied-state
+	 * revision can prove whether an in-flight GET predates newer client state.
+	 */
+	/**
+	 * An incoming SSE/GET frame can describe broker state from before an in-flight
+	 * block POST completed. Keep local speculative restrictions while accepting
+	 * distinct broker-authoritative scopes (and the stricter deadline for a shared
+	 * scope). Discarding all incoming blocks would temporarily unblock a peer's
+	 * already-committed restriction while our own POST is still held.
+	 * After all writes settle, reconcile against the canonical broker to retire
+	 * any speculative block that was never accepted.
+	 */
+	#retainPendingCredentialBlocks(incoming: SnapshotEntry, previous: SnapshotEntry | undefined): SnapshotEntry {
+		if (!previous || !this.#pendingCredentialBlockMutations.has(incoming.id)) return incoming;
+		this.#credentialBlockReconciliationPending.add(incoming.id);
+		const merged = new Map<string, CredentialBlockSnapshot>();
+		for (const block of incoming.blocks ?? []) {
+			merged.set(credentialBlockKey(incoming.id, block.providerKey, block.blockScope), block);
+		}
+		for (const block of previous.blocks ?? []) {
+			const key = credentialBlockKey(incoming.id, block.providerKey, block.blockScope);
+			const authoritative = merged.get(key);
+			if (!authoritative || block.blockedUntilMs > authoritative.blockedUntilMs) {
+				merged.set(key, block);
+			}
+		}
+		const blocks = [...merged.values()].sort(compareCredentialBlockSnapshots);
+		if (blocks.length > 0) return { ...incoming, blocks };
+		const next: SnapshotEntry = { ...incoming };
+		delete next.blocks;
+		return next;
+	}
+
+	#applyFetchedSnapshot(snapshot: SnapshotResponse, generation: number, revisionAtRequest: number): boolean {
+		if (revisionAtRequest !== this.#appliedSnapshotRevision) {
+			logger.debug("auth-broker stale snapshot response ignored", {
+				currentGeneration: this.#generation,
+				responseGeneration: generation,
+			});
+			return false;
+		}
+		this.#applySnapshot(snapshot, generation);
+		return true;
 	}
 
 	/**
@@ -369,13 +456,74 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	/**
+	 * A same-generation snapshot is not new broker progress when its effective
+	 * credential state and refresh policy have not changed. The broker recomputes
+	 * timestamps and countdowns on every response; those cannot postpone an
+	 * authoritative reconciliation. Preserve pending local safety blocks while
+	 * comparing broker frames, just as for SSE, without changing wire values.
+	 */
+	#isNoProgressSnapshot(snapshot: SnapshotResponse): boolean {
+		if (snapshot.generation !== this.#generation) return false;
+		const previousById = new Map(this.#snapshot.credentials.map(entry => [entry.id, entry] as const));
+		return (
+			isDeepStrictEqual(
+				snapshot.credentials
+					.map(entry =>
+						credentialSseProgressState(this.#retainPendingCredentialBlocks(
+							normalizeSnapshotEntryBlocks(entry, Date.now()), previousById.get(entry.id),
+						)),
+					)
+					.sort((a, b) => a.id - b.id),
+				this.#snapshot.credentials.map(credentialSseProgressState).sort((a, b) => a.id - b.id),
+			) &&
+			isDeepStrictEqual(
+				refresherSseProgressState(snapshot.refresher),
+				refresherSseProgressState(this.#snapshot.refresher),
+			)
+		);
+	}
+
 	async #pollSnapshot(): Promise<void> {
-		const result = await this.#client.fetchSnapshot({
-			ifGenerationGt: this.#generation,
-			waitMs: BACKGROUND_WAIT_MS,
-			signal: this.#backgroundAbort.signal,
-		});
-		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+		const generationAtRequest = this.#generation;
+		const revisionAtRequest = this.#appliedSnapshotRevision;
+		// Broker generations are process-local: after a restart, a changed
+		// credential set can reuse our last numeric generation. Conditional
+		// polls would then return 304 forever. Reuse the idle verifier's
+		// monotonic deadline to periodically fetch canonical broker truth,
+		// while preserving ordinary 30s conditional long-polls between checks.
+		const pollStartedAt = performance.now();
+		const needsCanonicalVerification =
+			pollStartedAt - this.#snapshotReceivedMonotonicAt >= this.#snapshotStreamVerifyIntervalMs;
+		const result = await this.#client.fetchSnapshot(
+			needsCanonicalVerification
+				? { signal: this.#backgroundAbort.signal }
+				: {
+						ifGenerationGt: generationAtRequest,
+						waitMs: BACKGROUND_WAIT_MS,
+						signal: this.#backgroundAbort.signal,
+					},
+		);
+		if (result.status === 200) {
+			// A conditional 200 with no durable progress is no fresher than a 304:
+			// a broken relay may replay only different timestamps/countdowns forever.
+			// Unconditional canonical GETs are authoritative even at a reused generation.
+			if (needsCanonicalVerification || !this.#isNoProgressSnapshot(result.snapshot)) {
+				this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+				return;
+			}
+		} else if (needsCanonicalVerification) {
+			// An unconditional read must return broker truth; a 304 cannot establish freshness.
+			throw new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot");
+		}
+		// A faulty proxy may return 304 or an unchanged 200 immediately instead
+		// of holding the requested long-poll. Pace only the unused wait window,
+		// capped by the monotonic canonical-GET deadline.
+		const remainingPollMs = BACKGROUND_WAIT_MS - (performance.now() - pollStartedAt);
+		const remainingVerifyMs =
+			this.#snapshotStreamVerifyIntervalMs - (performance.now() - this.#snapshotReceivedMonotonicAt);
+		const paceMs = Math.min(remainingPollMs, remainingVerifyMs);
+		if (paceMs > 0) await scheduler.wait(paceMs, { signal: this.#backgroundAbort.signal });
 	}
 
 	/**
@@ -399,16 +547,94 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return true;
 	}
 
+	/**
+	 * Heartbeat comments are filtered by the SSE parser, and a half-open proxy
+	 * can hold a stream forever. An idle canonical GET bounds stale views while
+	 * retaining the existing applied-revision fence and pending safety blocks.
+	 */
+	async #verifyIdleSnapshotStream(signal: AbortSignal): Promise<void> {
+		while (!this.#closed && !signal.aborted) {
+			try {
+				await scheduler.wait(this.#snapshotStreamVerifyIntervalMs, { signal });
+			} catch {
+				return; // Stream closed or store shutdown; never leave an orphan timer.
+			}
+			if (this.#closed || signal.aborted) return;
+			if (performance.now() - this.#snapshotReceivedMonotonicAt < this.#snapshotStreamVerifyIntervalMs) continue;
+			const revisionAtRequest = this.#appliedSnapshotRevision;
+			try {
+				const result = await this.#client.fetchSnapshot({ signal });
+				if (result.status === 200) {
+					this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+				} else {
+					this.#reportStaleSnapshot(
+						"snapshot-stream-idle-verify",
+						new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot"),
+					);
+				}
+			} catch (error) {
+				if (!signal.aborted) this.#reportStaleSnapshot("snapshot-stream-idle-verify", error);
+			}
+		}
+	}
+
 	async #consumeSnapshotStream(): Promise<void> {
+		const revisionAtConnect = this.#appliedSnapshotRevision;
+		let firstFrame = true;
 		const iterator = this.#client.openSnapshotStream({ signal: this.#backgroundAbort.signal });
+		const watchdogAbort = new AbortController();
+		const watchdogSignal = AbortSignal.any([this.#backgroundAbort.signal, watchdogAbort.signal]);
+		// Verify broker truth even when the SSE connection never yields its first
+		// frame (for example a proxy holding the initial response body open).
+		// The existing revision fence rejects a late superseded initial frame.
+		const watchdog = this.#verifyIdleSnapshotStream(watchdogSignal);
 		try {
 			for await (const event of iterator) {
 				if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+				if (firstFrame && event.kind === "snapshot") {
+					// A reconnect starts with an authoritative full snapshot, even after
+					// the broker resets its generation. A newer local GET during connect
+					// instead supersedes that frame; reconnect rather than revert it.
+					if (revisionAtConnect !== this.#appliedSnapshotRevision) {
+						throw new AIError.AuthBrokerError("Auth broker stream initial snapshot superseded during connection");
+					}
+					const { kind: _kind, ...snapshot } = event;
+					// An identical first frame after reconnect is not new broker state.
+					// Use the existing no-progress comparator for equal generations;
+					// a real same-generation update still applies, and a broker restart
+					// with a reset generation remains authoritative on this connection.
+					if (snapshot.generation === this.#generation) this.#applyStreamEvent(event);
+					else this.#applySnapshot(snapshot, snapshot.generation);
+				} else {
+					this.#applyStreamEvent(event);
+				}
+				firstFrame = false;
 				this.#streamingActive = true;
-				this.#applyStreamEvent(event);
 			}
 		} finally {
 			this.#streamingActive = false;
+			watchdogAbort.abort();
+			await watchdog;
+		}
+		if (!this.#closed && !this.#backgroundAbort.signal.aborted) {
+			// A broken relay can complete 200-SSE responses before *any* frame.
+			// Each reconnect cancels the per-stream watchdog before its first tick.
+			// Probe canonical broker truth once the monotonic freshness deadline
+			// has elapsed, then use the existing stream failure backoff rather than
+			// hot-looping through more immediately completed connections.
+			if (performance.now() - this.#snapshotReceivedMonotonicAt >= this.#snapshotStreamVerifyIntervalMs) {
+				const revisionAtRequest = this.#appliedSnapshotRevision;
+				const result = await this.#client.fetchSnapshot({ signal: this.#backgroundAbort.signal });
+				if (result.status === 200) {
+					this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+				} else {
+					this.#reportStaleSnapshot(
+						"snapshot-stream-early-eof",
+						new AIError.AuthBrokerError("Unexpected broker snapshot verification response after SSE EOF"),
+					);
+				}
+			}
+			throw new AIError.AuthBrokerError("Auth broker snapshot stream ended unexpectedly");
 		}
 	}
 
@@ -424,30 +650,54 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					});
 					return;
 				}
+				// Replayed equal-generation state is not progress: accepting it
+				// repeatedly would starve the canonical idle GET and invalidate
+				// in-flight GETs through the applied-revision fence.
+				// Compare the effective view: a locally pending safety block can be
+				// absent from an unchanged broker frame without being fresh state.
+				if (this.#isNoProgressSnapshot(snapshot)) return;
 				this.#applySnapshot(snapshot, snapshot.generation);
 				return;
 			}
 			case "entry": {
 				if (event.generation < this.#generation) return;
+				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
+				const effectiveIncoming = this.#retainPendingCredentialBlocks(
+					normalizeSnapshotEntryBlocks(event.entry, Date.now()), current,
+				);
+				if (
+					event.generation === this.#generation &&
+					current &&
+					isDeepStrictEqual(credentialSseProgressState(current), credentialSseProgressState(effectiveIncoming)) &&
+					isDeepStrictEqual(refresherSseProgressState(event.refresher), refresherSseProgressState(this.#snapshot.refresher))
+				) return;
 				this.#applyStreamEntry(event.entry, event.refresher, event.generation, event.serverNowMs);
 				return;
 			}
 			case "removed": {
 				if (event.generation < this.#generation) return;
+				if (
+					event.generation === this.#generation &&
+					!this.#snapshot.credentials.some(entry => entry.id === event.id) &&
+					isDeepStrictEqual(refresherSseProgressState(event.refresher), refresherSseProgressState(this.#snapshot.refresher))
+				) return;
 				this.#removeStreamCredential(event.id, event.refresher, event.generation, event.serverNowMs);
 				return;
 			}
 		}
 	}
-
 	#applyStreamEntry(
 		entry: SnapshotEntry,
 		refresher: RefresherSchedule,
 		generation: number,
 		serverNowMs: number,
 	): void {
-		const incoming = normalizeSnapshotEntryBlocks(entry, Date.now());
-		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === incoming.id);
+		const normalized = normalizeSnapshotEntryBlocks(entry, Date.now());
+		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === normalized.id);
+		const incoming = this.#retainPendingCredentialBlocks(
+			normalized,
+			index === -1 ? undefined : this.#snapshot.credentials[index],
+		);
 		const previousBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
 		const blocksChanged = !credentialBlockSnapshotsEqual(previousBlocks, incoming.blocks);
 		if (blocksChanged) this.#invalidateUsageCache();
@@ -458,7 +708,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		if (blocksChanged) this.#protectNewSnapshotBlocks(this.#snapshot.credentials, credentials, Date.now());
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
+		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = Date.now();
+		this.#snapshotReceivedMonotonicAt = performance.now();
 	}
 
 	#removeStreamCredential(id: number, refresher: RefresherSchedule, generation: number, serverNowMs: number): void {
@@ -467,13 +719,21 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const credentials = this.#snapshot.credentials.filter(entry => entry.id !== id);
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
 		this.#generation = generation;
+		this.#appliedSnapshotRevision += 1;
 		this.#snapshotReceivedAt = Date.now();
+		this.#snapshotReceivedMonotonicAt = performance.now();
 	}
 
 	/** Re-hydrate the in-memory snapshot from the broker. */
 	async refreshSnapshot(): Promise<SnapshotResponse> {
+		const revisionAtRequest = this.#appliedSnapshotRevision;
 		const result = await this.#client.fetchSnapshot();
-		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+		// An explicit unconditional refresh cannot establish broker truth from
+		// a 304: returning a cached snapshot would misreport stale state as fresh.
+		if (result.status !== 200) {
+			throw new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot");
+		}
+		this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 		return this.#snapshot;
 	}
 
@@ -536,18 +796,114 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return blocks;
 	}
 
+	/**
+	 * A broker GET represents the entire credential snapshot. Never apply it
+	 * while any block POST/DELETE remains unsettled, even for another scope or
+	 * credential: an uncommitted speculative block would disappear from the view.
+	 */
+	#startCredentialBlockMutation(id: number, mutation: symbol): void {
+		let pending = this.#pendingCredentialBlockMutations.get(id);
+		if (!pending) {
+			pending = new Set<symbol>();
+			this.#pendingCredentialBlockMutations.set(id, pending);
+		}
+		pending.add(mutation);
+		this.#credentialBlockMutationEpoch += 1;
+	}
+
+	#settleCredentialBlockMutation(id: number, mutation: symbol, failed: boolean): void {
+		// Even if a newer same-key block succeeds, an older failed speculative
+		// deadline may be longer. Do not retire its failure until a canonical
+		// broker snapshot has replaced every settled local projection.
+		if (failed) this.#credentialBlockReconciliationPending.add(id);
+		const pending = this.#pendingCredentialBlockMutations.get(id);
+		pending?.delete(mutation);
+		if (pending?.size === 0) {
+			this.#pendingCredentialBlockMutations.delete(id);
+		}
+		if (this.#pendingCredentialBlockMutations.size > 0) return;
+		if (this.#credentialBlockReconciliationPending.size > 0) {
+			void this.#reconcileFailedCredentialBlockMutations();
+		} else if (!failed) {
+			this.#maybeRefreshSnapshot("credential block");
+		}
+	}
+
+	/**
+	 * A failed write emits no SSE frame. Once ALL speculative writes settle,
+	 * reconcile their scopes from one authoritative broker snapshot. Retry if
+	 * unrelated SSE, local edits or newer write starts supersede the GET.
+	 */
+	async #reconcileFailedCredentialBlockMutations(): Promise<void> {
+		if (
+			this.#credentialBlockReconciliationInFlight ||
+			this.#pendingCredentialBlockMutations.size > 0 ||
+			this.#credentialBlockReconciliationPending.size === 0
+		) return;
+		this.#credentialBlockReconciliationInFlight = true;
+		// A newer write can settle while an earlier reconciliation GET is still
+		// in flight, preventing its settlement from starting a fresh read.
+		const epochAtStart = this.#credentialBlockMutationEpoch;
+		const cause = "credential-block-mutation-reconcile";
+		try {
+			for (let attempt = 0; attempt < MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS; attempt += 1) {
+				if (this.#pendingCredentialBlockMutations.size > 0) return;
+				const revisionAtRequest = this.#appliedSnapshotRevision;
+				const mutationEpochAtRequest = this.#credentialBlockMutationEpoch;
+				const result = await this.#client.fetchSnapshot();
+				// Even a DELETE that makes no speculative edit must supersede
+				// a GET started before that write was sent.
+				if (this.#pendingCredentialBlockMutations.size > 0) return;
+				if (mutationEpochAtRequest !== this.#credentialBlockMutationEpoch) continue;
+				if (result.status === 200 && this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)) {
+					this.#credentialBlockReconciliationPending.clear();
+					return;
+				}
+			}
+			this.#reportStaleSnapshot(
+				cause,
+				new AIError.AuthBrokerError("Broker credential block reconciliation superseded repeatedly"),
+				{ credentialIds: [...this.#credentialBlockReconciliationPending], attempts: MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS },
+			);
+		} catch (error) {
+			this.#reportStaleSnapshot(cause, error, { credentialIds: [...this.#credentialBlockReconciliationPending] });
+		} finally {
+			this.#credentialBlockReconciliationInFlight = false;
+			// An overlapping write may have settled while the previous GET was
+			// awaiting a response. If that GET failed, its caller cannot schedule
+			// a replacement while the in-flight flag was set. Retry once for the
+			// newer mutation epoch, but never spin on an unchanged broker outage.
+			if (
+				this.#credentialBlockMutationEpoch !== epochAtStart &&
+				this.#pendingCredentialBlockMutations.size === 0 &&
+				this.#credentialBlockReconciliationPending.size > 0
+			) {
+				void this.#reconcileFailedCredentialBlockMutations();
+			}
+		}
+	}
+
+
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
+		const mutation = Symbol("block-upsert");
+		const key = credentialBlockKey(block.credentialId, block.providerKey, block.blockScope);
+		this.#startCredentialBlockMutation(block.credentialId, mutation);
 		this.#upsertSnapshotBlock(block);
 		this.#invalidateUsageCache();
 		this.#credentialBlockReconcileAfter.set(
-			credentialBlockKey(block.credentialId, block.providerKey, block.blockScope),
+			key,
 			Math.min(block.blockedUntilMs, Date.now() + CREDENTIAL_BLOCK_RECONCILE_DELAY_MS),
 		);
 		const body = toCredentialBlockSnapshot(block);
 		void this.#client
 			.upsertCredentialBlock(block.credentialId, body)
-			.then(() => {
-				this.#maybeRefreshSnapshot("credential block");
+			.then(response => {
+				if (!response.ok) {
+					throw new AIError.AuthBrokerError(`Broker refused credential block upsert id=${block.credentialId}`);
+				}
+				// Never fetch an older broker view while any speculative block is
+				// still awaiting its own server acknowledgment.
+				this.#settleCredentialBlockMutation(block.credentialId, mutation, false);
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential block propagation failed", {
@@ -556,25 +912,37 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					blockScope: block.blockScope,
 					error: String(error),
 				});
+				this.#settleCredentialBlockMutation(block.credentialId, mutation, true);
 			});
 	}
 
+
 	deleteCredentialBlocks(credentialId: number): void {
-		this.#deleteSnapshotBlocks(credentialId);
-		for (const key of this.#credentialBlockReconcileAfter.keys()) {
-			if (key.startsWith(`${credentialId}\0`)) this.#credentialBlockReconcileAfter.delete(key);
-		}
-		this.#invalidateUsageCache();
+		// A DELETE covers every block scope for this ID. Its success cannot
+		// unblock a still-pending upsert or a newer accepted local block.
+		const mutation = Symbol("block-delete");
+		this.#startCredentialBlockMutation(credentialId, mutation);
 		void this.#client
 			.deleteCredentialBlocks(credentialId)
-			.then(() => {
-				this.#maybeRefreshSnapshot("credential blocks delete");
+			.then(response => {
+				if (!response.ok) {
+					throw new AIError.AuthBrokerError(`Broker refused credential block deletion id=${credentialId}`);
+				}
+				// A successful DELETE acknowledges its own commit, not the absence
+				// of newer peer safety blocks. With stalled SSE, the local mutation
+				// epoch and applied revision cannot detect broker writes by a peer.
+				// Retain the known restriction until the canonical broker GET is
+				// applied; failed reads remain restrictive and report stale state.
+				this.#credentialBlockReconciliationPending.add(credentialId);
+				this.#settleCredentialBlockMutation(credentialId, mutation, false);
 			})
 			.catch(error => {
 				logger.warn("auth-broker credential blocks delete propagation failed", {
 					id: credentialId,
 					error: String(error),
 				});
+				// The broker may have committed before its reply was lost.
+				this.#settleCredentialBlockMutation(credentialId, mutation, true);
 			});
 	}
 
@@ -594,42 +962,67 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		for (const entry of this.#snapshot.credentials) {
 			if (entry.id !== id) continue;
 			entry.credential = credential as typeof entry.credential;
+			this.#appliedSnapshotRevision += 1;
 			return;
 		}
 	}
 
 	deleteAuthCredential(id: number, disabledCause: string): void {
-		this.#removeCredentialById(id);
-		// Fire-and-forget: tell the broker to persist the disable.
-		this.#client.disableCredential(id, disabledCause).catch(error => {
-			logger.warn("auth-broker disable propagation failed", { id, error: String(error) });
-		});
+		if (!this.#snapshot.credentials.some(entry => entry.id === id)) return;
+		const revisionAtDisable = this.#appliedSnapshotRevision;
+		// The legacy synchronous API cannot confirm a remote disable. Retain the grant
+		// until the broker acknowledges it; stale replies must not erase newer state.
+		void this.#disableCredentialConfirmed(id, disabledCause)
+			.then(() => {
+				if (revisionAtDisable === this.#appliedSnapshotRevision) this.#removeCredentialById(id);
+				this.#maybeRefreshSnapshot("delete credential");
+			})
+			.catch(error => {
+				logger.warn("auth-broker disable propagation failed", { id, error: String(error) });
+			});
+	}
+
+	/** A 2xx response is not revocation confirmation unless the broker reports ok:true. */
+	async #disableCredentialConfirmed(id: number, disabledCause: string): Promise<void> {
+		const response = await this.#client.disableCredential(id, disabledCause);
+		if (!response.ok) {
+			throw new AIError.AuthBrokerError(`Broker refused credential disable id=${id}`);
+		}
 	}
 
 	async deleteAuthCredentialRemote(id: number, disabledCause: string): Promise<boolean> {
 		const found = this.#snapshot.credentials.some(entry => entry.id === id);
 		if (!found) return false;
-		await this.#client.disableCredential(id, disabledCause);
+		const revisionAtDisable = this.#appliedSnapshotRevision;
+		await this.#disableCredentialConfirmed(id, disabledCause);
+		// A newer broker snapshot or local edit may have replaced this same ID while
+		// the disable response was pending. Acknowledging the earlier request does
+		// not authorize evicting the subsequently accepted credential.
+		if (revisionAtDisable !== this.#appliedSnapshotRevision) {
+			this.#maybeRefreshSnapshot("delete credential superseded");
+			throw new AIError.AuthBrokerError(`Broker credential disable superseded by newer state id=${id}`);
+		}
 		this.#removeCredentialById(id);
 		this.#maybeRefreshSnapshot("delete credential");
 		return true;
 	}
 
-	tryDisableAuthCredentialIfMatches(id: number, _expectedData: string, disabledCause: string): boolean {
-		const found = this.#snapshot.credentials.find(entry => entry.id === id);
-		if (!found) return false;
-		this.deleteAuthCredential(id, disabledCause);
-		return true;
+	tryDisableAuthCredentialIfMatches(_id: number, _expectedData: string, _disabledCause: string): boolean {
+		// A redacted local snapshot cannot compare the broker's serialized grant.
+		// Never turn a synchronous CAS into an unconditional remote disable or claim
+		// success before the broker has checked the current refresh-token owner.
+		return false;
 	}
 
 	async waitForFreshSnapshot(maxWaitMs: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
 		const previousGeneration = this.#generation;
+		const revisionAtRequest = this.#appliedSnapshotRevision;
 		const result = await this.#client.fetchSnapshot({
-			ifGenerationGt: this.#generation,
+			ifGenerationGt: previousGeneration,
 			waitMs: maxWaitMs,
 			signal: opts.signal,
 		});
-		if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
+		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 		return this.#generation !== previousGeneration;
 	}
 
@@ -680,8 +1073,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * any concurrent peer (refresh, generation bump) stays in sync.
 	 */
 	async upsertAuthCredentialRemote(provider: string, credential: AuthCredential): Promise<StoredAuthCredential[]> {
+		const revisionAtUpload = this.#appliedSnapshotRevision;
 		const { entries } = await this.#client.uploadCredential(provider, credential);
-		this.#applyProviderEntries(provider, entries);
+		this.#applyProviderEntries(provider, entries, revisionAtUpload);
 		this.#maybeRefreshSnapshot("upload");
 		return this.listAuthCredentials(provider);
 	}
@@ -696,25 +1090,35 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		credentials: AuthCredential[],
 	): Promise<StoredAuthCredential[]> {
 		const existing = this.listAuthCredentials(provider);
-		for (const entry of existing) {
-			try {
-				await this.#client.disableCredential(entry.id, "replaced by newer credential");
-			} catch (error) {
-				logger.warn("auth-broker disable during replace failed", {
-					provider,
-					id: entry.id,
-					error: String(error),
-				});
+		let changed = false;
+		try {
+			for (const entry of existing) {
+				// Abort replacement if the broker cannot disable an old grant.
+				// Only broker-confirmed removes may disappear from the local view.
+				const revisionAtDisable = this.#appliedSnapshotRevision;
+				await this.#disableCredentialConfirmed(entry.id, "replaced by newer credential");
+				// A delayed confirmation may refer to the old grant while another
+				// broker snapshot has accepted a newer grant under the same ID.
+				if (
+					revisionAtDisable !== this.#appliedSnapshotRevision &&
+					this.#snapshot.credentials.some(current => current.id === entry.id)
+				) {
+					this.#maybeRefreshSnapshot("replace disable superseded");
+					throw new AIError.AuthBrokerError(`Broker credential disable superseded by newer state id=${entry.id}`);
+				}
+				this.#removeCredentialById(entry.id);
+				changed = true;
 			}
+			// Every old grant was disabled before a replacement can be uploaded.
+			for (const credential of credentials) {
+				const revisionAtUpload = this.#appliedSnapshotRevision;
+				const { entries } = await this.#client.uploadCredential(provider, credential);
+				this.#applyProviderEntries(provider, entries, revisionAtUpload);
+				changed = true;
+			}
+		} finally {
+			if (changed) this.#maybeRefreshSnapshot("replace");
 		}
-		// Snapshot reflects the disables before we add the new rows so a concurrent
-		// reader cannot momentarily see old + new together for the same provider.
-		this.#removeProviderEntries(provider);
-		for (const credential of credentials) {
-			const { entries } = await this.#client.uploadCredential(provider, credential);
-			this.#applyProviderEntries(provider, entries);
-		}
-		this.#maybeRefreshSnapshot("replace");
 		return this.listAuthCredentials(provider);
 	}
 
@@ -725,22 +1129,55 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 */
 	async deleteAuthCredentialsRemote(provider: string, disabledCause: string): Promise<void> {
 		const existing = this.listAuthCredentials(provider);
-		for (const entry of existing) {
-			try {
-				await this.#client.disableCredential(entry.id, disabledCause);
-			} catch (error) {
-				logger.warn("auth-broker disable during delete failed", {
-					provider,
-					id: entry.id,
-					error: String(error),
-				});
+		let disabledAny = false;
+		try {
+			for (const entry of existing) {
+				const revisionAtDisable = this.#appliedSnapshotRevision;
+				await this.#disableCredentialConfirmed(entry.id, disabledCause);
+				if (
+					revisionAtDisable !== this.#appliedSnapshotRevision &&
+					this.#snapshot.credentials.some(current => current.id === entry.id)
+				) {
+					this.#maybeRefreshSnapshot("logout disable superseded");
+					throw new AIError.AuthBrokerError(`Broker credential disable superseded by newer state id=${entry.id}`);
+				}
+				this.#removeCredentialById(entry.id);
+				disabledAny = true;
 			}
+		} finally {
+			// Reconcile confirmed partial disables even when a later broker call failed.
+			if (disabledAny) this.#maybeRefreshSnapshot("delete");
 		}
-		this.#removeProviderEntries(provider);
-		this.#maybeRefreshSnapshot("delete");
 	}
 
-	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[]): void {
+	#applyProviderEntries(provider: string, entries: AuthCredentialSnapshotEntry[], revisionAtUpload: number): void {
+		// Upload replies are a trust boundary: validate the *whole* list before
+		// replacing any local rows, even when the broker normally redacts it.
+		// IDs are global across providers: refresh, disable, and block use the ID.
+		// Refuse duplicates and IDs belonging to retained other-provider rows.
+		const retainedIds = new Set(
+			this.#snapshot.credentials.filter(entry => entry.provider !== provider).map(entry => entry.id),
+		);
+		const returnedIds = new Set<number>();
+		for (const entry of entries) {
+			if (entry.provider !== provider) {
+				throw new AIError.AuthBrokerError(`Broker upload identity mismatch for provider=${provider}`);
+			}
+			if (returnedIds.has(entry.id) || retainedIds.has(entry.id)) {
+				throw new AIError.AuthBrokerError(`Broker upload identity collision for credential id=${entry.id} provider=${provider}`);
+			}
+			returnedIds.add(entry.id);
+			if (entry.credential.type === "oauth" && entry.credential.refresh !== REMOTE_REFRESH_SENTINEL) {
+				throw new AIError.AuthBrokerError(`Broker upload returned unredacted OAuth refresh for provider=${provider}`);
+			}
+		}
+		// A later GET/SSE or local write can supersede a response formed before
+		// revocation while the POST reply is in flight. Do not restore its old
+		// provider list; the normal stream/GET reconciliation remains authoritative.
+		if (revisionAtUpload !== this.#appliedSnapshotRevision) {
+			logger.debug("auth-broker stale credential upload response ignored", { provider });
+			return;
+		}
 		// `entries` is the broker's authoritative post-upsert list of rows for
 		// `provider`. Drop our existing rows for the same provider and splice in
 		// the fresh set — preserving every other provider's rows in place.
@@ -752,6 +1189,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
 		const incoming = entries.map(entry => credentialEntryWithBlocks(entry, existingBlocks.get(entry.id)));
 		this.#snapshot = { ...this.#snapshot, credentials: others.concat(incoming) };
+		this.#appliedSnapshotRevision += 1;
 	}
 	#applyCredentialEntry(entry: AuthCredentialSnapshotEntry): void {
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
@@ -759,21 +1197,20 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const incoming = credentialEntryWithBlocks(entry, existingBlocks);
 		if (index === -1) {
 			this.#snapshot = { ...this.#snapshot, credentials: this.#snapshot.credentials.concat([incoming]) };
+			this.#appliedSnapshotRevision += 1;
 			return;
 		}
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = incoming;
 		this.#snapshot = { ...this.#snapshot, credentials };
-	}
-
-	#removeProviderEntries(provider: string): void {
-		const next = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
-		this.#snapshot = { ...this.#snapshot, credentials: next };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#removeCredentialById(id: number): void {
 		const next = this.#snapshot.credentials.filter(entry => entry.id !== id);
+		if (next.length === this.#snapshot.credentials.length) return;
 		this.#snapshot = { ...this.#snapshot, credentials: next };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#upsertSnapshotBlock(block: StoredCredentialBlock): void {
@@ -798,18 +1235,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = { ...entry, blocks };
 		this.#snapshot = { ...this.#snapshot, credentials };
-	}
-
-	#deleteSnapshotBlocks(credentialId: number): void {
-		const index = this.#snapshot.credentials.findIndex(entry => entry.id === credentialId);
-		if (index === -1) return;
-		const entry = this.#snapshot.credentials[index]!;
-		if (!entry.blocks || entry.blocks.length === 0) return;
-		const next: SnapshotEntry = { ...entry };
-		delete next.blocks;
-		const credentials = this.#snapshot.credentials.slice();
-		credentials[index] = next;
-		this.#snapshot = { ...this.#snapshot, credentials };
+		this.#appliedSnapshotRevision += 1;
 	}
 
 	#pruneExpiredCredentialBlocks(nowMs: number): void {
@@ -824,7 +1250,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			delete next.blocks;
 			return next;
 		});
-		if (changed) this.#snapshot = { ...this.#snapshot, credentials };
+		if (changed) {
+			this.#snapshot = { ...this.#snapshot, credentials };
+			this.#appliedSnapshotRevision += 1;
+		}
 	}
 
 	/**
