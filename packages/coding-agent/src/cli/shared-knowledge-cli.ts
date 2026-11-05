@@ -1,9 +1,6 @@
 import * as path from "node:path";
-import {
-	getAgentDir,
-	getGlobalConfigRootDir,
-	getProfileRootDir,
-} from "@veyyon/utils/dirs";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
+import { getAgentDir, getProfileRootDir } from "@veyyon/utils/dirs";
 import { readCatalog } from "../shared-knowledge/catalog";
 import {
 	applyKnowledgeCatalog,
