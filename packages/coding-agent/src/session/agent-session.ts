@@ -175,6 +175,7 @@ import {
 	resolveHelperModel,
 } from "../task/helper-settings";
 import {
+	IrcBus,
 	type IrcMessage,
 	type IrcPersistedDeliveryFacts,
 	type IrcPersistedDeliveryTelemetry,
