@@ -18,6 +18,7 @@ import {
 
 let cleanupPath: string | undefined;
 const originalSystemRoot = process.env.SystemRoot;
+const originalAclTimeout = process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 
 type AclSpawn = NonNullable<WindowsAclOptions["spawn"]>;
 
@@ -61,6 +62,8 @@ function createFakeSpawn(child: FakeChild, calls: SpawnCall[] = []): { calls: Sp
 
 afterEach(async () => {
 	vi.useRealTimers();
+	if (originalAclTimeout === undefined) delete process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
+	else process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = originalAclTimeout;
 	if (originalSystemRoot === undefined) delete process.env.SystemRoot;
 	else process.env.SystemRoot = originalSystemRoot;
 	if (cleanupPath !== undefined) await fs.rm(cleanupPath, { recursive: true, force: true });
@@ -68,6 +71,47 @@ afterEach(async () => {
 });
 
 describe("owner-only Windows ACL helpers", () => {
+	it.each([
+		["125", 125],
+		["0007", 7],
+		["", 60_000],
+		["0", 60_000],
+		["-1", 60_000],
+		["1.5", 60_000],
+		["1e3", 60_000],
+		[" 100 ", 60_000],
+		["invalid", 60_000],
+		["2147483648", 60_000],
+		["9007199254740993", 60_000],
+	])("uses the deadline for override %j", async (value, deadline) => {
+		vi.useFakeTimers();
+		process.env.SystemRoot = "C:\\Windows";
+		process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = value;
+		const child = createFakeChild();
+		const fake = createFakeSpawn(child);
+		const operation = verifyOwnerOnlyWindowsAcl("C:\\safe", { platform: "win32", spawn: fake.spawn });
+		vi.advanceTimersByTime(deadline - 1);
+		expect(child.killCalls).toBe(0);
+		vi.advanceTimersByTime(1);
+		await expect(operation).rejects.toThrow(/timed out/);
+		expect(child.killCalls).toBe(1);
+	});
+
+	it("does not reuse a successful verification when the same path becomes unsafe", async () => {
+		let calls = 0;
+		const run: WindowsAclCommandRunner = async () => {
+			calls++;
+			return calls === 1
+				? { exitCode: 0, stdout: "OK", stderr: "" }
+				: { exitCode: 1, stdout: "", stderr: "ACL inheritance is enabled" };
+		};
+		await verifyOwnerOnlyWindowsAcl("C:\\safe", { platform: "win32", run });
+		await expect(verifyOwnerOnlyWindowsAcl("C:\\safe", { platform: "win32", run })).rejects.toThrow(
+			/ACL inheritance is enabled/,
+		);
+		expect(calls).toBe(2);
+	});
+
 	/** POSIX callers must not accidentally spawn or depend on Windows-only tooling. */
 	it("is an inert no-op off Windows", async () => {
 		let called = false;
@@ -230,10 +274,11 @@ describe("owner-only Windows ACL helpers", () => {
 		expect(child.killCalls).toBe(1);
 	});
 
-	/** The fixed deadline must terminate and clean up a silent child exactly at 15 seconds, without real sleeping. */
+	/** The default deadline cleans up a silent child at 60 seconds without real sleeping. */
 	it("kills and releases a child at the command timeout", async () => {
 		vi.useFakeTimers();
 		process.env.SystemRoot = "C:\\Windows";
+		delete process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 		const child = createFakeChild();
 		const fake = createFakeSpawn(child);
 		let settled = false;
@@ -247,7 +292,7 @@ describe("owner-only Windows ACL helpers", () => {
 			},
 		);
 
-		vi.advanceTimersByTime(14_999);
+		vi.advanceTimersByTime(59_999);
 		await Promise.resolve();
 		expect(settled).toBe(false);
 		expect(child.killCalls).toBe(0);
