@@ -1998,8 +1998,12 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
     let session: AgentSession | undefined;
     try {
+      expect(await manager.saveArtifact("synthetic pre-switch archival evidence", "bash")).toBe("0");
       manager.appendMessage({
         role: "user", content: "Original active session", timestamp: Date.now(),
+      });
+      manager.appendMessage({
+        role: "user", content: "Retain artifact://0 through a failed source close", timestamp: Date.now(),
       });
       await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
@@ -2007,6 +2011,9 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       const sourceId = manager.getSessionId();
       expect(manager.getLifecycleState()).toBe("running");
       const initialBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected original sidecar evidence");
+      const originalArtifactBytes = await fs.readFile(sourceArtifact);
 
       const agent = new Agent({
         initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
@@ -2058,6 +2065,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         entry.type === "message" && entry.message.role === "user" &&
         entry.message.content === "Foreign tail before rollback"
       )).toBe(true);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
 
       // Simulate another legitimate writer after this manager has repaired
       // only its own aborted switch marker. The foreign line must survive.
@@ -2097,6 +2105,12 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       expect(manager.getSessionId()).not.toBe(sourceId);
       expect(agent.sessionId).toBe(manager.getSessionId());
       expect(await fs.readFile(sourceFile, "utf8")).toContain("Foreign writer must survive recovery");
+      // No source history/sidecar elision, and the published fork gets its own copy.
+      const forkedArtifact = await manager.getArtifactPath("0");
+      if (!forkedArtifact) throw new Error("expected fork sidecar copy");
+      expect(forkedArtifact).not.toBe(sourceArtifact);
+      expect(await fs.readFile(forkedArtifact)).toEqual(originalArtifactBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
     } finally {
       storage.rejectNextSourceClose = false;
       try { await session?.dispose(); } finally {
