@@ -8,6 +8,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
 // can exceed Bun's 5s default per-test timeout, flaking the suite. Give the worker-backed
@@ -527,6 +528,92 @@ describe("executeJs", () => {
 		expect(result.displayOutputs.filter(o => o.type === "json")).toHaveLength(0);
 	});
 
+	it.each(["timeout", "cancel"])("withholds an incomplete structured inventory on %s", async mode => {
+		const chunks: string[] = [];
+		const controller = new AbortController();
+		const execution = executeJs(
+			[
+				'console.log(\'inventory status\\n{\\n  "ALPHA": "neutral-one",\\n  "BETA": "neutral-two"\');',
+				'phase("inventory queued");',
+				"await Promise.withResolvers().promise",
+			].join("\n"),
+			{
+				sessionId,
+				session,
+				sessionFile,
+				onStatus: event => {
+					if (mode === "cancel" && event.op === "phase" && event.title === "inventory queued") {
+						controller.abort(new Error("cancelled"));
+					}
+				},
+				onChunk: chunk => chunks.push(chunk),
+				...(mode === "timeout" ? { timeoutMs: 100 } : { signal: controller.signal }),
+			},
+		);
+		const result = await execution;
+		expect(result.cancelled).toBe(true);
+		if (mode === "cancel") expect(chunks.join("")).toContain("inventory status");
+		// The host's own explanation survives the withheld producer record: the
+		// model must still learn that the worker was killed and its state is gone.
+		if (mode === "timeout") expect(result.output).toContain("VM state was reset");
+		expect(chunks.join("")).not.toContain("ALPHA");
+		expect(chunks.join("")).not.toContain("BETA");
+		expect(result.output).not.toContain("ALPHA");
+		expect(result.output).not.toContain("BETA");
+	});
+	it("keeps a thrown error's explanation without leaking unfinished credential values", async () => {
+		const message = 'eval failure\n{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"';
+		const callbacks: string[] = [];
+		const result = await executeJs(`throw new Error(${JSON.stringify(message)});`, {
+			sessionId,
+			session,
+			sessionFile,
+			onChunk: chunk => callbacks.push(chunk),
+		});
+		expect(result.exitCode).toBe(1);
+		expect(result.output).toContain("eval failure");
+		expect(callbacks.join("")).toContain("eval failure");
+		for (const value of ["fake-a", "fake-b"]) {
+			expect(result.output).not.toContain(value);
+			expect(callbacks.join("")).not.toContain(value);
+		}
+	});
+	it.each([
+		["console.log({ count: 1 }, /\\{/);", "{ count: 1 } /\\{/"],
+		["console.log([1], /\\{/);", "[ 1 ] /\\{/"],
+		["console.log({ count: 1 }, 42, /\\{/);", "{ count: 1 } 42 /\\{/"],
+		['console.log({ count: 1 }, "value", /\\{/);', "{ count: 1 } value /\\{/"],
+		["console.log({ count: 1 }, /ok/, /\\{/);", "{ count: 1 } /ok/ /\\{/"],
+	])("prints RegExp after a completed container and console arguments: %s", async (code, expected) => {
+		const result = await executeJs(`${code}\nconsole.log("done");`, { sessionId, session, sessionFile });
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe(`${expected}\ndone\n`);
+	});
+	it("withholds complete and unfinished inventories after a slash-bearing scalar argument", async () => {
+		for (const inventory of [
+			'{"ALPHA": "/private/a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"\n}',
+			'{"ALPHA": "https://example.invalid/path",\n  "BETA": "fake-b"',
+		]) {
+			const result = await executeJs(
+				`console.log({ count: 1 }, "config /", ${JSON.stringify(inventory)});\nconsole.log("done");`,
+				{ sessionId, session, sessionFile },
+			);
+			expect(result.exitCode).toBe(0);
+			for (const value of ["private/a", "https://example.invalid/path", "fake-b", "fake-c"]) {
+				expect(result.output).not.toContain(value);
+			}
+			expect(result.output).toContain(BLOCKED_OUTPUT_RECORD);
+		}
+	});
+	it("prints a complete object holding a RegExp and the text after it", async () => {
+		const result = await executeJs('console.log({ pattern: /\\{/ });\nconsole.log("done");', {
+			sessionId,
+			session,
+			sessionFile,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("{ pattern: /\\{/ }\ndone\n");
+	});
 	it("cancels execution when the timeout expires", async () => {
 		const result = await executeJs("await new Promise(() => {})", {
 			sessionId,
@@ -538,5 +625,84 @@ describe("executeJs", () => {
 		expect(result.cancelled).toBe(true);
 		expect(result.exitCode).toBeUndefined();
 		expect(result.output).toContain("Command timed out");
+	});
+});
+describe("ProducerOutputGuard finalization", () => {
+	it("does not release withheld inventory when finish is called twice", () => {
+		const guard = new ProducerOutputGuard();
+		expect(guard.push('{\n  "ALPHA": "fake-a",\n')).toBe("");
+		expect(guard.push('  "BETA": "fake-b",\n')).toBe("");
+		expect(guard.finish()).toBe(BLOCKED_OUTPUT_RECORD);
+		expect(guard.finish()).toBe("");
+	});
+
+	it("withholds an incomplete final line after an ordinary status line", () => {
+		const guard = new ProducerOutputGuard();
+		const output =
+			guard.push("ordinary status\n{\n") +
+			guard.push('  "ALPHA": "fake-a",\n') +
+			guard.push('  "BETA": "fake-b"') +
+			guard.finish();
+
+		expect(output).toBe(`ordinary status\n${BLOCKED_OUTPUT_RECORD}`);
+		expect(output).not.toContain("fake-a");
+		expect(output).not.toContain("fake-b");
+	});
+
+	it("withholds an incomplete inventory split into individual characters", () => {
+		const guard = new ProducerOutputGuard();
+		for (const char of '{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b",\n') {
+			expect(guard.push(char)).toBe("");
+		}
+		expect(guard.finish()).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+
+	it("emits a complete structured object with two ordinary keys", () => {
+		const guard = new ProducerOutputGuard();
+		const closed = '{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"\n}\n';
+		const output = guard.push(closed.slice(0, 17)) + guard.push(closed.slice(17)) + guard.finish();
+
+		expect(output).toBe(closed);
+	});
+
+	it("allows two complete assignments but blocks three", () => {
+		for (const count of [2, 3]) {
+			const guard = new ProducerOutputGuard();
+			const chunks = ["ALPHA=fake-a\n", "BETA=fake-b\n", "GAMMA=fake-c\n"].slice(0, count);
+			const output = chunks.map(chunk => guard.push(chunk)).join("") + guard.finish();
+
+			if (count === 2) {
+				expect(output).toBe(chunks.join(""));
+			} else {
+				expect(output).toContain(BLOCKED_OUTPUT_RECORD);
+				expect(output).not.toContain("fake-a");
+				expect(output).not.toContain("fake-b");
+				expect(output).not.toContain("fake-c");
+			}
+		}
+	});
+
+	// util.inspect prints a RegExp bare, so an escaped or classed delimiter inside it is
+	// not structure. Each complete line must stream at once instead of being held.
+	it.each(["/\\{/", "/[{]/", "/\\[/", "/[[]/", "/a\\/{/", "/x/g"])(
+		"streams a complete object holding the RegExp %s",
+		pattern => {
+			const guard = new ProducerOutputGuard();
+			const line = `{ pattern: ${pattern} }\n`;
+			expect(guard.push(line)).toBe(line);
+			expect(guard.push("done\n")).toBe("done\n");
+			expect(guard.finish()).toBe("");
+		},
+	);
+
+	it("treats a slash that never closes on its line as ordinary text", () => {
+		const guard = new ProducerOutputGuard();
+		expect(guard.push("{ ratio: 1 / 2, path: /usr }\n")).toBe("{ ratio: 1 / 2, path: /usr }\n");
+	});
+
+	it("still withholds an unfinished inventory whose values look like RegExps", () => {
+		const guard = new ProducerOutputGuard();
+		const output = guard.push("{\n  ALPHA: /fake-a{/,\n") + guard.push('  BETA: "fake-b"') + guard.finish();
+		expect(output).toBe(BLOCKED_OUTPUT_RECORD);
 	});
 });

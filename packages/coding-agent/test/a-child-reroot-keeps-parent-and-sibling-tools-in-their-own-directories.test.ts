@@ -103,6 +103,8 @@ describe("a spawned child's set_cwd re-roots that child and nothing else", () =>
 			authStorage,
 			sessionManager: SessionManager.inMemory(cwd),
 			settings: Settings.isolated({
+				// This fixture authorizes moves outside the starting cwd; it tests isolation, not approval.
+				"tools.approvalMode": "yolo",
 				"async.enabled": false,
 				"bash.autoBackground.enabled": false,
 				"bashInterceptor.enabled": false,
