@@ -24,6 +24,7 @@ runs:
              exit 1
            fi
            pin="bun-v${version}"
+           echo "BUN_INSTALL_CACHE_DIR=${HOME}/.bun/install/cache" >> "$GITHUB_ENV"
            installed=""
            if command -v bun >/dev/null 2>&1; then
              installed="$(bun --version)"
@@ -75,6 +76,7 @@ runs:
            fi
 
       - name: Cache bun store
+        id: cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
            path: ~/.bun/install/cache
@@ -84,10 +86,109 @@ runs:
            # job runs; the save phase of a native build then fails the whole job with
            # "hashFiles('**/bun.lock') failed. Fail to hash files under directory".
            key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+           restore-keys: |
+             bun-${{ runner.os }}-
+
+      - name: Bun cache diagnostic
+        shell: ${{ inputs.shell }}
+        env:
+           CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+           RUNNER_NAME: ${{ runner.name }}
+        run: |
+           # 1. Effective cache and environment inspection
+           effective_cache="$(bun pm cache 2>/dev/null || true)"
+           echo "bun pm cache: ${effective_cache:-<failed to query>}"
+           echo "BUN_INSTALL=${BUN_INSTALL:-<unset>}"
+           echo "BUN_INSTALL_CACHE_DIR=${BUN_INSTALL_CACHE_DIR:-<unset>}"
+           echo "HOME=${HOME:-<unset>}"
+           echo "RUNNER_NAME=${RUNNER_NAME:-<unset>}"
+           echo "cache-hit: ${CACHE_HIT:-false}"
+           expected_cache="${HOME}/.bun/install/cache"
+           echo "expected cached path: ${expected_cache} (~/.bun/install/cache)"
+
+           echo "::notice title=Bun cache diagnostic::effective_cache=${effective_cache:-unknown}, expected_cache=~/.bun/install/cache, cache_hit=${CACHE_HIT:-false}, runner=${RUNNER_NAME:-unknown}, BUN_INSTALL=${BUN_INSTALL:-unset}"
+
+           # 2. Read only the allowed [install.cache] scalar settings.
+           for cfg in "bunfig.toml" "${HOME}/.bunfig.toml"; do
+             echo "--- Checking bunfig: ${cfg} ---"
+             if [ ! -f "${cfg}" ]; then
+               echo "${cfg}: missing"
+               echo "::notice title=Bunfig install.cache config::${cfg}: missing"
+               continue
+             fi
+             if ! parsed="$(BUNFIG_PATH="$cfg" bun -e '
+               const fs = require("node:fs");
+               try {
+                 const config = Bun.TOML.parse(fs.readFileSync(process.env.BUNFIG_PATH, "utf8"));
+                 const cache = config.install?.cache;
+                 const selected = {};
+                 if (typeof cache?.dir === "string") selected.dir = cache.dir;
+                 if (typeof cache?.disable === "boolean") selected.disable = cache.disable;
+                 if (typeof cache?.disableManifest === "boolean") selected.disableManifest = cache.disableManifest;
+                 console.log(JSON.stringify(selected));
+               } catch {
+                 process.exitCode = 1;
+               }
+             ' 2>/dev/null)"; then
+               echo "${cfg}: unreadable or invalid"
+               echo "::notice title=Bunfig install.cache config::${cfg}: unreadable or invalid"
+               continue
+             fi
+             echo "Allowed [install.cache] settings: ${parsed}"
+             echo "::notice title=Bunfig install.cache config::${cfg}: ${parsed}"
+           done
+
+           # 3. Read-only Linux load evidence
+           echo "=== Linux load evidence ==="
+           if [ -f /proc/loadavg ]; then
+             load_uptime="$(uptime 2>/dev/null || true)"
+             load_avg="$(cat /proc/loadavg 2>/dev/null || true)"
+             cpu_count="$(nproc 2>/dev/null || true)"
+             mem_avail="$(grep -E '^(MemTotal|MemAvailable|MemFree):' /proc/meminfo 2>/dev/null | tr '\n' ' ' | sed -e 's/[[:space:]]*$//' || true)"
+             if [ -z "$mem_avail" ]; then
+               mem_avail="$(free -m 2>/dev/null | awk '/^Mem:/{print "MemAvailable: "$7" MiB"}' || true)"
+             fi
+             echo "uptime: ${load_uptime}"
+             echo "/proc/loadavg: ${load_avg}"
+             echo "nproc: ${cpu_count}"
+             echo "memory: ${mem_avail}"
+             echo "::notice title=Linux load diagnostic::uptime=${load_uptime}, loadavg=${load_avg}, nproc=${cpu_count}, ${mem_avail}"
+           else
+             echo "/proc/loadavg not available; skipping Linux load diagnostics"
+           fi
 
       - name: Install dependencies
         shell: ${{ inputs.shell }}
         run: |
+           start_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date 2>/dev/null || true)"
+           install_completed=false
+           on_signal() {
+             status=$1
+             elapsed=$SECONDS
+             echo "::notice title=Bun install timing::status=timeout/terminated (${status}) elapsed=${elapsed}s (start=${start_date})"
+             trap - HUP INT TERM EXIT
+             exit "$status"
+           }
+           trap 'on_signal 129' HUP
+           trap 'on_signal 130' INT
+           trap 'on_signal 143' TERM
+           on_exit() {
+             status=$?
+             elapsed=$SECONDS
+             trap - HUP INT TERM EXIT
+             if [ "$install_completed" != "true" ] && [ "$status" -eq 0 ]; then
+               status=143
+             fi
+             if [ "$status" -eq 124 ] || [ "$status" -eq 129 ] || [ "$status" -eq 130 ] || [ "$status" -eq 143 ]; then
+               echo "::notice title=Bun install timing::status=timeout/terminated (${status}) elapsed=${elapsed}s (start=${start_date})"
+             else
+               echo "::notice title=Bun install timing::status=${status} elapsed=${elapsed}s (start=${start_date})"
+             fi
+             exit "$status"
+           }
+           trap on_exit EXIT
+           SECONDS=0
+
            # The shared bun store (actions/cache) can hand a job a corrupt or
            # partially written tarball when parallel jobs touch the same cache
            # entry, so `bun install` aborts with `Fail extracting tarball for
@@ -99,15 +200,21 @@ runs:
            # only runs on the rare corruption (also covers a transient network
            # blip on attempt 1).
            if bun install --frozen-lockfile; then
+             install_completed=true
              exit 0
            fi
            echo "::warning title=bun install retry::shared bun store install failed; retrying with a clean job-local cache"
            retry_cache="$(mktemp -d "${RUNNER_TEMP:-/tmp}/bun-cache-retry.XXXXXX")"
            bun install --frozen-lockfile --cache-dir="$retry_cache"
+           install_completed=true
 
       - name: Generate source codegen
         shell: ${{ inputs.shell }}
         run: |
+           start_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date 2>/dev/null || true)"
+           trap 'status=$?; elapsed=$SECONDS; echo "::notice title=Source codegen timing::status=${status} elapsed=${elapsed}s (start=${start_date})"' EXIT
+           SECONDS=0
+
            # coding-agent's src/export/html/index.ts imports
            # ./tool-views.generated.js (a gitignored codegen artifact bundled
            # from collab-web/src/tool-render). `bun install` alone does not

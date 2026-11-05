@@ -26,6 +26,8 @@ Execution blocks your turn: the call only returns once the work is completely fi
 {{/if}}
 {{/if}}
 - `successorOf` (optional, per task): The predecessor agent ID from this parent's persisted session. Start a fresh lane with its durable results. Use the same task, shared context, agent contract and cwd. At most two successors may run per slice; the third fails with `successor-limit`. A checkpoint accepts only one successor claim. Claims remain consumed after a crash; do not retry completed work. Isolated and fileless-parent tasks do not support successors. This is explicit continuation, not automatic retry or external-action replay protection.
+- `ownershipLease` (optional, per task): Hand selected dirty paths to the child with `{ paths: ["src/file.ts"], expiresAt: "<ISO timestamp>" }`. Paths resolve within the child's worktree. The runtime records the parent grantor, child owner, canonical worktree, paths and expiry in a per-agent receipt. The lease covers only these paths until expiry. It does not grant filesystem permissions or override human, production or security gates. Omit it for work with no explicit path handoff.
+  Leases require non-isolated spawns. A fresh isolated workspace cannot inherit ownership of the ancestor's dirty files. Expired, empty and out-of-worktree grants fail before the child starts.
 
 # Context and Communication
 Spawned agents start blank. They have no access to your conversation history.

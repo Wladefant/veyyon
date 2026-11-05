@@ -13,13 +13,36 @@ memories, in `config.yml` or `/settings`.
 | `local` | Markdown under the agent memories dir (`MEMORY.md`, `memory_summary.md`, `skills/`) | Summaries from past session files |
 | `mnemopi` | SQLite via `@veyyon/mnemopi` | Vector + FTS, auto-retain, compaction hooks |
 | `hindsight` | Hindsight server (when configured) | Remote bank; retain/recall/reflect tools |
+| `basic-memory` | Configured Basic Memory project | Optional, lexical recall and explicit retain tools |
 
 Enable in config:
 
 ```yaml
 memory:
-  backend: mnemopi   # or local, hindsight, off
+  backend: basic-memory
+  basicMemory:
+    command: bm
+    project: main
+    configDir: ""
+    timeoutMs: 60000
 ```
+The default backend remains `off`. Basic Memory is opt-in and requires the pinned
+`basic-memory==0.23.2` runtime. `memory.basicMemory.command` selects the executable
+(default `bm`), `memory.basicMemory.project` selects the Basic Memory project
+(default `main`), `memory.basicMemory.configDir` optionally selects its config
+directory (empty uses Basic Memory's default), and `memory.basicMemory.timeoutMs`
+sets the per-operation timeout (default 60000 ms, from 1000 to 300000 ms).
+Project names map to Basic Memory project configuration; Veyyon does not create or
+configure projects. Basic Memory must be installed and the selected project must
+already be configured.
+
+The four `memory.basicMemory.*` keys are config-only and do not appear in settings
+screens. Set them in `config.yml`.
+
+Basic Memory recall uses lexical search. It does not promise semantic recall.
+`reflect` returns source notes as evidence for the calling agent to synthesize;
+the server does not generate the answer. Retention is explicit through the `retain`
+tool. Veyyon does not auto-retain to Basic Memory.
 
 ### Mnemopi (recommended for long-running work)
 

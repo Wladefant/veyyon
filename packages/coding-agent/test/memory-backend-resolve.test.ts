@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { createMemoryRuntimeContext, resolveMemoryBackend } from "@veyyon/coding-agent/memory/backend";
+import { resetSettingsForTest, Settings } from "../src/config/settings";
+import { createMemoryRuntimeContext, resolveMemoryBackend } from "../src/memory/backend";
 
 describe("resolveMemoryBackend", () => {
 	beforeEach(() => {
@@ -14,6 +14,12 @@ describe("resolveMemoryBackend", () => {
 	it("returns the hindsight backend when memory.backend is hindsight", async () => {
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
 		expect((await resolveMemoryBackend(settings)).id).toBe("hindsight");
+	});
+
+	it("selects Basic Memory only when explicitly configured", async () => {
+		const settings = Settings.isolated({ "memory.backend": "basic-memory" });
+		expect((await resolveMemoryBackend(settings)).id).toBe("basic-memory");
+		expect((await resolveMemoryBackend(Settings.isolated())).id).toBe("off");
 	});
 
 	it("exposes inactive status when no session is available", async () => {

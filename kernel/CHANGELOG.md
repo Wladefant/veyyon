@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [1.7.10] - 2026-11-04
+
+### Fixed
+
+- Terminal ownership scans reuse one bounded PowerShell process while checking every parent and record ACL in the original read order. Each command uses the configured Windows ACL deadline. No ACL decision is cached, and uncertain failures remain fail-closed ([#833](https://github.com/Wladefant/veyyon/issues/833), [#849](https://github.com/Wladefant/veyyon/issues/849)).
+- Authoritative journal checks refuse unreadable disk state without changing ordinary best-effort session persistence ([#705](https://github.com/Wladefant/veyyon/issues/705)).
+
+## [1.7.9] - 2026-11-04
+
+### Fixed
+
+- Terminal ownership checks can ignore unreadable or malformed publisher records. The filename PID must be dead, or its derived endpoint must be absent. Live or uncertain claims still fail closed ([#849](https://github.com/Wladefant/veyyon/issues/849)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

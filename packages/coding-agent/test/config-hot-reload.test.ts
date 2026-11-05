@@ -9,11 +9,13 @@ import { resolveEffort } from "../src/config/effort-resolver";
 import type { ModelRegistry } from "../src/config/model-registry";
 import { type SettingPath, Settings, type SettingValue } from "../src/config/settings";
 import { InputController, type InputControllerContext } from "../src/modes/terminal/controllers/input-controller";
+import { createTools } from "../src/tools";
 import { AgentSession } from "../src/session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../src/slash-commands/types";
 import { resolveAgentModel } from "../src/task/agent-settings";
 import { createSubagentSettingsForCwd } from "../src/task/executor";
+import * as git from "../src/utils/git";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
 
 const dirs = useTrackedTempDirs("config-reload-");
@@ -744,4 +746,59 @@ describe("config hot reload", () => {
 			);
 		},
 	);
+
+	it("reloads github.enabled from disk, propagates to fork settings, and explicit allowlist cannot bypass disabled state", async () => {
+		const ghAvailable = spyOn(git.github, "available").mockReturnValue(true);
+		try {
+			const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(file, "github:\n  enabled: true\n");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		expect(settings.get("github.enabled")).toBe(true);
+
+		await fs.writeFile(file, "github:\n  enabled: false\n");
+		const result = await settings.reloadConfig();
+
+		expect(settings.get("github.enabled")).toBe(false);
+		expect(result.restartRequired).not.toContain("github.enabled");
+		expect(result.changed.map(c => c.path)).toContain("github.enabled");
+
+		const fork = settings.forkWithRuntimeOverrides();
+		expect(fork.get("github.enabled")).toBe(false);
+
+		// Explicit tool allowlist naming github cannot bypass disabled setting
+		const explicitTools = await createTools(
+			{
+				cwd: dir,
+				hasUI: false,
+				settings: fork,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+			},
+			["github", "read"],
+		);
+		expect(explicitTools.some(t => t.name === "github")).toBe(false);
+
+		// false -> true transition
+		await fs.writeFile(file, "github:\n  enabled: true\n");
+		const result2 = await settings.reloadConfig();
+		expect(settings.get("github.enabled")).toBe(true);
+		expect(result2.changed.map(c => c.path)).toContain("github.enabled");
+		const fork2 = settings.forkWithRuntimeOverrides();
+		expect(fork2.get("github.enabled")).toBe(true);
+		const explicitTools2 = await createTools(
+			{
+				cwd: dir,
+				hasUI: false,
+				settings: fork2,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+			},
+			["github", "read"],
+		);
+		expect(explicitTools2.some(t => t.name === "github")).toBe(true);
+		} finally {
+			ghAvailable.mockRestore();
+		}
+	});
 });
