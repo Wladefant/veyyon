@@ -619,6 +619,27 @@ describe("IRC", () => {
 			expect(result.details?.waited).toBeUndefined();
 			expect(sub.delivered.map(msg => msg.body)).toEqual(["ping"]);
 		});
+		it("op=send delivers from a depth-one child to its parent through Main and its exact id", async () => {
+			const { session: parent } = createRealSession();
+			sessions.push(parent);
+			Object.defineProperty(parent, "isStreaming", { value: true, configurable: true });
+			registry.register({ id: "parent-id", displayName: "main", kind: "main", session: parent });
+			registry.register({ id: "child-id", displayName: "task", kind: "sub", parentId: "parent-id", session: null });
+			const toolSession = makeToolSession(registry, "child-id");
+			toolSession.taskDepth = 1;
+			const tool = new IrcTool(toolSession);
+
+			for (const [to, body] of [["Main", "via alias"], ["parent-id", "via exact id"]]) {
+				const result = await tool.execute(`send-${body}`, { op: "send", to, message: body });
+				expect(result.details?.receipts).toEqual([{ to: "parent-id", outcome: "injected" }]);
+				expect(result.isError).toBeFalsy();
+				const inbox = await new IrcTool(makeToolSession(registry, "parent-id")).execute(`inbox-${body}`, {
+					op: "inbox",
+				});
+				expect(inbox.details?.inbox?.map(message => message.body)).toEqual([body]);
+			}
+		});
+
 
 		it("op=send to=all fans out to live peers and reports per-recipient receipts", async () => {
 			const a = makeFakeSession();

@@ -12,7 +12,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, formatDuration, lazy, prompt } from "@veyyon/utils";
+import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
 import {
 	type BuildIdentity,
 	formatBuildIdentity,
