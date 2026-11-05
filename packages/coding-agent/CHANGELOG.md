@@ -25,6 +25,8 @@
 - ACP client-terminal Bash commands ending in a line-continuation backslash retain the stdin-guard shell group's closing brace ([#565](https://github.com/Wladefant/veyyon/issues/565)).
 - MCP HTTP SSE validates decoded frames, returns correlated capacity errors, and closes with an explicit error for oversized batches ([Refs #927](https://github.com/Wladefant/veyyon/issues/927)).
 - Withhold unattributable kernel stderr bytes instead of logging raw ownerless chunks ([Refs #941](https://github.com/Wladefant/veyyon/issues/941)).
+- Eval console output withholds inventories after bracketed labels and preserves serialized diagnostic strings with later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
+- Eval console output withholds inventories after unmatched label quotes and inside labeled arrays, while preserving array diagnostics and later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
 - JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
 - Kernel IPC tracing logs request length instead of payload content ([Refs #943](https://github.com/Wladefant/veyyon/issues/943)).
 - Reconnected operator-answer inboxes reject stale or unreadable journals before accepting or replaying an answer ([#705](https://github.com/Wladefant/veyyon/issues/705)).
