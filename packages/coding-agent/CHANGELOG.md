@@ -54,6 +54,9 @@
 ### Fixed
 
 - MCP event delivery preserves replayable cursors when poll or push subscriptions stop during in-flight acceptance ([Refs #614](https://github.com/Wladefant/veyyon/issues/614)).
+### Fixed
+
+- Sanitize loaded session-notice version diagnostics and reject malformed build hashes and capability metadata rather than displaying forged lines or accepting unsupported notice delivery ([#551](https://github.com/Wladefant/veyyon/issues/551)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
