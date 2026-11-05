@@ -1653,6 +1653,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
 class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNewSession = false;
+  rejectSourceRepair = false;
 
   override async writeTextAtomic(
     target: string,
@@ -1661,6 +1662,9 @@ class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
   ): Promise<void> {
     if (this.rejectNewSession && target !== this.protectedSourceFile) {
       throw new Error("synthetic new fork JSONL publication refusal");
+    }
+    if (this.rejectSourceRepair && target === this.protectedSourceFile) {
+      throw new Error("synthetic original-source rollback refusal");
     }
     await super.writeTextAtomic(target, body, options);
   }
