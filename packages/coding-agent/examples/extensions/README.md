@@ -16,6 +16,8 @@ cp permission-gate.ts ~/.veyyon/profiles/<profile>/agent/extensions/
 
 See [SageOx team handoffs](sageox.md) for the opt-in Veyyon extension for teams using Codex and Claude Code.
 
+Portable approved context uses `team-context.ts` and `team-context-sageox.ts` with `sageox.ts` installed as `index.ts` in one subdirectory. Install the required modules together from the same revision. Add `team-context-git.ts` only when trusted host code explicitly selects the Git provider. Git-backed records stay local until a normal authorized commit and push. See the [SageOx guide](sageox.md) for setup and trust limits.
+
 ### Lifecycle & Safety
 
 | Extension                | Description                                                                  |
