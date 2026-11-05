@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-11-05
+
 ### Fixed
 
 - IRC messages from spawned agent lanes now import the registry used to deliver them, and IRC inbox ownership is unified ([#992](https://github.com/Wladefant/veyyon/pull/992)).
