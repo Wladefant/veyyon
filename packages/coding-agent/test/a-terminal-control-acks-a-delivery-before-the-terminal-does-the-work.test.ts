@@ -294,6 +294,13 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		timestamp: "2026-01-01T00:00:00.000Z",
 		message: { role: "toolResult", toolCallId: "tool-1", toolName: "inspect", details: { output: "z".repeat(16_384) } },
 	});
+	const yieldLine = JSON.stringify({
+		type: "message",
+		id: "cold-yield-result",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "toolResult", toolCallId: "yield-1", toolName: "yield", isError: false, details: { output: "q".repeat(16_384) } },
+	});
 	const line = JSON.stringify({
 		type: "message",
 		id: "cold-assistant",
@@ -311,14 +318,19 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	const userOffset = 0;
 	const toolResultOffset = Buffer.byteLength(userLine) + 1;
 	const assistantOffset = toolResultOffset + Buffer.byteLength(toolResultLine) + 1;
-	const lines = new Map([[userOffset, userLine], [toolResultOffset, toolResultLine], [assistantOffset, line]]);
+	const yieldOffset = assistantOffset + Buffer.byteLength(line) + 1;
+	const lines = new Map([[userOffset, userLine], [toolResultOffset, toolResultLine], [assistantOffset, line], [yieldOffset, yieldLine]]);
+	const reads = new Map<number, number>();
 	const payloads = new ColdEntryPayloads();
 	const reader = {
 		identity: "terminal-history-test",
-		read: (offset: number, length: number) => lines.get(offset)?.slice(0, length) ?? "",
+		read: (offset: number, length: number) => {
+			reads.set(offset, (reads.get(offset) ?? 0) + 1);
+			return lines.get(offset)?.slice(0, length) ?? "";
+		},
 		scanLines: (from: number, _headBytes: number, visit: (head: string, offset: number, length: number) => void) => {
 			for (const [offset, value] of lines) if (offset >= from) visit(value, offset, Buffer.byteLength(value));
-			return assistantOffset + Buffer.byteLength(line);
+			return yieldOffset + Buffer.byteLength(yieldLine);
 		},
 		close: () => {},
 	};
@@ -326,15 +338,19 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	const userEntry = JSON.parse(userLine) as SessionEntry;
 	const toolResultEntry = JSON.parse(toolResultLine) as SessionEntry;
 	const entry = JSON.parse(line) as SessionEntry;
+	const yieldEntry = JSON.parse(yieldLine) as SessionEntry;
 	expect(payloads.cool(userEntry, userOffset, Buffer.byteLength(userLine))).toBe(true);
 	expect(payloads.cool(toolResultEntry, toolResultOffset, Buffer.byteLength(toolResultLine))).toBe(true);
 	expect(payloads.cool(entry, assistantOffset, Buffer.byteLength(line))).toBe(true);
+	expect(payloads.cool(yieldEntry, yieldOffset, Buffer.byteLength(yieldLine))).toBe(true);
 	const coldUserMessage = userEntry.message as unknown as object;
 	const coldToolResultMessage = toolResultEntry.message as unknown as object;
 	const coldMessage = entry.message as unknown as object;
+	const coldYieldMessage = yieldEntry.message as unknown as object;
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
 	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldYieldMessage)).toEqual(["details"]);
 	const warmEntry = {
 		type: "message",
 		id: "warm-assistant",
@@ -343,7 +359,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		message: { role: "assistant", content: [{ type: "text", text: "Warm historical answer" }] },
 	} as unknown as SessionEntry;
 
-	const journal = [warmEntry, userEntry, toolResultEntry, entry];
+	const journal = [warmEntry, userEntry, toolResultEntry, entry, yieldEntry];
 	const mockMode = {
 		sessionManager: {
 			getSessionId: () => "cold",
@@ -371,7 +387,12 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
 	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldYieldMessage)).toEqual(["details"]);
 	expect(coldFieldsOf(warmEntry.message as unknown as object)).toBeUndefined();
+	expect(reads.get(userOffset) ?? 0).toBe(0);
+	expect(reads.get(toolResultOffset) ?? 0).toBe(0);
+	expect(reads.get(assistantOffset) ?? 0).toBe(1);
+	expect(reads.get(yieldOffset) ?? 0).toBe(1);
 
 });
 
