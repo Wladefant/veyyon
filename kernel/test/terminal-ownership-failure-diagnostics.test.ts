@@ -48,11 +48,19 @@ describe("terminal ownership failure diagnostics", () => {
 		});
 	}
 
-	it("reports the configured command deadline, not the default", async () => {
+	it("does not report a shell command deadline for a native ownership read", async () => {
 		process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = "123456";
 		const { root, sessionFile } = await claim();
-		vi.spyOn(utils, "readOwnerOnlyFile").mockRejectedValue(new Error("access denied"));
-		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("ACL deadline=123456ms per command");
+		const cause = new Error("access denied");
+		vi.spyOn(utils, "readOwnerOnlyFile").mockRejectedValue(cause);
+		const error = await assertNotTerminalOwned(sessionFile, root).then(
+			() => undefined,
+			error => error,
+		);
+		expect(error).toBeInstanceOf(Error);
+		expect(error.cause).toBe(cause);
+		expect(error.message).toContain("access denied");
+		expect(error.message).not.toContain("ACL deadline=");
 	});
 
 	it("names parse failures and keeps their original SyntaxError", async () => {
