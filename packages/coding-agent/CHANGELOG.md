@@ -60,6 +60,9 @@
 ### Fixed
 
 - ACP-sourced MCP tool calls wait for completion without a default transport deadline while retaining caller cancellation and explicit deadlines ([Refs #829](https://github.com/Wladefant/veyyon/pull/829)).
+### Fixed
+
+- Confine retained native task continuation artifact filenames to the session artifact directory, including traversal and Windows-reserved task identifiers ([Refs #766](https://github.com/Wladefant/veyyon/issues/766)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed

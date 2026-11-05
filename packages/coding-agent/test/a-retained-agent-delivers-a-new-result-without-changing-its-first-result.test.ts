@@ -41,6 +41,36 @@ describe("retained agent result delivery", () => {
 		expect(await replay.complete("worker", "owner", "resume-1", "ignored duplicate output")).toEqual(result);
 		expect(reopened.getEntries().filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-result")).toHaveLength(1);
 	});
+	it("confines unsafe task names to portable continuation artifacts without changing replay identity", async () => {
+		const session = store();
+		const dir = session.getArtifactsDir()!;
+		const outbox = new IrcContinuationOutbox(session);
+		const cases = ["../outside", String.raw`..\\outside`, "CON", "com1", "invalid:name", "🔒worker", "a".repeat(100)];
+		for (const [index, agentId] of cases.entries()) {
+			const phaseId = `unsafe-phase-${index}`;
+			const output = `result-${index}`;
+			const result = await outbox.complete(agentId, "owner", phaseId, output);
+			const stem = result.handle.slice("agent://".length);
+			expect(stem).toMatch(/^agent-[a-f0-9]{64}\.phase-[a-f0-9]{64}$/);
+			expect(path.basename(`${stem}.md`)).toBe(`${stem}.md`);
+			expect(path.dirname(path.join(dir, `${stem}.md`))).toBe(dir);
+			expect(await fs.readFile(path.join(dir, `${stem}.md`), "utf8")).toBe(output);
+			expect(result.agentId).toBe(agentId);
+			if (index === 0) {
+				// With a raw "../outside" stem the original writer created this file
+				// outside the artifacts directory.
+				const escaped = path.resolve(dir, "..", `outside.phase-${result.id}.md`);
+				await expect(fs.access(escaped)).rejects.toThrow();
+			}
+		}
+		await session.flush();
+		const reopened = await SessionManager.open(session.getSessionFile()!);
+		const replay = new IrcContinuationOutbox(reopened);
+		const original = outbox.pending()[0]!;
+		expect(await replay.complete("../outside", "owner", "unsafe-phase-0", "changed retry text")).toEqual(original);
+		expect(await fs.readFile(path.join(dir, `${original.handle.slice("agent://".length)}.md`), "utf8")).toBe("result-0");
+	});
+
 	it("serializes concurrent delivery and attempts each failed result once per flush", async () => {
 		const session = store();
 		const outbox = new IrcContinuationOutbox(session);
