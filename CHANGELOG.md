@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Terminal history reads cold assistant payloads transiently and keeps their source entries cold ([Refs #980](https://github.com/Wladefant/veyyon/issues/980)).
+
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
