@@ -523,7 +523,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const remainingVerifyMs =
 			this.#snapshotStreamVerifyIntervalMs - (performance.now() - this.#snapshotReceivedMonotonicAt);
 		const paceMs = Math.min(remainingPollMs, remainingVerifyMs);
-		if (paceMs > 0) await scheduler.wait(paceMs, { signal: this.#backgroundAbort.signal });
+		// Promise timers may truncate fractional milliseconds. Round UP to avoid
+		// another conditional poll just before the canonical verification deadline.
+		if (paceMs > 0) await scheduler.wait(Math.ceil(paceMs), { signal: this.#backgroundAbort.signal });
 	}
 
 	/**
