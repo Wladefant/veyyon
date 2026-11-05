@@ -55,6 +55,12 @@ Auth methods:
 a relative one fails. Each accepts `mcpServers` for the session. `session/list` pages 50 per
 page. `session/close` releases the session.
 
+`session/load` and `session/fork` search stored history when the session is not loaded.
+The ID must name one canonical transcript.
+Distinct transcripts with the same ID fail with `ACP session ID is ambiguous` before either history changes.
+A fork of a loaded session uses that session's own transcript.
+`session/resume` stays scoped to the requested directory.
+
 The session's MCP servers, approval mode and settings come from the active profile's
 `config.yml`, plus any `--config` overlay passed to the server process; see
 [Approval modes](./approval-mode.md#acp-sessions).

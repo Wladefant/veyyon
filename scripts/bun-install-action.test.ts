@@ -42,7 +42,10 @@ function pinnedBunVersion(): string {
 	return match[1];
 }
 
-async function runDetectStep(installedVersion: string, packageManager = `bun@${pinnedBunVersion()}`): Promise<DetectStepResult> {
+async function runDetectStep(
+	installedVersion: string,
+	packageManager = `bun@${pinnedBunVersion()}`,
+): Promise<DetectStepResult> {
 	const action = Bun.YAML.parse(await Bun.file(".github/actions/bun-install/action.yml").text()) as CompositeAction;
 	const step = action.runs.steps.find(candidate => candidate.name === "Detect bun");
 	if (!step?.run) throw new Error("bun-install action has no bun detection step");
@@ -75,8 +78,12 @@ async function runDetectStep(installedVersion: string, packageManager = `bun@${p
 	if (exitCode !== 0) throw new Error(`bun detection failed: ${stderr}`);
 	const [output, env, pathOutput] = await Promise.all([
 		Bun.file(outputPath).text(),
-		Bun.file(envPath).text().catch(() => ""),
-		Bun.file(pathPath).text().catch(() => ""),
+		Bun.file(envPath)
+			.text()
+			.catch(() => ""),
+		Bun.file(pathPath)
+			.text()
+			.catch(() => ""),
 	]);
 	const match = /^BUN_INSTALL=(.+)$/m.exec(env);
 	return {
@@ -155,7 +162,87 @@ fi
 	};
 }
 
+interface DiagnosticStepResult {
+	exitCode: number;
+	stdout: string;
+}
+
+async function runDiagnosticStep(config: string | null): Promise<DiagnosticStepResult> {
+	const action = Bun.YAML.parse(await Bun.file(".github/actions/bun-install/action.yml").text()) as CompositeAction;
+	const step = action.runs.steps.find(candidate => candidate.name === "Bun cache diagnostic");
+	if (!step?.run) throw new Error("bun-install action has no executable cache diagnostic step");
+
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "bun-diagnostic-action-"));
+	tempRoots.push(root);
+	const home = path.join(root, "home");
+	fs.mkdirSync(home);
+	if (config !== null) await Bun.write(path.join(root, "bunfig.toml"), config);
+	const fakeBunPath = path.join(root, "bun");
+	await Bun.write(
+		fakeBunPath,
+		`#!/bin/sh
+if [ "$1" = "pm" ] && [ "$2" = "cache" ]; then
+  printf '/cache/from-bun\\n'
+else
+  exec "$REAL_BUN" "$@"
+fi
+`,
+	);
+	fs.chmodSync(fakeBunPath, 0o755);
+
+	const proc = Bun.spawn(["bash", "-c", step.run], {
+		cwd: root,
+		env: {
+			...process.env,
+			PATH: `${root}:${process.env.PATH ?? ""}`,
+			HOME: home,
+			REAL_BUN: process.execPath,
+			CACHE_HIT: "false",
+			RUNNER_NAME: "diagnostic-test",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stdout, stderr] = await Promise.all([
+		proc.exited,
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+	]);
+	expect(stderr).toBe("");
+	return { exitCode, stdout };
+}
+
 describe("bun-install composite action PATH serialization", () => {
+	it("reports only typed cache scalars from valid TOML and hides indented scope records", async () => {
+		const sentinel = "diagnostic-sentinel-token";
+		const result = await runDiagnosticStep(`install.verified = true
+[install.cache]
+"dir" = """
+/cache/selected"""
+"disable" = false
+"disableManifest" = true
+
+  [install.scopes]
+  dir = { url = "https://registry.example/", token = "${sentinel}" }
+`);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain('{"dir":"/cache/selected","disable":false,"disableManifest":true}');
+		expect(result.stdout).not.toContain(sentinel);
+		expect(result.stdout).not.toContain("token");
+	});
+
+	it("reports invalid and missing TOML without exposing parser details", async () => {
+		const invalidSentinel = "invalid-config-sentinel";
+		const invalid = await runDiagnosticStep(`not valid = = "${invalidSentinel}"`);
+		expect(invalid.exitCode).toBe(0);
+		expect(invalid.stdout).toContain("bunfig.toml: unreadable or invalid");
+		expect(invalid.stdout).not.toContain(invalidSentinel);
+		expect(invalid.stdout).not.toContain("TOML Parse error");
+
+		const missing = await runDiagnosticStep(null);
+		expect(missing.exitCode).toBe(0);
+		expect(missing.stdout).toContain("bunfig.toml: missing");
+	});
 	it("installs when the runner bun does not match the root packageManager pin", async () => {
 		const result = await runDetectStep("1.4.0");
 		const expectedDirName = `bun-bun-v${pinnedBunVersion()}`;
