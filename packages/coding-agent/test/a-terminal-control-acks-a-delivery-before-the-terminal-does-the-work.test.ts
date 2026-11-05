@@ -315,11 +315,25 @@ test("history reads a cold assistant payload transiently and preserves its text"
 			],
 		},
 	});
+	const postYieldLine = JSON.stringify({
+		type: "message",
+		id: "cold-after-yield",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "assistant", content: [{ type: "text", text: "After successful yield" }] },
+	});
 	const userOffset = 0;
 	const toolResultOffset = Buffer.byteLength(userLine) + 1;
 	const assistantOffset = toolResultOffset + Buffer.byteLength(toolResultLine) + 1;
 	const yieldOffset = assistantOffset + Buffer.byteLength(line) + 1;
-	const lines = new Map([[userOffset, userLine], [toolResultOffset, toolResultLine], [assistantOffset, line], [yieldOffset, yieldLine]]);
+	const postYieldOffset = yieldOffset + Buffer.byteLength(yieldLine) + 1;
+	const lines = new Map([
+		[userOffset, userLine],
+		[toolResultOffset, toolResultLine],
+		[assistantOffset, line],
+		[yieldOffset, yieldLine],
+		[postYieldOffset, postYieldLine],
+	]);
 	const reads = new Map<number, number>();
 	const payloads = new ColdEntryPayloads();
 	const reader = {
@@ -330,7 +344,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		},
 		scanLines: (from: number, _headBytes: number, visit: (head: string, offset: number, length: number) => void) => {
 			for (const [offset, value] of lines) if (offset >= from) visit(value, offset, Buffer.byteLength(value));
-			return yieldOffset + Buffer.byteLength(yieldLine);
+			return postYieldOffset + Buffer.byteLength(postYieldLine);
 		},
 		close: () => {},
 	};
@@ -359,7 +373,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		message: { role: "assistant", content: [{ type: "text", text: "Warm historical answer" }] },
 	} as unknown as SessionEntry;
 
-	const journal = [warmEntry, userEntry, toolResultEntry, entry, yieldEntry];
+	const journal = [warmEntry, userEntry, toolResultEntry, entry, yieldEntry, JSON.parse(postYieldLine) as SessionEntry];
 	const mockMode = {
 		sessionManager: {
 			getSessionId: () => "cold",
@@ -383,6 +397,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		.map(({ entryId, text, turn }) => ({ entryId, text, turn }))).toEqual([
 		{ entryId: warmEntry.id, text: "Warm historical answer", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
 		{ entryId: entry.id, text: "Visible historical answer", turn: { hasOperatorMessage: true, hasSubstantiveToolCall: true, toolNames: ["inspect"], isMain: true } },
+		{ entryId: "cold-after-yield", text: "After successful yield", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
 	]);
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
@@ -393,6 +408,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	expect(reads.get(toolResultOffset) ?? 0).toBe(0);
 	expect(reads.get(assistantOffset) ?? 0).toBe(1);
 	expect(reads.get(yieldOffset) ?? 0).toBe(1);
+	expect(reads.get(postYieldOffset) ?? 0).toBe(1);
 
 });
 
