@@ -933,14 +933,19 @@ export class SessionManager {
 	 * a large transcript back to learn nothing is the single most expensive step
 	 * of a rewrite (246ms and 322MiB of a 253MiB session's 778ms and 1056MiB).
 	 */
-	async #refreshForeignLines(): Promise<void> {
+	async #refreshForeignLines(requireReadable = false): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		if (this.#fileIsExactlyAsPublished()) return;
-		if (!(await this.#storage.exists(this.#sessionFile))) return;
+		if (requireReadable) {
+			const state = this.#storage.existsStateSync(this.#sessionFile);
+			if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
+			if (state !== "present") throw new Error("Cannot verify current session journal");
+		} else if (!(await this.#storage.exists(this.#sessionFile))) return;
 		let text: string;
 		try {
 			text = await this.#storage.readText(this.#sessionFile);
 		} catch {
+			if (requireReadable) throw new Error("Cannot verify current session journal");
 			return;
 		}
 		this.#adoptForeignLines(text);
@@ -2202,6 +2207,28 @@ export class SessionManager {
 	}
 
 	/**
+	 * Verify replay authority without allocating a complete historical transcript
+	 * when a previously loaded journal has changed beneath this manager.
+	 * Identity plus length are the same guards used for the loaded/published
+	 * layout; a changed file is unsafe to replay even before scanning its lines.
+	 * For storage backends without a trustworthy loaded identity, retain the
+	 * existing strict readable/foreign-entry check rather than guessing.
+	 */
+	async assertReplayJournalCurrent(): Promise<void> {
+		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#foreignLines.length > 0)
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+		if (this.#fileIsExactlyAsPublished()) return;
+		const state = this.#storage.existsStateSync(this.#sessionFile);
+		if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
+		if (state !== "present") throw new Error("Cannot verify current session journal");
+		if (this.#publishedFileState?.identity !== undefined)
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+		if (await this.holdsForeignEntries({ requireReadable: true }))
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+	}
+
+	/**
 	 * True when the session file holds a line this manager never wrote.
 	 *
 	 * The question every full-file operation has to ask before it destroys what is
@@ -2210,8 +2237,8 @@ export class SessionManager {
 	 * re-read is what tells the operator once that a second session is writing this
 	 * file.
 	 */
-	async holdsForeignEntries(): Promise<boolean> {
-		await this.#refreshForeignLines();
+	async holdsForeignEntries(options: { requireReadable?: boolean } = {}): Promise<boolean> {
+		await this.#refreshForeignLines(options.requireReadable === true);
 		return this.#foreignLines.length > 0;
 	}
 
