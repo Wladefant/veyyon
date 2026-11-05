@@ -1033,8 +1033,9 @@ describe("ACP event mapper", () => {
 			cwd: "/repo",
 		});
 		expectAcpStructure(arkSessionNotification, { sessionId: "session-1", update });
-		expect(update.rawInput).toEqual(args);
-		expect(update.locations).toEqual([
+		const acpUpdate = update as unknown as { rawInput?: unknown; locations?: { path: string }[] };
+		expect(acpUpdate.rawInput).toEqual(args);
+		expect(acpUpdate.locations).toEqual([
 			{ path: path.resolve("/repo", "src/file.ts") },
 			{ path: path.resolve("/repo", "src/previous.ts") },
 		]);
@@ -1124,7 +1125,7 @@ describe("ACP event mapper", () => {
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
 		const update = updates[0]!.update as {
-			content?: Array<{ type: string; path?: string }>;
+			content?: Array<{ type: string; path?: string; oldText?: string | null; newText?: string }>;
 			locations?: { path: string }[];
 		};
 		expect(update.content?.filter(block => block.type === "diff")).toEqual([
@@ -1146,7 +1147,7 @@ describe("ACP event mapper", () => {
 		);
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as { content?: Array<{ type: string; path?: string }> };
+		const update = updates[0]!.update as { content?: Array<{ type: string; path?: string; oldText?: string | null; newText?: string }> };
 		expect(update.content?.filter(block => block.type === "diff")).toEqual([
 			{ type: "diff", path: "src/legacy.ts", oldText: "old", newText: "new" },
 		]);
