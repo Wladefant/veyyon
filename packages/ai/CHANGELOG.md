@@ -30,6 +30,10 @@
 - Remote auth-broker awaited individual disable refuses late acknowledgments that would evict a newer accepted credential grant ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Remote auth-broker provider logout and replacement refuse superseded disable acknowledgments before evicting a newer accepted same-ID grant or uploading a replacement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
+- Explicitly empty environment-backed broker references remain unset, preserving local SQLite and token-file fallback behavior ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Keep credential-bearing broker URL details out of missing-token errors ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Use credential-safe broker provenance in source descriptions instead of echoing the configured endpoint ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed

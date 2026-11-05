@@ -81,14 +81,15 @@ export function getAuthBrokerTokenFilePath(): string {
 }
 
 /**
- * Default resolver for config values: checks `process.env` first, then treats
- * the value as a literal. Does NOT execute `!command` syntax; such values are
- * left unresolved so the caller can fall back to the token file.
+ * Default resolver for config values: a defined `process.env` entry wins,
+ * including an empty value that the caller treats as unset. Otherwise the
+ * config value is treated as a literal. Does NOT execute `!command` syntax;
+ * such values are left unresolved so the caller can fall back to the token file.
  */
 async function defaultResolveConfigValue(config: string): Promise<string | undefined> {
 	if (config.startsWith("!")) return undefined;
 	const envValue = process.env[config];
-	return envValue || config;
+	return envValue === undefined ? config : envValue;
 }
 
 async function readTokenFile(): Promise<string | null> {
@@ -198,7 +199,7 @@ export async function resolveAuthBrokerConfig(
 	if (!token) {
 		throw new AIError.MissingApiKeyError(
 			undefined,
-			`VEYYON_AUTH_BROKER_URL is set (${url}) but no bearer token is available. ` +
+			`VEYYON_AUTH_BROKER_URL is configured but no bearer token is available. ` +
 				`Set VEYYON_AUTH_BROKER_TOKEN, the \`auth.broker.token\` config entry, or place one at ${getAuthBrokerTokenFilePath()}.`,
 		);
 	}
@@ -274,7 +275,7 @@ async function openBrokerStorage(
 	});
 	return new AuthStorage(store, {
 		configValueResolver: options.configValueResolver,
-		sourceLabel: options.sourceLabel ?? `broker ${brokerConfig.url}`,
+		sourceLabel: options.sourceLabel ?? "remote broker",
 		loadBalancing: options.loadBalancing,
 	});
 }
