@@ -7,6 +7,9 @@
 - Legacy SSE parse diagnostics omit malformed peer frame data, and unattributable peer warnings omit peer-supplied messages while caller errors stay unchanged ([Refs #866](https://github.com/Wladefant/veyyon/issues/866)).
 
 - Native Mainplane session and operation identities reject malformed Unicode before hashing ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
+
+- Terminal history reads cold assistant and tool-result payloads transiently and keeps their source entries cold ([Refs #980](https://github.com/Wladefant/veyyon/issues/980)).
+
 ## [1.7.10] - 2026-11-04
 
 ### Fixed

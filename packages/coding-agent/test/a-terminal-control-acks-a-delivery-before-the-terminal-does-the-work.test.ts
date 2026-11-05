@@ -7,6 +7,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as utils from "@veyyon/utils";
+import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
+import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 
@@ -273,6 +275,146 @@ test("history converts only new entries on a leaf change, and the frame stays bo
 			.at(-1).entryId,
 	).toBe(`e${BASE + 50}`);
 	expect(conversions).toBe(BASE + 50 + journal.length);
+});
+
+test("history reads a cold assistant payload transiently and preserves its text", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-cold-history-"));
+	cleanup.push(async () => fs.rm(root, { recursive: true, force: true }));
+	const userLine = JSON.stringify({
+		type: "message",
+		id: "cold-user",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "user", content: [{ type: "text", text: "u".repeat(16_384) }] },
+	});
+	const toolResultLine = JSON.stringify({
+		type: "message",
+		id: "cold-tool-result",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "toolResult", toolCallId: "tool-1", toolName: "inspect", details: { output: "z".repeat(16_384) } },
+	});
+	const yieldLine = JSON.stringify({
+		type: "message",
+		id: "cold-yield-result",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "toolResult", toolCallId: "yield-1", toolName: "yield", isError: false, details: { output: "q".repeat(16_384) } },
+	});
+	const line = JSON.stringify({
+		type: "message",
+		id: "cold-assistant",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "Visible historical answer" },
+				{ type: "toolCall", id: "tool-1", name: "inspect", arguments: { detail: "x".repeat(16_384) } },
+				{ type: "thinking", thinking: "y".repeat(16_384) },
+			],
+		},
+	});
+	const postYieldLine = JSON.stringify({
+		type: "message",
+		id: "cold-after-yield",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "assistant", content: [{ type: "text", text: "After successful yield" }] },
+	});
+	const userOffset = 0;
+	const toolResultOffset = Buffer.byteLength(userLine) + 1;
+	const assistantOffset = toolResultOffset + Buffer.byteLength(toolResultLine) + 1;
+	const yieldOffset = assistantOffset + Buffer.byteLength(line) + 1;
+	const postYieldOffset = yieldOffset + Buffer.byteLength(yieldLine) + 1;
+	const lines = new Map([
+		[userOffset, userLine],
+		[toolResultOffset, toolResultLine],
+		[assistantOffset, line],
+		[yieldOffset, yieldLine],
+		[postYieldOffset, postYieldLine],
+	]);
+	const reads = new Map<number, number>();
+	const payloads = new ColdEntryPayloads();
+	const reader = {
+		identity: "terminal-history-test",
+		read: (offset: number, length: number) => {
+			reads.set(offset, (reads.get(offset) ?? 0) + 1);
+			return lines.get(offset)?.slice(0, length) ?? "";
+		},
+		scanLines: (from: number, _headBytes: number, visit: (head: string, offset: number, length: number) => void) => {
+			for (const [offset, value] of lines) if (offset >= from) visit(value, offset, Buffer.byteLength(value));
+			return postYieldOffset + Buffer.byteLength(postYieldLine);
+		},
+		close: () => {},
+	};
+	expect(payloads.pin(reader.identity, () => reader, text => JSON.parse(text) as SessionEntry)).toBe(true);
+	const userEntry = JSON.parse(userLine) as SessionMessageEntry;
+	const toolResultEntry = JSON.parse(toolResultLine) as SessionMessageEntry;
+	const entry = JSON.parse(line) as SessionMessageEntry;
+	const yieldEntry = JSON.parse(yieldLine) as SessionMessageEntry;
+	const postYieldEntry = JSON.parse(postYieldLine) as SessionMessageEntry;
+	expect(payloads.cool(userEntry, userOffset, Buffer.byteLength(userLine))).toBe(true);
+	expect(payloads.cool(toolResultEntry, toolResultOffset, Buffer.byteLength(toolResultLine))).toBe(true);
+	expect(payloads.cool(entry, assistantOffset, Buffer.byteLength(line))).toBe(true);
+	expect(payloads.cool(yieldEntry, yieldOffset, Buffer.byteLength(yieldLine))).toBe(true);
+	expect(payloads.cool(postYieldEntry, postYieldOffset, Buffer.byteLength(postYieldLine))).toBe(true);
+	const coldUserMessage = userEntry.message as unknown as object;
+	const coldToolResultMessage = toolResultEntry.message as unknown as object;
+	const coldMessage = entry.message as unknown as object;
+	const coldYieldMessage = yieldEntry.message as unknown as object;
+	const coldPostYieldMessage = postYieldEntry.message as unknown as object;
+	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
+	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldYieldMessage)).toEqual(["details"]);
+	expect(coldFieldsOf(coldPostYieldMessage)).toEqual(["content"]);
+	const warmEntry = {
+		type: "message",
+		id: "warm-assistant",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "assistant", content: [{ type: "text", text: "Warm historical answer" }] },
+	} as unknown as SessionMessageEntry;
+
+	const journal = [warmEntry, userEntry, toolResultEntry, entry, yieldEntry, postYieldEntry];
+	const mockMode = {
+		sessionManager: {
+			getSessionId: () => "cold",
+			getLeafId: () => entry.id,
+			getCwd: () => root,
+			getSessionFile: () => path.join(root, "cold.jsonl"),
+			getEntries: () => journal,
+		},
+		session: {
+			isStreaming: false,
+			displayAssistantContent: (content: unknown[]) => content,
+		},
+		isShuttingDown: false,
+		isInitialized: true,
+	};
+	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
+	cleanup.push(await startTerminalControl(mockMode as never));
+	const owner = await readOwner(root);
+	const response = await rpc(owner, "subscribe");
+	expect(response.events.filter(event => event.kind === "history").flatMap(event => event.entries)
+		.map(({ entryId, text, turn }) => ({ entryId, text, turn }))).toEqual([
+		{ entryId: warmEntry.id, text: "Warm historical answer", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
+		{ entryId: entry.id, text: "Visible historical answer", turn: { hasOperatorMessage: true, hasSubstantiveToolCall: true, toolNames: ["inspect"], isMain: true } },
+		{ entryId: "cold-after-yield", text: "After successful yield", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
+	]);
+	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
+	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldYieldMessage)).toEqual(["details"]);
+	expect(coldFieldsOf(coldPostYieldMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(warmEntry.message as unknown as object)).toBeUndefined();
+	expect(reads.get(userOffset) ?? 0).toBe(0);
+	expect(reads.get(toolResultOffset) ?? 0).toBe(0);
+	expect(reads.get(assistantOffset) ?? 0).toBe(1);
+	expect(reads.get(yieldOffset) ?? 0).toBe(1);
+	expect(reads.get(postYieldOffset) ?? 0).toBe(1);
+
 });
 
 const settle = async () => {

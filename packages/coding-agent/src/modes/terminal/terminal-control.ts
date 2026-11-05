@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { readColdEntry } from "@veyyon/kernel/session/session-cold-payloads";
 import { logTelegramDeliveryTrace } from "@veyyon/utils";
 import type { TerminalSecretRequest } from "../../launch/terminal-control";
 import {
@@ -15,6 +16,7 @@ import {
 import { parseSecretSubmission } from "../../secrets/intake-wire";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
 import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
+import { TOOL } from "../../tools/core/builtin-names";
 import type { InteractiveMode } from "./interactive-mode";
 
 export interface TerminalTurnProvenance {
@@ -49,10 +51,12 @@ export function createTerminalTranscriptProjector() {
 			}
 			if (message.role === "toolResult") {
 				if (
+					message.toolName === TOOL.yield &&
+					!message.isError &&
 					isTerminalYieldToolResult({
 						toolName: message.toolName,
 						isError: message.isError,
-						result: { details: message.details },
+						result: message,
 					})
 				)
 					this.reset();
@@ -91,9 +95,15 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 	let lastConvertedId: string | undefined;
 	const projector = createTerminalTranscriptProjector();
 	const convert = (entry: SessionEntry): TerminalTranscriptText[] => {
-		const turn = projector.observe(entry);
-		if (entry.type !== "message" || entry.message.role !== "assistant") return [];
-		const content = mode.session.displayAssistantContent(entry.message.content);
+		const readable =
+			entry.type === "message" &&
+			(entry.message.role === "assistant" ||
+				(entry.message.role === "toolResult" && entry.message.toolName === TOOL.yield && !entry.message.isError))
+				? readColdEntry(entry) ?? entry
+				: entry;
+		const turn = projector.observe(readable);
+		if (readable.type !== "message" || readable.message.role !== "assistant") return [];
+		const content = mode.session.displayAssistantContent(readable.message.content);
 		const text = content
 			.filter(block => block.type === "text")
 			.map(block => block.text)
