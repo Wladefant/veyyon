@@ -90,6 +90,10 @@
 
 - MCP HTTP SSE diagnostics no longer include malformed peer JSON fragments ([#929](https://github.com/Wladefant/veyyon/issues/929)).
 
+### Fixed
+
+- MCP tool consumers remove disconnected server tools by exact server ownership and ignore stale tool refreshes ([Refs #887](https://github.com/Wladefant/veyyon/issues/887)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

@@ -304,6 +304,10 @@ export class MCPManager {
 	}
 
 	#connections = new Map<string, MCPServerConnection>();
+	// A single-server disconnect can await event drain and transport close while
+	// its connection is still indexed. Retired transport identity must never
+	// publish a late tools/list reply, even if close subsequently rejects.
+	#retiredToolConnections = new WeakSet<MCPServerConnection>();
 	/** Session CPU budget hook, set by the owning session: spawned stdio server pids join the session's budget group. */
 	#adoptSpawnedPid: ((pid: number) => void) | undefined;
 	/** Session CPU budget gate: refuse a new stdio server while the group is saturated or uncreated. */
@@ -423,6 +427,8 @@ export class MCPManager {
 	#tools: CustomTool<TSchema, MCPToolDetails>[] = [];
 	#pendingConnections = new Map<string, Promise<MCPServerConnection>>();
 	#pendingToolLoads = new Map<string, Promise<ToolLoadResult>>();
+	/** An initial tools/list superseded by a newer notification must never publish or enter the startup snapshot. */
+	#supersededInitialToolLoads = new WeakSet<Promise<ToolLoadResult>>();
 	#sources = new Map<string, SourceMeta>();
 	// Last connection failure per server, retained so `/mcp list` can show *why*
 	// a server is not connected instead of a bare "not connected". Cleared when
@@ -439,6 +445,11 @@ export class MCPManager {
 	#notificationsEnabled = false;
 	#notificationsEpoch = 0;
 	#subscribedResources = new Map<string, Set<string>>();
+	/** Per-connection tools/list single flight; one later notification requests one fresh pass. */
+	#pendingToolRefreshes = new Map<
+		string,
+		{ connection: MCPServerConnection; again: boolean; promise: Promise<void> }
+	>();
 	#pendingResourceRefresh = new Map<string, { connection: MCPServerConnection; promise: Promise<void> }>();
 	#pendingReconnections = new Map<string, Promise<MCPServerConnection | null>>();
 	#serverConfigs = new Map<string, MCPServerConfig>();
@@ -1491,11 +1502,15 @@ export class MCPManager {
 				.then(async ({ connection, serverTools }) => {
 					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
 					this.#pendingToolLoads.delete(name);
-					const reconnect = () => this.reconnectServer(name);
-					const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
-					this.#replaceServerTools(name, customTools);
-					this.#onToolsChanged?.(this.#tools);
-					void this.toolCache?.set(name, config, serverTools);
+					// A newer refresh owns the tool catalog, but the original
+					// handshake still owns connection-status and resource/prompt setup.
+					if (!this.#supersededInitialToolLoads.has(toolsPromise)) {
+						const reconnect = () => this.reconnectServer(name);
+						const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
+						this.#replaceServerTools(name, customTools);
+						this.#onToolsChanged?.(this.#tools);
+						void this.toolCache?.set(name, config, serverTools);
+					}
 
 					this.#lastErrors.delete(name);
 					onStatus?.({ type: "connected", serverName: name });
@@ -1504,6 +1519,55 @@ export class MCPManager {
 				.catch(error => {
 					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
 					this.#pendingToolLoads.delete(name);
+					if (this.#supersededInitialToolLoads.has(toolsPromise)) {
+						// The newer refresh owns the final tool list. If the initial
+						// request fails, keep its live handshake status pending until
+						// the queued replacement finishes instead of reporting stale
+						// failure or leaving the session stuck at "connecting".
+						void connectionPromise
+							.then(connection => {
+								const settleRecovery = async (recoveryError?: unknown): Promise<void> => {
+									if (
+										this.#connections.get(name) !== connection ||
+										this.#retiredToolConnections.has(connection)
+									) {
+										return;
+									}
+									if (connection.tools !== undefined) {
+										this.#lastErrors.delete(name);
+										onStatus?.({ type: "connected", serverName: name });
+										await this.#loadServerResourcesAndPrompts(name, connection);
+									} else {
+										const message = errorMessage(recoveryError ?? error);
+										this.#lastErrors.set(name, message);
+										onStatus?.({
+											type: "failed",
+											serverName: name,
+											error: message,
+											foreign: this.#isForeignServer(name),
+										});
+									}
+								};
+								const refresh = this.#pendingToolRefreshes.get(name);
+								const finished =
+									refresh && refresh.connection === connection
+										? refresh.promise.then(
+												() => settleRecovery(),
+												recoveryError => settleRecovery(recoveryError),
+											)
+										: settleRecovery();
+								void finished.catch(recoveryError => {
+									logger.warn("MCP superseded startup status recovery failed", {
+										path: `mcp:${name}`,
+										error: errorMessage(recoveryError),
+									});
+								});
+							})
+							.catch(() => {
+								// No handshake to recover after connection failure.
+							});
+						return;
+					}
 					const message = errorMessage(error);
 					this.#lastErrors.set(name, message);
 					onStatus?.({ type: "failed", serverName: name, error: message, foreign: this.#isForeignServer(name) });
@@ -1552,17 +1616,33 @@ export class MCPManager {
 
 			for (const task of connectionTasks) {
 				const { name } = task;
+				// A later live refresh owns this catalog, but the original
+				// transport is still connected and belongs in the startup summary.
+				if (this.#supersededInitialToolLoads.has(task.toolsPromise)) {
+					const live = this.#connections.get(name);
+					// The newer refresh may already have published, but an explicit
+					// disconnect can retire that connection before this startup
+					// aggregator runs. Never re-expose tools after retirement.
+					if (live && !this.#retiredToolConnections.has(live)) {
+						connectedServers.add(name);
+						for (const tool of this.#tools) {
+							if (tool.mcpServerName === name) allTools.push(tool);
+						}
+					}
+					continue;
+				}
 				if (task.tracked.status === "fulfilled") {
 					const value = task.tracked.value;
 					if (!value) continue;
 					const { connection, serverTools } = value;
-					// A fulfilled task is only a historical result. A per-server
-					// disconnect may have retired that transport while another
-					// startup task was waiting on cached tools.
-					if (this.#connections.get(name) !== connection || this.#activeDisconnects.has(name)) continue;
+					if (
+						this.#connections.get(name) !== connection ||
+						this.#activeDisconnects.has(name) ||
+						this.#retiredToolConnections.has(connection)
+					) continue;
 					connectedServers.add(name);
 					const reconnect = () => this.reconnectServer(name);
-					const mcpTools = MCPTool.fromTools(connection, serverTools, reconnect);
+					const mcpTools = MCPTool.fromTools(connection, connection.tools ?? serverTools, reconnect);
 					for (let ti = 0; ti < mcpTools.length; ti++) allTools.push(mcpTools[ti]!);
 				} else if (task.tracked.status === "rejected") {
 					const message = errorMessage(task.tracked.reason);
@@ -1634,6 +1714,9 @@ export class MCPManager {
 	}
 
 	#replaceServerTools(name: string, tools: CustomTool<TSchema, MCPToolDetails>[]): void {
+		// Both MCPTool and DeferredMCPTool carry their exact originating server.
+		// Name-prefix matching would also erase a healthy sibling: "alpha"
+		// owns mcp__alpha_*, but "alpha_beta" tools share that string prefix.
 		this.#tools = this.#tools.filter(tool => tool.mcpServerName !== name);
 		for (let ti = 0; ti < tools.length; ti++) this.#tools.push(tools[ti]!);
 		// Stable sort by name so reconnect order does not perturb the array.
@@ -1860,6 +1943,8 @@ export class MCPManager {
 		// Revoke a still-pending initial handshake synchronously, before any
 		// awaited event drain gives its late response an opportunity to enroll.
 		// Its success continuation will dispose that exact obsolete transport.
+		const connection = this.#connections.get(name);
+		if (connection) this.#retiredToolConnections.add(connection);
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
 		await this.#stopServerEvents(name);
@@ -1868,8 +1953,6 @@ export class MCPManager {
 		this.#serverConfigs.delete(name);
 		this.#pendingResourceRefresh.delete(name);
 		this.#reconnectHistory.delete(name);
-
-		const connection = this.#connections.get(name);
 
 		const subscribedUris = this.#subscribedResources.get(name);
 		if (subscribedUris && subscribedUris.size > 0 && connection) {
@@ -1894,7 +1977,10 @@ export class MCPManager {
 			}
 		}
 
-		// Remove tools from this server and notify consumers
+		// Remove tools using the exact server identity that minted them.
+		// Tool-name prefixes overlap for distinct names ("alpha", "alpha_beta"),
+		// so a prefix filter can silently erase a healthy sibling. Match the
+		// notification gate to the very same exact owner predicate.
 		const hadTools = this.#tools.some(tool => tool.mcpServerName === name);
 		this.#tools = this.#tools.filter(tool => tool.mcpServerName !== name);
 		if (hadTools) this.#onToolsChanged?.(this.#tools);
@@ -2274,22 +2360,82 @@ export class MCPManager {
 	/**
 	 * Refresh tools from a specific server.
 	 */
-	async refreshServerTools(name: string): Promise<void> {
+	refreshServerTools(name: string): Promise<void> {
 		const connection = this.#connections.get(name);
-		if (!connection) return;
+		if (!connection || this.#retiredToolConnections.has(connection)) return Promise.resolve();
 
-		// Clear cached tools
-		connection.tools = undefined;
+		// Each tools/list reply writes connection.tools inside client.ts before
+		// manager-level stale checks can run. Serialize requests for the SAME
+		// live connection; a second notification schedules a newer pass instead
+		// of letting a slow old response roll the catalog backwards.
+		const initialToolLoad = this.#pendingToolLoads.get(name);
+		// The first discovery request also writes connection.tools in client.ts.
+		// Mark it obsolete before yielding, and let it finish before the fresh
+		// request starts. This prevents either cache or registry from going back
+		// to an older initial snapshot when a notification arrives mid-startup.
+		if (initialToolLoad) this.#supersededInitialToolLoads.add(initialToolLoad);
+		const active = this.#pendingToolRefreshes.get(name);
+		if (active?.connection === connection) {
+			active.again = true;
+			return active.promise;
+		}
 
-		// Reload tools
-		const serverTools = await listTools(connection);
-		const reconnect = () => this.reconnectServer(name);
-		const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
-		void this.toolCache?.set(name, connection.config, serverTools);
+		const completion = Promise.withResolvers<void>();
+		const state = { connection, again: false, promise: completion.promise };
+		this.#pendingToolRefreshes.set(name, state);
+		void (async () => {
+			try {
+				// The startup tools/list request is outside the refresh-only
+				// single-flight map. Drain it before querying fresh tools. A failed
+				// initial request does not prevent a later notification recovery.
+				if (initialToolLoad) {
+					try {
+						await initialToolLoad;
+					} catch {
+						// The queued refresh is still eligible to recover this live connection.
+					}
+				}
+				do {
+					state.again = false;
+					if (this.#retiredToolConnections.has(connection) || this.#connections.get(name) !== connection) break;
+					const epoch = this.#epoch;
 
-		// Replace tools from this server
-		this.#replaceServerTools(name, customTools);
-		this.#onToolsChanged?.(this.#tools);
+					// A transport response may still fail while a newer change is
+					// queued; allow the later request to recover a live connection.
+					connection.tools = undefined;
+					let serverTools: MCPToolDefinition[];
+					try {
+						serverTools = await listTools(connection);
+					} catch (error) {
+						if (state.again) continue;
+						throw error;
+					}
+
+					// A completed response is not permission to publish after
+					// explicit retirement, reconnect or bulk reset.
+					if (
+						this.#retiredToolConnections.has(connection) ||
+						this.#connections.get(name) !== connection ||
+						this.#epoch !== epoch
+					)
+						break;
+					// A newer notification arrived while this response was pending:
+					// do not publish an already-superseded catalog even briefly.
+					if (state.again) continue;
+					const reconnect = () => this.reconnectServer(name);
+					const customTools = MCPTool.fromTools(connection, serverTools, reconnect);
+					void this.toolCache?.set(name, connection.config, serverTools);
+					this.#replaceServerTools(name, customTools);
+					this.#onToolsChanged?.(this.#tools);
+				} while (state.again);
+				completion.resolve();
+			} catch (error) {
+				completion.reject(error);
+			} finally {
+				if (this.#pendingToolRefreshes.get(name) === state) this.#pendingToolRefreshes.delete(name);
+			}
+		})();
+		return completion.promise;
 	}
 
 	/**
