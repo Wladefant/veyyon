@@ -49,6 +49,50 @@ bun needs the `./` prefix on a path: without it the argument is a name FILTER ma
 against the files discovery already found, not a path, so a target discovery did not
 collect matches nothing and the run reports clean.
 
+#### Focused Windows tests through WSL
+
+When repository policy permits focused local checks, use WSL's Linux sandbox from the Windows
+worktree. This also works when the worktree's `node_modules` is a shared Windows
+junction: do not install through that junction.
+
+Reuse a prepared Linux dependency tree for the checkout's lockfile. Set
+`VEYYON_SANDBOX_NODE_MODULES` to its absolute Linux `node_modules` path. The bwrap
+rung binds that tree read-only over the worktree's `node_modules`. Relative workspace
+links resolve against the tested worktree. This prevents a Windows junction from
+leaving workspace imports such as `@veyyon/catalog/models` unresolved in Linux.
+The manifest's Bun version must be available outside the hidden home, normally at
+`/usr/local/bin/bun`. WSL must also provide Git, sh, and bwrap.
+
+Save the external `.sh` file with LF line endings, not CRLF.
+
+Save this script outside the repository, replacing both example paths:
+
+```sh
+#!/bin/bash
+set -euo pipefail
+cd /mnt/c/repo/veyyon-wt/my-lane
+export VEYYON_SANDBOX_NODE_MODULES=/opt/prepared-veyyon-deps/node_modules
+bash scripts/test-sandbox/run.sh --rung=bwrap bun test ./packages/coding-agent/test/a-replayed-operator-answer-injects-nothing.test.ts
+```
+
+Run the script through the workstation's build-slot wrapper:
+
+```text
+python C:/Users/<user>/.veyyon/workflows/build_slot.py run focused-operator-answers --class medium --timeout 900 -- wsl.exe --exec /bin/bash /mnt/c/repo/scratch/focused-operator-answers.sh
+```
+
+Pass Linux paths to WSL. A script avoids Windows shell expansion of Linux variables.
+Never export `VEYYON_TEST_SANDBOX` yourself: the sandbox driver sets its marker only
+after it establishes the kernel boundary, and the preload independently checks it.
+An unavailable pinned rung is an error, not permission to run on the bare host.
+
+Read the Bun summary and keep the tested commit SHA with it. A successful receipt
+requires positive test and assertion counts, with zero failures. A missing module,
+exit status alone, or a zero-test run proves nothing. Dependency preparation and
+the full rung contract live in
+[`scripts/test-sandbox/README.md`](../../scripts/test-sandbox/README.md#windows-through-wsl).
+If repository policy does not permit local checks, use its remote CI route instead.
+
 #### The one exception: real-browser suites on a host with Chromium
 
 The sandbox guest has no Chromium, so the three real-browser suites
