@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Native release builds no longer reference the removed walker helper.
+
 ## [1.8.1] - 2026-11-05
 
 ### Fixed
