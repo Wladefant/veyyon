@@ -1,15 +1,30 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { logger, TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
+import { submitInteractiveInput } from "../src/main";
 import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
 import { AgentSession } from "../src/session/agent-session";
 import { initTheme } from "../src/theme/theme";
+
+// WHY: a trace regression must fail at the stuck submission/queue boundary,
+// not wait indefinitely after the mock provider has entered. These deadlines
+// bound observation; releasing the owned provider remains explicit in finally.
+async function withinTracePhase<T>(operation: Promise<T>, phase: string): Promise<T> {
+	const deadline = Promise.withResolvers<never>();
+	const timer = setTimeout(() => deadline.reject(new Error(`Timed out waiting for ${phase}`)), 10_000);
+	try {
+		return await Promise.race([operation, deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
 
 describe("a pending submission lifecycle in interactive mode", () => {
 	let tempDir: TempDir | undefined;
@@ -85,4 +100,139 @@ describe("a pending submission lifecycle in interactive mode", () => {
 		const startedAfterCancel = mode.markPendingSubmissionStarted(submission);
 		expect(startedAfterCancel).toBe(false);
 	});
+	it("preserves Telegram trace metadata from the real interactive submit to provider invocation", async () => {
+		const realMode = mode;
+		const realSession = session;
+		if (!realMode || !realSession || !authStorage) throw new Error("Expected initialized interactive session");
+		// The provider is entirely in-memory; the real InteractiveMode, submission code and
+		// AgentSession are exercised, rather than copying their trace-forwarding logic into a fake.
+		const fakeProvider = createMockModel({ responses: [{ content: ["Trace delivered"], stopReason: "stop" }] });
+		authStorage.setRuntimeApiKey("mock", "test-only-token");
+		realSession.agent.setModel(fakeProvider.model);
+		const traceRecords: Array<Record<string, unknown>> = [];
+		vi.spyOn(logger, "info").mockImplementation((message, context) => {
+			if (message === "Telegram delivery trace") traceRecords.push(context ? { ...context } : {});
+		});
+		const traceAtProvider: Array<Array<Record<string, unknown>>> = [];
+		realSession.agent.streamFn = (model, context, options) => {
+			// The agent-loop emits provider_call_start immediately before invoking this callback.
+			traceAtProvider.push(traceRecords.map(record => ({ ...record })));
+			return fakeProvider.stream(model, context, options);
+		};
+		const errors: string[] = [];
+		vi.spyOn(realMode, "showError").mockImplementation(message => {
+			errors.push(message);
+		});
+		const telegramTrace = { updateId: 9001, messageId: 42, chatId: "-1001999888", topicId: 10 };
+		const input = realMode.startPendingSubmission({
+			text: "traced input",
+			streamingBehavior: "followUp",
+			telegramTrace,
+		});
+		await withinTracePhase(submitInteractiveInput(realMode, realSession, input), "traced submission");
+		await withinTracePhase(realSession.waitForIdle(), "traced session idle");
+		expect(errors).toEqual([]);
+		expect(input.started).toBe(true);
+		expect(fakeProvider.calls).toHaveLength(1);
+		expect(JSON.stringify(fakeProvider.calls[0]?.context.messages)).toContain("traced input");
+		expect(traceAtProvider).toHaveLength(1);
+		const traceId = "-1001999888:9001:42";
+		expect(traceAtProvider[0]?.filter(record => record.stage === "provider_call_start")).toEqual([
+			expect.objectContaining({
+				stage: "provider_call_start",
+				traceId,
+				sessionId: realSession.sessionManager.getSessionId(),
+			}),
+		]);
+		expect(traceAtProvider[0]?.some(record => record.stage === "turn_consumption" && record.traceId === traceId)).toBe(true);
+		expect(JSON.stringify(traceRecords)).not.toContain("traced input");
+	}, 30_000);
+
+	it("attributes queued Telegram steer and follow-up to their own provider calls", async () => {
+		const realMode = mode;
+		const realSession = session;
+		if (!realMode || !realSession || !authStorage) throw new Error("Expected initialized interactive session");
+		const releaseFirstProvider = Promise.withResolvers<void>();
+		const firstProviderEntered = Promise.withResolvers<void>();
+		let responseCount = 0;
+		const fakeProvider = createMockModel({
+			handler: async () => {
+				if (responseCount++ === 0) {
+					// Wait until the provider handler is actually blocked, not merely the streamFn called.
+					firstProviderEntered.resolve();
+					await releaseFirstProvider.promise;
+				}
+				return { content: ["Acknowledged"], stopReason: "stop" };
+			},
+		});
+		authStorage.setRuntimeApiKey("mock", "test-only-token");
+		realSession.agent.setModel(fakeProvider.model);
+		const records: Array<Record<string, unknown>> = [];
+		vi.spyOn(logger, "info").mockImplementation((message, context) => {
+			if (message === "Telegram delivery trace") records.push(context ? { ...context } : {});
+		});
+		const atProvider: Array<{ traceIds: string[]; messages: string }> = [];
+		let observedStartCount = 0;
+		realSession.agent.streamFn = (model, context, options) => {
+			// Snapshot only the start records that appeared since the previous provider invocation.
+			const starts = records.filter(record => record.stage === "provider_call_start");
+			const traceIds = starts.slice(observedStartCount).map(record => String(record.traceId));
+			observedStartCount = starts.length;
+			atProvider.push({ traceIds, messages: JSON.stringify(context.messages) });
+			return fakeProvider.stream(model, context, options);
+		};
+		const errors: string[] = [];
+		vi.spyOn(realMode, "showError").mockImplementation(message => errors.push(message));
+		const base = { chatId: "-1001999888", topicId: 10 };
+		const initial = realMode.startPendingSubmission({
+			text: "original traced turn",
+			streamingBehavior: "followUp",
+			telegramTrace: { ...base, updateId: 9101, messageId: 51 },
+		});
+		const initialDelivery = submitInteractiveInput(realMode, realSession, initial);
+		// Observe early rejection while startup is awaited; finally still awaits the
+		// original promise, so this handler cannot turn a failed submission into success.
+		void initialDelivery.catch(() => undefined);
+		try {
+			await withinTracePhase(firstProviderEntered.promise, "first mock provider handler");
+			if (!realSession.isStreaming) throw new Error("Expected first turn to remain in flight");
+			const steering = realMode.startPendingSubmission({
+				text: "steering traced turn",
+				streamingBehavior: "steer",
+				telegramTrace: { ...base, updateId: 9102, messageId: 52 },
+			});
+			await withinTracePhase(submitInteractiveInput(realMode, realSession, steering), "queued steering submission");
+			const followUp = realMode.startPendingSubmission({
+				text: "follow-up traced turn",
+				streamingBehavior: "followUp",
+				telegramTrace: { ...base, updateId: 9103, messageId: 53 },
+			});
+			await withinTracePhase(submitInteractiveInput(realMode, realSession, followUp), "queued follow-up submission");
+			expect(steering.started).toBe(true);
+			expect(followUp.started).toBe(true);
+		} finally {
+			releaseFirstProvider.resolve();
+			await withinTracePhase(initialDelivery, "initial delivery after provider release");
+		}
+		await withinTracePhase(realSession.waitForIdle(), "queued trace session idle");
+		expect(errors).toEqual([]);
+		const expectedTraceIds = ["-1001999888:9101:51", "-1001999888:9102:52", "-1001999888:9103:53"];
+		// A queued steer is delivered before a follow-up; neither trace may leak into
+		// the provider invocation for the previous or subsequent logical user turn.
+		expect(atProvider.map(call => call.traceIds)).toEqual(expectedTraceIds.map(id => [id]));
+		expect(fakeProvider.calls).toHaveLength(3);
+		for (const [index, prompt] of [
+			"original traced turn",
+			"steering traced turn",
+			"follow-up traced turn",
+		].entries()) {
+			expect(atProvider[index]?.messages).toContain(prompt);
+		}
+		expect(records.filter(record => record.stage === "turn_consumption").map(record => record.traceId)).toEqual(
+			expectedTraceIds,
+		);
+		for (const text of ["original traced turn", "steering traced turn", "follow-up traced turn"]) {
+			expect(JSON.stringify(records)).not.toContain(text);
+		}
+	}, 60_000);
 });
