@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:chil
 import * as path from "node:path";
 import { escapeTerminalText } from "./terminal-safe";
 import { errorMessage } from "./type-guards";
+import { verifyNativeOwnerOnlyWindowsAcl } from "./windows-acl-native";
 
 const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024;
 export const WINDOWS_ACL_TIMEOUT_MS = 60_000;
@@ -148,7 +149,12 @@ export async function withOwnerOnlyWindowsAclVerification<T>(
 	operation: (options: WindowsAclOptions) => Promise<T>,
 	options: WindowsAclOptions = {},
 ): Promise<T> {
-	if ((options.platform ?? process.platform) !== "win32" || options.run !== undefined) return operation(options);
+	if (
+		(options.platform ?? process.platform) !== "win32" ||
+		options.run !== undefined ||
+		options.spawn === undefined
+	)
+		return operation(options);
 	let child: ChildProcessWithoutNullStreams | undefined;
 	let closing = false;
 	let closed = false;
@@ -312,28 +318,28 @@ export async function applyOwnerOnlyWindowsAcl(filePath: string, options: Window
 
 /** Verify that a path has a protected owner-only DACL; rejects on any ambiguity. */
 export async function verifyOwnerOnlyWindowsAcl(filePath: string, options: WindowsAclOptions = {}): Promise<void> {
-	await runOwnerOnlyAcl(VERIFY_SCRIPT, filePath, options);
+	if (options.run !== undefined || options.spawn !== undefined) {
+		await runOwnerOnlyAcl(VERIFY_SCRIPT, filePath, options);
+		return;
+	}
+	verifyOwnerOnlyWindowsAclSync(filePath, options);
 }
 
 /**
- * Synchronous {@link verifyOwnerOnlyWindowsAcl} for a reader that cannot await. It runs the same
- * VERIFY_SCRIPT with the same environment, deadline and output bound, and rejects the same way.
+ * Synchronous verification for readers that cannot await. Both readers query the native security API;
+ * injected command runners retain the same fail-closed output checks used by the ACL writer.
  */
 export function verifyOwnerOnlyWindowsAclSync(filePath: string, options: WindowsAclOptions = {}): void {
 	const platform = options.platform ?? process.platform;
 	if (platform !== "win32") return;
 	assertOwnerOnlyPath(filePath);
 
-	let result: WindowsAclCommandResult;
 	try {
-		result =
-			options.runSync === undefined
-				? defaultWindowsAclSyncRunner(VERIFY_SCRIPT, filePath)
-				: options.runSync(VERIFY_SCRIPT, filePath);
+		if (options.runSync === undefined) verifyNativeOwnerOnlyWindowsAcl(filePath);
+		else assertOwnerOnlyResult(options.runSync(VERIFY_SCRIPT, filePath));
 	} catch (error) {
 		throw ownerOnlyAclFailure(error);
 	}
-	assertOwnerOnlyResult(result);
 }
 
 async function runOwnerOnlyAcl(script: string, filePath: string, options: WindowsAclOptions): Promise<void> {
@@ -468,27 +474,6 @@ async function defaultWindowsAclRunner(
 	return await promise;
 }
 
-/**
- * Runs a verification synchronously with the async runner's bounds: a configurable deadline, a per-stream
- * output cap and no console window. A node-level failure (timeout, oversized output) throws.
- */
-function defaultWindowsAclSyncRunner(script: string, filePath: string): WindowsAclCommandResult {
-	const { executable, env } = trustedPowerShell(filePath);
-	const result = spawnSync(
-		executable,
-		["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-		{
-			encoding: "utf8",
-			env,
-			maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
-			stdio: ["ignore", "pipe", "pipe"],
-			timeout: getWindowsAclTimeoutMs(),
-			windowsHide: true,
-		},
-	);
-	if (result.error) throw result.error;
-	return { exitCode: result.status ?? -1, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
-}
 
 function boundedDiagnostic(value: string): string {
 	const inert = escapeTerminalText(value);

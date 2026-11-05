@@ -26,7 +26,7 @@ async function claim(): Promise<{ root: string; sessionFile: string; record: str
 
 describe("terminal ownership failure diagnostics", () => {
 	for (const step of ["open", "ACL #1 (parent)", "ACL #2 (record)", "identity"]) {
-		it(`names the record, ${step}, code, elapsed time and deadline without losing the cause`, async () => {
+		it(`names the record, ${step}, code and elapsed time without losing the cause`, async () => {
 			const { root, sessionFile, record } = await claim();
 			delete process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 			const cause = Object.assign(new Error("access denied"), { code: "EPERM" });
@@ -43,16 +43,24 @@ describe("terminal ownership failure diagnostics", () => {
 			expect(error.message).toContain(
 				`Cannot establish terminal writer ownership: ${record}; step=${step}; code=EPERM;`,
 			);
-			expect(error.message).toMatch(/elapsed=\d+ms; ACL deadline=60000ms per command; access denied$/);
+			expect(error.message).toMatch(/elapsed=\d+ms; access denied$/);
 			expect(read).toHaveBeenCalledTimes(1);
 		});
 	}
 
-	it("reports the configured command deadline, not the default", async () => {
+	it("does not report a shell command deadline for a native ownership read", async () => {
 		process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS = "123456";
 		const { root, sessionFile } = await claim();
-		vi.spyOn(utils, "readOwnerOnlyFile").mockRejectedValue(new Error("access denied"));
-		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("ACL deadline=123456ms per command");
+		const cause = new Error("access denied");
+		vi.spyOn(utils, "readOwnerOnlyFile").mockRejectedValue(cause);
+		const error = await assertNotTerminalOwned(sessionFile, root).then(
+			() => undefined,
+			error => error,
+		);
+		expect(error).toBeInstanceOf(Error);
+		expect(error.cause).toBe(cause);
+		expect(error.message).toContain("access denied");
+		expect(error.message).not.toContain("ACL deadline=");
 	});
 
 	it("names parse failures and keeps their original SyntaxError", async () => {
