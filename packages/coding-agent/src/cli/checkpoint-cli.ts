@@ -1,8 +1,13 @@
-import { isCheckpointNodeLabel } from "@veyyon/session/checkpoint-ownership";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import { isCheckpointNodeLabel } from "@veyyon/session/checkpoint-ownership";
 import { CheckpointClient } from "../checkpoints/cloud-checkpoints";
-import { captureNativeCheckpoint, forkNativeCheckpoint, persistNativeHandoffIdentity, restoreNativeCheckpoint } from "../checkpoints/native-recovery";
+import {
+	captureNativeCheckpoint,
+	forkNativeCheckpoint,
+	persistNativeHandoffIdentity,
+	restoreNativeCheckpoint,
+} from "../checkpoints/native-recovery";
 import { settings } from "../config/settings";
 
 export interface CheckpointCommandArgs {
@@ -15,7 +20,8 @@ export interface CheckpointCommandArgs {
 }
 export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise<void> {
 	if (args.action === "fork" && args.sessionFile) {
-		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? []);
+		// A local-only fork is not an encrypted Cloudflare object.
+		const bundle = await captureNativeCheckpoint(args.sessionFile, args.workspace ?? [], "local");
 		console.log(JSON.stringify(await forkNativeCheckpoint(bundle)));
 		return;
 	}
@@ -47,12 +53,14 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 						pending.handoff.transferId,
 						{ ownerNode, epoch: pending.handoff.epoch - 1 },
 					);
-					console.log(JSON.stringify({
-						sessionId,
-						transferred: true,
-						targetNode: pending.handoff.targetNode,
-						epoch: next.epoch,
-					}));
+					console.log(
+						JSON.stringify({
+							sessionId,
+							transferred: true,
+							targetNode: pending.handoff.targetNode,
+							epoch: next.epoch,
+						}),
+					);
 					return;
 				} catch (error) {
 					if (!(error instanceof Error) || !error.message.includes("HTTP 409")) throw error;
@@ -80,7 +88,9 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 					handoff.claimToken,
 					handoff.transferId,
 				);
-				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: handoff.targetNode, epoch: next.epoch }));
+				console.log(
+					JSON.stringify({ sessionId, transferred: true, targetNode: handoff.targetNode, epoch: next.epoch }),
+				);
 				return;
 			}
 		}
@@ -115,7 +125,9 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 					handoff.claimToken,
 					handoff.transferId,
 				);
-				console.log(JSON.stringify({ sessionId, transferred: true, targetNode: handoff.targetNode, epoch: next.epoch }));
+				console.log(
+					JSON.stringify({ sessionId, transferred: true, targetNode: handoff.targetNode, epoch: next.epoch }),
+				);
 			} else {
 				console.log(JSON.stringify({ sessionId, exported: true }));
 			}
@@ -142,4 +154,4 @@ export async function runCheckpointCommand(args: CheckpointCommandArgs): Promise
 		throw new Error(`This checkpoint handoff targets node ${bundle.handoff.targetNode}`);
 	const id = await restoreNativeCheckpoint(bundle, resolve(args.output));
 	console.log(`Restored native session ${id} to ${resolve(args.output)}; resume acquires fenced ownership`);
-	}
+}
