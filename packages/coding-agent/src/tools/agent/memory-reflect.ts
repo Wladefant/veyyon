@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { lazy, logger, untilAborted } from "@veyyon/utils";
 import { ensureBankExists } from "../../memory/hindsight/bank";
+import { searchBasicMemory } from "../../memory/basic-memory";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { requireMnemopiSessionState } from "./memory-session";
@@ -33,13 +34,33 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema.v
 
 	static createIf(session: ToolSession): MemoryReflectTool | null {
 		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
+		if (backend !== "hindsight" && backend !== "mnemopi" && backend !== "basic-memory") return null;
 		return new MemoryReflectTool(session);
 	}
 
 	async execute(_id: string, params: MemoryReflectParams, signal?: AbortSignal): Promise<AgentToolResult> {
 		return untilAborted(signal, async () => {
 			const backend = this.session.settings.get("memory.backend");
+			if (backend === "basic-memory") {
+				const query = params.context?.trim()
+					? `${params.query.trim()}\n\nAdditional context:\n${params.context.trim()}`
+					: params.query;
+				const result = await searchBasicMemory(this.session.settings, this.session.cwd, query, {
+					signal,
+				});
+				const evidence = result.items.length
+					? result.items.map(item => `${item.id ? `memory://${item.id}\n` : ""}${item.content}`).join("\n\n")
+					: "No relevant source notes found.";
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Source evidence for your synthesis (Basic Memory does not generate an answer):\n\n${evidence}`,
+						},
+					],
+					details: {},
+				};
+			}
 			if (backend === "mnemopi") {
 				const state = requireMnemopiSessionState(this.session);
 

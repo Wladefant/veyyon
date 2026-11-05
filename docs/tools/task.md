@@ -48,6 +48,13 @@ The wire schema is shape-swapped by `agent.batch` (default on). One unit of work
 | `task` | `string` | Yes | The work, complete, self-contained instructions. Empty-after-trim is rejected. Item field in batch shape, top-level in flat shape. |
 | `cwd` | `string` | No | Per-spawn working-directory override. Item field in batch shape, top-level in flat shape. |
 | `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `agent.isolation.mode` is not `none`; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion, not revivable. |
+| `ownershipLease` | `{ paths: string[], expiresAt: string }` | No | Explicit dirty-path handoff for a non-isolated spawn. Paths resolve inside the child's canonical worktree. Expiry must be a future timestamp. |
+
+The runtime supplies the lease's grantor and allocated child owner. It resolves existing symlinks before checking path scope, including the existing parent of a new file. It rejects expired, empty and out-of-worktree grants before starting the child. Isolated spawns cannot inherit dirty-path ownership.
+
+A lease writes `<URL-encoded-id>.ownership-lease.json` beside the child's transcript. Its versioned JSON records the canonical worktree, paths, grantor, owner and expiry. The child receives the same record in its runtime context. While the lease is valid, dirty files from the granting ancestor do not require a competing-writer question on those paths.
+
+Outside the recorded scope, or after expiry, the unknown-writer guard still applies. A separate peer with fresh overlapping activity still requires coordination. The lease changes no filesystem permissions or human, production, secret or security approval.
 
 There is no wire label field: the one-line UI label shown in the TUI/registry is generated automatically from the `task` text by the tiny/title model (fire-and-forget), so callers never provide it.
 

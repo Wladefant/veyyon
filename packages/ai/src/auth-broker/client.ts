@@ -102,7 +102,13 @@ export class AuthBrokerClient {
 			"Auth broker response failed schema validation",
 			response.status,
 		);
-		return { status: 200, snapshot, generation: etagGeneration ?? snapshot.generation };
+		// A full broker snapshot carries one generation in both its strong ETag
+		// and its validated body. Conflicting metadata cannot select a different
+		// local epoch from the snapshot that was actually received.
+		if (etagGeneration !== undefined && etagGeneration !== snapshot.generation) {
+			throw new AuthBrokerError("Auth broker snapshot ETag generation disagrees with response body");
+		}
+		return { status: 200, snapshot, generation: snapshot.generation };
 	}
 
 	/**
@@ -121,7 +127,7 @@ export class AuthBrokerClient {
 			if (sse.event === null && sse.data === "") continue; // keepalive comment frames
 			const event = parseStreamEvent(sse.data);
 			if (!sawFirstEvent && event.kind !== "snapshot") {
-				throw new AuthBrokerError("Auth broker stream did not start with snapshot", { body: sse.data });
+				throw new AuthBrokerError("Auth broker stream did not start with snapshot");
 			}
 			sawFirstEvent = true;
 			yield event;
@@ -338,11 +344,12 @@ interface BrokerResponse {
 	text: string;
 }
 
-/** `raw` checked against `schema`, or an {@link AuthBrokerError} carrying the schema's summary of what failed. */
+/** Validate JSON without retaining untrusted credential-bearing values in diagnostic errors. */
 function validateWire<T>(schema: (input: unknown) => unknown, raw: unknown, message: string, status?: number): T {
 	const validated = schema(raw);
 	if (validated instanceof type.errors) {
-		throw new AuthBrokerError(message, { status, body: validated.summary });
+		// ArkType summaries can echo token/key values from an invalid broker reply.
+		throw new AuthBrokerError(message, { status });
 	}
 	return validated as T;
 }
@@ -352,24 +359,24 @@ function parseStreamEvent(data: string): SnapshotStreamEvent {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(data);
-	} catch (err) {
-		throw new AuthBrokerError("Auth broker stream returned malformed JSON", { body: data, cause: err });
+	} catch {
+		// JSON parse errors may quote credential-bearing input fragments.
+		throw new AuthBrokerError("Auth broker stream returned malformed JSON");
 	}
-	return validateWire<SnapshotStreamEvent>(
-		wireSchemas().snapshotStreamEventSchema,
-		parsed,
-		"Auth broker stream event failed schema validation",
-	);
+	const event = wireSchemas().snapshotStreamEventSchema(parsed);
+	if (event instanceof type.errors) {
+		// Schema error summaries may echo rejected access-token or key values.
+		throw new AuthBrokerError("Auth broker stream event failed schema validation");
+	}
+	return event as SnapshotStreamEvent;
 }
 
 function parseJson(text: string, status: number): unknown {
 	try {
 		return text.length === 0 ? null : JSON.parse(text);
-	} catch (parseError) {
-		throw new AuthBrokerError("Auth broker returned malformed JSON", {
-			status,
-			body: text,
-			cause: parseError,
-		});
+	} catch {
+		// Broker JSON can include access tokens/keys: neither raw text nor parser
+		// exceptions that might quote input fragments belong on the error object.
+		throw new AuthBrokerError("Auth broker returned malformed JSON", { status });
 	}
 }

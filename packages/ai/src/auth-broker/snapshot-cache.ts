@@ -6,7 +6,9 @@
  * still the trust boundary; a process that can read both the token and this file
  * can decrypt the snapshot.
  */
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { asStrictBytes } from "@veyyon/utils/bytes";
 import { isEnoent } from "@veyyon/utils/fs-error";
@@ -22,6 +24,46 @@ const HEADER_LENGTH = IV_OFFSET + IV_LENGTH;
 const AES_ALGORITHM = "AES-GCM";
 const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
+
+/** FIFO per target path, before encryption/rename: the atomic writer alone cannot order snapshots. */
+const pendingCacheWrites = new Map<string, Promise<void>>();
+
+/** An atomic write follows final-component and parent symlinks, so aliases must share one FIFO. */
+function cacheWriteTargetKey(filePath: string): string {
+	let target = path.resolve(filePath);
+	const visited = new Set<string>();
+	for (;;) {
+		let stats: fsSync.Stats;
+		try {
+			stats = fsSync.lstatSync(target);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			// A cache need not exist yet. Resolve its nearest existing parent so
+			// dangling basename links and parent-directory aliases share the key.
+			let parent = path.dirname(target);
+			const suffix = [path.basename(target)];
+			for (;;) {
+				try {
+					return path.join(fsSync.realpathSync(parent), ...suffix);
+				} catch (parentError) {
+					if (!isEnoent(parentError)) throw parentError;
+					const nextParent = path.dirname(parent);
+					if (nextParent === parent) throw parentError;
+					suffix.unshift(path.basename(parent));
+					parent = nextParent;
+				}
+			}
+		}
+		if (!stats.isSymbolicLink()) return fsSync.realpathSync(target);
+		if (visited.has(target)) {
+			const error = new Error("Auth-broker snapshot cache path has a symlink loop") as NodeJS.ErrnoException;
+			error.code = "ELOOP";
+			throw error;
+		}
+		visited.add(target);
+		target = path.resolve(path.dirname(target), fsSync.readlinkSync(target));
+	}
+}
 
 export interface ReadAuthBrokerSnapshotCacheOptions {
 	path: string;
@@ -93,9 +135,36 @@ export async function readAuthBrokerSnapshotCache(
 	}
 }
 
-export async function writeAuthBrokerSnapshotCache(opts: WriteAuthBrokerSnapshotCacheOptions): Promise<void> {
-	const payload = await encryptCachePayload(opts.snapshot, opts.token, opts.url);
-	await atomicWriteFile(opts.path, payload, { mode: 0o600 });
+/**
+ * Accepted full snapshots must publish in call order. This queue covers a
+ * single process and cache path, not simultaneous writes from other processes.
+ */
+export function writeAuthBrokerSnapshotCache(opts: WriteAuthBrokerSnapshotCacheOptions): Promise<void> {
+	let targetKey: string;
+	try {
+		// Resolve synchronously before registration: asynchronous key lookups can
+		// themselves reorder two calls while an older encryption is in flight.
+		// Case variants of a not-yet-created basename can be the same file on
+		// case-insensitive NTFS/APFS. Fold the canonical queue identity before
+		// admission so a delayed older snapshot cannot publish after revocation.
+		// On case-sensitive volumes this conservatively serializes case-only
+		// distinct paths; it does not alter the path passed to the writer.
+		targetKey = cacheWriteTargetKey(opts.path).toLowerCase();
+	} catch (error) {
+		return Promise.reject(error);
+	}
+	const preceding = pendingCacheWrites.get(targetKey);
+	const write = async (): Promise<void> => {
+		const payload = await encryptCachePayload(opts.snapshot, opts.token, opts.url);
+		await atomicWriteFile(opts.path, payload, { mode: 0o600 });
+	};
+	const pending = preceding ? preceding.then(write, write) : write();
+	pendingCacheWrites.set(targetKey, pending);
+	const clear = (): void => {
+		if (pendingCacheWrites.get(targetKey) === pending) pendingCacheWrites.delete(targetKey);
+	};
+	void pending.then(clear, clear);
+	return pending;
 }
 
 async function encryptCachePayload(snapshot: SnapshotResponse, token: string, url: string): Promise<Uint8Array> {
