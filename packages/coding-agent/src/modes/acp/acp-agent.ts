@@ -590,6 +590,7 @@ export class AcpAgent implements Agent {
 	async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
 		assertAbsoluteCwd(params.cwd);
 		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers, true);
+		for (const id of await record.session.refreshExternalTurn()) record.pendingExternalEntryIds.add(id);
 		await this.#replaySessionHistory(record);
 		const response: LoadSessionResponse = {
 			configOptions: this.#buildConfigOptions(record.session),
@@ -1782,7 +1783,7 @@ export class AcpAgent implements Agent {
 		const cwd = record.session.sessionManager.getCwd();
 		const replayedToolCallIds = new Set<string>();
 		const replayedToolCallArgs = new Map<string, unknown>();
-		const messages = record.session.sessionManager.buildSessionContext().messages as ReplayableMessage[];
+		const messages = record.session.sessionManager.buildSessionContext({ transcript: true }).messages as ReplayableMessage[];
 		const representedPendingIds = record.session.sessionManager
 			.getBranch()
 			.filter(entry => {
