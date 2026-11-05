@@ -39,6 +39,14 @@ already be configured.
 The four `memory.basicMemory.*` keys are config-only and do not appear in settings
 screens. Set them in `config.yml`.
 
+The integration starts `bm mcp --project <NAME>` from the session's working
+directory and sets `BASIC_MEMORY_FORCE_LOCAL=true`. It reads and writes only the
+configured project through the local MCP process. Imported source rows use the
+`hindsight_source_base64:<base64-encoded JSON>` format; Veyyon decodes the row's
+`text` (or supported legacy content field) for recall. Basic Memory does not
+auto-inject mental models into the prompt. This remains a cutover blocker until
+that behavior is available and verified.
+
 Basic Memory recall uses lexical search. It does not promise semantic recall.
 `reflect` returns source notes as evidence for the calling agent to synthesize;
 the server does not generate the answer. Retention is explicit through the `retain`
