@@ -155,6 +155,7 @@ import type { HindsightSessionState } from "../memory/hindsight/state";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
 import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import type { PlanModeState } from "../plan-mode/state";
+import { sideChannelPrompts } from "../prompts/side-channel/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
