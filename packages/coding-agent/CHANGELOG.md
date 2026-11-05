@@ -5,6 +5,7 @@
 
 ### Added
 
+- The browser tool connects through the Chrome extension bridge and lists lane-owned tabs with explicit cleanup approval ([Refs #968](https://github.com/Wladefant/veyyon/pull/968)).
 - `veyyon usage` can list OpenAI Codex reset credits and redeem one by numeric credential ID.
 
 ### Fixed

@@ -69,7 +69,7 @@ export interface BrowserViewArgs {
 	code?: string;
 	all?: boolean;
 	kill?: boolean;
-	app?: { path?: string; cdp_url?: string; target?: string; cmux?: boolean; surface?: string };
+	app?: { path?: string; cdp_url?: string; target?: string; cmux?: boolean; surface?: string; extension?: boolean };
 	viewport?: { width: number; height: number; scale?: number };
 	timeout?: number;
 }
@@ -85,6 +85,7 @@ export interface BrowserViewResult extends ToolViewResult<BrowserToolDetails> {}
  * arguments did not decide.
  */
 function describeBrowser(args: BrowserViewArgs, details: BrowserToolDetails | undefined): string | undefined {
+	if (args.app?.extension === true) return "extension (operator's Chrome)";
 	const cdpUrl = typeof args.app?.cdp_url === "string" ? args.app.cdp_url : "";
 	if (cdpUrl) return `connected ${cdpUrl}`;
 	const appPath = typeof args.app?.path === "string" ? args.app.path : "";
@@ -99,6 +100,8 @@ function describeBrowser(args: BrowserViewArgs, details: BrowserToolDetails | un
 			return "spawned";
 		case "connected":
 			return "connected";
+		case "extension":
+			return "extension";
 		case "cmux":
 			return "cmux";
 		default:
