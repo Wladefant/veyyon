@@ -103,14 +103,14 @@ describe("mcpFailureWarrantsReconnect", () => {
 });
 
 // ---------------------------------------------------------------------------
-// MCPTool.execute retry behavior
+// MCPTool.execute unknown-outcome and future-call reconnect behavior
 // ---------------------------------------------------------------------------
 
-describe("MCPTool.execute retry on connection error", () => {
+describe("MCPTool.execute refuses implicit replay after a lost response", () => {
 	const noop = () => {};
 	const noCtx = {} as Parameters<MCPTool["execute"]>[3];
 
-	it("retries once on retriable error when reconnect succeeds", async () => {
+	it("does not replay an attempted call when reconnect succeeds", async () => {
 		let callCount = 0;
 		const failTransport = mockTransport(async () => {
 			callCount++;
@@ -128,12 +128,12 @@ describe("MCPTool.execute retry on connection error", () => {
 		const tool = new MCPTool(oldConn, TOOL_DEF, reconnect);
 		const result = await tool.execute("call-1", {}, noop, noCtx);
 
-		expect(callCount).toBe(2); // 1 fail + 1 retry
-		expect(result.details?.isError).toBeFalsy();
-		expect(result.content[0]).toEqual({ type: "text", text: "ok" });
+		expect(callCount).toBe(1); // the lost reply is not evidence that the side effect failed
+		expect(result.details?.isError).toBe(true);
+		expect(JSON.stringify(result)).toContain("outcome unknown");
 	});
 
-	it("retries on transport closed and rebinding succeeds", async () => {
+	it("rebinds after a closed transport without replaying the original call", async () => {
 		let oldCalls = 0;
 		let newCalls = 0;
 		let reconnects = 0;
@@ -158,9 +158,9 @@ describe("MCPTool.execute retry on connection error", () => {
 
 		expect(reconnects).toBe(1);
 		expect(oldCalls).toBe(1);
-		expect(newCalls).toBe(1);
-		expect(result.details?.isError).toBeFalsy();
-		expect(result.content[0]).toEqual({ type: "text", text: "ok" });
+		expect(newCalls).toBe(0);
+		expect(result.details?.isError).toBe(true);
+		expect(JSON.stringify(result)).toContain("outcome unknown");
 	});
 
 	it("reuses refreshed connection on later call", async () => {
@@ -188,11 +188,11 @@ describe("MCPTool.execute retry on connection error", () => {
 		const second = await tool.execute("call-2", {}, noop, noCtx);
 
 		expect(oldCalls).toBe(1);
-		expect(newCalls).toBe(2);
+		expect(newCalls).toBe(1);
 		expect(reconnects).toBe(1);
-		expect(first.details?.isError).toBeFalsy();
+		expect(first.details?.isError).toBe(true);
 		expect(second.details?.isError).toBeFalsy();
-		expect(first.content[0]).toEqual({ type: "text", text: "ok" });
+		expect(JSON.stringify(first)).toContain("outcome unknown");
 		expect(second.content[0]).toEqual({ type: "text", text: "ok" });
 	});
 
@@ -206,7 +206,7 @@ describe("MCPTool.execute retry on connection error", () => {
 		const result = await tool.execute("call-1", {}, noop, noCtx);
 
 		expect(result.details?.isError).toBe(true);
-		expect(result.content[0]).toEqual({ type: "text", text: modelFacingFailure("ECONNRESET") });
+		expect(JSON.stringify(result)).toContain("outcome unknown");
 	});
 
 	it("does not retry on non-retriable error", async () => {
@@ -224,6 +224,7 @@ describe("MCPTool.execute retry on connection error", () => {
 
 		expect(reconnectCalled).toBe(false);
 		expect(result.details?.isError).toBe(true);
+		expect(result.content[0]).toEqual({ type: "text", text: modelFacingFailure("MCP error -32603: Internal error") });
 	});
 
 	it("does not retry when no reconnect callback", async () => {
@@ -235,14 +236,16 @@ describe("MCPTool.execute retry on connection error", () => {
 		const result = await tool.execute("call-1", {}, noop, noCtx);
 
 		expect(result.details?.isError).toBe(true);
-		expect(result.content[0]).toEqual({ type: "text", text: modelFacingFailure("ECONNREFUSED") });
+		expect(JSON.stringify(result)).toContain("outcome unknown");
 	});
 
-	it("returns error from retry when retry also fails", async () => {
+	it("does not send the unknown operation to a recovered transport", async () => {
 		const failTransport = mockTransport(async () => {
 			throw new Error("ECONNREFUSED");
 		});
+		let refreshedCalls = 0;
 		const retryFailTransport = mockTransport(async () => {
+			refreshedCalls++;
 			throw new Error("HTTP 503: Service Unavailable");
 		});
 		const reconnect: MCPReconnect = async () => makeConnection(retryFailTransport);
@@ -250,14 +253,12 @@ describe("MCPTool.execute retry on connection error", () => {
 		const tool = new MCPTool(makeConnection(failTransport), TOOL_DEF, reconnect);
 		const result = await tool.execute("call-1", {}, noop, noCtx);
 
+		expect(refreshedCalls).toBe(0);
 		expect(result.details?.isError).toBe(true);
-		expect(result.content[0]).toEqual({
-			type: "text",
-			text: modelFacingFailure("HTTP 503: Service Unavailable"),
-		});
+		expect(JSON.stringify(result)).toContain("outcome unknown");
 	});
 
-	it("preserves provider info from new connection on successful retry", async () => {
+	it("preserves the original provider identity when a lost reply is reported", async () => {
 		const failTransport = mockTransport(async () => {
 			throw new Error("fetch failed");
 		});
@@ -270,9 +271,10 @@ describe("MCPTool.execute retry on connection error", () => {
 
 		const tool = new MCPTool(oldConn, TOOL_DEF, async () => newConn);
 		const result = await tool.execute("call-1", {}, noop, noCtx);
+		expect(result.details?.isError).toBe(true);
 
-		expect(result.details?.provider).toBe("new-provider");
-		expect(result.details?.providerName).toBe("New");
+		expect(result.details?.provider).toBe("old-provider");
+		expect(result.details?.providerName).toBe("Old");
 	});
 
 	it("falls back to original provider when new connection has no source", async () => {
@@ -293,7 +295,7 @@ describe("MCPTool.execute retry on connection error", () => {
 		expect(result.details?.providerName).toBe("Original");
 	});
 
-	it("rebuilds reconnect attempts from raw args with the then-current transform", async () => {
+	it("does not silently rebuild or resend raw arguments on reconnect", async () => {
 		const rawSecret = "reconnect-raw-secret";
 		const sentArgs: unknown[] = [];
 		const firstTransport = mockTransport(async (_method, params) => {
@@ -315,13 +317,13 @@ describe("MCPTool.execute retry on connection error", () => {
 
 		await tool.execute("call-1", rawArgs, noop, context);
 
-		expect(sentArgs).toEqual([{ nested: { token: "first-safe" } }, { nested: { token: "second-safe" } }]);
+		expect(sentArgs).toEqual([{ nested: { token: "first-safe" } }]);
 		expect(rawArgs).toEqual({ nested: { token: rawSecret } });
 	});
 });
 
-describe("DeferredMCPTool.execute provider boundary", () => {
-	it("rebuilds reconnect attempts from raw args with the then-current transform", async () => {
+describe("DeferredMCPTool.execute preserves request-origin boundary", () => {
+	it("does not silently rebuild or resend raw arguments on reconnect", async () => {
 		const rawSecret = "deferred-reconnect-raw-secret";
 		const sentArgs: unknown[] = [];
 		const firstConnection = makeConnection(
@@ -353,7 +355,7 @@ describe("DeferredMCPTool.execute provider boundary", () => {
 
 		await tool.execute("call-1", rawArgs, undefined, context);
 
-		expect(sentArgs).toEqual([{ nested: { token: "first-safe" } }, { nested: { token: "second-safe" } }]);
+		expect(sentArgs).toEqual([{ nested: { token: "first-safe" } }]);
 		expect(rawArgs).toEqual({ nested: { token: rawSecret } });
 	});
 });

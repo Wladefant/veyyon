@@ -24,6 +24,9 @@
 ### Fixed
 
 - MCP disconnects retire pending handshakes and join each server's complete teardown without reviving removed tools ([Refs #893](https://github.com/Wladefant/veyyon/issues/893)).
+### Fixed
+
+- MCP tool calls report unknown outcomes after lost responses without automatically repeating possible side effects ([Refs #890](https://github.com/Wladefant/veyyon/issues/890)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
