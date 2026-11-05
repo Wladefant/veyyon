@@ -233,15 +233,68 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -s "$RELATED_TESTS" || "$NATIVE_INPUT" == "true" ]]; then
-            bun run ci:build:native
-            shopt -s nullglob
-            node_files=(natives/bridge/bindings/native/veyyon_natives.linux-x64*.node)
-            if [[ ${#node_files[@]} -eq 0 ]]; then
-              echo '::error::Missing native binding veyyon_natives.linux-x64*.node'
-              exit 1
+            fail() { echo "::error::$1"; exit 1; }
+            [[ -n "${RUNNER_TOOL_CACHE:-}" && "$RUNNER_TOOL_CACHE" == /* ]] || fail "RUNNER_TOOL_CACHE must be an absolute nonempty path"
+            [[ -d "$RUNNER_TOOL_CACHE" && -w "$RUNNER_TOOL_CACHE" ]] || fail "RUNNER_TOOL_CACHE must be an existing writable directory"
+            [[ "${RUNNER_NAME:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "RUNNER_NAME is not a safe basename"
+            expected_target="$RUNNER_TOOL_CACHE/veyyon-cargo/$RUNNER_NAME"
+            [[ "$CARGO_TARGET_DIR" == "$expected_target" ]] || fail "CARGO_TARGET_DIR does not match the per-runner cache path"
+            tool_cache_real="$(realpath -e -- "$RUNNER_TOOL_CACHE")" || fail "Cannot resolve RUNNER_TOOL_CACHE"
+            [[ "$tool_cache_real" == "$RUNNER_TOOL_CACHE" ]] || fail "RUNNER_TOOL_CACHE must be canonical"
+            workspace_real="$(realpath -e -- "$GITHUB_WORKSPACE")" || fail "Cannot resolve GITHUB_WORKSPACE"
+            runner_temp_real="$(realpath -e -- "$RUNNER_TEMP")" || fail "Cannot resolve RUNNER_TEMP"
+            target_parent="$tool_cache_real/veyyon-cargo"
+            target_real="$(realpath -m -- "$CARGO_TARGET_DIR")" || fail "Cannot resolve target path"
+            [[ "$target_real" == "$expected_target" ]] || fail "Target path is noncanonical or contains a symlink"
+            case "$target_real/" in
+              "$workspace_real/"*|"$runner_temp_real/"*) fail "Target must be outside GITHUB_WORKSPACE and RUNNER_TEMP" ;;
+            esac
+            if [[ -e "$target_real" && ! -d "$target_real" ]]; then
+              fail "Existing native cache target is not a directory"
             fi
-            bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();'
-            echo "native_ready=true" >> "$GITHUB_OUTPUT"
+            if [[ ! -e "$target_parent" ]]; then
+              mkdir -- "$target_parent" || fail "Cannot create native cache parent"
+            fi
+            [[ -d "$target_parent" && ! -L "$target_parent" ]] || fail "Native cache parent must be a real directory"
+            if [[ -L "${CARGO_TARGET_DIR}.lock" ]]; then
+              fail "Native cache lock must not be a symlink"
+            fi
+            lock_file="${CARGO_TARGET_DIR}.lock"
+            exec 9<> "$lock_file" || fail "Cannot open native cache lock"
+            flock --nonblock 9 || fail "Native cache is locked by another build"
+            cache_size=0
+            pruned=false
+            if [[ -d "$CARGO_TARGET_DIR" ]]; then
+              cache_size="$(timeout 30 du -sb -- "$CARGO_TARGET_DIR" | cut -f1)" || fail "Cannot measure native cache within 30 seconds"
+              [[ "$cache_size" =~ ^[0-9]+$ ]] || fail "Native cache size is not numeric"
+            fi
+            echo "native cache threshold=4294967296 bytes size=$cache_size bytes pruned=$pruned"
+            timeout 10 df -B1 -- "$RUNNER_TOOL_CACHE" || echo "::warning::Could not report native cache filesystem before build"
+            if (( cache_size > 4294967296 )); then
+              timeout 60 rm -rf --one-file-system --preserve-root=all -- "$CARGO_TARGET_DIR" || fail "Native cache prune failed or exceeded 60 seconds"
+              pruned=true
+              mkdir -- "$CARGO_TARGET_DIR" || fail "Cannot recreate native cache target"
+            elif [[ ! -e "$CARGO_TARGET_DIR" ]]; then
+              mkdir -- "$CARGO_TARGET_DIR" || fail "Cannot create native cache target"
+            fi
+            echo "native cache threshold=4294967296 bytes size=$cache_size bytes pruned=$pruned"
+            build_status=0
+            bun run ci:build:native || build_status=$?
+            if (( build_status == 0 )); then
+              shopt -s nullglob
+              node_files=(natives/bridge/bindings/native/veyyon_natives.linux-x64*.node)
+              if [[ ${#node_files[@]} -eq 0 ]]; then
+                echo '::error::Missing native binding veyyon_natives.linux-x64*.node'
+                build_status=1
+              else
+                bun -e 'import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages();' || build_status=$?
+              fi
+              if (( build_status == 0 )); then
+                echo "native_ready=true" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+            timeout 10 df -B1 -- "$RUNNER_TOOL_CACHE" || echo "::warning::Could not report native cache filesystem after build"
+            exit "$build_status"
           else
             echo "native_ready=false" >> "$GITHUB_OUTPUT"
           fi
