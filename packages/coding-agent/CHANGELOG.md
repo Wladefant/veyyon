@@ -130,6 +130,7 @@
 ### Fixed
 
 - Legacy MCP SSE requests honor per-request timeout overrides, including `timeoutMs: 0` to disable the deadline ([Refs #860](https://github.com/Wladefant/veyyon/issues/860)).
+- MCP JSON-RPC failures no longer log caller arguments, response bytes, status reasons, or URL query values ([Refs #856](https://github.com/Wladefant/veyyon/issues/856)).
 
 ## [1.7.8] - 2026-11-03
 
