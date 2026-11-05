@@ -130,14 +130,16 @@ describe("OVH native cache behavior", () => {
 		expect(result.stdout).toContain("pruned=true");
 	});
 
-	linuxIt("rejects empty roots and invalid runner names before cache deletion", () => {
-		for (const env of [
-			{ RUNNER_TOOL_CACHE: "" },
-			{ RUNNER_NAME: "../runner" },
-		]) {
+	linuxIt("rejects empty or missing roots and invalid runner names before cache deletion", () => {
+		for (const invalid of ["empty-root", "missing-root", "runner-name"] as const) {
 			const f = fixture();
 			const sentinel = makeSentinel(f);
-			const result = runStep(f, { ...f.env, ...env });
+			const invalidEnv = invalid === "empty-root"
+				? { RUNNER_TOOL_CACHE: "" }
+				: invalid === "missing-root"
+					? { RUNNER_TOOL_CACHE: join(f.dir, "missing-tool-cache") }
+					: { RUNNER_NAME: "../runner" };
+			const result = runStep(f, { ...f.env, ...invalidEnv });
 
 			expect(result.status).not.toBe(0);
 			expect(existsSync(sentinel)).toBe(true);
