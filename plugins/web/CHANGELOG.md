@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Changed
 
 - Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.

@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/utils",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "Shared utilities for pi packages",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -31,8 +31,8 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@veyyon/host": "catalog:",
-    "@veyyon/natives": "catalog:",
+    "@veyyon/host": "workspace:*",
+    "@veyyon/natives": "workspace:*",
     "handlebars": "catalog:",
     "turndown": "catalog:",
     "turndown-plugin-gfm": "catalog:",

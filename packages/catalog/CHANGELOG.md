@@ -2,17 +2,17 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
+### Added
+
+- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
+- `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
+- Codex discovery lists every signed-in ChatGPT account, so the catalog holds the models of every account tier, records in `Model.accountAccess` which accounts' listings include each model and the `available_access_programs` each account is offered, and caches the list per account set, so a login or logout lists the accounts again; the bundled catalog never contains the field, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
+
 ### Changed
 
 - OpenCode Go no longer routes Console credential envelopes; API keys continue to use the configured gateway.
-
-### Fixed
-
-- OpenCode Go model discovery uses the API key directly after Console credential-envelope discovery support was removed.
-- OpenCode Go model discovery reads its configured API key without throwing an undefined-identifier error.
-
-### Changed
-
 - `resolveBundledModelReference` in a compiled build stores each answer, a bundled model or none, in the profile's `cache/model-references.json` under the build's id, and a later launch of that build reads the answer instead of indexing the catalog's model ids.
 - `bundledCatalogDigest` returns `process.env.VEYYON_CATALOG_DIGEST` when it is set, which the compiled binary defines at build time, instead of reading and hashing `models.json`.
 - The models.dev overlay keeps only the providers a catalog descriptor maps, in memory and in `models-dev.json`, so a model refresh parses 2.26 MB instead of 5.96 MB and a cached whole file is rewritten in cut form at its next renewal.
@@ -26,6 +26,8 @@
 
 ### Fixed
 
+- OpenCode Go model discovery uses the API key directly after Console credential-envelope discovery support was removed.
+- OpenCode Go model discovery reads its configured API key without throwing an undefined-identifier error.
 - Ollama discovery no longer drops every model when one `/api/show` body is `null` or not an object, or when `/api/tags` answers `null` or a `models` value that is not a list; the body is reported as a `payload` failure and the affected model keeps default metadata.
 - Ollama Cloud no longer takes a `context_length` of `0` or below as a model's context window, no longer fails discovery on a non-list `capabilities`, and no longer grants thinking and image input from a `capabilities` string.
 - GitLab Duo namespace discovery stops at the first request that throws and reports that error, instead of trying every remaining candidate against the same unreachable host and concluding that `GITLAB_DUO_NAMESPACE_ID` should be set.
@@ -36,12 +38,6 @@
 ### Removed
 
 - Removed `derive-tmp.js`, a scratch probe that printed effort-variant collapses; nothing imported it and no entry point exposed it.
-
-### Added
-
-- `codexRoutingHint` in `@veyyon/catalog/wire/codex` builds the `x-codex-routing-hint` value (`model=<model>;tier=<tier>`, or `model=<model>` without a tier) from a Codex Responses request body.
-- `@veyyon/catalog/wire/opencode-go` carries an OpenCode Go Console login's organization and inference endpoint in its API key and resolves the endpoint, route and organization header a request uses.
-- Codex discovery lists every signed-in ChatGPT account, so the catalog holds the models of every account tier, records in `Model.accountAccess` which accounts' listings include each model and the `available_access_programs` each account is offered, and caches the list per account set, so a login or logout lists the accounts again; the bundled catalog never contains the field, and the model cache schema moves to v14 so a Codex row cached without it is fetched again.
 
 ## [1.7.0] - 2026-10-31
 

@@ -1,75 +1,165 @@
 # Changelog
 
 ## [Unreleased]
+
+## [1.8.0] - 2026-11-05
+
 - Run-only MCP configuration rejects writerless FIFOs without blocking before it checks the file type ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 
 ### Added
 
 - The browser tool connects through the Chrome extension bridge and lists lane-owned tabs with explicit cleanup approval ([Refs #968](https://github.com/Wladefant/veyyon/pull/968)).
 - `veyyon usage` can list OpenAI Codex reset credits and redeem one by numeric credential ID.
+- An opt-in SageOx extension searches team context and shares reviewed Veyyon conversation snapshots and repository handoffs ([Refs #954](https://github.com/Wladefant/veyyon/issues/954)).
+- Added a portable approved-context contract with explicit SageOx and Git providers ([Refs Wladefant/superboard#2397](https://github.com/Wladefant/superboard/issues/2397)).
+- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
+- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
+- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
+
+### Changed
+
+- No user-visible change: `/btw` and `/omfg` show, replace, dismiss and fail a request through one `SidePanelSlot` in `modes/terminal/controllers/side-panel-slot.ts` instead of two copies, and a `/btw` answer is held on its request instead of in controller fields cleared on close.
+- No user-visible change: the collab host and guest connect through `RelayClient` from `@veyyon/wire/relay-client` instead of a private copy of the relay client, and `collab/crypto` no longer wraps `sealFrame` and `openFrame`.
+- No user-visible change: the memory tools resolve their backend through `memory-session`, the JS eval host and worker encode errors through one `eval/js/error-payload` codec, and `config get`, `set` and `reset` report a missing or unknown key through one helper.
+- No user-visible change: the Brave, Firecrawl, Jina, Synthetic, Tavily, TinyFish and Z.AI web search providers no longer export an unused `findApiKey`.
+- No user-visible change: an MCP OAuth refresh and the credential it stores read the token endpoint, client and resource from one `resolveMcpOAuthRefreshTarget`.
+- No user-visible change: prompt templates, file slash commands and the legacy loader's extra templates derive a missing description from one `firstLineDescription`.
+- No user-visible change: the `oauth` hooks of an extension `ProviderConfig` and of `ProviderConfigInput` are one `ProviderOAuthConfig` type.
+- Tool discovery and the system prompt select MCP tools by name before describing them, and tool examples render without converting each wire schema again, so a print-mode turn reaches its first request in 55.4 ms instead of 57.4 ms and exits in 76.3 ms instead of 80.6 ms.
+- A launch of the installed binary after its first reads the bundled model a custom model id resolves to from `cache/model-references.json` instead of indexing the catalog's model ids, so a print-mode turn with a custom model reaches its first request in 55.9 ms instead of 59.9 ms and exits in 76.9 ms instead of 81.4 ms.
+- The compiled binary carries the digest of the model catalog it embeds instead of reading and hashing the 2.3 MB catalog on every launch, so a print-mode turn reaches its first request in 54.9 ms instead of 57.9 ms and exits in 73.9 ms instead of 77.8 ms.
+- A launch whose extension, command, rule, prompt, tool and hook directories are missing or empty no longer loads the native addon to scan them, so a print-mode turn reaches its first request in 55.9 ms instead of 60.9 ms and exits in 75.0 ms instead of 79.6 ms.
+- A launch with arguments no longer constructs the stdin stream to describe why it skipped the first-frame replay when `VEYYON_REPLAY_DEBUG` is unset, so a print-mode turn exits in 79.3 ms instead of 81.8 ms.
+- A launch of the installed binary after its first sends the built-in tools' stored wire schemas instead of building every tool schema, so a print-mode turn reaches its first request in 61 ms instead of 86 ms and exits in 82 ms instead of 116 ms.
+- The first `lsp` query on a Rust file starts when rust-analyzer reports `experimental/serverStatus` with `quiescent: true` instead of after polling `rust-analyzer/analyzerStatus` for at least 2 s, so a cold `definition` on a small crate returns in 1.46 s instead of 2.16 s and on a crate with dependencies in 1.88 s instead of 2.42 s.
+- No user-visible change: an abort inside the rust-analyzer workspace wait returns from `waitForProjectLoaded`, as it does for every other server, instead of throwing when it lands between two `analyzerStatus` polls.
+- No user-visible change: the collab guest, eval executor, markit registry, launch client, MCP stdio transport, RPC prompt result, extension send, TTS client, IRC tool and memory tools coerce a thrown value with `toError` from `@veyyon/utils` instead of nineteen inline copies.
+- Diagnostics after an edit or write are reported when the language server publishes them instead of at the next 100ms poll, so a server that answers in 50ms reports in 51ms instead of 101ms, or in 301ms instead of 402ms when it does not echo the document version.
+- No user-visible change: ZIP central-directory reads, config-file read failures, LSP severity counts, patch line-hint matching, SQLite row updates, GitHub issue and pull request body sections, eval import rewriting, plugin enable and disable, QR penalty scoring and autoresearch loop entry each run through one helper instead of two or three copies.
+- A modal card keeps its padding from 29 rows for large cards and 27 rows for medium and settings cards, instead of 39, 33 and 31, so cards on terminals 27 to 38 rows tall show up to four more list rows.
+- No user-visible change: the `lsp` diagnostics action and the diagnostics reported after a write merge server reports through one `uniqueSortedDiagnostics` in `lsp/utils.ts` instead of two copies.
+- No user-visible change: the `/debug` performance, dump and memory reports write their bundle through one sequence in `debug/index.ts` instead of three copies.
+- No user-visible change: the agents and import setup steps take the checklist sentinel, key hints and space-to-toggle input from `setup-wizard/scenes/wizard-list.ts` instead of two copies.
+- No user-visible change: the prompt history search overlay highlights the tokens `historyQueryTokens` in `@veyyon/kernel/session/history-storage` matched instead of its own copy of the tokenizer.
+- No user-visible change: the session-compaction-stall and session-tree-nav benches build their usage records from `emptyUsage()` instead of restating its zero fields.
+- No user-visible change: the LSP writethrough bench's header describes the event-driven diagnostics wait instead of the 100ms poll it replaced.
+- No user-visible change: each MCP HTTP request builds its headers through one transport helper instead of five inline copies, and the HTTP transport, the legacy SSE transport and `callMCP` read the JSON-RPC POST headers from one constant in `mcp/json-rpc.ts`.
+- No user-visible change: the selectors, dialogs, dashboards and the Ctrl+P model cycle step through their rows, tabs and models with `wrapIndex` instead of hand-written wrap arithmetic.
+- No user-visible change: the pointer-band selectors and the MCP add wizard repaint on the result of `HoverController.set` instead of comparing the hovered row themselves.
+- No user-visible change: the emoji, internal-URL, GitHub-reference and prompt-action completions return `AppliedCompletion` instead of restating its shape.
+- No user-visible change: the status producer falls back to the kernel's `emptyUsageStatistics()` from `session/session-entries.ts` instead of restating the zero usage record, so the status row evaluates no session-context or compaction module.
+- No user-visible change: the Antigravity, xAI, OpenRouter, Gemini and OpenAI image providers read a refused request's message through one `providerErrorMessage` in `tools/web/image-gen.ts` instead of five copies, and the GitHub run watch and run result reports write their header lines through one `pushRunHeader`.
+- No user-visible change: the assistant message component takes its `ImageContent` type from the `@veyyon/wire` presentation contract instead of `@veyyon/model`, which the package does not declare.
+- The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
+- No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
+- A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.
+- No user-visible change: compaction model keys and ACP model option values come from `formatModelString` instead of two private copies of it.
+- The Cursor exec bridge and the commit agent preview read message text through the shared `contentText` owner, and the commit map phase reads observations through the commit analysis reader instead of a second copy; no user-facing change.
+- Transcript, custom-display and rewind-report text now flatten message content through the shared `contentText` owner instead of two local copies; no user-facing change.
+- Hooks and extensions now share one definition of the `tool_result` event types, so a hook's `ToolResultEvent.isError` is typed `boolean`, matching what the extension runner delivers.
+- The bash and eval blocks run from the composer draw through one execution block that folds streamed chunks at the next draw and builds its header once, so an eval block drawn after each of 5000 streamed chunks takes 47 ms instead of 575 ms.
+- The `tools.format` setting takes its dialect list from a table keyed by the catalog's `Dialect` type instead of a second copy of the catalog's list; no user-facing change.
+- The markit converters share one stream-acceptance rule, one XML parser with the 1,000,000 entity-expansion cap, and one repeated-element reader; no user-facing change.
+- Session memory banks and `memory stats` readers open their Mnemopi store through one builder, `createBankMemory`; no user-facing change.
+- `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
+- The session's terminal-yield tracking and the subprocess executor decide whether a `yield` ends a run through one predicate; no user-facing change.
+- `local://` and `memory://` confine a resolved path to their root through one shared real-path check; no user-facing change.
+- The writethrough per-server loop drops a custom-linter check its callers already make; no user-facing change.
+- The RPC client and the agent run monitor recognize agent events through `AGENT_EVENT_TYPES` instead of their own copies of the list; no user-facing change.
+- Syncing a written file to its language servers and announcing its save share one per-server loop; no user-facing change.
+- The plugin manager runs its `bun` subcommands through the command runner the git cache refresh uses; no user-facing change.
+- `veyyon stats --summary` prints the summary and draws the sync progress line through `@veyyon/stats`, which the standalone stats entry point also uses; no user-facing change.
+- The collab wire and the HTML export build a tool call's display and a tool result's display through the same two functions instead of a copy each; no user-facing change.
+- The hook editor, hook input and MCP add wizard cards pass their whole body to the modal shell, which keeps the rows that fit, instead of planning the card chrome a second time to cut it first; no user-facing change.
+- An MCP tool with a live connection and one waiting for its server send a call and build its result through the same functions, and a waiting tool's failure names the source of the connection it failed on as its success does; no user-facing change.
+- The reftable HEAD lookup, the LSP document open and the eval kernel's result each have one implementation shared by their sync and async or success and cancellation paths; no user-facing change.
+- The debug adapter client starts every adapter, and kills one that never connects, through one helper; the GitHub issue, PR and diff lookups return the cache's own lookup result type; and the custom tool loader declares its pending-action shape once; no user-facing change.
+- `check:types` covers `bench/`, and the code-review-reminder, rendering, session-compaction-stall and session-tree-nav benches compile and run against the current APIs; no user-facing change.
+- The streamed tool-argument preview copies each run of plain characters in a string argument at once instead of one character at a time, which cut the one-shot decode of a 160 KB `write` call from 1.75 ms to 0.68 ms and its live reveal in 100-character steps from 10.5 ms to 9.2 ms (median).
+- A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 580.8 ms to 560.0 ms (median of 15).
+- A launch with no llama.cpp server running no longer rewrites the llama.cpp model-cache row and syncs `models.db` four times, which cut a print run against a provider that answers in 300 ms and streams for 150 ms from 558.3 ms to 553.9 ms (median of 15).
+- `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
+- The config-root, global-config and path-comparison helpers are imported from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
+- The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
+- `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
+- `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
+- The secret vault and its key file remove a stale entry through one quarantine-and-recheck helper instead of two copies of it; no user-facing change.
+- The Mnemopi stats command resolves a bank's database path through the function a session uses instead of a copy of it; no user-facing change.
+- The terminal reports a `/browser` restart that fails after the mode is saved as `Browser mode set to <mode>, but restart failed: …`, the sentence ACP prints, and shows the `/browser` usage line as a warning.
+- `/effort` checks a level through one function the terminal and the text surfaces share, with no change to what either accepts or prints.
+- No user-visible change: `/export` path resolution moved from the session runtime into the HTML exporter.
+- IRC message delivery moved out of `AgentSession` into the `IrcDelivery` session collaborator, with no change to how a message is steered, queued, woken on or auto-replied to.
+- The first shell command of a session no longer compiles the output-stage regular expressions of every built-in output filter; each filter compiles them the first time it applies, so a first `ls` runs in 5 ms instead of 12 ms.
+- The `session_stop` hook pass moved out of `AgentSession` into the `SessionStopHook` session collaborator, with no change to the event a handler receives, the continuation it queues or the cap that ends a chain.
+- The hidden next-turn message queue moved out of `AgentSession` into the `NextTurnMessages` session collaborator, with no change to when a queued message reaches a turn or the order it arrives in.
+- Model switching moved out of `AgentSession` into the `ModelSelection` session collaborator, with no change to what a saved switch, a session-only switch or the Ctrl+P cycle records, persists or pins.
+- Esc repaints a frame sooner when it arms no double-press gesture: closing a selector takes 4 ms instead of 35 ms with the kitty keyboard protocol and 54 ms instead of 86 ms without.
+- The `/model` picker resolves the default model against the models it lists, as startup does, so its first open paints in 4 ms instead of 41 ms and the default mark lands on the model a new session starts on.
+- Views that load after the key that opens them, such as the Extension Control Center, paint up to 30 ms sooner.
+- `/cpu-limit status` reports the kill policy in force: `kill on sustained saturation` for the CPU budget and `kill when exceeded` for the write budget.
+- The tool argument repair registry lists path resolution in the file tools among the tool-local parsing it excludes; no user-facing change.
+- Background job delivery, listing, cancellation and the settle wake moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Releasing what a conversation ends with on `/new`, `/resume` and a handoff moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Routing a finished run through retry, compaction and the stop-time passes moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The message a prompt raises when a provider's credential produced no token is built in the credential-message module beside the other missing-credential messages ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Queueing steers and follow-ups, the idle drain that starts a turn on them, and the queue count, chips, clear and pop moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Running a shell command or Python cell typed with `!` or `$` moved out of the session class into the session collaborator that tracks those runs ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The context threshold checks before a prompt and between the provider calls of a tool loop, and the switch to a larger-context model they share, moved out of the session class into the `TurnContextCheck` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Starting a new transcript with `/new` or `/drop` and forking one with `/fork` moved out of the session class into the `SessionSwitch` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The session-state block and the eager delegate reminders a turn carries ahead of its message moved out of the session class into the `TurnPreludes` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The per-family service tiers, `/fast` and the tier each request resolves to moved out of the session class into the `ServiceTiers` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The command registries, the resolution of a typed prompt through extension, custom and file-based commands and the prompt templates, and the agents a `/` command grants for its turn moved out of the session class into the `PromptCommands` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The display copy of assistant content, tool intents, streamed deltas and rebuilt transcripts, with the stream decoder a streamed reply runs through, moved out of the session class into the `DisplayCopy` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The normalization of a message's images for the active model, the description a text-only model reads in their place and the latest images a tool addresses moved out of the session class into the `ImageAttachments` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The response and raw SSE interceptors every request runs with, the raw SSE capture, the side stream function and the preparation of a side request's options moved out of the session class into the `ProviderTransport` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The redacted tool start markers, the `session_exit` entry and the process teardown callback that writes it when no dispose runs moved out of the session class into the `ExitRecord` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The event subscribers, the extension event forwarder and the wire-level `agent_end` held while a prompt unwinds moved out of the session class into the `SessionEvents` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The scheduled `agent.continue()`, the auto-continue prompt a compaction resumes with, their cancel and the recovery wait a prompt runs moved out of the session class into the `TurnContinuations` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The HTML export, the `/copy` texts, the `/dump` text and its request snapshot moved out of the session class into the `TranscriptExports` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The mode blocks a prompt restates (plan reference, plan-mode rules, goal, vibe mode), the reads of the files it mentions as `@path` and the `before_agent_start` extension input moved out of the session class into the `TurnInput` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- The release at dispose of the session's background jobs, owned job manager, eval kernels, session-scoped resources and MCP hold moved out of the session class into the `SessionRelease` session collaborator, and the memory backends' release into `MemoryContext` ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- How a custom message reaches the conversation, queued, held for the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices moved out of the session class into the `CustomMessages` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
+- The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
+- The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
+- MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
+- The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
+- The Streamable HTTP and legacy HTTP+SSE MCP transports send every JSON-RPC message through one `postJsonRpc` with one auth-retry path, and a refreshed credential replaces the transport's headers instead of writing into the configuration object it was created with.
+- The stdio, Streamable HTTP and legacy HTTP+SSE MCP transports classify a server's messages through one `routeIncomingMessage`, and the two HTTP transports POST the answer to a server request through one `deliverServerResponse`.
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
+- The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
+- The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
+- `bench/session-compaction-stall.bench.ts` measures the longest event-loop stall and the wall time of a compaction's republish on a large synthetic session; no user-facing change.
+- The no-model sentence a prompt receives is built in `config/model-resolution-failure.ts` instead of the session runtime; no user-facing change.
+- A `search` call that carries a field another type takes, such as `hidden` on a `text` search, runs as if the field were absent and starts its result with a line listing the ignored fields and the fields that type takes, instead of failing with `Search type "text" does not accept: hidden`.
+- A `search` of type `text` asks the disk for 32 files per walk thread at once, so over 3.22 million uncached PHP files (24 GB) the native search returns in 33–36 s instead of 138 s and the tool searches 3.20–3.22 million files within its 30 s limit instead of 785,990, with no change over cached files.
+- A `search` of type `files` whose `;`-separated entries share a root reads that root once, through one `{a,b}` alternation, instead of once per entry in parallel walks that contend for the same directories, so four leading-glob entries over a tree one walk reads in 2.4 s return in 2.6 s instead of stopping at the 5 s limit with a partial result.
 
 ### Fixed
 
 - Native worker claims preserve each request's accountable owner and reject stale or malformed execution identities ([#802](https://github.com/Wladefant/veyyon/issues/802)).
-
 - Withhold startup text and parser error reflections from invalid kernel frame diagnostics ([Refs #942](https://github.com/Wladefant/veyyon/issues/942)).
 - Legacy SSE parse diagnostics omit malformed peer frame data, and unattributable peer warnings omit peer-supplied messages while caller errors stay unchanged ([Refs #866](https://github.com/Wladefant/veyyon/issues/866)).
-
 - Native Mainplane session and operation identities reject malformed Unicode before hashing ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
-
 - Terminal history reads cold assistant and tool-result payloads transiently and keeps their source entries cold ([Refs #980](https://github.com/Wladefant/veyyon/issues/980)).
-
-### Fixed
-
 - MCP server connections preserve tools from previously connected peers ([Refs #897](https://github.com/Wladefant/veyyon/issues/897)).
-### Fixed
-
 - MCP disconnects retire pending handshakes and join each server's complete teardown without reviving removed tools ([Refs #893](https://github.com/Wladefant/veyyon/issues/893)).
-### Fixed
-
 - MCP tool calls report unknown outcomes after lost responses without automatically repeating possible side effects ([Refs #890](https://github.com/Wladefant/veyyon/issues/890)).
-### Fixed
-
 - MCP stdio rejects malformed matching-ID JSON-RPC responses before completing tool calls or stream subscriptions ([Refs #876](https://github.com/Wladefant/veyyon/issues/876)).
-### Fixed
-
 - Bound native checkpoint source reads before cloud export to avoid unbounded allocations from oversized files ([#603](https://github.com/Wladefant/veyyon/issues/603)).
-### Fixed
-
 - ACP BashTool terminal creation honors cancellation and the original command deadline, and cleans up handles returned after cancellation ([Refs #867](https://github.com/Wladefant/veyyon/issues/867)).
-### Fixed
-
 - MCP Streamable HTTP rejects malformed or mismatched JSON-RPC replies before accepting results or initialization session identifiers ([Refs #862](https://github.com/Wladefant/veyyon/issues/862)).
-### Fixed
-
 - MCP stdio diagnostics omit malformed frame payloads and peer-controlled parse-error messages from persistent logs ([Refs #858](https://github.com/Wladefant/veyyon/issues/858)).
-### Fixed
-
 - Native Mainplane receipts require string operation and state values and exact UTF-8 output bodies ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
-### Fixed
-
 - Native Mainplane text reads preserve the verified UTF-8 byte order mark ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
-### Fixed
-
 - Fence concurrent checkpoint admission during shutdown and refuse native handoff journals with unreadable headers rather than admitting them as ordinary local sessions ([#603](https://github.com/Wladefant/veyyon/issues/603)).
-### Fixed
-
 - MCP event delivery preserves replayable cursors when poll or push subscriptions stop during in-flight acceptance ([Refs #614](https://github.com/Wladefant/veyyon/issues/614)).
-### Fixed
-
 - Sanitize loaded session-notice version diagnostics and reject malformed build hashes and capability metadata rather than displaying forged lines or accepting unsupported notice delivery ([#551](https://github.com/Wladefant/veyyon/issues/551)).
-### Fixed
-
 - ACP-sourced MCP tool calls wait for completion without a default transport deadline while retaining caller cancellation and explicit deadlines ([Refs #829](https://github.com/Wladefant/veyyon/pull/829)).
-### Fixed
-
 - Confine retained native task continuation artifact filenames to the session artifact directory, including traversal and Windows-reserved task identifiers ([Refs #766](https://github.com/Wladefant/veyyon/issues/766)).
-### Fixed
-
 - Refuse stored history with ambiguous session headers, misplaced titles, duplicate members, blank IDs, or an unverifiable leaf after malformed entries ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
-
-### Fixed
-
 - MCP HTTP SSE validates decoded frames, returns correlated capacity errors, and closes with an explicit error for oversized batches ([Refs #927](https://github.com/Wladefant/veyyon/issues/927)).
 - Eval console output withholds inventories after bracketed labels and preserves serialized diagnostic strings with later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
 - Eval console output withholds inventories after unmatched label quotes and inside labeled arrays, while preserving array diagnostics and later output ([Refs #904](https://github.com/Wladefant/veyyon/issues/904)).
@@ -222,135 +312,7 @@
 - With several ChatGPT accounts signed in, the model list holds the Codex models of every account's tier, such as the Daybreak-only models listed for a Daybreak account, and a turn on such a model is sent from an account whose listing includes it.
 - The Codex `web_search` provider and Codex hosted image generation send `access_programs.cyber` set to the Daybreak program the signed-in account is offered for the model, so a Daybreak account's security search or image request is no longer refused with `cyber_policy` for lack of the field.
 - A Codex `web_search` on a model the catalog marks for Responses-Lite, which includes every default search model, is sent in the plain Responses shape and searches, instead of failing with `400 Tool choice 'web_search_preview' not found in 'tools' parameter.`
-
-### Added
-
-- An opt-in SageOx extension searches team context and shares reviewed Veyyon conversation snapshots and repository handoffs ([Refs #954](https://github.com/Wladefant/veyyon/issues/954)).
-- Added a portable approved-context contract with explicit SageOx and Git providers ([Refs Wladefant/superboard#2397](https://github.com/Wladefant/superboard/issues/2397)).
-- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
-- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
-- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
-
-### Changed
-
-- No user-visible change: `/btw` and `/omfg` show, replace, dismiss and fail a request through one `SidePanelSlot` in `modes/terminal/controllers/side-panel-slot.ts` instead of two copies, and a `/btw` answer is held on its request instead of in controller fields cleared on close.
-- No user-visible change: the collab host and guest connect through `RelayClient` from `@veyyon/wire/relay-client` instead of a private copy of the relay client, and `collab/crypto` no longer wraps `sealFrame` and `openFrame`.
-- No user-visible change: the memory tools resolve their backend through `memory-session`, the JS eval host and worker encode errors through one `eval/js/error-payload` codec, and `config get`, `set` and `reset` report a missing or unknown key through one helper.
-- No user-visible change: the Brave, Firecrawl, Jina, Synthetic, Tavily, TinyFish and Z.AI web search providers no longer export an unused `findApiKey`.
-- No user-visible change: an MCP OAuth refresh and the credential it stores read the token endpoint, client and resource from one `resolveMcpOAuthRefreshTarget`.
-- No user-visible change: prompt templates, file slash commands and the legacy loader's extra templates derive a missing description from one `firstLineDescription`.
-- No user-visible change: the `oauth` hooks of an extension `ProviderConfig` and of `ProviderConfigInput` are one `ProviderOAuthConfig` type.
-- Tool discovery and the system prompt select MCP tools by name before describing them, and tool examples render without converting each wire schema again, so a print-mode turn reaches its first request in 55.4 ms instead of 57.4 ms and exits in 76.3 ms instead of 80.6 ms.
-- A launch of the installed binary after its first reads the bundled model a custom model id resolves to from `cache/model-references.json` instead of indexing the catalog's model ids, so a print-mode turn with a custom model reaches its first request in 55.9 ms instead of 59.9 ms and exits in 76.9 ms instead of 81.4 ms.
-- The compiled binary carries the digest of the model catalog it embeds instead of reading and hashing the 2.3 MB catalog on every launch, so a print-mode turn reaches its first request in 54.9 ms instead of 57.9 ms and exits in 73.9 ms instead of 77.8 ms.
-- A launch whose extension, command, rule, prompt, tool and hook directories are missing or empty no longer loads the native addon to scan them, so a print-mode turn reaches its first request in 55.9 ms instead of 60.9 ms and exits in 75.0 ms instead of 79.6 ms.
-- A launch with arguments no longer constructs the stdin stream to describe why it skipped the first-frame replay when `VEYYON_REPLAY_DEBUG` is unset, so a print-mode turn exits in 79.3 ms instead of 81.8 ms.
-- A launch of the installed binary after its first sends the built-in tools' stored wire schemas instead of building every tool schema, so a print-mode turn reaches its first request in 61 ms instead of 86 ms and exits in 82 ms instead of 116 ms.
-- The first `lsp` query on a Rust file starts when rust-analyzer reports `experimental/serverStatus` with `quiescent: true` instead of after polling `rust-analyzer/analyzerStatus` for at least 2 s, so a cold `definition` on a small crate returns in 1.46 s instead of 2.16 s and on a crate with dependencies in 1.88 s instead of 2.42 s.
-- No user-visible change: an abort inside the rust-analyzer workspace wait returns from `waitForProjectLoaded`, as it does for every other server, instead of throwing when it lands between two `analyzerStatus` polls.
-- No user-visible change: the collab guest, eval executor, markit registry, launch client, MCP stdio transport, RPC prompt result, extension send, TTS client, IRC tool and memory tools coerce a thrown value with `toError` from `@veyyon/utils` instead of nineteen inline copies.
-- Diagnostics after an edit or write are reported when the language server publishes them instead of at the next 100ms poll, so a server that answers in 50ms reports in 51ms instead of 101ms, or in 301ms instead of 402ms when it does not echo the document version.
-- No user-visible change: ZIP central-directory reads, config-file read failures, LSP severity counts, patch line-hint matching, SQLite row updates, GitHub issue and pull request body sections, eval import rewriting, plugin enable and disable, QR penalty scoring and autoresearch loop entry each run through one helper instead of two or three copies.
-- A modal card keeps its padding from 29 rows for large cards and 27 rows for medium and settings cards, instead of 39, 33 and 31, so cards on terminals 27 to 38 rows tall show up to four more list rows.
-- No user-visible change: the `lsp` diagnostics action and the diagnostics reported after a write merge server reports through one `uniqueSortedDiagnostics` in `lsp/utils.ts` instead of two copies.
-- No user-visible change: the `/debug` performance, dump and memory reports write their bundle through one sequence in `debug/index.ts` instead of three copies.
-- No user-visible change: the agents and import setup steps take the checklist sentinel, key hints and space-to-toggle input from `setup-wizard/scenes/wizard-list.ts` instead of two copies.
-- No user-visible change: the prompt history search overlay highlights the tokens `historyQueryTokens` in `@veyyon/kernel/session/history-storage` matched instead of its own copy of the tokenizer.
-- No user-visible change: the session-compaction-stall and session-tree-nav benches build their usage records from `emptyUsage()` instead of restating its zero fields.
-- No user-visible change: the LSP writethrough bench's header describes the event-driven diagnostics wait instead of the 100ms poll it replaced.
-- No user-visible change: each MCP HTTP request builds its headers through one transport helper instead of five inline copies, and the HTTP transport, the legacy SSE transport and `callMCP` read the JSON-RPC POST headers from one constant in `mcp/json-rpc.ts`.
-- No user-visible change: the selectors, dialogs, dashboards and the Ctrl+P model cycle step through their rows, tabs and models with `wrapIndex` instead of hand-written wrap arithmetic.
-- No user-visible change: the pointer-band selectors and the MCP add wizard repaint on the result of `HoverController.set` instead of comparing the hovered row themselves.
-- No user-visible change: the emoji, internal-URL, GitHub-reference and prompt-action completions return `AppliedCompletion` instead of restating its shape.
-- No user-visible change: the status producer falls back to the kernel's `emptyUsageStatistics()` from `session/session-entries.ts` instead of restating the zero usage record, so the status row evaluates no session-context or compaction module.
-- No user-visible change: the Antigravity, xAI, OpenRouter, Gemini and OpenAI image providers read a refused request's message through one `providerErrorMessage` in `tools/web/image-gen.ts` instead of five copies, and the GitHub run watch and run result reports write their header lines through one `pushRunHeader`.
-- No user-visible change: the assistant message component takes its `ImageContent` type from the `@veyyon/wire` presentation contract instead of `@veyyon/model`, which the package does not declare.
-- The composer reads the draft's queue shorthand and magic keywords once per frame instead of once per drawn row, so a keystroke and its frame in a 400-line draft take about 20 µs instead of about 85 µs.
-- No user-visible change: a modal card is laid out and its chrome planned once per frame, and the body is painted against that plan (`layoutModalCard`, `planModalChrome`, `renderModalShell`).
-- A start with no usable credential reports the missing credential without building the whole model catalog, so it reaches the prompt in 72 ms instead of 112 ms, and the message counts providers instead of models.
-- No user-visible change: compaction model keys and ACP model option values come from `formatModelString` instead of two private copies of it.
-- The Cursor exec bridge and the commit agent preview read message text through the shared `contentText` owner, and the commit map phase reads observations through the commit analysis reader instead of a second copy; no user-facing change.
-- Transcript, custom-display and rewind-report text now flatten message content through the shared `contentText` owner instead of two local copies; no user-facing change.
-- Hooks and extensions now share one definition of the `tool_result` event types, so a hook's `ToolResultEvent.isError` is typed `boolean`, matching what the extension runner delivers.
-- The bash and eval blocks run from the composer draw through one execution block that folds streamed chunks at the next draw and builds its header once, so an eval block drawn after each of 5000 streamed chunks takes 47 ms instead of 575 ms.
-- The `tools.format` setting takes its dialect list from a table keyed by the catalog's `Dialect` type instead of a second copy of the catalog's list; no user-facing change.
-- The markit converters share one stream-acceptance rule, one XML parser with the 1,000,000 entity-expansion cap, and one repeated-element reader; no user-facing change.
-- Session memory banks and `memory stats` readers open their Mnemopi store through one builder, `createBankMemory`; no user-facing change.
-- `AgentParsingError` extends `SourcedParseError` from `@veyyon/utils` instead of copying its formatting; no user-facing change.
-- The session's terminal-yield tracking and the subprocess executor decide whether a `yield` ends a run through one predicate; no user-facing change.
-- `local://` and `memory://` confine a resolved path to their root through one shared real-path check; no user-facing change.
-- The writethrough per-server loop drops a custom-linter check its callers already make; no user-facing change.
-- The RPC client and the agent run monitor recognize agent events through `AGENT_EVENT_TYPES` instead of their own copies of the list; no user-facing change.
-- Syncing a written file to its language servers and announcing its save share one per-server loop; no user-facing change.
-- The plugin manager runs its `bun` subcommands through the command runner the git cache refresh uses; no user-facing change.
-- `veyyon stats --summary` prints the summary and draws the sync progress line through `@veyyon/stats`, which the standalone stats entry point also uses; no user-facing change.
-- The collab wire and the HTML export build a tool call's display and a tool result's display through the same two functions instead of a copy each; no user-facing change.
-- The hook editor, hook input and MCP add wizard cards pass their whole body to the modal shell, which keeps the rows that fit, instead of planning the card chrome a second time to cut it first; no user-facing change.
-- An MCP tool with a live connection and one waiting for its server send a call and build its result through the same functions, and a waiting tool's failure names the source of the connection it failed on as its success does; no user-facing change.
-- The reftable HEAD lookup, the LSP document open and the eval kernel's result each have one implementation shared by their sync and async or success and cancellation paths; no user-facing change.
-- The debug adapter client starts every adapter, and kills one that never connects, through one helper; the GitHub issue, PR and diff lookups return the cache's own lookup result type; and the custom tool loader declares its pending-action shape once; no user-facing change.
-- `check:types` covers `bench/`, and the code-review-reminder, rendering, session-compaction-stall and session-tree-nav benches compile and run against the current APIs; no user-facing change.
-- The streamed tool-argument preview copies each run of plain characters in a string argument at once instead of one character at a time, which cut the one-shot decode of a 160 KB `write` call from 1.75 ms to 0.68 ms and its live reveal in 100-character steps from 10.5 ms to 9.2 ms (median).
-- A `-p` or `--mode json` run starts background model discovery once its first response starts streaming instead of when its session is created, which sends the first request about 33 ms sooner and cut a run against a provider that answers in 300 ms and streams for 150 ms from 580.8 ms to 560.0 ms (median of 15).
-- A launch with no llama.cpp server running no longer rewrites the llama.cpp model-cache row and syncs `models.db` four times, which cut a print run against a provider that answers in 300 ms and streams for 150 ms from 558.3 ms to 553.9 ms (median of 15).
-- `read` and the CLI `@` attachment import the entry-kind phrase from `@veyyon/utils/fs-error`, which adds no module to any import graph; no user-facing change.
-- The config-root, global-config and path-comparison helpers are imported from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
-- The provider-refusal check and the Mnemopi per-bank target dedupe each have one definition; no user-facing change.
-- `/todo` with an unknown verb in the TUI lists the accepted verbs, the message ACP shows, instead of the full usage.
-- `veyyon ttsr scan` compiles rule conditions, globs and scopes with the functions a session uses instead of a copy of them; no user-facing change.
-- The secret vault and its key file remove a stale entry through one quarantine-and-recheck helper instead of two copies of it; no user-facing change.
-- The Mnemopi stats command resolves a bank's database path through the function a session uses instead of a copy of it; no user-facing change.
-- The terminal reports a `/browser` restart that fails after the mode is saved as `Browser mode set to <mode>, but restart failed: …`, the sentence ACP prints, and shows the `/browser` usage line as a warning.
-- `/effort` checks a level through one function the terminal and the text surfaces share, with no change to what either accepts or prints.
-- No user-visible change: `/export` path resolution moved from the session runtime into the HTML exporter.
-- IRC message delivery moved out of `AgentSession` into the `IrcDelivery` session collaborator, with no change to how a message is steered, queued, woken on or auto-replied to.
-- The first shell command of a session no longer compiles the output-stage regular expressions of every built-in output filter; each filter compiles them the first time it applies, so a first `ls` runs in 5 ms instead of 12 ms.
-- The `session_stop` hook pass moved out of `AgentSession` into the `SessionStopHook` session collaborator, with no change to the event a handler receives, the continuation it queues or the cap that ends a chain.
-- The hidden next-turn message queue moved out of `AgentSession` into the `NextTurnMessages` session collaborator, with no change to when a queued message reaches a turn or the order it arrives in.
-- Model switching moved out of `AgentSession` into the `ModelSelection` session collaborator, with no change to what a saved switch, a session-only switch or the Ctrl+P cycle records, persists or pins.
-- Esc repaints a frame sooner when it arms no double-press gesture: closing a selector takes 4 ms instead of 35 ms with the kitty keyboard protocol and 54 ms instead of 86 ms without.
-- The `/model` picker resolves the default model against the models it lists, as startup does, so its first open paints in 4 ms instead of 41 ms and the default mark lands on the model a new session starts on.
-- Views that load after the key that opens them, such as the Extension Control Center, paint up to 30 ms sooner.
-- `/cpu-limit status` reports the kill policy in force: `kill on sustained saturation` for the CPU budget and `kill when exceeded` for the write budget.
-- The tool argument repair registry lists path resolution in the file tools among the tool-local parsing it excludes; no user-facing change.
-- Background job delivery, listing, cancellation and the settle wake moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- Releasing what a conversation ends with on `/new`, `/resume` and a handoff moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- Routing a finished run through retry, compaction and the stop-time passes moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The message a prompt raises when a provider's credential produced no token is built in the credential-message module beside the other missing-credential messages ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- Queueing steers and follow-ups, the idle drain that starts a turn on them, and the queue count, chips, clear and pop moved out of the session class into one session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- Running a shell command or Python cell typed with `!` or `$` moved out of the session class into the session collaborator that tracks those runs ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The context threshold checks before a prompt and between the provider calls of a tool loop, and the switch to a larger-context model they share, moved out of the session class into the `TurnContextCheck` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- Starting a new transcript with `/new` or `/drop` and forking one with `/fork` moved out of the session class into the `SessionSwitch` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The session-state block and the eager delegate reminders a turn carries ahead of its message moved out of the session class into the `TurnPreludes` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The per-family service tiers, `/fast` and the tier each request resolves to moved out of the session class into the `ServiceTiers` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The command registries, the resolution of a typed prompt through extension, custom and file-based commands and the prompt templates, and the agents a `/` command grants for its turn moved out of the session class into the `PromptCommands` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The display copy of assistant content, tool intents, streamed deltas and rebuilt transcripts, with the stream decoder a streamed reply runs through, moved out of the session class into the `DisplayCopy` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The normalization of a message's images for the active model, the description a text-only model reads in their place and the latest images a tool addresses moved out of the session class into the `ImageAttachments` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The response and raw SSE interceptors every request runs with, the raw SSE capture, the side stream function and the preparation of a side request's options moved out of the session class into the `ProviderTransport` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The redacted tool start markers, the `session_exit` entry and the process teardown callback that writes it when no dispose runs moved out of the session class into the `ExitRecord` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The event subscribers, the extension event forwarder and the wire-level `agent_end` held while a prompt unwinds moved out of the session class into the `SessionEvents` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The scheduled `agent.continue()`, the auto-continue prompt a compaction resumes with, their cancel and the recovery wait a prompt runs moved out of the session class into the `TurnContinuations` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The HTML export, the `/copy` texts, the `/dump` text and its request snapshot moved out of the session class into the `TranscriptExports` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The mode blocks a prompt restates (plan reference, plan-mode rules, goal, vibe mode), the reads of the files it mentions as `@path` and the `before_agent_start` extension input moved out of the session class into the `TurnInput` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- The release at dispose of the session's background jobs, owned job manager, eval kernels, session-scoped resources and MCP hold moved out of the session class into the `SessionRelease` session collaborator, and the memory backends' release into `MemoryContext` ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- How a custom message reaches the conversation, queued, held for the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices moved out of the session class into the `CustomMessages` session collaborator ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
-- An extension command run on a session with no UI receives the extension runner's no-op UI context instead of a second copy of it; no user-facing change.
-- The theme loader and the status-rail animation read 256-color palette indices through `ansi256ToHex` in `@veyyon/utils/color` instead of two copies of the xterm table; no user-facing change.
-- The hook selector behind `ask` questions and extension `ui.select` counts the rows its options take once per terminal width instead of on every key, so an arrow key on an 80-option list takes 28 µs instead of 286 µs at 80x10 and 59 µs instead of 341 µs at 80x30.
-- MCP initial connect and reconnect open and wire a server connection through one pair of manager methods, ACP reads the last assistant message through `findLastAssistantMessage`, vault `extend`, `replaceValue` and `rename` share one narrowest-first edit walk, the conflict warning and the `:conflicts` index print their scan note and side labels through one function, and the three JS eval worker handles share one close handshake; no user-facing change.
-- The transcript builder and the presentation event bridge state a tool call's arguments through the tool block's own serializer instead of a second copy of it; no user-facing change.
-- The Streamable HTTP and legacy HTTP+SSE MCP transports send every JSON-RPC message through one `postJsonRpc` with one auth-retry path, and a refreshed credential replaces the transport's headers instead of writing into the configuration object it was created with.
-- The stdio, Streamable HTTP and legacy HTTP+SSE MCP transports classify a server's messages through one `routeIncomingMessage`, and the two HTTP transports POST the answer to a server request through one `deliverServerResponse`.
-- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
-- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
-- The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
-- The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
-- `bench/session-compaction-stall.bench.ts` measures the longest event-loop stall and the wall time of a compaction's republish on a large synthetic session; no user-facing change.
-- The no-model sentence a prompt receives is built in `config/model-resolution-failure.ts` instead of the session runtime; no user-facing change.
-- A `search` call that carries a field another type takes, such as `hidden` on a `text` search, runs as if the field were absent and starts its result with a line listing the ignored fields and the fields that type takes, instead of failing with `Search type "text" does not accept: hidden`.
-- A `search` of type `text` asks the disk for 32 files per walk thread at once, so over 3.22 million uncached PHP files (24 GB) the native search returns in 33–36 s instead of 138 s and the tool searches 3.20–3.22 million files within its 30 s limit instead of 785,990, with no change over cached files.
-- A `search` of type `files` whose `;`-separated entries share a root reads that root once, through one `{a,b}` alternation, instead of once per entry in parallel walks that contend for the same directories, so four leading-glob entries over a tree one walk reads in 2.4 s return in 2.6 s instead of stopping at the 5 s limit with a partial result.
+- Reject encoded path separators and reserved Windows device names in `agent://` result identifiers before artifact lookup ([#852](https://github.com/Wladefant/veyyon/issues/852)).
 
 ### Removed
 
@@ -373,9 +335,6 @@
 - Error explanations withhold embedded incomplete inventories, and JS eval preserves RegExp output after object or array console arguments ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 - Error explanations withhold complete prefixed inventories, and JS eval preserves RegExp output after scalar console arguments ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
 - JS eval only treats a top-level RegExp as a console argument when its closing slash and flags end at whitespace or the line boundary ([Refs #908](https://github.com/Wladefant/veyyon/issues/908)).
-
-### Fixed
-
 - ACP rejects stored session IDs that identify different histories before cross-cwd loads or unloaded forks change session state ([Refs #901](https://github.com/Wladefant/veyyon/issues/901)).
 
 ## [1.7.9] - 2026-11-04
@@ -389,9 +348,6 @@
 - ACP bash terminal output now withholds environment inventories from previews, final reads, and persisted artifacts ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
 - ACP bash terminal output withholds a truncated client snapshot whole, because the cut-off start can hold the context that marks the rest as an inventory ([Refs #906](https://github.com/Wladefant/veyyon/issues/906)).
 
-### Fixed
-
-- Reject encoded path separators and reserved Windows device names in `agent://` result identifiers before artifact lookup ([#852](https://github.com/Wladefant/veyyon/issues/852)).
 ## [1.7.8] - 2026-11-03
 
 ### Fixed

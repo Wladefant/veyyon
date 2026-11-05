@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/agent-core",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "General-purpose agent with transport abstraction, state management, and attachment support",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -35,14 +35,14 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@veyyon/ai": "catalog:",
-    "@veyyon/catalog": "catalog:",
-    "@veyyon/natives": "catalog:",
-    "@veyyon/session": "catalog:",
-    "@veyyon/tool": "catalog:",
-    "@veyyon/utils": "catalog:",
-    "@veyyon/view": "catalog:",
-    "@veyyon/wire": "catalog:",
+    "@veyyon/ai": "workspace:*",
+    "@veyyon/catalog": "workspace:*",
+    "@veyyon/natives": "workspace:*",
+    "@veyyon/session": "workspace:*",
+    "@veyyon/tool": "workspace:*",
+    "@veyyon/utils": "workspace:*",
+    "@veyyon/view": "workspace:*",
+    "@veyyon/wire": "workspace:*",
     "@opentelemetry/api": "catalog:"
   },
   "devDependencies": {

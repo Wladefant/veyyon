@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Changed
 
 - No user-visible change: the resource hook and the request drawer coerce a failed fetch with `toError` from `@veyyon/utils/type-guards` instead of inline copies.

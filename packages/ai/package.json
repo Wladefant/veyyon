@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/ai",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "Unified LLM API with automatic model discovery and provider configuration",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -38,11 +38,11 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "catalog:",
-    "@veyyon/catalog": "catalog:",
-    "@veyyon/model": "catalog:",
-    "@veyyon/tool": "catalog:",
-    "@veyyon/utils": "catalog:",
-    "@veyyon/wire": "catalog:",
+    "@veyyon/catalog": "workspace:*",
+    "@veyyon/model": "workspace:*",
+    "@veyyon/tool": "workspace:*",
+    "@veyyon/utils": "workspace:*",
+    "@veyyon/wire": "workspace:*",
     "arktype": "catalog:",
     "zod": "catalog:"
   },

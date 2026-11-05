@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/kernel",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "The only Veyyon member that is not a plugin: it loads plugins, resolves their contributions and runs a session, and it names no tool and no host",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -30,14 +30,14 @@
     "test": "bun test --parallel"
   },
   "dependencies": {
-    "@veyyon/agent-core": "catalog:",
-    "@veyyon/ai": "catalog:",
-    "@veyyon/catalog": "catalog:",
-    "@veyyon/natives": "catalog:",
-    "@veyyon/plugin": "catalog:",
-    "@veyyon/session": "catalog:",
-    "@veyyon/settings": "catalog:",
-    "@veyyon/utils": "catalog:"
+    "@veyyon/agent-core": "workspace:*",
+    "@veyyon/ai": "workspace:*",
+    "@veyyon/catalog": "workspace:*",
+    "@veyyon/natives": "workspace:*",
+    "@veyyon/plugin": "workspace:*",
+    "@veyyon/session": "workspace:*",
+    "@veyyon/settings": "workspace:*",
+    "@veyyon/utils": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:"

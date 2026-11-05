@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Changed
 
 - `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.

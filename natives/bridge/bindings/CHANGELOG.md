@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Breaking Changes
 
 - `summarizeCode()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where an 18,000-line TypeScript source held the event loop 68 ms.

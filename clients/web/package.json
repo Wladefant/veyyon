@@ -37,9 +37,9 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@veyyon/wire": "catalog:",
-    "@veyyon/tool-render": "catalog:",
-    "@veyyon/utils": "catalog:",
+    "@veyyon/wire": "workspace:*",
+    "@veyyon/tool-render": "workspace:*",
+    "@veyyon/utils": "workspace:*",
     "lucide-react": "catalog:",
     "marked": "catalog:",
     "react": "catalog:",

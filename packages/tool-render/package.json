@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@veyyon/tool-render",
-	"version": "1.7.10",
+	"version": "1.8.0",
 	"description": "Shared React tool-call renderers for Veyyon HTML export and collab-web",
 	"homepage": "https://veyyon.dev",
 	"author": "santhreal",
@@ -26,9 +26,9 @@
 		"fmt": "biome format --write ."
 	},
 	"dependencies": {
-		"@veyyon/utils": "catalog:",
-		"@veyyon/view": "catalog:",
-		"@veyyon/wire": "catalog:",
+		"@veyyon/utils": "workspace:*",
+		"@veyyon/view": "workspace:*",
+		"@veyyon/wire": "workspace:*",
 		"lucide-react": "catalog:",
 		"marked": "catalog:",
 		"react": "catalog:"

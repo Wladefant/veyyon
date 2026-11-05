@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/tui",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "Terminal User Interface library with differential rendering for efficient text-based applications",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -37,9 +37,9 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@veyyon/host": "catalog:",
-    "@veyyon/natives": "catalog:",
-    "@veyyon/utils": "catalog:",
+    "@veyyon/host": "workspace:*",
+    "@veyyon/natives": "workspace:*",
+    "@veyyon/utils": "workspace:*",
     "lru-cache": "catalog:",
     "marked": "catalog:"
   },

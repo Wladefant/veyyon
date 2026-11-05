@@ -32,13 +32,13 @@
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:",
-		"@veyyon/agent-core": "catalog:",
-		"@veyyon/ai": "catalog:",
-		"@veyyon/catalog": "catalog:",
-		"@veyyon/coding-agent": "catalog:",
-		"@veyyon/kernel": "catalog:",
-		"@veyyon/tui": "catalog:",
-		"@veyyon/utils": "catalog:",
+		"@veyyon/agent-core": "workspace:*",
+		"@veyyon/ai": "workspace:*",
+		"@veyyon/catalog": "workspace:*",
+		"@veyyon/coding-agent": "workspace:*",
+		"@veyyon/kernel": "workspace:*",
+		"@veyyon/tui": "workspace:*",
+		"@veyyon/utils": "workspace:*",
 		"arktype": "catalog:"
 	},
 	"engines": {

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
+### Added
+
+- `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
+
 ### Changed
 
 - No user-visible change: `Form`, `SettingsList` and `TabBar` step through their fields, rows, sections and tabs with `wrapIndex`.
@@ -23,10 +29,6 @@
 ### Fixed
 
 - A frame that shrinks below the rows already in scrollback and replaces one of the rows it keeps commits the new row to scrollback, instead of counting the old copy as that row and losing the new one once it scrolls off.
-
-### Added
-
-- `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
 
 ## [1.6.0] - 2026-10-28
 

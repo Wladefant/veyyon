@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Added
 
 - `@veyyon/wire/relay-client` exports `RelayClient`, the collab relay client (send ordering, send backpressure, reconnect, fatal close codes) that the CLI host, the CLI guest and the browser guest bind with their own frame types, backoff schedule and log sink.

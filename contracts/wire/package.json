@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/wire",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "Shared wire protocol types for Veyyon packages",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -31,12 +31,12 @@
     "test": "bun test --parallel"
   },
   "dependencies": {
-    "@veyyon/model": "catalog:",
-    "@veyyon/view": "catalog:"
+    "@veyyon/model": "workspace:*",
+    "@veyyon/view": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
-    "@veyyon/utils": "catalog:"
+    "@veyyon/utils": "workspace:*"
   },
   "engines": {
     "bun": ">=1.4.3"

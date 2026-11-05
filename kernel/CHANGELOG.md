@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
+### Breaking Changes
+
+- `ColdEntryPayloads.rebase(identity, open, shift)` drops its `entries` parameter and moves every cold entry read through the current handle onto the new object at once.
+
+### Added
+
+- `ColdEntryPayloads.warmed` counts the cold entries read back into memory.
+
+### Changed
+
+- The agent storage retry loop and owned-resource disposal coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of inline copies; no user-facing change.
+- `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
+- The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
+- `session/history-storage` exports `historyQueryTokens`, the tokenizer prompt history search matches with; no user-facing change.
+- A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
+- A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
+- A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
+
 ### Fixed
 
 - Terminal ownership diagnostics no longer report a shell command deadline when Windows ACL verification runs natively ([#932](https://github.com/Wladefant/veyyon/issues/932)).
@@ -23,26 +45,6 @@
 - A session entry holding a value that loops back to one of its own ancestors, such as a tool result from a JS eval cell that displayed a cyclic object, reaches the session file with `"[Circular]"` at the loop instead of throwing `RangeError: Maximum call stack size exceeded` and leaving the entry out of the resumed session; the persistence pass over 400 entries takes 79 µs instead of 68 µs for the check.
 - A context rebuilt from a session log drops a never-ran placeholder tool result whose call is on no turn of the branch, so a resume of a log written before the fix no longer replays a refused turn's refusal text to the model on every request; a result whose tool ran is kept.
 - A session file that ends inside a line, left by a write that was cut off, is rewritten whole on its first write after a resume instead of appended to, so the next entry no longer merges into the cut line and is no longer lost on the following resume.
-
-### Changed
-
-- The agent storage retry loop and owned-resource disposal coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of inline copies; no user-facing change.
-- `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
-- The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
-- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
-- The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
-- `session/history-storage` exports `historyQueryTokens`, the tokenizer prompt history search matches with; no user-facing change.
-- A compaction's republish moves every cold entry onto the new session file at once, closes the replaced file off the event loop, and skips the second walk over history when nothing changed since the first, so on a 200,000-entry, 419 MiB session a compaction holds the event loop for at most 14-15 ms instead of 86-90 ms and finishes in 120-124 ms instead of 159-165 ms.
-- A staged session rewrite is flushed to disk before it replaces the file, so a power cut during a rewrite leaves the previous file or the new one, and on ext4 the rename no longer blocks the event loop for 38-92 ms.
-- A settings file that does not parse is quarantined with the parser's reason, which for a YAML syntax error states its line and column.
-
-### Breaking Changes
-
-- `ColdEntryPayloads.rebase(identity, open, shift)` drops its `entries` parameter and moves every cold entry read through the current handle onto the new object at once.
-
-### Added
-
-- `ColdEntryPayloads.warmed` counts the cold entries read back into memory.
 
 ## [1.7.10] - 2026-11-04
 

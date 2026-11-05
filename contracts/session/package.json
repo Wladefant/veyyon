@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/session",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "What a session file is made of: the entry vocabulary and the message union it records",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -31,7 +31,7 @@
     "test": "bun test --parallel"
   },
   "dependencies": {
-    "@veyyon/model": "catalog:"
+    "@veyyon/model": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:"

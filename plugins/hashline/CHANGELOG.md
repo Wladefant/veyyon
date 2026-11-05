@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Changed
 
 - `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.

@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/web",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "Site scrapers that turn a URL into markdown for Veyyon agents",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -32,8 +32,8 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@veyyon/ai": "catalog:",
-    "@veyyon/utils": "catalog:",
+    "@veyyon/ai": "workspace:*",
+    "@veyyon/utils": "workspace:*",
     "linkedom": "catalog:"
   },
   "devDependencies": {

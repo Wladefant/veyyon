@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/hashline",
-  "version": "1.7.10",
+  "version": "1.8.0",
   "description": "Hashline: a compact, line-anchored patch language and applier. Pluggable FS/IO so it works over disk, in-memory, or any custom backend.",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
@@ -34,7 +34,7 @@
     "fmt": "biome format --write ."
   },
   "dependencies": {
-    "@veyyon/utils": "catalog:",
+    "@veyyon/utils": "workspace:*",
     "diff": "catalog:",
     "lru-cache": "catalog:"
   },

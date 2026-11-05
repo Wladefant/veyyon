@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-05
+
 ### Added
 
 - `AGENT_EVENT_TYPES` in `@veyyon/agent-core/types` lists every agent event type and fails to compile when the event union gains a type it lacks.
