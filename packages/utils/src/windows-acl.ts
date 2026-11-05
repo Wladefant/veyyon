@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { escapeTerminalText } from "./terminal-safe";
 import { errorMessage } from "./type-guards";
@@ -118,6 +118,198 @@ if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'ACL targe
 ${VERIFY_ACL}
 [Console]::Out.Write('OK')
 `;
+
+const VERIFY_STREAM_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+while ($null -ne ($request = [Console]::In.ReadLine())) {
+  $separator = $request.IndexOf([char]9)
+  if ($separator -lt 1) { throw 'Invalid ACL request frame' }
+  $requestId = $request.Substring(0, $separator)
+  if ($requestId -notmatch '^[1-9][0-9]*$') { throw 'Invalid ACL request identifier' }
+  try {
+    $target = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($request.Substring($separator + 1)))
+    if ([string]::IsNullOrEmpty($target)) { throw 'ACL target is missing' }
+    $item = Get-Item -LiteralPath $target -Force -ErrorAction Stop
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'ACL target is a reparse point' }
+${VERIFY_ACL}
+    [Console]::Out.WriteLine($requestId + [char]9 + 'OK')
+  } catch {
+    $detail = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_.Exception.Message))
+    [Console]::Out.WriteLine($requestId + [char]9 + 'ERR' + [char]9 + $detail)
+  }
+  [Console]::Out.Flush()
+}
+`;
+
+/**
+ * Reuse one verifier process without caching any ACL decision or changing the caller's read order.
+ * The process exists only within this scope. Requests are sequential and independently bounded.
+ */
+export async function withOwnerOnlyWindowsAclVerification<T>(
+	operation: (options: WindowsAclOptions) => Promise<T>,
+	options: WindowsAclOptions = {},
+): Promise<T> {
+	if (
+		(options.platform ?? process.platform) !== "win32" ||
+		options.run !== undefined ||
+		options.spawn === undefined
+	)
+		return operation(options);
+	let child: ChildProcessWithoutNullStreams | undefined;
+	let closing = false;
+	let closed = false;
+	let terminating = false;
+	let failure: Error | undefined;
+	let nextId = 0;
+	let pending:
+		| {
+				id: number;
+				output: string;
+				bytes: number;
+				timer: NodeJS.Timeout;
+				resolve: (result: WindowsAclCommandResult) => void;
+				reject: (error: Error) => void;
+		  }
+		| undefined;
+	const completion = Promise.withResolvers<void>();
+	const fail = (error: Error, terminate: boolean): void => {
+		failure ??= error;
+		if (pending !== undefined) {
+			const request = pending;
+			pending = undefined;
+			clearTimeout(request.timer);
+			request.reject(failure);
+		}
+		if (terminate && child !== undefined && !closed && !terminating) {
+			terminating = true;
+			try {
+				child.kill();
+			} catch {}
+		}
+	};
+	const onStdout = (chunk: Buffer): void => {
+		const request = pending;
+		if (request === undefined) {
+			fail(new Error("The Windows ACL verifier produced unsolicited output."), true);
+			return;
+		}
+		request.bytes += chunk.length;
+		if (request.bytes > MAX_COMMAND_OUTPUT_BYTES) {
+			fail(new Error("The Windows ACL command produced excessive output."), true);
+			return;
+		}
+		request.output += chunk.toString("utf8");
+		if (!request.output.includes("\n")) return;
+		const response = /^([1-9][0-9]*)\t(OK|ERR\t([A-Za-z0-9+/]*={0,2}))\r?\n$/.exec(request.output);
+		if (response === null || response[1] !== String(request.id)) {
+			fail(new Error("The Windows ACL verifier returned an invalid response frame."), true);
+			return;
+		}
+		const encodedError = response[3];
+		const detail = encodedError === undefined ? undefined : Buffer.from(encodedError, "base64");
+		if (detail !== undefined && detail.toString("base64") !== encodedError) {
+			fail(new Error("The Windows ACL verifier returned an invalid error frame."), true);
+			return;
+		}
+		clearTimeout(request.timer);
+		pending = undefined;
+		request.resolve(
+			detail === undefined
+				? { exitCode: 0, stdout: "OK", stderr: "" }
+				: { exitCode: 1, stdout: "", stderr: detail.toString("utf8") },
+		);
+	};
+	const onError = (error: Error): void => fail(error, true);
+	const onStderr = (): void => fail(new Error("The Windows ACL verifier wrote unexpected stderr."), true);
+	const run: WindowsAclCommandRunner = (script, filePath) => {
+		if (closing || failure !== undefined)
+			return Promise.reject(failure ?? new Error("The Windows ACL verifier scope ended."));
+		if (script !== VERIFY_SCRIPT || pending !== undefined) {
+			fail(new Error("The Windows ACL verifier only accepts sequential verification requests."), true);
+			return Promise.reject(failure);
+		}
+		const result = Promise.withResolvers<WindowsAclCommandResult>();
+		const id = ++nextId;
+		pending = {
+			id,
+			output: "",
+			bytes: 0,
+			resolve: result.resolve,
+			reject: result.reject,
+			timer: setTimeout(() => fail(new Error("The Windows ACL command timed out."), true), getWindowsAclTimeoutMs()),
+		};
+		try {
+			if (child === undefined) {
+				const { executable, env } = trustedPowerShell("");
+				child = (options.spawn ?? spawn)(
+					executable,
+					[
+						"-NoLogo",
+						"-NoProfile",
+						"-NonInteractive",
+						"-ExecutionPolicy",
+						"Bypass",
+						"-Command",
+						VERIFY_STREAM_SCRIPT,
+					],
+					{ env, cwd: path.win32.dirname(executable), stdio: "pipe", windowsHide: true },
+				);
+				child.stdout.on("data", onStdout);
+				child.stderr.on("data", onStderr);
+				child.stdin.on("error", onError);
+				child.stdout.on("error", onError);
+				child.stderr.on("error", onError);
+				child.on("error", onError);
+				child.once("close", code => {
+					closed = true;
+					if (!closing || pending !== undefined || code !== 0) {
+						fail(new Error("The Windows ACL verifier exited before completing its scope."), false);
+					}
+					child?.stdout.off("data", onStdout);
+					child?.stderr.off("data", onStderr);
+					completion.resolve();
+				});
+			}
+			child.stdin.write(`${id}\t${Buffer.from(filePath, "utf8").toString("base64")}\n`);
+		} catch (error) {
+			fail(error instanceof Error ? error : new Error(String(error)), true);
+		}
+		return result.promise;
+	};
+	let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+	try {
+		outcome = { ok: true, value: await operation({ ...options, run }) };
+	} catch (error) {
+		outcome = { ok: false, error };
+	}
+	closing = true;
+	if (child !== undefined) {
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			if (pending !== undefined) fail(new Error("The Windows ACL verifier has an unfinished request."), true);
+			if (!closed) {
+				child.stdin.end();
+				await Promise.race([
+					completion.promise,
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(() => {
+							const error = new Error("The Windows ACL verifier did not exit.");
+							fail(error, true);
+							reject(error);
+						}, getWindowsAclTimeoutMs());
+					}),
+				]);
+			}
+			if (failure !== undefined) throw failure;
+		} catch (error) {
+			if (outcome.ok) outcome = { ok: false, error };
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+	if (outcome.ok) return outcome.value;
+	throw outcome.error;
+}
 
 /** Apply a protected DACL granting full control only to the current user and LocalSystem. */
 export async function applyOwnerOnlyWindowsAcl(filePath: string, options: WindowsAclOptions = {}): Promise<void> {

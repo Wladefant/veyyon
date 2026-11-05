@@ -276,6 +276,14 @@ describe("a command on a client terminal gets an end of stdin unless it asks for
 		expect(elapsedMs).toBeLessThan(ELAPSED_BOUND_MS);
 	});
 
+	/** The first newline can be escaped by the caller; the closing brace must remain a separate token. */
+	it("preserves its shell closing brace after a trailing backslash continuation", async () => {
+		const command = "printf 'TRAILING_OK\\n' " + "\\";
+		const { text, elapsedMs } = await runOnClientTerminal("trailing-backslash", command);
+		expect(text).toContain("TRAILING_OK");
+		expect(text).not.toContain("syntax error");
+		expect(elapsedMs).toBeLessThan(ELAPSED_BOUND_MS);
+	});
 	/** A pipeline feeds its consumer from the upstream command, not from the group's `/dev/null`. */
 	it("still delivers the output of an upstream pipeline stage", async () => {
 		const { text, elapsedMs } = await runOnClientTerminal(

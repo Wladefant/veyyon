@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Discovery readers check sibling records with one parent ACL check, at most 32 open files per batch, bounded descriptor reads, and three verification attempts before failure ([#833](https://github.com/Wladefant/veyyon/issues/833)).
+## [1.7.9] - 2026-11-04
+
 ### Fixed
 
 - Verify Windows discovery-record ACLs through read-only native security calls, without PowerShell startup delays during nested agent launch (Refs #932).

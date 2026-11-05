@@ -8,9 +8,9 @@ export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from 
 
 import { formatBytes } from "@veyyon/utils/format";
 import { DEFAULT_INLINE_FLOOR_FRACTION, DEFAULT_INLINE_OUTPUT_MAX_BYTES } from "../config/settings-domains/shared";
-import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
-import { currentProducerSecretOwner } from "../secrets/producer-owner";
 import { ProducerOutputGuard } from "../secrets/producer-output";
+import { currentProducerSecretOwner } from "../secrets/producer-owner";
+import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
 
 // =============================================================================
 // Constants
@@ -940,12 +940,27 @@ export class OutputSink {
 		this.#pushFiltered(this.#outputGuard ? this.#outputGuard.push(chunk) : chunk, options);
 	}
 
+	/**
+	 * Append host explanations after finalizing the producer stream, so a withheld
+	 * unfinished record cannot absorb them. Validate the separate payload structurally:
+	 * exception and PTY explanations can still contain producer-controlled text.
+	 */
+	pushHostText(text: string): void {
+		if (this.#outputGuard) {
+			const tail = this.#outputGuard.finish();
+			this.#pushFiltered(tail && !tail.endsWith("\n") ? `${tail}\n` : tail);
+			text = this.#outputGuard.sanitizeComplete(text);
+		}
+		this.#pushFiltered(text);
+	}
+
 	#pushFiltered(chunk: string, options?: { inline?: string; emitInline?: boolean }): void {
 		const { head, partial } = splitTrailingPartialEscape(this.#partialEscape + chunk);
 		this.#partialEscape = partial;
 		if (head.length === 0) return;
 		chunk = sanitizeWithOptionalSixelPassthrough(head, sanitizeText);
-		const inline = options?.inline === undefined ? undefined : this.#outputGuard?.sanitize(options.inline) ?? options.inline;
+		const inline =
+			options?.inline === undefined ? undefined : (this.#outputGuard?.sanitize(options.inline) ?? options.inline);
 		const substituted = inline !== undefined;
 		const inlineChunk = inline === undefined ? chunk : sanitizeText(inline);
 
@@ -1450,7 +1465,7 @@ export class OutputSink {
 
 	async #dumpInternal(notice: string | undefined, strict: boolean): Promise<OutputSummary> {
 		if (this.#outputGuard) this.#pushFiltered(this.#outputGuard.finish());
-		const safeNotice = notice ? this.#outputGuard?.sanitize(notice) ?? notice : undefined;
+		const safeNotice = notice ? (this.#outputGuard?.sanitize(notice) ?? notice) : undefined;
 		const noticeLine = safeNotice ? `[${safeNotice}]\n` : "";
 
 		// Flush any chunk still held back by the throttle so the live preview
