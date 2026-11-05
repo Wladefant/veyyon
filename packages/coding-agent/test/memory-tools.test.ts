@@ -10,19 +10,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { DEFAULT_EMBED_IDLE_UNLOAD_MS } from "@veyyon/coding-agent/config/settings-domains/shared";
-import { HindsightApi } from "@veyyon/coding-agent/memory/hindsight/client";
-import type { HindsightConfig } from "@veyyon/coding-agent/memory/hindsight/config";
+import { resetSettingsForTest, Settings } from "../src/config/settings";
+import { DEFAULT_EMBED_IDLE_UNLOAD_MS } from "../src/config/settings-domains/shared";
+import { HindsightApi } from "../src/memory/hindsight/client";
+import type { HindsightConfig } from "../src/memory/hindsight/config";
 import {
 	HINDSIGHT_RETAIN_BATCH_SIZE,
 	HindsightSessionState,
 	MEMORY_RETAIN_MAX_BYTES,
 	MEMORY_RETAIN_MAX_ITEM_BYTES,
 	MEMORY_RETAIN_MAX_ITEMS,
-} from "@veyyon/coding-agent/memory/hindsight/state";
-import { mnemopiBackend } from "@veyyon/coding-agent/memory/mnemopi/backend";
-import { loadMnemopiConfig, type MnemopiBackendConfig } from "@veyyon/coding-agent/memory/mnemopi/config";
+} from "../src/memory/hindsight/state";
+import { mnemopiBackend } from "../src/memory/mnemopi/backend";
+import { loadMnemopiConfig, type MnemopiBackendConfig } from "../src/memory/mnemopi/config";
 import {
 	getMnemopiScopedDbPaths,
 	getMnemopiSessionState,
@@ -30,12 +30,12 @@ import {
 	loadMnemopiCore,
 	MnemopiSessionState,
 	setMnemopiSessionState,
-} from "@veyyon/coding-agent/memory/mnemopi/state";
-import { MemoryEditTool } from "@veyyon/coding-agent/tools/agent/memory-edit";
-import { MemoryRecallTool } from "@veyyon/coding-agent/tools/agent/memory-recall";
-import { MemoryReflectTool } from "@veyyon/coding-agent/tools/agent/memory-reflect";
-import { MemoryRetainTool } from "@veyyon/coding-agent/tools/agent/memory-retain";
-import type { ToolSession } from "@veyyon/coding-agent/tools/index";
+} from "../src/memory/mnemopi/state";
+import { MemoryEditTool } from "../src/tools/agent/memory-edit";
+import { MemoryRecallTool } from "../src/tools/agent/memory-recall";
+import { MemoryReflectTool } from "../src/tools/agent/memory-reflect";
+import { MemoryRetainTool } from "../src/tools/agent/memory-retain";
+import type { ToolSession } from "../src/tools/index";
 import { resetMemoryForTests } from "@veyyon/mnemopi";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
@@ -217,6 +217,13 @@ describe("Hindsight tool factories", () => {
 		// factory returns ITS OWN tool rather than a sibling.
 		const settings = Settings.isolated({ "memory.backend": "hindsight" });
 		const session = makeSession(settings);
+		expect(MemoryRetainTool.createIf(session)).toBeInstanceOf(MemoryRetainTool);
+		expect(MemoryRecallTool.createIf(session)).toBeInstanceOf(MemoryRecallTool);
+		expect(MemoryReflectTool.createIf(session)).toBeInstanceOf(MemoryReflectTool);
+	});
+
+	it("exposes recall, retain, and reflect for Basic Memory", () => {
+		const session = makeSession(Settings.isolated({ "memory.backend": "basic-memory" }));
 		expect(MemoryRetainTool.createIf(session)).toBeInstanceOf(MemoryRetainTool);
 		expect(MemoryRecallTool.createIf(session)).toBeInstanceOf(MemoryRecallTool);
 		expect(MemoryReflectTool.createIf(session)).toBeInstanceOf(MemoryReflectTool);

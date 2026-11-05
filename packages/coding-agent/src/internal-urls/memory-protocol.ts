@@ -13,6 +13,8 @@ import { getMemoryRoot } from "../memory/paths";
 import { AgentRegistry } from "../registry/agent-registry";
 import { buildDirectoryResource, ensureWithinRoot as ensureWithinRootShared } from "./filesystem-resource";
 import { validateRelativePath } from "./relative-path";
+import { readBasicMemory } from "../memory/basic-memory";
+import type { Settings } from "../config/settings";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 const DEFAULT_MEMORY_FILE = "memory_summary.md";
@@ -238,12 +240,20 @@ export class MemoryProtocolHandler implements ProtocolHandler {
 			throw new Error("memory:// URL requires a namespace: memory://root or memory://<memory-id>");
 		}
 
-		// Mnemopi rows live in SQLite banks per session, keyed by memory id.
-		// Any host other than the file-backed `root` namespace is treated as a
-		// mnemopi memory id lookup. This is the read counterpart to
-		// `memory_edit update` and lets agents inspect the full content of a
-		// clipped recall preview before overwriting it (issue #4443).
+		// Non-root memory identifiers are looked up by the selected structured backend.
 		if (namespace !== MEMORY_NAMESPACE) {
+			const settings = context?.settings as Settings | undefined;
+			if (settings?.get("memory.backend") === "basic-memory") {
+				if (!context?.cwd) throw new Error("Basic Memory URL reads require the calling session cwd.");
+				const content = await readBasicMemory(settings, context.cwd, namespace, context.signal);
+				return {
+					url: url.href,
+					content,
+					contentType: "text/markdown",
+					size: Buffer.byteLength(content, "utf-8"),
+					notes: [],
+				};
+			}
 			const mnemopiStates = mnemopiSessionStatesFromRegistry();
 			if (mnemopiStates.length === 0) {
 				throw new Error(

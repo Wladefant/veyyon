@@ -15,11 +15,50 @@ function fixture() {
   try{return await callback(storage)}catch(error){data.clear();for(const [key,value] of snapshot)data.set(key,value);throw error}finally{release()}
  } };
  const objects = new Map<string, Uint8Array>();
- const env:Environment = { OBJECTS: { get: async key => {const bytes=objects.get(key);return bytes?{size:bytes.length,arrayBuffer:async()=>bytes.slice().buffer}:null},put:async()=>{} }, INDEX: {prepare:()=>({bind:()=>({run:async()=>{},all:async()=>[]})})} };
+ let objectGets=0;
+ let objectBufferReads=0;
+ let beforeObjectGet:(()=>void)|undefined;
+ const env:Environment = { OBJECTS: { get: async key => {objectGets++;beforeObjectGet?.();const bytes=objects.get(key);return bytes?{size:bytes.length,arrayBuffer:async()=>{objectBufferReads++;return bytes.slice().buffer}}:null},put:async()=>{} }, INDEX: {prepare:()=>({bind:()=>({run:async()=>{},all:async()=>[]})})} };
  const authority = new SessionAuthority({storage}, env);
  const post = (action:string,body:unknown) => authority.fetch(new Request(`https://test/v1/sessions/s/${action}`, {method:"POST",body:JSON.stringify(body)}));
- return {post, objects, storage, data, authority, failPut:(key:string)=>{failPutKey=key}};
+ return {post, objects, storage, data, authority, objectAccess:()=>({gets:objectGets,buffers:objectBufferReads}), beforeRead:(callback:()=>void)=>{beforeObjectGet=callback}, failPut:(key:string)=>{failPutKey=key}};
 }
+test("malformed or capped expected heads cannot spend checkpoint object reads",async()=>{
+ const {post,objects,objectAccess,data}=fixture();
+ const lease=await (await post("lease",{ownerNode:"runtime"})).json() as {ownerNode:string;epoch:number};
+ const bytes=new Uint8Array([7,8,9]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const cases:[unknown,number][]=[["0",1],[null,1],[-1,0],[100,101]];
+ for(const [index,[expectedHead,sequence]] of cases.entries()){
+  const manifest={version:1,sessionId:"s",sequence,objects:[{hash,size:bytes.length}]};
+  const response=await post("commit",{ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead,idempotencyKey:`rejected-head-${index}`,manifest});
+  expect(response.status).toBe(400);
+ }
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ expect(data.has("head")).toBe(false);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ expect((await post("commit",{ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead:0,idempotencyKey:"numeric-head",manifest})).status).toBe(200);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+});
+
+test("a lease change during object verification cannot commit past the final authority fence",async()=>{
+ const {post,objects,data,beforeRead,objectAccess}=fixture();
+ const lease=await (await post("lease",{ownerNode:"runtime"})).json() as {ownerNode:string;epoch:number;expiresAt:string};
+ const bytes=new Uint8Array([2,4,6]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ // The advisory preflight sees the original live lease. Simulate a
+ // concurrent lease replacement exactly when object verification starts.
+ beforeRead(()=>data.set("lease",{...lease,epoch:lease.epoch+1}));
+ const reply=await post("commit",{ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead:0,idempotencyKey:"race-final-fence",manifest});
+ expect(reply.status).toBe(409);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+ expect(data.has("head")).toBe(false);
+ expect(data.has("replay:race-final-fence")).toBe(false);
+});
+
 test("release advances epochs and replay is payload bound",async()=>{
  const {post,objects}=fixture();
  const lease=await (await post("lease",{ownerNode:"a"})).json() as {epoch:number;ownerNode:string};
@@ -54,6 +93,219 @@ test("a transfer fences the source and allows only one runtime on the named dest
  expect((await post("claim",{targetNode:"destination",transferId:"transfer-1",claimToken:token,epoch:destination.epoch,ownerNode:"runtime-b"})).status).toBe(409);
  expect((await post("lease",{ownerNode:"runtime-b"})).status).toBe(409);
 });
+test("the first claim advances its fence even when the runtime label equals the transfer target",async()=>{
+ const {post}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="same-label-first-claim";
+ const claimToken="synthetic-same-label-claim";
+ const reservationResponse=await post("transfer",{...source,targetNode,transferId,claimToken});
+ expect(reservationResponse.status).toBe(200);
+ const reservation=await reservationResponse.json() as {epoch:number};
+ const body={targetNode,transferId,claimToken,epoch:reservation.epoch,ownerNode:targetNode};
+ const firstResponse=await post("claim",body);
+ expect(firstResponse.status).toBe(200);
+ const first=await firstResponse.json() as {ownerNode:string;epoch:number;resumeToken:string};
+ expect(first.ownerNode).toBe(targetNode);
+ expect(first.epoch).toBe(reservation.epoch+1);
+ expect(typeof first.resumeToken).toBe("string");
+ // A retry by the same runtime while the receipt is pending must not
+ // mint a second epoch or consume a different resume capability.
+ const pendingResponse=await post("claim",body);
+ expect(pendingResponse.status).toBe(200);
+ const pending=await pendingResponse.json() as {epoch:number;resumeToken:string};
+ expect(pending.epoch).toBe(first.epoch);
+ expect(pending.resumeToken).toBe(first.resumeToken);
+ expect((await post("finalize",{ownerNode:targetNode,targetNode,transferId,epoch:reservation.epoch,leaseEpoch:first.epoch,resumeToken:first.resumeToken})).status).toBe(200);
+ expect((await post("claim",body)).status).toBe(409);
+});
+
+test("a finalized original transfer claim cannot disclose a later pending rotated resume",async()=>{
+ const {post,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="rotated-one-use-revocation";
+ const claimToken="synthetic-original-transfer-capability";
+ const reservation=await (await post("transfer",{...source,targetNode,transferId,claimToken})).json() as {epoch:number};
+ const firstReply=await post("claim",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,claimToken});
+ expect(firstReply.status).toBe(200);
+ const first=await firstReply.json() as {epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:first.epoch,resumeToken:first.resumeToken})).status).toBe(200);
+ expect((await post("release",{ownerNode:"runtime-one",epoch:first.epoch})).status).toBe(200);
+ const rotatedReply=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken});
+ expect(rotatedReply.status).toBe(200);
+ const rotated=await rotatedReply.json() as {epoch:number;resumeToken:string};
+ expect(rotated.resumeToken).not.toBe(first.resumeToken);
+ const claimState=JSON.stringify(data.get(`claim:${transferId}`));
+ const leaseState=JSON.stringify(data.get("lease"));
+ // A stale holder of the original one-use token must not receive rotated P2,
+ // even when it copies the current owner's public label during P2's pending phase.
+ const staleReply=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,claimToken});
+ expect(staleReply.status).toBe(409);
+ expect(JSON.stringify(data.get(`claim:${transferId}`))).toBe(claimState);
+ expect(JSON.stringify(data.get("lease"))).toBe(leaseState);
+ // The current finalized capability P1 is still authorized to replay P2
+ // for the same live runtime; this preserves lost-response idempotency.
+ const authorizedRetry=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken});
+ expect(authorizedRetry.status).toBe(200);
+ const retry=await authorizedRetry.json() as {epoch:number;resumeToken:string};
+ expect(retry.epoch).toBe(rotated.epoch);
+ expect(retry.resumeToken).toBe(rotated.resumeToken);
+ expect((await post("finalize",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:rotated.epoch,resumeToken:rotated.resumeToken})).status).toBe(200);
+ expect((await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,claimToken})).status).toBe(409);
+});
+
+test("an expired pending resume cannot carry a previously disclosed capability into another runtime",async()=>{
+ const {post,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination",transferId="pending-cross-owner-rotation";
+ const claimToken="synthetic-original-one-use-token";
+ const reservation=await (await post("transfer",{...source,targetNode,transferId,claimToken})).json() as {epoch:number};
+ const first=await (await post("claim",{ownerNode:"runtime-a",targetNode,transferId,epoch:reservation.epoch,claimToken})).json() as {epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:"runtime-a",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:first.epoch,resumeToken:first.resumeToken})).status).toBe(200);
+ // Runtime A received P2 but has not finalized it; a retry on the same
+ // live epoch must return the identical pending response.
+ const requestA={ownerNode:"runtime-a",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken};
+ const pendingA=await (await post("claim",requestA)).json() as {epoch:number;resumeToken:string};
+ const sameA=await (await post("claim",requestA)).json() as {epoch:number;resumeToken:string};
+ expect(sameA).toMatchObject({epoch:pendingA.epoch,resumeToken:pendingA.resumeToken});
+ // Expiry permits a legitimate replacement using only the last finalized
+ // credential P1, but never hands that new runtime the abandoned P2.
+ (data.get("lease") as {expiresAt:string}).expiresAt=new Date(0).toISOString();
+ const requestB={ownerNode:"runtime-b",targetNode,transferId,epoch:reservation.epoch,resumeToken:first.resumeToken};
+ const responseB=await post("claim",requestB);
+ expect(responseB.status).toBe(200);
+ const pendingB=await responseB.json() as {epoch:number;resumeToken:string};
+ expect(pendingB.epoch).toBeGreaterThan(pendingA.epoch);
+ expect(pendingB.resumeToken).not.toBe(pendingA.resumeToken);
+ const before=JSON.stringify(data.get(`claim:${transferId}`));
+ expect((await post("claim",{...requestB,resumeToken:pendingA.resumeToken})).status).toBe(409);
+ expect(JSON.stringify(data.get(`claim:${transferId}`))).toBe(before);
+ const sameB=await (await post("claim",requestB)).json() as {epoch:number;resumeToken:string};
+ expect(sameB).toMatchObject({epoch:pendingB.epoch,resumeToken:pendingB.resumeToken});
+ expect((await post("finalize",{ownerNode:"runtime-b",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:pendingB.epoch,resumeToken:pendingB.resumeToken})).status).toBe(200);
+ (data.get("lease") as {expiresAt:string}).expiresAt=new Date(0).toISOString();
+ expect((await post("claim",{...requestA,resumeToken:pendingA.resumeToken})).status).toBe(409);
+});
+
+test("an expired rotated pending lease rejects the spent original transfer token",async()=>{
+ const {post,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="rotated-expired-fence";
+ const claimToken="synthetic-expired-original-capability";
+ const reservation=await (await post("transfer",{...source,targetNode,transferId,claimToken})).json() as {epoch:number};
+ const initial=await (await post("claim",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,claimToken})).json() as {epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:"runtime-one",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:initial.epoch,resumeToken:initial.resumeToken})).status).toBe(200);
+ expect((await post("release",{ownerNode:"runtime-one",epoch:initial.epoch})).status).toBe(200);
+ const pending=await (await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:initial.resumeToken})).json() as {epoch:number;resumeToken:string};
+ const lease=data.get("lease") as {expiresAt:string;epoch:number;ownerNode:string};
+ lease.expiresAt=new Date(0).toISOString();
+ const beforeClaim=JSON.stringify(data.get(`claim:${transferId}`));
+ const beforeLease=JSON.stringify(data.get("lease"));
+ // An expired lease must not reactivate original C and hand P2 to a new owner.
+ expect((await post("claim",{ownerNode:"stale-third-runtime",targetNode,transferId,epoch:reservation.epoch,claimToken})).status).toBe(409);
+ expect(JSON.stringify(data.get(`claim:${transferId}`))).toBe(beforeClaim);
+ expect(JSON.stringify(data.get("lease"))).toBe(beforeLease);
+ // Current finalized P1 remains authorized for interrupted P2 recovery.
+ const recoveredReply=await post("claim",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,resumeToken:initial.resumeToken});
+ expect(recoveredReply.status).toBe(200);
+ const recovered=await recoveredReply.json() as {epoch:number;resumeToken:string};
+ expect(recovered.epoch).toBeGreaterThan(pending.epoch);
+ expect(recovered.resumeToken).not.toBe(pending.resumeToken); // a new epoch must rotate abandoned pending credentials
+ expect((await post("finalize",{ownerNode:"runtime-two",targetNode,transferId,epoch:reservation.epoch,leaseEpoch:recovered.epoch,resumeToken:recovered.resumeToken})).status).toBe(200);
+});
+
+test("a reservation cannot commit, renew, or release before its one-use claim is redeemed",async()=>{
+ const {post,objects,data}=fixture();
+ const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const targetNode="destination";
+ const transferId="reservation-not-runtime";
+ const claimToken="synthetic-reservation-capability";
+ const reservedResponse=await post("transfer",{...source,targetNode,transferId,claimToken});
+ expect(reservedResponse.status).toBe(200);
+ const reservation=await reservedResponse.json() as {epoch:number};
+ const reservedLease={ownerNode:targetNode,epoch:reservation.epoch};
+ // Labels/epoch are returned with the transfer, but ownership is not live
+ // until the authority spends the one-use destination claim.
+ expect((await post("renew",reservedLease)).status).toBe(409);
+ expect((await post("release",reservedLease)).status).toBe(409);
+ const bytes=new Uint8Array([1,2,3]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ expect((await post("commit",{...reservedLease,expectedHead:0,idempotencyKey:"before-claim",manifest})).status).toBe(409);
+ expect(data.has("head")).toBe(false);
+ const claimedResponse=await post("claim",{targetNode,transferId,claimToken,epoch:reservation.epoch,ownerNode:"runtime"});
+ expect(claimedResponse.status).toBe(200);
+ const claimed=await claimedResponse.json() as {ownerNode:string;epoch:number;resumeToken:string};
+ expect(claimed.epoch).toBe(reservation.epoch+1);
+ expect((await post("finalize",{ownerNode:claimed.ownerNode,targetNode,transferId,epoch:reservation.epoch,leaseEpoch:claimed.epoch,resumeToken:claimed.resumeToken})).status).toBe(200);
+ expect((await post("commit",{ownerNode:claimed.ownerNode,epoch:claimed.epoch,expectedHead:0,idempotencyKey:"after-claim",manifest})).status).toBe(200);
+ expect((await post("renew",{ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
+ expect((await post("release",{ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
+});
+
+test("invalid lease expiry cannot authorize a commit before or after R2 verification",async()=>{
+ const {post,objects,data,beforeRead,objectAccess}=fixture();
+ const lease=await (await post("lease",{ownerNode:"runtime"})).json() as {ownerNode:string;epoch:number;expiresAt:string};
+ const bytes=new Uint8Array([4,2,7]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ const body={ownerNode:lease.ownerNode,epoch:lease.epoch,expectedHead:0,idempotencyKey:"bad-expiry",manifest};
+ // NaN from an unreadable persisted date must not pass the preflight.
+ data.set("lease",{...lease,expiresAt:"invalid-expiry"});
+ expect((await post("commit",body)).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ expect(data.has("head")).toBe(false);
+ // Also prove final in-transaction fencing if the expiry turns invalid while
+ // the previously authorized object retrieval is awaiting its result.
+ data.set("lease",lease);
+ beforeRead(()=>data.set("lease",{...lease,expiresAt:"invalid-expiry"}));
+ expect((await post("commit",body)).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+ expect(data.has("head")).toBe(false);
+ expect(data.has("replay:bad-expiry")).toBe(false);
+ // A valid current lease still commits; the negative did not consume the key.
+ beforeRead(()=>{});
+ data.set("lease",lease);
+ expect((await post("commit",body)).status).toBe(200);
+ expect(objectAccess()).toEqual({gets:2,buffers:2});
+ expect(data.has("head")).toBe(true);
+});
+
+test("fenced commit owners cannot spend R2 reads before lease and claim admission",async()=>{
+ const {post,objects,objectAccess,data}=fixture();
+ const bytes=new Uint8Array([1,2,3]);
+ const hash=new Bun.SHA256().update(bytes).digest("hex");
+ objects.set(hash,bytes);
+ const manifest={version:1,sessionId:"s",sequence:1,objects:[{hash,size:bytes.length}]};
+ const original=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const body={ownerNode:"source",epoch:original.epoch,expectedHead:0,idempotencyKey:"preflight",manifest};
+ expect((await post("commit",{...body,ownerNode:"other"})).status).toBe(409);
+ expect((await post("commit",{...body,epoch:original.epoch-1})).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ const released=await (await post("release",original)).json() as {ownerNode:string;epoch:number};
+ expect((await post("commit",{...body,epoch:released.epoch})).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ const fresh=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
+ const transferId="preflight-only";
+ const targetNode="destination";
+ const claimToken="preflight-claim-token";
+ const reserved=await (await post("transfer",{...fresh,targetNode,transferId,claimToken})).json() as {ownerNode:string;epoch:number};
+ expect((await post("commit",{...body,ownerNode:reserved.ownerNode,epoch:reserved.epoch})).status).toBe(409);
+ expect(objectAccess()).toEqual({gets:0,buffers:0});
+ expect(data.has("head")).toBe(false);
+ const reply=await post("claim",{targetNode,transferId,claimToken,epoch:reserved.epoch,ownerNode:"runtime"});
+ expect(reply.status).toBe(200);
+ const claimed=await reply.json() as {ownerNode:string;epoch:number;resumeToken:string};
+ expect((await post("finalize",{ownerNode:claimed.ownerNode,targetNode,transferId,epoch:reserved.epoch,leaseEpoch:claimed.epoch,resumeToken:claimed.resumeToken})).status).toBe(200);
+ expect((await post("commit",{...body,ownerNode:claimed.ownerNode,epoch:claimed.epoch})).status).toBe(200);
+ expect(objectAccess()).toEqual({gets:1,buffers:1});
+ expect(data.has("head")).toBe(true);
+});
+
 test("concurrent claim redemption grants one runtime and denies the other",async()=>{
  const {post}=fixture();
  const source=await (await post("lease",{ownerNode:"source"})).json() as {ownerNode:string;epoch:number};
@@ -144,7 +396,7 @@ test("a crash after redemption reclaims the pending capability after expiry and 
  current.expiresAt=new Date(0).toISOString();
  const recovered=await post("claim",{targetNode:"destination",transferId,claimToken:token,epoch:transfer.epoch,ownerNode:"runtime-recovered"});
  expect(recovered.status).toBe(200);
- expect((await recovered.json() as {resumeToken:string}).resumeToken).toBe(first.resumeToken);
+ expect((await recovered.json() as {resumeToken:string}).resumeToken).not.toBe(first.resumeToken); // retry still succeeds, but expired pending token is revoked
  expect((await post("lease",{ownerNode:"copied-installation"})).status).toBe(409);
 });
 test("node labels reject path syntax at authority boundaries",async()=>{

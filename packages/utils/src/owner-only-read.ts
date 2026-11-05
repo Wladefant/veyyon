@@ -1,7 +1,7 @@
 /**
  * Reads of discovery records: small JSON files a process publishes under the config root so a peer can
  * find a live session or terminal. A record counts as evidence only when the current user wrote it.
- * A reader refuses any record another user could have written or can read, before it parses one.
+ * Readers refuse unsafe records before using their content as ownership or non-ownership evidence.
  *
  * WHY: a record that is broadly readable or writable is not proof of ownership. Another local user can
  * plant one (a live pid, a socket path that answers), and a reader that trusts it refuses a session it
@@ -31,8 +31,8 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as fsp from "node:fs/promises";
+import * as path from "node:path";
 import { isFsError } from "./fs-error";
 import { verifyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAclSync, type WindowsAclOptions } from "./windows-acl";
 
@@ -50,6 +50,8 @@ export interface OwnerOnlyReadOptions {
 	platform?: NodeJS.Platform;
 	/** Forwarded to the Windows ACL check. `run` and `runSync` keep that check hermetic in tests. */
 	windowsAcl?: WindowsAclOptions;
+	/** Reports the current verification step without changing the checks or their errors. */
+	onStep?: (step: string) => void;
 }
 
 function refuse(filePath: string, reason: string): Error {
@@ -125,35 +127,59 @@ function assertSameFile(filePath: string, checked: fs.Stats, opened: fs.Stats): 
 	}
 }
 
+/** Keep the discovery-record limit even when a publisher grows the file after stat. */
+async function readBoundedRecord(filePath: string, handle: fsp.FileHandle): Promise<string> {
+	const buffer = Buffer.allocUnsafe(MAX_DISCOVERY_RECORD_BYTES + 1);
+	let length = 0;
+	while (length < buffer.length) {
+		const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+		if (bytesRead === 0) break;
+		length += bytesRead;
+	}
+	if (length > MAX_DISCOVERY_RECORD_BYTES) throw refuse(filePath, "larger than a discovery record");
+	return buffer.toString("utf8", 0, length);
+}
+
 /**
  * Read a discovery record that only the current user can have written. Rejects, and returns no content,
  * when the record is refused. A missing file rejects with its `ENOENT` error, as a plain read does.
  */
 export async function readOwnerOnlyFile(filePath: string, options: OwnerOnlyReadOptions = {}): Promise<string> {
 	const platform = options.platform ?? process.platform;
+	options.onStep?.("path");
 	if (platform === "win32") assertWindowsFilePath(filePath);
+	options.onStep?.(platform === "win32" ? "ACL #1 (parent)" : "parent");
 	await checkParent(filePath, platform, options);
 	if (platform === "win32") {
 		// A symbolic link is refused before it is opened, so the open never follows one.
+		options.onStep?.("lstat");
 		if ((await fsp.lstat(filePath)).isSymbolicLink()) throw refuse(filePath, "is a symbolic link");
+		options.onStep?.("open");
 		const handle = await fsp.open(filePath, "r");
 		try {
+			options.onStep?.("stat");
 			const opened = await handle.stat();
 			assertRecordStats(filePath, opened, platform);
+			options.onStep?.("ACL #2 (record)");
 			await verifyOwnerOnlyWindowsAcl(filePath, { ...options.windowsAcl, platform });
+			options.onStep?.("identity");
 			assertSameFile(filePath, await fsp.lstat(filePath), opened);
-			return await handle.readFile({ encoding: "utf8" });
+			options.onStep?.("read");
+			return await readBoundedRecord(filePath, handle);
 		} finally {
 			await handle.close();
 		}
 	}
 	// O_NOFOLLOW reports a symlink as ELOOP; name that refusal instead of the raw errno.
+	options.onStep?.("open");
 	const handle = await fsp.open(filePath, POSIX_READ_FLAGS).catch(error => {
 		throw isFsError(error) && error.code === "ELOOP" ? refuse(filePath, "is a symbolic link") : error;
 	});
 	try {
+		options.onStep?.("stat");
 		assertRecordStats(filePath, await handle.stat(), platform);
-		return await handle.readFile({ encoding: "utf8" });
+		options.onStep?.("read");
+		return await readBoundedRecord(filePath, handle);
 	} finally {
 		await handle.close();
 	}

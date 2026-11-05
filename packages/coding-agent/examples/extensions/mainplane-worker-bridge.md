@@ -9,6 +9,13 @@ Inject MAINPLANE_BRIDGE_URL and MAINPLANE_API_KEY using the existing secret flow
 Never put a key in prompts, issues, argv or versioned bundles. Each operation binds
 the persisted Veyyon session/tool call to the exact native worker request. Errors
 include the stable receipt key for reconciliation, never a raw network exception.
+Both native session and operation identity inputs must round-trip through UTF-8
+without replacement. An unpaired UTF-16 surrogate is not a distinct persisted
+session or tool-call identity: encoding it would alias the U+FFFD replacement
+character and could reuse another operation's native idempotency key. Reject
+such input before contacting the bridge; valid Unicode identities retain their
+existing deterministic SHA-256-derived IDs. This is local identity integrity,
+not a claim that malformed paths exist on a real enrolled machine.
 
 Run: nonzero shell exits and unconfirmed duplicates are error tool results.
 Read: schema, worker, integer length, canonical base64, SHA-256 and UTF-8 are

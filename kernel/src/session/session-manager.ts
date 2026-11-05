@@ -933,14 +933,19 @@ export class SessionManager {
 	 * a large transcript back to learn nothing is the single most expensive step
 	 * of a rewrite (246ms and 322MiB of a 253MiB session's 778ms and 1056MiB).
 	 */
-	async #refreshForeignLines(): Promise<void> {
+	async #refreshForeignLines(requireReadable = false): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		if (this.#fileIsExactlyAsPublished()) return;
-		if (!(await this.#storage.exists(this.#sessionFile))) return;
+		if (requireReadable) {
+			const state = this.#storage.existsStateSync(this.#sessionFile);
+			if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
+			if (state !== "present") throw new Error("Cannot verify current session journal");
+		} else if (!(await this.#storage.exists(this.#sessionFile))) return;
 		let text: string;
 		try {
 			text = await this.#storage.readText(this.#sessionFile);
 		} catch {
+			if (requireReadable) throw new Error("Cannot verify current session journal");
 			return;
 		}
 		this.#adoptForeignLines(text);
@@ -2202,6 +2207,28 @@ export class SessionManager {
 	}
 
 	/**
+	 * Verify replay authority without allocating a complete historical transcript
+	 * when a previously loaded journal has changed beneath this manager.
+	 * Identity plus length are the same guards used for the loaded/published
+	 * layout; a changed file is unsafe to replay even before scanning its lines.
+	 * For storage backends without a trustworthy loaded identity, retain the
+	 * existing strict readable/foreign-entry check rather than guessing.
+	 */
+	async assertReplayJournalCurrent(): Promise<void> {
+		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#foreignLines.length > 0)
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+		if (this.#fileIsExactlyAsPublished()) return;
+		const state = this.#storage.existsStateSync(this.#sessionFile);
+		if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
+		if (state !== "present") throw new Error("Cannot verify current session journal");
+		if (this.#publishedFileState?.identity !== undefined)
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+		if (await this.holdsForeignEntries({ requireReadable: true }))
+			throw new Error("Operator-answer journal is stale; reopen session before accepting");
+	}
+
+	/**
 	 * True when the session file holds a line this manager never wrote.
 	 *
 	 * The question every full-file operation has to ask before it destroys what is
@@ -2210,9 +2237,130 @@ export class SessionManager {
 	 * re-read is what tells the operator once that a second session is writing this
 	 * file.
 	 */
-	async holdsForeignEntries(): Promise<boolean> {
-		await this.#refreshForeignLines();
+	async holdsForeignEntries(options: { requireReadable?: boolean } = {}): Promise<boolean> {
+		await this.#refreshForeignLines(options.requireReadable === true);
 		return this.#foreignLines.length > 0;
+	}
+
+	/**
+	 * Adopt a completed turn written by another manager to this transcript, and
+	 * return the ids of the entries it adopted, in branch order. An empty result
+	 * means nothing changed.
+	 *
+	 * The stat/version check in {@link #refreshForeignLines} keeps the ordinary
+	 * no-change path cheap. A foreign line triggers one full load. The foreign
+	 * entries are adopted only when they extend the branch this manager holds
+	 * right now: the first unknown entry must be a child of the current leaf, so a
+	 * sibling branch or a metadata-only append never moves the selected leaf. The
+	 * extension must also end in a finished run: its last message is an assistant
+	 * message that is not waiting on a tool, and every tool call in it has a
+	 * result. Anything else stays foreign and the local branch is kept. The caller
+	 * must use this only while its agent is idle.
+	 */
+	async refreshExternalTurn(): Promise<readonly string[]> {
+		if (!(await this.holdsForeignEntries())) return [];
+		const sessionFile = this.#sessionFile;
+		if (!sessionFile) return [];
+
+		// Flush local appends before loading, so the foreign adoption cannot discard
+		// entries that were still pending in this manager's writer.
+		await this.flush();
+		const capturedLeafId = this.#index.leafId();
+		const resolvedSessionFile = path.resolve(sessionFile);
+		const loaded = await loadSessionFile(resolvedSessionFile, this.#storage, {
+			operatorNotices: this.#operatorNotices,
+			coolCompactedHistory: true,
+		});
+		if (loaded.entries.length < 2) return [];
+
+		const fileEntries = loaded.entries;
+		const header = fileEntries[0] as SessionHeader;
+		if (header.id !== this.#sessionId) return [];
+		await resolveBlobRefsInEntries(
+			fileEntries,
+			new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
+			{
+				source: resolvedSessionFile,
+				operatorNotices: this.#operatorNotices,
+			},
+		);
+		const migrated = await migrateToCurrentVersion(fileEntries);
+		const entries = fileEntries.slice(1) as SessionEntry[];
+		const byId = new Map(entries.map(entry => [entry.id, entry]));
+		const activePath = walkBranchPath(byId, entries.at(-1));
+		const adopted = this.#completedExtensionOf(capturedLeafId, activePath);
+		// The awaited load can race a local selection or append; adopt only against
+		// the branch the extension was validated for.
+		if (adopted.length === 0 || this.#index.leafId() !== capturedLeafId) return [];
+
+		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
+		const lifecycleStarted = this.#lifecycleStarted;
+		const lifecycleEnded = this.#lifecycleEnded;
+		await this.#drainAndCloseWriter();
+		if (this.#index.leafId() !== capturedLeafId) return [];
+		if (loaded.cold !== undefined) this.#cold = loaded.cold.payloads;
+		this.#applyEntries(header, entries, loaded.cold?.usage);
+		this.#lifecycleStarted = lifecycleStarted;
+		this.#lifecycleEnded = lifecycleEnded;
+		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
+		this.#hasTitleSlot = titleSlot !== undefined;
+		this.#fileIsCurrent = true;
+		this.#rewriteRequired = migrated;
+		this.#deferredLegacyRewrite = migrated;
+		this.#forceFileCreation = true;
+		this.#artifactManager = null;
+		this.#artifactManagerSessionFile = null;
+		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) {
+			this.#rewriteRequired = true;
+			this.#deferredLegacyRewrite = false;
+		}
+		if (loaded.layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(loaded.layout);
+		this.#coolUnreachablePayloads();
+		return adopted.map(entry => entry.id);
+	}
+
+	/**
+	 * The entries of `activePath` this manager does not hold, when they are a
+	 * finished extension of the branch ending at `leafId`; otherwise none.
+	 */
+	#completedExtensionOf(leafId: string | null, activePath: readonly SessionEntry[]): readonly SessionEntry[] {
+		const firstUnknown = activePath.findIndex(entry => !this.#index.has(entry.id));
+		if (firstUnknown < 0) return [];
+		const extension = activePath.slice(firstUnknown);
+		if (extension.some(entry => this.#index.has(entry.id))) return [];
+		if ((extension[0]!.parentId ?? null) !== leafId) return [];
+
+		const calls = new Set<string>();
+		const results = new Set<string>();
+		let lastMessage: AgentMessage | undefined;
+		for (const entry of extension) {
+			if (entry.type !== "message") continue;
+			const message = entry.message;
+			lastMessage = message;
+			if (message.role === "assistant") {
+				for (const block of message.content) if (block.type === "toolCall") calls.add(block.id);
+			} else if (message.role === "toolResult") {
+				results.add(message.toolCallId);
+			}
+		}
+		if (lastMessage === undefined && extension.some(entry => entry.type === "message")) {
+			throw new Error("Unfinished external session extension: messages do not end in a completed assistant turn");
+		}
+		if (
+			lastMessage?.role !== "assistant" ||
+			(lastMessage.stopReason !== "stop" && lastMessage.stopReason !== "length")
+		) {
+			if (lastMessage !== undefined) {
+				throw new Error("Unfinished external session extension: messages do not end in a completed assistant turn");
+			}
+			return [];
+		}
+		for (const id of calls) {
+			if (!results.has(id)) {
+				throw new Error(`Unfinished external session extension: tool call ${id} has no result`);
+			}
+		}
+		return extension;
 	}
 
 	/**
@@ -2916,6 +3064,16 @@ export class SessionManager {
 			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index, options);
 		}
 		return buildSessionContextFromPath(this.#index.leafPath(), options);
+	}
+
+	/**
+	 * The display transcript one persisted entry contributes: its message, its
+	 * visible custom message or its compaction divider, and nothing for entries
+	 * that carry no message. Built from the entry alone, so a caller that tracks
+	 * entries by id can map each id to what the transcript shows for it.
+	 */
+	buildEntryContext(entry: SessionEntry, options?: BuildSessionContextOptions): SessionContext {
+		return buildSessionContextFromPath([entry], { ...options, transcript: true, keepDanglingToolCalls: true });
 	}
 
 	/**

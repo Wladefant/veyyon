@@ -947,7 +947,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			throw new Error(`${this.#options.languageName} kernel stdin is not open`);
 		}
 		if (this.#options.traceIpc) {
-			logger.debug(`${this.#options.languageName}Kernel send`, { preview: line.slice(0, 120) });
+			logger.debug(`${this.#options.languageName}Kernel send`, { characters: line.length });
 		}
 		this.#stdin.write(`${line}\n`);
 		// Execution cancellation must not wait for pipe backpressure to clear.
@@ -979,16 +979,13 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 
 	#startStderrDrain(stream: ReadableStream<Uint8Array>): void {
 		const reader = stream.getReader();
-		const decoder = new TextDecoder();
 		const loop = async () => {
 			try {
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
-					const text = decoder.decode(value, { stream: true });
-					if (text.trim()) {
-						logger.warn(`${this.#options.languageName} runner stderr`, { text });
-					}
+					// Withhold ownerless raw bytes under process policy; do not decode or log payloads.
+					void value;
 				}
 			} catch {
 				/* ignore */
