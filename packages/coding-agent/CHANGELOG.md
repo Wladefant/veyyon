@@ -3,6 +3,10 @@
 ## [Unreleased]
 - Run-only MCP configuration rejects writerless FIFOs without blocking before it checks the file type ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 
+### Added
+
+- `veyyon usage` can list OpenAI Codex reset credits and redeem one by numeric credential ID.
+
 ### Fixed
 - Legacy SSE parse diagnostics omit malformed peer frame data, and unattributable peer warnings omit peer-supplied messages while caller errors stay unchanged ([Refs #866](https://github.com/Wladefant/veyyon/issues/866)).
 
