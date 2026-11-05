@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Fixed
+- Serialize in-process encrypted auth-broker snapshot writes across case-only cache-path aliases before the file exists, retaining independent file contents on case-sensitive volumes ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Serialize encrypted auth-broker cache writes across real-path and symlink aliases to the same destination, preventing delayed stale snapshot publication ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Serialize in-process encrypted auth-broker full-snapshot cache writes by path to prevent an older delayed write from replacing newer broker state, and continue after failed writes ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Explicit remote auth-broker snapshot refresh rejects an unexpected unconditional HTTP 304 rather than reporting its cached credential view as a successful refresh ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Auth-broker malformed or schema-invalid successful REST JSON replies omit credential-bearing response contents and parser/schema details from protocol errors, preserving status and valid reply handling ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Auth-broker SSE protocol errors omit credential-bearing frame contents and parser/schema details while retaining explicit failure messages ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Auth-broker snapshot clients reject conflicting HTTP 200 ETag and body generations before installing remote broker state, while preserving missing-ETag fallback ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
+- Remote auth-broker treats unchanged conditional HTTP 200 snapshots as no-progress and preserves its authoritative revoke-verification deadline without delaying genuine same-generation updates ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker paces premature conditional HTTP 304 replies to the existing freshness deadline and backs off invalid unconditional 304 responses instead of hot-looping snapshot requests ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker long-poll fallback periodically requests an unconditional canonical snapshot when idle, preventing a broker restart with a reused numeric generation from hiding credential revocation behind repeated HTTP 304 responses ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker ignores countdown-only same-generation SSE replays for snapshot freshness, preserving authoritative revoke reconciliation and legitimate refresh-policy updates ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker ignores unchanged same-generation SSE replays, including reordered snapshots and locally pending safety-block overlays, so duplicated frames cannot defer idle broker reconciliation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker reconciles canonical snapshot truth after prematurely closed SSE streams, backs off clean EOF retries, and ignores unchanged equal-generation initial snapshots replayed on each reconnect rather than resetting the idle-verification deadline ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker conservatively combines broker-authoritative peer block scopes with locally pending restrictions, without losing either during incoming snapshots, then reconciles after write settlement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker reconciles failed block scopes after overlapping broker writes settle without clearing another pending scope ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker obsolete failed block mutations cannot reconcile away a newer same-credential pending block ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
+- Remote auth-broker snapshot readers discard delayed older generations after newer local updates so revoked credentials are not reintroduced ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker provider logout and replacement stop on a failed disable and retain any grants not confirmed disabled ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker credential blocks remain enforced until their deletion is broker-confirmed, without clearing newer concurrent block state ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker failed credential-block mutations retry superseded snapshot reads before reporting stale credential-block state ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker speculative credential blocks reconcile after refused or failed broker upserts even during an active snapshot stream ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker synchronous credential disable waits for broker confirmation and refuses unverifiable remote compare-and-disable attempts ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker awaited individual disable refuses late acknowledgments that would evict a newer accepted credential grant ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Remote auth-broker provider logout and replacement refuse superseded disable acknowledgments before evicting a newer accepted same-ID grant or uploading a replacement ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed

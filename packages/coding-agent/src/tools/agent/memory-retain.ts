@@ -6,6 +6,7 @@ import {
 	MEMORY_RETAIN_MAX_ITEM_BYTES,
 	MEMORY_RETAIN_MAX_ITEMS,
 } from "../../memory/hindsight/state";
+import { retainBasicMemory } from "../../memory/basic-memory";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { abortedPartway } from "../core/aborted-partway";
@@ -98,7 +99,7 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 
 	static createIf(session: ToolSession): MemoryRetainTool | null {
 		const backend = session.settings.get("memory.backend");
-		if (backend !== "hindsight" && backend !== "mnemopi") return null;
+		if (backend !== "hindsight" && backend !== "mnemopi" && backend !== "basic-memory") return null;
 		return new MemoryRetainTool(session);
 	}
 
@@ -115,6 +116,20 @@ export class MemoryRetainTool implements AgentTool<typeof memoryRetainSchema.val
 		throwIfAborted(signal);
 		assertMemoryRetainLimits(params.items);
 		const backend = this.session.settings.get("memory.backend");
+		if (backend === "basic-memory") {
+			const result = await retainBasicMemory(
+				this.session.settings,
+				this.session.cwd,
+				params.items,
+				signal,
+			);
+			const count = result.stored;
+			const noun = count === 1 ? "memory" : "memories";
+			return {
+				content: [{ type: "text", text: `${count} ${noun} stored.` }],
+				details: { count, ids: result.ids },
+			};
+		}
 		if (backend === "mnemopi") {
 			const state = requireMnemopiSessionState(this.session);
 

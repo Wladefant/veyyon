@@ -605,13 +605,13 @@ export const CONTEXT_SETTINGS = {
 	// config/settings.ts) and is not a declared setting.
 	"memory.backend": {
 		type: "enum",
-		values: ["off", "local", "hindsight", "mnemopi"] as const,
+		values: ["off", "local", "hindsight", "mnemopi", "basic-memory"] as const,
 		default: "off",
 		ui: {
 			tab: "memory",
 			group: "General",
 			label: "Memory Backend",
-			description: "Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory",
+			description: "Off, local summary pipeline, Mnemopi SQLite, Hindsight remote memory, or Basic Memory",
 			options: [
 				{ value: "off", label: "Off", description: "No memory subsystem runs" },
 				{ value: "local", label: "Local", description: "Local rollout summarisation pipeline (memory_summary.md)" },
@@ -621,9 +621,18 @@ export const CONTEXT_SETTINGS = {
 					label: "Mnemopi",
 					description: "Local SQLite recall/retain backend with optional embeddings",
 				},
+				{
+					value: "basic-memory",
+					label: "Basic Memory",
+					description: "Optional local Basic Memory MCP server",
+				},
 			],
 		},
 	},
+	"memory.basicMemory.command": { type: "string", default: "bm" },
+	"memory.basicMemory.project": { type: "string", default: "main" },
+	"memory.basicMemory.configDir": { type: "string", default: "" },
+	"memory.basicMemory.timeoutMs": { type: "number", default: 60_000 },
 
 	// Session telemetry uses the closed category policy in @veyyon/ai/instrumentation.
 	// `off` preserves the historical record unchanged; higher levels permit

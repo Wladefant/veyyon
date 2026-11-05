@@ -25,6 +25,15 @@ function manifestOf(value:unknown):Manifest | null {
  for(const item of m.objects){if(!item || typeof item!=="object")return null;const o=item as Record<string,unknown>;if(typeof o.hash!=="string" || !hashPattern.test(o.hash) || typeof o.size!=="number" || !Number.isSafeInteger(o.size) || o.size<1 || o.size>8388608)return null;total+=o.size;objects.push({hash:o.hash,size:o.size});}
  return total>67108864 ? null : {version:1,sessionId:m.sessionId,sequence:m.sequence as number,objects};
 }
+// A transfer reservation is not a writable runtime. Until a one-use
+// claim is redeemed, the destination label and epoch must not grant ordinary
+// commit, renewal, or release capabilities.
+async function isUnclaimedTransfer(store: Storage, lease: Lease): Promise<boolean> {
+ if (!lease.claimHash) return false;
+ if (!lease.transferId) return true;
+ const claim=await store.get<Claim>(`claim:${lease.transferId}`);
+ return claim?.spent!==true;
+}
 export class SessionAuthority {
  constructor(readonly state:{storage:Storage},readonly env:Pick<Env,"OBJECTS"|"INDEX">){}
  async repair(head:Head):Promise<void>{await this.env.INDEX.prepare("INSERT INTO sessions (id, sequence, manifest_hash) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET sequence=excluded.sequence, manifest_hash=excluded.manifest_hash WHERE excluded.sequence >= sessions.sequence").bind(head.manifest.sessionId,head.sequence,head.manifestHash).run();await this.state.storage.put("indexed",head.sequence);}
@@ -36,12 +45,20 @@ export class SessionAuthority {
  const body=raw as Record<string,unknown>;
  if(!isCheckpointNodeLabel(body.ownerNode))return json({error:"valid owner required"},400);
  if(action==="commit"){
- const manifest=manifestOf(body.manifest);if(!manifest || manifest.sequence!==Number(body.expectedHead)+1 || typeof body.idempotencyKey!=="string" || body.idempotencyKey.length>128)return json({error:"invalid manifest"},400);
+ const expectedHead=body.expectedHead;
+ const manifest=manifestOf(body.manifest);
+ if(typeof expectedHead!=="number" || !Number.isSafeInteger(expectedHead) || expectedHead<0 || expectedHead>=100 || !manifest || manifest.sequence!==expectedHead+1 || typeof body.idempotencyKey!=="string" || body.idempotencyKey.length>128)return json({error:"invalid manifest"},400);
  if (manifest.sessionId !== new URL(request.url).pathname.split("/")[3]) return json({error:"session identity mismatch"},400);
+ // Cheap advisory preflight avoids object reads by already-fenced writers.
+ // The transaction below MUST recheck ownership after asynchronous R2 work.
+ const preflightLease=await this.state.storage.get<Lease>("lease");
+ if(!preflightLease || preflightLease.ownerNode!==body.ownerNode || preflightLease.epoch!==body.epoch || !(Date.parse(preflightLease.expiresAt)>Date.now()))return json({error:"stale writer"},409);
+ if(await isUnclaimedTransfer(this.state.storage,preflightLease))return json({error:"transfer claim required"},409);
  const manifestHash=await digest(new TextEncoder().encode(JSON.stringify(manifest)));
  for(const ref of manifest.objects){const object=await this.env.OBJECTS.get(ref.hash);if(!object || object.size!==ref.size || await digest(await object.arrayBuffer())!==ref.hash)return json({error:"missing or corrupt object"},422);}
  const result=await this.state.storage.transaction(async store=>{
- const lease=await store.get<Lease>("lease");if(!lease || lease.ownerNode!==body.ownerNode || lease.epoch!==body.epoch || Date.parse(lease.expiresAt)<=Date.now())return json({error:"stale writer"},409);
+ const lease=await store.get<Lease>("lease");if(!lease || lease.ownerNode!==body.ownerNode || lease.epoch!==body.epoch || !(Date.parse(lease.expiresAt)>Date.now()))return json({error:"stale writer"},409);
+ if(await isUnclaimedTransfer(store,lease))return json({error:"transfer claim required"},409);
  const replay=await store.get<Head>(`replay:${body.idempotencyKey}`);if(replay)return replay.manifestHash===manifestHash?json(replay):json({error:"idempotency mismatch"},409);
  const head=await store.get<Head>("head");if((head?.sequence??0)!==body.expectedHead || manifest.sequence>100 || (head && head.manifest.sessionId!==manifest.sessionId))return json({error:"head conflict or cap"},409);
  const next={sequence:manifest.sequence,manifestHash,manifest};await store.put("head",next);await store.put(`replay:${body.idempotencyKey}`,next);await store.put("outbox",next);return json(next);
@@ -102,18 +119,25 @@ export class SessionAuthority {
     current.epoch===transfer.targetEpoch &&
     current.claimHash===transfer.claimHash;
    if(live && current.ownerNode!==body.ownerNode && !pendingTransferReservation)return json({error:"another runtime holds the live checkpoint lease"},409);
-   if(claim?.spent && claimHash!==undefined && !claim.pendingResumeToken)return json({error:"transfer claim has already been spent"},409);
+   // The original one-use claim can recover a lost first response, but must
+   // never recover any new rotated pending token after a successful finalize.
+   if(claim?.spent && claimHash!==undefined && (claim.resumeHash!==undefined || !claim.pendingResumeToken))return json({error:"transfer claim has already been spent"},409);
    if(!claim?.spent && claimHash===undefined)return json({error:"resume capability required"},409);
    if(!claim?.spent && (current.ownerNode!==targetNode || current.epoch!==transfer.targetEpoch || current.claimHash!==transfer.claimHash))
     return json({error:"transfer claim is stale"},409);
-   const retrySameRuntime=live && current.ownerNode===body.ownerNode;
+   // A reserved destination label is not a previously redeemed runtime.
+   // The first successful claim must advance the fencing epoch even when
+   // the caller chooses the same node label as the transfer target.
+   const retrySameRuntime=claim?.spent===true && live && current.ownerNode===body.ownerNode;
    const epoch=retrySameRuntime?current.epoch:current.epoch+1;
-   const pendingToken=retrySameRuntime && claim?.pendingResumeToken
-    ? claim.pendingResumeToken
-    : claim?.pendingResumeToken ?? nextResumeToken;
-   const pendingHash=retrySameRuntime && claim?.pendingResumeHash
-    ? claim.pendingResumeHash
-    : claim?.pendingResumeHash ?? nextResumeHash;
+   // An unfinished response is idempotent only for the same live runtime.
+   // After expiry/takeover, rotate instead of sharing the prior owner's
+   // possibly disclosed pending resume capability with the new owner.
+   const reusePending=retrySameRuntime &&
+    claim?.pendingResumeToken!==undefined &&
+    claim?.pendingResumeHash!==undefined;
+   const pendingToken=reusePending ? claim!.pendingResumeToken! : nextResumeToken;
+   const pendingHash=reusePending ? claim!.pendingResumeHash! : nextResumeHash;
    const next:Lease={...current,ownerNode:body.ownerNode as string,epoch,expiresAt:new Date(Date.now()+60000).toISOString()};
    const nextClaim:Claim={
     targetNode,transferEpoch:transfer.targetEpoch,claimHash:transfer.claimHash,spent:true,
@@ -140,6 +164,7 @@ export class SessionAuthority {
    return json({ok:true});
   }
   if(!live || current.ownerNode!==body.ownerNode || current.epoch!==body.epoch)return json({error:"stale writer"},409);
+  if((action==="renew" || action==="release") && await isUnclaimedTransfer(store,current))return json({error:"transfer claim required"},409);
   if(action==="renew"){const next={...current,expiresAt:new Date(Date.now()+60000).toISOString()};await store.put("lease",next);return json(next);}
   if(action==="release"){
    const next={...current,epoch:current.epoch+1,expiresAt:new Date(0).toISOString()};

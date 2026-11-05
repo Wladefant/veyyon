@@ -460,9 +460,8 @@ describe("plain multi-turn sessions without interjection", () => {
 	});
 
 	it("settles when the provider goes silent after N bytes mid-session", async () => {
-		// Turn 1 is healthy; turn 2 streams real content then the socket dies.
-		// The idle watchdog must kill it, the retry must re-sample, and the
-		// session must settle with the recovered answer.
+		// Turn 1 is healthy. Turn 2 streams visible content and then stalls.
+		// The watchdog must end it without replay or loss of that partial.
 		const stalled = Promise.withResolvers<never>();
 		sim = await createSimulation({
 			script: scriptTurns(
@@ -487,8 +486,10 @@ describe("plain multi-turn sessions without interjection", () => {
 		await sim.session.prompt("second");
 
 		expect(sim.session.isStreaming).toBe(false);
-		expect(sim.providerCalls()).toBe(3);
-		expect(lastAssistantText(sim.session)).toBe("recovered mid-session");
+		expect(sim.session.isRetrying).toBe(false);
+		expect(sim.providerCalls()).toBe(2);
+		expect(lastAssistantText(sim.session)).toContain("half an answer");
+		expect(sim.session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
 	});
 
 	it("settles when the provider never sends a first byte mid-session", async () => {

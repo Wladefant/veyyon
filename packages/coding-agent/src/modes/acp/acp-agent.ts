@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -1761,7 +1762,20 @@ export class AcpAgent implements Agent {
 
 	async #findStoredSessionById(sessionId: string): Promise<StoredSessionInfo | undefined> {
 		const sessions = await listStoredSessions();
-		return sessions.find(session => session.id === sessionId);
+		let match: StoredSessionInfo | undefined;
+		let canonicalPath: string | undefined;
+		for (const session of sessions) {
+			if (session.id !== sessionId) continue;
+			if (!match) {
+				match = session;
+				continue;
+			}
+			canonicalPath ??= await fs.realpath(match.path);
+			if ((await fs.realpath(session.path)) !== canonicalPath) {
+				throw new Error("ACP session ID is ambiguous");
+			}
+		}
+		return match;
 	}
 
 	async #replaySessionHistory(record: ManagedSessionRecord): Promise<void> {
