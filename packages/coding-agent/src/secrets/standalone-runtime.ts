@@ -1,4 +1,4 @@
-import { getGlobalConfigRootDir } from "@veyyon/utils";
+import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
 import { collectEnvSecrets, loadSecrets, type SecretEntry, SecretObfuscator } from ".";
 import { buildEnvSecretPattern, loadEnvSecretKeywords } from "./env-keywords";
 import { resolveVaultLocations, SecretVault } from "./vault";
