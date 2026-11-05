@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Corrected the owner-only reader's import order; runtime behavior is unchanged.
 ### Added
 
 - Discovery readers check sibling records with one parent ACL check, at most 32 open files per batch, bounded descriptor reads, and three verification attempts before failure ([#833](https://github.com/Wladefant/veyyon/issues/833)).
