@@ -449,6 +449,10 @@ export class MCPManager {
 	#reconnectHistory = new Map<string, number[]>();
 	/** Monotonic epoch incremented on disconnectAll to invalidate stale reconnections. */
 	#epoch = 0;
+	/** Active bulk teardowns gate NEW starts until every closing snapshot is settled. */
+	#bulkDisconnectCount = 0;
+	/** One promise per explicitly retiring server; same-name callers join that teardown. */
+	#activeDisconnects = new Map<string, Promise<void>>();
 
 	constructor(
 		private cwd: string,
@@ -1314,6 +1318,15 @@ export class MCPManager {
 		sources: Record<string, SourceMeta>,
 		onStatus?: (event: McpConnectionStatusEvent) => void,
 	): Promise<MCPLoadResult> {
+		// A NEW connection started after teardown increments #epoch would capture
+		// that new epoch and escape the stale-start guard. Refuse admission until
+		// every overlapping bulk teardown has finished closing its snapshot.
+		if (this.#bulkDisconnectCount > 0) {
+			throw new Error("MCP connect refused: bulk disconnect is in progress");
+		}
+		// A startup batch captures the teardown epoch before asynchronous
+		// initialization and optional cached-tool reads may yield.
+		const startupEpoch = this.#epoch;
 		type ConnectionTask = {
 			name: string;
 			config: MCPServerConfig;
@@ -1333,6 +1346,16 @@ export class MCPManager {
 		const connectionTasks: ConnectionTask[] = [];
 
 		for (const [name, config] of Object.entries(configs)) {
+			// A closing transport is still in #connections until DELETE resolves.
+			// Never report it as a fresh successful explicit connection.
+			if (this.#activeDisconnects.has(name)) {
+				const message = `MCP server "${name}" disconnect is in progress`;
+				errors.set(name, message);
+				validationFailures.push({ name, message });
+				reportedErrors.add(name);
+				statusServerNames.push(name);
+				continue;
+			}
 			if (sources[name]) {
 				this.#sources.set(name, sources[name]);
 				const existing = this.#connections.get(name);
@@ -1370,6 +1393,9 @@ export class MCPManager {
 			// Save config early so reconnection works even if the initial connect times out
 			// and falls back to cached/deferred tools.
 			this.#serverConfigs.set(name, config);
+			// Bulk disconnect invalidates every pending initial handshake, even
+			// while another connected server's close is still being awaited.
+			const initialConnectionEpoch = this.#epoch;
 
 			// Resolve auth config before connecting, but do so per-server in parallel.
 			const connectionPromise = (async () => {
@@ -1385,6 +1411,18 @@ export class MCPManager {
 				});
 			})().then(
 				connection => {
+					// Initial handshake completion is NOT permission to re-enroll
+					// after an explicit disconnect revoked this exact pending
+					// attempt. Otherwise a late success resurrects #serverConfigs,
+					// starts events and leaves the transport untracked/unclosable.
+					if (
+						this.#pendingConnections.get(name) !== connectionPromise ||
+						!this.#serverConfigs.has(name) ||
+						this.#epoch !== initialConnectionEpoch
+					) {
+						closeTransportDetached(connection.transport, name, "initial-connect-revoked");
+						throw new Error("MCP initial connection was withdrawn before completion");
+					}
 					// Store original config (without resolved tokens) to keep
 					// cache keys stable and avoid leaking rotating credentials.
 					connection.config = config;
@@ -1518,6 +1556,10 @@ export class MCPManager {
 					const value = task.tracked.value;
 					if (!value) continue;
 					const { connection, serverTools } = value;
+					// A fulfilled task is only a historical result. A per-server
+					// disconnect may have retired that transport while another
+					// startup task was waiting on cached tools.
+					if (this.#connections.get(name) !== connection || this.#activeDisconnects.has(name)) continue;
 					connectedServers.add(name);
 					const reconnect = () => this.reconnectServer(name);
 					const mcpTools = MCPTool.fromTools(connection, serverTools, reconnect);
@@ -1528,7 +1570,13 @@ export class MCPManager {
 					reportedErrors.add(name);
 				} else {
 					const cached = cachedTools.get(name);
-					if (cached) {
+					// A revoked pending load must not be resurrected from cache.
+					if (
+						cached &&
+						this.#pendingToolLoads.get(name) === task.toolsPromise &&
+						this.#serverConfigs.has(name) &&
+						!this.#activeDisconnects.has(name)
+					) {
 						const source = this.#sources.get(name);
 						const reconnect = () => this.reconnectServer(name);
 						const deferred = DeferredMCPTool.fromTools(
@@ -1542,6 +1590,18 @@ export class MCPManager {
 					}
 				}
 			}
+		}
+
+		// A pending cached-tool lookup can finish after disconnectAll has
+		// already cleared all live tools. Never republish the old fulfilled list
+		// or report an already-closed startup server as still connected.
+		if (this.#epoch !== startupEpoch) {
+			return { tools: [], errors, connectedServers: [], exaApiKeys: [] };
+		}
+		// Existing connections added before another task awaited cache can also
+		// have been explicitly retired without changing the bulk epoch.
+		for (const name of connectedServers) {
+			if (!this.#connections.has(name) || this.#activeDisconnects.has(name)) connectedServers.delete(name);
 		}
 
 		// This call can include only a new subset of servers. Its allTools
@@ -1672,6 +1732,7 @@ export class MCPManager {
 	 * Get current connection status for a server.
 	 */
 	getConnectionStatus(name: string): "connected" | "connecting" | "disconnected" {
+		if (this.#activeDisconnects.has(name)) return "disconnected";
 		if (this.#connections.has(name)) return "connected";
 		if (
 			this.#pendingConnections.has(name) ||
@@ -1729,6 +1790,7 @@ export class MCPManager {
 	 * Wait for a connection to complete (or fail).
 	 */
 	async waitForConnection(name: string): Promise<MCPServerConnection> {
+		if (this.#activeDisconnects.has(name)) throw new Error(`MCP server "${name}" disconnect is in progress`);
 		const connection = this.#connections.get(name);
 		if (connection) return connection;
 		const pending = this.#pendingConnections.get(name);
@@ -1757,7 +1819,7 @@ export class MCPManager {
 	 * Get all connected server names.
 	 */
 	getConnectedServers(): string[] {
-		return Array.from(this.#connections.keys());
+		return Array.from(this.#connections.keys()).filter(name => !this.#activeDisconnects.has(name));
 	}
 
 	/**
@@ -1773,10 +1835,34 @@ export class MCPManager {
 	/**
 	 * Disconnect from a specific server.
 	 */
-	async disconnectServer(name: string): Promise<void> {
-		await this.#stopServerEvents(name);
+	disconnectServer(name: string): Promise<void> {
+		const ongoing = this.#activeDisconnects.get(name);
+		if (ongoing) return ongoing;
+		// Install the per-name gate synchronously before the first awaited drain.
+		// Multiple explicit disconnects share completion rather than reporting an
+		// early success while the old transport is still being closed.
+		const completion = Promise.withResolvers<void>();
+		this.#activeDisconnects.set(name, completion.promise);
+		void (async () => {
+			try {
+				await this.#disconnectServerOnce(name);
+				completion.resolve();
+			} catch (error) {
+				completion.reject(error);
+			} finally {
+				if (this.#activeDisconnects.get(name) === completion.promise) this.#activeDisconnects.delete(name);
+			}
+		})();
+		return completion.promise;
+	}
+
+	async #disconnectServerOnce(name: string): Promise<void> {
+		// Revoke a still-pending initial handshake synchronously, before any
+		// awaited event drain gives its late response an opportunity to enroll.
+		// Its success continuation will dispose that exact obsolete transport.
 		this.#pendingConnections.delete(name);
 		this.#pendingToolLoads.delete(name);
+		await this.#stopServerEvents(name);
 		this.#pendingReconnections.delete(name);
 		this.#sources.delete(name);
 		this.#serverConfigs.delete(name);
@@ -1793,11 +1879,19 @@ export class MCPManager {
 		}
 		this.#subscribedResources.delete(name);
 
+		let failedClose: { error: unknown } | undefined;
 		if (connection) {
-			// Detach onClose to prevent spurious reconnect from close()
+			// Detach onClose to prevent spurious reconnect from close().
 			connection.transport.onClose = undefined;
-			await disconnectServer(connection);
-			this.#connections.delete(name);
+			try {
+				await disconnectServer(connection);
+			} catch (error) {
+				// A rejected DELETE is not permission to hand the closing
+				// transport to the next explicit connection request.
+				failedClose = { error };
+			} finally {
+				if (this.#connections.get(name) === connection) this.#connections.delete(name);
+			}
 		}
 
 		// Remove tools from this server and notify consumers
@@ -1807,33 +1901,64 @@ export class MCPManager {
 
 		// Notify prompt consumers so stale commands are cleared
 		if (connection?.prompts?.length) this.#onPromptsChanged?.(name);
+		// A rejected transport close can leave an SSE listener or child process
+		// running even after the registry is drained. Keep a per-name, sanitized
+		// diagnostic for an operator querying a disconnected server; never keep
+		// the peer's potentially private exception text in persistent state.
+		// The explicit caller still receives its original exception.
+		if (failedClose) {
+			this.#lastErrors.set(name, "MCP transport close unconfirmed; verify the server before reconnecting");
+			throw failedClose.error;
+		}
 	}
 
 	/**
 	 * Disconnect from all servers.
 	 */
 	async disconnectAll(): Promise<void> {
-		// Invalidate any in-flight reconnection attempts that outlive this call.
-		// They captured the old epoch; after increment they'll detect staleness.
-		this.#epoch++;
-		await this.stopEvents();
-		// Detach onClose before closing to prevent spurious reconnect attempts
-		for (const conn of this.#connections.values()) {
-			conn.transport.onClose = undefined;
-		}
-		const promises = Array.from(this.#connections.values()).map(conn => disconnectServer(conn));
-		await Promise.allSettled(promises);
+		this.#bulkDisconnectCount++;
+		try {
+			// The epoch invalidates in-flight work that began before shutdown.
+			// The bulk admission gate stays set until all per-name cleanup finishes.
+			this.#epoch++;
+			await this.stopEvents();
+			// Detach callbacks before shutdown to avoid transport-close reconnects.
+			for (const conn of this.#connections.values()) {
+				conn.transport.onClose = undefined;
+			}
+			// The public per-name disconnect promise covers BOTH transport close
+			// and registry/tool/config cleanup. A raw close promise could resolve
+			// while an unrelated B close was held, falsely reporting A complete.
+			// Reuse already-started per-name promises, then synchronously enroll
+			// each remaining name so bulk→single and single→bulk join exactly once.
+			const alreadyClosing = Array.from(this.#activeDisconnects.values());
+			const closing = Array.from(this.#connections.keys())
+				.filter(name => !this.#activeDisconnects.has(name))
+				.map(name => this.disconnectServer(name));
+			const outcomes = await Promise.allSettled([...alreadyClosing, ...closing]);
+			const failedCloses = outcomes.filter(outcome => outcome.status === "rejected").length;
+			if (failedCloses > 0) {
+				// Transport errors may include endpoints or credentials: only report
+				// the aggregate count, never raw exceptions or untrusted server names.
+				logger.warn("MCP bulk disconnect did not close every server cleanly", {
+					path: "mcp:disconnectAll",
+					failedCloses,
+				});
+			}
 
-		this.#pendingConnections.clear();
-		this.#pendingToolLoads.clear();
-		this.#pendingReconnections.clear();
-		this.#pendingResourceRefresh.clear();
-		this.#sources.clear();
-		this.#serverConfigs.clear();
-		this.#connections.clear();
-		this.#tools = [];
-		this.#subscribedResources.clear();
-		this.#reconnectHistory.clear();
+			this.#pendingConnections.clear();
+			this.#pendingToolLoads.clear();
+			this.#pendingReconnections.clear();
+			this.#pendingResourceRefresh.clear();
+			this.#sources.clear();
+			this.#serverConfigs.clear();
+			this.#connections.clear();
+			this.#tools = [];
+			this.#subscribedResources.clear();
+			this.#reconnectHistory.clear();
+		} finally {
+			this.#bulkDisconnectCount--;
+		}
 	}
 
 	/**
@@ -1851,6 +1976,9 @@ export class MCPManager {
 	 *   and the per-tool-call retry path in `tool-bridge` MUST NOT set it.
 	 */
 	async reconnectServer(name: string, options?: { manual?: boolean }): Promise<MCPServerConnection | null> {
+		// A reconnect beginning mid-shutdown would also capture its new epoch.
+		// Do not revive a server while disconnectAll is still closing transports.
+		if (this.#bulkDisconnectCount > 0 || this.#activeDisconnects.has(name)) return null;
 		if (options?.manual) {
 			this.#reconnectHistory.delete(name);
 			// An operator-driven reconnect is the recovery step after rotating a secret, so this

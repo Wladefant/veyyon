@@ -21,6 +21,9 @@
 ### Fixed
 
 - MCP server connections preserve tools from previously connected peers ([Refs #897](https://github.com/Wladefant/veyyon/issues/897)).
+### Fixed
+
+- MCP disconnects retire pending handshakes and join each server's complete teardown without reviving removed tools ([Refs #893](https://github.com/Wladefant/veyyon/issues/893)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
