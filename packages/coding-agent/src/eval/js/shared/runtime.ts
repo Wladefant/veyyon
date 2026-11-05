@@ -7,7 +7,6 @@ import { Writable } from "node:stream";
 import * as util from "node:util";
 
 import * as logger from "@veyyon/utils/logger";
-import { errorMessage } from "@veyyon/utils/type-guards";
 import { createHelpers, type HelperBundle } from "./helpers";
 import { awaitMaybePromise, indirectEval } from "./indirect-eval";
 import { LocalModuleLoader } from "./local-module-loader";
@@ -288,10 +287,8 @@ export class JsRuntime {
 			}
 			try {
 				hooks.onDisplay({ type: "json", data: structuredClone(value) });
-			} catch (err) {
-				logger.debug("js displayValue: value is not structured-cloneable, falling back to text", {
-					error: errorMessage(err),
-				});
+			} catch {
+				logger.debug("js displayValue: value is not structured-cloneable, falling back to text");
 				hooks.onText(`${Object.prototype.toString.call(value)}\n`);
 			}
 			return;

@@ -192,7 +192,7 @@ export class WorkerCore {
 					type: "log",
 					level: "warn",
 					msg: "Unhandled rejection from a finished eval cell (missing await?)",
-					meta: { filename: recent, error: errorPayload(reason) },
+					meta: { filename: recent },
 				});
 				return true;
 			}
@@ -210,7 +210,6 @@ export class WorkerCore {
 				type: "log",
 				level: "warn",
 				msg: "Unhandled rejection during concurrent eval runs; cannot attribute to a cell",
-				meta: { error: errorPayload(reason) },
 			});
 			return true;
 		}

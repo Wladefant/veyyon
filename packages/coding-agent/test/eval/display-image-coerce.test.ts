@@ -1,6 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import { JsRuntime, type RuntimeHooks } from "@veyyon/coding-agent/eval/js/shared/runtime";
 import type { JsDisplayOutput } from "@veyyon/coding-agent/eval/js/shared/types";
+import * as logger from "@veyyon/utils/logger";
 
 function collect(): {
 	runtime: JsRuntime;
@@ -90,5 +91,27 @@ describe("JsRuntime.displayValue image coercion", () => {
 		runtime.displayValue({ type: "image", data: "abcd=efg", mimeType: "image/png" }, hooks);
 		expect(displays).toHaveLength(0);
 		expect(texts.join("")).toMatch(/image dropped/);
+	});
+	// A throwing getter's diagnostic must not bypass the display output policy.
+	it("does not log a throwing display getter's error payload", () => {
+		const { runtime, hooks, displays, texts } = collect();
+		const debug = vi.spyOn(logger, "debug");
+		try {
+			runtime.displayValue(
+				{
+					get value() {
+						throw new Error("synthetic-diagnostic-secret");
+					},
+				},
+				hooks,
+			);
+			expect(displays).toEqual([]);
+			expect(texts).toEqual(["[object Object]\n"]);
+			const logBytes = JSON.stringify(debug.mock.calls);
+			expect(logBytes).not.toContain("synthetic-diagnostic-secret");
+			expect(logBytes).not.toContain("Error:");
+		} finally {
+			vi.restoreAllMocks();
+		}
 	});
 });
