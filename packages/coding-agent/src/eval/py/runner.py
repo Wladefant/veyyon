@@ -177,6 +177,22 @@ except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
     _CAPTURE_READ_FD = None
 _OUT_LOCK = threading.Lock()
 
+# Requests travel on a private dup of the original stdin, and fd 0 is then
+# repointed at the null device. On Windows a thread blocked in a synchronous
+# read of the request pipe serializes every other I/O on that file object, so
+# a child spawned by user code without stdin= (e.g. subprocess.run with
+# capture_output) inherits the pipe and hangs during its own startup. Children
+# now inherit NUL, and input() in user code sees EOF instead of consuming
+# protocol lines.
+try:
+    _REQUEST_FD = os.dup(sys.__stdin__.fileno())
+    _RAW_STDIN = os.fdopen(_REQUEST_FD, "r", encoding="utf-8")
+    _null_fd = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(_null_fd, sys.__stdin__.fileno())
+    os.close(_null_fd)
+except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+    _RAW_STDIN = sys.__stdin__
+
 
 def _json_default(o: Any) -> Any:
     try:
@@ -1466,7 +1482,7 @@ async def _main_async() -> None:
     _guard_host_lifetime()
     _start_capture_drain()
 
-    stdin = sys.__stdin__
+    stdin = _RAW_STDIN
     if stdin is None:
         return
 

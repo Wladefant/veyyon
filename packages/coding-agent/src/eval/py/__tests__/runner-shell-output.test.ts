@@ -103,6 +103,22 @@ describe("Python runner shell output streaming", () => {
 		expect(stdout.join("")).toContain("return=0 lines=['first', 'second']");
 	});
 
+	it("runs a child that inherits stdin without hanging on the request pipe", async () => {
+		const frames = await runCell(
+			[
+				"import subprocess, sys",
+				"r = subprocess.run([sys.executable, '-c', 'import sys; print(repr(sys.stdin.read()))'], capture_output=True, text=True, timeout=20)",
+				"print('child=' + r.stdout.strip())",
+			].join("\n"),
+		);
+		const stdout = frames
+			.filter(frame => frame.type === "stdout")
+			.map(frame => frame.data)
+			.join("");
+
+		expect(stdout).toContain("child=''");
+	}, 30_000);
+
 	it("caps !cmd output and captured result by line count with a truncation notice", async () => {
 		const child = ["import sys", "sys.stdout.write(('x' + chr(10)) * 3100)", "sys.stdout.flush()"].join(";");
 		const frames = await runCell(
