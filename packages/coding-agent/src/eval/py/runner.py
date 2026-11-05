@@ -1436,6 +1436,33 @@ def _emit_error(rid: str, exc: BaseException) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _protocol_stdin():
+    """Keep the Windows protocol pipe out of child standard input."""
+    stdin = sys.__stdin__
+    if stdin is None or os.name != "nt":
+        return stdin
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    # A child inheriting this synchronous pipe can block during startup while
+    # our reader waits for the next request. Only the protocol reader owns it.
+    protocol = os.fdopen(os.dup(stdin.fileno()), "r", encoding=stdin.encoding)
+    try:
+        with open(os.devnull, "rb") as null:
+            os.dup2(null.fileno(), stdin.fileno())
+        dll = ctypes.WinDLL("kernel32", use_last_error=True)
+        dll.SetStdHandle.argtypes = [wintypes.DWORD, wintypes.HANDLE]
+        dll.SetStdHandle.restype = wintypes.BOOL
+        if not dll.SetStdHandle(0xfffffff6, msvcrt.get_osfhandle(stdin.fileno())):
+            raise ctypes.WinError(ctypes.get_last_error())
+    except BaseException:
+        protocol.close()
+        raise
+    return protocol
+
+
 def _read_stdin(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stdin) -> None:
     for raw_line in stdin:
         line = raw_line.strip()
@@ -1466,7 +1493,7 @@ async def _main_async() -> None:
     _guard_host_lifetime()
     _start_capture_drain()
 
-    stdin = sys.__stdin__
+    stdin = _protocol_stdin()
     if stdin is None:
         return
 
