@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-05
+
+### Fixed
+
+- Basic Memory recall passes its query, uses the pinned CLI's supported options, and accepts null configuration values ([Refs #982](https://github.com/Wladefant/veyyon/pull/982)).
+
 ## [1.8.0] - 2026-11-05
 
 ### Breaking Changes
