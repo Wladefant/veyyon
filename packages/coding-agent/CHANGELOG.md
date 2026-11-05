@@ -63,6 +63,9 @@
 ### Fixed
 
 - Confine retained native task continuation artifact filenames to the session artifact directory, including traversal and Windows-reserved task identifiers ([Refs #766](https://github.com/Wladefant/veyyon/issues/766)).
+### Fixed
+
+- Refuse stored history with ambiguous session headers, misplaced titles, duplicate members, blank IDs, or an unverifiable leaf after malformed entries ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
