@@ -42,6 +42,9 @@
 ### Fixed
 
 - MCP stdio diagnostics omit malformed frame payloads and peer-controlled parse-error messages from persistent logs ([Refs #858](https://github.com/Wladefant/veyyon/issues/858)).
+### Fixed
+
+- Native Mainplane receipts require string operation and state values and exact UTF-8 output bodies ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed

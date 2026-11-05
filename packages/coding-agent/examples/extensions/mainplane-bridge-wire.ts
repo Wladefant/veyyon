@@ -160,7 +160,8 @@ export function validateReceipt(
 ): BridgeReceipt {
 	if (
 		value.schema_version !== 2 ||
-		!["run", "write", "kill", "job"].includes(String(value.operation)) ||
+		typeof value.operation !== "string" ||
+		!["run", "write", "kill", "job"].includes(value.operation) ||
 		(operation !== undefined && value.operation !== operation) ||
 		value.idempotency_sha256 !== digest(runId) ||
 		typeof value.request_sha256 !== "string" ||
@@ -169,7 +170,8 @@ export function validateReceipt(
 		!WORKER_ID.test(value.worker) ||
 		typeof value.session !== "string" ||
 		!WORKER_ID.test(value.session) ||
-		!["submitting", "uncertain", "accepted", "cancelled", "completed"].includes(String(value.state))
+		typeof value.state !== "string" ||
+		!["submitting", "uncertain", "accepted", "cancelled", "completed"].includes(value.state)
 	)
 		throw new MainplaneError("Mainplane receipt identity or schema mismatch");
 	const result: BridgeReceipt = {
@@ -223,7 +225,11 @@ export function validateReceipt(
 		result.exit = value.exit;
 		result.output_sha256 = value.output_sha256;
 		if (value.body !== undefined) {
-			if (typeof value.body !== "string" || digest(value.body) !== value.output_sha256)
+			if (
+				typeof value.body !== "string" ||
+				Buffer.from(value.body, "utf8").toString("utf8") !== value.body ||
+				digest(value.body) !== value.output_sha256
+			)
 				throw new MainplaneError("Mainplane output digest mismatch");
 			result.body = value.body;
 		}
