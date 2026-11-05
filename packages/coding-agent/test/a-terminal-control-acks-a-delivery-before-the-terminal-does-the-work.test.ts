@@ -353,18 +353,22 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	const toolResultEntry = JSON.parse(toolResultLine) as SessionEntry;
 	const entry = JSON.parse(line) as SessionEntry;
 	const yieldEntry = JSON.parse(yieldLine) as SessionEntry;
+	const postYieldEntry = JSON.parse(postYieldLine) as SessionEntry;
 	expect(payloads.cool(userEntry, userOffset, Buffer.byteLength(userLine))).toBe(true);
 	expect(payloads.cool(toolResultEntry, toolResultOffset, Buffer.byteLength(toolResultLine))).toBe(true);
 	expect(payloads.cool(entry, assistantOffset, Buffer.byteLength(line))).toBe(true);
 	expect(payloads.cool(yieldEntry, yieldOffset, Buffer.byteLength(yieldLine))).toBe(true);
+	expect(payloads.cool(postYieldEntry, postYieldOffset, Buffer.byteLength(postYieldLine))).toBe(true);
 	const coldUserMessage = userEntry.message as unknown as object;
 	const coldToolResultMessage = toolResultEntry.message as unknown as object;
 	const coldMessage = entry.message as unknown as object;
 	const coldYieldMessage = yieldEntry.message as unknown as object;
+	const coldPostYieldMessage = postYieldEntry.message as unknown as object;
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
 	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldYieldMessage)).toEqual(["details"]);
+	expect(coldFieldsOf(coldPostYieldMessage)).toEqual(["content"]);
 	const warmEntry = {
 		type: "message",
 		id: "warm-assistant",
@@ -373,7 +377,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		message: { role: "assistant", content: [{ type: "text", text: "Warm historical answer" }] },
 	} as unknown as SessionEntry;
 
-	const journal = [warmEntry, userEntry, toolResultEntry, entry, yieldEntry, JSON.parse(postYieldLine) as SessionEntry];
+	const journal = [warmEntry, userEntry, toolResultEntry, entry, yieldEntry, postYieldEntry];
 	const mockMode = {
 		sessionManager: {
 			getSessionId: () => "cold",
@@ -403,6 +407,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
 	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(coldYieldMessage)).toEqual(["details"]);
+	expect(coldFieldsOf(coldPostYieldMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(warmEntry.message as unknown as object)).toBeUndefined();
 	expect(reads.get(userOffset) ?? 0).toBe(0);
 	expect(reads.get(toolResultOffset) ?? 0).toBe(0);
