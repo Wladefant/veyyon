@@ -18,6 +18,9 @@
 
 - Terminal history reads cold assistant and tool-result payloads transiently and keeps their source entries cold ([Refs #980](https://github.com/Wladefant/veyyon/issues/980)).
 
+### Fixed
+
+- MCP server connections preserve tools from previously connected peers ([Refs #897](https://github.com/Wladefant/veyyon/issues/897)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed

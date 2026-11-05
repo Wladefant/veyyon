@@ -43,6 +43,8 @@ import {
 	unsubscribeFromEvents,
 	unsubscribeFromResources,
 } from "./client";
+import { type LoadMCPConfigsResult, loadAllMCPConfigs, validateServerConfig } from "./config";
+import { hasMcpConfigCommands, mcpConfigCommandValues } from "./config-commands";
 import {
 	createWebhookReceiver,
 	type MCPWebhookControl,
@@ -50,8 +52,6 @@ import {
 	type MCPWebhookRegistration,
 } from "./events-webhook";
 import { startMCPWebhookHost } from "./events-webhook-host";
-import { type LoadMCPConfigsResult, loadAllMCPConfigs, validateServerConfig } from "./config";
-import { hasMcpConfigCommands, mcpConfigCommandValues } from "./config-commands";
 import { mcpManagerInstance, setMcpManagerInstance } from "./manager-instance";
 import {
 	lookupMcpOAuthCredential,
@@ -61,10 +61,12 @@ import {
 import { type MCPStoredOAuthCredential, refreshMCPOAuthToken } from "./oauth-flow";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "./runtime-config";
 import { MCP_CONFIG_STATUS_LABEL, type McpConnectionStatusEvent } from "./startup-events";
-import { DeferredMCPTool, MCPTool, type MCPToolDetails, mcpToolNamePrefix } from "./tool-bridge";
+import { DeferredMCPTool, MCPTool, type MCPToolDetails } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
 import { describeMCPServerTarget } from "./transports/transport-failure";
 import {
+	isMCPEventsEnabled,
+	type MCPEventDescriptor,
 	type MCPEventOccurrence,
 	type MCPGetPromptResult,
 	MCPNotificationMethods,
@@ -79,7 +81,6 @@ import {
 	type MCPStreamRequest,
 	type MCPToolDefinition,
 	type MCPTransport,
-	isMCPEventsEnabled,
 } from "./types";
 
 type ActiveMCPEventSubscription = {
@@ -374,7 +375,11 @@ export class MCPManager {
 			...(gate ? { beforeSpawn: () => gate("an MCP stdio server") } : {}),
 		};
 	}
-	#onEventControl?: (serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
+	#onEventControl?: (
+		serverName: string,
+		subscriptionKey: string,
+		message: MCPWebhookControl,
+	) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
 	#webhookRegistrations = new Map<string, MCPWebhookRegistration>();
 	#webhookVerificationRoutes = new Map<string, { secret: string }>();
 	#webhookSubscriptions = new Map<string, { serverName: string; key: string }>();
@@ -399,16 +404,18 @@ export class MCPManager {
 				}
 				return outcome === "duplicate" ? "duplicate" : "queued";
 			}
-			return (await this.#deliverEvent(target.serverName, target.key, subscription, message)) ? "queued" : "duplicate";
+			return (await this.#deliverEvent(target.serverName, target.key, subscription, message))
+				? "queued"
+				: "duplicate";
 		},
 	});
 	#onEventCursor?: (serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>;
 	#eventCursorProvider?: (serverName: string, subscriptionKey: string) => string | null | undefined;
-	#onEvent?: (serverName: string, event: MCPEventOccurrence, subscriptionKey: string) =>
-		| void
-		| "queued"
-		| "duplicate"
-		| Promise<void | "queued" | "duplicate">;
+	#onEvent?: (
+		serverName: string,
+		event: MCPEventOccurrence,
+		subscriptionKey: string,
+	) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">;
 	#activeEvents = new Map<string, ActiveMCPEventSubscription>();
 	#eventStartupControllers = new Map<string, AbortController>();
 	#eventStartupPromises = new Map<string, Promise<void>>();
@@ -455,14 +462,13 @@ export class MCPManager {
 		this.#onNotification = handler;
 	}
 
-
 	setOnEvent(
 		handler:
 			| ((
 					serverName: string,
 					event: MCPEventOccurrence,
 					subscriptionKey: string,
-				) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
+			  ) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
 			| undefined,
 	): void {
 		this.#onEvent = handler;
@@ -478,17 +484,26 @@ export class MCPManager {
 	}
 
 	setOnEventCursor(
-		handler: ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>) | undefined,
+		handler:
+			| ((serverName: string, subscriptionKey: string, cursor: string | null) => void | Promise<void>)
+			| undefined,
 	): void {
 		this.#onEventCursor = handler;
 	}
-	setEventCursorProvider(provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined): void {
+	setEventCursorProvider(
+		provider: ((serverName: string, subscriptionKey: string) => string | null | undefined) | undefined,
+	): void {
 		this.#eventCursorProvider = provider;
 	}
 
-
 	setOnEventControl(
-		handler: ((serverName: string, subscriptionKey: string, message: MCPWebhookControl) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">) | undefined,
+		handler:
+			| ((
+					serverName: string,
+					subscriptionKey: string,
+					message: MCPWebhookControl,
+			  ) => void | "queued" | "duplicate" | Promise<void | "queued" | "duplicate">)
+			| undefined,
 	): void {
 		this.#onEventControl = handler;
 	}
@@ -514,7 +529,13 @@ export class MCPManager {
 		const matching = [...this.#activeEvents.entries()].filter(([key]) => key.startsWith(`${serverName}\0`));
 		for (const [key, subscription] of matching) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			matching.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			matching
+				.flatMap(([, subscription]) => [
+					subscription.stream?.done,
+					subscription.lifecycle,
+					subscription.unsubscribe,
+				])
+				.filter(Boolean),
 		);
 	}
 
@@ -524,7 +545,13 @@ export class MCPManager {
 		const active = [...this.#activeEvents.entries()];
 		for (const [key, subscription] of active) this.#stopEvent(key, subscription);
 		await Promise.allSettled(
-			active.flatMap(([, subscription]) => [subscription.stream?.done, subscription.lifecycle, subscription.unsubscribe]).filter(Boolean),
+			active
+				.flatMap(([, subscription]) => [
+					subscription.stream?.done,
+					subscription.lifecycle,
+					subscription.unsubscribe,
+				])
+				.filter(Boolean),
 		);
 		for (const [port, host] of this.#webhookHosts) {
 			this.#webhookHosts.delete(port);
@@ -543,7 +570,7 @@ export class MCPManager {
 		const controller = new AbortController();
 		this.#eventStartupControllers.set(serverName, controller);
 		const promise = (async () => {
-			let descriptors;
+			let descriptors: MCPEventDescriptor[];
 			try {
 				descriptors = await listEvents(connection, { signal: controller.signal });
 			} catch (error) {
@@ -555,20 +582,12 @@ export class MCPManager {
 					this.#eventStartupControllers.delete(serverName);
 				}
 			}
-			if (
-				controller.signal.aborted ||
-				!this.#onEvent ||
-				this.#connections.get(serverName) !== connection
-			) {
+			if (controller.signal.aborted || !this.#onEvent || this.#connections.get(serverName) !== connection) {
 				return;
 			}
 			const byName = new Map(descriptors.map(descriptor => [descriptor.name, descriptor]));
 			for (const requested of eventsConfig.subscriptions) {
-				if (
-					controller.signal.aborted ||
-					!this.#onEvent ||
-					this.#connections.get(serverName) !== connection
-				) {
+				if (controller.signal.aborted || !this.#onEvent || this.#connections.get(serverName) !== connection) {
 					return;
 				}
 				const descriptor = byName.get(requested.name);
@@ -671,8 +690,15 @@ export class MCPManager {
 			logger.error("MCP webhook callback URL is invalid", { path: `mcp:${serverName}` });
 			return;
 		}
-		if (callback.protocol !== "https:" || callback.username !== "" || callback.password !== "" || callback.hash !== "") {
-			logger.error("MCP webhook callback must use HTTPS without embedded credentials or a fragment", { path: `mcp:${serverName}` });
+		if (
+			callback.protocol !== "https:" ||
+			callback.username !== "" ||
+			callback.password !== "" ||
+			callback.hash !== ""
+		) {
+			logger.error("MCP webhook callback must use HTTPS without embedded credentials or a fragment", {
+				path: `mcp:${serverName}`,
+			});
 			return;
 		}
 		const path = callback.pathname;
@@ -713,13 +739,15 @@ export class MCPManager {
 					requested.name,
 					requested.arguments ?? {},
 					webhook.callbackUrl,
-				).catch(error => {
-					logger.warn("Failed to clean up canceled MCP webhook subscription", {
-						path: `mcp:${serverName}`,
-						event: requested.name,
-						error: errorMessage(error),
-					});
-				}).then(() => this.#closeUnusedWebhookHost(port));
+				)
+					.catch(error => {
+						logger.warn("Failed to clean up canceled MCP webhook subscription", {
+							path: `mcp:${serverName}`,
+							event: requested.name,
+							error: errorMessage(error),
+						});
+					})
+					.then(() => this.#closeUnusedWebhookHost(port));
 				await subscription.unsubscribe;
 				return;
 			}
@@ -750,15 +778,24 @@ export class MCPManager {
 			}
 			if (result.refreshBefore !== null) {
 				const refreshAt = Date.parse(result.refreshBefore) - Date.now() - 60_000;
-				subscription.timer = setTimeout(() => {
-					if (
-						!subscription.controller.signal.aborted &&
-						this.#activeEvents.get(key) === subscription &&
-						this.#connections.get(serverName) === connection
-					) {
-						subscription.lifecycle = this.#subscribeWebhook(serverName, connection, requested, key, subscription);
-					}
-				}, Math.max(1_000, refreshAt));
+				subscription.timer = setTimeout(
+					() => {
+						if (
+							!subscription.controller.signal.aborted &&
+							this.#activeEvents.get(key) === subscription &&
+							this.#connections.get(serverName) === connection
+						) {
+							subscription.lifecycle = this.#subscribeWebhook(
+								serverName,
+								connection,
+								requested,
+								key,
+								subscription,
+							);
+						}
+					},
+					Math.max(1_000, refreshAt),
+				);
 			}
 		} catch (error) {
 			this.#webhookVerificationRoutes.delete(path);
@@ -791,7 +828,8 @@ export class MCPManager {
 			subscription.controller.signal.aborted ||
 			!this.#activeEvents.has(key) ||
 			this.#connections.get(serverName) !== connection
-		) return;
+		)
+			return;
 		subscription.timer = setTimeout(() => {
 			if (
 				!subscription.controller.signal.aborted &&
@@ -848,7 +886,8 @@ export class MCPManager {
 		}
 		if (!this.#onEvent) throw new Error("MCP event callback is not configured");
 		const hasEventCursor = event.cursor !== undefined || cursor !== undefined;
-		const eventCursor = event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
+		const eventCursor =
+			event.cursor !== undefined ? event.cursor : cursor !== undefined ? cursor : subscription.cursor;
 		if (subscription.seen.has(event.eventId)) return false;
 		const deliveryEvent = { ...event, cursor: eventCursor };
 		const outcome = await this.#onEvent(serverName, deliveryEvent, key);
@@ -867,13 +906,9 @@ export class MCPManager {
 		while (!subscription.controller.signal.aborted && this.#activeEvents.has(key)) {
 			const previousCursor = subscription.cursor;
 			try {
-				const result = await pollEvents(
-					connection,
-					requested.name,
-					requested.arguments ?? {},
-					previousCursor,
-					{ signal: subscription.controller.signal },
-				);
+				const result = await pollEvents(connection, requested.name, requested.arguments ?? {}, previousCursor, {
+					signal: subscription.controller.signal,
+				});
 				for (const event of result.events) {
 					await this.#deliverEvent(serverName, key, subscription, event, undefined, false);
 				}
@@ -940,7 +975,7 @@ export class MCPManager {
 			notification => {
 				if (!("method" in notification)) return;
 				const params = notification.params;
-				const value = params && typeof params === "object" ? params as Record<string, unknown> : undefined;
+				const value = params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
 				const metadata = value?._meta as Record<string, unknown> | undefined;
 				const notificationId = metadata?.["io.modelcontextprotocol/subscriptionId"];
 				if (streamId === undefined || notificationId !== streamId) {
@@ -951,82 +986,85 @@ export class MCPManager {
 				}
 				if (!notification.method.startsWith("notifications/events/")) return;
 				this.#armStreamHeartbeat(subscription);
-				subscription.streamProcessing = subscription.streamProcessing!.then(async () => {
-					if (subscription.streamFailed || subscription.controller.signal.aborted) return;
-					if (!value) throw new Error("MCP event stream frame has no params");
-					const rawCursor = value.cursor;
-					if (rawCursor !== undefined && rawCursor !== null && typeof rawCursor !== "string") {
-						throw new Error("MCP event stream frame has an invalid cursor");
-					}
-					const cursor = rawCursor === undefined ? undefined : rawCursor;
-					const controlMessageId =
-						`push:${key}:${notification.method}:${cursor ?? "null"}:${String((value.error as { code?: unknown } | undefined)?.code ?? "")}`;
-					if (notification.method === "notifications/events/event") {
-						if (!isMCPEventOccurrence(value) || value.name !== requested.name) {
-							// Throwing here would cancel the stream and reopen it at the same cursor; the server would
-							// resend this frame and the subscription would never move past it. Drop it as poll mode does.
-							logger.warn("Skipping invalid MCP event occurrence", {
-								path: `mcp:${serverName}`,
-								event: value.name,
-							});
-							if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
-							return;
+				subscription.streamProcessing = subscription
+					.streamProcessing!.then(async () => {
+						if (subscription.streamFailed || subscription.controller.signal.aborted) return;
+						if (!value) throw new Error("MCP event stream frame has no params");
+						const rawCursor = value.cursor;
+						if (rawCursor !== undefined && rawCursor !== null && typeof rawCursor !== "string") {
+							throw new Error("MCP event stream frame has an invalid cursor");
 						}
-						await this.#deliverEvent(serverName, key, subscription, value, cursor);
-					} else if (
-						notification.method === "notifications/events/active" ||
-						notification.method === "notifications/events/heartbeat"
-					) {
-						if (notification.method === "notifications/events/active" && value.truncated === true) {
+						const cursor = rawCursor === undefined ? undefined : rawCursor;
+						const controlMessageId = `push:${key}:${notification.method}:${cursor ?? "null"}:${String((value.error as { code?: unknown } | undefined)?.code ?? "")}`;
+						if (notification.method === "notifications/events/event") {
+							if (!isMCPEventOccurrence(value) || value.name !== requested.name) {
+								// Throwing here would cancel the stream and reopen it at the same cursor; the server would
+								// resend this frame and the subscription would never move past it. Drop it as poll mode does.
+								logger.warn("Skipping invalid MCP event occurrence", {
+									path: `mcp:${serverName}`,
+									event: value.name,
+								});
+								if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+								return;
+							}
+							await this.#deliverEvent(serverName, key, subscription, value, cursor);
+						} else if (
+							notification.method === "notifications/events/active" ||
+							notification.method === "notifications/events/heartbeat"
+						) {
+							if (notification.method === "notifications/events/active" && value.truncated === true) {
+								await this.#recordEventControl(serverName, key, {
+									type: "gap",
+									messageId: controlMessageId,
+									...(cursor !== undefined ? { cursor } : {}),
+								});
+							}
+							if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+						} else if (notification.method === "notifications/events/gap") {
 							await this.#recordEventControl(serverName, key, {
 								type: "gap",
 								messageId: controlMessageId,
 								...(cursor !== undefined ? { cursor } : {}),
 							});
+							if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
+						} else if (notification.method === "notifications/events/error") {
+							const error = value.error as { code?: unknown } | undefined;
+							logger.warn("MCP event stream reported a transient error", {
+								path: `mcp:${serverName}`,
+								event: requested.name,
+								code: typeof error?.code === "number" ? error.code : undefined,
+							});
+						} else if (notification.method === "notifications/events/list_changed") {
+							await this.#refreshEventDescriptors(serverName);
+						} else if (notification.method === "notifications/events/terminated") {
+							const error = value.error as
+								| { code?: number; message?: string; data?: Record<string, unknown> }
+								| undefined;
+							const code = error?.code;
+							await this.#recordEventControl(serverName, key, {
+								type: "terminated",
+								messageId: controlMessageId,
+								error: {
+									code: typeof code === "number" ? code : 0,
+									message: typeof error?.message === "string" ? error.message : "MCP event stream terminated",
+									...(error?.data ? { data: error.data } : {}),
+								},
+							});
+							this.#stopEvent(key, subscription, false);
+							if (code !== -32024 && [-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
+								void this.#refreshEventDescriptors(serverName);
+							}
 						}
-						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
-					} else if (notification.method === "notifications/events/gap") {
-						await this.#recordEventControl(serverName, key, {
-							type: "gap",
-							messageId: controlMessageId,
-							...(cursor !== undefined ? { cursor } : {}),
-						});
-						if (cursor !== undefined) await this.#recordEventCursor(subscription, cursor);
-					} else if (notification.method === "notifications/events/error") {
-						const error = value.error as { code?: unknown } | undefined;
-						logger.warn("MCP event stream reported a transient error", {
+					})
+					.catch(error => {
+						subscription.streamFailed = true;
+						logger.warn("Failed to persist MCP event stream frame", {
 							path: `mcp:${serverName}`,
 							event: requested.name,
-							code: typeof error?.code === "number" ? error.code : undefined,
+							error: errorMessage(error),
 						});
-					} else if (notification.method === "notifications/events/list_changed") {
-						await this.#refreshEventDescriptors(serverName);
-					} else if (notification.method === "notifications/events/terminated") {
-						const error = value.error as { code?: number; message?: string; data?: Record<string, unknown> } | undefined;
-						const code = error?.code;
-						await this.#recordEventControl(serverName, key, {
-							type: "terminated",
-							messageId: controlMessageId,
-							error: {
-								code: typeof code === "number" ? code : 0,
-								message: typeof error?.message === "string" ? error.message : "MCP event stream terminated",
-								...(error?.data ? { data: error.data } : {}),
-							},
-						});
-						this.#stopEvent(key, subscription, false);
-						if (code !== -32024 && [-32023, -32026, -32011, -32012, -32015].includes(code ?? 0)) {
-							void this.#refreshEventDescriptors(serverName);
-						}
-					}
-				}).catch(error => {
-					subscription.streamFailed = true;
-					logger.warn("Failed to persist MCP event stream frame", {
-						path: `mcp:${serverName}`,
-						event: requested.name,
-						error: errorMessage(error),
+						subscription.stream?.cancel();
 					});
-					subscription.stream?.cancel();
-				});
 			},
 			{
 				signal: subscription.controller.signal,
@@ -1060,7 +1098,10 @@ export class MCPManager {
 			}
 			this.#scheduleStreamRestart(serverName, connection, requested, key, subscription);
 		};
-		void stream.done.then(() => finish(), error => finish(error));
+		void stream.done.then(
+			() => finish(),
+			error => finish(error),
+		);
 	}
 	#armStreamHeartbeat(subscription: ActiveMCPEventSubscription): void {
 		clearTimeout(subscription.timer);
@@ -1105,13 +1146,15 @@ export class MCPManager {
 				subscription.config.name,
 				subscription.config.arguments ?? {},
 				subscription.config.webhook.callbackUrl,
-			).catch(error => {
-				logger.warn("Failed to unsubscribe MCP webhook", {
-					path: `mcp:${subscription.connection?.name ?? "unknown"}`,
-					event: subscription.config?.name,
-					error: errorMessage(error),
-				});
-			}).then(closeHost);
+			)
+				.catch(error => {
+					logger.warn("Failed to unsubscribe MCP webhook", {
+						path: `mcp:${subscription.connection?.name ?? "unknown"}`,
+						event: subscription.config?.name,
+						error: errorMessage(error),
+					});
+				})
+				.then(closeHost);
 		} else if (closeHost) {
 			subscription.unsubscribe = closeHost();
 		}
@@ -1121,7 +1164,8 @@ export class MCPManager {
 		if (
 			[...this.#webhookPortById.values()].includes(port) ||
 			[...this.#activeEvents.values()].some(subscription => subscription.webhookPort === port)
-		) return;
+		)
+			return;
 		const host = this.#webhookHosts.get(port);
 		if (!host) return;
 		this.#webhookHosts.delete(port);
@@ -1500,16 +1544,29 @@ export class MCPManager {
 			}
 		}
 
+		// This call can include only a new subset of servers. Its allTools
+		// array contains only this batch, while #tools also owns tools from
+		// previously connected peers. Replacing the entire registry would
+		// silently drop every peer not in the current connection request (and
+		// an already-connected-only request would empty it).
+		//
+		// Replace exact server owners represented in the current batch, while
+		// preserving other peers and any already-published background tools.
+		// Server ownership comes from MCPTool / DeferredMCPTool metadata, not
+		// the sanitized name prefix (which is not collision-free).
+		const replacingOwners = new Set(
+			allTools.map(tool => tool.mcpServerName).filter((name): name is string => name !== undefined),
+		);
+		const fullCatalog = this.#tools.filter(tool => !replacingOwners.has(tool.mcpServerName ?? ""));
+		fullCatalog.push(...allTools);
 		// Stable sort by name so the order is independent of connection completion.
 		// See `sortMCPToolsByName` for the cache-stability rationale.
-		sortMCPToolsByName(allTools);
-
-		// Update cached tools
-		this.#tools = allTools;
+		sortMCPToolsByName(fullCatalog);
+		this.#tools = fullCatalog;
 		allowBackgroundLogging = true;
 
 		return {
-			tools: allTools,
+			tools: fullCatalog,
 			errors,
 			connectedServers: Array.from(connectedServers),
 			exaApiKeys: [], // Will be populated by discoverAndConnect
@@ -1517,11 +1574,7 @@ export class MCPManager {
 	}
 
 	#replaceServerTools(name: string, tools: CustomTool<TSchema, MCPToolDetails>[]): void {
-		// The prefix must be derived the same way the tool names were, or a server
-		// whose name needed sanitizing keeps its stale tools AND gains a second
-		// copy on every reconnect. See `mcpToolNamePrefix`.
-		const prefix = mcpToolNamePrefix(name);
-		this.#tools = this.#tools.filter(t => !t.name.startsWith(prefix));
+		this.#tools = this.#tools.filter(tool => tool.mcpServerName !== name);
 		for (let ti = 0; ti < tools.length; ti++) this.#tools.push(tools[ti]!);
 		// Stable sort by name so reconnect order does not perturb the array.
 		// See `sortMCPToolsByName` for the cache-stability rationale.
@@ -1748,12 +1801,8 @@ export class MCPManager {
 		}
 
 		// Remove tools from this server and notify consumers
-		const hadTools = this.#tools.some(t => t.name.startsWith(`mcp__${name}_`));
-		// The prefix must be derived the same way the tool names were, or a server
-		// whose name needed sanitizing keeps its stale tools AND gains a second
-		// copy on every reconnect. See `mcpToolNamePrefix`.
-		const prefix = mcpToolNamePrefix(name);
-		this.#tools = this.#tools.filter(t => !t.name.startsWith(prefix));
+		const hadTools = this.#tools.some(tool => tool.mcpServerName === name);
+		this.#tools = this.#tools.filter(tool => tool.mcpServerName !== name);
 		if (hadTools) this.#onToolsChanged?.(this.#tools);
 
 		// Notify prompt consumers so stale commands are cleared
