@@ -33,7 +33,7 @@ export const Shell = lazyNativeClass("Shell");
 
 // functions
 export const __veyyonInstallTokioRuntime = lazyNativeFn("__veyyonInstallTokioRuntime");
-export const __veyyonNativesV1_8_2 = lazyNativeFn("__veyyonNativesV1_8_2");
+export const __veyyonNativesV1_8_3 = lazyNativeFn("__veyyonNativesV1_8_3");
 export const astEdit = lazyNativeFn("astEdit");
 export const astGrep = lazyNativeFn("astGrep");
 export const astMatch = lazyNativeFn("astMatch");

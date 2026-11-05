@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-11-05
+
 ### Fixed
 
 - Windows release builds compile merged kernel, transcript and read-output helpers without missing exports or duplicate declarations.

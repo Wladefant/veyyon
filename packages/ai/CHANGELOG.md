@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-11-05
+
 ### Fixed
 
 - Provider finish errors use one exported formatter and classification pattern.
