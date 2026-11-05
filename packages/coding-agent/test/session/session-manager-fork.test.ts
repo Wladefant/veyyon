@@ -1833,13 +1833,16 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       expect(manager.getHeader()?.id).toBe(sourceId);
       expect(manager.getSessionFile()).toBe(sourceFile);
       expect(agent.sessionId).toBe(providerSessionId);
+      // Read the disk journal without a caller flush: even if the process
+      // terminates now, reopening this source must not observe a false end.
       const failedEntries = await loadEntriesFromFile(sourceFile);
       expect(failedEntries.some(entry =>
         entry.type === "session_lifecycle" && entry.state === "ended" &&
         entry.reason === "session_switched"
-      )).toBe(instrumentation === "basic");
+      )).toBe(false);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
 
-      // A foreign writer can append after rollback, before source repair.
+      // A foreign writer can append after durable rollback; later appends
       const foreignEntry: JsonlMessageEntry = {
         type: "message",
         id: "publication-refusal-foreign-tail",
@@ -1938,6 +1941,17 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         entry.type === "session_lifecycle" && entry.state === "ended" &&
         entry.reason === "session_switched"
       )).toBe(false);
+      // Reparse the actual source bytes without an explicit caller flush.
+      // The aborted terminal marker must not survive a process restart.
+      const diskAfterRefusal = await loadEntriesFromFile(sourceFile);
+      expect(diskAfterRefusal.some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+      expect(diskAfterRefusal.some(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content === "Original active session"
+      )).toBe(true);
 
       // Simulate a different, legitimate writer while this manager repairs
       // only its own aborted switch marker. The foreign line must survive.
