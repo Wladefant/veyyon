@@ -112,6 +112,10 @@
 
 - ACP Bash commands now enforce their deadline and caller cancellation during terminal output polling and the final output read ([Refs #869](https://github.com/Wladefant/veyyon/issues/869)).
 
+### Fixed
+
+- Disk history lookup rejects ambiguous IDs across case-folded and repeated archive paths ([Refs #871](https://github.com/Wladefant/veyyon/issues/871)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
