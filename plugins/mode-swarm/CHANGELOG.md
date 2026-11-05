@@ -4,16 +4,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A swarm file with a YAML syntax error fails with the error's line and column, such as `Nested mappings are not allowed in compact mappings at line 4, column 9`, instead of `Unexpected token`.
+
 ## [1.6.0] - 2026-10-28
 
 ### Changed
 
 - Sync upstream changes from santhreal/veyyon.
-## [1.5.10] - 2026-10-25
-
-### Fixed
-
-- A swarm file with a YAML syntax error fails with the error's line and column, such as `Nested mappings are not allowed in compact mappings at line 4, column 9`, instead of `Unexpected token`.
 
 ## [1.5.6] - 2026-10-13
 

@@ -2,18 +2,6 @@
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-28
-
-### Changed
-
-- Sync upstream changes from santhreal/veyyon.
-
-## [1.5.6] - 2026-10-10
-
-### Fixed
-
-- Closed database connections and active sockets when stopping the stats dashboard server, and validated request identifier and limit parameters.
-- A dashboard built from a source checkout keeps the anti-flash theme script `build.ts` writes into `index.html` instead of overwriting the page with a copy that lacks it, so a stored theme that differs from the system theme applies before the first paint instead of after the dashboard script loads.
 ### Changed
 
 - No user-visible change: the resource hook and the request drawer coerce a failed fetch with `toError` from `@veyyon/utils/type-guards` instead of inline copies.
@@ -28,7 +16,18 @@
 - `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.
 - The embedded dashboard is extracted into `<tmpdir>/veyyon-<uid>/stats-client` (mode 700) instead of `<tmpdir>/veyyon-stats-client`, where another account could place its own files first.
 
-## [1.5.9] - 2026-10-22
+## [1.6.0] - 2026-10-28
+
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+
+## [1.5.6] - 2026-10-10
+
+### Fixed
+
+- Closed database connections and active sockets when stopping the stats dashboard server, and validated request identifier and limit parameters.
+- A dashboard built from a source checkout keeps the anti-flash theme script `build.ts` writes into `index.html` instead of overwriting the page with a copy that lacks it, so a stored theme that differs from the system theme applies before the first paint instead of after the dashboard script loads.
 
 ### Removed
 

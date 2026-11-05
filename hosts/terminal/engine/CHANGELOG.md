@@ -2,28 +2,6 @@
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-28
-
-### Changed
-
-- Sync upstream changes from santhreal/veyyon.
-- `Markdown` borders the rows a nested quote already laid out without wrapping them again at each enclosing quote, so a quote nested 20 deep renders in 0.65 ms instead of 1.5 ms at width 40; output is byte-identical.
-- `Markdown` appends an inline paragraph, a `**strong**`/`*em*`/`~~del~~` span and a token it has no style for through one helper each instead of inside its inline-token switch; output is byte-identical.
-- `SelectList` computes each item's visual row count, the visible window, the navigation target of a key and a wrapped description through one helper each instead of inside its window picker, key handler and row renderer; rendered rows and selection are unchanged and a key with its render on a 500-item list costs the same.
-- `Form` paints each field kind through one function and shares one empty click-target list among the rows a click does not operate by column, instead of one 130-line render loop that allocated a target list per row, so rendering an eight-field dialog costs 4.45 µs instead of 4.75 µs with identical rows, click targets and callbacks.
-- `chunkForConPTY` finds each chunk's end and each code point's UTF-8 width through one function each, `emergencyTerminalRestore` restores a tracked terminal and a lost one through one function each, and `OverlayStack.compositeIntoWindow` clips an overlay to its maximum height and paints its rows through one function each; written bytes, chunk boundaries and composited rows are unchanged and chunking a 332,248-character frame costs the same.
-- `Box.render`, `Container.render`, `ScrollView.render`, `TabBar.render`, `Loader.render`, `Image.render`, `SettingsList` rendering and key handling, `Markdown` table layout, list items, HTML normalization, stream freezing and inline-token styling, `renderImage`, the full-paint replay in `core/paint-sequences.ts`, the Sixel probe's input handler, the `StdinBuffer` sequence splitter, the SGR coalescing, committed-prefix resync and oversized-row fit in `core/renderer.ts`, the `TUI`'s frame composition, direct writes, input dispatch, alt-screen residency, window planning and assembly and incremental update, and the editor's `wordWrapLine`, row rendering, key dispatch, typed-text insertion, yank-pop and line-span deletion are split into one function per step; behavior is unchanged.
-- Left and Right move the editor cursor without rebuilding the draft's visual-line map, which only Right at the end of the last line reads, so an arrow key on a 200-line draft costs 0.62 µs instead of 4.5 µs.
-
-### Fixed
-
-- `ImageRenderResult` and `ImageFit`, the types `renderImage` and `calculateImageFit` return, are exported from `@veyyon/tui/terminal-capabilities`.
-- `Editor.setPrediction()` shows a suggested message as ghost text over the empty composer in place of the placeholder; Tab inserts it, the first edit that leaves text in the composer dismisses it, and its optional `acceptHint` follows the suggestion in the same style and leaves with it.
-- A `Markdown` blockquote too narrow to keep a content cell beside its two-cell border renders without the border instead of re-wrapping deeper bordered rows at one cell, so a `>`×20 quote around 15 characters renders 7 rows in 0.4 ms at width 12 instead of 425,984 rows in 410 ms, and no quote row exceeds the render width.
-
-## [1.5.6] - 2026-10-10
-
-### Removed
 ### Changed
 
 - No user-visible change: `Form`, `SettingsList` and `TabBar` step through their fields, rows, sections and tabs with `wrapIndex`.
@@ -46,13 +24,34 @@
 
 - A frame that shrinks below the rows already in scrollback and replaces one of the rows it keeps commits the new row to scrollback, instead of counting the old copy as that row and losing the new one once it scrolls off.
 
-## [1.5.10] - 2026-10-25
-
 ### Added
 
 - `SelectListLayoutOptions.tabularDescription` keeps runs of spaces in a description, so a list whose descriptions are space-padded columns lines up under a heading ([#966](https://github.com/santhreal/veyyon/issues/966)).
 
-## [1.5.9] - 2026-10-22
+## [1.6.0] - 2026-10-28
+
+### Changed
+
+- Sync upstream changes from santhreal/veyyon.
+- `Markdown` borders the rows a nested quote already laid out without wrapping them again at each enclosing quote, so a quote nested 20 deep renders in 0.65 ms instead of 1.5 ms at width 40; output is byte-identical.
+- `Markdown` appends an inline paragraph, a `**strong**`/`*em*`/`~~del~~` span and a token it has no style for through one helper each instead of inside its inline-token switch; output is byte-identical.
+- `SelectList` computes each item's visual row count, the visible window, the navigation target of a key and a wrapped description through one helper each instead of inside its window picker, key handler and row renderer; rendered rows and selection are unchanged and a key with its render on a 500-item list costs the same.
+- `Form` paints each field kind through one function and shares one empty click-target list among the rows a click does not operate by column, instead of one 130-line render loop that allocated a target list per row, so rendering an eight-field dialog costs 4.45 µs instead of 4.75 µs with identical rows, click targets and callbacks.
+- `chunkForConPTY` finds each chunk's end and each code point's UTF-8 width through one function each, `emergencyTerminalRestore` restores a tracked terminal and a lost one through one function each, and `OverlayStack.compositeIntoWindow` clips an overlay to its maximum height and paints its rows through one function each; written bytes, chunk boundaries and composited rows are unchanged and chunking a 332,248-character frame costs the same.
+- `Box.render`, `Container.render`, `ScrollView.render`, `TabBar.render`, `Loader.render`, `Image.render`, `SettingsList` rendering and key handling, `Markdown` table layout, list items, HTML normalization, stream freezing and inline-token styling, `renderImage`, the full-paint replay in `core/paint-sequences.ts`, the Sixel probe's input handler, the `StdinBuffer` sequence splitter, the SGR coalescing, committed-prefix resync and oversized-row fit in `core/renderer.ts`, the `TUI`'s frame composition, direct writes, input dispatch, alt-screen residency, window planning and assembly and incremental update, and the editor's `wordWrapLine`, row rendering, key dispatch, typed-text insertion, yank-pop and line-span deletion are split into one function per step; behavior is unchanged.
+- Left and Right move the editor cursor without rebuilding the draft's visual-line map, which only Right at the end of the last line reads, so an arrow key on a 200-line draft costs 0.62 µs instead of 4.5 µs.
+
+### Fixed
+
+- `ImageRenderResult` and `ImageFit`, the types `renderImage` and `calculateImageFit` return, are exported from `@veyyon/tui/terminal-capabilities`.
+- `Editor.setPrediction()` shows a suggested message as ghost text over the empty composer in place of the placeholder; Tab inserts it, the first edit that leaves text in the composer dismisses it, and its optional `acceptHint` follows the suggestion in the same style and leaves with it.
+- A `Markdown` blockquote too narrow to keep a content cell beside its two-cell border renders without the border instead of re-wrapping deeper bordered rows at one cell, so a `>`×20 quote around 15 characters renders 7 rows in 0.4 ms at width 12 instead of 425,984 rows in 410 ms, and no quote row exceeds the render width.
+
+## [1.5.6] - 2026-10-10
+
+### Removed
+
+- Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
 
 ### Added
 
@@ -63,45 +62,6 @@
 ### Changed
 
 - The committed-prefix audit and resync are in `core/committed-prefix.ts` instead of `core/renderer.ts`, and the render scheduler, the root-child frame-segment helpers, the render intent and the alt-buffer caret mapping are in `core/render-scheduler.ts`, `core/frame-segments.ts`, `core/render-intent.ts` and `core/cursor.ts` instead of `core/tui.ts` and `core/frame-plan.ts`; behavior is unchanged.
-
-### Fixed
-
-- An `Editor` evaluates the text at the cursor when its first autocomplete provider attaches, so an `@` mention, `#` action, slash command or shortcode typed before then opens its suggestions or is rewritten instead of being ignored until the next keystroke.
-- A nested `Markdown` blockquote styles each row once, at the outermost quote, instead of once per level, so a `>`×20 quote row is 242 bytes instead of 584 and renders in 0.03 ms instead of 0.05 ms averaged over widths 1 to 40.
-- `Loader.start()` replaces a running animation timer instead of arming a second one that `stop()` could not clear.
-- An SGR mouse or kitty escape that starts while an expired partial is being held is no longer merged into that partial and delivered as typed characters; the stale partial is delivered on its own and the new sequence gets its own hold window.
-- A terminal started again while running no longer leaves its first keyboard-probe fallback armed, which enabled modifyOtherKeys on the restored terminal after `stop()`.
-
-### Removed
-
-- Removed the `ImageBudget` and `DEFAULT_MAX_INLINE_IMAGES` re-exports from `@veyyon/tui/components/image`; import them from `@veyyon/tui` or `@veyyon/tui/core/image-budget`.
-
-## [1.5.7] - 2026-10-15
-
-### Changed
-
-- `Markdown` borders a nested quote's laid-out rows without first checking whether the border symbol leads with a blank, since the final row wrap writes the same bytes either way; output is unchanged.
-
-## [1.5.6] - 2026-10-13
-
-### Breaking Changes
-
-- `ImageOptions.onDisplayed` is replaced by `displayListener`, an `ImageDisplayListener` whose `imageDisplayed(fallback)` receives each change of the image's on-screen state, so a caller passes one object instead of a closure per image.
-
-### Added
-
-- The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
-- `Component.releaseRenderCache()` drops the rows a component memoized for its next render once those rows have left the frame for native scrollback; `Container`, `Box`, `Markdown`, `Text`, `TruncatedText` and `Image` implement it, and a later render rebuilds identical rows from source.
-- `Editor.seedHistory()` adds a prompt to the up/down history ring without writing it to the history database; `addToHistory()` still writes it.
-- `TUIOptions.activity` sets the `ActivitySignal` the TUI attaches to between `start()` and `stop()`; the default is `processActivity`.
-- `RenderSignature`, every input besides the text that a `Markdown` render's rows depend on, is exported from `@veyyon/tui/components/markdown`.
-- `TUI.reusedRows(child)`, read inside `onBeforeCompose`, returns the rows a component-scoped frame keeps for a root child it does not re-render, and `undefined` when the frame renders the child or outside the sizing pass.
-- `ImageRenderResult` and `ImageFit`, the types `renderImage` and `calculateImageFit` return, are exported from `@veyyon/tui/terminal-capabilities`.
-- `Editor.setPrediction()` shows a suggested message as ghost text over the empty composer in place of the placeholder; Tab inserts it, the first edit that leaves text in the composer dismisses it, and its optional `acceptHint` follows the suggestion in the same style and leaves with it.
-
-### Changed
-
-- `Markdown` borders the rows a nested quote already laid out without wrapping them again at each enclosing quote, so a quote nested 20 deep renders in 0.65 ms instead of 1.5 ms at width 40; output is byte-identical.
 - The TUI reports each keystroke and frame to its activity signal before handling it, so its loop watchdog arms no tick while the session rests and resumes on the next keystroke or frame.
 - `Input`, `Editor` and `wordWrapLine` take the shared grapheme segmenter on first use instead of when their module loads, so loading them builds no `Intl.Segmenter`.
 - The frame throttle and the terminal hosts' settle windows are in `core/frame-pacing.ts` instead of `core/tui.ts`; frame timing is unchanged.

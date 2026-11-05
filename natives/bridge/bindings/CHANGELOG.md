@@ -2,7 +2,6 @@
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-28
 ### Breaking Changes
 
 - `summarizeCode()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where an 18,000-line TypeScript source held the event loop 68 ms.
@@ -17,12 +16,7 @@
 - `grep` repairs a pattern rejected for an unpaired parenthesis by escaping only that parenthesis, so `(get|set)Value(` matches `getValue(` instead of the text `(get` or `set)Value(`, and `)(` matches the text `)(` instead of every line.
 - The shell `grep` and `rg` builtins reject a pattern whose `)` closes no group instead of matching every line: `grep -E ')('`, `grep -P ')('` and `rg ')('` exit 2, `grep -G '\)\('` and `grep -G '\('` exit 2 with GNU grep's `Unmatched ) or \)` and `Unmatched ( or \(`, and a bare `grep ')('` searches for the text `)(`.
 
-## [1.5.9] - 2026-10-22
-
-### Breaking Changes
-
-- `releaseFreeHeapPages()` returns a `Promise<boolean>` and walks the C allocator's arenas on libuv's thread pool instead of on the calling thread, where the walk held a 6 GiB session's event loop 250 to 1127 ms per call.
-- `enclosingBlockBoundaries()` returns a `Promise` and parses on libuv's thread pool instead of on the calling thread, where a 3.5 MB TypeScript source held the event loop 153 ms; every call shares one retained parse tree, so a second window of the same source answers in 4 ms on any pool thread.
+## [1.6.0] - 2026-10-28
 
 ### Added
 
