@@ -56,6 +56,9 @@
 ### Fixed
 
 - SageOx handoffs accept approved context from sessions without a leaf entry ([Refs #954](https://github.com/Wladefant/veyyon/issues/954)).
+### Fixed
+
+- JavaScript eval sanitizes registered strings inside JSON display values before serialization ([Refs #937](https://github.com/Wladefant/veyyon/issues/937)).
 
 ## [1.7.8] - 2026-11-03
 
