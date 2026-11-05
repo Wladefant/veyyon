@@ -35,10 +35,10 @@ for (const record of [
 			onChunk: chunk => live.push(chunk),
 		});
 		// Every boundary, including within both the key and value, is hostile to chunk-local filtering.
-		for (const character of record + "\n") sink.push(character);
+		for (const character of `${record}\n`) sink.push(character);
 		const result = await sink.dumpWithArtifactStatus();
 		const persisted = await fs.readFile(artifactPath, "utf8");
-		expect(live.join("")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+		expect(live.join("")).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 		expect(persisted).not.toContain("fake-credential-123");
 		expect(persisted).toContain(BLOCKED_OUTPUT_RECORD);
 		expect(result.output).not.toContain("fake-credential-123");
@@ -62,7 +62,7 @@ test("known values redact at EOF and on minimizer replacement without enumeratin
 test("unterminated oversized records never leak their suffix and memory stays bounded", () => {
 	const guard = new ProducerOutputGuard();
 	expect(guard.push("x".repeat(65537))).toBe("");
-	expect(guard.push("fake-credential-123\nmore-secret-data\n")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+	expect(guard.push("fake-credential-123\nmore-secret-data\n")).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 	expect(guard.finish()).toBe("");
 });
 
@@ -77,13 +77,13 @@ test("redactor failure withholds the record instead of falling back to raw outpu
 	const guard = new ProducerOutputGuard(() => {
 		throw new Error("synthetic failure");
 	});
-	expect(guard.push("fake-credential-123\n")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+	expect(guard.push("fake-credential-123\n")).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 	expect(guard.finish()).toBe("");
 });
 
 test("a final snapshot cannot reopen a withheld producer stream", () => {
 	const guard = new ProducerOutputGuard();
-	expect(guard.push("API_KEY=fake-credential-123\n")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+	expect(guard.push("API_KEY=fake-credential-123\n")).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 	expect(guard.finish()).toBe("");
 	expect(guard.push("unlabelled credential suffix\n")).toBe("");
 	expect(guard.finish()).toBe("");
@@ -107,8 +107,8 @@ test("ANSI between a credential key and delimiter cannot hide a record", async (
 		onChunk: chunk => live.push(chunk),
 	});
 	for (const character of "\x1b[32mAPI_KEY\x1b[0m=fake-credential-123\n") sink.push(character);
-	expect((await sink.dump()).output).toBe(BLOCKED_OUTPUT_RECORD + "\n");
-	expect(live.join("")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+	expect((await sink.dump()).output).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+	expect(live.join("")).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 });
 
 test("ANSI within a known value cannot bypass its secret owner", () => {
@@ -135,7 +135,7 @@ for (const record of [
 ]) {
 	test(`recognizes credential label form: ${record.split(/[=:]/)[0]}`, () => {
 		const guard = new ProducerOutputGuard();
-		expect(guard.push(record + "\n")).toBe(BLOCKED_OUTPUT_RECORD + "\n");
+		expect(guard.push(`${record}\n`)).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 		expect(guard.finish()).toBe("");
 	});
 }
@@ -160,4 +160,180 @@ test("dump between credential label chunks keeps the credential out of artifacts
 	expect(live.join("")).not.toContain("fake-credential-123");
 	expect(persisted).not.toContain("fake-credential-123");
 	expect(result.output).not.toContain("fake-credential-123");
+});
+
+test("host text after an unfinished inventory reaches every sink while the inventory stays withheld", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+	directories.push(directory);
+	const artifactPath = path.join(directory, "output.txt");
+	const live: string[] = [];
+	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(),
+		artifactPath,
+		artifactId: "fake-output",
+		spillThreshold: 1,
+		onChunk: chunk => live.push(chunk),
+	});
+	sink.push('status\n{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"');
+	sink.pushHostText("PTY error: connection lost\n");
+	const result = await sink.dumpWithArtifactStatus();
+	const persisted = await fs.readFile(artifactPath, "utf8");
+	const expected = `status\n${BLOCKED_OUTPUT_RECORD}\nPTY error: connection lost\n`;
+	expect(result.output).not.toContain("fake-a");
+	expect(result.output).not.toContain("fake-b");
+	expect(result.output).not.toContain("PTY error: connection lost");
+	expect(live.join("")).toBe(expected);
+	expect(persisted).toBe(expected);
+});
+
+test("host text carrying a credential record is still withheld", async () => {
+	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
+	sink.pushHostText("Error: API_KEY=fake-credential-123\n");
+	expect((await sink.dump()).output).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+});
+
+test.each([
+	["ordinary diagnostic", "eval failure: worker exited\n", "eval failure: worker exited\n"],
+	[
+		"complete two-key map",
+		'eval failure\n{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"\n}\n',
+		'eval failure\n{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"\n}\n',
+	],
+])("pushHostText preserves %s", async (_name, input, expected) => {
+	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
+	sink.pushHostText(input);
+	expect((await sink.dump()).output).toBe(expected);
+});
+
+test("pushHostText keeps captured secret-owner redaction independent of producer finalization", async () => {
+	const secrets = new SecretObfuscator([{ type: "plain", content: "fake-owned-value", origin: "environment" }]);
+	const guard = new ProducerOutputGuard(text => secrets.obfuscate(text));
+	const sink = new OutputSink({ outputGuard: guard });
+	sink.push('unfinished status\n{\n  "ALPHA": "fake-a"');
+	sink.pushHostText("eval failure: fake-owned-value\n");
+	const result = await sink.dump();
+	expect(result.output).toContain("eval failure:");
+	expect(result.output).toContain(secrets.obfuscate("fake-owned-value"));
+	expect(result.output).not.toContain("fake-owned-value");
+	expect(result.output).not.toContain("fake-a");
+});
+
+test.each([
+	["unfinished two-key map", '{\n  "ALPHA": "fake-a",\n  "BETA": "fake-b"'],
+	["unfinished array", '[\n  { "ALPHA": "fake-a" },\n  { "BETA": "fake-b" }'],
+])(
+	"pushHostText with %s preserves diagnostics but withholds values in inline and spill output",
+	async (_label, record) => {
+		for (const spill of [false, true]) {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-host-error-"));
+			directories.push(directory);
+			const artifactPath = path.join(directory, "output.txt");
+			const live: string[] = [];
+			const diagnostic = `eval failure\n${record}`;
+			const sink = new OutputSink({
+				outputGuard: new ProducerOutputGuard(),
+				...(spill ? { artifactPath, artifactId: "fake-host-error", spillThreshold: 1 } : {}),
+				onChunk: chunk => live.push(chunk),
+			});
+			sink.pushHostText(diagnostic);
+			const result = await sink.dumpWithArtifactStatus();
+			const inline = live.join("");
+			expect(inline).toContain("eval failure");
+			if (!spill) expect(result.output).toContain("eval failure");
+			else expect(result.output).not.toContain("eval failure");
+			for (const value of ["fake-a", "fake-b"]) {
+				expect(inline).not.toContain(value);
+				expect(result.output).not.toContain(value);
+			}
+			if (spill) {
+				const artifact = await fs.readFile(artifactPath, "utf8");
+				expect(artifact).toContain("eval failure");
+				expect(artifact).not.toContain("fake-a");
+				expect(artifact).not.toContain("fake-b");
+			}
+		}
+	},
+);
+test.each([
+	["complete", 'Error: {\n  "ALPHA": "fake-a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"\n}'],
+	["unfinished", 'Error: {\n  "ALPHA": "fake-a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"'],
+])(
+	"pushHostText with a %s prefixed inventory withholds values in inline and spill output",
+	async (_label, diagnostic) => {
+		for (const spill of [false, true]) {
+			const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-host-error-"));
+			directories.push(directory);
+			const artifactPath = path.join(directory, "output.txt");
+			const live: string[] = [];
+			const sink = new OutputSink({
+				outputGuard: new ProducerOutputGuard(),
+				...(spill ? { artifactPath, artifactId: "fake-host-error", spillThreshold: 1 } : {}),
+				onChunk: chunk => live.push(chunk),
+			});
+			sink.pushHostText(diagnostic);
+			const result = await sink.dumpWithArtifactStatus();
+			const inline = live.join("");
+			for (const value of ["fake-a", "fake-b", "fake-c"]) {
+				expect(inline).not.toContain(value);
+				expect(result.output).not.toContain(value);
+			}
+			if (spill) {
+				const artifact = await fs.readFile(artifactPath, "utf8");
+				for (const value of ["fake-a", "fake-b", "fake-c"]) expect(artifact).not.toContain(value);
+			}
+		}
+	},
+);
+
+test.each([
+	["complete", '{ count: 1 } config / {"ALPHA": "/private/a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"\n}'],
+	["unfinished", '{ count: 1 } config / {"ALPHA": "https://example.invalid/path",\n  "BETA": "fake-b"'],
+])("slash separators do not hide %s inventories from sink outputs", async (_label, record) => {
+	for (const spill of [false, true]) {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+		directories.push(directory);
+		const artifactPath = path.join(directory, "output.txt");
+		const live: string[] = [];
+		const sink = new OutputSink({
+			outputGuard: new ProducerOutputGuard(),
+			...(spill ? { artifactPath, artifactId: "fake-output", spillThreshold: 1 } : {}),
+			onChunk: chunk => live.push(chunk),
+		});
+		sink.pushHostText(`${record}\n`);
+		const result = await sink.dumpWithArtifactStatus();
+		const outputs = [live.join(""), result.output];
+		if (spill) outputs.push(await fs.readFile(artifactPath, "utf8"));
+		for (const output of outputs) {
+			for (const value of ["private/a", "https://example.invalid/path", "fake-b", "fake-c"]) {
+				expect(output).not.toContain(value);
+			}
+		}
+	}
+});
+
+test.each([
+	["complete", '{ count: 1 } config / {"ALPHA": "/private/a",\n  "BETA": "fake-b",\n  "GAMMA": "fake-c"\n}'],
+	["unfinished", '{ count: 1 } config / {"ALPHA": "https://example.invalid/path",\n  "BETA": "fake-b"'],
+])("streaming sink pushes do not leak %s slash-separated inventories", async (_label, record) => {
+	for (const spill of [false, true]) {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "producer-output-"));
+		directories.push(directory);
+		const artifactPath = path.join(directory, "output.txt");
+		const live: string[] = [];
+		const sink = new OutputSink({
+			outputGuard: new ProducerOutputGuard(),
+			...(spill ? { artifactPath, artifactId: "fake-output", spillThreshold: 1 } : {}),
+			onChunk: chunk => live.push(chunk),
+		});
+		const lines = record.split("\n");
+		for (const [index, line] of lines.entries()) sink.push(line + (index < lines.length - 1 ? "\n" : ""));
+		const result = await sink.dumpWithArtifactStatus();
+		const outputs = [live.join(""), result.output];
+		if (spill) outputs.push(await fs.readFile(artifactPath, "utf8"));
+		for (const output of outputs) {
+			for (const value of ["private/a", "https://example.invalid/path", "fake-b", "fake-c"]) {
+				expect(output).not.toContain(value);
+			}
+		}
+	}
 });
