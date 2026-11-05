@@ -24,6 +24,7 @@ import { buildNonInteractiveEnv } from "../../exec/non-interactive-env";
 import type { ExtensionTerminalCapability } from "../../extensibility/terminal-capability";
 import { InternalUrlRouter } from "../../internal-urls";
 import { toolsPrompts } from "../../prompts/tools/rows";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../secrets/producer-output";
 import { type SessionCpuLimit, sessionBudgetLimits, sessionCpuLimit } from "../../session/cpu-limit";
 import {
 	artifactFooter,
@@ -95,14 +96,15 @@ const BRIDGE_POLL_INTERVAL_MS = 250;
  * stdin control, so the client's open pipe would otherwise reach the command, and a `read`,
  * `cat` or stdin-reading child would wait forever. A pipe, a heredoc or a `< file` inside the
  * command overrides the group's stdin, so explicit input still arrives. The newline before the
- * closing brace ends a trailing `# comment`.
+ * closing brace ends a trailing `# comment`. A separating blank line prevents a final
+ * backslash continuation from swallowing that closing brace.
  */
 export function wrapShellLineForClientTerminal(
 	line: string,
 	shellConfig: { shell: string; args: string[]; prefix?: string | undefined },
 ): { command: string; args: string[] } {
 	const prefixed = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
-	const finalLine = `{\n${prefixed}\n} </dev/null`;
+	const finalLine = `{\n${prefixed}\n\n} </dev/null`;
 	return { command: shellConfig.shell, args: shellConfig.args.concat([finalLine]) };
 }
 
@@ -1320,11 +1322,14 @@ export class BashTool
 				} catch (error) {
 					logger.warn("ACP terminal final output read failed", { terminalId: handle.terminalId, error });
 				}
-				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(current, {
-					exitCode: undefined,
-					cancelled: false,
-					timedOut: true,
-				});
+				const timedOutResult: BashInteractiveResult = summarizeBridgeOutput(
+					guardClientTerminalOutput(current, true),
+					{
+						exitCode: undefined,
+						cancelled: false,
+						timedOut: true,
+					},
+				);
 				return this.#buildCompletedResult(timedOutResult, call.timeoutSec, {
 					...resultOptions,
 					notices: call.notices,
@@ -1333,7 +1338,7 @@ export class BashTool
 			}
 
 			// Fetch final output; the terminal is released in the finally.
-			const finalOutput = await handle.currentOutput();
+			const finalOutput = guardClientTerminalOutput(await handle.currentOutput(), true);
 			const { exitCode, signal: exitSignal } = clientTerminalExit(exitStatus);
 			const bridgeResult: BashResult = {
 				...summarizeBridgeOutput(finalOutput, { exitCode, cancelled: false }),
@@ -1630,6 +1635,20 @@ async function createClientTerminalWhileActive(
 }
 
 /**
+ * ACP returns cumulative snapshots, not chunks. Classify each snapshot from its start,
+ * holding incomplete records and assignment prefixes until the command's final read.
+ * A truncated snapshot has lost its start at an arbitrary character, and that lost prefix
+ * can hold the assignment name, table header or earlier rows that classify the rest, so it
+ * is withheld whole rather than classified from a suffix.
+ */
+function guardClientTerminalOutput(output: ClientBridgeTerminalOutput, completed = false): ClientBridgeTerminalOutput {
+	if (output.truncated) return { ...output, output: BLOCKED_OUTPUT_RECORD };
+	const guard = new ProducerOutputGuard();
+	const filtered = guard.push(output.output);
+	return { ...output, output: filtered + (completed ? guard.finish() : "") };
+}
+
+/**
  * Poll the client's terminal until the process exits, the timeout elapses, or the caller
  * aborts, pushing its output on every tick. A timeout kills the command before returning, so
  * a slow `terminal/output` RPC cannot let it keep running past the enforced deadline; the
@@ -1712,7 +1731,7 @@ async function waitForClientTerminal(
 			// `signal?.aborted` and exits via the abort branch.
 			if (pollOutput === undefined) continue;
 			onUpdate?.({
-				content: [{ type: "text", text: pollOutput.output }],
+				content: [{ type: "text", text: guardClientTerminalOutput(pollOutput).output }],
 				details: { terminalId: handle.terminalId },
 			});
 		}

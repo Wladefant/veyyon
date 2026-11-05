@@ -452,6 +452,7 @@ export class Settings extends SettingsStore {
 				"agent.maxConcurrency",
 				...groupSettingPaths("compaction"),
 				"tools.maxDiscoveredTools",
+				"github.enabled",
 			],
 			{
 				defaultEffort:
