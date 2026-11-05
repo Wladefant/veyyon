@@ -1553,6 +1553,8 @@ async function readFinalClientTerminalOutput(
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);
 	}
+}
+/**
  * ACP returns cumulative snapshots, not chunks. Classify each snapshot from its start,
  * holding incomplete records and assignment prefixes until the command's final read.
  * A truncated snapshot has lost its start at an arbitrary character, and that lost prefix
