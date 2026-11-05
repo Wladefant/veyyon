@@ -4,8 +4,8 @@ import { readFile, stat } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionCommandContext } from "@veyyon/coding-agent";
 import * as zod from "zod/v4";
 import sageox from "../examples/extensions/sageox";
-import { createSageOxProvider } from "../examples/extensions/team-context-sageox";
 import { approveRecord, createDraft } from "../examples/extensions/team-context";
+import { createSageOxProvider } from "../examples/extensions/team-context-sageox";
 
 const TEAM = "team_fixture";
 const REPO = "repo_fixture";
@@ -131,12 +131,14 @@ function fixture(wsl = false) {
 					args[1] === "list"
 						? JSON.stringify({ murmurs: [{ content: state.note }], total: 1 })
 						: "Murmur queued (daemon starting, will sync shortly): receipt-id";
-			if (args[0] === "query")
-				stdout = JSON.stringify({ team_context: { results: [{ text: state.queryText }] } });
+			if (args[0] === "query") stdout = JSON.stringify({ team_context: { results: [{ text: state.queryText }] } });
 			return { code: args[0] === "import" && state.fail ? 1 : 0, stdout, stderr: "", killed: false };
 		},
 	};
-	const provider = createSageOxProvider(api as unknown as ExtensionAPI, TEAM, windows, { team: "portable-team", repository: "portable-repo" });
+	const provider = createSageOxProvider(api as unknown as ExtensionAPI, TEAM, windows, {
+		team: "portable-team",
+		repository: "portable-repo",
+	});
 	sageox(api as unknown as ExtensionAPI, TEAM, windows, provider);
 	return {
 		state,
