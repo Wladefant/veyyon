@@ -1,11 +1,12 @@
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { logger } from "@veyyon/utils";
+import { logger, type TelegramDeliveryTraceData } from "@veyyon/utils";
 
 const ENTRY_TYPE = "terminal:operator-answer";
 const ANSWER_MARKER = /^\[operator-answer question=([^\s\]]{1,256}) event=[^\s\]]{1,256}\](?:\s|$)/;
 type DeliveryMode = "auto" | "steer" | "followUp";
-// In-process FIFO across inbox instances that reference the same session journal.
-const journalOperationChains = new WeakMap<SessionManager, Promise<void>>();
+// In-process FIFO by durable session identity: reconnect may reopen the same file with a different manager.
+// Idle chains are removed; this is not a cross-process lease.
+const journalOperationChains = new Map<string, Promise<void>>();
 interface PendingAnswer {
 	version: 1;
 	sessionId: string;
@@ -28,14 +29,22 @@ export function operatorAnswerQuestionId(text: string): string | undefined {
  */
 export class OperatorAnswerInbox {
 	readonly #journal: () => SessionManager;
-	readonly #dispatch: (text: string, mode: DeliveryMode) => Promise<string>;
+	readonly #dispatch: (
+		text: string,
+		mode: DeliveryMode,
+		options?: { telegramTrace?: TelegramDeliveryTraceData },
+	) => Promise<string>;
 	readonly #isQueued: (questionId: string) => boolean;
 	readonly #queued = new Set<string>();
 	#chain: Promise<void> = Promise.resolve();
 
 	constructor(
 		journal: () => SessionManager,
-		dispatch: (text: string, mode: DeliveryMode) => Promise<string>,
+		dispatch: (
+			text: string,
+			mode: DeliveryMode,
+			options?: { telegramTrace?: TelegramDeliveryTraceData },
+		) => Promise<string>,
 		isQueued: (questionId: string) => boolean,
 	) {
 		this.#journal = journal;
@@ -50,7 +59,13 @@ export class OperatorAnswerInbox {
 		for (const entry of journal.getEntries()) {
 			if (entry.type === "message" && entry.message.role === "user") {
 				const content = entry.message.content;
-				const text = typeof content === "string" ? content : content.filter(block => block.type === "text").map(block => block.text).join("\n");
+				const text =
+					typeof content === "string"
+						? content
+						: content
+								.filter(block => block.type === "text")
+								.map(block => block.text)
+								.join("\n");
 				const questionId = operatorAnswerQuestionId(text);
 				if (questionId) consumed.add(questionId);
 			}
@@ -63,9 +78,14 @@ export class OperatorAnswerInbox {
 			if (answer.sessionId !== sessionId) continue;
 			// A record this build cannot read (another version, a damaged field) is not pending. It must never stop
 			// the session from opening or a later answer from being accepted.
-			if (answer.version !== 1 || typeof answer.text !== "string" || typeof answer.questionId !== "string" ||
-				answer.inputId !== `operator-answer:${answer.questionId}` || operatorAnswerQuestionId(answer.text) !== answer.questionId ||
-				!(["auto", "steer", "followUp"] as unknown[]).includes(answer.mode)) {
+			if (
+				answer.version !== 1 ||
+				typeof answer.text !== "string" ||
+				typeof answer.questionId !== "string" ||
+				answer.inputId !== `operator-answer:${answer.questionId}` ||
+				operatorAnswerQuestionId(answer.text) !== answer.questionId ||
+				!(["auto", "steer", "followUp"] as unknown[]).includes(answer.mode)
+			) {
 				logger.warn("Skipping unreadable operator-answer journal record", { entryId: entry.id });
 				continue;
 			}
@@ -79,20 +99,31 @@ export class OperatorAnswerInbox {
 			const journal = this.#journal();
 			// Reconnect can replace an inbox while the old instance is still accepting a sender retry.
 			// Serialize both instances against their shared durable journal, not only each inbox's chain.
-			const previous = journalOperationChains.get(journal) ?? Promise.resolve();
+			const sessionId = journal.getSessionId();
+			const previous = journalOperationChains.get(sessionId) ?? Promise.resolve();
 			const queued = previous.then(() => operation(journal));
-			journalOperationChains.set(journal, queued.then(() => {}, () => {}));
+			const settled = queued.then(
+				() => {},
+				() => {},
+			);
+			journalOperationChains.set(sessionId, settled);
+			void settled.then(() => {
+				if (journalOperationChains.get(sessionId) === settled) journalOperationChains.delete(sessionId);
+			});
 			return queued;
 		});
-		this.#chain = run.then(() => {}, () => {});
+		this.#chain = run.then(
+			() => {},
+			() => {},
+		);
 		return run;
 	}
 
-	async #queue(answer: PendingAnswer): Promise<string> {
+	async #queue(answer: PendingAnswer, options?: { telegramTrace?: TelegramDeliveryTraceData }): Promise<string> {
 		const key = `${answer.sessionId}:${answer.questionId}`;
 		this.#queued.add(key);
 		try {
-			return await this.#dispatch(answer.text, answer.mode);
+			return await this.#dispatch(answer.text, answer.mode, options);
 		} catch (error) {
 			this.#queued.delete(key);
 			throw error;
@@ -100,7 +131,11 @@ export class OperatorAnswerInbox {
 	}
 
 	/** Return undefined for ordinary input; only the operator envelope enters this protocol. */
-	accept(text: string, mode: DeliveryMode): Promise<string | undefined> {
+	accept(
+		text: string,
+		mode: DeliveryMode,
+		options?: { telegramTrace?: TelegramDeliveryTraceData },
+	): Promise<string | undefined> {
 		const questionId = operatorAnswerQuestionId(text);
 		if (!questionId) return Promise.resolve(undefined);
 		return this.#serialize(async journal => {
@@ -113,7 +148,9 @@ export class OperatorAnswerInbox {
 			// runtime taking the message and journaling it is a window of milliseconds against a retry's seconds.
 			// A replacement inbox may receive the sender's retry before recover() inspects a still-queued
 			// answer. The durable pending record, not only this instance's mark, requires checking the queue.
-			if (!consumed.has(questionId) && (pending.has(questionId) || this.#queued.has(key))) {
+			// Another manager can have queued the answer after this manager loaded a stale snapshot.
+			// Check the shared runtime queue even when no local pending record was observed.
+			if (!consumed.has(questionId)) {
 				if (this.#isQueued(questionId)) this.#queued.add(key);
 				else this.#queued.delete(key);
 			}
@@ -121,15 +158,25 @@ export class OperatorAnswerInbox {
 				logger.info(`DUPLICATE-ANSWER ${questionId}`);
 				return "duplicate";
 			}
+			// A separately opened manager can have an older in-memory journal even after our per-session
+			// operation lock has settled. Its empty queue is not proof that no durable answer exists.
+			// Refuse to append from that stale snapshot; a reopened manager can recover the original.
+			await journal.assertReplayJournalCurrent();
+			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before journaling");
 			const answer: PendingAnswer = pending.get(questionId) ?? {
-				version: 1, sessionId, questionId, inputId: `operator-answer:${questionId}`, text, mode,
+				version: 1,
+				sessionId,
+				questionId,
+				inputId: `operator-answer:${questionId}`,
+				text,
+				mode,
 			};
 			if (!pending.has(questionId)) journal.appendCustomEntry(ENTRY_TYPE, answer);
 			// append alone can remain behind the lazy-file gate or a foreign-file rewrite.
 			await journal.ensureOnDisk();
 			await journal.flush();
 			if (this.#journal() !== journal) throw new Error("Operator-answer session changed before injection");
-			return this.#queue(answer);
+			return this.#queue(answer, options);
 		});
 	}
 
@@ -139,6 +186,15 @@ export class OperatorAnswerInbox {
 	 */
 	recover(): Promise<void> {
 		return this.#serialize(async journal => {
+			if (this.#journal() !== journal) return;
+			// Recovery must not replay an already-consumed answer from a retained stale manager.
+			try {
+				await journal.assertReplayJournalCurrent();
+			} catch {
+				// Changed or unreadable durable state cannot authorize replay; sender retries later.
+				logger.warn("Skipping operator-answer recovery because session journal is stale or cannot be verified");
+				return;
+			}
 			if (this.#journal() !== journal) return;
 			const { pending, consumed } = this.#scan(journal);
 			for (const answer of pending.values()) {

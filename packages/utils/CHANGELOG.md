@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [1.7.9] - 2026-11-04
+
+### Fixed
+
+- Allow Windows ACL commands 60 seconds by default. Accept `VEYYON_WINDOWS_ACL_TIMEOUT_MS` as an integer from 1 to 2147483647 milliseconds; ignore invalid values. Keep every owner, reparse-point, inheritance and DACL check ([Refs #849](https://github.com/Wladefant/veyyon/issues/849)).
+
+## [1.7.2] - 2026-11-01
+
+### Added
+
+- Added `telegram-delivery-trace` utilities for structured Telegram delivery lifecycle tracing with strict allowlisted metadata and WeakMap message association ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
+### Fixed
+
+- Record Telegram turn consumption once across the original message and all transferred copies ([Refs #505](https://github.com/Wladefant/veyyon/issues/505)).
+
+## [1.7.1] - 2026-10-31
+
+### Fixed
+
+- Retry lock publication EPERM, EACCES and EBUSY errors only when a competing lock is observable, preserving owner identity and candidate cleanup.
+
 ## [1.7.0] - 2026-10-31
 
 ### Fixed

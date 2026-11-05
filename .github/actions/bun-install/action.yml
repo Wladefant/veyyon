@@ -5,12 +5,17 @@ description: >
    then materialize the gitignored source codegen so the tree is runnable.
    A missing or mismatched runner bun is installed in a job-local directory.
 
+inputs:
+   shell:
+      description: Shell used to run this action's command steps
+      required: false
+      default: bash
 runs:
    using: composite
    steps:
       - name: Detect bun
         id: env
-        shell: bash
+        shell: ${{ inputs.shell }}
         run: |
            # Read the only bun version pin from the root package manifest.
            version="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' package.json | head -n1)"
@@ -39,7 +44,7 @@ runs:
            fi
       - name: Install bun when absent or mismatched
         if: steps.env.outputs.setup_bun == 'true'
-        shell: bash
+        shell: ${{ inputs.shell }}
         run: |
            # The version and install directory are selected by the detection
            # step from the root packageManager pin and RUNNER_TEMP.
@@ -81,7 +86,7 @@ runs:
            key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
-        shell: bash
+        shell: ${{ inputs.shell }}
         run: |
            # The shared bun store (actions/cache) can hand a job a corrupt or
            # partially written tarball when parallel jobs touch the same cache
@@ -101,7 +106,7 @@ runs:
            bun install --frozen-lockfile --cache-dir="$retry_cache"
 
       - name: Generate source codegen
-        shell: bash
+        shell: ${{ inputs.shell }}
         run: |
            # coding-agent's src/export/html/index.ts imports
            # ./tool-views.generated.js (a gitignored codegen artifact bundled
