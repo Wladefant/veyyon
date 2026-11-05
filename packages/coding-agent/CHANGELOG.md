@@ -73,6 +73,10 @@
 - Supervision phases now use bounded watchdogs (120 s for startup, 180 s for streams, 15 min for tools, and 30 min for children). A timed-out phase supports one acknowledged recovery in the same session, and terminal outcomes remain durable with five-minute parked retention and bounded orphan cleanup.
 - Task successors cannot start after another successor claims the predecessor checkpoint. Retiring a predecessor preserves its history.
 - A refused pre-dispatch successor handoff releases its own claim, and phase watchdogs reset only on phase changes or observable progress ([Refs #849](https://github.com/Wladefant/veyyon/issues/849)).
+### Fixed
+
+- MCP HTTP SSE diagnostics no longer include malformed peer JSON fragments ([#929](https://github.com/Wladefant/veyyon/issues/929)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
