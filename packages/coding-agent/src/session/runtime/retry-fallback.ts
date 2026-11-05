@@ -32,7 +32,7 @@ import {
 	sanitizeRetryFallbackChains,
 } from "../agent-session-retry-fallback";
 import type { AgentSessionEvent } from "../agent-session-types";
-import { hasReplayUnsafeOutput, isClassifierRefusal } from "../failed-turn";
+import { hasReplayUnsafeOutput } from "../failed-turn";
 
 /** What {@link RetryFallback} reads from the session's public surface. */
 export interface RetryFallbackSession {
@@ -241,7 +241,7 @@ export class RetryFallback {
 		if (!model) return false;
 		const retrySettings = this.#session.settings.getGroup("retry");
 		if (!retrySettings.enabled || !retrySettings.modelFallback || !this.chainEnabled) return false;
-		if (isClassifierRefusal(message) || isProviderRefusalMessage(message)) return false;
+		if (isProviderRefusalMessage(message)) return false;
 		const id = this.#host.classify(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;

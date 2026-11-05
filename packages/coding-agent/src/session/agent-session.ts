@@ -29,6 +29,7 @@ import {
 	ToolAdmissionFatalError,
 	type ToolChoiceDirective,
 } from "@veyyon/agent-core";
+import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { CompactionResult, SessionMessageEntry, ShakeConfig } from "@veyyon/agent-core/compaction";
 import type {
 	AssistantMessage,
@@ -3037,7 +3038,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		// Classifier refusals are persisted-skipped above; also prune the trailing stub from active
 		// context so the next turn's prompt does not replay it. Fall through to the standard error
 		// tail so `session_stop` hooks (block, continue, telemetry) still fire.
-		if (isClassifierRefusal(msg)) {
+		if (isProviderRefusalMessage(msg)) {
 			removeAssistantMessageFromActiveContext(this.agent, msg);
 		} else {
 			// No retry, fallback, or compaction continuation fired: this errored
