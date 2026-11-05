@@ -242,7 +242,7 @@ export class LegacySseTransport implements MCPTransport {
 			method,
 			params: params ?? {},
 		};
-		const timeout = resolveMCPTimeoutMs(this.#config.timeout);
+		const timeout = options?.timeoutMs ?? resolveMCPTimeoutMs(this.#config.timeout);
 		const signal = options?.signal
 			? AbortSignal.any([options.signal, this.#requestController.signal])
 			: this.#requestController.signal;

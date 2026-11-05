@@ -124,6 +124,9 @@
 ### Fixed
 
 - Disk history lookup rejects ambiguous IDs across case-folded and repeated archive paths ([Refs #871](https://github.com/Wladefant/veyyon/issues/871)).
+### Fixed
+
+- Legacy MCP SSE requests honor per-request timeout overrides, including `timeoutMs: 0` to disable the deadline ([Refs #860](https://github.com/Wladefant/veyyon/issues/860)).
 
 ## [1.7.8] - 2026-11-03
 
