@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { getConfigRootDir, getWindowsAclTimeoutMs, readOwnerOnlyFile } from "@veyyon/utils";
+import { getConfigRootDir, readOwnerOnlyFile } from "@veyyon/utils";
 
 /** Windows recycles PIDs fast, so a live pid is not proof: the owner's pipe must answer. */
 async function isEndpointServing(endpoint: string): Promise<boolean> {
@@ -78,7 +78,7 @@ export async function assertNotTerminalOwned(sessionFile: string, root = getConf
 			const code = (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.name : "unknown");
 			const detail = error instanceof Error ? error.message : String(error);
 			throw new Error(
-				`Cannot establish terminal writer ownership: ${record}; step=${step}; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ACL deadline=${getWindowsAclTimeoutMs()}ms per command; ${detail}`,
+				`Cannot establish terminal writer ownership: ${record}; step=${step}; code=${code}; elapsed=${Math.round(performance.now() - started)}ms; ${detail}`,
 				{ cause: error },
 			);
 		}

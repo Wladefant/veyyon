@@ -26,7 +26,7 @@ async function claim(): Promise<{ root: string; sessionFile: string; record: str
 
 describe("terminal ownership failure diagnostics", () => {
 	for (const step of ["open", "ACL #1 (parent)", "ACL #2 (record)", "identity"]) {
-		it(`names the record, ${step}, code, elapsed time and deadline without losing the cause`, async () => {
+		it(`names the record, ${step}, code and elapsed time without losing the cause`, async () => {
 			const { root, sessionFile, record } = await claim();
 			delete process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 			const cause = Object.assign(new Error("access denied"), { code: "EPERM" });
@@ -43,7 +43,7 @@ describe("terminal ownership failure diagnostics", () => {
 			expect(error.message).toContain(
 				`Cannot establish terminal writer ownership: ${record}; step=${step}; code=EPERM;`,
 			);
-			expect(error.message).toMatch(/elapsed=\d+ms; ACL deadline=60000ms per command; access denied$/);
+			expect(error.message).toMatch(/elapsed=\d+ms; access denied$/);
 			expect(read).toHaveBeenCalledTimes(1);
 		});
 	}
