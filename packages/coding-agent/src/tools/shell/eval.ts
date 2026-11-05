@@ -10,7 +10,7 @@ import type { BackendProbeOptions } from "../../eval/probe";
 import { defaultEvalSessionId } from "../../eval/session-id";
 import { upsertStatusEvent } from "../../eval/status-events";
 import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../../eval/types";
-import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { appendNotice, formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import {
 	DEFAULT_MAX_BYTES,
@@ -33,6 +33,7 @@ import {
 	formatArtifactErrorNotice,
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
+	resolveOutputSinkWindow,
 	resolveOutputSinkHeadBytes,
 } from "../core/output-meta";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
