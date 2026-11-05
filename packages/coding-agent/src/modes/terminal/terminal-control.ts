@@ -92,9 +92,16 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 	let lastConvertedId: string | undefined;
 	const projector = createTerminalTranscriptProjector();
 	const convert = (entry: SessionEntry): TerminalTranscriptText[] => {
-		const turn = projector.observe(entry);
-		if (entry.type !== "message" || entry.message.role !== "assistant") return [];
+		if (entry.type !== "message") {
+			projector.observe(entry);
+			return [];
+		}
+		if (entry.message.role !== "assistant") {
+			projector.observe(entry);
+			return [];
+		}
 		const readable = readColdEntry(entry) ?? entry;
+		const turn = projector.observe(readable);
 		const content = mode.session.displayAssistantContent(readable.message.content);
 		const text = content
 			.filter(block => block.type === "text")
