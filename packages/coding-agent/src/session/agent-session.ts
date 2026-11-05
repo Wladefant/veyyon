@@ -64,6 +64,12 @@ import { modelsAreEqual } from "@veyyon/catalog/models";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
 import { declaredContextWindow } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
+import {
+	collectPendingToolCalls,
+	SESSION_EXIT_CUSTOM_TYPE,
+	type SessionExitData,
+	sessionExitLogLevel,
+} from "@veyyon/kernel/session/exit-diagnostics";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import {
@@ -156,6 +162,7 @@ import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionStat
 import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import type { PlanModeState } from "../plan-mode/state";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
+import { AgentRegistry } from "../registry/agent-registry";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
 import {
