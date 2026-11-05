@@ -4,6 +4,7 @@
 - Run-only MCP configuration rejects writerless FIFOs without blocking before it checks the file type ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 
 ### Fixed
+- Legacy SSE parse diagnostics omit malformed peer frame data, and unattributable peer warnings omit peer-supplied messages while caller errors stay unchanged ([Refs #866](https://github.com/Wladefant/veyyon/issues/866)).
 
 - Native Mainplane session and operation identities reject malformed Unicode before hashing ([Refs #775](https://github.com/Wladefant/veyyon/issues/775)).
 ## [1.7.10] - 2026-11-04

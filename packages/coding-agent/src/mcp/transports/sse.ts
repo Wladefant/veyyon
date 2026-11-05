@@ -145,7 +145,7 @@ export class LegacySseTransport implements MCPTransport {
 				} catch (error) {
 					if (error instanceof SyntaxError) {
 						throw new Error(
-							`${describeMCPTarget({ url: this.#config.url })} sent a legacy SSE message that is not JSON: ${event.data}. Fix: this is a bug in the server; check its own logs. If the server is behind a proxy, the proxy may be rewriting the event stream.`,
+							`${describeMCPTarget({ url: this.#config.url })} sent a legacy SSE message that is not JSON. Fix: this is a bug in the server; check its own logs. If the server is behind a proxy, the proxy may be rewriting the event stream.`,
 						);
 					}
 					throw error;
@@ -195,7 +195,6 @@ export class LegacySseTransport implements MCPTransport {
 			logger.warn("MCP server reported an error it could not attribute to a request", {
 				server: this.#config.url,
 				code: error.code,
-				message: error.message,
 				failedRequests: failed,
 			});
 			this.onError?.(new Error(describeJsonRpcError(error)));
