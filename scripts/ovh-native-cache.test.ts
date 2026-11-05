@@ -95,6 +95,8 @@ function makeSentinel(f: Fixture, at = f.target): string {
 
 const linuxIt = it.skipIf(process.platform !== "linux");
 
+// WHY: a clean checkout can erase Cargo's workspace target, and unsafe pruning can erase another runner's data.
+// This suite exercises the actual YAML shell step; it does not prove remote cache reuse or runner-hook release.
 describe("OVH native cache behavior", () => {
 	linuxIt("keeps an under-threshold cache and builds while preserving a sibling cache", () => {
 		const f = fixture();
