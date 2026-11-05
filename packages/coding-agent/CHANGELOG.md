@@ -23,6 +23,7 @@
 ### Fixed
 
 - ACP client-terminal Bash commands ending in a line-continuation backslash retain the stdin-guard shell group's closing brace ([#565](https://github.com/Wladefant/veyyon/issues/565)).
+- MCP HTTP SSE validates decoded frames, returns correlated capacity errors, and closes with an explicit error for oversized batches ([Refs #927](https://github.com/Wladefant/veyyon/issues/927)).
 - Withhold unattributable kernel stderr bytes instead of logging raw ownerless chunks ([Refs #941](https://github.com/Wladefant/veyyon/issues/941)).
 - JavaScript eval `log()` and `phase()` withhold assignment-shaped statuses, including inventories split across events, before live updates or retention ([Refs #905](https://github.com/Wladefant/veyyon/issues/905)).
 - Kernel IPC tracing logs request length instead of payload content ([Refs #943](https://github.com/Wladefant/veyyon/issues/943)).

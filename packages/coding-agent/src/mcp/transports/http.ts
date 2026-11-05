@@ -37,7 +37,10 @@ import {
 } from "./transport-failure";
 
 const HTTP_SSE_CONNECT_TIMEOUT_MS = 1_000;
-
+// A single untrusted SSE event must not fan out unbounded work or log volume.
+const MAX_HTTP_SSE_BATCH_MEMBERS = 256;
+// Count request handling AND its HTTP response delivery in the same budget.
+const MAX_PENDING_HTTP_SSE_SERVER_REQUESTS = 32;
 
 const mcpToolArgsAttemptFactory = Symbol("mcpToolArgsAttemptFactory");
 
@@ -99,13 +102,9 @@ function isStreamMessage(value: unknown): value is JsonRpcMessage {
 		return !("id" in value) || typeof value.id === "string" || typeof value.id === "number";
 	}
 	if (value.id !== null && typeof value.id !== "string" && typeof value.id !== "number") return false;
-	if (("result" in value) === ("error" in value)) return false;
+	if ("result" in value === "error" in value) return false;
 	if ("error" in value) {
-		return (
-			isRecord(value.error) &&
-			typeof value.error.code === "number" &&
-			typeof value.error.message === "string"
-		);
+		return isRecord(value.error) && typeof value.error.code === "number" && typeof value.error.message === "string";
 	}
 	return "result" in value;
 }
@@ -119,6 +118,7 @@ export class HttpTransport implements MCPTransport {
 	#sseConnection: AbortController | null = null;
 	#streamRequests = new Map<string | number, AbortController>();
 	#requestController = new AbortController();
+	#pendingSSEServerRequests = 0;
 
 	onClose?: () => void;
 	onError?: (error: Error) => void;
@@ -233,7 +233,7 @@ export class HttpTransport implements MCPTransport {
 		try {
 			for await (const message of readSseJson<JsonRpcMessage>(body, signal)) {
 				if (!this.#connected) break;
-				this.#dispatchSSEMessage(message);
+				await this.#dispatchSSEMessage(message);
 			}
 		} catch (error) {
 			if (error instanceof Error && !isAbortError(error)) {
@@ -249,23 +249,60 @@ export class HttpTransport implements MCPTransport {
 		}
 	}
 
-	/** Route an SSE message (or batch) to the appropriate handler. */
-	#dispatchSSEMessage(message: JsonRpcMessage | JsonRpcMessage[]): void {
-		if (Array.isArray(message)) {
-			for (const m of message) this.#dispatchSSEMessage(m);
+	/** Validate and admit an untrusted SSE event using bounded per-frame work. */
+	async #dispatchSSEMessage(message: unknown): Promise<void> {
+		const members = Array.isArray(message) ? message : [message];
+		if (members.length > MAX_HTTP_SSE_BATCH_MEMBERS) {
+			// Fail the connection instead of silently stranding valid request IDs.
+			// Closing bounds rejection work independently of the batch length.
+			try {
+				this.onError?.(new Error("MCP HTTP SSE batch exceeds the 256-member limit"));
+			} finally {
+				await this.close();
+			}
 			return;
 		}
-		// Server-to-client request: has both method and id
-		if ("method" in message && "id" in message && message.id != null) {
-			void answerServerRequest(this.onRequest, message as JsonRpcRequest).then(body =>
-				this.#sendServerResponse(body),
-			);
-			return;
+		let invalidMember = false;
+		let requestCapacityExceeded = false;
+		for (const member of members) {
+			if (!this.#connected) return;
+			// JSON-RPC batches are flat; nested arrays and malformed envelopes
+			// must never reach callbacks or recurse into untrusted structures.
+			if (Array.isArray(member) || !isStreamMessage(member)) {
+				invalidMember = true;
+				continue;
+			}
+			// Server-to-client request: has both method and id.
+			if ("method" in member && "id" in member && member.id != null) {
+				if (this.#pendingSSEServerRequests >= MAX_PENDING_HTTP_SSE_SERVER_REQUESTS) {
+					requestCapacityExceeded = true;
+					// Apply reader backpressure instead of creating another unbounded
+					// set of response POSTs when the handler budget is full.
+					await this.#sendServerResponse({
+						jsonrpc: "2.0",
+						id: member.id,
+						error: { code: -32000, message: "Server busy" },
+					});
+					continue;
+				}
+				this.#pendingSSEServerRequests++;
+				void answerServerRequest(this.onRequest, member as JsonRpcRequest)
+					.then(body => this.#sendServerResponse(body))
+					.catch(() => logger.warn("MCP HTTP SSE server request could not be completed"))
+					.finally(() => {
+						this.#pendingSSEServerRequests--;
+					});
+				continue;
+			}
+			// Notification: has method but no id.
+			if ("method" in member && !("id" in member)) {
+				this.onNotification?.(member.method, member.params);
+			}
 		}
-		// Notification: has method but no id
-		if ("method" in message && !("id" in message)) {
-			this.onNotification?.(message.method, message.params);
-		}
+		// At most one static warning of each kind per SSE frame, regardless of
+		// how many invalid or over-capacity members the peer supplied.
+		if (invalidMember) logger.warn("Skipping invalid MCP HTTP SSE batch member");
+		if (requestCapacityExceeded) logger.warn("MCP HTTP SSE server request capacity exceeded");
 	}
 
 	streamRequest(
@@ -558,7 +595,7 @@ export class HttpTransport implements MCPTransport {
 							continue;
 						}
 						if (!this.#connected) continue;
-						this.#dispatchSSEMessage(message);
+						await this.#dispatchSSEMessage(message);
 					}
 				}
 				if (!captured) {
