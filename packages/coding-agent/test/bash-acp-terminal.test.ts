@@ -97,7 +97,7 @@ describe("BashTool ACP terminal routing", () => {
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
 		expect(params.command).toBe("/bin/bash");
-		expect(params.args).toEqual(["-l", "-c", "{\necho hi\n} </dev/null"]);
+		expect(params.args).toEqual(["-l", "-c", "{\necho hi\n\n} </dev/null"]);
 
 		// The first onUpdate must carry the terminalId so the editor can embed it
 		expect(updates.length).toBeGreaterThanOrEqual(1);
@@ -139,7 +139,7 @@ describe("BashTool ACP terminal routing", () => {
 		expect(createSpy).toHaveBeenCalledTimes(1);
 		const params = createSpy.mock.calls[0]![0];
 		expect(params.command).toBe("/bin/bash");
-		expect(params.args).toEqual(["-l", "-c", `{\n${line}\n} </dev/null`]);
+		expect(params.args).toEqual(["-l", "-c", `{\n${line}\n\n} </dev/null`]);
 		// `args` must actually be present — the bug was omitting it entirely.
 		expect(params.args).toBeDefined();
 		expect(params.args?.length).toBeGreaterThan(0);

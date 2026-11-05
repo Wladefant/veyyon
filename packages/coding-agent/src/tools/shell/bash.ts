@@ -1675,7 +1675,7 @@ async function waitForClientTerminal(
 			}
 			if (polled.kind !== "output") continue;
 			onUpdate?.({
-				content: [{ type: "text", text: guardClientTerminalOutput(pollOutput).output }],
+				content: [{ type: "text", text: guardClientTerminalOutput(polled.output).output }],
 				details: { terminalId: handle.terminalId },
 			});
 		}
