@@ -30,7 +30,7 @@ describe("terminal ownership failure diagnostics", () => {
 			const { root, sessionFile, record } = await claim();
 			delete process.env.VEYYON_WINDOWS_ACL_TIMEOUT_MS;
 			const cause = Object.assign(new Error("access denied"), { code: "EPERM" });
-			const read = vi.spyOn(utils, "readOwnerOnlyFile").mockImplementation(async (_file, options) => {
+			const read = vi.spyOn(utils, "readOwnerOnlyFile").mockImplementation(async (_path, options) => {
 				options?.onStep?.(step);
 				throw cause;
 			});
@@ -66,7 +66,7 @@ describe("terminal ownership failure diagnostics", () => {
 		expect(error.message).toContain(`${record}; step=parse; code=SyntaxError;`);
 	});
 
-	it("still treats a vanished record as absent", async () => {
+	it("still treats a disappeared record as absent", async () => {
 		const { root, sessionFile } = await claim();
 		vi.spyOn(utils, "readOwnerOnlyFile").mockRejectedValue(Object.assign(new Error("gone"), { code: "ENOENT" }));
 		await expect(assertNotTerminalOwned(sessionFile, root)).resolves.toBeUndefined();
