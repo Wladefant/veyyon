@@ -1671,6 +1671,7 @@ class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
 class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNextSourceClose = false;
+  appendForeignLineOnRefusal: string | undefined;
 
   override openWriter(
     target: string,
@@ -1687,6 +1688,10 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
         await writer.close();
         if (this.rejectNextSourceClose && target === this.protectedSourceFile) {
           this.rejectNextSourceClose = false;
+          // A separate writer can append between our end marker and rollback.
+          const foreignLine = this.appendForeignLineOnRefusal;
+          this.appendForeignLineOnRefusal = undefined;
+          if (foreignLine) await fs.appendFile(target, foreignLine);
           throw new Error("synthetic source writer-close refusal");
         }
       },
@@ -1930,6 +1935,18 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       const providerSessionId = agent.sessionId;
 
       storage.protectedSourceFile = sourceFile;
+      // Interleave a real file append from an independent synthetic writer
+      // AFTER our old-source end marker but BEFORE the rollback repairs it.
+      const interleavedForeign: JsonlMessageEntry = {
+        type: "message",
+        id: "synthetic-interleaved-close-tail",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user", content: "Foreign tail before rollback", timestamp: Date.now(),
+        },
+      };
+      storage.appendForeignLineOnRefusal = `${JSON.stringify(interleavedForeign)}\n`;
       storage.rejectNextSourceClose = true;
       await expect(session.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
       expect(storage.rejectNextSourceClose).toBe(false);
@@ -1952,8 +1969,12 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         entry.type === "message" && entry.message.role === "user" &&
         entry.message.content === "Original active session"
       )).toBe(true);
+      expect(diskAfterRefusal.some(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content === "Foreign tail before rollback"
+      )).toBe(true);
 
-      // Simulate a different, legitimate writer while this manager repairs
+      // Simulate another legitimate writer after this manager has repaired
       // only its own aborted switch marker. The foreign line must survive.
       const foreignEntry: JsonlMessageEntry = {
         type: "message",
