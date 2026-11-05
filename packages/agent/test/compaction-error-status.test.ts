@@ -7,9 +7,10 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	generateHandoff,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { AssistantMessage } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { anthropicModel, createAssistantMessage, createUserMessage } from "./helpers";
 
 // Pins the fix for the "raw 401 surfaced as Compaction failed:" bug.
 //
@@ -27,26 +28,6 @@ import { getBundledModel } from "@veyyon/catalog/models";
 // sites in `packages/agent/src/compaction/compaction.ts`, so verifying
 // one site is sufficient to lock the contract.
 
-function makeAssistantStop(content: AssistantMessage["content"]): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
-
 function makeAssistantError(errorStatus: number | undefined, errorMessage: string): AssistantMessage {
 	return {
 		role: "assistant",
@@ -55,44 +36,27 @@ function makeAssistantError(errorStatus: number | undefined, errorMessage: strin
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "error",
 		errorMessage,
 		...(errorStatus !== undefined ? { errorStatus } : {}),
 	};
 }
 
-function getAnthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
-}
-
 const handoffMessages: AgentMessage[] = [
 	{ role: "user", content: "begin", timestamp: 1 },
-	makeAssistantStop([{ type: "text", text: "ok" }]),
+	createAssistantMessage([{ type: "text", text: "ok" }]),
 ];
-
-function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
-	return { role: "user", content: text, timestamp };
-}
 
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
 		messagesToSummarize: [
-			makeUserMessage("history msg"),
-			makeAssistantStop([{ type: "text", text: "history reply" }]),
+			createUserMessage("history msg"),
+			createAssistantMessage([{ type: "text", text: "history reply" }]),
 		],
-		turnPrefixMessages: [makeUserMessage("turn prefix msg")],
-		recentMessages: [makeUserMessage("recent msg")],
+		turnPrefixMessages: [createUserMessage("turn prefix msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: true,
 		tokensBefore: 12_345,
 		fileOps: createFileOps(),
@@ -114,7 +78,7 @@ describe("compaction error-status propagation", () => {
 			),
 		);
 
-		const error = await generateHandoff(handoffMessages, getAnthropicModel(), "stale-key", {
+		const error = await generateHandoff(handoffMessages, anthropicModel(), "stale-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 		}).catch(err => err);
@@ -133,7 +97,7 @@ describe("compaction error-status propagation", () => {
 			makeAssistantError(403, '403 {"error":{"type":"forbidden","message":"Access denied"}}'),
 		);
 
-		const error = await compact(makePreparation(), getAnthropicModel(), "stale-key").catch(err => err);
+		const error = await compact(makePreparation(), anthropicModel(), "stale-key").catch(err => err);
 
 		expect(error).toBeInstanceOf(Error);
 		const e = error as Error & { status?: number };
@@ -146,7 +110,7 @@ describe("compaction error-status propagation", () => {
 			makeAssistantError(undefined, "503 auth_unavailable: no auth available (providers=codex, model=gpt-5.4-mini)"),
 		);
 
-		const error = await generateHandoff(handoffMessages, getAnthropicModel(), "stale-key", {
+		const error = await generateHandoff(handoffMessages, anthropicModel(), "stale-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 		}).catch(err => err);

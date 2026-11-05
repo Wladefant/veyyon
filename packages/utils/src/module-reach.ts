@@ -273,18 +273,6 @@ export function resolveModuleSpecifier(
 }
 
 /**
- * Every module statically reachable from `entry`, including `entry` itself, as absolute paths.
- *
- * A file that cannot be READ is counted and not followed, rather than throwing. That is a narrower case
- * than it first looks, and the narrowing was measured rather than assumed: a MISSING module never
- * reaches this point at all, because `resolveFile` requires the path to exist, so it resolves to
- * `undefined` and is simply not followed. What is left is a file that existed when it was resolved and
- * could not be read a moment later: no read permission, or a regeneration that replaced it between the
- * two calls. Both happen in a repo whose builds rewrite generated modules while tests run, and neither
- * should turn an architecture ceiling into a crash. Nothing is hidden by continuing, because the edge
- * that named the file is already in the set.
- */
-/**
  * A per-run memo of "which files does this file import", for a caller that walks MANY entries.
  *
  * WHY THIS EXISTS. Each walk re-reads and re-resolves every file it reaches, and the gates that use this

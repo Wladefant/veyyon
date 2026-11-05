@@ -18,6 +18,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ImageContent, ToolCall } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { agentMessageKind, registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { formatSessionDumpText } from "../../src/session/session-dump-format";
@@ -38,14 +39,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 1,
 	};

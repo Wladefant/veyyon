@@ -2,15 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as ai from "@veyyon/ai";
 import * as aiStream from "@veyyon/ai/stream";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { generateCommitMessage } from "@veyyon/coding-agent/utils/commit-message-generator";
 import { generateSessionTitle } from "@veyyon/coding-agent/utils/title-generator";
-
-function getModelOrThrow(id: string) {
-	const model = getBundledModel("anthropic", id);
-	if (!model) throw new Error(`Expected model ${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function createSettings(helpers: Record<string, { model?: string; thinkingLevel?: string }>, defaultModel?: string) {
 	return {
@@ -37,7 +31,7 @@ describe("helper thinking propagation", () => {
 	// `low`/`medium`/`high`, so a suffix that never propagated would send the
 	// default model's stored `high` and read red instead of matching a clamp.
 	it("passes the commit helper's effort to commit message generation", async () => {
-		const model = getModelOrThrow("claude-opus-4-5");
+		const model = requireBundledModel("anthropic", "claude-opus-4-5");
 		const settings = createSettings({ commit: { thinkingLevel: "low" } }, `${model.provider}/${model.id}:high`);
 		const registry = {
 			getAvailable: () => [model],
@@ -63,7 +57,7 @@ describe("helper thinking propagation", () => {
 	});
 
 	it("keeps the commit budget reasoning-safe when the catalog disables reasoning", async () => {
-		const model = { ...getModelOrThrow("claude-sonnet-4-5"), reasoning: false };
+		const model = { ...requireBundledModel("anthropic", "claude-sonnet-4-5"), reasoning: false };
 		const settings = createSettings({ commit: { model: `${model.provider}/${model.id}` } });
 		const registry = {
 			getAvailable: () => [model],
@@ -88,7 +82,7 @@ describe("helper thinking propagation", () => {
 	});
 
 	it("disables reasoning for title generation even when the title helper has an effort", async () => {
-		const model = getModelOrThrow("claude-opus-4-5");
+		const model = requireBundledModel("anthropic", "claude-opus-4-5");
 		const settings = createSettings({ title: { thinkingLevel: "low" } }, `${model.provider}/${model.id}:high`);
 		const registry = {
 			getAvailable: () => [model],

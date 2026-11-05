@@ -2,12 +2,8 @@
  * Seeded deterministic walk of DEL/INS/SWAP ops: no throw, length non-negative.
  */
 import { describe, expect, it } from "bun:test";
-import { applyEdits, parsePatch } from "@veyyon/hashline";
 import { lcgUint32 } from "@veyyon/utils/adversarial-strings";
-
-function apply(text: string, patch: string): string {
-	return applyEdits(text, parsePatch(patch).edits).text;
-}
+import { applyPatch } from "./support/apply-patch";
 
 /** LCG for deterministic "random" ops. */
 describe("applyEdits continue depth random walk seeded", () => {
@@ -22,21 +18,21 @@ describe("applyEdits continue depth random walk seeded", () => {
 			const n = t === "" ? 0 : t.split("\n").length;
 			const op = next() % 4;
 			if (n === 0 || op === 0) {
-				t = apply(t, `INS.TAIL:\n+X${i}`);
+				t = applyPatch(t, `INS.TAIL:\n+X${i}`);
 				expected += 1;
 				expect(t.split("\n").at(-1)).toBe(`X${i}`);
 			} else if (op === 1) {
 				const line = (next() % n) + 1;
 				const dropped = t.split("\n")[line - 1];
-				t = apply(t, `DEL ${line}`);
+				t = applyPatch(t, `DEL ${line}`);
 				expected -= 1;
 				expect(t.split("\n")[line - 1]).not.toBe(dropped);
 			} else if (op === 2) {
 				const line = (next() % n) + 1;
-				t = apply(t, `SWAP ${line}.=${line}:\n+S${i}`);
+				t = applyPatch(t, `SWAP ${line}.=${line}:\n+S${i}`);
 				expect(t.split("\n")[line - 1]).toBe(`S${i}`);
 			} else {
-				t = apply(t, `INS.HEAD:\n+H${i}`);
+				t = applyPatch(t, `INS.HEAD:\n+H${i}`);
 				expected += 1;
 				expect(t.split("\n")[0]).toBe(`H${i}`);
 			}

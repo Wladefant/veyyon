@@ -52,7 +52,7 @@ describe("/login slash command", () => {
 	it("submits manual callback URL without opening selector", async () => {
 		const manualInput = new OAuthManualInputManager();
 		const callbackUrl = "http://localhost:1455/auth/callback?code=abc&state=xyz";
-		const pending = manualInput.waitForInput("openai-codex");
+		const pending = manualInput.tryClaimInput("mcp")?.promise;
 		const harness = createRuntimeHarness(manualInput);
 
 		const handled = await executeBuiltinSlashCommand(`/login ${callbackUrl}`, harness.runtime);

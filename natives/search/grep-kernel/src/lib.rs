@@ -181,6 +181,36 @@ pub fn pcre_matcher_override_no_unicode(
 	builder.utf(false).ucp(false)
 }
 
+/// Why `pattern` does not parse on its own under the Rust engine's syntax, or
+/// `None` when it does.
+///
+/// grep-regex parses each pattern inside `(?:…)`, so a `)` that closes no group
+/// of the pattern's own pairs with that wrapper and the build succeeds: `)(`
+/// compiles as `(?:)()` and matches every line. Asking this first reports the
+/// fault the way the pattern is written.
+#[must_use]
+pub fn rust_standalone_error(pattern: &str) -> Option<regex_syntax::ast::Error> {
+	regex_syntax::ast::parse::Parser::new().parse(pattern).err()
+}
+
+/// Why `pattern` does not compile on its own under PCRE2, or `None` when it
+/// does.
+///
+/// `unicode` selects the `utf`/`ucp` switches the caller's builder uses, since
+/// UTF mode refuses constructs the byte mode accepts (`\C` inside a
+/// look-behind).
+///
+/// grep-pcre2 compiles each pattern inside `(?:…)` too, with the same result
+/// for a `)` that closes no group of the pattern's own.
+#[must_use]
+pub fn pcre_standalone_error(pattern: &str, unicode: bool) -> Option<pcre2::Error> {
+	pcre2::bytes::RegexBuilder::new()
+		.utf(unicode)
+		.ucp(unicode)
+		.build(pattern)
+		.err()
+}
+
 /// Escape a pattern so it matches its own bytes: the one owner of literal
 /// escaping.
 ///

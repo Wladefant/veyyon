@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "bun:test";
 import type { DiscoveryFailure } from "@veyyon/catalog/discovery/failure";
-import { ollamaModelManagerOptions } from "@veyyon/catalog/provider-models/openai-compat";
+import { ollamaModelManagerOptions } from "@veyyon/catalog/provider-models/ollama";
 import type { FetchImpl } from "@veyyon/catalog/types";
 
 /**

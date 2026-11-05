@@ -48,10 +48,7 @@ import {
 	WriteSuccessSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import type { ToolResultMessage } from "../types";
-
-export function toolResultToText(toolResult: ToolResultMessage): string {
-	return toolResult.content.map(item => (item.type === "text" ? item.text : `[${item.mimeType} image]`)).join("\n");
-}
+import { messageContentText } from "../utils/message-text";
 
 function toolResultWasTruncated(toolResult: ToolResultMessage): boolean {
 	if (!toolResult.details || typeof toolResult.details !== "object") {
@@ -70,7 +67,7 @@ function toolResultDetailBoolean(toolResult: ToolResultMessage, key: string): bo
 }
 
 export function buildReadResultFromToolResult(path: string, toolResult: ToolResultMessage) {
-	const text = toolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	if (toolResult.isError) {
 		return buildReadErrorResult(path, text || "Read failed");
 	}
@@ -111,7 +108,7 @@ export function buildWriteResultFromToolResult(
 	args: { path: string; fileText?: string; fileBytes?: Uint8Array; returnFileContentAfterWrite?: boolean },
 	toolResult: ToolResultMessage,
 ) {
-	const text = toolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	if (toolResult.isError) {
 		return buildWriteErrorResult(args.path, text || "Write failed");
 	}
@@ -150,7 +147,7 @@ export function buildWriteRejectedResult(path: string, reason: string) {
 }
 
 export function buildDeleteResultFromToolResult(path: string, toolResult: ToolResultMessage) {
-	const text = toolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	if (toolResult.isError) {
 		return buildDeleteErrorResult(path, text || "Delete failed");
 	}
@@ -189,7 +186,7 @@ export function buildShellResultFromToolResult(
 	args: { command: string; workingDirectory: string },
 	toolResult: ToolResultMessage,
 ) {
-	const output = toolResultToText(toolResult);
+	const output = messageContentText(toolResult.content);
 	if (toolResult.isError) {
 		return buildShellFailureResult(args.command, args.workingDirectory, output || "Shell failed");
 	}
@@ -242,7 +239,7 @@ export function buildShellRejectedResult(command: string, workingDirectory: stri
 }
 
 export function buildLsResultFromToolResult(path: string, toolResult: ToolResultMessage) {
-	const text = toolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	if (toolResult.isError) {
 		return buildLsErrorResult(path, text || "Ls failed");
 	}
@@ -312,7 +309,7 @@ export function buildGrepResultFromToolResult(
 	args: { pattern: string; path?: string; outputMode?: string },
 	toolResult: ToolResultMessage,
 ) {
-	const text = toolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	if (toolResult.isError) {
 		return buildGrepErrorResult(text || "Grep failed");
 	}
@@ -475,7 +472,7 @@ export function emptyGrepPatternRejection(pattern: string | undefined, glob: str
 }
 
 export function buildDiagnosticsResultFromToolResult(path: string, toolResult: ToolResultMessage) {
-	const text = toolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	if (toolResult.isError) {
 		return buildDiagnosticsErrorResult(path, text || "Diagnostics failed");
 	}

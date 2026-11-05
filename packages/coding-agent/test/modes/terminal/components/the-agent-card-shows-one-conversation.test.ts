@@ -25,6 +25,7 @@
  * which is the only remaining surface for a conversation running off screen.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -33,8 +34,6 @@ import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 function deliveringSession(): AgentSession {
 	return { deliverIrcMessage: () => true } as unknown as AgentSession;
@@ -83,7 +82,7 @@ afterEach(() => {
 });
 
 function textOf(dashboard: AgentDashboard): string {
-	return dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+	return stripVTControlCharacters(dashboard.render(120).join("\n"));
 }
 
 describe("The roster is the opening conversation's", () => {

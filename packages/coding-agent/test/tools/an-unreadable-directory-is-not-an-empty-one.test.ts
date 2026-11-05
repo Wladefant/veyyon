@@ -25,10 +25,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { canRestrictAccess } from "../../../utils/test/helpers/mode-bits";
 import { buildDirectoryTree, buildTopLevelDirectoryListing } from "../../src/workspace-tree";
-
-/** `chmod 000` does not stop root, so the sweep would pass for the wrong reason. */
-const CANNOT_ENFORCE_PERMISSIONS = process.getuid?.() === 0 || process.platform === "win32";
 
 const BUILDERS: Array<[string, (dir: string) => Promise<{ totalLines: number }>]> = [
 	["buildDirectoryTree", dir => buildDirectoryTree(dir, { maxDepth: 2 })],
@@ -49,7 +47,8 @@ describe("a directory that cannot be scanned reports why", () => {
 	});
 
 	it.each(BUILDERS)("%s throws instead of reporting an empty tree", async (_name, build) => {
-		if (CANNOT_ENFORCE_PERMISSIONS) return;
+		// `chmod 000` does not stop root, so the sweep would pass for the wrong reason.
+		if (!canRestrictAccess()) return;
 		const locked = path.join(root, "locked");
 		await mkdir(locked);
 		await writeFile(path.join(locked, "secret.txt"), "content\n");

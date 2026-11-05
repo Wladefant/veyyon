@@ -3,16 +3,14 @@ import { KeybindingsManager } from "@veyyon/coding-agent/config/keybindings";
 import { HookEditorComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/hook-editor";
 import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { getKeybindings, setKeybindings } from "@veyyon/utils/keybindings";
 import { cardBodyLines } from "./helpers/modal-card";
+import { requireTheme } from "./helpers/require-theme";
 
 beforeAll(async () => {
-	const theme = await getThemeByName("dark");
-	if (!theme) {
-		throw new Error("Failed to load dark theme for tests");
-	}
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 

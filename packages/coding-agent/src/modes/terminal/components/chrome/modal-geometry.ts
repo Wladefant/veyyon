@@ -7,6 +7,7 @@
  * renderer, and the chrome rows it reserves, are in `modal-shell.ts`.
  */
 import { clamp, clampLow } from "@veyyon/utils/math";
+import { padding } from "@veyyon/utils/padding";
 
 /**
  * Columns of padding on EACH side of the hook editor's title and hint rows in the embedded
@@ -71,29 +72,32 @@ const MODAL_MIN_TALL_ROWS = 24;
 /**
  * Whether a card at this height is space-starved and should shed its padding.
  *
- * The old test was `areaHeight <= 24`, read straight off the terminal, and it
- * put a step in the middle of ordinary window sizes: a 24-row terminal gave a
- * full-screen card with no padding, and a 25-row terminal gave a card the same
- * height that spent four of its rows on padding, so growing the window by one
- * row cost four rows of list. The question is not how tall the TERMINAL is. It
- * is whether the card has room to spare, and it does not while its height is
- * still pinned to the floor by {@link MODAL_MIN_TALL_ROWS}.
+ * A compact card's floor is {@link MODAL_MIN_TALL_ROWS} and a padded card's is four rows higher
+ * per row of padding, and a padded card spends `2 * vPad` of its rows on blank space. Below the
+ * compact floor both cards take the whole screen and the compact one shows more; above it the
+ * padded card grows while the compact one stays on its floor, and the padded body catches up at
+ * `MODAL_MIN_TALL_ROWS + 2 * vPad` rows. One row above that it shows one row more than the compact
+ * card did, so that is where the padding comes back. The boundary used to be where the card left
+ * its floor (`areaHeight - 2 * vMargin`), which kept a LARGE card compact up to 38 rows: on a
+ * 30-row terminal it was a 24-row card, two body rows short of the padded one.
+ *
+ * The step at the boundary is up only while a compact card is still on its floor there, which
+ * holds for a sizing whose `vMargin` is at least its `vPad`.
  */
 export function modalNeedsCompactPadding(areaHeight: number, sizing: ModalSizing): boolean {
-	return areaHeight - 2 * sizing.vMargin <= MODAL_MIN_TALL_ROWS;
+	return areaHeight <= MODAL_MIN_TALL_ROWS + 2 * sizing.vPad;
 }
 
 /**
- * The sizing a card should actually use in an area this tall.
+ * The sizing a card should actually use in an area this tall. {@link layoutModalCard}
+ * applies it to every sizing it lays out, so a card calls it only to measure a row
+ * before layout (a width that depends on the padding the card will keep).
  *
  * This is the ONLY way to reach the compact strip, and it takes the AREA HEIGHT
  * rather than a decision, because every hand-rolled decision this replaced was
- * wrong in the same direction. `ModelPicker` carried `termRows < 24` and so kept
- * its padding for every height from 24 to 32, where {@link modalNeedsCompactPadding}
- * says the card is still pinned to its floor: the card grew four rows at 33 and
- * the list lost them, which is precisely the cliff the shared rule exists to
- * remove. A threshold read off the terminal cannot be right for more than one
- * sizing, since the answer depends on that sizing's own margins.
+ * wrong. `ModelPicker` carried `termRows < 24`, a threshold read off the
+ * terminal, and a threshold read off the terminal cannot be right for more than
+ * one sizing, since the answer depends on that sizing's own padding.
  *
  * `forceCompact` can only make a card compact EARLIER than the height rule would.
  * It exists for a card whose own mode already denies it the room (the session
@@ -137,8 +141,8 @@ export function computeModalDims(areaWidth: number, areaHeight: number, sizing: 
 	// at all. Opening a list surface on a 25-to-30-row terminal, which is an
 	// ordinary split pane, showed an empty box. The floor keeps the card at
 	// MODAL_MIN_TALL_ROWS (or the whole screen when the screen is smaller than
-	// that), so height is monotonic in terminal height and the compact boundary is
-	// a step of zero rows instead of thirteen.
+	// that), so height is monotonic in terminal height and leaving the compact path
+	// never shrinks the card.
 	// The floor rises with the padding the card carries. A card that sheds its
 	// padding (the compact path) needs only the base floor; one that pays for
 	// padding is given four rows of height per row of padding BEFORE it starts
@@ -154,6 +158,39 @@ export function computeModalDims(areaWidth: number, areaHeight: number, sizing: 
 }
 
 /**
+ * A card laid out on one terminal area: the dimensions {@link computeModalDims} gives it, with the
+ * sizing and the area they were computed from. `planModalChrome` reserves the card's chrome inside
+ * it and `renderModalShell` paints that plan, so a card is laid out once per frame, by its caller,
+ * and the shell paints the card the caller sized its body for.
+ */
+export interface ModalCardLayout extends ModalDims {
+	readonly sizing: ModalSizing;
+	readonly areaWidth: number;
+	readonly areaHeight: number;
+}
+
+/**
+ * Lay a card out on an area, or null when the area is too small to paint one. The card sheds its
+ * padding by {@link sizingForArea} here, so no card reaches a layout that skipped the compact
+ * rule; `forceCompact` is passed through.
+ */
+export function layoutModalCard(
+	areaWidth: number,
+	areaHeight: number,
+	sizing: ModalSizing,
+	forceCompact = false,
+): ModalCardLayout | null {
+	const fitted = sizingForArea(sizing, areaHeight, forceCompact);
+	const dims = computeModalDims(areaWidth, areaHeight, fitted);
+	return dims === null ? null : { ...dims, sizing: fitted, areaWidth, areaHeight };
+}
+
+/** The frame of an area too small for a card: one blank row per area row. */
+export function emptyModalArea(areaWidth: number, areaHeight: number): string[] {
+	return Array.from({ length: areaHeight }, () => padding(areaWidth));
+}
+
+/**
  * The card width whose CONTENT row is `contentWidth` cells wide — the inverse of the
  * `contentWidth` {@link computeModalDims} returns. A caller that knows how wide its widest row
  * has to be raises `minWidth` to this instead of restating the border-and-padding arithmetic.
@@ -165,11 +202,10 @@ export function modalWidthForContent(contentWidth: number, sizing: ModalSizing):
 /**
  * How many cells a medium card's content row gets on a terminal this size, or null when the
  * terminal is too small for a card at all. It exists so a caller that has to pre-wrap text for a
- * medium card asks the layout owner one question instead of assembling `sizingForArea` and
- * {@link computeModalDims} itself: the sizing a medium card uses is this module's decision, and a
- * second copy of it wraps to a width the card then wraps again.
+ * medium card asks the layout owner one question instead of laying a medium card out itself: the
+ * sizing a medium card uses is this module's decision, and a second copy of it wraps to a width
+ * the card then wraps again.
  */
 export function mediumModalContentWidth(areaWidth: number, areaHeight: number): number | null {
-	const dims = computeModalDims(areaWidth, areaHeight, sizingForArea(MODAL_SIZING_MEDIUM, areaHeight));
-	return dims ? dims.contentWidth : null;
+	return layoutModalCard(areaWidth, areaHeight, MODAL_SIZING_MEDIUM)?.contentWidth ?? null;
 }

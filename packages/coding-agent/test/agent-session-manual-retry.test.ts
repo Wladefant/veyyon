@@ -4,12 +4,12 @@ import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function lastAgentMessage(session: AgentSession): AssistantMessage {
 	const message = session.agent.state.messages.at(-1);
@@ -40,10 +40,7 @@ describe("AgentSession manual retry", () => {
 	});
 
 	it("removes the failed assistant turn and continues with a fresh attempt", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [
@@ -82,10 +79,7 @@ describe("AgentSession manual retry", () => {
 	});
 
 	it("returns false when the trailing assistant turn succeeded", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const mock = createMockModel({
 			responses: [{ content: ["already done"], stopReason: "stop" }],

@@ -106,8 +106,12 @@ const ADMITTED_THIRD_PARTY = ["chalk", "lru-cache"];
  * 338 rather than 334 is four more splits of modules the card already evaluates, each importing only
  * what its source did: `core/committed-prefix.ts` from `core/renderer.ts`, and `core/render-scheduler.ts`,
  * `core/frame-segments.ts` and `core/render-intent.ts` from `core/tui.ts` and `core/frame-plan.ts`.
+ *
+ * 341 rather than 338 is three splits of `@veyyon/utils/dirs`, which the card already evaluates, with
+ * no code added: `config-root.ts`, `global-config.ts` and `global-config-write.ts`, the config root,
+ * the reader of the global `config.yml` and its writer, each importing only what its source did.
  */
-const CARD_PATH_CEILING = 338;
+const CARD_PATH_CEILING = 341;
 const CARD_PATH_FLOOR = 250;
 
 describe("nothing joins the launch card path uncounted", () => {

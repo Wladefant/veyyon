@@ -1,13 +1,14 @@
+import { StatusPill } from "@veyyon/tool-render";
 import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import { getToolDashboardStats } from "../api";
-import { CHART_THEMES, MODEL_COLORS } from "../components/chart-shared";
+import { buildSharedPlugins, CHART_THEMES, chartScaleBase, MODEL_COLORS } from "../components/chart-shared";
 import { formatRangeTick, rangeMeta } from "../components/range-meta";
 import { formatCompact, formatCost, formatInteger, formatPercent, formatRelativeTime } from "../data/formatters";
 import { useResource } from "../data/useResource";
 import { buildToolRows, type ToolRowView } from "../data/view-models";
 import type { TimeRange, ToolModelStats, ToolTimeSeriesPoint, ToolUsageStats } from "../types";
-import { AsyncBoundary, DataTable, Panel, StatusPill } from "../ui";
+import { AsyncBoundary, DataTable, Panel } from "../ui";
 import { useSystemTheme } from "../useSystemTheme";
 
 export interface ToolsRouteProps {
@@ -172,53 +173,24 @@ function ToolCallsChart({ series, timeRange }: { series: ToolTimeSeriesPoint[]; 
 		[chartSeries, timeRange],
 	);
 
-	const options = useMemo(
-		() => ({
+	const options = useMemo(() => {
+		const scaleBase = chartScaleBase(chartTheme);
+		return {
 			responsive: true,
 			maintainAspectRatio: false,
 			interaction: { mode: "index" as const, intersect: false },
-			plugins: {
-				legend: {
-					position: "top" as const,
-					align: "start" as const,
-					labels: {
-						color: chartTheme.legendLabel,
-						usePointStyle: true,
-						padding: 16,
-						font: { size: 12 },
-						boxWidth: 8,
-					},
-				},
-				tooltip: {
-					backgroundColor: chartTheme.tooltipBackground,
-					titleColor: chartTheme.tooltipTitle,
-					bodyColor: chartTheme.tooltipBody,
-					borderColor: chartTheme.tooltipBorder,
-					borderWidth: 1,
-					padding: 12,
-					cornerRadius: 8,
-					callbacks: {
-						label: (context: { dataset: { label?: string }; parsed: { y: number | null } }) =>
-							`${context.dataset.label ?? ""}: ${formatInteger(context.parsed.y ?? 0)} calls`,
-					},
-				},
-			},
+			plugins: buildSharedPlugins({
+				chartTheme,
+				showLegend: true,
+				defaultLabel: "",
+				formatValue: value => `${formatInteger(value)} calls`,
+			}),
 			scales: {
-				x: {
-					stacked: true,
-					grid: { color: chartTheme.grid, drawBorder: false },
-					ticks: { color: chartTheme.tick, font: { size: 11 } },
-				},
-				y: {
-					stacked: true,
-					grid: { color: chartTheme.grid, drawBorder: false },
-					ticks: { color: chartTheme.tick, font: { size: 11 }, precision: 0 },
-					min: 0,
-				},
+				x: { ...scaleBase, stacked: true },
+				y: { ...scaleBase, stacked: true, ticks: { ...scaleBase.ticks, precision: 0 }, min: 0 },
 			},
-		}),
-		[chartTheme],
-	);
+		};
+	}, [chartTheme]);
 
 	return (
 		<Panel title="Calls Over Time" subtitle={`Tool calls over ${meta.windowLabel}, stacked by tool`}>

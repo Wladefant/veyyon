@@ -107,6 +107,29 @@ export function appendInlineArgsFallback(
 	return `${rendered}\n\n${argsText}`;
 }
 
+/** Characters of a body's first line kept as the description of a template whose frontmatter states none. */
+const FIRST_LINE_DESCRIPTION_LENGTH = 60;
+
+/**
+ * The description of a Markdown prompt template or command whose frontmatter states none: its first
+ * non-blank line, cut to 60 characters with `...` appended when it is longer. Empty for a blank body.
+ */
+export function firstLineDescription(body: string): string {
+	let start = 0;
+	while (start < body.length) {
+		const newline = body.indexOf("\n", start);
+		const end = newline === -1 ? body.length : newline;
+		const line = body.slice(start, end);
+		if (line.trim()) {
+			return line.length > FIRST_LINE_DESCRIPTION_LENGTH
+				? `${line.slice(0, FIRST_LINE_DESCRIPTION_LENGTH)}...`
+				: line;
+		}
+		start = end + 1;
+	}
+	return "";
+}
+
 /**
  * Recursively scan a directory for .md files (and symlinks to .md files) and load them as prompt templates
  */
@@ -149,16 +172,7 @@ async function loadTemplatesFromDir(
 						sourceStr = fullSubdir ? `(project:${fullSubdir})` : "(project)";
 					}
 
-					// Get description from frontmatter or first non-empty line
-					let description = String(frontmatter.description || "");
-					if (!description) {
-						const firstLine = body.split("\n").find(line => line.trim());
-						if (firstLine) {
-							// Truncate if too long
-							description = firstLine.slice(0, 60);
-							if (firstLine.length > 60) description += "...";
-						}
-					}
+					let description = String(frontmatter.description || "") || firstLineDescription(body);
 
 					// Append source to description
 					description = description ? `${description} ${sourceStr}` : sourceStr;

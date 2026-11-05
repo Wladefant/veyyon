@@ -12,14 +12,16 @@ import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 
-const emptyUsage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+import { convertMessages } from "@veyyon/ai/providers/openai-completions";
+
+import { NON_VISION_IMAGE_PLACEHOLDER } from "@veyyon/ai/providers/vision-guard";
+
+import type { AssistantMessage, Context, Model, ToolResultMessage } from "@veyyon/ai/types";
+import { buildModel } from "@veyyon/catalog/build";
+
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
+
+import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 
 const compat: ResolvedOpenAICompat = {
 	supportsStore: true,
@@ -143,7 +145,7 @@ describe("openai-completions convertMessages", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: now,
 		};
@@ -186,7 +188,7 @@ describe("openai-completions convertMessages", () => {
 					api: model.api,
 					provider: model.provider,
 					model: model.id,
-					usage: emptyUsage,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: now,
 				},
@@ -231,7 +233,7 @@ describe("openai-completions convertMessages", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: now,
 		};
@@ -291,7 +293,7 @@ describe("openai-completions convertMessages", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: now,
 		};
@@ -336,7 +338,7 @@ describe("openai-completions convertMessages", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: now,
 		};
@@ -414,7 +416,7 @@ describe("openai-completions convertMessages", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: emptyUsage,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: now,
 			};

@@ -114,7 +114,7 @@ export const evalCellCommonFields = lazy(() => ({
  * the full language union for typing; {@link evalSchemaFor} narrows the wire
  * copy per session so disabled backends are never advertised to the model.
  */
-export const evalSchema = lazy(() =>
+export const evalSchema = toolSchema("eval", () =>
 	type({
 		language: type("'py' | 'js' | 'rb' | 'jl'").describe(describeLanguageField(EVAL_LANGUAGE_ORDER)),
 		...evalCellCommonFields.value,
@@ -136,19 +136,24 @@ export type EvalCellInput = EvalToolParams;
  * The list is a subsequence of {@link EVAL_LANGUAGE_ORDER}, which bounds the cache at one entry per
  * subset of the four languages.
  */
-const evalSchemaByLanguages = new Map<string, typeof evalSchema.value>();
+const evalSchemaByLanguages = new Map<string, ToolSchema<typeof evalSchema.value>>();
 
-function evalSchemaFor(langs: readonly EvalLanguageToken[]): typeof evalSchema.value {
-	if (langs.length === 0 || langs.length === EVAL_LANGUAGE_ORDER.length) return evalSchema.value;
+function evalSchemaFor(langs: readonly EvalLanguageToken[]): ToolSchema<typeof evalSchema.value> {
+	if (langs.length === 0 || langs.length === EVAL_LANGUAGE_ORDER.length) return evalSchema;
 	const key = langs.join(",");
-	const cached = evalSchemaByLanguages.get(key);
-	if (cached) return cached;
-	const schema = type({
-		language: type.enumerated(...langs).describe(describeLanguageField(langs)),
-		code: type("string").describe(describeCodeField(langs)),
-		...evalCellCommonFields.value,
-	}) as unknown as typeof evalSchema.value;
-	evalSchemaByLanguages.set(key, schema);
+	let schema = evalSchemaByLanguages.get(key);
+	if (schema === undefined) {
+		schema = toolSchema(
+			`eval:${key}`,
+			() =>
+				type({
+					language: type.enumerated(...langs).describe(describeLanguageField(langs)),
+					code: type("string").describe(describeCodeField(langs)),
+					...evalCellCommonFields.value,
+				}) as unknown as typeof evalSchema.value,
+		);
+		evalSchemaByLanguages.set(key, schema);
+	}
 	return schema;
 }
 
@@ -158,6 +163,7 @@ export type EvalToolResult = {
 };
 
 export type EvalProxyExecutor = (params: EvalToolParams, signal?: AbortSignal) => Promise<EvalToolResult>;
+
 
 export interface EvalToolDescriptionOptions {
 	py?: boolean;
@@ -431,7 +437,10 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 		return ALL_EXAMPLES.filter(ex => "call" in ex && langs.has(ex.call.language as EvalLanguageToken));
 	}
 	get parameters(): typeof evalSchema.value {
-		return evalSchemaFor(this.#enabledLanguages());
+		return evalSchemaFor(this.#enabledLanguages()).value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return evalSchemaFor(this.#enabledLanguages()).wire;
 	}
 	readonly concurrency = "exclusive";
 	readonly strict = true;
@@ -637,8 +646,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 					// eval is the single largest producer of tool-result bytes, and its
 					// largest tenth of results carried two thirds of them. Price the
 					// inline window through the one owner rather than the flat default.
-					spillThreshold: inlineBudgetFor(session),
-					headBytes: resolveOutputSinkHeadBytes(session.settings),
+					...resolveOutputSinkWindow(session.settings, inlineBudgetFor(session)),
 					maxColumns: resolveOutputMaxColumns(session.settings),
 					onChunk: chunk => {
 						appendTail(chunk);
@@ -867,9 +875,7 @@ export class EvalTool implements AgentTool<typeof evalSchema.value, EvalToolDeta
 				if (result.exitCode !== 0 && result.exitCode !== undefined) {
 					cellResult.status = "error";
 					pushUpdate();
-					const outputText = foldedOutput
-						? `${foldedOutput}\n\n${formatExitCodeNotice(result.exitCode)}`
-						: formatExitCodeNotice(result.exitCode);
+					const outputText = appendNotice(foldedOutput, formatExitCodeNotice(result.exitCode));
 					return await finishCell(outputText, true);
 				}
 
@@ -927,6 +933,9 @@ async function summarizeFinal(
 	};
 	const outputLines = cellOutput.length > 0 ? cellOutput.split("\n").length : 0;
 	const outputBytes = Buffer.byteLength(cellOutput, "utf-8");
+	// A head and tail window: the sink's own totals and per-window line counts describe what the
+	// text shows. Rebasing them on the visible text would turn the head into part of a tail.
+	if (rawSummary.elidedBytes !== undefined) return { ...rawSummary, output: cellOutput, outputLines, outputBytes };
 	const missingLines = Math.max(0, rawSummary.totalLines - rawSummary.outputLines);
 	const missingBytes = Math.max(0, rawSummary.totalBytes - rawSummary.outputBytes);
 	return {

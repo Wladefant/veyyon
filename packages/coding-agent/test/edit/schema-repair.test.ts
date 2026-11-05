@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Tool, ToolCall } from "@veyyon/ai/types";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
+import { MAX_REPAIR_INPUT_BYTES } from "@veyyon/coding-agent/tools/core/repair/limits";
 import {
 	detectAmbiguousRequiredStringRepair,
 	detectStrictUnknownKeyRepair,
 	formatRepairCoachingHints,
 	isToolCallRepairDisabled,
-	MAX_REPAIR_INPUT_BYTES,
 	planAliasKeyRepairs,
 	repairToolCallArguments,
 	type ToolCallRepairOutcome,

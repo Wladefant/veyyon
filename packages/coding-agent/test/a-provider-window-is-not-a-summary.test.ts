@@ -21,6 +21,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type {
 	CompactionEntry,
@@ -28,26 +29,16 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 } from "@veyyon/kernel/session/session-entries";
+import { createUserMessage } from "../../agent/test/helpers";
 
 let entryCounter = 0;
 let lastId: string | null = null;
-
-function userMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
 
 function assistantMessage(text: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
-		usage: {
-			input: 100,
-			output: 50,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 150,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 100, output: 50, totalTokens: 150 },
 		stopReason: "stop",
 		timestamp: Date.now(),
 		api: "openai-responses",
@@ -111,12 +102,12 @@ function remoteCompactionEntry(firstKeptEntryId: string, provider: string): Comp
 function scenario(activeProvider: string, activeModel: string) {
 	entryCounter = 0;
 	lastId = null;
-	const u1 = messageEntry(userMessage("pre-compaction user evidence"));
+	const u1 = messageEntry(createUserMessage("pre-compaction user evidence"));
 	const a1 = messageEntry(assistantMessage("pre-compaction assistant evidence"));
-	const u2 = messageEntry(userMessage("retained request"));
+	const u2 = messageEntry(createUserMessage("retained request"));
 	const compaction = remoteCompactionEntry(u2.id, "openai");
 	const change = modelChangeEntry(activeProvider, activeModel);
-	const u3 = messageEntry(userMessage("post-compaction continuation"));
+	const u3 = messageEntry(createUserMessage("post-compaction continuation"));
 	const entries: SessionEntry[] = [u1, a1, u2, compaction, change, u3];
 	return { entries, context: buildSessionContext(entries) };
 }
@@ -163,8 +154,8 @@ describe("an entry that can neither replay nor explain itself", () => {
 		// reader rejects it. With no summary either, the entry is empty.
 		entryCounter = 0;
 		lastId = null;
-		const u1 = messageEntry(userMessage("pre-compaction user evidence"));
-		const u2 = messageEntry(userMessage("retained request"));
+		const u1 = messageEntry(createUserMessage("pre-compaction user evidence"));
+		const u2 = messageEntry(createUserMessage("retained request"));
 		const broken: CompactionEntry = {
 			type: "compaction",
 			id: "broken",
@@ -178,7 +169,7 @@ describe("an entry that can neither replay nor explain itself", () => {
 			},
 		};
 		lastId = "broken";
-		const u3 = messageEntry(userMessage("post-compaction continuation"));
+		const u3 = messageEntry(createUserMessage("post-compaction continuation"));
 
 		const context = buildSessionContext([u1, u2, broken, u3]);
 
@@ -189,8 +180,8 @@ describe("an entry that can neither replay nor explain itself", () => {
 	it("still honours a real local summary, which explains the span on any provider", () => {
 		entryCounter = 0;
 		lastId = null;
-		const u1 = messageEntry(userMessage("pre-compaction user evidence"));
-		const u2 = messageEntry(userMessage("retained request"));
+		const u1 = messageEntry(createUserMessage("pre-compaction user evidence"));
+		const u2 = messageEntry(createUserMessage("retained request"));
 		const local: CompactionEntry = {
 			type: "compaction",
 			id: "local",
@@ -201,7 +192,7 @@ describe("an entry that can neither replay nor explain itself", () => {
 			tokensBefore: 10000,
 		};
 		lastId = "local";
-		const u3 = messageEntry(userMessage("post-compaction continuation"));
+		const u3 = messageEntry(createUserMessage("post-compaction continuation"));
 
 		const context = buildSessionContext([u1, u2, local, u3]);
 

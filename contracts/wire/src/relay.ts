@@ -1,11 +1,11 @@
 /**
  * The collab relay protocol: its control messages, its fatal close codes, and the client-side send bound.
  *
- * WHY THESE LIVE TOGETHER AND IN THIS PACKAGE. Two independent clients speak this protocol, the CLI's
+ * WHY THESE LIVE TOGETHER AND IN THIS PACKAGE. Two independent clients spoke this protocol, the CLI's
  * `collab/relay-client.ts` in `@veyyon/coding-agent` and the browser's `lib/socket.ts` in
  * `@veyyon/collab-web`, and a third program, the relay itself, decides the codes. Each client carried its own
  * copy of the fatal-code table, character for character, doc comment included, and its own
- * `MAX_PENDING_SENDS = 256`.
+ * `MAX_PENDING_SENDS = 256`. Both clients are now `RelayClient` in `./relay-client`, which each side binds.
  *
  * A close code the table does not know is treated as TRANSIENT, so the client reconnects. That is the whole
  * consequence: add a fatal code to the relay, teach one client about it, and the other reconnects in a loop

@@ -4,6 +4,7 @@ import {
 	buildGitLabDuoWorkflowSystemPrompt,
 } from "@veyyon/ai/providers/gitlab-duo-workflow/goal";
 import type { AssistantMessage, Context, Message, ToolResultMessage, UserMessage } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * A GitLab Duo Workflow goal is the session replayed as text: a lone turn goes as the bare prompt, a
@@ -27,14 +28,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		api: "gitlab-duo-agent",
 		provider: "gitlab-duo-agent",
 		model: "duo",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

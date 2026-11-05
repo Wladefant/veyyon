@@ -20,7 +20,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ANY_MODEL_EFFORT_KEY } from "@veyyon/coding-agent/config/effort-resolver";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -30,6 +29,7 @@ import { initializeExtensions } from "@veyyon/coding-agent/modes/runtime-init";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("an extension setting a durable thinking level", () => {
 	let tempDir: TempDir;
@@ -39,8 +39,7 @@ describe("an extension setting a durable thinking level", () => {
 
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-ext-thinking-persist-");
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");

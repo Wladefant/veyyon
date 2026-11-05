@@ -29,7 +29,6 @@ import type {
 	TextContent,
 	TSchema,
 } from "@veyyon/ai";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@veyyon/ai/oauth/types";
 import type { HostView } from "@veyyon/kernel/registry/host-view";
 import type * as TypeBox from "@veyyon/kernel/registry/typebox";
 import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "@veyyon/kernel/registry/widget";
@@ -41,8 +40,7 @@ import type { KeyId } from "@veyyon/utils/keys";
 import type { ToolViewRenderer } from "@veyyon/view";
 import type { Type as arktype } from "arktype";
 import type * as zod from "zod/v4";
-import type { ModelRegistry } from "../../config/model-registry";
-import type { EditToolDetails } from "../../edit";
+import type { ModelRegistry, ProviderOAuthConfig } from "../../config/model-registry";
 import type { PythonResult } from "../../eval/py/executor";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -53,15 +51,7 @@ import type { WorkerSummary } from "../../native-control/telegram-control-bridge
 import type { CustomMessage, CustomMessagePayload } from "../../session/messages";
 import type { IrcDeliveryReceipt } from "../../task/irc-bus";
 import type { Theme } from "../../theme/theme";
-import type {
-	BashToolDetails,
-	BashToolInput,
-	ReadToolDetails,
-	ReadToolInput,
-	SearchToolDetails,
-	SearchToolInput,
-	WriteToolInput,
-} from "../../tools";
+import type { BashToolInput, ReadToolInput, SearchToolInput, WriteToolInput } from "../../tools";
 import type { ApprovalMode } from "../../tools/core/approval";
 import type { EventBus } from "../../utils/event-bus";
 import type {
@@ -94,6 +84,7 @@ import type {
 	SessionTreeEvent,
 	TodoReminderEvent,
 	ToolCallEventResult,
+	ToolResultEvent,
 	ToolResultEventResult,
 	TtsrTriggeredEvent,
 	TurnEndEvent,
@@ -855,52 +846,15 @@ export type ToolCallEvent =
 	| SearchToolCallEvent
 	| CustomToolCallEvent;
 
-interface ToolResultEventBase {
-	type: "tool_result";
-	toolCallId: string;
-	input: Record<string, unknown>;
-	content: (TextContent | ImageContent)[];
-	isError: boolean;
-}
-
-export interface BashToolResultEvent extends ToolResultEventBase {
-	toolName: "bash";
-	details: BashToolDetails | undefined;
-}
-
-export interface ReadToolResultEvent extends ToolResultEventBase {
-	toolName: "read";
-	details: ReadToolDetails | undefined;
-}
-
-export interface EditToolResultEvent extends ToolResultEventBase {
-	toolName: "edit";
-	details: EditToolDetails | undefined;
-}
-
-export interface WriteToolResultEvent extends ToolResultEventBase {
-	toolName: "write";
-	details: undefined;
-}
-
-export interface SearchToolResultEvent extends ToolResultEventBase {
-	toolName: "search";
-	details: SearchToolDetails | undefined;
-}
-
-export interface CustomToolResultEvent extends ToolResultEventBase {
-	toolName: string;
-	details: unknown;
-}
-
-/** Fired after a tool executes. Can modify result. */
-export type ToolResultEvent =
-	| BashToolResultEvent
-	| ReadToolResultEvent
-	| EditToolResultEvent
-	| WriteToolResultEvent
-	| SearchToolResultEvent
-	| CustomToolResultEvent;
+export type {
+	BashToolResultEvent,
+	CustomToolResultEvent,
+	EditToolResultEvent,
+	ReadToolResultEvent,
+	SearchToolResultEvent,
+	ToolResultEvent,
+	WriteToolResultEvent,
+} from "../shared-events";
 
 /**
  * Type guard for narrowing ToolCallEvent by tool name.
@@ -1382,18 +1336,7 @@ export interface ProviderConfig {
 	/** Models to register. If provided, replaces all existing models for this provider. */
 	models?: ProviderModelConfig[];
 	/** OAuth provider for /login support. */
-	oauth?: {
-		/** Display name in login UI. */
-		name: string;
-		/** Run the provider login flow and return credentials (or a plain API key) to persist. */
-		login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string>;
-		/** Refresh expired credentials. Pass `signal` to the token request so an abandoned refresh stops. */
-		refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
-		/** Convert credentials to an API key string for requests. */
-		getApiKey?(credentials: OAuthCredentials): string;
-		/** Optional model rewrite hook for credential-aware routing (e.g., enterprise URLs). */
-		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
-	};
+	oauth?: ProviderOAuthConfig;
 	/**
 	 * Async factory that fetches the live model list from the provider endpoint.
 	 * Runs through the same SQLite model-cache as built-in providers (keyed by
@@ -1555,12 +1498,11 @@ export interface ExtensionContextActions {
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	getSystemPrompt: () => string[];
 	/** Live redaction-only transform for provider-bound extension and hook strings. */
-	obfuscateProviderText?: (text: string) => string;
+	obfuscateProviderText: (text: string) => string;
 }
 
-/** Actions for ExtensionCommandContext (ctx.* in command handlers). */
+/** Actions for ExtensionCommandContext (ctx.* in command handlers), beyond the context actions. */
 export interface ExtensionCommandContextActions {
-	getContextUsage: () => ContextUsage | undefined;
 	waitForIdle: () => Promise<void>;
 	newSession: (options?: {
 		parentSession?: string;
@@ -1568,7 +1510,6 @@ export interface ExtensionCommandContextActions {
 	}) => Promise<{ cancelled: boolean }>;
 	branch: (entryId: string) => Promise<{ cancelled: boolean }>;
 	navigateTree: (targetId: string, options?: { summarize?: boolean }) => Promise<{ cancelled: boolean }>;
-	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
 	reload: () => Promise<void>;
 }

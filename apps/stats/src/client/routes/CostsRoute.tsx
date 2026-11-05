@@ -3,15 +3,13 @@ import { useMemo, useState } from "react";
 import { Bar, Line } from "react-chartjs-2";
 import { getCostDashboardStats } from "../api";
 import {
-	barDatasetStyle,
 	buildAggregateTimeSeries,
 	buildSharedPlugins,
 	buildSharedScales,
 	buildTopNByModelSeries,
 	CHART_THEMES,
-	lineDatasetStyle,
-	MODEL_COLORS,
-	styleDatasets,
+	timeChartData,
+	timeChartOptions,
 } from "../components/chart-shared";
 import { formatCost } from "../data/formatters";
 import { useResource } from "../data/useResource";
@@ -153,7 +151,7 @@ function CostTrendPanel({ costSeries }: { costSeries: CostTimeSeriesPoint[] }) {
 		});
 	}, [chartTheme, byModel]);
 
-	const { sharedScaleBase, yScale } = useMemo(() => {
+	const scales = useMemo(() => {
 		return buildSharedScales({
 			chartTheme,
 			formatY: v => `$${Math.round(v)}`,
@@ -164,48 +162,11 @@ function CostTrendPanel({ costSeries }: { costSeries: CostTimeSeriesPoint[] }) {
 		return makeBarLabelPlugin(BAR_LABEL_COLORS[theme]);
 	}, [theme]);
 
-	const lineData = useMemo(() => {
-		if (!byModel) return null;
-		return {
-			labels: chartData.labels,
-			datasets: styleDatasets(chartData, i => lineDatasetStyle(MODEL_COLORS[i % MODEL_COLORS.length])),
-		};
-	}, [chartData, byModel]);
+	const { lineData, barData } = useMemo(() => timeChartData(chartData, byModel), [chartData, byModel]);
 
-	const lineOptions = useMemo(() => {
-		return {
-			responsive: true,
-			maintainAspectRatio: false,
-			interaction: { mode: "index" as const, intersect: false },
-			plugins: sharedPlugins,
-			scales: { x: sharedScaleBase, y: yScale },
-		};
-	}, [sharedPlugins, sharedScaleBase, yScale]);
-
-	const barData = useMemo(() => {
-		if (byModel) return null;
-		return {
-			labels: chartData.labels,
-			datasets: styleDatasets(chartData, i => barDatasetStyle(MODEL_COLORS[i % MODEL_COLORS.length])),
-		};
-	}, [chartData, byModel]);
-
-	const barOptions = useMemo(() => {
-		return {
-			responsive: true,
-			maintainAspectRatio: false,
-			interaction: { mode: "index" as const, intersect: false },
-			plugins: {
-				...sharedPlugins,
-				costBarLabels: {},
-			},
-			scales: {
-				x: { ...sharedScaleBase, stacked: true },
-				y: { ...yScale, stacked: true },
-			},
-			layout: { padding: { top: 24 } },
-		};
-	}, [sharedPlugins, sharedScaleBase, yScale]);
+	const { lineOptions, barOptions } = useMemo(() => {
+		return timeChartOptions(sharedPlugins, scales, { plugins: { costBarLabels: {} }, paddingTop: 24 });
+	}, [sharedPlugins, scales]);
 
 	const toggleOptions = [
 		{ value: false, label: "All Models" },

@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveModuleSpecifier } from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution, workspacePackages } from "@veyyon/utils/module-reach-workspace";
+import {
+	packageModuleReach,
+	workspaceModuleReachResolution,
+	workspacePackages,
+} from "@veyyon/utils/module-reach-workspace";
 
 /**
  * Contract: the module-reach gates resolve a cross-package import the way the runtime does, for EVERY
@@ -382,5 +386,47 @@ describe("the real workspace resolves completely", () => {
 		expect(resolveModuleSpecifier(from, "@veyyon/utils/dirs", resolution)).toBe(
 			path.join(REPO_ROOT, "packages", "utils", "src", "dirs.ts"),
 		);
+	});
+});
+
+describe("one package's reach measurements", () => {
+	/** `packages/a/src/entry.ts` imports a sibling and the other package's barrel. */
+	function twoPackages(): string {
+		const root = fixtureWorkspace(
+			{
+				a: { name: "@fixture/a", exports: { ".": "./src/entry.ts" } },
+				b: { name: "@fixture/b", exports: { ".": "./src/index.ts" } },
+			},
+			["packages/a/src/local.ts", "packages/b/src/index.ts"],
+		);
+		fs.writeFileSync(
+			path.join(root, "packages", "a", "src", "entry.ts"),
+			'import { marker } from "./local";\nimport { marker as other } from "@fixture/b";\nexport const sum = marker + other;\n',
+		);
+		return root;
+	}
+
+	it("walks a path under src across the package boundary", () => {
+		const root = twoPackages();
+		const walks = packageModuleReach(root, path.join(root, "packages", "a", "src"));
+
+		expect(walks.reach("entry.ts")).toBe(3);
+		expect(walks.reachedNames("entry.ts")).toEqual([
+			path.join("packages", "a", "src", "entry.ts"),
+			path.join("packages", "a", "src", "local.ts"),
+			path.join("packages", "b", "src", "index.ts"),
+		]);
+		expect(walks.runtimeImportsOf("entry.ts")).toEqual(["./local", "@fixture/b"]);
+	});
+
+	it("names reached modules relative to the directory it is given", () => {
+		const root = twoPackages();
+		const walks = packageModuleReach(root, path.join(root, "packages", "a", "src"), path.join(root, "packages"));
+
+		expect(walks.reachedNames("entry.ts")).toEqual([
+			path.join("a", "src", "entry.ts"),
+			path.join("a", "src", "local.ts"),
+			path.join("b", "src", "index.ts"),
+		]);
 	});
 });

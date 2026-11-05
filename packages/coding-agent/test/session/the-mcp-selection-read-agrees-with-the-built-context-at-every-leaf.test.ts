@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, UserMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 let clock = 0;
@@ -31,14 +32,7 @@ function assistant(text: string): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-test",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop",
 		timestamp: ++clock,
 	};

@@ -30,30 +30,10 @@ import { replaceBinaryForUpdate, sweepStaleBackups, verifyBinaryUsable } from "@
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as YAML from "yaml";
 import { RICH_CONFIG, RICH_CONFIG_SECRET } from "./helpers/rich-config-fixture";
+import { standInBinary } from "./helpers/stand-in-binary";
 
 const NEW_VERSION = "9.9.9";
 const OLD_VERSION = "9.9.8";
-
-/**
- * A stand-in veyyon that answers exactly what the update verifies.
- *
- * `--version` must print `veyyon/X.Y.Z` (the swap parses that shape), and the search probe
- * requires a `grep` that really finds the file it is pointed at: a script that echoed
- * `probe.txt` would satisfy the probe even if the update stopped pointing it anywhere,
- * which is the failure the probe exists to catch.
- */
-function standInBinary(version: string): string {
-	return `#!/bin/sh
-set -u
-case "\${1:-}" in
-	--version) echo "veyyon/${version}"; exit 0 ;;
-	grep)
-		[ "\${2:-}" = "--help" ] && { echo "usage: veyyon grep <pattern> <path>"; exit 0; }
-		exec grep -rl -- "$2" "$3" ;;
-	*) echo "unknown command: \${1:-}" >&2; exit 2 ;;
-esac
-`;
-}
 
 const tempRoots: string[] = [];
 

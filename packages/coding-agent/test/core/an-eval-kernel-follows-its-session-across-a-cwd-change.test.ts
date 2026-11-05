@@ -37,7 +37,7 @@ import * as rubyExecutor from "@veyyon/coding-agent/eval/rb/executor";
 import * as rubyKernel from "@veyyon/coding-agent/eval/rb/kernel";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
 import { makeToolSession } from "../helpers/tool-session";
@@ -234,6 +234,9 @@ describe("the eval session id of an agent session", () => {
 	 */
 	it("keeps one Python kernel across setCwd for a session with a file", async () => {
 		using root = TempDir.createSync("@veyyon-follows-cwd-session-");
+		// The session owns the process, so `setCwd` chdirs it into `second`. The original comes back
+		// before `root` is removed, or every later test starts inside a deleted directory.
+		const originalProjectDir = getProjectDir();
 		const first = path.join(root.path(), "first");
 		const second = path.join(root.path(), "second");
 		fs.mkdirSync(first);
@@ -255,6 +258,7 @@ describe("the eval session id of an agent session", () => {
 			expect(started[0]!.cwds).toEqual([first, second]);
 		} finally {
 			await session.dispose();
+			setProjectDir(originalProjectDir);
 		}
 	});
 });

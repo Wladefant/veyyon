@@ -28,6 +28,7 @@ import { HomeAnchorLayout } from "@veyyon/coding-agent/modes/terminal/controller
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type Component, Container, CURSOR_MARKER, type Focusable, TUI } from "@veyyon/tui";
 import { settleFrames } from "../../../../../../hosts/terminal/engine/test/helpers/settle-frames";
+import { lastPaintedRow } from "../../../../../../hosts/terminal/engine/test/helpers/terminal-output";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
 
 class Block implements Component {
@@ -55,13 +56,6 @@ class Composer implements Component, Focusable {
 async function settleResize(term: VirtualTerminal, tui: TUI): Promise<void> {
 	await Bun.sleep(160);
 	await settleFrames(term, tui);
-}
-
-function lastPaintedRow(term: VirtualTerminal): number {
-	return term
-		.getViewport()
-		.map(row => Bun.stripANSI(row).trimEnd())
-		.reduce((last, row, i) => (row.trim().length > 0 ? i : last), -1);
 }
 
 describe("a taller terminal still hugs the composer to the bottom", () => {

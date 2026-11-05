@@ -6,6 +6,7 @@
  * It does not contact the live Portal or verify the JWT signature; the Portal is the mocked external boundary.
  */
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { loginNousResearch, NOUS_DEVICE_CODE_URL, NOUS_TOKEN_URL } from "@veyyon/ai/oauth/nous-research";
 import { getOAuthApiKey, getOAuthProviders, PROVIDER_REGISTRY, refreshOAuthToken } from "@veyyon/ai/registry";
 import type { OAuthAuthInfo, OAuthCredentials, OAuthLoginCallbacks } from "@veyyon/ai/registry/oauth/types";
@@ -98,8 +99,8 @@ describe("Nous Portal OAuth", () => {
 
 	test("polls at the cadence the Portal asked for instead of its own floor", async () => {
 		const sleeps: number[] = [];
-		vi.spyOn(Bun, "sleep").mockImplementation(async (ms: number | Date) => {
-			sleeps.push(typeof ms === "number" ? ms : ms.getTime() - Date.now());
+		vi.spyOn(scheduler, "wait").mockImplementation(async (ms: number) => {
+			sleeps.push(ms);
 		});
 		let tokenAttempts = 0;
 		const fetchStub: FetchImpl = vi.fn(async (input: string | URL | Request) => {

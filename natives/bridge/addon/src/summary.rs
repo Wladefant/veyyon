@@ -1,9 +1,8 @@
 //! Structural source summaries powered by tree-sitter.
 
-use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::napi_error::to_napi;
+use crate::{napi_error::to_napi, task};
 
 #[napi(object)]
 pub struct SummaryOptions {
@@ -74,17 +73,23 @@ impl From<veyyon_ast::summary::SummaryResult> for SummaryResult {
 	}
 }
 
+/// Summarize `options.code` into kept and elided segments.
+///
+/// The parse runs on the thread pool, so a large source never holds the event
+/// loop, and summaries of several sources parse in parallel.
 #[napi]
-pub fn summarize_code(options: SummaryOptions) -> Result<SummaryResult> {
-	veyyon_ast::summary::summarize_code(veyyon_ast::summary::SummaryOptions {
-		code:               options.code,
-		lang:               options.lang,
-		path:               options.path,
-		min_body_lines:     options.min_body_lines,
-		min_comment_lines:  options.min_comment_lines,
-		unfold_until_lines: options.unfold_until_lines,
-		unfold_limit_lines: options.unfold_limit_lines,
+pub fn summarize_code(options: SummaryOptions) -> task::Promise<SummaryResult> {
+	task::blocking("summarize_code", (), move |_| {
+		veyyon_ast::summary::summarize_code(veyyon_ast::summary::SummaryOptions {
+			code:               options.code,
+			lang:               options.lang,
+			path:               options.path,
+			min_body_lines:     options.min_body_lines,
+			min_comment_lines:  options.min_comment_lines,
+			unfold_until_lines: options.unfold_until_lines,
+			unfold_limit_lines: options.unfold_limit_lines,
+		})
+		.map(Into::into)
+		.map_err(to_napi)
 	})
-	.map(Into::into)
-	.map_err(to_napi)
 }

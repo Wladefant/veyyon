@@ -19,13 +19,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
 import { SearchTool } from "../../src/tools/search/search";
-
-function getResultText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text ?? "")
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 function virtualDocName(url: InternalUrl): string {
 	const host = url.rawHost || url.hostname;
@@ -135,7 +129,7 @@ describe("SearchTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", { path: "skill://demo/references" });
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("index.md");
 		expect(text).toContain("docs/");
 		expect(result.details?.resolvedPath).toBe(path.join(skillDir, "references"));
@@ -159,7 +153,7 @@ describe("SearchTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", { path: "skill://demo" });
 
-		expect(getResultText(result)).toContain("# Demo");
+		expect(toolResultText(result)).toContain("# Demo");
 		expect(result.details?.resolvedPath).toBe(path.join(skillDir, "SKILL.md"));
 	});
 	it("walks skill:// directory subpaths for text and file search", async () => {
@@ -178,10 +172,10 @@ describe("SearchTool internal URL resolution", () => {
 			input: "skill://demo/references",
 		});
 
-		const searchText = getResultText(searchResult);
+		const searchText = toolResultText(searchResult);
 		expect(searchText).toContain("deep needle");
 		expect(searchText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
-		expect(getResultText(fileSearchResult)).toContain("guide.md");
+		expect(toolResultText(fileSearchResult)).toContain("guide.md");
 	});
 
 	it("walks bare skill:// roots for text and file search", async () => {
@@ -200,8 +194,8 @@ describe("SearchTool internal URL resolution", () => {
 			input: "skill://demo",
 		});
 
-		expect(getResultText(searchResult)).toContain("deep needle");
-		expect(getResultText(fileSearchResult)).toContain("guide.md");
+		expect(toolResultText(searchResult)).toContain("deep needle");
+		expect(toolResultText(fileSearchResult)).toContain("guide.md");
 	});
 
 	it("resolves artifact:// URL to a backing file and searches it", async () => {
@@ -217,7 +211,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "artifact://5",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("needle");
 	});
 
@@ -234,7 +228,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "artifact://3",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("connection refused");
 		expect(text).toContain("disk full");
 		expect(text).not.toContain("timeout");
@@ -253,7 +247,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "virtual://doc.md",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("needle in virtual content");
 		expect((result.details?.result as { files?: string[] } | undefined)?.files).toEqual(["virtual://doc.md"]);
 	});
@@ -270,7 +264,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "virtual://doc.md:3-3",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("needle inside range");
 		expect(text).not.toContain("needle outside range");
 	});
@@ -286,7 +280,7 @@ describe("SearchTool internal URL resolution", () => {
 			input: "needle",
 			path: "virtual://big.md:2090-2100",
 		});
-		expect(getResultText(result)).toContain("needle 2095");
+		expect(toolResultText(result)).toContain("needle 2095");
 	});
 
 	it("searches a virtual resource larger than the native grep cap with chunked native RE2 (line mode)", async () => {
@@ -296,7 +290,7 @@ describe("SearchTool internal URL resolution", () => {
 		registerVirtualDocs(new Map([["big.md", content]]));
 		const tool = new SearchTool(createSession());
 		const result = await tool.execute("big-virtual", { type: "text", input: "(?i)NEEDLE", path: "virtual://big.md" });
-		expect(getResultText(result)).toContain("needle");
+		expect(toolResultText(result)).toContain("needle");
 	});
 
 	it("rejects a malformed selector on a selector-capable internal URL instead of widening the search", async () => {
@@ -342,7 +336,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "veyyon://",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("# veyyon://tools/search.md");
 		expect(text).toContain("Search workspace files, text, or code structure");
 	});
@@ -357,7 +351,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "veyyon://docs",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("# veyyon://tools/read.md");
 		expect(text).toContain("Read files, directories, archives");
 	});
@@ -383,7 +377,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "test.txt",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("hello");
 	});
 
@@ -399,7 +393,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "data.log",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("data");
 	});
 
@@ -416,7 +410,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "artifact://9",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("needle");
 		// No hashline section headers or numbered editable lines for immutable sources.
 		expect(text).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
@@ -431,7 +425,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "skill://demo/references/example.ts",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("demoCall(value)");
 		expect(text).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
 	});
@@ -451,7 +445,7 @@ describe("SearchTool internal URL resolution", () => {
 			input: "local://PLAN.md",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("PLAN.md");
 	});
 
@@ -470,12 +464,12 @@ describe("SearchTool internal URL resolution", () => {
 		});
 		const dirResource = await InternalUrlRouter.instance().resolve("local://notes");
 
-		const readText = getResultText(readResult);
+		const readText = toolResultText(readResult);
 		expect(readText).toContain("PLAN.md");
 		// Directory listings must stay immutable so hashline edit anchors never key on a directory path.
 		expect(readText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
 		expect(dirResource.immutable).toBe(true);
-		expect(getResultText(fileSearchResult)).toContain("PLAN.md");
+		expect(toolResultText(fileSearchResult)).toContain("PLAN.md");
 	});
 
 	it("keeps hashline anchors when searching mutable local:// sources", async () => {
@@ -494,7 +488,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "local://plan.md",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("needle");
 		// Mutable local:// sources keep a hashline section header plus numbered match lines.
 		expect(text).toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
@@ -521,7 +515,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "local://notes.md:1-2",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		// The base file was targeted (URL selector semantics preserved), not the
 		// sibling literal. Content check is enough — the read tool's context
 		// expansion around the requested range is unrelated to the shadow bug.
@@ -544,7 +538,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: JSON.stringify(["artifact://11", "mixed.txt"]),
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("needle");
 		// Mutable mixed.txt keeps hashlines somewhere in the output.
 		expect(text).toMatch(/^# mixed\.txt#[0-9A-F]{4}/m);
@@ -574,7 +568,7 @@ describe("SearchTool internal URL resolution", () => {
 			path: "virtual://doc.md",
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		const lineNumbers = text
 			.split("\n")
 			.map(line => /^[* ](\d+)\|/.exec(line)?.[1])
@@ -592,7 +586,7 @@ describe("SearchTool internal URL resolution", () => {
 		registerVirtualDocs(new Map([["doc.md", "needle here\n"]]));
 		const tool = new SearchTool(createSession());
 		const result = await tool.execute("re2-virtual", { type: "text", input: "(?i)NEEDLE", path: "virtual://doc.md" });
-		expect(getResultText(result)).toContain("needle");
+		expect(toolResultText(result)).toContain("needle");
 	});
 
 	it("applies an RE2 inline-flag pattern across mixed local and virtual scopes", async () => {
@@ -604,7 +598,7 @@ describe("SearchTool internal URL resolution", () => {
 			input: "(?i)NEEDLE",
 			path: `${path.join(tmpDir, "local.txt")}; virtual://doc.md`,
 		});
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("local");
 		expect(text).toContain("virtual");
 	});
@@ -623,7 +617,7 @@ describe("SearchTool internal URL resolution", () => {
 			skip: 5,
 		});
 
-		const text = getResultText(result);
+		const text = toolResultText(result);
 		expect(text).toBe("No more results (2 files total; skip=5 has exhausted the result set)");
 		expect(result.useless).toBeUndefined();
 		expect(result.details?.type).toBe("text");
@@ -679,6 +673,6 @@ describe("SearchTool internal URL resolution", () => {
 		});
 		const tool = new SearchTool(createSession());
 		const result = await tool.execute("ssh-ipv6", { type: "text", input: "needle", path: "ssh://[::1]/etc/hosts" });
-		expect(getResultText(result)).toContain("needle");
+		expect(toolResultText(result)).toContain("needle");
 	});
 });

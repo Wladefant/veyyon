@@ -48,7 +48,6 @@
  * one assertion until this file is green.
  */
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { AgentMessage } from "@veyyon/agent-core";
 import {
 	type CompactionPreparation,
 	compactWithProvider,
@@ -59,9 +58,10 @@ import {
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import { resetServerCompactionRouteCache } from "@veyyon/ai/providers/openai-compaction";
 import { buildOpenAIResponsesCompat } from "@veyyon/catalog/compat/openai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { ResolvedOpenAIResponsesCompat } from "@veyyon/catalog/types";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
+import { createUserMessage, requireBundledModel } from "./helpers";
 
 /** The route the host serves compaction on: the ordinary turn route. */
 // A compaction rides a live conversation, so the transport requires the session
@@ -86,33 +86,20 @@ function makeAssistantStop(text: string): AssistantMessage {
 		api: "openai-completions",
 		provider: "openai-codex",
 		model: "gpt-5.1-codex",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 	};
 }
 
-function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
-	return { role: "user", content: text, timestamp };
-}
-
 function codexModel(): Model {
-	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!model) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
-	return model;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function makePreparation(): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
-		messagesToSummarize: [makeUserMessage("history msg"), makeAssistantStop("history reply")],
+		messagesToSummarize: [createUserMessage("history msg"), makeAssistantStop("history reply")],
 		turnPrefixMessages: [],
-		recentMessages: [makeUserMessage("recent msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: false,
 		tokensBefore: 221_568,
 		fileOps: createFileOps(),
@@ -443,8 +430,7 @@ describe("a ChatGPT OAuth session compacts on the codex backend", () => {
 		// A real bundled lite row, not a flag flipped onto another row: lite is
 		// refused for a model that cannot be sent `all_turns` reasoning context,
 		// so a hand-built spec would prove the opposite of what it claims.
-		const lite = getBundledModel("openai-codex", "gpt-5.6-sol");
-		if (!lite) throw new Error("Expected built-in openai-codex/gpt-5.6-sol to exist");
+		const lite = requireBundledModel("openai-codex", "gpt-5.6-sol");
 		expect(lite.useResponsesLite).toBe(true);
 		const calls = codexBackend();
 
@@ -488,8 +474,7 @@ describe("a ChatGPT OAuth session compacts on the codex backend", () => {
 	test("opening codex does not open every Responses host", () => {
 		// A repointed `openai` row: the same api family, a host that does not
 		// serve the route.
-		const official = getBundledModel("openai", "gpt-5.1");
-		if (!official) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const official = requireBundledModel("openai", "gpt-5.1");
 		const proxied: Model = {
 			...official,
 			baseUrl: "https://proxy.example.com/v1",
@@ -501,8 +486,7 @@ describe("a ChatGPT OAuth session compacts on the codex backend", () => {
 		};
 		expect(resolveServerCompactionTransport(proxied)).toBeUndefined();
 
-		const anthropic = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!anthropic) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const anthropic = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		expect(resolveServerCompactionTransport(anthropic)).toBeUndefined();
 	});
 });

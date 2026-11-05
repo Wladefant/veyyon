@@ -7,18 +7,20 @@
  * in the frame, so a resumed 600-turn session held 31,661 of these records, 1.48 MiB, the largest
  * object shape in its heap.
  *
- * THE CLASS. Anything the engine retains per frame row as a heap cell of its own: a record, a
- * wrapper, a copied string. The suite paints a 20,000-row frame through the real `TUI` onto a
- * terminal that keeps nothing, and bounds the cells alive after a full garbage collection. Rows are
- * plain ASCII narrower than the terminal, so a fitted row is the composed string itself and the only
- * cells a paint may add are a fixed number of arrays and scalars per frame.
+ * THE CLASS. Anything the engine retains per frame row as an object cell of its own: a record or a
+ * wrapper, in an instance or in a module-level cache. The suite paints 20,000-row frames through the
+ * real `TUI` onto a terminal that keeps nothing, and bounds the cells alive after a full garbage
+ * collection. Rows are plain ASCII narrower than the terminal, so a fitted row is the composed
+ * string itself and the only cells a paint may add are a fixed number of arrays and scalars per
+ * frame.
  *
  * The remaining cases pin what the parallel-array cache must still do: a width change retires every
  * fitted row, and rows a shrink dropped are fitted again when the frame grows back to them.
  *
  * WHAT IT DOES NOT CATCH. Array storage (a butterfly) is not a cell, so an extra array of row
- * pointers passes the bound. A row whose fitted form differs from its source (a Thai AM vowel, a row
- * wider than the terminal) is a new string per row by necessity and is not exercised here.
+ * pointers passes the bound. `heapStats().objectTypeCounts` counts no string cell, so a copied string
+ * per row passes too. A row whose fitted form differs from its source (a Thai AM vowel, a row wider
+ * than the terminal) is a new string per row by necessity and is not exercised here.
  */
 
 import { heapStats } from "bun:jsc";
@@ -107,37 +109,67 @@ async function settledGrownCells(before: Record<string, number>): Promise<number
  * cell per row the engine kept. The JSON round trip returns flat strings and the intermediates
  * die with this frame.
  */
-function flatRows(count: number): string[] {
+function flatRows(count: number, frame: number): string[] {
 	return JSON.parse(
-		JSON.stringify(Array.from({ length: count }, (_, i) => `transcript row ${i} of the painted frame`)),
+		JSON.stringify(Array.from({ length: count }, (_, i) => `transcript row ${i} of painted frame ${frame}`)),
 	);
 }
 
-describe("a painted frame", () => {
-	it("leaves no cell per row alive in the engine", async () => {
-		const term = new DiscardTerminal();
-		const tui = new TUI(term);
-		const block = new Rows(Array.from({ length: 12 }, (_, i) => `warm row ${i}`));
-		tui.addChild(block);
-		tui.start();
-		try {
-			await settleFrames(term, tui);
-			// The rows exist before the baseline: the component owns them, the engine only points at them.
-			const rows = flatRows(ROWS);
-			const before = liveCells();
-			block.lines = rows;
-			tui.requestRender();
-			await settleFrames(term, tui);
-			const grown = await settledGrownCells(before);
+/** What one paint of a fresh {@link ROWS}-row frame left behind. */
+interface PaintCount {
+	grown: number;
+	composedRows: number;
+	bytes: number;
+}
 
-			expect(tui.composedFrameRows).toBe(ROWS);
-			expect(term.bytes).toBeGreaterThan(ROWS * 20);
+/**
+ * Paint frame `frame` (rows whose text no earlier frame used) on a fresh engine and count the cells
+ * it leaves alive.
+ */
+async function paintAndCount(frame: number): Promise<PaintCount> {
+	const term = new DiscardTerminal();
+	const tui = new TUI(term);
+	const block = new Rows(Array.from({ length: 12 }, (_, i) => `warm row ${i}`));
+	tui.addChild(block);
+	tui.start();
+	try {
+		await settleFrames(term, tui);
+		// The rows exist before the baseline: the component owns them, the engine only points at them.
+		const rows = flatRows(ROWS, frame);
+		const before = liveCells();
+		block.lines = rows;
+		tui.requestRender();
+		await settleFrames(term, tui);
+		const grown = await settledGrownCells(before);
+		expect(rows.length).toBe(ROWS);
+		return { grown, composedRows: tui.composedFrameRows, bytes: term.bytes };
+	} finally {
+		tui.stop();
+	}
+}
+
+/** Paints measured before the bound is judged on the quietest of them. */
+const PAINT_ATTEMPTS = 3;
+
+describe("a painted frame", () => {
+	/**
+	 * Each attempt paints rows of text no earlier attempt used on a new engine, so a cell the engine
+	 * keeps per row, in an instance or in a module-level cache keyed by row or by text, is counted
+	 * again by every attempt and the least of them still holds it. Cells another suite in the same
+	 * worker holds across all three counts of one attempt (one CI run counted 25,990, 1.3 per row,
+	 * against a few hundred in every other run) are not held across every attempt.
+	 */
+	it("leaves no cell per row alive in the engine", async () => {
+		let quietest: PaintCount | undefined;
+		for (let attempt = 0; attempt < PAINT_ATTEMPTS; attempt++) {
+			const count = await paintAndCount(attempt);
+			expect(count.composedRows).toBe(ROWS);
+			expect(count.bytes).toBeGreaterThan(ROWS * 20);
+			if (!quietest || count.grown < quietest.grown) quietest = count;
 			// One record per row was 20,000 cells; a paint without one adds a few hundred at most.
-			expect(grown).toBeLessThan(ROWS / 10);
-			expect(rows.length).toBe(ROWS);
-		} finally {
-			tui.stop();
+			if (quietest.grown < ROWS / 10) break;
 		}
+		expect(quietest?.grown).toBeLessThan(ROWS / 10);
 	});
 });
 

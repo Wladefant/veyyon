@@ -8,14 +8,8 @@ import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 /**
  * write files → glob finds them → read each found file returns its body.
@@ -71,12 +65,12 @@ describe("write→search(files)→read chain adversarial", () => {
 		for (const [rel, body] of Object.entries(bodies)) {
 			await write.execute(`w-${rel}`, { path: path.join(tmpDir, rel), content: body });
 		}
-		const globText = textOf(await new SearchTool(s).execute("g", { type: "files", input: "src/**/*.ts" }));
+		const globText = toolResultText(await new SearchTool(s).execute("g", { type: "files", input: "src/**/*.ts" }));
 		expect(globText).toContain("a.ts");
 		expect(globText).toContain("b.ts");
 		const read = new ReadTool(s);
 		for (const [rel, body] of Object.entries(bodies)) {
-			const out = textOf(await read.execute(`r-${rel}`, { path: path.join(tmpDir, rel) }));
+			const out = toolResultText(await read.execute(`r-${rel}`, { path: path.join(tmpDir, rel) }));
 			expect(out).toContain(body.trim());
 		}
 	});

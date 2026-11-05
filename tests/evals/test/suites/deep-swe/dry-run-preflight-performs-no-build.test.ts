@@ -27,15 +27,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AuthStorage, type CredentialHealthResult } from "@veyyon/ai";
 import { suites } from "../../../engine/members/loaded";
-import { internalScratchDir } from "../../../engine/package-paths";
 import { deepSweSuite } from "../../../suites/deep-swe/main";
 import { checkBinaryBuildNeeded } from "../../../suites/deep-swe/runner/preflight";
-
-function createScratchDir(prefix: string): string {
-	const base = internalScratchDir();
-	fs.mkdirSync(base, { recursive: true });
-	return fs.mkdtempSync(path.join(base, prefix));
-}
+import { createScratchDir } from "../../scratch-dir";
 
 describe("dry-run preflight purity and artifact reporting", () => {
 	let reloadSpy: Mock<() => Promise<void>> | undefined;

@@ -1,6 +1,5 @@
 import { toBoolean, toNumber } from "@veyyon/catalog/utils";
 import { getCodexAccountEmail, getCodexAccountId } from "@veyyon/catalog/wire/codex";
-import { clamp } from "@veyyon/utils/math";
 import { HOUR_MS, MINUTE_MS, WEEK_MS } from "@veyyon/utils/time";
 import { normalizeStoredEmail } from "../auth-credential-rows";
 import type {
@@ -18,7 +17,7 @@ import type {
 import { isRecord } from "../utils";
 import { normalizeCodexBaseUrl } from "./openai-codex-base-url";
 import { listCodexResetCredits } from "./openai-codex-reset";
-import { usageStatusFromUsedFraction } from "./shared";
+import { usageAmountFromUsedPercent, usageStatusFromUsedFraction } from "./shared";
 
 const CODEX_USAGE_PATH = "wham/usage";
 
@@ -206,20 +205,7 @@ function buildUsageWindow(window: ParsedUsageWindow, key: string, nowMs: number)
 }
 
 function buildUsageAmount(window: ParsedUsageWindow): UsageAmount {
-	const usedPercent = window.usedPercent;
-	if (usedPercent === undefined) {
-		return { unit: "percent" };
-	}
-	const clamped = clamp(usedPercent, 0, 100);
-	const usedFraction = clamped / 100;
-	return {
-		used: clamped,
-		limit: 100,
-		remaining: Math.max(0, 100 - clamped),
-		usedFraction,
-		remainingFraction: Math.max(0, 1 - usedFraction),
-		unit: "percent",
-	};
+	return window.usedPercent === undefined ? { unit: "percent" } : usageAmountFromUsedPercent(window.usedPercent);
 }
 
 // Codex adds one provider-specific prefix: an explicit limit_reached flag from

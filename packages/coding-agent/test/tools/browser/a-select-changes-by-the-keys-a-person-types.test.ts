@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
+import { toolResultText } from "../../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./chromium";
 
 const opts = (labels: readonly string[]): string => labels.map(label => `<option>${label}</option>`).join("");
@@ -84,10 +85,6 @@ const opened = await tab.select("#doubled", "Lion");
 const openedEvents = await tab.evaluate(() => window.takeEvents("doubled"));
 return { outcomes, several, severalHeld, severalEvents, again, repeatEvents, opened, openedEvents };`;
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
-}
-
 let origin = "";
 let server: Bun.Server<undefined> | undefined;
 
@@ -123,7 +120,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("tab.select", () => {
 					timeout: 240,
 					code: SWEEP.replace("IDS", JSON.stringify(Object.keys(SELECTS))),
 				});
-				const swept = JSON.parse(text(result)) as {
+				const swept = JSON.parse(toolResultText(result, "")) as {
 					outcomes: Outcome[];
 					several: string[];
 					severalHeld: string[];

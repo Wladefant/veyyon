@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it, spyOn } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createInitialResponsesAssistantMessage } from "../src/providers/initial-message";
 import type { Api, AssistantMessage } from "../src/types";
 
@@ -26,20 +27,7 @@ describe("initial assistant message constructor", () => {
 				api: "openai-responses" as Api,
 				provider: "openai",
 				model: "gpt-4o",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						total: 0,
-					},
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: FIXED_TIMESTAMP,
 			});

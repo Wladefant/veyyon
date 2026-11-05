@@ -8,12 +8,12 @@ import * as path from "node:path";
 import { Agent, type AgentEvent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 function makeEvent(): AgentEvent {
 	return { type: "tool_execution_start", toolCallId: "probe-1", toolName: "probe", args: {} };
@@ -71,8 +71,7 @@ describe("#emit listener isolation", () => {
 		beforeEach(async () => {
 			tempDir = path.join(os.tmpdir(), `pi-emit-iso-${Snowflake.next()}`);
 			fs.mkdirSync(tempDir, { recursive: true });
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Test model not found");
+			const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 			authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 			authStorage.setRuntimeApiKey("anthropic", "test-key");
 			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));

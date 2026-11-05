@@ -86,6 +86,36 @@ export function selectMcpOAuthRefreshMaterial(
 	return credential.tokenUrl ? credential : auth;
 }
 
+/** The token endpoint, client and resource a stored MCP OAuth credential is refreshed against. */
+export interface MCPOAuthRefreshTarget {
+	tokenUrl: string | undefined;
+	clientId: string | undefined;
+	clientSecret: string | undefined;
+	authorizationUrl: string | undefined;
+	/** The resource indicator the refresh sends: the stated one, else the URL of an http or sse server. */
+	resource: string | undefined;
+	/** `resource` is the server URL standing in for one no credential or config states, and is not stored. */
+	resourceIsFallback: boolean;
+}
+
+/** Resolve what refreshing `credential` for the server `config` describes is sent to and stored with. */
+export function resolveMcpOAuthRefreshTarget(
+	credential: MCPStoredOAuthCredential,
+	config: MCPServerConfig,
+): MCPOAuthRefreshTarget {
+	const material = selectMcpOAuthRefreshMaterial(credential, config.auth);
+	const resourceIsFallback =
+		!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
+	return {
+		tokenUrl: material?.tokenUrl,
+		clientId: material?.clientId,
+		clientSecret: material?.clientSecret,
+		authorizationUrl: material && "authorizationUrl" in material ? material.authorizationUrl : undefined,
+		resource: material?.resource ?? (resourceIsFallback ? config.url : undefined),
+		resourceIsFallback,
+	};
+}
+
 export async function removeManagedMcpOAuthCredential(
 	authStorage: AuthStorage,
 	credentialId: string | undefined,

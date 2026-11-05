@@ -1,22 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Api, ApiKeyResolver, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
-import { type GeneratedProvider, getBundledModel } from "@veyyon/catalog/models";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { generateSessionTitle } from "@veyyon/coding-agent/utils/title-generator";
 import { logger } from "@veyyon/utils";
-
-function getModelOrThrow(id: string): Model<Api> {
-	const model = getBundledModel("anthropic", id);
-	if (!model) throw new Error(`Expected model ${id}`);
-	return model;
-}
-
-function getModelFor(provider: GeneratedProvider, id: string): Model<Api> {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected model ${provider}/${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function createSettings(model: Model<Api>, tinyModel = "online") {
 	return {
@@ -44,7 +32,7 @@ afterEach(() => {
 
 describe("title generator", () => {
 	it("returns the marker-wrapped title without forcing a tool call", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Structured Title</title>" }],
@@ -67,7 +55,7 @@ describe("title generator", () => {
 	});
 
 	it("redacts first-turn secrets at the online title provider boundary", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const secret = "TITLE_PROVIDER_SECRET_49372";
 		const obfuscator = new SecretObfuscator([{ type: "plain", origin: "config", content: secret }]);
 		const placeholder = obfuscator.obfuscate(secret);
@@ -95,7 +83,7 @@ describe("title generator", () => {
 	});
 
 	it("keeps a complete placeholder when a secret straddles title truncation", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const secret = "TITLE_BOUNDARY_SECRET_ABCDEF";
 		const obfuscator = new SecretObfuscator([{ type: "plain", origin: "config", content: secret }]);
 		const placeholder = obfuscator.obfuscate(secret);
@@ -123,7 +111,7 @@ describe("title generator", () => {
 	});
 
 	it("re-reads the title sanitizer after credential resolution", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const secret = "TITLE_NEW_RUNTIME_SECRET_B881";
 		const placeholder = "#TITLE_RUNTIME_SECRET#";
 		let sanitize = (text: string) => text;
@@ -158,7 +146,7 @@ describe("title generator", () => {
 	});
 
 	it("re-sanitizes the title context for a credential retry", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const secret = "TITLE_RETRY_SECRET_883";
 		const placeholder = "#TITLE_RETRY_SECRET#";
 		let sanitize = (text: string) => text;
@@ -219,7 +207,7 @@ describe("title generator", () => {
 			"```reasoning\nThinking process:\n<title>Wrong internal scratchpad</title>\n```\n<title>Fix login button</title>",
 		],
 	] as const)("ignores leaked %s reasoning markup before the visible title", async (_marker, responseText) => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: responseText }],
@@ -235,7 +223,7 @@ describe("title generator", () => {
 	});
 
 	it("preserves in-band reasoning syntax inside the parsed title", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Fix <think> tag parsing</title>" }],
@@ -251,7 +239,7 @@ describe("title generator", () => {
 	});
 
 	it("uses the bundled default prompt when no title prompt file is resolved", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Default Prompt</title>" }],
@@ -265,7 +253,7 @@ describe("title generator", () => {
 	});
 
 	it("appends the marker instruction after a resolved TITLE_SYSTEM.md prompt", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const customPrompt = "Generate lowercase colon-delimited session names.";
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
@@ -290,7 +278,7 @@ describe("title generator", () => {
 	});
 
 	it('unwraps a JSON {"title": ...} response into the bare title', async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '{"title": "Optimize CNPG kernel reports"}' }],
@@ -306,7 +294,7 @@ describe("title generator", () => {
 	});
 
 	it("unwraps a code-fenced JSON title response", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '```json\n{"title": "Fix login button on mobile"}\n```' }],
@@ -322,7 +310,7 @@ describe("title generator", () => {
 	});
 
 	it("unwraps a JSON title wrapped in <title> markers", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '<title>{"title": "Add OAuth authentication"}</title>' }],
@@ -338,7 +326,7 @@ describe("title generator", () => {
 	});
 
 	it("salvages the title from truncated JSON output", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '{"title": "Debug failing CI tests"' }],
@@ -354,7 +342,7 @@ describe("title generator", () => {
 	});
 
 	it("defers titling for a greeting without invoking the model", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
 
 		const title = await generateSessionTitle("hi", createRegistry(model), createSettings(model));
@@ -364,7 +352,7 @@ describe("title generator", () => {
 	});
 
 	it("returns null when the model rejects a non-greeting taskless message with the none sentinel", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>none</title>" }],
@@ -381,7 +369,7 @@ describe("title generator", () => {
 	});
 
 	it("returns null for a self-closing <title/> marker", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title/>" }],
@@ -398,7 +386,7 @@ describe("title generator", () => {
 	});
 
 	it("returns null for a bare <title> marker", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>" }],
@@ -415,7 +403,7 @@ describe("title generator", () => {
 	});
 
 	it("logs and returns null when title credentials are missing", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
 		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
@@ -443,7 +431,7 @@ describe("title generator", () => {
 	});
 
 	it("logs and returns null when title credential lookup throws", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
 		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
@@ -474,7 +462,7 @@ describe("title generator", () => {
 	});
 
 	it("uses a reasoning-safe output budget for reasoning models", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Budget Title</title>" }],
@@ -496,7 +484,7 @@ describe("title generator", () => {
 	// reasoning-safe budget, otherwise the `<title>` output is truncated
 	// before it can be emitted.
 	it("uses a reasoning-safe output budget even when the model declares reasoning: false", async () => {
-		const baseModel = getModelOrThrow("claude-sonnet-4-5");
+		const baseModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...baseModel, reasoning: false } as Model<Api>;
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
@@ -515,7 +503,7 @@ describe("title generator", () => {
 	});
 
 	it("strips code blocks from the message sent to the model", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Setup Screen</title>" }],
@@ -535,7 +523,7 @@ describe("title generator", () => {
 	});
 
 	it("accepts a plain sentence when the model omits the <title> markers", async () => {
-		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		const model = requireBundledModel("deepseek", "deepseek-v4-pro");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "Fix login button on mobile" }],
@@ -553,7 +541,7 @@ describe("title generator", () => {
 	it.each(["Here's a thinking process:", "Thinking process:", "Reasoning process:"])(
 		"rejects a markerless prose thinking preamble: %s",
 		async responseText => {
-			const model = getModelFor("deepseek", "deepseek-v4-pro");
+			const model = requireBundledModel("deepseek", "deepseek-v4-pro");
 			vi.spyOn(ai, "completeSimple").mockResolvedValue({
 				stopReason: "stop",
 				content: [{ type: "text", text: responseText }],
@@ -570,7 +558,7 @@ describe("title generator", () => {
 	);
 
 	it("preserves a markerless title that mentions a <think> tag", async () => {
-		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		const model = requireBundledModel("deepseek", "deepseek-v4-pro");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "Fix <think> tag parsing" }],
@@ -586,7 +574,7 @@ describe("title generator", () => {
 	});
 
 	it("preserves a markerless title that mentions a ```thinking fence", async () => {
-		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		const model = requireBundledModel("deepseek", "deepseek-v4-pro");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "Fix ```thinking fence parsing" }],
@@ -603,7 +591,7 @@ describe("title generator", () => {
 	});
 
 	it("strips an unclosed <title> tag from a truncated response", async () => {
-		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		const model = requireBundledModel("deepseek", "deepseek-v4-pro");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Refactor API client error handling" }],
@@ -619,9 +607,9 @@ describe("title generator", () => {
 	});
 
 	it("resolves the title model in precedence order: title helper -> session model -> defaultModel", async () => {
-		const titleModel = getModelOrThrow("claude-haiku-4-5");
-		const sessionModel = getModelOrThrow("claude-sonnet-4-5");
-		const defaultModel = getModelOrThrow("claude-opus-4-8");
+		const titleModel = requireBundledModel("anthropic", "claude-haiku-4-5");
+		const sessionModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const defaultModel = requireBundledModel("anthropic", "claude-opus-4-8");
 
 		const mockComplete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",

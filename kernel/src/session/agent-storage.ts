@@ -18,7 +18,7 @@ import { getDbBusyTimeoutMs } from "@veyyon/utils/env";
 import * as logger from "@veyyon/utils/logger";
 import { openSqliteDatabaseSync, SQLITE_NOW_EPOCH } from "@veyyon/utils/sqlite";
 import { DAY_MS } from "@veyyon/utils/time";
-import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
+import { errorMessage, isRecord, toError } from "@veyyon/utils/type-guards";
 
 /** Row shape for model_usage table queries */
 type ModelUsageRow = {
@@ -402,7 +402,7 @@ FROM model_usage_legacy
 				if (!isSqliteBusyError(err)) {
 					throw err;
 				}
-				lastError = err instanceof Error ? err : new Error(String(err));
+				lastError = toError(err);
 				if (attempt < maxRetries - 1) {
 					await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: baseDelayMs, jitter: 0 }));
 				}

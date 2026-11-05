@@ -24,6 +24,7 @@ import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 
 interface SessionStub {
 	session: AgentSession;
@@ -83,10 +84,6 @@ function makeController(registry: AgentRegistry, lifecycle: AgentLifecycleManage
 		dismissWelcome: vi.fn(),
 	} as unknown as InteractiveModeContext;
 	return new SessionFocusController(ctx, registry, () => lifecycle);
-}
-
-async function settle(): Promise<void> {
-	for (let i = 0; i < 16; i++) await Promise.resolve();
 }
 
 describe("a focused agent is never parked under the screen", () => {
@@ -160,7 +157,7 @@ describe("a focused agent is never parked under the screen", () => {
 		expect(lifecycle.isPinned("Scout-ttl")).toBe(true);
 		stub.releaseFlush();
 		vi.advanceTimersByTime(5_000);
-		await settle();
+		await drainMicrotasks(16);
 		// Deferred before the flush: a session on screen is not written out under it.
 		expect(stub.flushCalls()).toBe(0);
 		expect(stub.disposeCalls()).toBe(0);
@@ -170,11 +167,11 @@ describe("a focused agent is never parked under the screen", () => {
 		expect(lifecycle.isPinned("Scout-ttl")).toBe(false);
 		// The TTL counts from the unfocus, not from the last activity.
 		vi.advanceTimersByTime(999);
-		await settle();
+		await drainMicrotasks(16);
 		expect(registry.get("Scout-ttl")?.status).toBe("idle");
 		vi.advanceTimersByTime(1);
-		await settle();
-		await settle();
+		await drainMicrotasks(16);
+		await drainMicrotasks(16);
 		expect(stub.disposeCalls()).toBe(1);
 		expect(registry.get("Scout-ttl")?.status).toBe("parked");
 	});

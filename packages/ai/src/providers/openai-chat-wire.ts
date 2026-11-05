@@ -115,7 +115,18 @@ export type Metadata = {
 	[key: string]: string;
 };
 
-/** Constrains effort on reasoning for reasoning models. */
+/**
+ * Constrains effort on reasoning for reasoning models. Currently supported
+ * values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+ *
+ * - `gpt-5.1` defaults to `none`, which does not perform reasoning. The supported
+ *   reasoning values for `gpt-5.1` are `none`, `low`, `medium`, and `high`.
+ * - All models before `gpt-5.1` default to `medium` reasoning effort, and do not
+ *   support `none`.
+ * - The `gpt-5-pro` model defaults to (and only supports) `high` reasoning effort.
+ * - `xhigh` is supported for all models after `gpt-5.1-codex-max`.
+ * - `max` is supported for `gpt-5.6` and later models.
+ */
 export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
 
 /** JSON object response format (older JSON mode). */

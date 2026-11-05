@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { AgentMessage } from "@veyyon/agent-core";
 import {
 	CompactionCancelledError,
 	type CompactionPreparation,
@@ -12,7 +11,8 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Context, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { createUserMessage, requireBundledModel } from "./helpers";
 
 /**
  * An empty model response is never a valid compaction result, and accepting one
@@ -40,14 +40,7 @@ function makeEmptyStop(text?: string): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 268,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 268,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), output: 268, totalTokens: 268 },
 		stopReason: "stop",
 	} as AssistantMessage;
 }
@@ -56,22 +49,16 @@ function makeAborted(text?: string): AssistantMessage {
 	return { ...makeEmptyStop(text), stopReason: "aborted" };
 }
 
-function makeUserMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function getModel(): Model {
-	const model = getBundledModel("openai-codex", "gpt-5.1-codex");
-	if (!model) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
-	return model;
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 function makePreparation(): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
-		messagesToSummarize: [makeUserMessage("history msg")],
+		messagesToSummarize: [createUserMessage("history msg")],
 		turnPrefixMessages: [],
-		recentMessages: [makeUserMessage("recent msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: false,
 		tokensBefore: 221_568,
 		fileOps: createFileOps(),
@@ -100,7 +87,7 @@ describe("an empty model response is never accepted as a compaction result", () 
 		fileOps.read.add("natives/scanner/src/engine/process.rs");
 
 		await expect(
-			generateHandoff([makeUserMessage("do the work")], getModel(), "test-key", {
+			generateHandoff([createUserMessage("do the work")], getModel(), "test-key", {
 				systemPrompt: ["sp"],
 				tools: [],
 				fileOps,
@@ -113,7 +100,10 @@ describe("an empty model response is never accepted as a compaction result", () 
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeEmptyStop("   \n\t  "));
 
 		await expect(
-			generateHandoff([makeUserMessage("do the work")], getModel(), "test-key", { systemPrompt: ["sp"], tools: [] }),
+			generateHandoff([createUserMessage("do the work")], getModel(), "test-key", {
+				systemPrompt: ["sp"],
+				tools: [],
+			}),
 		).rejects.toThrow(/empty document/i);
 	});
 
@@ -131,7 +121,7 @@ describe("an empty model response is never accepted as a compaction result", () 
 	test("a non-empty handoff document passes through", async () => {
 		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeEmptyStop("## Goal\nShip the fix."));
 
-		const document = await generateHandoff([makeUserMessage("do the work")], getModel(), "test-key", {
+		const document = await generateHandoff([createUserMessage("do the work")], getModel(), "test-key", {
 			systemPrompt: ["sp"],
 			tools: [],
 		});
@@ -154,7 +144,7 @@ describe("aborted compaction completions always use the canonical cancellation e
 		test(`generateSummary rejects ${output.label} aborted output`, async () => {
 			await expectCanonicalCancellation(
 				generateSummary(
-					[makeUserMessage("history")],
+					[createUserMessage("history")],
 					getModel(),
 					1024,
 					"test-key",
@@ -188,7 +178,7 @@ describe("aborted compaction completions always use the canonical cancellation e
 		/** The convenience handoff export must propagate the same sentinel. */
 		test(`generateHandoff rejects ${output.label} aborted output`, async () => {
 			await expectCanonicalCancellation(
-				generateHandoff([makeUserMessage("history")], getModel(), "test-key", {
+				generateHandoff([createUserMessage("history")], getModel(), "test-key", {
 					systemPrompt: ["system"],
 					completeImpl: async () => makeAborted(output.text),
 				}),
@@ -208,7 +198,7 @@ describe("aborted compaction completions always use the canonical cancellation e
 		test(`compact rejects ${output.label} aborted turn-prefix output`, async () => {
 			const splitPreparation = makePreparation();
 			splitPreparation.messagesToSummarize = [];
-			splitPreparation.turnPrefixMessages = [makeUserMessage("partial current turn")];
+			splitPreparation.turnPrefixMessages = [createUserMessage("partial current turn")];
 			splitPreparation.isSplitTurn = true;
 			await expectCanonicalCancellation(
 				compact(splitPreparation, getModel(), "test-key", undefined, undefined, {

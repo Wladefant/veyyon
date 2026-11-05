@@ -86,8 +86,8 @@ const PRECEDENCE: ReadonlyArray<{
 		actions: s => ["editor:set:", `border:bash=${s.on.has("bashMode")},python=false`],
 	},
 	{ takes: s => s.on.has("streaming"), actions: () => ["abort:turn"] },
-	{ takes: s => s.on.has("draft"), actions: () => ["lastEscapeTime=0"] },
-	{ takes: () => true, actions: () => ["lastEscapeTime=now"] },
+	{ takes: s => s.on.has("draft"), actions: () => ["hold", "lastEscapeTime=0"] },
+	{ takes: () => true, actions: () => ["lastEscapeTime=now", "hold"] },
 ];
 
 function expectedActions(scene: Scene): string[] {
@@ -118,6 +118,7 @@ function stage(scene: Scene, log: string[]): InteractiveModeContext {
 		},
 		ui: {
 			requestRender: () => log.push("render"),
+			holdFrameForInput: () => log.push("hold"),
 			resetDisplay: () => log.push("resetDisplay"),
 			addInputListener: () => () => {},
 			addStartListener: () => {},

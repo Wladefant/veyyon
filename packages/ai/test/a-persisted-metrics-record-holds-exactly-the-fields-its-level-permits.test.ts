@@ -28,6 +28,7 @@ import {
 	type ToolCallMetricsInput,
 	toolCallMetricsForPersistence,
 } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 // An unknown string reaches persistence from a malformed config or a record written by another build.
 const UNKNOWN = "verbose" as InstrumentationLevel;
@@ -117,13 +118,13 @@ const turnInput: AssistantTurnMetricsInput = {
 	status: "ok",
 	ttftMs: 500,
 	usage: {
+		...emptyUsage(),
 		input: 100,
 		output: 300,
 		cacheRead: 20,
 		cacheWrite: 10,
 		totalTokens: 430,
 		reasoningTokens: 40,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	},
 	previousCacheReadTokens: 5_000,
 	upstreamProvider: "upstream",

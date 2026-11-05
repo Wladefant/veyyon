@@ -7,8 +7,9 @@
  *
  * What this file closes: every login surface in the TUI is driven for every registry provider with
  * a login, split by the row's declared credential. An `api-key` row's URL is shown as the place to
- * get a key and is never launched or copied; an `oauth` row's URL is launched (and, in the wizard,
- * copied). The picker prints the credential beside every row, and the two OpenAI rows are told
+ * get a key and is never launched or copied; an `oauth` row's URL is launched and copied, so a login
+ * over SSH, where the launch opens no browser the operator can see, still has the link in hand. The
+ * picker prints the credential beside every row, and the two OpenAI rows are told
  * apart by name. Sweeping the registry means a provider added with either declaration is exercised
  * on every surface without a change here.
  *
@@ -50,16 +51,25 @@ function plain(lines: readonly string[]): string {
 	return lines.map(line => stripVTControlCharacters(line)).join("\n");
 }
 
-function makeDialog(providerId: string): { dialog: LoginDialogComponent; opened: string[]; frame: () => string } {
+function makeDialog(providerId: string): {
+	dialog: LoginDialogComponent;
+	opened: string[];
+	copied: string[];
+	frame: () => string;
+} {
 	const opened: string[] = [];
+	const copied: string[] = [];
 	vi.spyOn(openModule, "openPath").mockImplementation((target: string) => {
 		opened.push(target);
+	});
+	vi.spyOn(clipboard, "copyToClipboard").mockImplementation(async (text: string) => {
+		copied.push(text);
 	});
 	const tui = { requestRender: vi.fn() } as unknown as TUI;
 	const dialog = new LoginDialogComponent(tui, formatProviderName(providerId), () => {}, {
 		browserLogin: getLoginCredential(providerId) === "oauth",
 	});
-	return { dialog, opened, frame: () => plain(dialog.render(100)) };
+	return { dialog, opened, copied, frame: () => plain(dialog.render(100)) };
 }
 
 type WizardDrive = {
@@ -127,21 +137,32 @@ describe("a login dialog launches only a browser login", () => {
 		expect(browserRows.length).toBeGreaterThan(0);
 	});
 
-	it.each(keyRows.map(row => [row.id] as const))("%s: the dialog shows the key page and does not open it", id => {
-		const { dialog, opened, frame } = makeDialog(id);
-		dialog.showAuth(AUTH_URL, "Copy a key from the dashboard");
-		expect(opened).toEqual([]);
-		const drawn = frame();
-		expect(drawn).toContain("Get an API key at");
-		expect(drawn).toContain(AUTH_URL);
-	});
+	it.each(keyRows.map(row => [row.id] as const))(
+		"%s: the dialog shows the key page and neither opens nor copies it",
+		id => {
+			const { dialog, opened, copied, frame } = makeDialog(id);
+			dialog.showAuth(AUTH_URL, "Copy a key from the dashboard");
+			expect(opened).toEqual([]);
+			expect(copied).toEqual([]);
+			const drawn = frame();
+			expect(drawn).toContain("Get an API key at");
+			expect(drawn).toContain(AUTH_URL);
+			expect(drawn).not.toContain("link sent to the clipboard");
+		},
+	);
 
-	it.each(browserRows.map(row => [row.id] as const))("%s: the dialog opens the URL the flow waits on", id => {
-		const { dialog, opened, frame } = makeDialog(id);
-		dialog.showAuth(AUTH_URL, "Approve the request");
-		expect(opened).toEqual([AUTH_URL]);
-		expect(frame()).not.toContain("Get an API key at");
-	});
+	it.each(browserRows.map(row => [row.id] as const))(
+		"%s: the dialog opens and copies the URL the flow waits on",
+		id => {
+			const { dialog, opened, copied, frame } = makeDialog(id);
+			dialog.showAuth(AUTH_URL, "Approve the request");
+			expect(opened).toEqual([AUTH_URL]);
+			expect(copied).toEqual([AUTH_URL]);
+			const drawn = frame();
+			expect(drawn).not.toContain("Get an API key at");
+			expect(drawn).toContain("link sent to the clipboard");
+		},
+	);
 
 	it.each(keyRows.map(row => [row.id, row] as const))(
 		"%s: the wizard shows the key page and neither opens nor copies it",

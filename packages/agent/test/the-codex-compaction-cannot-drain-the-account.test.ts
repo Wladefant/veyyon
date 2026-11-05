@@ -74,7 +74,7 @@ import {
 	SERVER_COMPACTION_WIRE_APIS,
 	serverCompactionRouteAbsent,
 } from "@veyyon/ai/providers/openai-compaction";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
 const BANNER = "DO NOT CHANGE WITHOUT OPERATOR PERMISSION — THIS REGRESSION HAS HAPPENED 50+ TIMES";
 
@@ -86,14 +86,8 @@ function codexToken(): string {
 	return `header.${payload}.signature`;
 }
 
-function bundled(provider: Parameters<typeof getBundledModel>[0], id: string): Model {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`${BANNER}: bundled ${provider}/${id} is gone`);
-	return model;
-}
-
 function codexModel(): Model {
-	return bundled("openai-codex", "gpt-5.1-codex");
+	return requireBundledModel("openai-codex", "gpt-5.1-codex");
 }
 
 const COMPACTION_ITEM = { type: "compaction", encrypted_content: "gAAAAAB-opaque" };
@@ -522,18 +516,18 @@ describe(`only a 404 stands the route down (${BANNER})`, () => {
 
 	test("the stand-down is keyed to the model, not the whole provider", async () => {
 		await compactDirect(codexModel(), 404, { detail: "Not Found" });
-		const sibling = bundled("openai-codex", "gpt-5.6-sol");
+		const sibling = requireBundledModel("openai-codex", "gpt-5.6-sol");
 		expect(serverCompactionRouteAbsent(sibling)).toBe(false);
 	});
 
 	test("the stand-down does not reach another provider's models", async () => {
 		await compactDirect(codexModel(), 404, { detail: "Not Found" });
-		expect(serverCompactionRouteAbsent(bundled("openai", "gpt-5.1"))).toBe(false);
+		expect(serverCompactionRouteAbsent(requireBundledModel("openai", "gpt-5.1"))).toBe(false);
 	});
 
 	test("a sibling model still resolves a transport after another model's 404", async () => {
 		await compactDirect(codexModel(), 404, { detail: "Not Found" });
-		expect(resolveServerCompactionTransport(bundled("openai-codex", "gpt-5.6-sol"))).toBeDefined();
+		expect(resolveServerCompactionTransport(requireBundledModel("openai-codex", "gpt-5.6-sol"))).toBeDefined();
 	});
 
 	test("the stand-down persists across calls within the process", async () => {
@@ -693,7 +687,7 @@ describe(`one compaction is one paid request (${BANNER})`, () => {
 		await expect(
 			compactWithProvider(
 				preparation(),
-				bundled("anthropic", "claude-sonnet-4-5"),
+				requireBundledModel("anthropic", "claude-sonnet-4-5"),
 				"key",
 				"sys",
 				undefined,

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { AgentMessage } from "@veyyon/agent-core";
 import {
 	type CompactionPreparation,
 	compact,
@@ -15,9 +14,9 @@ import {
 	resolveServerCompactionTransport,
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { createAssistantText, createUserMessage, requireBundledModel } from "./helpers";
 
 /**
  * Server-side (remote) compaction: the provider compacts the span through
@@ -28,42 +27,16 @@ import { getBundledModel } from "@veyyon/catalog/models";
  * the stale-window strip in the local path.
  */
 
-function makeAssistantStop(text: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-	};
-}
-
-function makeUserMessage(text: string, timestamp = Date.now()): AgentMessage {
-	return { role: "user", content: text, timestamp };
-}
-
 function getOpenAIModel(): Model {
-	const model = getBundledModel("openai", "gpt-5.1");
-	if (!model) throw new Error("Expected built-in openai/gpt-5.1 to exist");
-	return model;
+	return requireBundledModel("openai", "gpt-5.1");
 }
 
 function makePreparation(overrides: Partial<CompactionPreparation> = {}): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
-		messagesToSummarize: [makeUserMessage("history msg"), makeAssistantStop("history reply")],
+		messagesToSummarize: [createUserMessage("history msg"), createAssistantText("history reply")],
 		turnPrefixMessages: [],
-		recentMessages: [makeUserMessage("recent msg")],
+		recentMessages: [createUserMessage("recent msg")],
 		isSplitTurn: false,
 		tokensBefore: 221_568,
 		fileOps: createFileOps(),
@@ -164,13 +137,13 @@ function messageEntry(id: string, parentId: string | undefined, text: string): S
 		id,
 		parentId,
 		timestamp: new Date().toISOString(),
-		message: makeUserMessage(text),
+		message: createUserMessage(text),
 	} as SessionEntry;
 }
 
 /** Always compacts on openai/gpt-5.1, so the stored identity is the only variable. */
 async function compactAndReadInput(provider: string, api: string): Promise<unknown[]> {
-	vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("summary"));
+	vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("summary"));
 	const calls = mockCompactFetch();
 	await compactWithProvider(chainedPreparation(provider, api), getOpenAIModel(), "test-key");
 	expect(calls).toHaveLength(1);
@@ -192,8 +165,7 @@ describe("server-side compaction transport resolution is capability data", () =>
 	});
 
 	test("a non-Responses api does not: gating is api plus capability data, not a provider-name check", () => {
-		const anthropic = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!anthropic) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const anthropic = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		expect(resolveServerCompactionTransport(anthropic)).toBeUndefined();
 	});
 
@@ -203,21 +175,19 @@ describe("server-side compaction transport resolution is capability data", () =>
 	// it stores — so a ChatGPT OAuth session compacts server-side like any
 	// other Responses host.
 	test("a codex model resolves a transport", () => {
-		const codex = getBundledModel("openai-codex", "gpt-5.1-codex");
-		if (!codex) throw new Error("Expected built-in openai-codex/gpt-5.1-codex to exist");
+		const codex = requireBundledModel("openai-codex", "gpt-5.1-codex");
 		expect(resolveServerCompactionTransport(codex)).toBeDefined();
 	});
 
 	test("an Azure Responses model resolves a transport", () => {
-		const azure = getBundledModel("azure", "gpt-4");
-		if (!azure) throw new Error("Expected built-in azure/gpt-4 to exist");
+		const azure = requireBundledModel("azure", "gpt-4");
 		expect(resolveServerCompactionTransport(azure)).toBeDefined();
 	});
 });
 
 describe("compactWithProvider", () => {
 	test("posts the span to /responses/compact exactly per the documented shape", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("## Goal\nShip the fix."));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("## Goal\nShip the fix."));
 		const calls = mockCompactFetch();
 
 		await compactWithProvider(makePreparation(), getOpenAIModel(), "test-key", undefined, undefined, {
@@ -243,7 +213,7 @@ describe("compactWithProvider", () => {
 		// context; a second summarization buys nothing it does not already carry.
 		// `completeSimple` is every local summarization oneshot, so a call here
 		// means the second bill is back.
-		const summarize = vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("## Goal\nShip the fix."));
+		const summarize = vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("## Goal\nShip the fix."));
 		mockCompactFetch();
 
 		const result = await compactWithProvider(makePreparation(), getOpenAIModel(), "test-key");
@@ -286,7 +256,7 @@ describe("compactWithProvider", () => {
 	});
 
 	test("the stored window rebuilds to a provider payload for replay", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("summary"));
 		mockCompactFetch();
 
 		const result = await compactWithProvider(makePreparation(), getOpenAIModel(), "test-key");
@@ -298,7 +268,7 @@ describe("compactWithProvider", () => {
 	});
 
 	test("chains the previous remote window ahead of the new span", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("updated summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("updated summary"));
 		const calls = mockCompactFetch();
 
 		await compactWithProvider(chainedPreparation("openai", "openai-responses"), getOpenAIModel(), "test-key");
@@ -309,7 +279,7 @@ describe("compactWithProvider", () => {
 	});
 
 	test("the fresh window replaces the previous one instead of accumulating", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("updated summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("updated summary"));
 		mockCompactFetch();
 
 		const result = await compactWithProvider(
@@ -322,7 +292,7 @@ describe("compactWithProvider", () => {
 	});
 
 	test("a window with no compaction item is rejected, so nothing is stored or replayed", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("summary"));
 		mockCompactFetch({ ...COMPACT_RESPONSE, output: [COMPACT_RESPONSE.output[0]] });
 
 		await expect(compactWithProvider(makePreparation(), getOpenAIModel(), "test-key")).rejects.toThrow(
@@ -382,7 +352,7 @@ describe("a stored window chains only onto the host that minted it", () => {
 
 describe("the local path never carries a stale remote window forward", () => {
 	test("compact() strips the remote key but keeps unrelated preserve data", async () => {
-		vi.spyOn(ai, "completeSimple").mockResolvedValue(makeAssistantStop("fresh local summary"));
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(createAssistantText("fresh local summary"));
 
 		const result = await compact(
 			makePreparation({

@@ -7,11 +7,21 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { errorMessage, getProjectDir, isThenable, logger, readJsonl, Snowflake, truncate } from "@veyyon/utils";
+import {
+	errorMessage,
+	getProjectDir,
+	isThenable,
+	logger,
+	readJsonl,
+	Snowflake,
+	toError,
+	truncate,
+} from "@veyyon/utils";
 import { RingBuffer } from "@veyyon/utils/ring";
 import type { Subprocess } from "bun";
 import { hostHasInheritableConsole } from "../../eval/py/spawn-options";
 import { buildMcpChildEnv } from "../child-environment";
+import { describeJsonRpcError, isUnattributableError, rejectAllPending } from "../incoming-message";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcMessage,
@@ -25,7 +35,6 @@ import type {
 	ServerRequestResponse,
 } from "../types";
 import { answerServerRequest, toJsonRpcError } from "../types";
-import { describeJsonRpcError, isUnattributableError, rejectAllPending } from "../unattributable-error";
 import { terminateMcpServerTree } from "./process-tree";
 import { mcpNotConnectedMessage, mcpTimeoutMessage } from "./transport-failure";
 
@@ -412,10 +421,6 @@ export function writeFrame(stdin: FrameSink, frame: string): boolean {
 }
 
 /**
- * Stdio transport for MCP servers.
- * Spawns a subprocess and communicates via stdin/stdout.
- */
-/**
  * How many recent stderr lines a server's tail keeps.
  *
  * Enough to carry a stack trace or a startup error, small enough that a chatty
@@ -455,6 +460,10 @@ function isValidCorrelatedStdioResponse(value: unknown): value is JsonRpcRespons
 	return typeof fields.code === "number" && Number.isSafeInteger(fields.code) && typeof fields.message === "string";
 }
 
+/**
+ * Stdio transport for MCP servers.
+ * Spawns a subprocess and communicates via stdin/stdout.
+ */
 export class StdioTransport implements MCPTransport {
 	#process: Subprocess<"pipe", "pipe", "pipe"> | null = null;
 	/**
@@ -598,7 +607,7 @@ export class StdioTransport implements MCPTransport {
 			for await (const line of readJsonl(this.#process.stdout)) {
 				if (!this.#connected) break;
 				try {
-					this.#handleMessage(line as JsonRpcMessage);
+					this.#handleMessage(line);
 				} catch (error) {
 					// A dropped line is not always harmless: if it was the RESPONSE to a
 					// pending request, that request now waits until its timeout with no
@@ -620,7 +629,7 @@ export class StdioTransport implements MCPTransport {
 			}
 		} catch (error) {
 			if (this.#connected) {
-				this.onError?.(error instanceof Error ? error : new Error(String(error)));
+				this.onError?.(toError(error));
 			}
 		} finally {
 			this.#handleClose();
@@ -670,13 +679,12 @@ export class StdioTransport implements MCPTransport {
 		}
 	}
 
-	#handleMessage(message: JsonRpcMessage | JsonRpcMessage[]): void {
-		if (Array.isArray(message)) {
-			for (const m of message) this.#handleMessage(m);
+	#handleMessage(payload: unknown): void {
+		if (Array.isArray(payload)) {
+			for (const member of payload) this.#handleMessage(member);
 			return;
 		}
-		// JSONL can contain primitives; reject each member without losing its valid siblings.
-		if (message === null || typeof message !== "object") {
+		if (payload === null || typeof payload !== "object") {
 			logger.warn("Ignored an unreadable message from an MCP server", {
 				server: this.config.command,
 				failureType: "type",
@@ -684,6 +692,7 @@ export class StdioTransport implements MCPTransport {
 			});
 			return;
 		}
+		const message = payload as JsonRpcMessage;
 		// Validate method-bearing peer frames before interpreting id:null errors:
 		// a request/error hybrid must not reject every pending client call.
 		// Correlated client replies have a separate validation path.
@@ -1012,7 +1021,7 @@ export class StdioTransport implements MCPTransport {
 		const failFromSend = (error: unknown) => {
 			if (settled) return;
 			cleanup();
-			reject(error instanceof Error ? error : new Error(String(error)));
+			reject(toError(error));
 		};
 		try {
 			options?.onRequestId?.(id);

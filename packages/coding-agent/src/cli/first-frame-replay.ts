@@ -270,12 +270,16 @@ let replayed: ReplayedFirstFrame | undefined;
  * the ordinary path runs, and the recording is rewritten at the end. That is the right product
  * behavior and it makes "the replay never fires under this launcher" undiagnosable from a timing
  * table. The logger cannot serve here, because this runs before it exists.
+ *
+ * A reason given as a function is built only when the file is named: one that reads
+ * `process.stdin.isTTY` constructs the stdin stream, about 2 ms of a launch that never reads stdin.
  */
-function why(reason: string): void {
+function why(reason: string | (() => string)): void {
 	const file = process.env.VEYYON_REPLAY_DEBUG;
 	if (file === undefined) return;
+	const text = typeof reason === "function" ? reason() : reason;
 	try {
-		fs.appendFileSync(file, `${process.pid} ${reason}\n`);
+		fs.appendFileSync(file, `${process.pid} ${text}\n`);
 	} catch {
 		// A diagnostic that cannot be written is not a launch that fails.
 	}
@@ -290,7 +294,7 @@ function why(reason: string): void {
  */
 export function replayFirstFrame(): void {
 	if (!isBareInteractiveLaunch()) {
-		why(`not-bare argv=${process.argv.length} stdin=${process.stdin.isTTY} stdout=${process.stdout.isTTY}`);
+		why(() => `not-bare argv=${process.argv.length} stdin=${process.stdin.isTTY} stdout=${process.stdout.isTTY}`);
 		return;
 	}
 	try {

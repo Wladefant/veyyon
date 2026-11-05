@@ -1,19 +1,19 @@
 /**
- * Meta-guard: no large-base scale suite may sweep every anchor.
+ * Meta-guard: no edit suite may sweep every anchor of a large base.
  *
- * Why this suite exists: the `apply-edits-past-6000-*` suites bricked the CI
+ * Why this suite exists: the large-base edit suites bricked the CI
  * test_workspace bucket for four releases (1.0.13-1.0.16). Each swept every
  * anchor 1..n on bases up to n=100000, and because each applyEdits rebuilds the
  * base (O(n)), the full sweep was O(n^2) — it blew bun's 5s per-test timeout,
  * the ci-test-ts 600s bucket watchdog (SIGKILL 137), and OOM-crashed workers.
- * The fix was sweepAnchors (test/support/anchor-sweep.ts). This guard fails the
+ * The fix was sampleAnchors (test/support/anchor-sweep.ts). This guard fails the
  * moment a new (or regenerated) suite reintroduces a large exhaustive sweep, so
  * the release can never silently break the same way again.
  *
  * The rule targets the exact shape that broke: an anchor/count sweep that starts
  * at 1 and runs to a bound of >= SCALE_FLOOR — `for (let <id> = 1; <id> <= <N>; …)`
  * where N is a literal >= SCALE_FLOOR or an `<id>` whose `const` value is — while
- * calling applyEdits/parsePatch. Such a file MUST import sweepAnchors. This does
+ * calling applyEdits/parsePatch. Such a file MUST import sampleAnchors. This does
  * NOT flag seed-driven property suites (their loop starts at a large seed value,
  * not 1, over a small growing base) or small exhaustive suites (bound < floor).
  */
@@ -21,8 +21,8 @@ import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// Anchor sweeps to a bound at or above this size must go through sweepAnchors.
-// Matches EXHAUSTIVE_MAX (4000) with headroom: the smallest bounded suites are 6000.
+// Anchor sweeps to a bound at or above this size must go through sampleAnchors.
+// The largest exhaustive sweep is the 5000-line base of the `*-at-every-anchor` suites.
 const SCALE_FLOOR = 6000;
 const TEST_DIR = join(import.meta.dir, "..");
 
@@ -78,27 +78,33 @@ function hasRawLargeSeedLoop(src: string): boolean {
 }
 
 describe("large-base scale suites stay bounded", () => {
-	it("every from-1 sweep to a >=6000 bound goes through sweepAnchors", () => {
+	it("every from-1 sweep to a >=6000 bound goes through sampleAnchors", () => {
 		const offenders: string[] = [];
 		for (const name of listTestFiles()) {
 			const src = readFileSync(join(TEST_DIR, name), "utf8");
 			if (!hasLargeFromOneSweep(src)) continue;
 			if (!callsApplyEdits(src)) continue;
-			if (src.includes("sweepAnchors")) continue;
+			if (src.includes("sampleAnchors")) continue;
 			offenders.push(name);
 		}
 		// Assert the exact set (empty) so a regression names the offending file.
 		expect(offenders).toEqual([]);
 	});
 
-	it("finds the bounded suites it is meant to protect (guard is not vacuous)", () => {
-		// Sanity: the guard must actually see the large bounded suites, or a broken
-		// scan (wrong dir/regex) would pass while protecting nothing.
-		const bounded = listTestFiles().filter(name => {
-			const src = readFileSync(join(TEST_DIR, name), "utf8");
-			return src.includes("sweepAnchors") && src.includes("apply");
-		});
-		expect(bounded.length).toBeGreaterThanOrEqual(40);
+	it("finds the sampled large-base suites it is meant to protect (guard is not vacuous)", () => {
+		// A broken scan (wrong dir/regex) would pass while protecting nothing, so the
+		// sampled suites are pinned by name.
+		const sampled = listTestFiles().filter(name =>
+			/\bsampleAnchors\b/.test(readFileSync(join(TEST_DIR, name), "utf8")),
+		);
+		expect(sampled).toEqual([
+			"a-prefix-or-suffix-delete-keeps-the-rest-on-large-bases.test.ts",
+			"a-single-line-delete-removes-that-line-on-large-bases.test.ts",
+			"a-single-line-swap-rewrites-only-that-line-on-large-bases.test.ts",
+			"an-anchored-insert-lands-beside-its-anchor-on-large-bases.test.ts",
+			"formatted-delete-and-replace-headers-apply-on-large-bases.test.ts",
+			"head-and-tail-inserts-keep-the-base-for-sampled-large-row-counts.test.ts",
+		]);
 	});
 
 	it("does not flag seed-driven property suites (loop starts at a large seed, not 1)", () => {

@@ -16,6 +16,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { createArgotSession } from "@veyyon/coding-agent/argot-cache";
 import { expandAssistantContent, expandSessionContext, expandToolArguments } from "@veyyon/coding-agent/argot-wire";
 import { buildSystemPrompt } from "@veyyon/coding-agent/system-prompt";
@@ -222,14 +223,7 @@ describe("expandSessionContext", () => {
 				api: "test",
 				provider: "test",
 				model: "test",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 2,
 			},

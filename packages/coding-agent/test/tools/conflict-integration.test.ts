@@ -7,6 +7,7 @@ import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/sett
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { ConflictHistory } from "@veyyon/coding-agent/tools/fs/conflict-detect";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -19,13 +20,6 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		settings: Settings.isolated(),
 		...overrides,
 	});
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
 }
 
 async function getTool(session: ToolSession, name: "read" | "write") {
@@ -95,7 +89,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 
 		const result = await read.execute("read-foo", { path: "foo.ts" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		// Content is still returned.
 		expect(text).toContain("<<<<<<< HEAD");
 		expect(text).toContain("oldApi(x)");
@@ -124,7 +118,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 
 		const result = await read.execute("read-three", { path: "three.ts" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("- base = common ancestor");
 		expect(text).toContain("=== base");
 		expect(session.conflictHistory?.get(1)?.baseLines).toEqual(["base body"]);
@@ -137,7 +131,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 
 		const result = await read.execute("read-two", { path: "two-blocks.ts" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("──── #1  L1-5 ────");
 		expect(text).toContain("──── #2  L7-11 ────");
 		expect(session.conflictHistory?.get(1)?.oursLines).toEqual(["a-ours"]);
@@ -151,7 +145,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 
 		const result = await read.execute("read-clean", { path: "clean.ts" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("const a = 1;");
 		expect(text).not.toContain("conflict://");
 		expect(text).not.toContain("unresolved conflict");
@@ -178,7 +172,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 
 		await read.execute("read-full-init", { path: "full.ts" });
 		const result = await read.execute("read-full", { path: "conflict://1" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("<<<<<<< HEAD");
 		expect(text).toContain("oldApi(x)");
 		expect(text).toContain("=======");
@@ -196,7 +190,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 
 		await read.execute("read-theirs-init", { path: "theirs.ts" });
 		const result = await read.execute("read-theirs", { path: "conflict://1/theirs" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("newApi(x)");
 		expect(text).not.toContain("<<<<<<<");
 		expect(text).not.toContain("=======");
@@ -212,7 +206,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 
 		await read.execute("read-base-init", { path: "base.ts" });
 		const result = await read.execute("read-base", { path: "conflict://1/base" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("base body");
 		expect(text).not.toContain("ours body");
 		expect(text).not.toContain("theirs body");
@@ -250,7 +244,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 
 		const result = await read.execute("read-conflicts", { path: "many.ts:conflicts" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("2 unresolved conflicts in many.ts");
 		expect(text).toMatch(/#1\s+L1-5/);
 		expect(text).toMatch(/#2\s+L7-11/);
@@ -268,7 +262,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 
 		const result = await read.execute("read-diff3", { path: "diff3.ts:conflicts" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toMatch(/#1\s+L2-8.*3-way/);
 	});
 
@@ -279,7 +273,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 		const read = await getTool(session, "read");
 
 		const result = await read.execute("read-clean-conflicts", { path: "clean-conflicts.ts:conflicts" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("No unresolved git merge conflicts");
 	});
 
@@ -291,7 +285,7 @@ describe("read surfaces conflicts as a warning footer", () => {
 
 		// Read only the first block window.
 		const result = await read.execute("read-window", { path: "wide.ts:1-5" });
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("1 of 2 unresolved");
 		expect(text).toContain("read `wide.ts:conflicts`");
 	});
@@ -326,7 +320,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			content: "newApi(x);\n",
 		});
 
-		expect(getText(result)).toContain("Resolved conflict #1");
+		expect(toolResultText(result)).toContain("Resolved conflict #1");
 		const after = await Bun.file(filePath).text();
 		expect(after).toBe("line 1\nnewApi(x);\nline N\n");
 		// History is invalidated after resolve so the id no longer works.
@@ -359,7 +353,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			content: "\tours();\n\ttheirs();\n\tdone();\n}\n",
 		});
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("Resolved conflict #1");
 		expect(text).toContain("dropped 2 content line(s)");
 		expect(await Bun.file(filePath).text()).toBe(
@@ -382,7 +376,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			content: "@theirs",
 		});
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("Resolved conflict #1");
 		expect(text).toContain("stripped erroneous 'prefix.ts:' prefix");
 		expect(await Bun.file(filePath).text()).toBe("line 1\nnewApi(x)\nline N\n");
@@ -401,7 +395,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			content: "@ours",
 		});
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("Resolved 1 conflict");
 		expect(text).toContain("stripped erroneous 'bulk-prefix.ts:' prefix");
 		expect(await Bun.file(filePath).text()).toBe("line 1\noldApi(x)\nline N\n");
@@ -420,7 +414,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			content: "1: @ours\n2: @theirs\n",
 		});
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("Resolved 2 conflicts");
 		expect(await Bun.file(filePath).text()).toBe("a-ours\nmiddle\nb-theirs\ntail\n");
 		expect(session.conflictHistory?.get(1)).toBeUndefined();
@@ -440,7 +434,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			content: "2: @ours",
 		});
 
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("Resolved 1 conflict");
 		expect(text).toContain("still registered (#1)");
 		expect(await Bun.file(filePath).text()).toBe(
@@ -517,7 +511,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			path: "conflict://*",
 			content: "resolvedApi(x)\n",
 		});
-		expect(getText(result)).toContain("Resolved 1 conflict");
+		expect(toolResultText(result)).toContain("Resolved 1 conflict");
 		expect(await Bun.file(filePath).text()).toBe("line 1\nresolvedApi(x)\nline N\n");
 	});
 
@@ -689,7 +683,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			path: "conflict://*",
 			content: "@theirs",
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("Resolved 3 conflicts across 2 files");
 		expect(text).toContain("bulkA.ts: 2 conflicts");
 		expect(text).toContain("bulkB.ts: 1 conflict");
@@ -725,7 +719,7 @@ describe("write resolves conflicts via conflict://N", () => {
 			path: "conflict://1",
 			content: "@theirs",
 		});
-		expect(getText(result)).toContain("Resolved conflict #1");
+		expect(toolResultText(result)).toContain("Resolved conflict #1");
 		const after = await Bun.file(filePath).text();
 		expect(after).toBe("// extra line\n// another extra\nline 1\nnewApi(x)\nline N\n");
 	});

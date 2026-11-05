@@ -4,7 +4,7 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	normalizeCompactionStrategy,
 	resolveCompactionEngineAction,
@@ -15,15 +15,9 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
-const usage = {
-	input: 16,
-	output: 8,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 24,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 };
 
 describe("AgentSession shake", () => {
 	let tempDir: TempDir;
@@ -42,8 +36,7 @@ describe("AgentSession shake", () => {
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		events = [];
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		apiInfo = { api: model.api, provider: model.provider, model: model.id };
 
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
@@ -259,14 +252,7 @@ describe("AgentSession shake", () => {
 				content: [{ type: "text", text: "trigger" }],
 				...apiInfo,
 				stopReason: "stop",
-				usage: {
-					input: 10_000,
-					output: 1_000,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 11_000,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 10_000, output: 1_000, totalTokens: 11_000 },
 				timestamp: Date.now(),
 			};
 			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });

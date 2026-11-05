@@ -1,11 +1,17 @@
 /**
- * Kernel-backed path publication primitives used by the secret vault.
+ * Kernel-backed path publication and removal primitives used by the secret vault and its key.
  *
  * Plain `rename()` overwrites any destination that appears after a userspace check. These
  * wrappers use each platform's atomic no-replace and replacement-with-rollback operations so a
  * racing pathname is either preserved or restored, never silently clobbered.
  */
 import { dlopen, FFIType, type Pointer, ptr, read } from "bun:ffi";
+import { randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
+import * as fs from "node:fs/promises";
+import { isMissingPath } from "@veyyon/utils/fs-error";
+import { escapeTerminalText } from "@veyyon/utils/terminal-safe";
+import { errorMessage } from "@veyyon/utils/type-guards";
 
 const AT_FDCWD = -100;
 const RENAME_NOREPLACE = 1;
@@ -237,4 +243,75 @@ export function replaceWithRollback(
 		};
 	}
 	throw new Error("Secure atomic replacement is unavailable on this platform.");
+}
+
+/** `true` when two stats name the same inode on the same device. */
+export function sameInode(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">): boolean {
+	return left.dev === right.dev && left.ino === right.ino;
+}
+
+/**
+ * Remove `target` only while it is still the regular file `identity` names.
+ *
+ * Returns `true` when the file was removed and `false` when the path was absent or held a different
+ * entry. The path is renamed to a quarantine name first, so the pathname and inode are consumed in one
+ * kernel operation: an lstat-then-rm sequence can unlink a different file installed between those
+ * calls. A quarantined entry that turns out to be a different inode is moved back, and the removal
+ * fails rather than deleting its bytes. `subject` names the entry in those failures ("vault",
+ * "vault key").
+ */
+export async function removePathIfSameInode(
+	target: string,
+	identity: Pick<Stats, "dev" | "ino">,
+	subject: string,
+): Promise<boolean> {
+	let current: Stats;
+	try {
+		current = await fs.lstat(target);
+	} catch (error) {
+		if (isMissingPath(error)) return false;
+		throw error;
+	}
+	if (!current.isFile() || !sameInode(current, identity)) return false;
+
+	const quarantinePath = `${target}.${randomUUID()}.removing`;
+	let moved: boolean;
+	try {
+		moved = moveNoReplace(target, quarantinePath);
+	} catch (error) {
+		try {
+			await fs.lstat(target);
+		} catch (pathError) {
+			if (isMissingPath(pathError)) return false;
+		}
+		throw error;
+	}
+	if (!moved) {
+		throw new Error(`A ${subject} cleanup quarantine path already exists. Refusing to remove either entry.`);
+	}
+
+	const quarantined = await fs.lstat(quarantinePath);
+	if (!quarantined.isFile() || !sameInode(quarantined, identity)) {
+		let restored: boolean;
+		try {
+			restored = moveNoReplace(quarantinePath, target);
+		} catch (error) {
+			throw new Error(
+				`A racing ${subject} cleanup entry could not be restored safely (${escapeTerminalText(errorMessage(error))}). Refusing to continue.`,
+			);
+		}
+		if (!restored) {
+			throw new Error(`A racing ${subject} cleanup entry was isolated but its original path is occupied.`);
+		}
+		throw new Error(`A ${subject} cleanup entry changed before removal. It was restored without deleting its bytes.`);
+	}
+
+	await fs.rm(quarantinePath);
+	try {
+		await fs.lstat(quarantinePath);
+		return false;
+	} catch (error) {
+		if (isMissingPath(error)) return true;
+		throw error;
+	}
 }

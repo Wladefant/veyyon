@@ -10,7 +10,7 @@ import * as git from "../utils/git";
 import { closeModels, leaveArm } from "./arm-model";
 import { type ConsoleAction, type ConsoleHost, LoopConsoleModel, type LoopSetup } from "./console";
 import { createDashboardController } from "./dashboard";
-import { ensureAutoresearchBranch, parseWorkDirDirtyPaths } from "./git";
+import { type EnsureAutoresearchBranchSuccess, ensureAutoresearchBranch, parseWorkDirDirtyPaths } from "./git";
 import { formatNum, readWorkDirStatus } from "./helpers";
 import { deletePreset, type LoopPreset, loadPresets, savePreset } from "./presets";
 import { AUTORESEARCH_SCREEN_KEY } from "./shortcuts";
@@ -446,6 +446,47 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 	}
 
 	/**
+	 * Check out the autoresearch branch for `goal` and find the session already active on it. Null when
+	 * the branch could not be reached, which is already reported. A session recorded under a different
+	 * autoresearch/* branch is not looked at. The database is opened only when it exists, so the
+	 * empty-state path creates none.
+	 */
+	async function landOnLoopBranch(
+		ctx: ExtensionContext,
+		goal: string | null,
+	): Promise<{
+		branch: EnsureAutoresearchBranchSuccess;
+		resumable: { storage: AutoresearchStorage; session: SessionRow } | null;
+	} | null> {
+		const branch = await ensureAutoresearchBranch(ctx.cwd, goal);
+		if (!branch.ok) {
+			ctx.ui.notify(branch.error, "error");
+			return null;
+		}
+		if (branch.warning) ctx.ui.notify(branch.warning, "warning");
+		const storage = await openAutoresearchStorageIfExists(ctx.cwd);
+		const session = storage?.getActiveSessionForBranch(branch.branchName) ?? null;
+		return { branch, resumable: storage && session ? { storage, session } : null };
+	}
+
+	/** Turn the mode on with the experiment tools and send `goal`, or `noGoalNotice` when there is none. */
+	async function enterLoop(
+		ctx: ExtensionContext,
+		runtime: AutoresearchRuntime,
+		goal: string | null,
+		noGoalNotice: string,
+	): Promise<void> {
+		setMode(ctx, true, goal, "on");
+		dashboard.update(ctx, runtime);
+		await api.setActiveTools(activeToolsFor(api.getActiveTools(), true, effectiveBreadth(runtime)));
+		if (goal !== null) {
+			api.sendUserMessage(goal);
+		} else {
+			ctx.ui.notify(noGoalNotice, "info");
+		}
+	}
+
+	/**
 	 * Start or resume the swarm on its `autoresearch/*` branch with the setup
 	 * the console holds. Which of the two it is depends on the branch the loop
 	 * lands on, not on the row pressed: `Start` from `main` checks out a branch
@@ -454,22 +495,15 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 	 */
 	async function startOrResume(ctx: ExtensionContext, runtime: AutoresearchRuntime, setup: LoopSetup): Promise<void> {
 		const goal = setup.goal.length > 0 ? setup.goal : null;
-		const branchResult = await ensureAutoresearchBranch(ctx.cwd, goal ?? runtime.goal);
-		if (!branchResult.ok) {
-			ctx.ui.notify(branchResult.error, "error");
-			return;
-		}
-		if (branchResult.warning) ctx.ui.notify(branchResult.warning, "warning");
-
-		// Only open the DB if it already exists; the empty-state path must not
-		// create one.
-		const storage = await openAutoresearchStorageIfExists(ctx.cwd);
-		const existing = storage?.getActiveSessionForBranch(branchResult.branchName) ?? null;
-		if (existing && storage) {
+		const landed = await landOnLoopBranch(ctx, goal ?? runtime.goal);
+		if (!landed) return;
+		const { branch, resumable } = landed;
+		if (resumable) {
+			const { storage, session } = resumable;
 			// A Goal row cleared to nothing is not a request to forget the goal.
-			storage.updateSession(existing.id, {
+			storage.updateSession(session.id, {
 				...(goal !== null ? { goal } : {}),
-				branch: branchResult.branchName,
+				branch: branch.branchName,
 				breadth: setup.breadth,
 				attempts: setup.attempts,
 				certify: setup.certify,
@@ -477,7 +511,7 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 				armModels: setup.armModels,
 				maxIterations: setup.maxIterations,
 			});
-			await resumeSession(ctx, runtime, storage, storage.getSessionById(existing.id) ?? existing, branchResult, "");
+			await resumeSession(ctx, runtime, storage, storage.getSessionById(session.id) ?? session, branch, "");
 			return;
 		}
 
@@ -488,14 +522,7 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 			armModels: setup.armModels,
 			maxIterations: setup.maxIterations,
 		};
-		setMode(ctx, true, goal, "on");
-		dashboard.update(ctx, runtime);
-		await api.setActiveTools(activeToolsFor(api.getActiveTools(), true, effectiveBreadth(runtime)));
-		if (goal !== null) {
-			api.sendUserMessage(goal);
-		} else {
-			ctx.ui.notify("Autoswarm enabled—describe what to optimize in your next message.", "info");
-		}
+		await enterLoop(ctx, runtime, goal, "Autoswarm enabled—describe what to optimize in your next message.");
 	}
 
 	/**
@@ -577,20 +604,12 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 		}
 
 		const goalArg = resumeWord || freeText.length === 0 ? null : freeText;
-		const branchResult = await ensureAutoresearchBranch(ctx.cwd, goalArg ?? runtime.goal);
-		if (!branchResult.ok) {
-			ctx.ui.notify(branchResult.error, "error");
-			return;
-		}
-		if (branchResult.warning) ctx.ui.notify(branchResult.warning, "warning");
-
-		// Look up an existing session for the branch we just landed on. A session
-		// recorded under a different autoresearch/* branch is intentionally ignored
-		// — the command on a fresh branch starts a fresh session. Only open the
-		// DB if it already exists; the empty-state path must not create one.
-		const storage = await openAutoresearchStorageIfExists(ctx.cwd);
-		const existing = storage?.getActiveSessionForBranch(branchResult.branchName) ?? null;
-		if (existing && storage) {
+		// The command on a fresh branch starts a fresh session.
+		const landed = await landOnLoopBranch(ctx, goalArg ?? runtime.goal);
+		if (!landed) return;
+		const { branch, resumable } = landed;
+		if (resumable) {
+			const { storage, session: existing } = resumable;
 			// Free text is context for the resume, unless it is the goal typed
 			// back: `/autoresearch make the tokenizer faster` on the session that
 			// already optimizes that is a resume with nothing to add.
@@ -603,13 +622,13 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 					"info",
 				);
 			}
-			if (branchResult.branchName) storage.updateSession(existing.id, { branch: branchResult.branchName });
+			if (branch.branchName) storage.updateSession(existing.id, { branch: branch.branchName });
 			await resumeSession(
 				ctx,
 				runtime,
 				storage,
 				storage.getSessionById(existing.id) ?? existing,
-				branchResult,
+				branch,
 				resumeContext,
 			);
 			return;
@@ -618,14 +637,7 @@ export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 		// A serial loop: whatever the autoswarm console parked is not this
 		// command's, so `init_experiment` opens the session at breadth 1.
 		runtime.pendingSwarm = null;
-		setMode(ctx, true, goalArg, "on");
-		dashboard.update(ctx, runtime);
-		await api.setActiveTools(activeToolsFor(api.getActiveTools(), true, effectiveBreadth(runtime)));
-		if (goalArg !== null) {
-			api.sendUserMessage(goalArg);
-		} else {
-			ctx.ui.notify("Autoresearch enabled—describe what to optimize in your next message.", "info");
-		}
+		await enterLoop(ctx, runtime, goalArg, "Autoresearch enabled—describe what to optimize in your next message.");
 	}
 
 	// Every subcommand is listed before a letter is typed: one nobody can see is

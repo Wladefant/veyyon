@@ -5,7 +5,7 @@ Product behavior is covered by tests that assert concrete outcomes, not only non
 ## Examples of what tests check
 
 - **Hashline edit path**: round-trip: generated patches apply to the intended content; mismatches fail with the expected error surface.
-- **Tool-call repair**: unit and conformance cases in `packages/coding-agent/test/edit/schema-repair.test.ts` (already valid / repaired / unrepairable, alias ambiguity, strict `additionalProperties`).
+- **Tool-call repair**: unit and conformance cases in `packages/coding-agent/test/edit/schema-repair.test.ts` (already valid / repaired / unrepairable, alias ambiguity, strict `additionalProperties`), and the tool-specific repair registry swept through the agent loop in `packages/coding-agent/test/tools/a-tool-specific-argument-repair-reaches-approval-and-the-tool-as-one-set-of-arguments.test.ts`.
 - **Tool-output bounds**: truncation limits behave as configured and remain visible to the model.
 - **Architecture checks**: layering, import cycles, and module-reach checks in `packages/coding-agent/test/architecture/`.
 

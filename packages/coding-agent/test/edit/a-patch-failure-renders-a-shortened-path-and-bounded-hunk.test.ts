@@ -8,6 +8,7 @@ import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool
 import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import * as themeModule from "@veyyon/coding-agent/theme/theme";
 import { PREVIEW_LIMITS } from "@veyyon/coding-agent/tools/core/render-utils";
+import { requireTheme } from "../helpers/require-theme";
 
 /**
  * WHY:
@@ -36,9 +37,7 @@ beforeAll(async () => {
 
 async function getUiTheme() {
 	await themeModule.initTheme(false, undefined, undefined, "dark", "light");
-	const theme = await themeModule.getThemeByName("dark");
-	expect(theme).toBeDefined();
-	return theme!;
+	return requireTheme("dark");
 }
 
 /** The failed card a session draws for `filePath`, as the plain rows it occupies. */

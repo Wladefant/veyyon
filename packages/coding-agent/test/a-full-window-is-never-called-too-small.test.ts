@@ -18,9 +18,10 @@ import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { AgentSession } from "../src/session/agent-session";
@@ -61,14 +62,7 @@ function assistantResponse(promptTokens: number) {
 		provider: MODEL_PROVIDER,
 		model: MODEL_ID,
 		api: "openai-completions" as const,
-		usage: {
-			input: promptTokens,
-			output: 8,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: promptTokens + 8,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: promptTokens, output: 8, totalTokens: promptTokens + 8 },
 		stopReason: "stop" as const,
 	};
 }
@@ -99,8 +93,7 @@ describe("a session with a full context window is never told it is too small to 
 		systemPrompt = "Test",
 		seedPrompts: string[] = ["hello"],
 	): Promise<AgentSession> {
-		const model = getBundledModel(MODEL_PROVIDER, MODEL_ID);
-		if (!model) throw new Error(`Expected ${MODEL_PROVIDER}/${MODEL_ID} model to exist`);
+		const model = requireBundledModel(MODEL_PROVIDER, MODEL_ID);
 		// The summary itself is not under test: stub it so a compaction that does
 		// find a cut completes without a network call.
 		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({

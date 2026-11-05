@@ -9,15 +9,10 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 /**
  * write → grep (find token) → read header → SWAP token → grep confirms change.
@@ -63,22 +58,6 @@ describe("write→search(text)→edit→search(text) chain adversarial", () => {
 		});
 	}
 
-	function editOpts(sess: ToolSession, input: string) {
-		return {
-			session: sess,
-			input,
-			writethrough: async (targetPath: string, content: string) => {
-				await Bun.write(targetPath, content);
-				return undefined;
-			},
-			beginDeferredDiagnosticsForPath: () => ({
-				onDeferredDiagnostics: () => {},
-				signal: new AbortController().signal,
-				finalize: () => {},
-			}),
-		};
-	}
-
 	it("token is replaced and old token disappears from grep", async () => {
 		const s = session();
 		const file = path.join(tmpDir, "chain.ts");
@@ -88,17 +67,19 @@ describe("write→search(text)→edit→search(text) chain adversarial", () => {
 			path: file,
 			content: `const x = '${oldTok}';\n`,
 		});
-		expect(textOf(await new SearchTool(s).execute("g1", { type: "text", input: oldTok, path: file }))).toContain(
-			oldTok,
-		);
+		expect(
+			toolResultText(await new SearchTool(s).execute("g1", { type: "text", input: oldTok, path: file })),
+		).toContain(oldTok);
 
-		const header = textOf(await new ReadTool(s).execute("r", { path: file })).split("\n")[0]!;
-		await executeHashlineSingle(editOpts(s, `${header}\nSWAP 1.=1:\n+const x = '${newTok}';\n`));
+		const header = toolResultText(await new ReadTool(s).execute("r", { path: file })).split("\n")[0]!;
+		await executeHashlineSingle(hashlineExecOptions(`${header}\nSWAP 1.=1:\n+const x = '${newTok}';\n`, s));
 		expect(await Bun.file(file).text()).toBe(`const x = '${newTok}';\n`);
-		expect(textOf(await new SearchTool(s).execute("g2", { type: "text", input: newTok, path: file }))).toContain(
-			newTok,
+		expect(
+			toolResultText(await new SearchTool(s).execute("g2", { type: "text", input: newTok, path: file })),
+		).toContain(newTok);
+		const oldGrep = toolResultText(
+			await new SearchTool(s).execute("g3", { type: "text", input: oldTok, path: file }),
 		);
-		const oldGrep = textOf(await new SearchTool(s).execute("g3", { type: "text", input: oldTok, path: file }));
 		expect(oldGrep.includes(oldTok)).toBe(false);
 	});
 });

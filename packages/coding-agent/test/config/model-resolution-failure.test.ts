@@ -31,6 +31,7 @@ const CATALOG = [
 	"anthropic/claude-opus-5",
 	"openai/gpt-5",
 ];
+const CATALOG_PROVIDERS = ["google-antigravity", "anthropic", "openai"];
 
 describe("a credential failure is never reported as an unknown model id", () => {
 	/**
@@ -41,7 +42,8 @@ describe("a credential failure is never reported as an unknown model id", () => 
 	it("calls a registry with no usable credentials an authentication failure", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["google-antigravity/gemini-3.6-flash"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: [],
 		});
 		expect(failure.kind).toBe("no-credentials");
@@ -56,7 +58,8 @@ describe("a credential failure is never reported as an unknown model id", () => 
 	it("names providers the operator can sign in to", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["anthropic/claude-opus-5"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: [],
 		});
 		expect(failure.message).toContain("google-antigravity");
@@ -70,7 +73,8 @@ describe("a credential failure is never reported as an unknown model id", () => 
 	it("distinguishes an empty registry from an unknown id", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["anything"],
-			allModelIds: [],
+			providers: [],
+			allModelIds: () => [],
 			availableModelIds: [],
 		});
 		expect(failure.kind).toBe("empty-registry");
@@ -86,7 +90,8 @@ describe("a credential failure is never reported as an unknown model id", () => 
 	it("surfaces a registry error instead of guessing about the id", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["anthropic/claude-opus-5"],
-			allModelIds: [],
+			providers: [],
+			allModelIds: () => [],
 			availableModelIds: [],
 			registryError: "models.json: unexpected token at line 3",
 		});
@@ -102,7 +107,8 @@ describe("a credential failure is never reported as an unknown model id", () => 
 	it("reports a registry error even when some models loaded", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["custom/my-model"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: CATALOG,
 			registryError: "custom models config failed to parse",
 		});
@@ -119,7 +125,8 @@ describe("a correct id with an unauthenticated provider is not called unknown", 
 	it("says the credential is missing, not the model", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["anthropic/claude-opus-5"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: ["openai/gpt-5"],
 		});
 		expect(failure.kind).toBe("provider-unauthenticated");
@@ -133,7 +140,8 @@ describe("a correct id with an unauthenticated provider is not called unknown", 
 	it("recognises a bare model id without its provider prefix", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["claude-opus-5"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: ["openai/gpt-5"],
 		});
 		expect(failure.kind).toBe("provider-unauthenticated");
@@ -146,7 +154,8 @@ describe("a genuine mismatch is reported as one, with near-matches", () => {
 	it("says not found only when authenticated models exist and none match", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["gemini-9.9-ultra"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: CATALOG,
 		});
 		expect(failure.kind).toBe("unknown-model");
@@ -158,7 +167,8 @@ describe("a genuine mismatch is reported as one, with near-matches", () => {
 	it("suggests the real spelling for a mistyped version", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["google-antigravity/gemini-3.7-flash"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: CATALOG,
 		});
 		expect(failure.kind).toBe("unknown-model");
@@ -172,7 +182,8 @@ describe("a genuine mismatch is reported as one, with near-matches", () => {
 	it("suggests only models that have usable credentials", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["claude-opus-9"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: ["openai/gpt-5"],
 		});
 		expect(failure.nearMatches).not.toContain("anthropic/claude-opus-5");
@@ -183,7 +194,8 @@ describe("a genuine mismatch is reported as one, with near-matches", () => {
 	it("points at /model when nothing resembles the request", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["zzzzzzzz"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: CATALOG,
 		});
 		expect(failure.nearMatches).toEqual([]);
@@ -195,7 +207,8 @@ describe("a genuine mismatch is reported as one, with near-matches", () => {
 	it("reads back every requested pattern", () => {
 		const failure = describeModelResolutionFailure({
 			requested: ["aaa", "bbb"],
-			allModelIds: CATALOG,
+			providers: CATALOG_PROVIDERS,
+			allModelIds: () => CATALOG,
 			availableModelIds: CATALOG,
 		});
 		expect(failure.message).toContain('"aaa"');

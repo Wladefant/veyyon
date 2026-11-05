@@ -16,6 +16,7 @@
  * installer is wired behind it. These tests hold that.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { buildRollbackRows, type RollbackRow } from "@veyyon/coding-agent/cli/rollback-cli";
 import {
 	RollbackPanelComponent,
@@ -186,7 +187,7 @@ describe("when the release list cannot be read", () => {
 		await settle();
 
 		for (const line of h.panel.render(48)) {
-			expect(line.replace(/\x1b\[[0-9;]*m/g, "").length).toBeLessThanOrEqual(48);
+			expect(stripVTControlCharacters(line).length).toBeLessThanOrEqual(48);
 		}
 	});
 

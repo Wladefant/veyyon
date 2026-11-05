@@ -4,12 +4,12 @@ import { Agent } from "@veyyon/agent-core";
 import type { Api, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 // Switching the active model (Ctrl+P role cycling, /models selection) must be a
 // cheap, synchronous operation. It used to call the async `getApiKey`, which can
@@ -45,8 +45,7 @@ describe("AgentSession model switch auth pre-flight", () => {
 	});
 
 	function modelOrThrow(id: string): Model<Api> {
-		const model = getBundledModel("anthropic", id);
-		if (!model) throw new Error(`Expected anthropic model ${id} to exist`);
+		const model = requireBundledModel("anthropic", id);
 		return model;
 	}
 

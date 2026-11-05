@@ -34,6 +34,7 @@ import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { resolveAgentPruneBudget } from "@veyyon/coding-agent/task/agent-settings";
 import { finalizeSubagentLifecycle, runSubprocess, saysItIsWaitingOnAPeer } from "@veyyon/coding-agent/task/executor";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 import {
 	createAssistantStopMessage,
 	createAssistantToolCallMessage,
@@ -117,7 +118,7 @@ async function advance(ms: number): Promise<void> {
 	vi.advanceTimersByTime(ms);
 	// The expiry handler runs its stages in an async drain, so the microtask queue
 	// has to turn over before the registry reflects them.
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 /**

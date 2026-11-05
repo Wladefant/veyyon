@@ -14,10 +14,17 @@ Source: `src/modes/terminal/components/chrome/modal-shell.ts` (rendering, footer
 | MEDIUM | 0.60 | 120 | 44 | 4 | 2 | 1 | 2 |
 | SETTINGS | 0.80 | 124 | 44 | 3 | 2 | 1 | 2 |
 
-- `sizingForArea(sizing, areaHeight, forceCompact?)` is the only way to reach the compact strip: it sets `h_pad=1`, `v_pad=0` and leaves `v_margin` alone. It reads the area height itself through `modalNeedsCompactPadding`, so no card restates the decision.
-- `computeModalDims`: preferred width = `area.w * width_pct`, clamped to `[min_width, min(area.w-4, max_width)]`; height = `area.h - 2*v_margin`.
-- Returns null geometry and clears hit rectangles when `w < 20` or `h < 6`.
+- `layoutModalCard` applies `sizingForArea(sizing, areaHeight, forceCompact?)` to every sizing it lays out. On an area of at most `24 + 2*v_pad` rows (`modalNeedsCompactPadding`), or when `forceCompact` is set, the card sets `h_pad=1` and `v_pad=0` and keeps `v_margin`. Above that height the padded card shows more body rows than the compact card one row shorter. LARGE is compact up to 28 rows, MEDIUM and SETTINGS up to 26.
+- `computeModalDims`: preferred width = `area.w * width_pct`, clamped to `[min_width, min(area.w-4, max_width)]`; height = `max(area.h - 2*v_margin, min(area.h, 24 + 4*v_pad))`.
 - Card is centered with blank underpaint.
+
+## Rendering a card
+
+1. `layoutModalCard(areaWidth, areaHeight, sizing, forceCompact?)` lays the card out on the area with the compact rule applied. It returns null when `w < 20` or `h < 6`; the caller then paints `emptyModalArea(areaWidth, areaHeight)` and clears its hit rectangles.
+2. `planModalChrome(card, { shortcuts, hoveredShortcutId, tipCandidates, searchLine, minBodyRows })` reserves the chrome. When the card is too short for its chrome plus `minBodyRows` body rows, it sheds the tip gap, the tip, `v_pad` and the footer padding, in that order; chip rows are never shed. `maxBodyRows` is the number of body rows the card shows.
+3. `renderModalShell(plan, content)` paints that plan. A body row past `maxBodyRows` is dropped.
+
+A caller that sizes its body reads `maxBodyRows` from the plan it paints, so the body is sized against the chrome the card draws. A card with a body floor passes it as `minBodyRows` and fits its body to `maxBodyRows`, down to one row, instead of keeping the floor and losing the rows below it.
 
 ## Chrome anatomy
 

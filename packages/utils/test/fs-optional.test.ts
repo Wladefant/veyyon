@@ -21,6 +21,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { logger, readdirIfPresent, statIfPresent } from "../src/index";
+import { canRestrictAccess } from "./helpers/mode-bits";
 
 const created: string[] = [];
 const restricted: string[] = [];
@@ -29,11 +30,6 @@ function tempDir(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-fs-optional-"));
 	created.push(dir);
 	return dir;
-}
-
-/** Mode bits do not restrict root, and Windows does not honour them. */
-function canRestrictAccess(): boolean {
-	return process.platform !== "win32" && process.getuid?.() !== 0;
 }
 
 /** Take a mode away and remember to restore it, since cleanup needs the permission back. */

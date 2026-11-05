@@ -89,6 +89,7 @@ export function binNames(spec: CompletionSpec): string[] {
 const MODEL_FLAGS: Record<string, true> = {
 	model: true,
 	plan: true,
+	"compaction-model": true,
 	// Both name the model a phase hands off to; their descriptions say so.
 	"prewalk-into": true,
 	"plan-yolo-into": true,
@@ -152,6 +153,7 @@ export const FILE_ARGS: Record<string, true> = {
 	"plugin.targets": true,
 	"read.path": true,
 	"ttsr.snippet": true,
+	"trust.paths": true,
 };
 /**
  * Positionals that are free text until they start with `@`, which attaches a
@@ -352,7 +354,6 @@ function bashFlagCase(bin: string, flags: CompletionFlag[]): string {
 	return lines.join("\n");
 }
 
-/** `case` labels for every root flag that consumes the following token. */
 /**
  * Every spelling of a flag that consumes the token after it.
  *

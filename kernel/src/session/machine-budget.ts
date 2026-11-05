@@ -35,9 +35,13 @@
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-// Owners, not the `@veyyon/utils` barrel: 3 modules against 81.
-import { type GlobalResourceLimit, getGlobalConfigFilePath, resolveGlobalResourceLimit } from "@veyyon/utils/dirs";
 import { withFileLockSync } from "@veyyon/utils/file-lock";
+// Owners, not the `@veyyon/utils` barrel: 3 modules against 81.
+import {
+	type GlobalResourceLimit,
+	getGlobalConfigFilePath,
+	resolveGlobalResourceLimit,
+} from "@veyyon/utils/global-config";
 import * as logger from "@veyyon/utils/logger";
 import { formatCpuMaxValue, formatLimitFileValue, memoryCapControls } from "./cgroup-format";
 import { parseIoStatWrittenBytes } from "./write-accounting";

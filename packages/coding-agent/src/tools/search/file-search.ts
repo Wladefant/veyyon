@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import * as natives from "@veyyon/natives";
-import { formatGroupedPaths, isCancellation, isEnoent, untilAborted } from "@veyyon/utils";
+import { formatGroupedPaths, isCancellation, isEnoent, trimTrailingSlashes, untilAborted } from "@veyyon/utils";
 import { isTimeoutError } from "@veyyon/utils/abortable";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { InternalUrlRouter } from "../../internal-urls";
@@ -129,6 +129,70 @@ interface FileSearchTarget {
 	searchPath: string;
 	globPattern: string;
 	hasGlob: boolean;
+}
+
+/** One native walk: a root, the glob it matches, and whether it keeps directories only. */
+interface FileSearchWalk {
+	searchPath: string;
+	globPattern: string;
+	hasGlob: boolean;
+	dirsOnly: boolean;
+}
+
+/**
+ * True when `pattern` can stand as one member of a `{a,b}` alternation and mean
+ * what it means alone: its braces balance and it holds no `,` outside them.
+ * A bracket class can hold a brace or a comma that is a member rather than
+ * syntax, so a pattern with one keeps its own walk.
+ */
+function isAlternationMember(pattern: string): boolean {
+	if (pattern.includes("[")) return false;
+	let depth = 0;
+	for (const char of pattern) {
+		if (char === "{") {
+			depth += 1;
+		} else if (char === "}") {
+			depth -= 1;
+			if (depth < 0) return false;
+		} else if (char === "," && depth === 0) {
+			return false;
+		}
+	}
+	return depth === 0;
+}
+
+/**
+ * Plans one walk per root. Glob entries that share a root and a file-type
+ * filter join one `{a,b}` alternation, so `*a*;*b*` reads the tree once rather
+ * than once per entry in walks that run in parallel and contend for the same
+ * directories. A glob that ends in `/` names directories, as it does in a
+ * shell: no walked path ends in a separator, so the glob loses the slash and
+ * its walk keeps directories only.
+ */
+function planWalks(targets: FileSearchTarget[]): FileSearchWalk[] {
+	const walks: FileSearchWalk[] = [];
+	const joined = new Map<string, { walk: FileSearchWalk; patterns: Set<string> }>();
+	for (const target of targets) {
+		const dirsOnly = target.hasGlob && target.globPattern.endsWith("/");
+		const globPattern = dirsOnly ? trimTrailingSlashes(target.globPattern) : target.globPattern;
+		const walk: FileSearchWalk = { searchPath: target.searchPath, globPattern, hasGlob: target.hasGlob, dirsOnly };
+		if (!target.hasGlob || !isAlternationMember(globPattern)) {
+			walks.push(walk);
+			continue;
+		}
+		const key = `${dirsOnly ? "dirs" : "all"}:${target.searchPath}`;
+		const group = joined.get(key);
+		if (group) {
+			group.patterns.add(globPattern);
+			continue;
+		}
+		joined.set(key, { walk, patterns: new Set([globPattern]) });
+		walks.push(walk);
+	}
+	for (const { walk, patterns } of joined.values()) {
+		if (patterns.size > 1) walk.globPattern = `{${[...patterns].join(",")}}`;
+	}
+	return walks;
 }
 
 export async function executeFileSearch(
@@ -345,10 +409,11 @@ export async function executeFileSearch(
 			return resultBuilder.done();
 		};
 
-		// Walk each user path as its own root and run the globs concurrently.
+		// Each user path keeps its own root, and the roots are walked concurrently.
 		// Collapsing multiple paths to a shared base would force the walker to
 		// traverse and stat every unrelated sibling under that ancestor; per-path
-		// roots keep each scan bounded to exactly what the user asked for.
+		// roots keep each scan bounded to exactly what the user asked for. Entries
+		// that share a root share its walk (`planWalks`).
 		if (customOps?.glob) {
 			const operations = customOps;
 			const perTarget = await Promise.all(
@@ -413,7 +478,7 @@ export async function executeFileSearch(
 
 		const nativeGlob = options?.nativeGlob ?? natives.glob;
 		let timedOut = false;
-		const runTarget = async (target: FileSearchTarget): Promise<Array<{ path: string; mtime: number }>> => {
+		const runWalk = async (target: FileSearchWalk): Promise<Array<{ path: string; mtime: number }>> => {
 			throwIfAborted(signal);
 			let stat: fs.Stats;
 			try {
@@ -438,6 +503,7 @@ export async function executeFileSearch(
 						{
 							pattern: target.globPattern,
 							path: target.searchPath,
+							fileType: target.dirsOnly ? natives.FileType.Dir : undefined,
 							hidden: includeHidden,
 							maxResults: effectiveLimit,
 							sortByMtime: true,
@@ -467,7 +533,7 @@ export async function executeFileSearch(
 				}
 				return out;
 			} catch (error) {
-				// The backstop yields the matches of the targets that finished; a
+				// The backstop yields the matches of the walks that finished; a
 				// real cancellation propagates with its reason.
 				//
 				// `!signal?.aborted` is required: an operator interrupt that lands
@@ -481,7 +547,7 @@ export async function executeFileSearch(
 			}
 		};
 
-		let perTarget: Array<Array<{ path: string; mtime: number }>>;
+		let perWalk: Array<Array<{ path: string; mtime: number }>>;
 		try {
 			const settledTargets = await Promise.allSettled(targets.map(runTarget));
 			perTarget = settledTargets.map(result => {
@@ -492,13 +558,13 @@ export async function executeFileSearch(
 			scopedTimeout.cancel();
 		}
 
-		// Merge per-target results: native glob already ranks each target's own
+		// Merge per-walk results: native glob already ranks each walk's own
 		// matches by mtime and caps them at the limit, so a global mtime re-sort
-		// plus dedup yields the correct top-N across all roots. A target that
+		// plus dedup yields the correct top-N across all roots. A walk that
 		// reached the deadline contributes the matches it found by then.
 		const seen = new Set<string>();
 		const merged: FileSearchResultEntry[] = [];
-		for (const group of perTarget) {
+		for (const group of perWalk) {
 			for (const entry of group) {
 				if (seen.has(entry.path)) continue;
 				seen.add(entry.path);

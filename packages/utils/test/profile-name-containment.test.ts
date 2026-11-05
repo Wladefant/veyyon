@@ -2,12 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	__resetDirsFromEnvForTests,
-	getAgentDir,
-	normalizeProfileName,
-	resolveStartupProfile,
-} from "@veyyon/utils/dirs";
+import { normalizeProfileName } from "@veyyon/utils/config-root";
+import { __resetDirsFromEnvForTests, getAgentDir, resolveStartupProfile } from "@veyyon/utils/dirs";
 
 /**
  * PROF-5: a profile name is attacker-adjacent input — it arrives from an env var

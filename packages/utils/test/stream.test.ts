@@ -8,6 +8,7 @@ import {
 	readSseJson,
 	type ServerSentEvent,
 } from "@veyyon/utils/stream";
+import { mulberry32 } from "./helpers/mulberry32";
 
 const encoder = new TextEncoder();
 
@@ -243,18 +244,6 @@ describe("parseJsonlLenient — property/adversarial corruption fuzzer (DATALOSS
 		"}{",
 	] as const;
 
-	/** Deterministic PRNG (mulberry32) so a fuzz failure is reproducible from its seed. */
-	function makeRng(seed: number): () => number {
-		let a = seed >>> 0;
-		return () => {
-			a |= 0;
-			a = (a + 0x6d2b79f5) | 0;
-			let t = Math.imul(a ^ (a >>> 15), 1 | a);
-			t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-		};
-	}
-
 	/** Build one random stream; return the text plus the ground truth it must reproduce. */
 	function buildStream(rng: () => number): { text: string; goodValues: unknown[]; badCount: number } {
 		const lineCount = 1 + Math.floor(rng() * 40);
@@ -285,7 +274,7 @@ describe("parseJsonlLenient — property/adversarial corruption fuzzer (DATALOSS
 		// WHY: locks the DATALOSS-5 fix hard. With random corruption density and
 		// placement — including long adjacent-bad runs — the skip count must equal the
 		// real number of malformed lines (not 2x), and no good record may be lost.
-		const rng = makeRng(0x9e3779b9);
+		const rng = mulberry32(0x9e3779b9);
 		let checkedGood = 0;
 		let checkedBad = 0;
 		for (let iter = 0; iter < 3000; iter++) {

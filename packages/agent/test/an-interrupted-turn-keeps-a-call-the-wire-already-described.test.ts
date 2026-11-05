@@ -40,6 +40,7 @@ import {
 } from "@veyyon/ai/providers/cursor";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { type } from "arktype";
 import { createUserMessage } from "./helpers";
 
@@ -82,14 +83,7 @@ function emptyCursorMessage(): AssistantMessage {
 		api: "cursor-agent",
 		provider: "cursor",
 		model: "cursor-grok-4.6-medium",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "aborted",
 		timestamp: 0,
 	};

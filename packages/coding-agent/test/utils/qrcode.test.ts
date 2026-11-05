@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { QrCode, type QrEcLevel, renderQrHalfBlocks } from "@veyyon/coding-agent/utils/qrcode";
 
 function matrixFingerprint(qr: QrCode): string {
@@ -97,7 +98,7 @@ describe("renderQrHalfBlocks", () => {
 		const margin = 3;
 		const lines = renderQrHalfBlocks(qr, { margin });
 		// Visible cell width = symbol + both margins.
-		const stripped = lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+		const stripped = lines.map(line => stripVTControlCharacters(line));
 		expect(stripped[0]!.length).toBe(qr.size + margin * 2);
 		// Top quiet rows (margin/2 paired rows) carry no dark half-blocks.
 		const quietRows = Math.floor(margin / 2);

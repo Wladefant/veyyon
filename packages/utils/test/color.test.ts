@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	adjustHsv,
+	ansi256ToHex,
 	colorLuma,
 	hexToHsv,
 	hexToRgb,
@@ -122,6 +123,33 @@ describe("256-color palette parsing", () => {
 	it("maps grayscale-ramp indices linearly from 8 to 238", () => {
 		expect(colorLuma(232)).toBeCloseTo(8 / 255, 5);
 		expect(colorLuma(255)).toBeCloseTo(238 / 255, 5);
+	});
+
+	/**
+	 * `ansi256ToHex` is the only palette table: a theme's HTML export writes its output as CSS and
+	 * the rail motion compares it against rendered `38;5;N` escapes. The oracle derives the cube from
+	 * xterm's `55 + 40n` steps rather than the implementation's table, so a typo in either is caught.
+	 */
+	it("names the xterm hex of every index from 0 to 255", () => {
+		const base = ["000000", "800000", "008000", "808000", "000080", "800080", "008080", "c0c0c0"];
+		const bright = ["808080", "ff0000", "00ff00", "ffff00", "0000ff", "ff00ff", "00ffff", "ffffff"];
+		const two = (n: number) => n.toString(16).padStart(2, "0");
+		const step = (n: number) => two(n === 0 ? 0 : 55 + n * 40);
+		for (let index = 0; index < 256; index++) {
+			let expected: string;
+			if (index < 16) expected = [...base, ...bright][index] ?? "";
+			else if (index < 232) {
+				const n = index - 16;
+				expected = `${step(Math.floor(n / 36))}${step(Math.floor(n / 6) % 6)}${step(n % 6)}`;
+			} else expected = two(8 + (index - 232) * 10).repeat(3);
+			expect(ansi256ToHex(index)).toBe(`#${expected}`);
+		}
+	});
+
+	it("has no hex for a number that is not a palette index", () => {
+		for (const index of [-1, 256, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(ansi256ToHex(index)).toBeUndefined();
+		}
 	});
 });
 

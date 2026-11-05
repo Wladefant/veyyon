@@ -6,13 +6,14 @@ import type {
 	CustomMessage,
 } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, lazy, prompt, untilAborted } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage, prompt, untilAborted } from "@veyyon/utils";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { ToolError } from "../core/tool-errors";
 import { resolveToolView } from "./resolve-view";
 
-const resolveSchema = lazy(() =>
+const resolveSchema = toolSchema("resolve", () =>
 	type({
 		action: "'apply' | 'discard'",
 		reason: type("string").describe("reason for action"),
@@ -185,6 +186,9 @@ export class ResolveTool implements AgentTool<typeof resolveSchema.value, Resolv
 	readonly description: string;
 	get parameters(): typeof resolveSchema.value {
 		return resolveSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return resolveSchema.wire;
 	}
 	readonly strict = true;
 	readonly view = resolveToolView;

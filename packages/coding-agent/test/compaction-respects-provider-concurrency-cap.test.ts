@@ -31,25 +31,10 @@ import type { AgentMessage } from "@veyyon/agent-core/types";
 import type { AssistantMessage, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { wrapStreamFnWithProviderConcurrency } from "@veyyon/coding-agent/task/provider-concurrency";
-
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
-function requireModel(provider: string, id: string): Model {
-	const model = getBundledModel(provider as Parameters<typeof getBundledModel>[0], id);
-	if (!model) throw new Error(`Expected bundled model ${provider}/${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function makeAssistantMessage(text: string, model: Model): AssistantMessage {
 	return {
@@ -58,14 +43,7 @@ function makeAssistantMessage(text: string, model: Model): AssistantMessage {
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};
@@ -100,7 +78,7 @@ afterEach(() => {
 
 describe("issue #3751: compaction summaries respect provider concurrency cap", () => {
 	it("compact() routes every fan-out summarizer through SummaryOptions.completeImpl", async () => {
-		const model = requireModel("ollama-cloud", "gpt-oss:120b");
+		const model = requireBundledModel("ollama-cloud", "gpt-oss:120b");
 		const defaultSpy = vi
 			.spyOn(ai, "completeSimple")
 			.mockResolvedValue(makeAssistantMessage("default transport must not run", model));
@@ -128,14 +106,14 @@ describe("issue #3751: compaction summaries respect provider concurrency cap", (
 	});
 
 	it("limiter-wrapped sideStreamFn caps compaction HTTP requests at maxConcurrency=1", async () => {
-		const model = requireModel("ollama-cloud", "gpt-oss:120b");
+		const model = requireBundledModel("ollama-cloud", "gpt-oss:120b");
 		const settings = Settings.isolated({ "providers.ollama-cloud.maxConcurrency": 1 });
 
 		let inFlight = 0;
 		let peakInFlight = 0;
-		const gates: Deferred[] = [];
+		const gates: PromiseWithResolvers<void>[] = [];
 		const base: StreamFn = streamModel => {
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.push(gate);
 			inFlight++;
 			peakInFlight = Math.max(peakInFlight, inFlight);

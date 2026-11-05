@@ -4,6 +4,7 @@ import type { AssistantMessage, Context, Model } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { iterateWithIdleTimeout } from "@veyyon/ai/utils/idle-iterator";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 // Issue #4593: the generic lazy stream watchdog treats "no AssistantMessageEvent"
 // as "provider stalled". During a Cursor exec-channel round-trip the server is
@@ -40,14 +41,7 @@ function createAssistantMessage(): AssistantMessage {
 		api: "bedrock-converse-stream",
 		provider: "amazon-bedrock",
 		model: "mock-bedrock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};

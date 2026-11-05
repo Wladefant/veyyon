@@ -9,6 +9,14 @@ const MIN_RENDER_INTERVAL_MS = 1000 / 30;
 const INPUT_RENDER_GRACE_MS = MIN_RENDER_INTERVAL_MS;
 
 /**
+ * Frames a key press may paint without waiting out the cadence: the frame its handler requests,
+ * and the one after it, which a handler that awaits (a dashboard reading its rows, a session list
+ * read from disk) requests a few milliseconds later. The cadence held that second frame up to an
+ * interval behind the first although nothing else was painting.
+ */
+const KEY_PRESS_FRAMES = 2;
+
+/**
  * Weight of the newest frame in `FramePacer`'s cost estimate. At 0.3 a sustained
  * change in frame cost is ~90% absorbed within seven frames, so the loop
  * reaches its duty-cycle floor inside a quarter second of going slow, while
@@ -73,7 +81,7 @@ export const GHOSTTY_INITIAL_IMAGE_DELAY_MS = 100;
 // drift and would just see an unnecessary post-paint latency. See #2095.
 export const CONPTY_POST_FULL_PAINT_SETTLE_MS = 150;
 
-/** The throttle between frames: a 30 fps cadence, a cost-derived floor and an input grace. */
+/** The throttle between frames: a 30 fps cadence a key press is exempt from, a cost-derived floor and an input grace. */
 export class FramePacer {
 	/** Start of the newest frame. */
 	#frameStartedAt = 0;
@@ -85,18 +93,15 @@ export class FramePacer {
 	 * transcript diffs, huge assistant text wrap, component-tree walks) turns
 	 * the loop into a busy loop at 40-50% CPU (see #4145).
 	 *
-	 * A duty cycle is a property of a window, not of one frame, and reading the
-	 * previous frame alone conflated two different situations. A loop that
-	 * paints slowly on every frame converges here and is held to half the CPU,
-	 * which is what #4145 asked for. A single expensive paint among cheap ones
-	 * moves the estimate by a fraction of itself, so the frame after it still
-	 * arrives at the cadence: a scrolled viewport leaves the diff nothing to
-	 * reuse and costs a full paint, and putting a 66ms floor under the cheap
-	 * diff that followed it is how a session that painted on time 68% of the
-	 * time published at 14.2 fps against a 30 fps capture.
+	 * A duty cycle is a property of a window, not of one frame. A loop that paints slowly on every
+	 * frame converges here and is held to half the CPU (#4145); a single expensive paint among cheap
+	 * ones moves the estimate by a fraction of itself, so the frame after it still arrives at the
+	 * cadence. Flooring the cheap diff behind a full scrolled-viewport paint at 66ms published
+	 * 14.2 fps against a 30 fps capture.
 	 */
 	#frameCostEstimateMs = 0;
 	#inputGraceUntilMs = 0;
+	#keyPressFrames = 0;
 
 	/**
 	 * Records the start of a frame. Called before the frame composes, because a render requested
@@ -104,6 +109,7 @@ export class FramePacer {
 	 */
 	frameStarted(start: number): void {
 		this.#frameStartedAt = start;
+		if (this.#keyPressFrames > 0) this.#keyPressFrames--;
 	}
 
 	/** Folds the cost of the frame that ran from `start` to `end` into the estimate. */
@@ -112,26 +118,29 @@ export class FramePacer {
 	}
 
 	/**
-	 * Holds the next frame one cadence interval past `now`. Ctrl+C/Esc use app-level double-press
-	 * windows, and the hold gives those gestures one frame to drain queued input before an
-	 * ordinary repaint.
+	 * Holds the next frame one cadence interval past `now`, so the second press of a double-press
+	 * gesture the caller just armed drains from stdin before an ordinary repaint.
 	 */
 	holdForInput(now: number): void {
 		this.#inputGraceUntilMs = now + INPUT_RENDER_GRACE_MS;
 	}
 
+	/**
+	 * Lets the next {@link KEY_PRESS_FRAMES} frames skip the cadence. The cost floor and the input
+	 * grace still apply, and a frame nothing asked for in between takes one of them, so a press adds
+	 * at most that many frames to the cadence's count.
+	 */
+	keyPressed(): void {
+		this.#keyPressFrames = KEY_PRESS_FRAMES;
+	}
+
 	/** Milliseconds a frame requested at `now` waits before it paints. */
 	delay(now: number): number {
 		const elapsed = now - this.#frameStartedAt;
-		// Adaptive backpressure — target ~50% render duty cycle: the next frame
-		// starts no sooner than `frame_end + estimated_cost`, i.e.
-		// `frame_start + 2 × estimated_cost`. So `elapsed` (which counts from
-		// the last frame's start) must already exceed twice the estimate before
-		// the follow-up render may fire. The estimate is decayed rather
-		// than the previous sample, so a sustained slow loop is held to half the
-		// CPU (#4145) and an isolated expensive paint is not charged to the
-		// cheap frame behind it. Capped so a pathological cost cannot lock the UI.
+		// Adaptive backpressure toward a 50% duty cycle: the next frame starts no sooner than
+		// `frame_start + 2 × estimated_cost`, capped so a pathological cost cannot lock the UI.
 		const adaptiveFloor = Math.min(MAX_ADAPTIVE_RENDER_MS, this.#frameCostEstimateMs * 2);
-		return Math.max(0, MIN_RENDER_INTERVAL_MS - elapsed, adaptiveFloor - elapsed, this.#inputGraceUntilMs - now);
+		const cadence = this.#keyPressFrames > 0 ? 0 : MIN_RENDER_INTERVAL_MS - elapsed;
+		return Math.max(0, cadence, adaptiveFloor - elapsed, this.#inputGraceUntilMs - now);
 	}
 }

@@ -24,17 +24,7 @@ import { describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import { encodeStream } from "@veyyon/ai/providers/openai-responses-server";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-
-function zeroUsage(): AssistantMessage["usage"] {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function partialMessage(): AssistantMessage {
 	return {
@@ -43,7 +33,7 @@ function partialMessage(): AssistantMessage {
 		provider: "openai",
 		model: "gpt-5",
 		content: [],
-		usage: zeroUsage(),
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 1_700_000_000_000,
 	};
@@ -178,7 +168,7 @@ describe("the paths that must keep working", () => {
 		const final: AssistantMessage = {
 			...partialMessage(),
 			content: [{ type: "text", text: "Hi!" }],
-			usage: { ...zeroUsage(), input: 1, output: 2 },
+			usage: { ...emptyUsage(), input: 1, output: 2 },
 		};
 		queueMicrotask(() => {
 			stream.push({ type: "start", partial: partialMessage() });

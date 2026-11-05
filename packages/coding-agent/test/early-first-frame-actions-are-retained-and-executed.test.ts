@@ -69,6 +69,7 @@ import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides, se
 import { resetKeybindingsForTests } from "@veyyon/utils/keybindings";
 import type { KeyId } from "@veyyon/utils/keys";
 import { YAML } from "bun";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 
 const TINY_PNG_1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
 const TINY_PNG_2 =
@@ -79,7 +80,7 @@ describe("early first-frame actions are retained and executed", () => {
 	let modelRegistry: ModelRegistry;
 	let session: AgentSession;
 	let tempDir: TempDir;
-	let savedGeometry: Record<"columns" | "rows", PropertyDescriptor | undefined>;
+	let geometry: StubbedStdoutGeometry | undefined;
 	let savedIsTTY: Record<"stdin" | "stdout", PropertyDescriptor | undefined>;
 	let activeMode: InteractiveMode | undefined;
 	let dirOverrides: DirOverridesSnapshot;
@@ -260,16 +261,11 @@ describe("early first-frame actions are retained and executed", () => {
 
 	beforeEach(async () => {
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		savedGeometry = {
-			columns: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
-			rows: Object.getOwnPropertyDescriptor(process.stdout, "rows"),
-		};
 		savedIsTTY = {
 			stdin: Object.getOwnPropertyDescriptor(process.stdin, "isTTY"),
 			stdout: Object.getOwnPropertyDescriptor(process.stdout, "isTTY"),
 		};
-		Object.defineProperty(process.stdout, "columns", { value: 140, configurable: true });
-		Object.defineProperty(process.stdout, "rows", { value: 45, configurable: true });
+		geometry = stubStdoutGeometry({ columns: 140, rows: 45 });
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
@@ -300,11 +296,7 @@ describe("early first-frame actions are retained and executed", () => {
 		}
 		await session?.dispose();
 		authStorage?.close();
-		for (const key of ["columns", "rows"] as const) {
-			const descriptor = savedGeometry[key];
-			if (descriptor) Object.defineProperty(process.stdout, key, descriptor);
-			else delete (process.stdout as unknown as Record<string, unknown>)[key];
-		}
+		geometry?.restore();
 		for (const stream of ["stdin", "stdout"] as const) {
 			const descriptor = savedIsTTY[stream];
 			if (descriptor) Object.defineProperty(process[stream], "isTTY", descriptor);

@@ -38,10 +38,6 @@ const WIDTH = 120;
 /** SGR column safely inside the pane, past the category sidebar. */
 const PANE_COL = 61;
 
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
-
 let previousAnsiPolicy: AnsiPolicy;
 let geometryStub: { restore(): void } | undefined;
 
@@ -150,7 +146,7 @@ function frameLines(component: SettingsSelectorComponent): readonly string[] {
 }
 
 function frameText(component: SettingsSelectorComponent): string {
-	return frameLines(component).map(strip).join("\n");
+	return frameLines(component).map(stripVTControlCharacters).join("\n");
 }
 
 /** Wait for the asynchronous npm + marketplace listing to mount the list view. */
@@ -164,7 +160,7 @@ async function awaitText(component: SettingsSelectorComponent, needle: string): 
 
 /** 1-based screen row of the first line containing `needle`. */
 function rowOf(component: SettingsSelectorComponent, needle: string): number {
-	const index = frameLines(component).findIndex(line => strip(line).includes(needle));
+	const index = frameLines(component).findIndex(line => stripVTControlCharacters(line).includes(needle));
 	if (index === -1) throw new Error(`no rendered row contains ${JSON.stringify(needle)}`);
 	return index + 1;
 }
@@ -179,7 +175,7 @@ const wheelDownAt = (row: number, col = PANE_COL): string => `\x1b[<65;${col};${
  * rows and the tip band carry the same `·` glyph.
  */
 function chipLabels(component: SettingsSelectorComponent): string[] {
-	const lines = frameLines(component).map(strip);
+	const lines = frameLines(component).map(stripVTControlCharacters);
 	const bottom = lines.findIndex(line => line.includes("└"));
 	expect(bottom, "card bottom border").toBeGreaterThan(0);
 	const footer: string[] = [];
@@ -203,7 +199,7 @@ function chipLabels(component: SettingsSelectorComponent): string[] {
 
 /** 1-based row/col inside the footer chip carrying `label`. */
 function chipAt(component: SettingsSelectorComponent, label: string): { row: number; col: number } {
-	const lines = frameLines(component).map(strip);
+	const lines = frameLines(component).map(stripVTControlCharacters);
 	const row = lines.findIndex(line => line.includes(label));
 	if (row === -1) throw new Error(`no footer row carries ${JSON.stringify(label)}`);
 	return { row: row + 1, col: (lines[row] as string).indexOf(label) + 2 };
@@ -236,11 +232,11 @@ describe("the plugins tab answers the pointer", () => {
 			const clock = spyOn(Date, "now").mockReturnValue(1_764_000_000_000);
 			try {
 				const before = frameLines(component);
-				const index = before.findIndex(line => strip(line).includes("mkt-side@catalog"));
+				const index = before.findIndex(line => stripVTControlCharacters(line).includes("mkt-side@catalog"));
 				component.handleInput(motionAt(index + 1));
 
 				const after = frameLines(component);
-				expect(strip(after[index] ?? "")).toContain("mkt-side@catalog");
+				expect(stripVTControlCharacters(after[index] ?? "")).toContain("mkt-side@catalog");
 				expect(after[index]).not.toBe(before[index]);
 				// A background fill; fg-only styling cannot produce "48;".
 				expect(after[index]).toContain("48;");
@@ -296,7 +292,7 @@ describe("the plugins tab answers the pointer", () => {
 			const row = rowOf(component, "Enabled");
 			// The value column sits at the right edge of the pane, where the
 			// toggle's current value paints.
-			const valueCol = strip(frameLines(component)[row - 1] as string).indexOf("true") + 2;
+			const valueCol = stripVTControlCharacters(frameLines(component)[row - 1] as string).indexOf("true") + 2;
 			component.handleInput(clickAt(row, valueCol));
 
 			expect(setEnabled).toHaveBeenCalledWith("npm-side", false);
@@ -331,7 +327,7 @@ describe("the plugins tab answers the pointer", () => {
 
 			// Open the enum picker from the config row's value column.
 			const row = rowOf(component, "mode");
-			const valueCol = strip(frameLines(component)[row - 1] as string).indexOf("fast") + 2;
+			const valueCol = stripVTControlCharacters(frameLines(component)[row - 1] as string).indexOf("fast") + 2;
 			component.handleInput(clickAt(row, valueCol));
 			await awaitText(component, "Pick a mode");
 
@@ -356,7 +352,7 @@ describe("the plugins tab answers the pointer", () => {
 			await awaitText(component, "mode");
 
 			const before = frameLines(component);
-			const index = before.findIndex(line => strip(line).includes("mode"));
+			const index = before.findIndex(line => stripVTControlCharacters(line).includes("mode"));
 			component.handleInput(motionAt(index + 1));
 
 			const after = frameLines(component);

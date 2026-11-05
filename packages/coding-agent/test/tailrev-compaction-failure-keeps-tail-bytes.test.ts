@@ -29,23 +29,17 @@ import { Agent, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const HUGE = "x".repeat(40_000);
 
-const usage = () => ({
-	input: 1000,
-	output: 100,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 1100,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
+const usage = () => ({ ...emptyUsage(), input: 1000, output: 100, totalTokens: 1100 });
 
 describe("a failed compaction must not strand tail elisions on the branch", () => {
 	let tempDir: TempDir;
@@ -60,8 +54,7 @@ describe("a failed compaction must not strand tail elisions on the branch", () =
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("openai", "gpt-5.1");
-		if (!bundled) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const bundled = requireBundledModel("openai", "gpt-5.1");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		// Six small turns to summarize away, then a final turn whose one tool

@@ -18,7 +18,7 @@
  * another module mints. The cure applied here is the one `error/provider.ts`
  * already uses for `PROVIDER_RESPONSE_RETRYABLE` — put the decision and the data
  * it reads in one owner. `providerFinishErrorMessage` mints the string and
- * `PROVIDER_FINISH_ERROR_PATTERN` reads it, side by side in that file.
+ * `PROVIDER_FINISH_ERROR_PATTERN` reads it, side by side in `error/classes.ts`.
  *
  * The legacy wordings are still matched on purpose. They are in persisted
  * sessions written by earlier versions, and a resumed transcript replays the
@@ -42,9 +42,9 @@
  * source text is banned here.
  */
 import { describe, expect, it } from "bun:test";
+import { PROVIDER_FINISH_ERROR_PATTERN, providerFinishErrorMessage } from "@veyyon/ai/error/classes";
 import { Flag } from "@veyyon/ai/error/flag";
 import { classify } from "@veyyon/ai/error/flags";
-import { PROVIDER_FINISH_ERROR_PATTERN, providerFinishErrorMessage } from "@veyyon/ai/error/provider";
 import { streamGoogle } from "@veyyon/ai/providers/google";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";

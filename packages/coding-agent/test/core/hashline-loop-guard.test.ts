@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import {
-	type ExecuteHashlineSingleOptions,
 	executeHashlineSingle,
 	formatHashlineHeader,
 	getFileSnapshotStore as getFileReadCache,
@@ -13,6 +12,7 @@ import { NOOP_HARD_LIMIT } from "@veyyon/coding-agent/edit/hashline/noop-loop-gu
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ToolError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -21,22 +21,6 @@ beforeAll(async () => {
 
 function makeSession(tempDir: string): ToolSession {
 	return { cwd: tempDir, settings: Settings.isolated() } as ToolSession;
-}
-
-function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await Bun.write(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
 }
 
 async function withTempDir(fn: (tempDir: string) => Promise<void>): Promise<void> {
@@ -67,7 +51,7 @@ describe("hashline noop loop guard", () => {
 			const input = buildNoopInput(filePath, "a.ts", session);
 
 			for (let attempt = 1; attempt < NOOP_HARD_LIMIT; attempt++) {
-				const result = await executeHashlineSingle(execOptions(input, session));
+				const result = await executeHashlineSingle(hashlineExecOptions(input, session));
 				const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 				expect(text).toContain("parsed and applied cleanly, but produced no change");
 				expect(text).toContain("byte-identical to the file");
@@ -85,12 +69,12 @@ describe("hashline noop loop guard", () => {
 
 			// Burn the soft-hint attempts.
 			for (let attempt = 1; attempt < NOOP_HARD_LIMIT; attempt++) {
-				await executeHashlineSingle(execOptions(input, session));
+				await executeHashlineSingle(hashlineExecOptions(input, session));
 			}
 
 			let caught: unknown;
 			try {
-				await executeHashlineSingle(execOptions(input, session));
+				await executeHashlineSingle(hashlineExecOptions(input, session));
 			} catch (err) {
 				caught = err;
 			}
@@ -115,13 +99,13 @@ describe("hashline noop loop guard", () => {
 
 			// Drive a.ts to the brink, NOT past it.
 			for (let attempt = 1; attempt < NOOP_HARD_LIMIT; attempt++) {
-				await executeHashlineSingle(execOptions(aInput, session));
+				await executeHashlineSingle(hashlineExecOptions(aInput, session));
 			}
 
 			// b.ts is a fresh path: its counter starts at zero independent of a.ts.
 			// Drive b.ts up to the brink without escalating.
 			for (let attempt = 1; attempt < NOOP_HARD_LIMIT; attempt++) {
-				const result = await executeHashlineSingle(execOptions(bInput, session));
+				const result = await executeHashlineSingle(hashlineExecOptions(bInput, session));
 				const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 				expect(text).toContain("byte-identical to the file");
 				expect(text).not.toContain("STOP.");
@@ -138,7 +122,7 @@ describe("hashline noop loop guard", () => {
 
 			// Hit the threshold-minus-one no-op count.
 			for (let attempt = 1; attempt < NOOP_HARD_LIMIT; attempt++) {
-				await executeHashlineSingle(execOptions(noopInput, session));
+				await executeHashlineSingle(hashlineExecOptions(noopInput, session));
 			}
 
 			// Author a real edit. Re-snapshot since the file state and tag have changed
@@ -146,7 +130,7 @@ describe("hashline noop loop guard", () => {
 			const source = "aaa\nbbb\nccc\n";
 			const tag = getFileReadCache(session).record(filePath, source);
 			const realEdit = `${formatHashlineHeader("a.ts", tag)}\nSWAP 2.=2:\n+BBB\n`;
-			const editResult = await executeHashlineSingle(execOptions(realEdit, session));
+			const editResult = await executeHashlineSingle(hashlineExecOptions(realEdit, session));
 			expect(editResult.content[0]?.type === "text" ? editResult.content[0].text : "").not.toContain(
 				"byte-identical to the file",
 			);
@@ -158,7 +142,7 @@ describe("hashline noop loop guard", () => {
 			const newSource = "aaa\nBBB\nccc\n";
 			const newTag = getFileReadCache(session).record(filePath, newSource);
 			const newNoop = `${formatHashlineHeader("a.ts", newTag)}\nSWAP 2.=2:\n+BBB\n`;
-			const result = await executeHashlineSingle(execOptions(newNoop, session));
+			const result = await executeHashlineSingle(hashlineExecOptions(newNoop, session));
 			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain(
 				"byte-identical to the file",
 			);
@@ -174,14 +158,14 @@ describe("hashline noop loop guard", () => {
 			const inputA = buildNoopInput(filePath, "a.ts", sessionA);
 			// Drive sessionA to the brink.
 			for (let attempt = 1; attempt < NOOP_HARD_LIMIT; attempt++) {
-				await executeHashlineSingle(execOptions(inputA, sessionA));
+				await executeHashlineSingle(hashlineExecOptions(inputA, sessionA));
 			}
 
 			// A FRESH session starting on the same path/payload must NOT inherit
 			// the prior session's counter; the first no-op stays soft.
 			const sessionB = makeSession(tempDir);
 			const inputB = buildNoopInput(filePath, "a.ts", sessionB);
-			const result = await executeHashlineSingle(execOptions(inputB, sessionB));
+			const result = await executeHashlineSingle(hashlineExecOptions(inputB, sessionB));
 			expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain(
 				"byte-identical to the file",
 			);

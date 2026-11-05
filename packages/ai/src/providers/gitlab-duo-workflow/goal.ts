@@ -6,6 +6,7 @@
 import { AI_PROMPTS } from "../../prompts/registry";
 import type { AssistantMessage, Context, Message } from "../../types";
 import { normalizeSystemPrompts } from "../../utils";
+import { messageContentText } from "../../utils/message-text";
 
 interface GitLabDuoWorkflowReplayToolCall {
 	id: string;
@@ -183,7 +184,8 @@ function stripGitLabDuoWorkflowReplayIntent(args: Record<string, unknown>): Reco
 function extractLatestUserPrompt(messages: readonly Message[]): string {
 	const index = findLatestGitLabDuoWorkflowUserMessageIndex(messages);
 	if (index < 0) return "";
-	return gitLabDuoWorkflowUserContentToText(messages[index] as Exclude<Message, AssistantMessage>);
+	const message = messages[index] as Exclude<Message, AssistantMessage>;
+	return messageContentText(message.content);
 }
 
 function findLatestGitLabDuoWorkflowUserMessageIndex(messages: readonly Message[]): number {
@@ -204,10 +206,5 @@ function gitLabDuoWorkflowMessageContentToText(message: Message): string {
 			})
 			.join("\n");
 	}
-	return gitLabDuoWorkflowUserContentToText(message);
-}
-
-function gitLabDuoWorkflowUserContentToText(message: Exclude<Message, AssistantMessage>): string {
-	if (typeof message.content === "string") return message.content;
-	return message.content.map(item => (item.type === "text" ? item.text : `[${item.mimeType} image]`)).join("\n");
+	return messageContentText(message.content);
 }

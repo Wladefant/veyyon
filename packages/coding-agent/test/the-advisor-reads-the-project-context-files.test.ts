@@ -15,12 +15,12 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const FIRST = { path: "/repo/first/AGENTS.md", content: "First project rule: tabs for indentation." };
 const SECOND = { path: "/repo/second/AGENTS.md", content: "Second project rule: no default exports." };
@@ -38,8 +38,7 @@ describe("the advisor reads the project context files", () => {
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		model = bundled;
 	});
 

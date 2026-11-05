@@ -53,4 +53,20 @@ body`;
 			expect((err as AgentParsingError).source).toBe("embedded:nodesc.md");
 		}
 	});
+
+	it("prints the message, the file path and the cause's stack from an AgentParsingError", () => {
+		let thrown: unknown;
+		try {
+			parseAgent("embedded:nodesc.md", "---\nname: nameonly\n---\nbody", "bundled");
+		} catch (err) {
+			thrown = err;
+		}
+		if (!(thrown instanceof AgentParsingError) || !(thrown.cause instanceof Error)) {
+			throw new Error("expected an AgentParsingError with an Error cause");
+		}
+		expect(thrown.message).toStartWith("Failed to parse agent: Invalid agent field: embedded:nodesc.md");
+		expect(thrown.toString()).toBe(
+			`${thrown.message}\n\nSource: "embedded:nodesc.md"\n\nStack:\n${thrown.cause.stack}`,
+		);
+	});
 });

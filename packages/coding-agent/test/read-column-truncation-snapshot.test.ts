@@ -14,27 +14,19 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
 import { writethroughNoop } from "@veyyon/coding-agent/lsp/writethrough";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { Patch, Patcher } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 
 const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/m;
 const COLUMN_CAP = 64;
 const LONG_LINE_LEN = COLUMN_CAP * 3;
-
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
 
 function createSession(cwd: string): ToolSession {
 	const settings = Settings.isolated();
@@ -106,7 +98,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		const session = createSession(tmpDir);
 		const tool = new ReadTool(session);
 		const result = await tool.execute("call-1", { path: filePath });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		// Sanity: display IS column-truncated.
 		expect(text).toContain("…");
@@ -130,7 +122,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		const session = createSession(tmpDir);
 		const tool = new ReadTool(session);
 		const result = await tool.execute("call-range", { path: `${filePath}:1-3` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 		expect(text).toContain("…");
 
 		const { tag } = extractHeader(text);
@@ -147,7 +139,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		const session = createSession(tmpDir);
 		const tool = new ReadTool(session);
 		const result = await tool.execute("call-multi", { path: `${filePath}:1-2,6-7` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 		expect(text).toContain("…");
 
 		const { tag } = extractHeader(text);
@@ -163,7 +155,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 
 		const session = createSession(tmpDir);
 		const result = await new ReadTool(session).execute("call-multi-seen", { path: `${filePath}:1-2,6-7` });
-		const { tag } = extractHeader(textOutput(result));
+		const { tag } = extractHeader(toolResultText(result));
 		const snapshot = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(filePath), tag);
 
 		expect([...(snapshot?.clippedLines ?? [])].sort((a, b) => a - b)).toEqual([2, 6]);
@@ -184,7 +176,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		const wide = await tool.execute("call-wide", { path: `${widePath}:1-3` });
 		const wideSnapshot = getFileSnapshotStore(session).byHash(
 			canonicalSnapshotKey(widePath),
-			extractHeader(textOutput(wide)).tag,
+			extractHeader(toolResultText(wide)).tag,
 		);
 		expect([...(wideSnapshot?.clippedLines ?? [])]).toEqual([2]);
 		expect(wideSnapshot?.seenLines?.has(2)).toBe(false);
@@ -193,7 +185,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		const narrow = await tool.execute("call-narrow", { path: `${narrowPath}:1-3` });
 		const narrowSnapshot = getFileSnapshotStore(session).byHash(
 			canonicalSnapshotKey(narrowPath),
-			extractHeader(textOutput(narrow)).tag,
+			extractHeader(toolResultText(narrow)).tag,
 		);
 		expect(narrowSnapshot?.clippedLines?.size ?? 0).toBe(0);
 		expect(narrow.details?.meta?.limits?.columnTruncated).toBeUndefined();
@@ -213,7 +205,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 
 		const session = createSession(tmpDir);
 		const result = await new ReadTool(session).execute("call-context", { path: `${filePath}:7-8` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 		expect(text).not.toContain(longName);
 		expect(text).toContain("function wide(");
 		expect(text).toContain("…");
@@ -238,7 +230,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		const session = createSession(tmpDir);
 		const readTool = new ReadTool(session);
 		const readResult = await readTool.execute("call-read", { path: filePath });
-		const readText = textOutput(readResult);
+		const readText = toolResultText(readResult);
 		const { header } = extractHeader(readText);
 
 		// Replace line 3 ("outro") using the TAG returned by the truncating read.

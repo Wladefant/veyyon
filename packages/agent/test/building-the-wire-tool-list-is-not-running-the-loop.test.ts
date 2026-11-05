@@ -17,20 +17,12 @@
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { createModuleReachCache, type ModuleReachResolution, moduleReach } from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 const SRC = path.join(import.meta.dir, "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
 
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(REPO_ROOT, file))
-		.sort();
-}
+const { reachedNames } = packageModuleReach(REPO_ROOT, SRC);
 
 /** Measured at 221 for `append-only-context.ts` and 220 for `tool-normalization.ts`; the loop is 294. */
 const WIRE_TOOL_LIST_CEILING = 240;

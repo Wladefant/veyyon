@@ -8,6 +8,7 @@
  */
 import * as path from "node:path";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem } from "@veyyon/utils";
 import { liveStringBytes } from "../../../utils/test/helpers/live-string-bytes";
@@ -74,14 +75,7 @@ function assistantCalling(results: readonly ToolResultMessage[]): AssistantMessa
 		provider: "anthropic",
 		model: "claude-test",
 		stopReason: "toolUse",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 	};
 }
 

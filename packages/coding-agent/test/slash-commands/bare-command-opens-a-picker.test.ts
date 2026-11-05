@@ -334,7 +334,7 @@ describe("the picker card", () => {
 	it("shows each subcommand's description and the argument shape it takes", () => {
 		const { component } = card();
 
-		const rows = component.render(100).map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+		const rows = component.render(100).map(line => stripVTControlCharacters(line));
 
 		expect(rows.find(row => row.includes("manager"))).toContain("Open the account manager");
 		expect(rows.find(row => row.includes("switch"))).toContain("switch [provider]");

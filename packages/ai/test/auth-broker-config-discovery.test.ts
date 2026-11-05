@@ -8,7 +8,7 @@ import { discoverAuthStorage, resolveAuthBrokerConfig, type SnapshotResponse } f
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { removeWithRetries } from "../../utils/src/temp";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 type LoopbackHandler = (request: IncomingMessage, response: ServerResponse) => void;
 

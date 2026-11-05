@@ -29,12 +29,10 @@ import type {
 import { resolveAbortLabel, shouldRenderAbortReason } from "../session/messages";
 import { TRUNCATE_LENGTHS } from "../tools/core/render-limits";
 import { base64DecodedBytes } from "../utils/video-loading";
-import { contentToText } from "./content-text";
 import { projectCustomDisplay, readCustomLevel } from "./custom-display";
 import { toBranchSummaryView, toCompactionSummaryView } from "./summary-builder";
 import { buildToolExecutionBlock } from "./tool-execution";
-
-export { contentToText } from "./content-text";
+import { serializeToolInput } from "./tool-input";
 
 /** Everything the builder needs that a message does not carry. */
 export interface TranscriptBuildOptions {
@@ -108,17 +106,12 @@ export function defaultToolText(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (value === undefined) return "";
 	try {
-		// Fast-fail unformatted stringify first: Bun/JSC's indented stringifier spends
-		// seconds doing recursive indentation before detecting a cyclic reference.
 		JSON.stringify(value);
 		return JSON.stringify(value, null, 2) ?? "";
 	} catch {
-		// A tool argument holding a cycle or a BigInt is a display problem, not a
-		// session failure: say so in the block instead of throwing into the render.
 		return "[unserializable]";
 	}
 }
-
 /**
  * Stable block id. Derived from the message's own position and role rather than
  * a counter, so rebuilding a transcript from persisted messages reproduces the
@@ -349,7 +342,7 @@ function mentionAttachments(files: unknown): Attachment[] {
 export function toTranscriptBlock(message: AgentMessage, options: TranscriptBuildOptions): TranscriptBlock {
 	const id = blockIdFor(message, options.index);
 	const timestamp = timestampOf(message);
-	const renderToolText = options.renderToolText ?? defaultToolText;
+	const renderToolText = options.renderToolText ?? serializeToolInput;
 	const pending = options.pendingToolCallIds ?? new Set<string>();
 	const role = messageRole(message);
 
@@ -463,7 +456,7 @@ export function toTranscriptBlock(message: AgentMessage, options: TranscriptBuil
 				kind: "custom",
 				id,
 				customKind: customType,
-				text: contentToText(message.content, "\n", true),
+				text: contentText(message.content),
 				level,
 				timestamp,
 			};
@@ -481,7 +474,7 @@ export function toTranscriptBlock(message: AgentMessage, options: TranscriptBuil
 				kind: "hook",
 				id,
 				hookName,
-				text: contentToText(message.content, "\n", true),
+				text: contentText(message.content),
 				timestamp,
 			};
 			if (display !== undefined) {

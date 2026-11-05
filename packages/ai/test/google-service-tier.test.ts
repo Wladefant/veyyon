@@ -3,19 +3,9 @@ import { streamGoogle } from "@veyyon/ai/providers/google";
 import { streamGoogleVertex } from "@veyyon/ai/providers/google-vertex";
 import type { AssistantMessageEvent, Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { googleOkSse } from "./helpers/fetch-mock";
 
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] };
-
-function sseStop(): Response {
-	const chunk = {
-		candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
-		usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
-	};
-	return new Response(`data: ${JSON.stringify(chunk)}\n\n`, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
 
 async function drain(stream: AsyncIterable<AssistantMessageEvent>): Promise<void> {
 	for await (const _ of stream) {
@@ -35,7 +25,7 @@ function capturingFetch(): { fetch: FetchImpl; captured: () => Captured } {
 			headers: new Headers(init?.headers),
 			body: JSON.parse(String(init?.body ?? "{}")),
 		};
-		return sseStop();
+		return googleOkSse();
 	};
 	return {
 		fetch,

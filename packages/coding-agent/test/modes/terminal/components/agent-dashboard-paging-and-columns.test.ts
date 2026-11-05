@@ -17,6 +17,7 @@
  * the only way to catch a drift of one or two cells.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import type { AgentStatus } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
@@ -25,7 +26,6 @@ import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const WIDTH = 110;
 const ROWS = 40;
 const PAGE_DOWN = "\x1b[6~";
@@ -75,7 +75,7 @@ function registerRoster(count: number): void {
 }
 
 function frame(dashboard: AgentDashboard): string[] {
-	return dashboard.render(WIDTH).map(line => line.replace(ANSI_PATTERN, ""));
+	return dashboard.render(WIDTH).map(line => stripVTControlCharacters(line));
 }
 
 /** The agent type on the row the cursor is on, which is what the cursor points at. */
@@ -362,7 +362,7 @@ describe("A column never takes the whole row", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: ROWS });
 
 		for (const width of [110, 90, 70, 56]) {
-			const rows = dashboard.render(width).map(line => line.replace(ANSI_PATTERN, ""));
+			const rows = dashboard.render(width).map(line => stripVTControlCharacters(line));
 			const row = rows.find(line => line.includes("a-very-long"));
 			// The status still makes it onto the row at every width, which it cannot
 			// do if one column has taken the space.
@@ -411,7 +411,7 @@ describe("The model badge under pressure", () => {
 
 		const row = dashboard
 			.render(70)
-			.map(line => line.replace(ANSI_PATTERN, ""))
+			.map(line => stripVTControlCharacters(line))
 			.find(line => line.includes("reviewer"));
 
 		expect(row).toContain("claude-son");
@@ -425,7 +425,7 @@ describe("The model badge under pressure", () => {
 
 		const row = dashboard
 			.render(58)
-			.map(line => line.replace(ANSI_PATTERN, ""))
+			.map(line => stripVTControlCharacters(line))
 			.find(line => line.includes("reviewer"));
 
 		expect(row).not.toContain("claude");

@@ -33,17 +33,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createTools, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { isEnoent, TempDir } from "@veyyon/utils";
-
-async function fileExists(p: string): Promise<boolean> {
-	try {
-		await Bun.file(p).stat();
-		return true;
-	} catch (err) {
-		if (isEnoent(err)) return false;
-		throw err;
-	}
-}
+import { pathExistsOrThrow, TempDir } from "@veyyon/utils";
 
 /** The shape `GoalRuntime` persists through `appendModeChange`, as it lands on the branch. */
 function storedGoal(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -91,7 +81,7 @@ describe("the session file keeps a goal that has no conversation yet", () => {
 		if (!sessionFile) throw new Error("Expected persistent session file");
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 	});
 
 	it("keeps a session whose only durable entry is a paused goal", async () => {
@@ -106,7 +96,7 @@ describe("the session file keeps a goal that has no conversation yet", () => {
 		if (!sessionFile) throw new Error("Expected persistent session file");
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(true);
 	});
 
 	/**
@@ -127,7 +117,7 @@ describe("the session file keeps a goal that has no conversation yet", () => {
 		if (!sessionFile) throw new Error("Expected persistent session file");
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 
 	/** A goal that was dropped leaves `mode_change("none")`, which is selector state again. */
@@ -144,7 +134,7 @@ describe("the session file keeps a goal that has no conversation yet", () => {
 		if (!sessionFile) throw new Error("Expected persistent session file");
 		await session.close();
 
-		expect(await fileExists(sessionFile)).toBe(false);
+		expect(await pathExistsOrThrow(sessionFile)).toBe(false);
 	});
 });
 

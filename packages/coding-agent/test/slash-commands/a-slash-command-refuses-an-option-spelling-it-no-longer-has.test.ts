@@ -33,6 +33,7 @@ import { beforeAll, describe, expect, it, vi } from "bun:test";
 import * as mcpConfigWriter from "@veyyon/coding-agent/mcp/config-writer";
 import { MCPCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/mcp-command-controller";
 import { SSHCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/ssh-command-controller";
+import { parseSlashCommand } from "@veyyon/coding-agent/slash-commands/helpers/parse";
 import * as sshConfigWriter from "@veyyon/coding-agent/ssh/config-writer";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 
@@ -118,7 +119,7 @@ describe("a converted slash command refuses an option spelling it no longer has"
 		try {
 			const { controller, showError, present } = createMcpController();
 
-			await controller.handle(command);
+			await controller.handle(parseSlashCommand(command)?.args ?? "");
 
 			expect(write).not.toHaveBeenCalled();
 			expect(showError).toHaveBeenCalledTimes(1);
@@ -139,7 +140,7 @@ describe("a converted slash command refuses an option spelling it no longer has"
 		try {
 			const { controller, showError, present, refreshSshTool } = createSshController();
 
-			await controller.handle(command);
+			await controller.handle(parseSlashCommand(command)?.args ?? "");
 
 			expect(write).not.toHaveBeenCalled();
 			expect(remove).not.toHaveBeenCalled();
@@ -163,7 +164,7 @@ describe("a converted slash command refuses an option spelling it no longer has"
 		try {
 			const { controller, showError } = createSshController();
 
-			await controller.handle("/ssh add box example.com user root 2222 key ~/.ssh/id_ed25519 desc laptop compat");
+			await controller.handle("add box example.com user root 2222 key ~/.ssh/id_ed25519 desc laptop compat");
 
 			expect(showError).not.toHaveBeenCalled();
 			expect(write).toHaveBeenCalledTimes(1);
@@ -192,7 +193,7 @@ describe("a converted slash command refuses an option spelling it no longer has"
 		try {
 			const { controller, showError } = createSshController();
 
-			await controller.handle("/ssh add user key");
+			await controller.handle("add user key");
 
 			expect(showError).not.toHaveBeenCalled();
 			const [, name, hostConfig] = write.mock.calls[0]!;
@@ -208,7 +209,7 @@ describe("a converted slash command refuses an option spelling it no longer has"
 		try {
 			const { controller, showError } = createSshController();
 
-			await controller.handle("/ssh add box example.com 70000");
+			await controller.handle("add box example.com 70000");
 
 			expect(write).not.toHaveBeenCalled();
 			expect(showError.mock.calls[0]![0]).toContain("Invalid port: 70000");
@@ -222,7 +223,7 @@ describe("a converted slash command refuses an option spelling it no longer has"
 		try {
 			const { controller, showError } = createSshController();
 
-			await controller.handle("/ssh add box example.com bogus");
+			await controller.handle("add box example.com bogus");
 
 			expect(write).not.toHaveBeenCalled();
 			expect(showError.mock.calls[0]![0]).toContain("Unknown argument: bogus");
@@ -236,7 +237,7 @@ describe("a converted slash command refuses an option spelling it no longer has"
 		try {
 			const { controller, showError } = createSshController();
 
-			await controller.handle("/ssh add box example.com user root user admin");
+			await controller.handle("add box example.com user root user admin");
 
 			expect(write).not.toHaveBeenCalled();
 			expect(showError.mock.calls[0]![0]).toContain("`user` given twice.");

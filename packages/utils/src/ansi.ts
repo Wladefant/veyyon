@@ -147,3 +147,17 @@ export const SGR_SEQUENCE_PATTERN = "\\x1b\\[([0-9;:]*)m";
 export function sgrSequence(flags: string): RegExp {
 	return new RegExp(SGR_SEQUENCE_PATTERN, flags);
 }
+
+/**
+ * Index of the `m` that ends the SGR sequence whose escape byte is at `start`, or -1 when no SGR
+ * sequence starts there. The parameters between `ESC [` and the `m` are digits, `:` and `;`.
+ */
+export function sgrEnd(text: string, start: number): number {
+	if (text.charCodeAt(start + 1) !== 0x5b) return -1;
+	let end = start + 2;
+	for (; end < text.length; end++) {
+		const param = text.charCodeAt(end);
+		if (param < 0x30 || param > 0x3b) break;
+	}
+	return text.charCodeAt(end) === 0x6d ? end : -1;
+}

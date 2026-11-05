@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { walkBranchPath } from "@veyyon/kernel/session/session-context";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionEntryIndex } from "@veyyon/kernel/session/session-entry-index";
+import { mulberry32 } from "../../packages/utils/test/helpers/mulberry32";
 
 /**
  * WHY: `SessionEntryIndex` keeps the active branch (root to leaf) cached and extends it in place when
@@ -29,18 +30,6 @@ const TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
 function entry(id: string, parentId: string | null): SessionEntry {
 	return { type: "model_change", id, parentId, timestamp: TIMESTAMP, model: `provider/${id}` };
-}
-
-/** Deterministic PRNG, so a failing step reproduces from its seed. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
 }
 
 interface Walk {

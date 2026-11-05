@@ -8,8 +8,15 @@ import path from "node:path";
 import { errorMessage, logger } from "@veyyon/utils";
 import { formatPathRelativeToCwd, resolveToCwd } from "../tools/core/path-utils";
 import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
-import { getOrCreateClient, LspResponseError, sendNotification, sendRequest, waitForProjectLoaded } from "./client";
-import type { LspConfig } from "./config";
+import {
+	ensureFileOpen,
+	getOrCreateClient,
+	LspResponseError,
+	sendNotification,
+	sendRequest,
+	waitForProjectLoaded,
+} from "./client";
+import { type LspConfig, serverHandlesFile } from "./config";
 import { applyTextEdits, flattenWorkspaceTextEdits, rangesOverlap } from "./edits";
 import { getLspServers, getLspServersForFile, isProjectAwareLspServer } from "./servers";
 import type { ServerConfig, TextEdit, WorkspaceEdit } from "./types";
@@ -131,7 +138,11 @@ interface RenameProposals {
 	readonly serverNotes: string[];
 }
 
-/** One server's willRenameFiles answer, asked once a project-aware server has loaded its project. */
+/**
+ * One server's willRenameFiles answer, asked once a project-aware server has loaded its project. The
+ * first renamed file the server handles is opened first: tsserver loads no project until one of its
+ * files is open, and without a project it proposes no import edits.
+ */
 async function askRenameServer(
 	serverConfig: ServerConfig,
 	lspParams: { files: FileRenamePair[] },
@@ -140,6 +151,8 @@ async function askRenameServer(
 ): Promise<WorkspaceEdit | null> {
 	const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
 	if (isProjectAwareLspServer(serverConfig)) {
+		const handled = lspParams.files.find(pair => serverHandlesFile(serverConfig, uriToFile(pair.oldUri)));
+		if (handled) await ensureFileOpen(client, uriToFile(handled.oldUri), signal);
 		await waitForProjectLoaded(client, signal);
 	}
 	return (await sendRequest(client, "workspace/willRenameFiles", lspParams, signal)) as WorkspaceEdit | null;

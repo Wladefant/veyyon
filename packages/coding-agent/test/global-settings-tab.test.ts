@@ -64,7 +64,8 @@ describe("Global settings persistence (PROF-2)", () => {
 		settingsState = beginSettingsTest();
 		root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-global-tab-"));
 		// Point the global config root into the temp tree (same technique as
-		// global-config.test.ts) so writes never touch the real ~/.veyyon.
+		// the-global-config-selects-the-profile-and-migrates-the-legacy-layout.test.ts)
+		// so writes never touch the real ~/.veyyon.
 		process.env.VEYYON_CONFIG_DIR = path.relative(os.homedir(), root);
 		agentDir = path.join(root, "profiles", "work", "agent");
 		fs.mkdirSync(agentDir, { recursive: true });

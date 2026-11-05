@@ -27,11 +27,12 @@
 import { describe, expect, it } from "bun:test";
 import * as ai from "@veyyon/ai";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { AssistantMessage, AssistantMessageEvent, Context, FetchImpl, Model, Usage } from "@veyyon/ai/types";
+import type { AssistantMessage, AssistantMessageEvent, Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { withEmptyCompletionRetry } from "@veyyon/ai/utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { PRE_RESPONSE_STALL_ATTEMPTS } from "@veyyon/ai/utils/first-event-budget";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * The ladder's budget is this deadline times the attempt allowance, and the
@@ -60,17 +61,6 @@ const MODEL: Model<"openai-completions"> = buildModel({
 
 const CONTEXT = { messages: [{ role: "user", content: "hi" }] } as unknown as Context;
 
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function assistant(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 	return {
 		role: "assistant",
@@ -80,7 +70,7 @@ function assistant(overrides: Partial<AssistantMessage> = {}): AssistantMessage 
 		model: "test-model",
 		timestamp: 1,
 		stopReason: "stop",
-		usage: usage(),
+		usage: emptyUsage(),
 		...overrides,
 	} as AssistantMessage;
 }

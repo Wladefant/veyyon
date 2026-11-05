@@ -24,7 +24,7 @@
  * mode is exit 137 with the chunk composition printed beside it.
  */
 import { describe, expect, it } from "bun:test";
-import { codingAgentBucketPlans } from "./ci-test-ts";
+import { chunksAtOnce, codingAgentBucketPlans, type Mode, validModes } from "./ci-test-ts";
 
 describe("coding-agent bucket plans", () => {
 	// Swept from the table itself, so a bucket added later is covered without a
@@ -51,5 +51,52 @@ describe("coding-agent bucket plans", () => {
 	it("runs every bucket serially, which is the isolation a global-state suite needs", () => {
 		const concurrent = buckets.filter(([, plan]) => plan.parallel !== 1);
 		expect(concurrent.map(([name]) => name)).toEqual([]);
+	});
+});
+
+/**
+ * How many chunk processes CI runs side by side. A global-state suite needs nothing
+ * beside it, so any mode that reaches the singleton bucket runs its chunks one at a
+ * time; a wider bucket multiplies the job's peak RSS by its width, so the width stays
+ * within the 4-vCPU runner. Every mode is swept from the runner's own mode table, so a
+ * mode added later that runs the singleton bucket inside a wider fan-out turns this red.
+ *
+ * Not caught: a cross-process collision between two chunks of one bucket (a shared
+ * port or file name). Only a run shows that, as a failure in one of the two chunks.
+ */
+describe("chunk processes CI runs at once", () => {
+	const modes = Object.keys(validModes) as Mode[];
+
+	it("runs the singleton bucket one chunk at a time", () => {
+		expect(codingAgentBucketPlans.singleton.ciChunksAtOnce).toBe(1);
+		expect(chunksAtOnce("coding-agent-singleton", true, 100)).toBe(1);
+	});
+
+	it("bounds every bucket's width to the runner's cores", () => {
+		const outOfRange = Object.entries(codingAgentBucketPlans).filter(
+			([, plan]) => !Number.isInteger(plan.ciChunksAtOnce) || plan.ciChunksAtOnce < 1 || plan.ciChunksAtOnce > 4,
+		);
+		expect(outOfRange.map(([name]) => name)).toEqual([]);
+	});
+
+	it("runs each single-bucket mode at its plan's width and every other mode one chunk at a time", () => {
+		const widths = Object.fromEntries(modes.map(mode => [mode, chunksAtOnce(mode, true, 100)]));
+		expect(widths).toEqual(
+			Object.fromEntries(
+				modes.map(mode => {
+					const bucket = mode.startsWith("coding-agent-") ? mode.slice("coding-agent-".length) : "";
+					const plan = Object.hasOwn(codingAgentBucketPlans, bucket)
+						? codingAgentBucketPlans[bucket as keyof typeof codingAgentBucketPlans]
+						: undefined;
+					return [mode, plan?.ciChunksAtOnce ?? 1];
+				}),
+			),
+		);
+		// `coding-agent-heavy` runs the singleton bucket among the others.
+		expect(widths["coding-agent-heavy"]).toBe(1);
+	});
+
+	it("never runs more chunk processes than there are chunks", () => {
+		expect(modes.filter(mode => chunksAtOnce(mode, true, 1) !== 1)).toEqual([]);
 	});
 });

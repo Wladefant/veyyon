@@ -36,7 +36,7 @@ The tool is `concurrency = "exclusive"` for a session, so calls do not overlap.
 
 ## Kernel lifecycle
 
-Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to a `veyyon-python-runner` cache under the OS temp directory once per script hash, and reused by subsequent spawns.
+Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import) and cached as `runner-<hash>.py` in `cache/python-runner` under the veyyon config root, or under `$XDG_CACHE_HOME/veyyon` when that is set. Every spawn checks the file is present and writes it again when it was removed. The script is written to a sibling file and renamed into place, so a second process never runs a partly written runner.
 
 Importing the SDK or session class does not load evaluator implementations. The first `$` Python command
 loads its executor through the shell domain manifest. Constructing `eval` and reading its metadata do
@@ -184,7 +184,7 @@ kv.delete("cursor_handle")
 
 `kv.get(name, default=None)` accepts a Python default value. JavaScript returns `undefined` for a missing key. Keys contain 1–256 characters without `/`, `\`, or NUL. One encoded value is limited to 256 KiB and the store is limited to 4 MiB. Concurrent JavaScript and Python writes preserve updates to different keys.
 
-`defs()` returns up to 200 sorted names defined by user cells with a short value shape. Prelude and runtime names are omitted. Use it to check retained kernel state before redefining a helper.
+`defs()` returns up to 200 sorted names defined by user cells with a short value shape: `function <name>` for a callable, the type and length for a list, tuple, dict or set (`list[1000000]`), and the type and at most 60 characters of the repr for any other value. Prelude and runtime names are omitted. Use it to check retained kernel state before redefining a helper.
 
 ## Execution flow and cancellation/timeout
 
@@ -217,7 +217,7 @@ From runner frames:
 
 - `stdout` / `stderr` → plain text chunks
 - `display` / `result` → rich display handling (MIME bundle)
-- `error` → traceback text
+- `error` → traceback text, from the first frame of cell code inward; the runner frames that dispatched the cell are omitted, and a cell that does not compile shows its `SyntaxError` at its line in `<cell>` with no frames
 - `application/x-veyyon-status` MIME inside `display` → structured status events
 
 Display MIME precedence:
@@ -260,6 +260,7 @@ The bash execution block (`bash-execution.ts`) shares all three of those limits,
 - **Python backend not available**: Check `eval.py`, `VEYYON_PY`, and that `python`/`python3` is on PATH. If preflight fails and `eval.js` is enabled, use a `js` cell.
 - **No Python on PATH**: Install a system Python 3.8+ or place a venv at `~/.veyyon/python-env`. `veyyon setup python --check` reports the resolved interpreter.
 - **Execution hangs then times out**: Increase tool `timeout` (max 3600s) if workload is legitimate. For stuck native code, cancellation triggers `SIGINT` first then escalates; the session restarts on the next request.
+- **`Python kernel init failed: Python kernel exited with code N`**: The interpreter exited before it answered the init request. The interpreter's stderr is in the log as `Python runner stderr`.
 - **stdin/input prompts in Python code**: `input()` is not supported; pass data programmatically.
 - **Working directory errors**: Tool validates `cwd` exists and is a directory before execution.
 

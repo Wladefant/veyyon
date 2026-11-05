@@ -89,7 +89,7 @@ The provider-first projection of this map is documented in [Providers](./provide
 | `MINIMAX_API_KEY`               | MiniMax auth                                     | Using `minimax` provider                                       |                                                                                                     |
 | `MINIMAX_CODE_API_KEY`          | MiniMax Code auth                                | Using `minimax-code` provider                                  |                                                                                                     |
 | `MINIMAX_CODE_CN_API_KEY`       | MiniMax Code CN auth                             | Using `minimax-code-cn` provider                               |                                                                                                     |
-| `OPENCODE_API_KEY`              | OpenCode auth                                    | Using `opencode-go` / `opencode-zen` models                    |                                                                                                     |
+| `OPENCODE_API_KEY`              | OpenCode auth                                    | Using `opencode-go` / `opencode-zen` models                    | For `opencode-go`, a stored `/login opencode-go` credential takes precedence                        |
 | `QIANFAN_API_KEY`               | Qianfan auth                                     | Using `qianfan` provider                                       |                                                                                                     |
 | `QWEN_OAUTH_TOKEN`              | Qwen Portal auth                                 | Using `qwen-portal` with OAuth token                           | Takes precedence over `QWEN_PORTAL_API_KEY`                                                         |
 | `QWEN_PORTAL_API_KEY`           | Qwen Portal auth                                 | Using `qwen-portal` with API key                               | Fallback after `QWEN_OAUTH_TOKEN`                                                                   |
@@ -414,11 +414,11 @@ Extra conditional behavior:
 
 ## 6) Storage and config root paths
 
-These are consumed via `@veyyon/utils/dirs` and affect where coding-agent stores data.
+These are consumed via `@veyyon/utils/config-root` and `@veyyon/utils/dirs` and affect where coding-agent stores data.
 
 | Variable              | Default / behavior                                                            |
 | --------------------- | ----------------------------------------------------------------------------- |
-| `VEYYON_CONFIG_DIR`   | Config root dirname under home (default `.veyyon`). A name, not a path: an absolute value is rejected at startup. |
+| `VEYYON_CONFIG_DIR`   | Path of the config root (default `~/.veyyon`). A relative value resolves against the home directory. A value that resolves inside the home directory is rejected at startup. |
 | `VEYYON_PROFILE`      | Activate a named profile (relocates the profile base to `~/.veyyon/profiles/<name>`)|
 | `VEYYON_WORKTREE_DIR` | Base directory for task-isolation worktrees (default `~/.veyyon/profiles/<name>/wt`)|
 | `VEYYON_GITHUB_CACHE_DB` | Path override for the GitHub tool cache database|

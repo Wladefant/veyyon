@@ -9,6 +9,7 @@ import {
 import type { Api, AssistantMessage, Context, Model } from "@veyyon/ai/types";
 import type { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 let inheritedOverrides: ReadonlyMap<Api, LazyProviderModule<Api>> = new Map();
 
@@ -45,14 +46,7 @@ function createAssistantMessage(
 		api: "bedrock-converse-stream",
 		provider: "amazon-bedrock",
 		model: "mock-bedrock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason,
 		errorMessage,
 		timestamp: Date.now(),

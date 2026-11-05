@@ -15,6 +15,7 @@
  * same nothing they had before.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionKind, ExtensionRow } from "@veyyon/coding-agent/extensibility/extension-state/types";
 import { InspectorPanel } from "@veyyon/coding-agent/modes/terminal/components/extensions/inspector-panel";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -44,7 +45,7 @@ function panelText(ext: ExtensionRow): string {
 	panel.setExtension(ext);
 	return panel
 		.render(WIDTH)
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""))
+		.map(line => stripVTControlCharacters(line))
 		.join(" ")
 		.replace(/\s+/g, " ")
 		.trim();

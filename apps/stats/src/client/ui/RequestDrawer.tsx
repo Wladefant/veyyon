@@ -1,11 +1,11 @@
+import { JsonBlock, StatusPill } from "@veyyon/tool-render";
+import { toError } from "@veyyon/utils/type-guards";
 import { Clock, Coins, Gauge, Hash, Star, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getRequestDetails } from "../api";
 import { formatCost, formatDurationMs, formatInteger } from "../data/formatters";
 import type { RequestDetails } from "../types";
-import { JsonBlock } from "./JsonBlock";
 import { Skeleton } from "./Skeleton";
-import { StatusPill } from "./StatusPill";
 
 export interface RequestDrawerProps {
 	id: number | null;
@@ -40,7 +40,7 @@ export function RequestDrawer({ id, onClose }: RequestDrawerProps) {
 			})
 			.catch(err => {
 				if (controller.signal.aborted) return;
-				setError(err instanceof Error ? err : new Error(String(err)));
+				setError(toError(err));
 			})
 			.finally(() => {
 				if (!controller.signal.aborted) setLoading(false);

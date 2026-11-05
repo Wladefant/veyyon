@@ -1,17 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import * as http2 from "node:http2";
 import { create, toBinary } from "@bufbuild/protobuf";
-import { streamCursor } from "@veyyon/ai/providers/cursor";
-import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@veyyon/ai/types";
-import { buildModel } from "@veyyon/catalog/build";
+import { frameConnectMessage } from "@veyyon/ai/utils/connect-frames";
 import {
 	AgentServerMessageSchema,
 	ConversationStateStructureSchema,
 	ConversationTokenDetailsSchema,
 	InteractionUpdateSchema,
 	TokenDeltaUpdateSchema,
-	TurnEndedUpdateSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { type CursorH2Server, replayCursorScript, runCursorTurn, turnEndedFrame } from "./helpers/cursor-h2-server";
 
 // WHY THIS SUITE EXISTS
 // ---------------------
@@ -28,13 +25,6 @@ import {
 // happened. `used_tokens` is the whole conversation measured with this turn's
 // reply already in it, so the prompt side is the gauge minus the completion.
 
-function frame(payload: Uint8Array): Buffer {
-	const header = Buffer.alloc(5);
-	header.writeUInt8(0, 0);
-	header.writeUInt32BE(payload.length, 1);
-	return Buffer.concat([header, Buffer.from(payload)]);
-}
-
 function tokenDeltaFrame(tokens: number): Buffer {
 	const message = create(AgentServerMessageSchema, {
 		message: {
@@ -44,7 +34,7 @@ function tokenDeltaFrame(tokens: number): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 function checkpointFrame(usedTokens: number, maxTokens: number): Buffer {
@@ -56,83 +46,10 @@ function checkpointFrame(usedTokens: number, maxTokens: number): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
-function turnEndedFrame(): Buffer {
-	const message = create(AgentServerMessageSchema, {
-		message: {
-			case: "interactionUpdate",
-			value: create(InteractionUpdateSchema, {
-				message: { case: "turnEnded", value: create(TurnEndedUpdateSchema, {}) },
-			}),
-		},
-	});
-	return frame(toBinary(AgentServerMessageSchema, message));
-}
-
-interface FakeCursorServer {
-	baseUrl: string;
-	close: () => Promise<void>;
-}
-
-/** A localhost h2c server that replays a fixed frame script and then ends. */
-function startH2Server(script: Buffer[]): Promise<FakeCursorServer> {
-	const server = http2.createServer();
-	server.on("stream", (stream: http2.ServerHttp2Stream) => {
-		stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
-		for (const chunk of script) stream.write(chunk);
-		stream.end();
-	});
-	const { promise, resolve } = Promise.withResolvers<FakeCursorServer>();
-	server.listen(0, "127.0.0.1", () => {
-		const address = server.address();
-		const port = typeof address === "object" && address ? address.port : 0;
-		const closed = () => {
-			const done = Promise.withResolvers<void>();
-			server.close(() => done.resolve());
-			return done.promise;
-		};
-		resolve({ baseUrl: `http://127.0.0.1:${port}`, close: closed });
-	});
-	return promise;
-}
-
-const cursorModel = (baseUrl: string): Model<"cursor-agent"> =>
-	buildModel({
-		id: "cursor-composer-2.5",
-		name: "Cursor Composer 2.5",
-		api: "cursor-agent",
-		provider: "cursor",
-		baseUrl,
-		reasoning: false,
-		input: ["text"],
-		// Real rates: a Cursor row backed by a bundled reference inherits them.
-		cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 200_000,
-		maxTokens: 64_000,
-	});
-
-const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] };
-
-interface TurnResult {
-	events: AssistantMessageEvent[];
-	message: AssistantMessage;
-}
-
-async function runTurn(baseUrl: string): Promise<TurnResult> {
-	const events: AssistantMessageEvent[] = [];
-	let message: AssistantMessage | undefined;
-	for await (const event of streamCursor(cursorModel(baseUrl), context, { apiKey: "test-token" })) {
-		events.push(event);
-		if (event.type === "done") message = event.message;
-		if (event.type === "error") message = event.error;
-	}
-	if (!message) throw new Error("stream produced no terminal event");
-	return { events, message };
-}
-
-let srv: FakeCursorServer | undefined;
+let srv: CursorH2Server | undefined;
 
 beforeEach(() => {
 	srv = undefined;
@@ -144,18 +61,18 @@ afterEach(async () => {
 
 describe("cursor turn completion", () => {
 	it("reports a turn the server never ended as an incomplete stream, not a clean stop", async () => {
-		srv = await startH2Server([tokenDeltaFrame(120)]);
+		srv = await replayCursorScript([tokenDeltaFrame(120)]);
 
-		const { message } = await runTurn(srv.baseUrl);
+		const { message } = await runCursorTurn(srv.baseUrl);
 
 		expect(message.stopReason).toBe("error");
 		expect(message.errorMessage).toContain("turn_ended");
 	});
 
 	it("reports a turn the server ended as a clean stop", async () => {
-		srv = await startH2Server([tokenDeltaFrame(120), turnEndedFrame()]);
+		srv = await replayCursorScript([tokenDeltaFrame(120), turnEndedFrame()]);
 
-		const { message } = await runTurn(srv.baseUrl);
+		const { message } = await runCursorTurn(srv.baseUrl);
 
 		expect(message.stopReason).toBe("stop");
 	});
@@ -163,14 +80,14 @@ describe("cursor turn completion", () => {
 	it("bills the completion once and reports the conversation gauge as the total", async () => {
 		// The gauge lands before the last deltas on purpose: whichever order the
 		// server uses, the numbers must still describe one conversation.
-		srv = await startH2Server([
+		srv = await replayCursorScript([
 			tokenDeltaFrame(100),
 			checkpointFrame(50_000, 256_000),
 			tokenDeltaFrame(400),
 			turnEndedFrame(),
 		]);
 
-		const { message } = await runTurn(srv.baseUrl);
+		const { message } = await runCursorTurn(srv.baseUrl);
 
 		expect(message.usage.output).toBe(500);
 		expect(message.usage.input).toBe(49_500);
@@ -181,9 +98,9 @@ describe("cursor turn completion", () => {
 	});
 
 	it("still reports what an unfinished turn spent", async () => {
-		srv = await startH2Server([tokenDeltaFrame(2_000), checkpointFrame(50_000, 256_000)]);
+		srv = await replayCursorScript([tokenDeltaFrame(2_000), checkpointFrame(50_000, 256_000)]);
 
-		const { message } = await runTurn(srv.baseUrl);
+		const { message } = await runCursorTurn(srv.baseUrl);
 
 		expect(message.stopReason).toBe("error");
 		expect(message.usage.output).toBe(2_000);

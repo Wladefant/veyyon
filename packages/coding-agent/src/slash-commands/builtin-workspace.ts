@@ -8,10 +8,11 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { Settings } from "../config/settings";
 import { settings } from "../config/settings-instance";
 import { formatDurationCoarse } from "../session/account-format";
 import type { AgentSession } from "../session/agent-session";
-import { resolveToCwd } from "../tools/core/path-utils";
+import { normalizePathLikeInput, resolveToCwd } from "../tools/core/path-utils";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import {
@@ -70,6 +71,36 @@ export async function handleUsageResetCommand(
 	await output(describeRedeemOutcome(outcome, label));
 }
 
+/**
+ * Apply one `/browser` invocation, shared by the text and TUI surfaces so both accept exactly the
+ * same words and report the same sentence. The mode is saved before the running browser restarts,
+ * so a failed restart reports the saved mode with the failure.
+ */
+export async function applyBrowserCommand(
+	rawArgs: string,
+	from: Settings,
+	session: AgentSession,
+): Promise<{ ok: boolean; message: string }> {
+	if (!from.get("browser.enabled")) return { ok: false, message: "Browser tool is disabled (enable in settings)." };
+	const arg = rawArgs.trim().toLowerCase();
+	let headless: boolean;
+	if (!arg) headless = !from.get("browser.headless");
+	else if (arg === "headless" || arg === "hidden") headless = true;
+	else if (arg === "visible" || arg === "show" || arg === "headful") headless = false;
+	else return { ok: false, message: "Usage: /browser [headless|visible]" };
+	from.set("browser.headless", headless);
+	const mode = headless ? "headless" : "visible";
+	const tool = session.getToolByName("browser");
+	if (tool && "restartForModeChange" in tool) {
+		try {
+			await (tool as { restartForModeChange: () => Promise<void> }).restartForModeChange();
+		} catch (err) {
+			return { ok: false, message: `Browser mode set to ${mode}, but restart failed: ${errorMessage(err)}` };
+		}
+	}
+	return { ok: true, message: `Browser mode: ${mode}` };
+}
+
 /** What the workspace builtins DO, keyed by the name each is declared under. */
 export const WORKSPACE_HANDLERS = {
 	browser: {
@@ -81,65 +112,16 @@ export const WORKSPACE_HANDLERS = {
 				: "Toggle browser headless/visible · visible";
 		},
 		handle: async (command, runtime) => {
-			const arg = command.args.toLowerCase();
-			const enabled = runtime.settings.get("browser.enabled");
-			if (!enabled) return usage("Browser tool is disabled (enable in settings).", runtime);
-			const current = runtime.settings.get("browser.headless");
-			let next = current;
-			if (!arg) next = !current;
-			else if (arg === "headless" || arg === "hidden") next = true;
-			else if (arg === "visible" || arg === "show" || arg === "headful") next = false;
-			else return usage("Usage: /browser [headless|visible]", runtime);
-			runtime.settings.set("browser.headless", next);
-			const tool = runtime.session.getToolByName("browser");
-			if (tool && "restartForModeChange" in tool) {
-				try {
-					await (tool as { restartForModeChange: () => Promise<void> }).restartForModeChange();
-				} catch (err) {
-					// Setting was already mutated; surface the restart failure so the
-					// user knows the browser is in an inconsistent state.
-					await runtime.output(
-						`Browser mode set to ${next ? "headless" : "visible"}, but restart failed: ${errorMessage(err)}`,
-					);
-					return commandConsumed();
-				}
-			}
-			await runtime.output(`Browser mode: ${next ? "headless" : "visible"}`);
+			const result = await applyBrowserCommand(command.args, runtime.settings, runtime.session);
+			if (!result.ok) return usage(result.message, runtime);
+			await runtime.output(result.message);
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
-			const arg = command.args.toLowerCase();
-			const current = settings.get("browser.headless");
-			let next = current;
-			if (!settings.get("browser.enabled")) {
-				runtime.ctx.showWarning("Browser tool is disabled (enable in settings)");
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			if (!arg) {
-				next = !current;
-			} else if (arg === "headless" || arg === "hidden") {
-				next = true;
-			} else if (arg === "visible" || arg === "show" || arg === "headful") {
-				next = false;
-			} else {
-				runtime.ctx.showStatus("Usage: /browser [headless|visible]");
-				runtime.ctx.editor.setText("");
-				return;
-			}
-			settings.set("browser.headless", next);
-			const tool = runtime.ctx.session.getToolByName("browser");
-			if (tool && "restartForModeChange" in tool) {
-				try {
-					await (tool as { restartForModeChange: () => Promise<void> }).restartForModeChange();
-				} catch (error) {
-					runtime.ctx.showWarning(`Failed to restart browser: ${errorMessage(error)}`);
-					runtime.ctx.editor.setText("");
-					return;
-				}
-			}
-			runtime.ctx.showStatus(`Browser mode: ${next ? "headless" : "visible"}`);
 			runtime.ctx.editor.setText("");
+			const result = await applyBrowserCommand(command.args, settings, runtime.ctx.session);
+			if (result.ok) runtime.ctx.showStatus(result.message);
+			else runtime.ctx.showWarning(result.message);
 		},
 	},
 	jobs: {
@@ -253,18 +235,20 @@ export const WORKSPACE_HANDLERS = {
 	cwd: {
 		handle: async (command, runtime) => {
 			const current = runtime.sessionManager.getCwd();
-			if (!command.args) {
+			// The path is read the way `/move` reads it: trimmed, outer double quotes stripped.
+			const target = normalizePathLikeInput(command.args);
+			if (!target) {
 				await runtime.output(
 					`${current}\n(session-scoped and ephemeral. For a per-profile default working directory, set session.workdir in /settings › Interaction › Profile on this profile, or run: veyyon config set session.workdir <path>.)`,
 				);
 				return commandConsumed();
 			}
 			if (runtime.session.isStreaming) return usage("Cannot change cwd while streaming.", runtime);
-			const resolvedPath = resolveToCwd(command.args, current);
+			const resolvedPath = resolveToCwd(target, current);
 			// A relative arg resolves against the SESSION cwd, not the OS cwd or the
 			// project root, so name that base in the failure — otherwise `/cwd tmp`
 			// from a session rooted elsewhere reads as "tmp doesn't exist" with no clue why.
-			const relativeHint = path.isAbsolute(command.args.trim())
+			const relativeHint = path.isAbsolute(target)
 				? ""
 				: ` (relative paths resolve against the current session cwd ${current}; pass an absolute path to avoid this)`;
 			try {

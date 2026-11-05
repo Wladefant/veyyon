@@ -36,12 +36,6 @@ const ctx: Context = {
 	tools: [echoTool],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function kimiOpencodeGoModel(): Model<"openai-completions"> {
 	const base = getBundledModel("openai", "gpt-4o-mini");
 	return buildModel({
@@ -78,7 +72,7 @@ function captureBody(
 	streamOpenAICompletions(model, ctx, {
 		...opts,
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	return promise;

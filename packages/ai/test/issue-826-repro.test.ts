@@ -34,12 +34,6 @@ const baseContext: Context = {
 	tools: [bashTool],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function captureParams(
 	model: Model<"anthropic-messages">,
 ): Promise<{ tools?: Array<{ name: string; strict?: unknown }> }> {
@@ -47,7 +41,7 @@ function captureParams(
 	void streamAnthropic(model, baseContext, {
 		apiKey: "sk-ant-api-test",
 		isOAuth: false,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => {
 			resolve(payload as { tools?: Array<{ name: string; strict?: unknown }> });
 			return undefined;
@@ -91,7 +85,7 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 		void streamAnthropic(adaptiveModel, baseContext, {
 			apiKey: "sk-ant-api-test",
 			isOAuth: false,
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			thinkingEnabled: true,
 			onPayload: payload => {
 				resolve(payload as { thinking?: { type?: string } });
@@ -117,7 +111,7 @@ describe("issue #826: Anthropic strict-tools opt-out for Vertex-style proxies", 
 		void streamAnthropic(adaptiveModel, baseContext, {
 			apiKey: "sk-ant-api-test",
 			isOAuth: false,
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			thinkingEnabled: true,
 			onPayload: payload => {
 				resolve(payload as { thinking?: { type?: string; budget_tokens?: number } });

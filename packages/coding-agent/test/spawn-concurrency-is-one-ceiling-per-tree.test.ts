@@ -44,7 +44,7 @@ import {
 
 afterEach(async () => {
 	resetTreeSpawnSemaphoresForTests();
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	await removeCgroupRoots();
 });
 

@@ -80,7 +80,7 @@ export const MAGIC_KEYWORD_NOTICE_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** Custom-message type of the hidden companion carrying vision descriptions of image
- *  attachments sent to a text-only model (see `#buildImageDescriptionNotice`). */
+ *  attachments sent to a text-only model (see `ImageAttachments.textWithImages`). */
 export const IMAGE_ATTACHMENT_DESCRIPTION_TYPE = "image-attachment-description";
 
 /**

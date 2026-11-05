@@ -1,21 +1,22 @@
 /**
- * Arguments to `/mcp` subcommands are parsed through a shared grammar while
- * preserving surface-specific policies (such as trailing scope-word differences
- * between the interactive terminal and non-interactive CLI/ACP handlers).
+ * Arguments to `/mcp` subcommands are parsed through one shared grammar, with a
+ * single surface-specific rule: a trailing scope word in a search.
  *
  * THE DEFECT CLASS: Argument parsing across terminal and CLI previously drifted
- * because each surface maintained its own private parser copy. The terminal
- * parser and CLI parser differed in trailing scope-word handling during search:
- * the terminal controller rejects trailing `project` and `user` words as removed
- * options, whereas the CLI / ACP handler treats trailing unflagged words as
- * search keywords.
+ * because each surface maintained its own private parser copy, and then because
+ * the shared parser kept a per-surface vocabulary: the terminal answered a bare
+ * `scope` or `transport` (or an upper-case `PROJECT`) on `/mcp add` and
+ * `/mcp remove` with `Unknown argument`, while the CLI / ACP handler named the
+ * word that replaced it.
  *
  * THE INVARIANT:
  *   1. Argument tails are parsed without interpreting their contents as another command.
- *   2. Trailing plain scope words (`project`, `user`) are refused on the terminal
- *      surface and preserved as search terms on the CLI surface.
+ *   2. Trailing plain scope words (`scope`, `project`, `user`, any case) are refused on the
+ *      terminal search, where a picked result is added, and are search terms on the CLI
+ *      surface, which only lists results.
  *   3. Removed dashed options are refused with identical descriptive messages on both surfaces.
- *   4. Bare removed options retain each surface's vocabulary and case sensitivity.
+ *   4. A bare removed option on `/mcp add` and `/mcp remove`, in any case, gets the same
+ *      refusal on both surfaces.
  *
  * Provider requests are intercepted; network transport and interactive wizard completion
  * are outside this suite.
@@ -143,21 +144,28 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 		it("rejects trailing scope words on terminal surface", async () => {
 			const harness = createTerminalHarness();
 
-			await harness.controller.handle("/mcp smithery-search redis project");
+			await harness.controller.handle("smithery-search redis project");
 			expect(harness.errors).toHaveLength(1);
 			expect(harness.errors[0]).toContain("project is gone:");
 			expect(harness.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
 			harness.errors.length = 0;
-			await harness.controller.handle("/mcp smithery-search redis user");
+			await harness.controller.handle("smithery-search redis user");
 			expect(harness.errors).toHaveLength(1);
 			expect(harness.errors[0]).toContain("user is gone:");
 			expect(harness.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
 			harness.errors.length = 0;
-			await harness.controller.handle("/mcp smithery-search redis project 50");
+			await harness.controller.handle("smithery-search redis project 50");
 			expect(harness.errors).toHaveLength(1);
 			expect(harness.errors[0]).toContain("project is gone:");
+
+			// The scope words are read from the map, in any case, not from a list of two.
+			harness.errors.length = 0;
+			await harness.controller.handle("smithery-search redis SCOPE");
+			expect(harness.errors).toHaveLength(1);
+			expect(harness.errors[0]).toContain("SCOPE is gone:");
+			expect(harness.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 		});
 
 		it("keeps trailing scope words as keyword text on CLI surface", async () => {
@@ -179,7 +187,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 			const searches = recordSearches();
 
 			const harness = createTerminalHarness();
-			await harness.controller.handle('/mcp smithery-search "redis project"');
+			await harness.controller.handle('smithery-search "redis project"');
 
 			expect(harness.errors).toHaveLength(0);
 			expect(searches.map(search => search.keyword)).toEqual(["redis project"]);
@@ -189,7 +197,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 	describe("search argument validation parity", () => {
 		it("refuses empty keyword on both surfaces", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp smithery-search");
+			await term.controller.handle("smithery-search");
 			expect(term.errors[0]).toBe(`Keyword required.\n${MCP_SEARCH_USAGE}`);
 
 			const cli = createCliHarness();
@@ -199,11 +207,11 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses out-of-range numeric limits on both surfaces", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp smithery-search redis 0");
+			await term.controller.handle("smithery-search redis 0");
 			expect(term.errors[0]).toBe(`Invalid limit: 0. Use an integer between 1 and 100.\n${MCP_SEARCH_USAGE}`);
 
 			term.errors.length = 0;
-			await term.controller.handle("/mcp smithery-search redis 101");
+			await term.controller.handle("smithery-search redis 101");
 			expect(term.errors[0]).toBe(`Invalid limit: 101. Use an integer between 1 and 100.\n${MCP_SEARCH_USAGE}`);
 
 			const cli = createCliHarness();
@@ -213,11 +221,11 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses duplicate options on both surfaces", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp smithery-search redis semantic semantic");
+			await term.controller.handle("smithery-search redis semantic semantic");
 			expect(term.errors[0]).toBe(`\`semantic\` given twice.\n${MCP_SEARCH_USAGE}`);
 
 			term.errors.length = 0;
-			await term.controller.handle("/mcp smithery-search redis 10 20");
+			await term.controller.handle("smithery-search redis 10 20");
 			expect(term.errors[0]).toBe(`\`limit\` given twice.\n${MCP_SEARCH_USAGE}`);
 
 			const cli = createCliHarness();
@@ -232,7 +240,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 		it("refuses dashed options on both surfaces", async () => {
 			for (const key of Object.keys(MCP_SEARCH_REMOVED_OPTIONS)) {
 				const term = createTerminalHarness();
-				await term.controller.handle(`/mcp smithery-search redis --${key}`);
+				await term.controller.handle(`smithery-search redis --${key}`);
 				expect(term.errors[0]).toContain(`--${key} is gone:`);
 
 				const cli = createCliHarness();
@@ -255,31 +263,28 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 		expect(cli.outputs).toEqual([expected]);
 	});
 
-	for (const [verb, options, usage] of [
-		["add", MCP_ADD_REMOVED_OPTIONS, MCP_ADD_USAGE],
-		["remove", MCP_REMOVE_REMOVED_OPTIONS, MCP_REMOVE_USAGE],
+	for (const [verb, options] of [
+		["add", MCP_ADD_REMOVED_OPTIONS],
+		["remove", MCP_REMOVE_REMOVED_OPTIONS],
 	] as const) {
 		const words = Object.keys(options)
 			.filter(word => word !== "" && word !== "url" && word !== "token")
 			.flatMap(word => [word, word.toUpperCase()]);
-		it.each(words)(`${verb} preserves surface-specific bare option %s`, async word => {
-			const term = createTerminalHarness();
-			await term.controller.handle(`/mcp ${verb} server ${word}`);
-			if (word === "project" || word === "user") {
-				expect(term.errors[0]).toContain("is gone:");
-			} else {
-				expect(term.errors).toEqual([`Unknown argument: ${word}\n${usage}`]);
-			}
+		it.each(words)(`${verb} gives a bare removed option %s the same refusal on both surfaces`, async word => {
 			const cli = createCliHarness();
 			await cli.run(`/mcp ${verb} server ${word}`);
-			expect(cli.outputs[0]).toContain("is gone:");
+			expect(cli.outputs[0]).toContain(`${word} is gone:`);
+
+			const term = createTerminalHarness();
+			await term.controller.handle(`${verb} server ${word}`);
+			expect(term.errors).toEqual([cli.outputs[0]]);
 		});
 	}
 
 	describe("add and remove argument validation parity", () => {
 		it("refuses removed scope options on /mcp add", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp add my-server project");
+			await term.controller.handle("add my-server project");
 			expect(term.errors[0]).toContain("project is gone:");
 			expect(term.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
@@ -291,7 +296,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses removed scope options on /mcp remove", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp remove my-server project");
+			await term.controller.handle("remove my-server project");
 			expect(term.errors[0]).toContain("project is gone:");
 			expect(term.errors[0]).toContain(MCP_SCOPE_REMOVED_REPLACEMENT);
 
@@ -303,7 +308,7 @@ describe("an MCP command parses arguments across terminal and CLI", () => {
 
 		it("refuses unknown extra arguments on /mcp remove", async () => {
 			const term = createTerminalHarness();
-			await term.controller.handle("/mcp remove my-server extra");
+			await term.controller.handle("remove my-server extra");
 			expect(term.errors[0]).toBe(`Unknown argument: extra\n${MCP_REMOVE_USAGE}`);
 
 			const cli = createCliHarness();

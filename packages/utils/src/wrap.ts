@@ -7,6 +7,7 @@
  */
 
 import { visibleWidth as nativeVisibleWidth, wrapTextWithAnsi as nativeWrapTextWithAnsi } from "@veyyon/natives";
+import { sgrEnd } from "./ansi";
 import { collapseWhitespace } from "./collapse-whitespace";
 import { DEFAULT_TAB_WIDTH, replaceTabs } from "./tab-width";
 
@@ -131,17 +132,6 @@ function hungRow(text: string, indent: number, contentAt: number): string {
 		i = end - 1;
 	}
 	return row + text.slice(contentAt);
-}
-
-/** The index of the `m` closing the SGR sequence that starts at `start`, or -1 when none does. */
-function sgrEnd(text: string, start: number): number {
-	if (text.charCodeAt(start + 1) !== 0x5b) return -1;
-	let end = start + 2;
-	for (; end < text.length; end++) {
-		const param = text.charCodeAt(end);
-		if (param < 0x30 || param > 0x3b) break;
-	}
-	return text.charCodeAt(end) === 0x6d ? end : -1;
 }
 
 /**

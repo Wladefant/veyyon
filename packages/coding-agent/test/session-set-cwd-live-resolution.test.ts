@@ -1,23 +1,13 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { resolveToCwd } from "@veyyon/coding-agent/tools/core/path-utils";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { useTempDirs } from "./helpers/temp-dirs";
 
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
-
-afterEach(async () => {
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
-});
+const makeTempDir = useTempDirs();
 
 function toolSessionFromManager(manager: SessionManager): ToolSession {
 	return {

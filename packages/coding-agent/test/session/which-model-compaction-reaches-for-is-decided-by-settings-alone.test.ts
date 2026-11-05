@@ -32,12 +32,12 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, Model } from "@veyyon/ai";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { formatModelString } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	compactionModelCandidates,
 	configuredCompactionEfforts,
 	configuredModelTarget,
-	modelKey,
 } from "@veyyon/coding-agent/session/agent-session-model-targets";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
 
@@ -78,13 +78,16 @@ describe("a model's identity", () => {
 		const fromAnthropic = model("anthropic", "claude-sonnet-4-5");
 		const fromBedrock = model("amazon-bedrock", "claude-sonnet-4-5");
 
-		expect(modelKey(fromAnthropic)).not.toBe(modelKey(fromBedrock));
+		expect(formatModelString(fromAnthropic)).not.toBe(formatModelString(fromBedrock));
 
 		settings.set("compaction.modelFallbackStrategy", "any-model");
 		const candidates = compactionModelCandidates(settings, fromAnthropic, [fromAnthropic, fromBedrock]);
 
 		// The dedup runs over both. Collapsing the key to the bare id drops one.
-		expect(candidates.map(modelKey)).toEqual(["anthropic/claude-sonnet-4-5", "amazon-bedrock/claude-sonnet-4-5"]);
+		expect(candidates.map(formatModelString)).toEqual([
+			"anthropic/claude-sonnet-4-5",
+			"amazon-bedrock/claude-sonnet-4-5",
+		]);
 	});
 
 	it("is stable enough to dedup a model named twice, keeping the position it first earned", () => {
@@ -93,7 +96,7 @@ describe("a model's identity", () => {
 		settings.set("compaction.model", "anthropic/claude-haiku-4-5, anthropic/claude-haiku-4-5");
 		settings.set("compaction.modelFallbackStrategy", "configured-only");
 
-		expect(compactionModelCandidates(settings, main, [main, other]).map(modelKey)).toEqual([
+		expect(compactionModelCandidates(settings, main, [main, other]).map(formatModelString)).toEqual([
 			"anthropic/claude-haiku-4-5",
 		]);
 	});
@@ -155,7 +158,7 @@ describe("the fallback strategy", () => {
 		settings.set("compaction.model", "anthropic/claude-haiku-4-5");
 		settings.set("compaction.modelFallbackStrategy", "configured-only");
 
-		expect(compactionModelCandidates(settings, main, [main, cheap, wide]).map(modelKey)).toEqual([
+		expect(compactionModelCandidates(settings, main, [main, cheap, wide]).map(formatModelString)).toEqual([
 			"anthropic/claude-haiku-4-5",
 		]);
 	});
@@ -165,7 +168,7 @@ describe("the fallback strategy", () => {
 		const wide = model("google", "gemini-3-pro", { contextWindow: 2_000_000 });
 		settings.set("compaction.modelFallbackStrategy", "configured-only");
 
-		expect(compactionModelCandidates(settings, main, [main, wide]).map(modelKey)).toEqual([
+		expect(compactionModelCandidates(settings, main, [main, wide]).map(formatModelString)).toEqual([
 			"anthropic/claude-sonnet-4-5",
 		]);
 	});
@@ -176,15 +179,15 @@ describe("the fallback strategy", () => {
 
 		const candidates = compactionModelCandidates(settings, main, [main, recommended]);
 
-		expect(candidates.map(modelKey)).not.toContain("google/gemini-3-flash");
-		expect(candidates.map(modelKey)[0]).toBe("anthropic/claude-sonnet-4-5");
+		expect(candidates.map(formatModelString)).not.toContain("google/gemini-3-flash");
+		expect(candidates.map(formatModelString)[0]).toBe("anthropic/claude-sonnet-4-5");
 	});
 
 	it("takes a same-provider recommendation under auto, ahead of the model itself", () => {
 		const main = model("anthropic", "claude-sonnet-4-5", { compactionModel: "anthropic/claude-haiku-4-5" });
 		const recommended = model("anthropic", "claude-haiku-4-5");
 
-		expect(compactionModelCandidates(settings, main, [main, recommended]).map(modelKey)[0]).toBe(
+		expect(compactionModelCandidates(settings, main, [main, recommended]).map(formatModelString)[0]).toBe(
 			"anthropic/claude-haiku-4-5",
 		);
 	});
@@ -194,7 +197,7 @@ describe("the fallback strategy", () => {
 		const recommended = model("google", "gemini-3-flash");
 		settings.set("compaction.modelFallbackStrategy", "any-model");
 
-		expect(compactionModelCandidates(settings, main, [main, recommended]).map(modelKey)[0]).toBe(
+		expect(compactionModelCandidates(settings, main, [main, recommended]).map(formatModelString)[0]).toBe(
 			"google/gemini-3-flash",
 		);
 	});
@@ -205,7 +208,7 @@ describe("the fallback strategy", () => {
 		const middle = model("openai", "gpt-5", { contextWindow: 400_000 });
 		settings.set("compaction.modelFallbackStrategy", "any-model");
 
-		const keys = compactionModelCandidates(settings, main, [main, middle, widest]).map(modelKey);
+		const keys = compactionModelCandidates(settings, main, [main, middle, widest]).map(formatModelString);
 
 		expect(keys[0]).toBe("anthropic/claude-sonnet-4-5");
 		expect(keys.slice(1)).toEqual(["google/gemini-3-pro", "openai/gpt-5"]);
@@ -216,7 +219,9 @@ describe("the fallback strategy", () => {
 		const wide = model("google", "gemini-3-pro", { contextWindow: 2_000_000 });
 		settings.set("compaction.modelFallbackStrategy", "any-model");
 
-		const keys = compactionModelCandidates(settings, main, [main, wide], m => m.provider !== "google").map(modelKey);
+		const keys = compactionModelCandidates(settings, main, [main, wide], m => m.provider !== "google").map(
+			formatModelString,
+		);
 
 		expect(keys).toEqual(["anthropic/claude-sonnet-4-5"]);
 	});

@@ -217,6 +217,24 @@ describe("ConfigFile with an unreadable base file", () => {
 	});
 
 	/**
+	 * A config with neither spelling on disk is `not-found` from both loaders, and raises nothing.
+	 *
+	 * The first-run state. `tryLoad` and `tryLoadAsync` read through different calls and classify the
+	 * failure in one shared branch, so each loader is asserted: an ENOENT classified as `error` would
+	 * show every fresh install a config fault for a file it never wrote.
+	 */
+	it("loads an absent config as not-found from tryLoad and tryLoadAsync alike", async () => {
+		const base = path.join(root, "settings.yml");
+
+		const fromSync = new ConfigFile<Configured>("settings", SCHEMA, base).tryLoad();
+		const fromAsync = await new ConfigFile<Configured>("settings", SCHEMA, base).tryLoadAsync();
+
+		expect(fromSync).toEqual({ status: "not-found" });
+		expect(fromAsync).toEqual({ status: "not-found" });
+		expect(faults).toEqual([]);
+	});
+
+	/**
 	 * A readable base wins over a present fallback, and raises nothing.
 	 *
 	 * The ordinary case, asserted so the unreadable branch cannot be satisfied by treating every base as

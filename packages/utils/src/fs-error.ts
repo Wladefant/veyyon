@@ -16,6 +16,8 @@
  * ```
  */
 
+import type { Stats } from "node:fs";
+
 export interface FsError extends Error {
 	code: string;
 	errno?: number;
@@ -92,4 +94,14 @@ export function isEnotempty(err: unknown): err is FsError {
 
 export function hasFsCode(err: unknown, code: string): err is FsError {
 	return isFsError(err) && err.code === code;
+}
+
+/** How a refusal describes an entry that is not a regular file, e.g. "a named pipe (FIFO)". */
+export function nonRegularKind(stats: Stats): string {
+	if (stats.isDirectory()) return "a directory";
+	if (stats.isSymbolicLink()) return "a symbolic link";
+	if (stats.isFIFO()) return "a named pipe (FIFO)";
+	if (stats.isSocket()) return "a socket";
+	if (stats.isBlockDevice() || stats.isCharacterDevice()) return "a device node";
+	return "not a regular file";
 }

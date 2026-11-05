@@ -22,7 +22,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -31,6 +31,7 @@ import type { IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 interface MockYieldDetails {
 	status: "success";
@@ -159,14 +160,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		return {
 			content: [toolCall],
 			stopReason: "toolUse",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		};
 	}
 
@@ -557,7 +551,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		// Residual edge exposed once interrupting advice is steered (not parked) into a
 		// resumed streaming run: a concern can land in the steer queue past the loop's
 		// final boundary poll and strand. The steer queue otherwise bypasses the
-		// suppression latch in #canAutoContinueForFollowUp, so the idle settle would
+		// suppression latch in QueuedMessages.canAutoContinueForFollowUp, so the idle settle would
 		// auto-resume the run the user stopped. The settle drain must instead reclaim the
 		// stranded advisor steer as visible advice. (A non-user abort is used purely as a
 		// deterministic settle trigger — it neither extracts advisor cards nor clears the
@@ -604,7 +598,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		// Reported bug: typing a message during a run (queued as a steer) then pressing
 		// enter again (empty-submit interrupt) recorded the advisor card but stranded the
 		// user message — nothing resumed the run. The preserved advisor card is the
-		// trailing `custom` message, which #canAutoContinueForFollowUp must look past.
+		// trailing `custom` message, which QueuedMessages.canAutoContinueForFollowUp must look past.
 		const { session, sessionManager, mock, streamStarted } = await createParkedSession([
 			{ content: ["resumed on the steer"] },
 		]);
@@ -680,8 +674,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 	});
 
 	it("stops an idle IRC wake after a terminal yield", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		let providerCalls = 0;
 		const mock = createMockModel({
 			handler: () => {

@@ -6,6 +6,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { AskTool } from "@veyyon/coding-agent/tools/agent/ask";
 import { ToolAbortError } from "@veyyon/coding-agent/tools/core/tool-errors";
+import { toolResultText } from "../helpers/tool-result-text";
 
 /**
  * AskTool fail-path contract. Ask is the one tool that must NEVER invent an
@@ -107,10 +108,7 @@ describe("AskTool fail paths", () => {
 		const context = createContext({ select: async () => "yes" });
 		const result = await tool.execute("a-empty", { questions: [] }, undefined, undefined, context);
 		expect(result.isError).toBe(true);
-		const text = result.content
-			.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-			.map(b => b.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toContain("no questions");
 	});
 
@@ -118,10 +116,7 @@ describe("AskTool fail paths", () => {
 		const tool = new AskTool(createSession());
 		const context = createContext({ select: async () => "yes" });
 		const result = await tool.execute("a-ok", CONFIRM, undefined, undefined, context);
-		const text = result.content
-			.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-			.map(b => b.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toBe("User selected: yes");
 	});
 });

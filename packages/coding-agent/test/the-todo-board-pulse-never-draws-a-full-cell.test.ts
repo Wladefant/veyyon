@@ -32,11 +32,8 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
 import { SPINNER_FRAMES, spinnerRampOneLevelShallower } from "@veyyon/coding-agent/theme/symbols";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
-import type { TodoItem, TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
-
-function phase(name: string, tasks: Array<[string, TodoItem["status"]]>): TodoPhase {
-	return { name, tasks: tasks.map(([content, status]) => ({ content, status })) };
-}
+import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
+import { todoPhase } from "./helpers/todo-phase";
 
 function options(overrides: Partial<TodoBoardOptions> = {}): TodoBoardOptions {
 	return {
@@ -56,7 +53,7 @@ function rowsOf(phases: readonly TodoPhase[], overrides: Partial<TodoBoardOption
 }
 
 const PLAN: TodoPhase[] = [
-	phase("Foundation", [
+	todoPhase("Foundation", [
 		["scaffold the crate", "completed"],
 		["wire the workspace", "in_progress"],
 		["port the credential store", "pending"],
@@ -139,7 +136,7 @@ describe("the todo board pulse never draws a full cell", () => {
 	});
 
 	it("emits no full cell at any frame of a closed task and holds it still", () => {
-		const closing: TodoPhase[] = [phase("Foundation", [["wire the workspace", "completed"]])];
+		const closing: TodoPhase[] = [todoPhase("Foundation", [["wire the workspace", "completed"]])];
 		const rendered = new Set<string>();
 		for (let frame = 0; frame < 20; frame++) {
 			for (const animate of [true, false]) {

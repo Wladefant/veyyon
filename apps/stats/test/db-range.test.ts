@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { getDashboardStats } from "@veyyon/stats/aggregator";
 import { initDb, insertMessageStats } from "@veyyon/stats/db";
 import type { MessageStats } from "@veyyon/stats/types";
@@ -19,20 +20,7 @@ function makeMessage(timestamp: number, entryId: string): MessageStats {
 		ttft: 100,
 		stopReason: "stop",
 		errorMessage: null,
-		usage: {
-			input: 1000,
-			output: 500,
-			cacheRead: 200,
-			cacheWrite: 0,
-			totalTokens: 1700,
-			cost: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				total: 0,
-			},
-		},
+		usage: { ...emptyUsage(), input: 1000, output: 500, cacheRead: 200, totalTokens: 1700 },
 		agentType: "main",
 	};
 }

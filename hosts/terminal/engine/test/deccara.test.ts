@@ -9,7 +9,9 @@ import {
 	planDeccaraFills,
 } from "@veyyon/utils/deccara";
 import { applyBackgroundToLine } from "@veyyon/utils/sgr";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
+import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Truecolor background open token used throughout the integration tests.
@@ -42,14 +44,6 @@ class BgPanelComponent implements Component {
 	}
 }
 
-async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// Was `nextTick` + a fixed `Bun.sleep` + flush, i.e. a bet on how long the
-	// throttled frame takes. That bet loses under a loaded sweep (see
-	// `hosts/terminal/engine/test/helpers/settle-frames.ts`), so the engine is asked
-	// instead, through its `renderPending` signal.
-	await settleFrames(term, tui);
-}
-
 // A non-multiplexer resize paints the viewport immediately (plain rows) and
 // defers the authoritative full paint — which is where DECCARA rectangle fills
 // are planned — until the drag has been quiet for the resize settle window
@@ -58,17 +52,7 @@ async function settleResize(term: VirtualTerminal, tui: TUI): Promise<void> {
 	// The window is a real wall-clock wait before the deferred full paint is even
 	// scheduled, so it is slept through; only the frame after it settles.
 	await Bun.sleep(160);
-	await settle(term, tui);
-}
-
-function captureWrites(term: VirtualTerminal): string[] {
-	const writes: string[] = [];
-	const realWrite = term.write.bind(term);
-	vi.spyOn(term, "write").mockImplementation((data: string) => {
-		writes.push(data);
-		realWrite(data);
-	});
-	return writes;
+	await settleFrames(term, tui);
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -79,41 +63,6 @@ function countOccurrences(haystack: string, needle: string): number {
 		if (at === -1) return count;
 		count++;
 		from = at + needle.length;
-	}
-}
-
-async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: () => T | Promise<T>): Promise<T> {
-	const bunSnapshot: Record<string, string | undefined> = {};
-	const processSnapshot: Record<string, string | undefined> = {};
-	for (const key in patch) {
-		bunSnapshot[key] = Bun.env[key];
-		processSnapshot[key] = process.env[key];
-		const value = patch[key];
-		if (value === undefined) {
-			delete Bun.env[key];
-			delete process.env[key];
-		} else {
-			Bun.env[key] = value;
-			process.env[key] = value;
-		}
-	}
-	try {
-		return await run();
-	} finally {
-		for (const key in patch) {
-			const bunValue = bunSnapshot[key];
-			if (bunValue === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = bunValue;
-			}
-			const processValue = processSnapshot[key];
-			if (processValue === undefined) {
-				delete process.env[key];
-			} else {
-				process.env[key] = processValue;
-			}
-		}
 	}
 }
 
@@ -337,7 +286,7 @@ describe("TUI DECCARA integration", () => {
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const out = writes.join("");
 
 			expect(out).toContain(DECSACE_RECT);
@@ -360,7 +309,7 @@ describe("TUI DECCARA integration", () => {
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const out = writes.join("");
 
 			expect(out).not.toContain("$r");
@@ -374,7 +323,7 @@ describe("TUI DECCARA integration", () => {
 	});
 
 	it("keeps padded fallback bytes when synchronized output is disabled", async () => {
-		await withEnvPatch(
+		await withEnv(
 			{ VEYYON_NO_SYNC_OUTPUT: "1", VEYYON_FORCE_SYNC_OUTPUT: undefined, VEYYON_TUI_SYNC_OUTPUT: undefined },
 			async () => {
 				setTerminalDeccara(true);
@@ -385,7 +334,7 @@ describe("TUI DECCARA integration", () => {
 
 				try {
 					tui.start();
-					await settle(term, tui);
+					await settleFrames(term, tui);
 					const out = writes.join("");
 
 					expect(out).not.toContain("$r");
@@ -409,7 +358,7 @@ describe("TUI DECCARA integration", () => {
 			tui.addChild(new BgPanelComponent(rowsContent));
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				return trimmed(term);
 			} finally {
 				tui.stop();
@@ -422,7 +371,7 @@ describe("TUI DECCARA integration", () => {
 		tui.addChild(new BgPanelComponent(rowsContent));
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			// xterm.js ignores DECCARA, so trailing cells stay unpainted, but the
 			// printed glyphs (and their columns) must match the padded fallback
 			// exactly — only the invisible trailing background differs on xterm.
@@ -442,7 +391,7 @@ describe("TUI DECCARA integration", () => {
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const out = writes.join("");
 
 			// Visible tail optimized into a rectangle...
@@ -467,11 +416,11 @@ describe("TUI DECCARA integration", () => {
 			tui.addChild(panel);
 			try {
 				tui.start();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				const writes = captureWrites(term);
 				panel.setRows(["AAA", "BBB", "XXX", "DDD"]);
 				tui.requestRender();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				expect(term.getViewport()[2]?.trimEnd()).toBe("XXX");
 				return { out: writes.join(""), cursor: term.getCursor() };
 			} finally {
@@ -505,7 +454,7 @@ describe("TUI DECCARA integration", () => {
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = captureWrites(term);
 			term.resize(40, 10); // height change, content unchanged

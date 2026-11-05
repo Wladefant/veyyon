@@ -9,10 +9,11 @@ import {
 } from "@veyyon/tui/terminal-capabilities";
 import { setTerminalHeadless } from "@veyyon/utils";
 import { extractPrintableText } from "@veyyon/utils/keys";
+import { restorePlatform, setPlatform } from "../../../../packages/utils/test/helpers/platform-override";
+import { restoreEnv, restoreProperty } from "../../../../packages/utils/test/helpers/restore-global";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-const processPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
 const stdoutRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
@@ -24,22 +25,6 @@ const originalTermProgram = Bun.env.TERM_PROGRAM;
 // These suites drive the real ProcessTerminal start()/probe pipeline, so they
 // opt out of the test-default headless suppression and restore it per case.
 let previousHeadless = false;
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
-
-function restoreEnv(key: string, original: string | undefined): void {
-	if (original === undefined) {
-		delete Bun.env[key];
-		return;
-	}
-	Bun.env[key] = original;
-}
 
 describe("ProcessTerminal OSC 11 appearance detection", () => {
 	beforeEach(() => {
@@ -56,7 +41,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
-		restoreProperty(process, "platform", processPlatformDescriptor);
+		restorePlatform();
 		restoreEnv("WSL_INTEROP", originalWslInterop);
 		restoreEnv("WSL_DISTRO_NAME", originalWslDistroName);
 		restoreEnv("WT_SESSION", originalWtSession);
@@ -239,7 +224,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 
 	it("periodically re-queries OSC 11 under native Windows Terminal when Mode 2031 is unavailable (#5091)", () => {
 		vi.useFakeTimers();
-		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+		setPlatform("win32");
 		Bun.env.WT_SESSION = "test-wt-session";
 		Bun.env.TERM_PROGRAM = "Windows_Terminal";
 		const { terminal, queryCount } = setupTerminal();
@@ -262,7 +247,7 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 
 	it("does not periodically re-query OSC 11 under WSL either (#3297)", () => {
 		vi.useFakeTimers();
-		Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+		setPlatform("linux");
 		Bun.env.WSL_INTEROP = "/run/WSL/1_interop";
 		const { terminal, queryCount } = setupTerminal();
 
@@ -470,7 +455,7 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		restoreProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 		restoreProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
-		restoreProperty(process, "platform", processPlatformDescriptor);
+		restorePlatform();
 		restoreProperty(process.stdout, "columns", stdoutColumnsDescriptor);
 		restoreProperty(process.stdout, "rows", stdoutRowsDescriptor);
 		setCellDimensions(originalCellDims);

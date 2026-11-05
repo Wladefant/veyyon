@@ -33,6 +33,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -69,12 +70,17 @@ const ALLOWED: readonly string[] = [];
  * only when its text holds a read and the word `src`. A matcher is not part of the filter: the
  * boolean spelling of a scan (`expect(source.includes(...)).toBe(true)`) carries no text matcher at
  * all, and dropping those files is how a filter turns a gate into a decoration.
+ *
+ * A file git ignores is not part of the repository and is never read: a scratch checkout or a cache
+ * of cloned projects under a member is another tree's suites.
  */
 function testFiles(root: string): string[] {
+	const ignored = gitIgnoredUnder(root);
 	const found: string[] = [];
 	for (const entry of fs.readdirSync(root, { recursive: true, encoding: "utf-8" })) {
 		if (!entry.endsWith(".test.ts") && !entry.endsWith(".test.tsx")) continue;
 		if (entry.includes(`node_modules${path.sep}`) || entry.includes("node_modules/")) continue;
+		if (ignored(entry)) continue;
 		const file = path.join(root, entry);
 		const text = fs.readFileSync(file, "utf-8");
 		if (!/readFileSync|readFile\(|Bun\.file\(/.test(text)) continue;
@@ -82,6 +88,34 @@ function testFiles(root: string): string[] {
 		found.push(file);
 	}
 	return found.sort();
+}
+
+/**
+ * Whether git ignores a path relative to `root`, decided from one listing of the ignored entries
+ * under it. An ignored directory is listed once, so the listing stays short whatever the directory
+ * holds. Nothing is ignored when `root` is outside a work tree.
+ */
+function gitIgnoredUnder(root: string): (relative: string) => boolean {
+	const run = spawnSync(
+		"git",
+		["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--", "."],
+		{
+			cwd: root,
+			encoding: "utf-8",
+			maxBuffer: 64 * 1024 * 1024,
+		},
+	);
+	if (run.status !== 0) {
+		if (run.stderr.includes("not a git repository")) return () => false;
+		throw new Error(`git ls-files failed under ${root} (status ${run.status}): ${run.stderr || run.error}`);
+	}
+	const entries = run.stdout.split("\0").filter(Boolean);
+	const directories = entries.filter(entry => entry.endsWith("/"));
+	const files = new Set(entries.filter(entry => !entry.endsWith("/")));
+	return relative => {
+		const posix = relative.split(path.sep).join("/");
+		return files.has(posix) || directories.some(directory => posix.startsWith(directory));
+	};
 }
 
 /** The string fragments a path expression is built from, following consts declared in the same file. */
@@ -234,6 +268,13 @@ function flagsAByteMatch(lines: readonly string[]): boolean {
 	return byteMatchLines(file).length > 0;
 }
 
+/** A suite that reads a module's bytes and asserts on them, the shape the gate rejects, at line 3. */
+const OFFENDER = [
+	'const SRC = path.join(import.meta.dir, "../src");',
+	'const source = fs.readFileSync(path.join(SRC, "env.ts"), "utf-8");',
+	'expect(source).toContain("export function parseEnvFile");',
+].join("\n");
+
 describe("an invariant about a module is read from the module graph", () => {
 	/**
 	 * The gate. Pinned by exact equality, so a conversion shrinks the list and a regression cannot
@@ -264,14 +305,7 @@ describe("an invariant about a module is read from the module graph", () => {
 	it("reports a planted byte match, and only it", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "byte-match-sweep-"));
 		try {
-			fs.writeFileSync(
-				path.join(root, "offender.test.ts"),
-				[
-					'const SRC = path.join(import.meta.dir, "../src");',
-					'const source = fs.readFileSync(path.join(SRC, "env.ts"), "utf-8");',
-					'expect(source).toContain("export function parseEnvFile");',
-				].join("\n"),
-			);
+			fs.writeFileSync(path.join(root, "offender.test.ts"), OFFENDER);
 			fs.writeFileSync(
 				path.join(root, "innocent.test.ts"),
 				[
@@ -280,6 +314,23 @@ describe("an invariant about a module is read from the module graph", () => {
 					'expect(moduleSpecifiersIn(source)).toContain("./dirs");',
 				].join("\n"),
 			);
+
+			expect(byteMatchSites([root], root)).toEqual(["offender.test.ts:3"]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	// A gitignored scratch tree under a member holds suites that are not the repository's. The same
+	// offender planted there is skipped, and the tracked one beside it is still reported.
+	it("skips a planted byte match in a file git ignores", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "byte-match-ignored-"));
+		try {
+			expect(spawnSync("git", ["init", "-q"], { cwd: root }).status).toBe(0);
+			fs.writeFileSync(path.join(root, ".gitignore"), ".scratch/\n");
+			fs.mkdirSync(path.join(root, ".scratch"));
+			fs.writeFileSync(path.join(root, ".scratch", "offender.test.ts"), OFFENDER);
+			fs.writeFileSync(path.join(root, "offender.test.ts"), OFFENDER);
 
 			expect(byteMatchSites([root], root)).toEqual(["offender.test.ts:3"]);
 		} finally {

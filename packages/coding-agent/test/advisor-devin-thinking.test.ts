@@ -12,6 +12,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { resolveThinkingLevelForModel } from "@veyyon/coding-agent/thinking";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 // Regression for https://github.com/can1357/oh-my-pi/issues/4579.
 //
@@ -146,8 +147,7 @@ describe("AgentSession advisor descriptor thinking level", () => {
 		// ships one: gemini-3-pro-preview declares low/high, a google-level ladder
 		// with a genuine gap. This session carries no google credential, so the
 		// owner is driven directly rather than through a second fixture provider.
-		const gemini = getBundledModel("google", "gemini-3-pro-preview");
-		if (!gemini) throw new Error("Expected bundled google/gemini-3-pro-preview to exist");
+		const gemini = requireBundledModel("google", "gemini-3-pro-preview");
 		expect(gemini.thinking?.efforts).toEqual([Effort.Low, Effort.High]);
 
 		// Medium is absent, so the resolver walks down to the nearest declared tier
@@ -157,8 +157,7 @@ describe("AgentSession advisor descriptor thinking level", () => {
 
 	it("Anthropic advisor on a model declaring medium keeps the medium default", () => {
 		// claude-opus-4-5 declares [low, medium, high]: no clamp may fire.
-		const opus = getBundledModel("anthropic", "claude-opus-4-5");
-		if (!opus) throw new Error("Expected bundled anthropic/claude-opus-4-5 to exist");
+		const opus = requireBundledModel("anthropic", "claude-opus-4-5");
 		session.settings.set("agent.helpers", {
 			...session.settings.get("agent.helpers"),
 			advisor: { model: `${opus.provider}/${opus.id}` },

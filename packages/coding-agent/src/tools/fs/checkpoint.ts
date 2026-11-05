@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, prompt } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { prompt } from "@veyyon/utils";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import type { OutputMeta } from "../core/output-notice";
@@ -25,7 +26,7 @@ export interface CompletedRewindState {
 	rewoundAt: string;
 }
 
-const checkpointSchema = lazy(() =>
+const checkpointSchema = toolSchema("checkpoint", () =>
 	type({
 		goal: type("string").describe("investigation goal"),
 	}),
@@ -33,7 +34,7 @@ const checkpointSchema = lazy(() =>
 
 type CheckpointParams = typeof checkpointSchema.value.infer;
 
-const rewindSchema = lazy(() =>
+const rewindSchema = toolSchema("rewind", () =>
 	type({
 		report: type("string").describe("investigation findings"),
 	}),
@@ -66,6 +67,9 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema.value, 
 	readonly description: string;
 	get parameters(): typeof checkpointSchema.value {
 		return checkpointSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return checkpointSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";
@@ -114,6 +118,9 @@ export class RewindTool implements AgentTool<typeof rewindSchema.value, RewindTo
 	readonly description: string;
 	get parameters(): typeof rewindSchema.value {
 		return rewindSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return rewindSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";

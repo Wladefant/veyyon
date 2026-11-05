@@ -97,6 +97,19 @@
  * all, and that an entry read back once reads from its new place after. An entry whose line is gone,
  * or whose id another kind of entry now holds, still fails naming the entry.
  *
+ * A compaction republishes the file and then moves history out of memory twice, and on a
+ * 198,874-entry session that chain held the event loop for about 280 ms: every cold entry was
+ * pointed at the new object one at a time, and the second walk visited every entry the first had
+ * just visited. A republish now moves every cold entry of the replaced object at once, and a walk
+ * over the object, branch and read-backs the last walk saw is skipped. That opens a third class: an
+ * entry moved out after a republish recording its offset on the wrong base, a read-back that looks
+ * for a moved line in the replaced object's lines, and a skipped walk that leaves summarized,
+ * read-back or newly unreachable history in memory. The rebase sweep moves history out between two
+ * header shifts and pins zero scans; the relocation sweep rewrites the file in place across a header
+ * shift and pins one read per read-back once the line is found again; the walk sweep summarizes
+ * history with no publish between, moves the leaf to a branch as long, moves the keep boundary in
+ * place, and reads history back between two walks, and pins each moved out.
+ *
  * NOT CAUGHT: the heap bounds have a 2x and 4x margin, so a regression that keeps a quarter of the
  * cold payloads resident passes. Windows holds no pinned reader, so there every entry stays in
  * memory and the fd assertions are skipped. A branch scan this suite does not run that reads a
@@ -109,6 +122,10 @@
  * memory backend that walks the summarized span, still reads the history back.
  * A cold entry whose line opens with neither `id` nor a string `type` and then `id` is not found by
  * the relocation scan, and its read-back still fails once its offset stops holding its line.
+ * A republish whose new object reuses the inode number the last walk read, after an in-place update
+ * that read nothing back and left the branch as it was, skips the walk. An entry no longer in the
+ * session whose line a republish did not keep reads back the line its id holds in the new object.
+ * The flush of a staged rewrite before its rename is not exercised: no sweep cuts the power.
  */
 
 import { afterEach, describe, expect, it, vi } from "bun:test";
@@ -124,7 +141,7 @@ import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { MemoryBackend } from "@veyyon/coding-agent/memory/backend";
@@ -154,6 +171,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage, type PinnedSessionReader } from "@veyyon/kernel/session/session-storage";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import * as natives from "@veyyon/natives";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import type { ColdHistoryHeap } from "../fixtures/cold-history-heap";
 import type { DroppedDescriptors } from "../fixtures/dropped-session-manager-descriptors";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
@@ -256,14 +274,7 @@ function assistantTurn(text: string, timestamp: number): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		stopReason: "stop",
 		timestamp,
 	};
@@ -805,8 +816,7 @@ async function summarizeBranch(
 		onCredential();
 		return resolveKey(provider, sessionId, options);
 	});
-	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 	const session = new AgentSession({
 		agent: new Agent({
@@ -851,8 +861,7 @@ async function resumeSession(
 ): Promise<{ session: AgentSession; close: () => Promise<void> }> {
 	const authStorage = await AuthStorage.create(path.join(root, `auth-${++authFiles}.db`));
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
-	const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+	const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
@@ -1069,14 +1078,7 @@ async function crossThreshold(session: AgentSession): Promise<void> {
 	});
 	const turn: AssistantMessage = {
 		...assistantTurn("Done.", 40),
-		usage: {
-			input: 190_000,
-			output: 1_000,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 191_000,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 190_000, output: 1_000, totalTokens: 191_000 },
 	};
 	session.agent.emitExternalEvent({ type: "message_end", message: turn });
 	session.agent.emitExternalEvent({ type: "agent_end", messages: [turn] });
@@ -1213,6 +1215,250 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 			expect(storage.reads).toBeGreaterThan(0);
 			// Each entry read back from its recorded offset: no read-back had to scan the file for its line.
 			expect(storage.scans).toBe(0);
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"reads history a compaction moved out of memory between two header shifts from where its line is ($load)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(), arm.padding);
+			useLoadPath(fixture.file, arm);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			const root = path.dirname(fixture.dir);
+			const moveTo = async (name: string): Promise<void> => {
+				const cwd = path.join(root, name);
+				fs.mkdirSync(cwd);
+				await manager.setCwd(cwd);
+			};
+
+			// Every line moves forward before the compaction, so each turn it summarizes records its offset on
+			// an object the session has already moved its cold entries onto.
+			await moveTo(`moved-${"x".repeat(64)}`);
+			const prompts: string[] = [];
+			for (let turn = 0; turn < 6; turn++) {
+				prompts.push(
+					manager.appendMessage({
+						role: "user",
+						content: big(`shifted-prompt-${turn}`, 4096),
+						timestamp: 100 + turn,
+					}),
+				);
+				manager.appendMessage(assistantTurn(`shifted-answer-${turn}`, 100 + turn));
+			}
+			manager.appendCompaction(big("shifted-summary"), undefined, prompts[4]!, 1000);
+			manager.coolCompactedHistory();
+			expect(prompts.map(id => coldFieldsOf(manager.getEntry(id)!) !== undefined)).toEqual([
+				true,
+				true,
+				true,
+				true,
+				false,
+				false,
+			]);
+
+			// A shorter header moves every line back, those included.
+			await moveTo("m");
+			expect(storage.reads).toBe(0);
+
+			expect(serialized(manager)).toEqual(await freshLoad(fixture));
+			expect(storage.reads).toBeGreaterThan(0);
+			expect(storage.scans).toBe(0);
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
+
+	it.each(LOAD_PATHS)(
+		"finds a cold entry's line again on the republished object after the file was rewritten in place ($load)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(), arm.padding);
+			useLoadPath(fixture.file, arm);
+			const expected = await freshLoad(fixture);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+
+			// Two cold entries on neighbouring lines trade places. The object and its size stay, so the session
+			// still takes the file for the one it published and keeps both lines through a republish.
+			const coldEntryOn = (line: string | undefined): SessionEntry | undefined => {
+				let parsed: { id?: unknown };
+				try {
+					parsed = JSON.parse(line ?? "");
+				} catch {
+					return undefined;
+				}
+				const entry = typeof parsed.id === "string" ? manager.getEntry(parsed.id) : undefined;
+				return entry !== undefined && coldFieldsOf(entry) !== undefined ? entry : undefined;
+			};
+			const lines = fs.readFileSync(fixture.file, "utf8").split(/(?<=\n)/);
+			const at = lines.findIndex((line, i) => coldEntryOn(line) && coldEntryOn(lines[i + 1]));
+			expect(at).toBeGreaterThan(-1);
+			const x = coldEntryOn(lines[at])!;
+			const y = coldEntryOn(lines[at + 1])!;
+			[lines[at], lines[at + 1]] = [lines[at + 1]!, lines[at]!];
+			const identity = storage.statSync(fixture.file).identity;
+			fs.writeFileSync(fixture.file, lines.join(""));
+			expect(storage.statSync(fixture.file).identity).toBe(identity);
+
+			expect(JSON.stringify(readColdEntry(x))).toBe(expected.get(x.id)!);
+			expect(storage.scans).toBe(1);
+
+			// A longer header moves every kept line forward onto a new object.
+			const cwd = path.join(path.dirname(fixture.dir), `moved-${"x".repeat(64)}`);
+			fs.mkdirSync(cwd);
+			await manager.setCwd(cwd);
+			const republished = storage.statSync(fixture.file).identity!;
+			expect(republished).not.toBe(identity);
+			expect(storage.openIdentities()).toEqual([republished]);
+
+			// The other entry misses, and a scan of the new object finds it; after that it reads where it was
+			// found, and the entry found before the republish reads where its line moved.
+			let reads = storage.reads;
+			expect(JSON.stringify(readColdEntry(y))).toBe(expected.get(y.id)!);
+			expect(storage.reads - reads).toBe(2);
+			expect(storage.scans).toBe(2);
+			reads = storage.reads;
+			expect(JSON.stringify(readColdEntry(y))).toBe(expected.get(y.id)!);
+			expect(storage.reads - reads).toBe(1);
+			expect(JSON.stringify(readColdEntry(x))).toBe(expected.get(x.id)!);
+			expect(storage.reads - reads).toBe(2);
+			expect(storage.scans).toBe(2);
+
+			for (const [id, line] of expected) {
+				const entry = manager.getEntry(id);
+				expect(entry && JSON.stringify(entry)).toBe(line);
+			}
+			expect(storage.open.size).toBe(0);
+			await manager.close();
+		},
+	);
+
+	/**
+	 * A session created in a fresh directory, and `turns(n)`, which appends `n` turns of a prompt
+	 * large enough to move and a short answer and returns the ids of the prompts appended so far.
+	 */
+	const createLive = (): {
+		manager: SessionManager;
+		storage: ObservedStorage;
+		dir: string;
+		turns: (count: number) => string[];
+		warm: () => string[];
+	} => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-walk-"));
+		tempDirs.push(root);
+		const dir = path.join(root, "sessions");
+		fs.mkdirSync(dir);
+		fs.mkdirSync(path.join(root, "blobs"));
+		const storage = new ObservedStorage();
+		const manager = SessionManager.create(root, dir, storage);
+		const prompts: string[] = [];
+		const turns = (count: number): string[] => {
+			for (let turn = 0; turn < count; turn++) {
+				const at = prompts.length;
+				prompts.push(
+					manager.appendMessage({ role: "user", content: big(`walk-prompt-${at}`, 4096), timestamp: at }),
+				);
+				manager.appendMessage(assistantTurn(`walk-answer-${at}`, at));
+			}
+			return prompts;
+		};
+		const warm = (): string[] => prompts.filter(id => coldFieldsOf(manager.getEntry(id)!) === undefined);
+		return { manager, storage, dir, turns, warm };
+	};
+
+	it("moves the history a second compaction summarized out of memory when no publish came between", async () => {
+		const { manager, storage, dir, turns, warm } = createLive();
+		manager.appendCompaction(big("first-summary"), undefined, turns(10)[8]!, 1000);
+		manager.coolCompactedHistory();
+		const file = manager.getSessionFile();
+		if (file === undefined) throw new Error("the session wrote no file");
+		const identity = storage.statSync(file).identity;
+		expect(warm()).toEqual(turns(0).slice(8));
+
+		// The appends land on the object the first walk read and extend the branch it walked.
+		manager.appendCompaction(big("second-summary"), undefined, turns(10)[18]!, 1000);
+		manager.coolCompactedHistory();
+		expect(storage.statSync(file).identity).toBe(identity);
+		expect(warm()).toEqual(turns(0).slice(18));
+
+		await manager.flush();
+		expect(serialized(manager)).toEqual(await freshLoad({ dir, file }));
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("moves the branch the leaf leaves out of memory when it moves to a branch as long", async () => {
+		const { manager, storage, dir } = createLive();
+		const root = manager.appendMessage({ role: "user", content: "root", timestamp: 0 });
+		const side = manager.appendMessage({ role: "user", content: big("side-prompt", 4096), timestamp: 1 });
+		const sideAnswer = manager.appendMessage(assistantTurn("side-answer", 2));
+		manager.branch(root);
+		const main = manager.appendMessage({ role: "user", content: big("main-prompt", 4096), timestamp: 3 });
+		manager.appendMessage(assistantTurn("main-answer", 4));
+		const cold = (): boolean[] => [side, main].map(id => coldFieldsOf(manager.getEntry(id)!) !== undefined);
+		manager.coolCompactedHistory();
+		expect(cold()).toEqual([true, false]);
+
+		// Root, prompt and answer on both branches: the walk meets a branch of the length it read.
+		manager.branch(sideAnswer);
+		manager.coolCompactedHistory();
+		expect(cold()).toEqual([true, true]);
+
+		await manager.flush();
+		const file = manager.getSessionFile();
+		if (file === undefined) throw new Error("the session wrote no file");
+		expect(serialized(manager)).toEqual(await freshLoad({ dir, file }));
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("moves the history an in-place update leaves unreachable out of memory once a republish writes it", async () => {
+		const { manager, storage, dir, turns, warm } = createLive();
+		const prompts = turns(10);
+		const compaction = manager.getEntry(
+			manager.appendCompaction(big("moved-boundary"), undefined, prompts[6]!, 1000),
+		);
+		if (compaction?.type !== "compaction") throw new Error("the session lost its compaction");
+		manager.coolCompactedHistory();
+		expect(warm()).toEqual(prompts.slice(6));
+
+		// The update rewrites the compaction alone: no entry is read back, and the branch is the one the
+		// last walk read.
+		const reads = storage.reads;
+		compaction.firstKeptEntryId = prompts[8]!;
+		await manager.rewriteEntries([compaction]);
+		expect(storage.reads).toBe(reads);
+		expect(warm()).toEqual(prompts.slice(8));
+
+		const file = manager.getSessionFile();
+		if (file === undefined) throw new Error("the session wrote no file");
+		expect(serialized(manager)).toEqual(await freshLoad({ dir, file }));
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it.each(LOAD_PATHS)(
+		"moves history read back since the last walk out of memory again on the next one ($load)",
+		async arm => {
+			const fixture = await writeSession(everyKindHistory(), arm.padding);
+			useLoadPath(fixture.file, arm);
+			const storage = new ObservedStorage();
+			const manager = await SessionManager.open(fixture.file, fixture.dir, storage, { suppressBreadcrumb: true });
+			manager.coolCompactedHistory();
+			const moved = manager.getEntries().filter(entry => coldFieldsOf(entry) !== undefined);
+			const ids = (entries: SessionEntry[]): string[] => entries.map(entry => entry.id);
+			expect(moved.length).toBeGreaterThan(1);
+
+			// Every entry reads back, and nothing else changes before the next walk.
+			const expected = serialized(manager);
+			expect(ids(moved.filter(entry => coldFieldsOf(entry) !== undefined))).toEqual([]);
+			expect(storage.open.size).toBe(0);
+			manager.coolCompactedHistory();
+			expect(ids(moved.filter(entry => coldFieldsOf(entry) === undefined))).toEqual([]);
+
+			expect(serialized(manager)).toEqual(expected);
 			expect(storage.open.size).toBe(0);
 			await manager.close();
 		},

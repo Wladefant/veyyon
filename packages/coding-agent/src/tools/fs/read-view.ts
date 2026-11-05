@@ -273,7 +273,9 @@ function noticeLines(details: ReadToolDetails | undefined): ViewLine[] {
 	if (!truncation) return lines;
 	const fallback = details?.truncation;
 	if (fallback?.firstLineExceedsLimit) {
-		const limit = formatBytes(fallback.outputBytes ?? fallback.totalBytes);
+		// The budget the read was held to; a result recorded before the meta stated it has only the
+		// truncation's own counts.
+		const limit = formatBytes(truncation.maxBytes ?? fallback.outputBytes ?? fallback.totalBytes);
 		const reference = truncation.artifactId ? `. ${formatFullOutputReference(truncation.artifactId)}` : "";
 		lines.push([{ text: `First line exceeds ${limit} limit${reference}`, tone: "warning" }]);
 		return lines;

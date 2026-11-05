@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { EXIT_FAILURE, EXIT_INTERRUPTED } from "../src/cli/exit-codes";
 import { type PrintModeOptions, type PrintModeSession, runPrintMode } from "../src/modes/print-mode";
 
@@ -29,14 +30,7 @@ function makeAssistantMessage(stopReason: "stop" | "error" | "aborted", errorMes
 		model: "claude-3-5-sonnet",
 		stopReason,
 		errorMessage,
-		usage: {
-			input: 10,
-			output: 5,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 15,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 5, totalTokens: 15 },
 		timestamp: Date.now(),
 	};
 }
@@ -67,6 +61,7 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 		const session: PrintModeSession = {
 			subscribe: () => () => {},
 			prompt: async () => true,
+			waitForQuiescence: async () => {},
 			dispose: async () => {},
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,
@@ -87,6 +82,7 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 		const session: PrintModeSession = {
 			subscribe: () => () => {},
 			prompt: async () => true,
+			waitForQuiescence: async () => {},
 			dispose: async () => {},
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,
@@ -107,6 +103,7 @@ describe("Print-mode exit codes on error vs aborted stopReason", () => {
 		const session: PrintModeSession = {
 			subscribe: () => () => {},
 			prompt: async () => true,
+			waitForQuiescence: async () => {},
 			dispose: async () => {},
 			displayAssistantContent: content => content,
 			obfuscateProviderText: text => text,

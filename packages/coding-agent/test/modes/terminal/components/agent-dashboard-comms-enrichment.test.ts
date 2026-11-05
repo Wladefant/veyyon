@@ -14,6 +14,7 @@
  * the row, a strip that disagrees with the body under it.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { codeNameFor } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-activity";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -23,7 +24,6 @@ import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 /** Right arrow: Live -> Comms. */
 const RIGHT = "\x1b[C";
 const UP = "\x1b[A";
@@ -94,7 +94,7 @@ function commsCard(options: { scope?: string } = {}): {
 		scope: options.scope,
 	});
 	dashboard.handleInput(RIGHT);
-	return { dashboard, frame: () => dashboard.render(120).join("\n").replace(ANSI_PATTERN, "") };
+	return { dashboard, frame: () => stripVTControlCharacters(dashboard.render(120).join("\n")) };
 }
 
 /** The summary line above the stream, without the padding the card draws around it. */

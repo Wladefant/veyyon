@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
+import * as path from "node:path";
+import { bundledCatalogDigest } from "@veyyon/catalog/models";
 import { buildPayloadDefines } from "./generate-docs-index";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { createPrecompiledPromptPlugin } from "./precompiled-prompts";
@@ -179,6 +182,11 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			define: {
 				"process.env.VEYYON_COMPILED": JSON.stringify("true"),
 				"process.env.VEYYON_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
+				// Unique to this build: the tool wire-schema cache (`@veyyon/ai/utils/schema/tool-schema`)
+				// serves a stored wire form only to the build that stored it.
+				"process.env.VEYYON_BUILD_ID": JSON.stringify(randomUUID()),
+				// The digest of the catalog this build embeds, so a launch does not read and hash it.
+				"process.env.VEYYON_CATALOG_DIGEST": JSON.stringify(bundledCatalogDigest()),
 				...(await buildPayloadDefines()),
 				"process.env.VEYYON_BUILD_TAG": JSON.stringify(buildTag ?? ""),
 				"process.env.VEYYON_BUILD_SHA": JSON.stringify(buildSha ?? ""),

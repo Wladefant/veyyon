@@ -2,7 +2,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
-import { errorMessage, getProjectDir, isCancellation, isTimeoutError, logger, postmortem } from "@veyyon/utils";
+import {
+	errorMessage,
+	getProjectDir,
+	isCancellation,
+	isTimeoutError,
+	logger,
+	postmortem,
+	toError,
+} from "@veyyon/utils";
 import { Settings } from "../config/settings";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { OutputSink } from "../session/streaming-output";
@@ -47,10 +55,6 @@ export class KernelExecutionCancelledError extends Error {
 }
 
 /**
- * Options every kernel-backed language executor shares. Per-language option
- * interfaces structurally extend this; the base executor only reads these.
- */
-/**
  * Whether a language's kernel outlives one eval call.
  *
  * `session` keeps one kernel per session, so a later cell sees variables an earlier one defined, which
@@ -64,6 +68,10 @@ export class KernelExecutionCancelledError extends Error {
  */
 export type KernelMode = "session" | "per-call";
 
+/**
+ * Options every kernel-backed language executor shares. Per-language option
+ * interfaces structurally extend this; the base executor only reads these.
+ */
 export interface KernelExecutorBaseOptions {
 	cwd?: string;
 	timeoutMs?: number;
@@ -525,12 +533,32 @@ export async function executeWithKernelBase<
 		// owner every other tool uses. Without this the sink keeps a flat 50KB
 		// tail, which is why eval results reached 71KB and then cost a re-read on
 		// every subsequent turn. A session-less caller gets the flat budget.
-		...(options?.toolSession ? { spillThreshold: inlineBudgetFor(options.toolSession) } : {}),
-		headBytes: resolveOutputSinkHeadBytes(settings),
+		...resolveOutputSinkWindow(
+			settings,
+			options?.toolSession ? inlineBudgetFor(options.toolSession) : DEFAULT_MAX_BYTES,
+		),
 		maxColumns: resolveOutputMaxColumns(settings),
 	});
 
 	const displayOutputs: KernelDisplayOutput[] = [];
+	/** The run's result over everything the sink holds, with `annotation` appended to the output. */
+	const finish = async (
+		outcome: Pick<KernelExecutionResult, "exitCode" | "cancelled" | "stdinRequested">,
+		annotation?: string,
+	): Promise<KernelExecutionResult> => {
+		const dumped = await sink.dump(annotation);
+		return {
+			...outcome,
+			truncated: dumped.truncated,
+			output: dumped.output,
+			artifactId: dumped.artifactId ?? undefined,
+			totalLines: dumped.totalLines,
+			totalBytes: dumped.totalBytes,
+			outputLines: dumped.outputLines,
+			outputBytes: dumped.outputBytes,
+			displayOutputs,
+		};
+	};
 	const deadlineMs = (resolveDeadlineMs ?? getExecutionDeadlineMs)(options);
 	let executionTimeoutMs: number | undefined;
 	const abortShield = createBridgeAbortShield(options?.signal);
@@ -684,7 +712,7 @@ export async function executeWithKernelBase<
 				stdinRequested: false,
 			};
 		}
-		const error = err instanceof Error ? err : new Error(String(err));
+		const error = toError(err);
 		logger.error(`${errorLogLabel} execution failed`, { error: error.message });
 		throw error;
 	} finally {

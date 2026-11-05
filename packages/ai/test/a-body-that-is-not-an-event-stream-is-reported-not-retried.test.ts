@@ -534,7 +534,6 @@ describe("an unlabelled blank prefix is bounded before the event-stream decoder 
 		expect(released).toBe(true);
 	});
 });
-
 describe("a blank unlabelled body is an empty event stream", () => {
 	// Nothing but whitespace is neither markup nor JSON: it reads as an event stream that held no
 	// events, and it ends instead of waiting for a first byte that is never coming.

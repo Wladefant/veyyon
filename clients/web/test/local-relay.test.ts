@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { packEnvelope, unpackEnvelope } from "@veyyon/wire";
 import { RELAY_FATAL_CLOSE_REASONS } from "@veyyon/wire/relay";
 import { type LocalRelay, startLocalRelay } from "../scripts/local-relay";
-import { packEnvelope, unpackEnvelope } from "../src/lib/link";
 
 const ROOM = "RelayRoom_12345";
 const REQUEST_TIMEOUT_MS = 1_000;

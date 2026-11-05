@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { xmlNodeText } from "@veyyon/coding-agent/export/markit/converters/xml-text";
+import { xmlList, xmlNodeText } from "@veyyon/coding-agent/export/markit/converters/xml-text";
 
 /**
  * xmlNodeText is the one owner of "get the text out of a fast-xml-parser node"
@@ -46,5 +46,21 @@ describe("xmlNodeText", () => {
 		expect(xmlNodeText({})).toBe("");
 		expect(xmlNodeText({ "#text": null })).toBe("");
 		expect(xmlNodeText({ "#text": undefined })).toBe("");
+	});
+});
+
+describe("xmlList", () => {
+	it("reads an absent element as no occurrences", () => {
+		expect(xmlList(undefined)).toEqual([]);
+	});
+
+	it("reads a single bare occurrence as a list of one", () => {
+		const node = { "@_id": "only" };
+		expect(xmlList(node)).toEqual([node]);
+	});
+
+	it("reads repeated occurrences in document order", () => {
+		const nodes = [{ "@_id": "first" }, { "@_id": "second" }];
+		expect(xmlList(nodes)).toEqual(nodes);
 	});
 });

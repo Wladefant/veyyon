@@ -12,11 +12,14 @@ import { buildModel } from "@veyyon/catalog/build";
 import { resolveBundledModelReference, stripBracketedModelIdAffixes } from "@veyyon/catalog/identity";
 import {
 	normalizeOllamaBaseUrl as catalogNormalizeOllamaBaseUrl,
+	toOllamaNativeBaseUrl,
+} from "@veyyon/catalog/provider-models/ollama";
+import { fetchOllamaShow, ollamaInput, parseOllamaTags } from "@veyyon/catalog/provider-models/ollama-native";
+import {
 	fetchLiteLLMRichModels,
 	fetchLmStudioNativeModelMetadata,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
-	toOllamaNativeBaseUrl,
 } from "@veyyon/catalog/provider-models/openai-compat";
 import type { ModelSpec, OpenAICompat } from "@veyyon/catalog/types";
 import { isRecord, trimTrailingSlashes } from "@veyyon/utils";
@@ -120,7 +123,6 @@ type OllamaDiscoveredModelMetadata = {
 	input: ("text" | "image" | "video")[];
 	contextWindow?: number;
 };
-
 type LlamaCppDiscoveredServerMetadata = {
 	contextWindow?: number;
 	input?: ("text" | "image" | "video")[];
@@ -198,36 +200,6 @@ function resolveLlamaCppMaxTokens(contextWindow: number, maxTokens: "contextWind
 	return maxTokens === "contextWindow"
 		? contextWindow
 		: Math.min(contextWindow, maxTokens ?? DISCOVERY_DEFAULT_MAX_TOKENS);
-}
-
-function extractOllamaRuntimeContextWindow(payload: Record<string, unknown>): number | undefined {
-	const parameters = payload.parameters;
-	if (typeof parameters !== "string") {
-		return undefined;
-	}
-	const match = parameters.match(/(?:^|\n)\s*num_ctx\s+(\d+)\s*(?:$|\n)/m);
-	return match ? toPositiveNumberOrUndefined(match[1]) : undefined;
-}
-
-function extractOllamaContextWindow(payload: Record<string, unknown>): number | undefined {
-	const runtimeContextWindow = extractOllamaRuntimeContextWindow(payload);
-	if (runtimeContextWindow !== undefined) {
-		return runtimeContextWindow;
-	}
-
-	const modelInfo = payload.model_info;
-	if (isRecord(modelInfo)) {
-		for (const [key, value] of Object.entries(modelInfo)) {
-			if (key === "context_length" || key.endsWith(".context_length")) {
-				const contextWindow = toPositiveNumberOrUndefined(value);
-				if (contextWindow !== undefined) {
-					return contextWindow;
-				}
-			}
-		}
-	}
-
-	return undefined;
 }
 
 function extractLlamaCppContextWindow(payload: Record<string, unknown>): number | undefined {
@@ -363,58 +335,21 @@ async function discoverOllamaModelMetadata(
 	endpoint: string,
 	modelId: string,
 	headers: Record<string, string> | undefined,
-): Promise<OllamaDiscoveredModelMetadata | null> {
-	const showUrl = `${endpoint}/api/show`;
-	try {
-		const payload = await withScopedTimeoutSignal(150, async signal => {
-			const response = await ctx.fetch(showUrl, {
-				method: "POST",
-				headers: { ...(headers ?? {}), "Content-Type": "application/json" },
-				body: JSON.stringify({ model: modelId }),
-				signal,
-			});
-			if (!response.ok) {
-				return null;
-			}
-			return (await response.json()) as unknown;
-		});
-		if (!isRecord(payload)) {
-			return null;
-		}
-		const contextWindow = extractOllamaContextWindow(payload);
-		const capabilities = payload.capabilities;
-		if (Array.isArray(capabilities)) {
-			const normalized = new Set(
-				capabilities.flatMap(capability => (typeof capability === "string" ? [capability.toLowerCase()] : [])),
-			);
-			const supportsVision = normalized.has("vision") || normalized.has("image");
-			return {
-				reasoning: normalized.has("thinking"),
-				input: supportsVision ? ["text", "image"] : ["text"],
-				contextWindow,
-			};
-		}
-		if (!isRecord(capabilities)) {
-			return {
-				reasoning: false,
-				input: ["text"],
-				contextWindow,
-			};
-		}
-		const supportsVision = capabilities.vision === true || capabilities.image === true;
-		return {
-			reasoning: capabilities.thinking === true,
-			input: supportsVision ? ["text", "image"] : ["text"],
-			contextWindow,
-		};
-	} catch {
-		// This is ENRICHMENT of a model that has already been discovered, behind a 150ms probe: null means
-		// "no extra metadata", the model is still offered, and the caller falls back to the documented
-		// defaults for its context window and capabilities. What the reader loses is precision, not the
-		// model, and the defaults are visible in the model record. Carrying the reason back for the
-		// discovery calls that decide whether a model appears AT ALL is a separate, tracked change.
-		return null;
-	}
+): Promise<{ reasoning: boolean; input: ("text" | "image")[]; contextWindow?: number } | undefined> {
+	// This is ENRICHMENT of a model that has already been discovered, behind a 150ms probe: undefined means
+	// "no extra metadata", the model is still offered, and the caller falls back to the documented
+	// defaults for its context window and capabilities. What the reader loses is precision, not the
+	// model, and the defaults are visible in the model record. Carrying the reason back for the
+	// discovery calls that decide whether a model appears AT ALL is a separate, tracked change.
+	const show = await withScopedTimeoutSignal(150, signal =>
+		fetchOllamaShow(endpoint, modelId, { fetch: ctx.fetch, headers, signal }),
+	);
+	if (!show) return undefined;
+	return {
+		reasoning: show.capabilities?.has("thinking") ?? false,
+		input: show.capabilities ? ollamaInput(show.capabilities) : ["text"],
+		contextWindow: show.contextWindow,
+	};
 }
 
 export async function discoverOllamaModels(
@@ -432,12 +367,13 @@ export async function discoverOllamaModels(
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status} from ${tagsUrl}`);
 		}
-		return (await response.json()) as { models?: Array<{ name?: string; model?: string }> };
+		return (await response.json()) as unknown;
 	});
-	const entries = (payload.models ?? []).flatMap(item => {
-		const id = item.model || item.name;
-		return id ? [{ id, name: item.name || id }] : [];
-	});
+	const tags = parseOllamaTags(payload);
+	if (!tags) {
+		throw new Error(`${tagsUrl} answered without a \`models\` list`);
+	}
+	const entries = tags.map(tag => ({ id: tag.id, name: tag.name ?? tag.id }));
 	const metadataById = new Map(
 		await Promise.all(
 			entries.map(

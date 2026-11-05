@@ -15,6 +15,7 @@ import type {
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { DebugTool } from "@veyyon/coding-agent/tools/shell/debug";
 import { removeWithRetries } from "@veyyon/utils";
+import { restorePlatform, setPlatform } from "../../../utils/test/helpers/platform-override";
 import { makeToolSession } from "../helpers/tool-session";
 
 const TEST_ADAPTER: DapResolvedAdapter = {
@@ -176,6 +177,7 @@ describe("DAP launch failure handling", () => {
 		spyOn(DapClient, "spawn").mockResolvedValue(fake as unknown as DapClient);
 
 		await manager.launch({ adapter, program: "/bin/echo", cwd: process.cwd() }, undefined, 10);
+		await manager.terminate();
 
 		const launch = fake.requests.find(request => request.command === "launch");
 		expect(launch?.args).toMatchObject({ args: ["--configured"], program: "/bin/echo" });
@@ -574,8 +576,7 @@ describe("DAP launch failure handling", () => {
 	});
 
 	it("kills the detached adapter process when it never dials back on the TCP client-addr path", async () => {
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+		setPlatform("darwin");
 		try {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-debug-tcp-leak-"));
 			try {
@@ -610,9 +611,84 @@ describe("DAP launch failure handling", () => {
 				await removeWithRetries(cwd);
 			}
 		} finally {
-			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+			restorePlatform();
 		}
 	});
+});
+
+/**
+ * WHY: a socket-mode adapter (dlv) that died before it could be reached gave no
+ * reason. The Linux path reported "Adapter process exited before socket was
+ * ready"; the TCP client-addr path waited out the whole readiness timeout and
+ * reported that the adapter "did not connect". Both now report the exit the way
+ * the stdio path does: the exit code and the adapter's own stderr, as soon as
+ * the exit lands.
+ *
+ * The class is every socket path `DapClient.spawn` selects by platform, crossed
+ * with when the adapter's stderr lands: before the exit, and after the exit
+ * status, from a launcher whose child is still reporting when the launcher
+ * exits. Both paths are swept: the Unix-socket path where the host can run it,
+ * and the TCP path by reporting a platform that is not Linux. Not caught: an
+ * adapter that exits 0 can lose stderr written in its last moment, because a
+ * clean exit is reported without waiting for the stderr pipe to drain.
+ */
+describe("a socket adapter that dies before it is reachable", () => {
+	const SOCKET_PATHS = [
+		{ platform: "linux", runsHere: process.platform === "linux" },
+		{ platform: "darwin", runsHere: true },
+	] as const;
+	// Starts reporting only once the launcher can exit, so the line lands after
+	// the exit status and well inside the client's grace for reading it.
+	const LATE_REPORTER =
+		'process.stdout.write("ready"); setTimeout(() => process.stderr.write("listen: address already in use\\n"), 150);';
+	const STDERR_TIMINGS = [
+		{
+			lands: "before the exit",
+			script: `process.stderr.write("listen: address already in use\\n");\nprocess.exit(3);\n`,
+		},
+		{
+			lands: "after the exit status",
+			script: [
+				`import { spawn } from "node:child_process";`,
+				`const reporter = spawn(process.execPath, ["-e", ${JSON.stringify(LATE_REPORTER)}], { stdio: ["ignore", "pipe", "inherit"] });`,
+				`reporter.stdout.once("data", () => process.exit(3));`,
+				"",
+			].join("\n"),
+		},
+	] as const;
+
+	for (const { platform, runsHere } of SOCKET_PATHS) {
+		for (const { lands, script } of STDERR_TIMINGS) {
+			it(`reports the adapter's own exit on the ${platform} socket path when stderr lands ${lands}`, async () => {
+				if (!runsHere) return;
+				restorePlatform();
+				const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-debug-socket-exit-"));
+				try {
+					const adapterPath = path.join(cwd, "dying-socket-adapter.mjs");
+					await fs.writeFile(adapterPath, script);
+					const adapter: DapResolvedAdapter = {
+						...TEST_ADAPTER,
+						name: "dying-socket-adapter",
+						command: process.execPath,
+						args: [adapterPath],
+						resolvedCommand: process.execPath,
+						connectMode: "socket",
+					};
+					const started = Date.now();
+					const failure = await DapClient.spawn({ adapter, cwd, socketReadyTimeoutMs: 4_000 }).then(
+						() => "spawned",
+						(error: unknown) => (error instanceof Error ? error.message : String(error)),
+					);
+					expect(failure).toBe("DAP adapter exited (code 3): listen: address already in use");
+					// Reported when the exit lands, not when the readiness wait gives up.
+					expect(Date.now() - started).toBeLessThan(2_000);
+				} finally {
+					restorePlatform();
+					await removeWithRetries(cwd);
+				}
+			}, 10_000);
+		}
+	}
 });
 
 describe("DebugTool launch validation", () => {

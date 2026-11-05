@@ -23,6 +23,7 @@
  * past a looser check.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import {
 	COMPOSER_INSET_COLS,
 	resolveComposerAccents,
@@ -43,7 +44,7 @@ beforeAll(async () => {
 function visibleLines(component: Component, width: number): string[] {
 	return component
 		.render(width)
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, "").replace(/\x1b\]8;;[^\x07]*\x07/g, ""))
+		.map(line => stripVTControlCharacters(line).replace(/\x1b\]8;;[^\x07]*\x07/g, ""))
 		.filter(line => line.trim().length > 0);
 }
 
@@ -85,7 +86,7 @@ describe("the rail is the composer inset", () => {
 			sessionAccentAnsi: undefined,
 			thinkingLevel: "off",
 		});
-		const gutter = accents.promptGutter.replace(/\x1b\[[0-9;]*m/g, "");
+		const gutter = stripVTControlCharacters(accents.promptGutter);
 
 		expect(gutter.length - gutter.trimStart().length).toBe(COMPOSER_INSET_COLS);
 	});

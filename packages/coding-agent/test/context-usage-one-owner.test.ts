@@ -26,7 +26,7 @@ import { Agent } from "@veyyon/agent-core";
 import { resolveThresholdTokens, shouldCompact } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -34,21 +34,15 @@ import { computeStoredMessagesTokens } from "@veyyon/coding-agent/session/contex
 import { computeNonMessageTokens } from "@veyyon/coding-agent/session/non-message-tokens";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { assistantMsg, userMsg } from "./helpers/e2e-session";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { assistantMsg, userMsg } from "./helpers/session-messages";
 
 /** The tokens a provider claims it billed for the prompt, as one assistant anchor. */
 function anchorWithPromptTokens(text: string, promptTokens: number) {
 	const base = assistantMsg(text);
 	return {
 		...base,
-		usage: {
-			input: promptTokens,
-			output: 8,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: promptTokens + 8,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: promptTokens, output: 8, totalTokens: promptTokens + 8 },
 	};
 }
 
@@ -57,8 +51,7 @@ describe("the context total has one owner", () => {
 	let authStorage: AuthStorage;
 	let session: AgentSession;
 
-	const model = getBundledModel("openai-codex", "gpt-5.4-mini");
-	if (!model) throw new Error("Expected the bundled test model to exist");
+	const model = requireBundledModel("openai-codex", "gpt-5.4-mini");
 
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-context-total-");

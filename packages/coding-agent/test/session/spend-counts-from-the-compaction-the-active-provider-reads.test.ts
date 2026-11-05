@@ -21,7 +21,7 @@ import { Agent } from "@veyyon/agent-core";
 import { REMOTE_COMPACTION_PRESERVE_KEY, type RemoteCompactionPreserveData } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Model, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -42,14 +42,7 @@ function assistant(model: Model, input: number): AssistantMessage {
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: input,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input, totalTokens: input },
 		stopReason: "stop",
 		timestamp: 1,
 	};

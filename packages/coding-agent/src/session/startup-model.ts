@@ -25,6 +25,7 @@ import {
 	getModelMatchPreferences,
 	type ModelMatchPreferences,
 	type ParsedModelResult,
+	type ParsedModelString,
 	parseModelPattern,
 	parseModelString,
 	pickDefaultAvailableModel,
@@ -248,6 +249,7 @@ export class StartupModelSelection {
 	/** Run the second pass, after extension providers registered. */
 	async completeAfterExtensions(): Promise<void> {
 		this.#reclaimSessionModel();
+		await this.#discoverSessionModel();
 		if (!this.#model && this.#deferredPatterns.length > 0) await this.#resolveDeferredPatterns();
 		if (!this.#model && this.#deferredPatterns.length === 0) await this.#resolveFallbackModel();
 		await this.#refreshSelectedMetadata();
@@ -266,16 +268,21 @@ export class StartupModelSelection {
 		return this.#inputs.modelRegistry.hasConfiguredAuth(candidate);
 	}
 
-	/** The authenticated model session candidate `index` names, or undefined when it names none. */
-	#sessionCandidate(index: number): { model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined } | undefined {
+	/** Session model string `index`, parsed against the registry. */
+	#parseSessionModel(index: number): ParsedModelString | undefined {
 		const { modelRegistry } = this.#inputs;
-		const parsedModel = parseModelString(this.#sessionModelStrings[index], {
+		return parseModelString(this.#sessionModelStrings[index], {
 			allowMaxSuffix: true,
 			allowAutoAlias: true,
 			isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
 		});
+	}
+
+	/** The authenticated model session candidate `index` names, or undefined when it names none. */
+	#sessionCandidate(index: number): { model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined } | undefined {
+		const parsedModel = this.#parseSessionModel(index);
 		if (!parsedModel) return undefined;
-		const restoredModel = modelRegistry.find(parsedModel.provider, parsedModel.id);
+		const restoredModel = this.#inputs.modelRegistry.find(parsedModel.provider, parsedModel.id);
 		if (!restoredModel || !this.#hasAuth(restoredModel)) return undefined;
 		return { model: restoredModel, thinkingLevel: parsedModel.thinkingLevel };
 	}
@@ -393,6 +400,30 @@ export class StartupModelSelection {
 			this.#adopt(candidate.model);
 			return;
 		}
+	}
+
+	/**
+	 * Discover the providers of the session's preferred models the registry does not list, then
+	 * reclaim. A model that exists only in a provider's discovery listing is known at startup only
+	 * through the discovery cache, and a cold or rejected cache (a deleted `models.db`, the first
+	 * launch after the cache schema version changes) leaves it unknown until the background
+	 * refresh, which runs after selection. Discovery skips a provider with no credential, so a
+	 * resume that restored its model, or one whose provider cannot be authenticated, sends no
+	 * request.
+	 */
+	async #discoverSessionModel(): Promise<void> {
+		const { modelRegistry } = this.#inputs;
+		const preferred = this.#restoredIndex >= 0 ? this.#restoredIndex : this.#sessionModelStrings.length;
+		const providers = new Set<string>();
+		for (let i = 0; i < preferred; i++) {
+			const parsed = this.#parseSessionModel(i);
+			if (parsed) providers.add(parsed.provider);
+		}
+		if (providers.size === 0) return;
+		await logger.time("discoverSessionModel", () =>
+			Promise.all(Array.from(providers, provider => modelRegistry.refreshProvider(provider, "online-if-uncached"))),
+		);
+		this.#reclaimSessionModel();
 	}
 
 	/**

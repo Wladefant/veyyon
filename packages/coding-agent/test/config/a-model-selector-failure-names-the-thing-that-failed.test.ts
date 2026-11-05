@@ -92,7 +92,8 @@ function verdict(models: Model[], available: Model[], requested: string[], error
 	const qualify = (model: Model) => `${model.provider}/${model.id}`;
 	return describeModelResolutionFailure({
 		requested,
-		allModelIds: models.map(qualify),
+		providers: [...new Set(models.map(model => model.provider))],
+		allModelIds: () => models.map(qualify),
 		availableModelIds: available.map(qualify),
 		registryError: error,
 	});

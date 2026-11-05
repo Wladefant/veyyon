@@ -8,7 +8,7 @@ import {
 	parseCollabLink,
 	rewriteEnvelopePeer,
 	unpackEnvelope,
-} from "../src/lib/link";
+} from "@veyyon/wire";
 
 const KEY = Uint8Array.from({ length: 32 }, (_, i) => i);
 const KEY_TEXT = encodeBase64Url(KEY);

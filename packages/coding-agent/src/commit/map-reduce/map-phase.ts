@@ -7,6 +7,7 @@ import { mapWithConcurrencyLimit } from "../../task/parallel";
 import { toReasoningEffort } from "../../thinking";
 import { completeCommitSimple, type ResolveObfuscateProviderText } from "../shared-llm";
 import type { FileDiff, FileObservation } from "../types";
+import { extractTextContent } from "../utils/analysis";
 import { isExcludedFile } from "../utils/exclusions";
 import { MAX_FILE_TOKENS, truncateToTokenLimit } from "./utils";
 
@@ -121,11 +122,7 @@ export async function runMapPhase({
 }
 
 function parseObservations(message: AssistantMessage): string[] {
-	const text = message.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
-		.join("")
-		.trim();
+	const text = extractTextContent(message);
 
 	if (!text) return [];
 

@@ -46,6 +46,11 @@ to a budget:
   pagination and `where`/`order` filters), PDF/Word/PowerPoint/Excel/EPUB (extracted text), Jupyter
   notebooks (editable cell text), images, URLs (reader-mode by default), and internal URI schemes
   (`memory://`, `skill://`, `artifact://`, `mcp://`, `ssh://`, and others).
+- **Regular files and directories only.** A path that resolves to a named pipe, a socket or a device
+  node, directly or through a symbolic link, fails at once with an error stating the kind, such as
+  `Path 'events' is a named pipe (FIFO), not a file or directory.` `read` never opens one, so a pipe
+  with no writer or a terminal waiting for input cannot block the turn. This holds for every form of
+  the path: a selector, a path list entry, a suffix match, and an archive, SQLite or PDF member path.
 
 Text reading is separate from image inspection. By default, `read` decodes image
 files (PNG, JPEG, GIF, WEBP) inline for direct visual analysis. When `inspect_image.enabled` is set,
@@ -64,7 +69,12 @@ A `@path` token in a prompt auto-reads the file or lists the directory it points
 is bounded by `tools.artifactSpillThreshold`, the same budget that applies to a tool result, because
 the mention stays in the transcript and is billed on every later request. A capped mention states
 the lines it showed and the selector that pages the rest. A file over 5 MB, a binary file, or an
-image over 25 MB is not read: the message states the path and the reason.
+image over 25 MB is not read: the message states the path and the reason. A path to a named pipe, a
+socket or a device node is not opened and not attached; the `@path` text stays in the prompt.
+A mentioned image goes through the encoder `read` uses: with `images.autoResize` on it is
+downscaled to the model bounds and the mention states its original size, with it off it is
+re-encoded at its own size, and a model that cannot decode WebP (Ollama, llama.cpp, LM Studio and
+other `stb`-backed local servers) receives PNG or JPEG.
 
 `tools.artifactSpillThreshold` bounds every model-visible result. `read` applies it directly to a
 file window, a structural summary, a directory listing, an archive listing, a notebook or converted

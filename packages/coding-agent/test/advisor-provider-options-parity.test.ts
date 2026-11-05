@@ -15,12 +15,12 @@ import * as path from "node:path";
 import { Agent, type StreamFn } from "@veyyon/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /** Provider-facing advisor session ids must be UUIDv7 (issue #5040): Codex writes
  *  them verbatim onto `conversation_id`/`session_id` headers, so `-advisor`
@@ -38,8 +38,7 @@ describe("AgentSession advisor provider-options parity", () => {
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		model = bundled;
 	});
 

@@ -14,6 +14,7 @@ import * as path from "node:path";
 import {
 	appendInlineArgsFallback,
 	expandPromptTemplate,
+	firstLineDescription,
 	type PromptTemplate,
 	templateUsesInlineArgPlaceholders,
 } from "@veyyon/coding-agent/config/prompt-templates";
@@ -447,5 +448,27 @@ describe("appendInlineArgsFallback", () => {
 
 	test("appends the args after a blank line when the template does not use them inline", () => {
 		expect(appendInlineArgsFallback("rendered", "myargs", false)).toBe("rendered\n\nmyargs");
+	});
+});
+
+// Prompt templates, file slash commands and the legacy loader's extra templates all describe a file whose
+// frontmatter states no description by this one rule, so the three lists agree for the same file.
+describe("firstLineDescription", () => {
+	test("takes the first non-blank line, skipping blank and whitespace-only lines before it", () => {
+		expect(firstLineDescription("\n   \nReview the diff\nsecond line")).toBe("Review the diff");
+	});
+
+	test("keeps a line of exactly 60 characters whole", () => {
+		const line = "x".repeat(60);
+		expect(firstLineDescription(`${line}\nrest`)).toBe(line);
+	});
+
+	test("cuts a longer line to 60 characters and appends an ellipsis", () => {
+		expect(firstLineDescription(`${"y".repeat(61)}\nrest`)).toBe(`${"y".repeat(60)}...`);
+	});
+
+	test("is empty for an empty or blank body", () => {
+		expect(firstLineDescription("")).toBe("");
+		expect(firstLineDescription("\n \n\t\n")).toBe("");
 	});
 });

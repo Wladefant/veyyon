@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { PlanModeState } from "@veyyon/coding-agent/plan-mode/state";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { enforcePlanModeWrite, resolvePlanPath } from "@veyyon/coding-agent/tools/core/plan-mode-guard";
-import { removeWithRetries } from "@veyyon/utils";
+import { privateTempDir, removeWithRetries } from "@veyyon/utils";
 import { makeToolSession } from "../helpers/tool-session";
 
 const ARTIFACTS_DIR = path.join(os.tmpdir(), "agent-artifacts");
@@ -45,10 +45,10 @@ describe("resolvePlanPath local:// support", () => {
 		);
 	});
 
-	it("falls back to os tmp root when artifacts dir is unavailable", () => {
+	it("falls back to the private temp root when artifacts dir is unavailable", () => {
 		const session = makeSession({ artifactsDir: null, sessionId: "session-42" });
 		expect(resolvePlanPath(session, "local://memo.txt")).toBe(
-			path.join(os.tmpdir(), "veyyon-local", "session-42", "memo.txt"),
+			path.join(privateTempDir(), "local", "session-42", "memo.txt"),
 		);
 	});
 });

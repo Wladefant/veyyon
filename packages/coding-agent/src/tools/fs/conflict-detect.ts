@@ -691,17 +691,7 @@ export function formatConflictWarning(
 	} else {
 		out.push(`warn ${total} unresolved ${word} detected`);
 	}
-	if (options.scanTruncated) {
-		out.push("- note: file scan hit the byte cap; additional conflicts may exist beyond the scanned prefix.");
-	}
-
-	const oursLabel = pickLabel(entries, e => e.oursLabel);
-	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
-	const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));
-	const anyBase = entries.some(e => e.baseLines !== undefined);
-	if (oursLabel) out.push(`- ours = ${oursLabel}`);
-	if (theirsLabel) out.push(`- theirs = ${theirsLabel}`);
-	if (anyBase) out.push(`- base = ${baseLabel ?? "(no label)"}`);
+	appendScanNotes(out, entries, options.scanTruncated);
 	out.push(
 		'NOTICE: Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` to render a single side). Resolve with `write({ path: "conflict://<N>", content })`, or bulk-resolve every registered conflict with `write({ path: "conflict://*", content })`. Writes replace ONLY the marker block (markers + all sides) — never repeat the lines before/after it; they stay in place.',
 	);
@@ -761,16 +751,7 @@ export function formatConflictSummary(
 	const total = entries.length;
 	const word = total === 1 ? "conflict" : "conflicts";
 	lines.push(`warn ${total} unresolved ${word} in ${options.displayPath || "<file>"}`);
-	if (options.scanTruncated) {
-		lines.push("- note: file scan hit the byte cap; additional conflicts may exist beyond the scanned prefix.");
-	}
-	const oursLabel = pickLabel(entries, e => e.oursLabel);
-	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
-	const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));
-	const anyBase = entries.some(e => e.baseLines !== undefined);
-	if (oursLabel) lines.push(`- ours = ${oursLabel}`);
-	if (theirsLabel) lines.push(`- theirs = ${theirsLabel}`);
-	if (anyBase) lines.push(`- base = ${baseLabel ?? "(no label)"}`);
+	appendScanNotes(lines, entries, options.scanTruncated);
 	lines.push(
 		'NOTICE: Bulk-resolve with `write({ path: "conflict://*", content })`, or address a single block with `write({ path: "conflict://<N>", content })`. Inspect a block by reading `conflict://<N>` (add `/ours` / `/theirs` / `/base` for a single side).',
 	);
@@ -786,6 +767,21 @@ export function formatConflictSummary(
 		lines.push(`${idCell}  ${range}${kind}`);
 	}
 	return lines.join("\n");
+}
+
+/** The byte-cap note and the side labels shared by the full warning and the summary index. */
+function appendScanNotes(out: string[], entries: readonly ConflictEntry[], scanTruncated: boolean | undefined): void {
+	if (scanTruncated) {
+		out.push("- note: file scan hit the byte cap; additional conflicts may exist beyond the scanned prefix.");
+	}
+	const oursLabel = pickLabel(entries, e => e.oursLabel);
+	const theirsLabel = pickLabel(entries, e => e.theirsLabel);
+	if (oursLabel) out.push(`- ours = ${oursLabel}`);
+	if (theirsLabel) out.push(`- theirs = ${theirsLabel}`);
+	if (entries.some(e => e.baseLines !== undefined)) {
+		const baseLabel = pickLabel(entries, e => (e.baseLines !== undefined ? e.baseLabel : undefined));
+		out.push(`- base = ${baseLabel ?? "(no label)"}`);
+	}
 }
 
 function pickLabel(

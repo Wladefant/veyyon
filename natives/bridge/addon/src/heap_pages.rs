@@ -175,14 +175,14 @@ fn trim_arenas() -> bool {
 	}
 }
 
-/// What a test that measures the process's memory needs.
+/// What a test that measures or changes process-wide state needs.
 #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
 pub mod measure {
 	/// Runs the test `name` of `module` alone in a child process with `env` set.
 	///
-	/// Returns true in the child, so the measurement sees only that test's
-	/// allocations, and false in the parent after checking that the child
-	/// passed.
+	/// Returns true in the child, so the test is the only one in its process,
+	/// whose allocations and limits it measures or changes, and false in the
+	/// parent after checking that the child passed.
 	pub fn in_child(module: &str, name: &str, env: &[(&str, &str)]) -> bool {
 		const CHILD: &str = "VEYYON_HEAP_PAGES_TEST_CHILD";
 		if std::env::var_os(CHILD).is_some() {

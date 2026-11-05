@@ -25,16 +25,18 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	__resetDirsFromEnvForTests,
-	APP_NAME,
 	CONFIG_DIR_NAME,
 	DEFAULT_PROFILE_DIR_NAME,
-	getConfigRootDir,
 	getGlobalConfigRootDir,
+	PROFILES_DIR_NAME,
+} from "@veyyon/utils/config-root";
+import {
+	__resetDirsFromEnvForTests,
+	APP_NAME,
+	getConfigRootDir,
 	getLogsDir,
 	getPuppeteerDir,
 	getSessionsDir,
-	PROFILES_DIR_NAME,
 } from "@veyyon/utils/dirs";
 
 const KEYS = [

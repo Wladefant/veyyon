@@ -1,19 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core";
-import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
+import type { AgentContext, AgentLoopConfig, AgentTool } from "@veyyon/agent-core/types";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 /**
  * Concurrent tool execution + abort: a mid-run AbortSignal must stop further
  * tools and surface stopReason aborted (or an error tool result), never hang.
  */
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 function makeSlowTool(log: string[], delayMs: number): AgentTool {
 	const schema = type({ n: "number" });

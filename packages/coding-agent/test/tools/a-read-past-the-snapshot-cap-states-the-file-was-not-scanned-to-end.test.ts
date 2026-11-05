@@ -30,14 +30,8 @@ import {
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
 
 /** `count` rows of `width` bytes each, newline-terminated, so the byte size is exact. */
 function rows(count: number, width: number): string {
@@ -108,7 +102,7 @@ describe("a read past the snapshot cap states the file was not scanned to end", 
 
 	for (const { name, target, shownFirstLine } of oversized) {
 		it(`${name}: the notice states the shown range and no total`, async () => {
-			const output = getText(await read().execute("r", { path: target }));
+			const output = toolResultText(await read().execute("r", { path: target }));
 			const match = UNSCANNED_NOTICE.exec(output);
 			expect(match).not.toBeNull();
 			const [, start, end, next] = match as RegExpExecArray;
@@ -122,7 +116,7 @@ describe("a read past the snapshot cap states the file was not scanned to end", 
 	}
 
 	it("control: a file under the cap still reports its true total", async () => {
-		const output = getText(await read().execute("r", { path: "small.txt" }));
+		const output = toolResultText(await read().execute("r", { path: "small.txt" }));
 		expect(output).toMatch(
 			new RegExp(`\\[Showing lines 1-\\d+ of ${CONTROL_ROWS}(?: \\([^)]+\\))?\\. Use :\\d+ to continue\\]`),
 		);
@@ -132,7 +126,7 @@ describe("a read past the snapshot cap states the file was not scanned to end", 
 	it("control: a bounded range that reaches past the end of an oversized file scans to EOF and reports its true total", async () => {
 		// The selected-line accounting never hits its limit, so the scan runs to EOF and the count is
 		// exact: the rows plus the trailing phantom row of a newline-terminated file.
-		const output = getText(await read().execute("r", { path: `huge.txt:1-${OVERSIZED_ROWS * 2}` }));
+		const output = toolResultText(await read().execute("r", { path: `huge.txt:1-${OVERSIZED_ROWS * 2}` }));
 		expect(output).toMatch(
 			new RegExp(`\\[Showing lines 1-\\d+ of ${OVERSIZED_ROWS + 1}(?: \\([^)]+\\))?\\. Use :\\d+ to continue\\]`),
 		);

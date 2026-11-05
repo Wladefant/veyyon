@@ -727,6 +727,13 @@ function obfuscateAssistantMessage(obfuscator: SecretObfuscator, message: Assist
 			changed = true;
 			return { ...block, arguments: args };
 		}
+		if (block.type === "thinking") {
+			// The advisor renders the primary's reasoning, so it is a field a secret reaches it through.
+			const thinking = obfuscator.obfuscate(block.thinking);
+			if (thinking === block.thinking) return block;
+			changed = true;
+			return { ...block, thinking };
+		}
 		return block;
 	});
 	return changed ? { ...message, content } : message;
@@ -750,18 +757,7 @@ function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMes
 			const content = obfuscateTextualContent(obfuscator, message.content as TextualContent);
 			return content === message.content ? message : ({ ...(message as object), content } as AgentMessage);
 		}
-		case "toolResult": {
-			const msg = message as AgentMessage & {
-				content: TextualContent;
-				details?: Record<string, unknown>;
-			};
-			const content = obfuscateTextualContent(obfuscator, msg.content);
-			const details = obfuscateDetails(obfuscator, msg.details);
-			if (content === msg.content && details === msg.details) return message;
-			return { ...(message as object), content, details } as AgentMessage;
-		}
-		case "assistant":
-			return obfuscateAssistantMessage(obfuscator, message as AssistantMessage) as AgentMessage;
+		case "toolResult":
 		case "custom":
 		case "hookMessage": {
 			const msg = message as AgentMessage & {
@@ -773,6 +769,8 @@ function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMes
 			if (content === msg.content && details === msg.details) return message;
 			return { ...(message as object), content, details } as AgentMessage;
 		}
+		case "assistant":
+			return obfuscateAssistantMessage(obfuscator, message as AssistantMessage) as AgentMessage;
 		case "bashExecution": {
 			const msg = message as AgentMessage & { command: string; output: string };
 			const command = obfuscator.obfuscate(msg.command);

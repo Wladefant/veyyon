@@ -18,7 +18,9 @@ import type { AssistantRetryRecovery, ImageContent, TextContent, ToolResultMessa
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { CompactionEngineAction } from "../config/compaction-strategy";
 import type { Rule } from "../discovery/capability/rule";
+import type { EditToolDetails } from "../edit";
 import type { Goal, GoalModeState } from "../goals/state";
+import type { BashToolDetails, ReadToolDetails, SearchToolDetails } from "../tools";
 import type { TodoItem } from "../tools/agent/todo";
 
 // ============================================================================
@@ -282,6 +284,71 @@ export interface TodoReminderEvent {
 	attempt: number;
 	maxAttempts: number;
 }
+
+// ============================================================================
+// Tool Result Events
+// ============================================================================
+
+/** Fields every `tool_result` event has, whichever tool ran. */
+interface ToolResultEventBase {
+	type: "tool_result";
+	/** Tool call ID */
+	toolCallId: string;
+	/** Tool input parameters */
+	input: Record<string, unknown>;
+	/** Full content array (text and images) */
+	content: (TextContent | ImageContent)[];
+	/** Whether the tool execution was an error */
+	isError: boolean;
+}
+
+/** Tool result event for the bash tool */
+export interface BashToolResultEvent extends ToolResultEventBase {
+	toolName: "bash";
+	details: BashToolDetails | undefined;
+}
+
+/** Tool result event for the read tool */
+export interface ReadToolResultEvent extends ToolResultEventBase {
+	toolName: "read";
+	details: ReadToolDetails | undefined;
+}
+
+/** Tool result event for the edit tool */
+export interface EditToolResultEvent extends ToolResultEventBase {
+	toolName: "edit";
+	details: EditToolDetails | undefined;
+}
+
+/** Tool result event for the write tool */
+export interface WriteToolResultEvent extends ToolResultEventBase {
+	toolName: "write";
+	details: undefined;
+}
+
+/** Tool result event for workspace search */
+export interface SearchToolResultEvent extends ToolResultEventBase {
+	toolName: "search";
+	details: SearchToolDetails | undefined;
+}
+
+/** Tool result event for custom and unknown tools */
+export interface CustomToolResultEvent extends ToolResultEventBase {
+	toolName: string;
+	details: unknown;
+}
+
+/**
+ * Fired after a tool executes. Handlers can modify the result.
+ * Discriminate on `toolName` to get typed `details`.
+ */
+export type ToolResultEvent =
+	| BashToolResultEvent
+	| ReadToolResultEvent
+	| EditToolResultEvent
+	| WriteToolResultEvent
+	| SearchToolResultEvent
+	| CustomToolResultEvent;
 
 // ============================================================================
 // Shared Event Result Shapes

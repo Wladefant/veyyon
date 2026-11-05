@@ -14,9 +14,10 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
 import { EvalExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/eval-execution";
 import { EXECUTION_MAX_DISPLAY_COLUMNS } from "@veyyon/coding-agent/modes/terminal/components/transcript/execution-shared";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "./helpers/require-theme";
 
 const MAX_DISPLAY_LINE_CHARS = EXECUTION_MAX_DISPLAY_COLUMNS;
 
@@ -24,9 +25,8 @@ describe("the execution display clamp through the bash component", () => {
 	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		setThemeInstance(theme!);
+		const theme = await requireTheme("dark");
+		setThemeInstance(theme);
 	});
 
 	function createComponentWithOutput(output: string): BashExecutionComponent {
@@ -273,9 +273,8 @@ describe("the bash and eval components clamp identically", () => {
 	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		setThemeInstance(theme!);
+		const theme = await requireTheme("dark");
+		setThemeInstance(theme);
 	});
 
 	function bothOutputs(input: string): { bash: string; evaluated: string } {

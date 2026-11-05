@@ -61,7 +61,7 @@ import { withIcon } from "../../../../theme/icon-label";
 import { getCurrentThemeName, getSettingsListTheme, theme } from "../../../../theme/theme";
 import { INHERIT_EFFORT_OPTION_VALUE } from "../../../../thinking";
 import { getTabBarTheme } from "../../shared";
-import { computeModalDims, MODAL_SIZING_SETTINGS, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_SETTINGS } from "../chrome/modal-geometry";
 import {
 	BREADCRUMB_HOVER_ID,
 	type ModalShellGeometry,
@@ -1101,6 +1101,8 @@ const SETTINGS_TIPS: readonly string[] = [
 
 const SIDEBAR_GAP_COLS = 3;
 const MIN_SETTINGS_CONTENT_WIDTH = 32;
+/** List rows the settings card asks for on a short terminal; it sheds the tip and padding before it shows fewer. */
+const MIN_SETTINGS_BODY_ROWS = 4;
 
 const SETTINGS_SIDEBAR_SHORTCUTS: readonly ModalShortcut[] = [
 	{ label: "up/down category" },
@@ -1480,8 +1482,9 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	#settingsShortcuts(): readonly ModalShortcut[] {
+		// A submenu opened from a search result takes the keys, so its footer is the submenu's.
+		if ((this.#searchList ?? this.#currentList)?.hasOpenSubmenu()) return SETTINGS_SUBPANE_SHORTCUTS;
 		if (this.#searchList) return SETTINGS_FILTER_SHORTCUTS;
-		if (this.#currentList?.hasOpenSubmenu()) return SETTINGS_SUBPANE_SHORTCUTS;
 		if (this.#sidebarFocused) return SETTINGS_SIDEBAR_SHORTCUTS;
 		if (this.#pluginComponent) return this.#pluginComponent.shortcuts();
 		const selected = this.#currentList?.getSelectedItem();
@@ -1526,7 +1529,7 @@ export class SettingsSelectorComponent implements Component {
 		this.#viewportTooSmall = true;
 		this.#shellGeometry = null;
 		this.#contentRowCount = 0;
-		const lines = Array.from({ length: termHeight }, () => padding(width));
+		const lines = emptyModalArea(width, termHeight);
 		const messages =
 			width >= 40
 				? ["Settings needs a larger terminal · resize or press Esc to close"]
@@ -1542,8 +1545,7 @@ export class SettingsSelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const termHeight = Math.max(1, process.stdout.rows || 40);
-		const sizing = sizingForArea(MODAL_SIZING_SETTINGS, termHeight);
-		const dims = computeModalDims(width, termHeight, sizing);
+		const dims = layoutModalCard(width, termHeight, MODAL_SIZING_SETTINGS);
 		if (!dims || dims.contentWidth < MIN_SETTINGS_CONTENT_WIDTH) return this.#renderTooSmall(width, termHeight);
 		this.#viewportTooSmall = false;
 
@@ -1553,21 +1555,22 @@ export class SettingsSelectorComponent implements Component {
 		const selectedDescription = selectedItem && !selectedItem.heading ? selectedItem.description : undefined;
 		const tipCandidates = selectedDescription ? [truncateToWidth(selectedDescription, contentWidth)] : SETTINGS_TIPS;
 		const settingsShortcuts = this.#settingsShortcuts();
-		const maxBodyRows = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts: settingsShortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 			tipCandidates,
-			hasSearch: true,
-		}).maxBodyRows;
+			searchLine: this.#searchChromeLine(contentWidth),
+			minBodyRows: MIN_SETTINGS_BODY_ROWS,
+		});
+		const maxBodyRows = chrome.maxBodyRows;
 		if (maxBodyRows < 1) return this.#renderTooSmall(width, termHeight);
 
 		const sidebarWidth = this.#sidebarWidth(contentWidth);
 		const paneWidth = Math.max(1, contentWidth - sidebarWidth - SIDEBAR_GAP_COLS);
 		const sidebarCursor = this.#sidebarFocused ? `${theme.fg("accent", theme.nav.cursor)} ` : `${theme.nav.cursor} `;
-		const sidebarLines = this.#tabBar.renderVertical(sidebarWidth, sidebarCursor);
+		// A column with more tabs than body rows windows around the active tab, so the last
+		// tabs stay reachable on a short terminal instead of falling off the bottom of the card.
+		const sidebarLines = this.#tabBar.renderVertical(sidebarWidth, sidebarCursor, maxBodyRows);
 		const searching = this.#searchList !== null;
 		const showPreview = !searching && this.#currentTabId === "appearance" && paneWidth >= 40;
 		const requestedPreviewLines = showPreview
@@ -1584,13 +1587,23 @@ export class SettingsSelectorComponent implements Component {
 		const previewLines = estimatedBody >= 8 ? requestedPreviewLines : [];
 		let listLines: readonly string[] = [];
 		if (list) {
-			list.setMaxVisible(Math.max(1, estimatedBody - previewLines.length));
+			// The list draws its group headings on top of the items it shows, so it is fitted by the
+			// lines it renders: fewer items until they fit the pane, and a pane that cannot hold one
+			// item under its heading is too small, rather than an active row cut off the card.
+			const paneRows = estimatedBody - previewLines.length;
+			let visibleItems = Math.max(1, paneRows);
+			list.setMaxVisible(visibleItems);
 			list.setOptions({
 				descriptionMode: "expand",
 				expandedIds: this.#expandedIds,
 				layout: "flat",
 			});
 			listLines = list.render(paneWidth);
+			while (listLines.length > paneRows && visibleItems > 1) {
+				list.setMaxVisible(--visibleItems);
+				listLines = list.render(paneWidth);
+			}
+			if (listLines.length > paneRows) return this.#renderTooSmall(width, termHeight);
 		} else if (this.#pluginComponent) {
 			listLines = this.#pluginComponent.render(paneWidth);
 		}
@@ -1607,19 +1620,12 @@ export class SettingsSelectorComponent implements Component {
 		const openSubmenuLabel = list?.hasOpenSubmenu() ? list.getOpenSubmenuLabel() : undefined;
 		const breadcrumb = openSubmenuLabel ? ` ${theme.nav.cursor} ${openSubmenuLabel}` : undefined;
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Settings",
 			breadcrumb,
 			breadcrumbClickable: true,
 			breadcrumbHovered: this.#hoveredShortcutId === BREADCRUMB_HOVER_ID,
-			sizing,
-			areaWidth: width,
-			areaHeight: termHeight,
 			body,
-			searchLine: this.#searchChromeLine(contentWidth),
-			tipCandidates,
-			shortcuts: settingsShortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 

@@ -83,7 +83,6 @@ function goal(overrides?: Partial<Goal>): Goal {
 const IDLE_HOST: GoalModeHost = {
 	isAutoSubmitBlocked: () => false,
 	hasPendingSubmission: () => false,
-	hasPendingVisibleUserSubmission: () => false,
 	isPlanModeActive: () => false,
 	withProgress: async (_label, work) => await work(),
 };

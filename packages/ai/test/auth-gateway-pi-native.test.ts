@@ -1,13 +1,11 @@
 import { describe, expect, it } from "bun:test";
+
 import { encodeStream, formatError, parseRequest } from "@veyyon/ai/providers/pi-native-server";
-import type {
-	AssistantMessage,
-	AssistantMessageEvent,
-	AssistantMessageEventStream,
-	Context,
-	Usage,
-} from "@veyyon/ai/types";
+
+import type { AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, Context } from "@veyyon/ai/types";
 import { Effort } from "@veyyon/catalog/effort";
+
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function makeEventStream(events: AssistantMessageEvent[], final: AssistantMessage): AssistantMessageEventStream {
 	async function* iter() {
@@ -37,15 +35,6 @@ function parseSseLine(line: string): unknown {
 	return JSON.parse(stripped);
 }
 
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 function baseAssistant(overrides?: Partial<AssistantMessage>): AssistantMessage {
 	return {
 		role: "assistant",
@@ -53,7 +42,7 @@ function baseAssistant(overrides?: Partial<AssistantMessage>): AssistantMessage 
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: ZERO_USAGE,
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 		...overrides,
@@ -197,7 +186,7 @@ describe("pi-native encodeStream", () => {
 		// event type. No partial-stripping, no per-event re-shaping.
 		const finalMessage = baseAssistant({
 			content: [{ type: "text", text: "hi" }],
-			usage: { ...ZERO_USAGE, input: 4, output: 2, totalTokens: 6 },
+			usage: { ...emptyUsage(), input: 4, output: 2, totalTokens: 6 },
 		});
 		const partialAfterDelta: AssistantMessage = baseAssistant({
 			content: [{ type: "text", text: "hi" }],
@@ -254,7 +243,7 @@ describe("pi-native encodeStream", () => {
 		const errored = baseAssistant({
 			stopReason: "error",
 			errorMessage: "upstream blew up",
-			usage: { ...ZERO_USAGE, input: 3 },
+			usage: { ...emptyUsage(), input: 3 },
 		});
 		const events: AssistantMessageEvent[] = [{ type: "error", reason: "error", error: errored }];
 		const parsed = (await collectSse(encodeStream(makeEventStream(events, errored)))).map(parseSseLine);

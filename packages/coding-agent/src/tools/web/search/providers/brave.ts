@@ -6,7 +6,6 @@
  */
 import type { ApiKey, AuthStorage, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
-import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { resolveProviderTextTransform } from "../../../../provider-boundary";
 import type { SearchResponse, SearchSource } from "../types";
@@ -46,11 +45,6 @@ interface BraveSearchResponse {
 	web?: {
 		results?: BraveSearchResult[];
 	};
-}
-
-/** Find BRAVE_API_KEY from environment or .env files. */
-export function findApiKey(): string | null {
-	return getEnvApiKey("brave") ?? null;
 }
 
 function buildSnippet(result: BraveSearchResult): string | undefined {

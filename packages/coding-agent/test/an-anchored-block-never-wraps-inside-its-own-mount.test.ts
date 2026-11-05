@@ -34,10 +34,7 @@
  * where the region is positioned once its rows are correct.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { renderAgentHudLines } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-hud";
 import { renderTodoBoardLines } from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
@@ -45,24 +42,21 @@ import { ANCHORED_BLOCK_PADDING_X } from "@veyyon/coding-agent/modes/terminal/co
 import { paintRailMotion, railIdleHeadAt } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import type { ObservableSession } from "@veyyon/coding-agent/modes/terminal/session-observer-registry";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { type AgentProgressPayload, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
-import type { TodoItem, TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
+import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Text } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { getPaddingX } from "@veyyon/utils/tight-mode";
 import { visibleWidth } from "@veyyon/utils/width";
+import { createTestAgentSession } from "./helpers/test-agent-session";
+import { todoPhase } from "./helpers/todo-phase";
 
 /** The width the mode hands a block, which is what the mount leaves it. */
 function contentColumns(terminalColumns: number): number {
 	return Math.max(1, terminalColumns - getPaddingX(ANCHORED_BLOCK_PADDING_X) * 2);
-}
-
-function phase(name: string, tasks: Array<[string, TodoItem["status"]]>): TodoPhase {
-	return { name, tasks: tasks.map(([content, status]) => ({ content, status })) };
 }
 
 function laneSessions(): ObservableSession[] {
@@ -112,15 +106,15 @@ function laneSessions(): ObservableSession[] {
 }
 
 const plan: readonly TodoPhase[] = [
-	phase("Foundation and core architecture setup for the new subsystem", [
+	todoPhase("Foundation and core architecture setup for the new subsystem", [
 		["read the rate limiter and its test across multiple packages and directories", "completed"],
 		["write the validating owner with exhaustive property assertions and invariant checks", "in_progress"],
 		["implement fallback mechanisms for when rate limiting is temporarily degraded", "pending"],
 	]),
-	phase("Migration and rollout across all service endpoints", [
+	todoPhase("Migration and rollout across all service endpoints", [
 		["fan the edits out to three directories and update all caller signatures", "pending"],
 	]),
-	phase("Validation and comprehensive end-to-end integration tests", [
+	todoPhase("Validation and comprehensive end-to-end integration tests", [
 		["run the suite across full terminal width spectrum and advance the plan", "pending"],
 	]),
 ];
@@ -225,17 +219,10 @@ describe("the live agent HUD fits the width the mode reports", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@veyyon-anchored-wrap-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path(), overrides: { "startup.quiet": true } });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 		eventBus = new EventBus();
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "startup.quiet": true }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path(), {
+			settings: { "startup.quiet": true },
+		}));
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, eventBus);
 	});
 

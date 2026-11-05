@@ -9,6 +9,7 @@ import { transformMessages } from "@veyyon/ai/providers/transform-messages";
 import type { AssistantMessage, Message, Model, ToolResultMessage } from "@veyyon/ai/types";
 import { normalizeResponsesToolCallId } from "@veyyon/ai/utils";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function makeModel(): Model<"openai-responses"> {
 	return buildModel({
@@ -32,14 +33,7 @@ function assistantWithCall(id: string): AssistantMessage {
 		api: "openai-responses",
 		provider: "openai",
 		model: "gpt-test",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};

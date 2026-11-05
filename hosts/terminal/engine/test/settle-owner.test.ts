@@ -13,9 +13,9 @@
  * This lock fails when a suite that drives a real `TUI` grows a local settle
  * helper again that does not go through the owner. It checks the helper's body,
  * not merely the file's imports: a suite may legitimately keep a wrapper that
- * sleeps out a real debounce window (the editor's 100 ms autocomplete debounce,
- * the 120 ms resize settle) before settling the frame that follows, and those
- * wrappers still have to end at the owner.
+ * sleeps out a real wall-clock window (the 120 ms resize settle) before
+ * settling the frame that follows, and those wrappers still have to end at the
+ * owner.
  */
 import { describe, expect, it } from "bun:test";
 import { readdir } from "node:fs/promises";

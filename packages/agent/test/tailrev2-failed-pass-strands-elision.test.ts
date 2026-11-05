@@ -31,46 +31,12 @@ import {
 	renderTailElisionMarker,
 	rollbackTailElisions,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { ToolResultMessage } from "@veyyon/ai";
+import { assistant, messageEntries, readResult, user } from "./support/compaction-session";
 
-let idCounter = 0;
-
-const usage = (): Usage => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
-
-function entry(message: AgentMessage): SessionMessageEntry {
-	return { type: "message", id: `e-${idCounter++}`, parentId: null, timestamp: "2026-08-06T00:00:00.000Z", message };
-}
-
-const user = (text: string): AgentMessage => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
-
-const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
-	role: "assistant",
-	content,
-	timestamp: 1,
-	provider: "mock",
-	model: "mock",
-	api: "mock",
-	usage: usage(),
-	stopReason: "stop",
-});
+const { entry } = messageEntries();
 
 const withCall = (id: string) => assistant([{ type: "toolCall", id, name: "read", arguments: { path: "big" } }]);
-
-const result = (toolCallId: string, text: string): ToolResultMessage => ({
-	role: "toolResult",
-	toolCallId,
-	toolName: "read",
-	content: [{ type: "text", text }],
-	isError: false,
-	timestamp: 1,
-});
 
 function messageOf(e: SessionEntry): AgentMessage {
 	if (e.type !== "message") throw new Error("fixture entries are all message entries");
@@ -93,17 +59,16 @@ const HUGE_A = "a".repeat(400_000);
 const HUGE_B = "b".repeat(400_000);
 
 function buildSession(): SessionEntry[] {
-	idCounter = 0;
 	const entries: SessionEntry[] = [];
 	for (let turn = 0; turn < 6; turn++) {
 		entries.push(entry(user(`q${turn}`)));
 		entries.push(entry(withCall(`c${turn}`)));
-		entries.push(entry(result(`c${turn}`, "small")));
+		entries.push(entry(readResult(`c${turn}`, "small")));
 	}
 	// Newest turn: one tool result that dwarfs the keep-recent budget.
 	entries.push(entry(user("last")));
 	entries.push(entry(withCall("c-last")));
-	entries.push(entry(result("c-last", HUGE_A)));
+	entries.push(entry(readResult("c-last", HUGE_A)));
 	return entries;
 }
 
@@ -145,7 +110,7 @@ describe("a failed compaction pass rolls its tail elisions back", () => {
 		// RETRY: a new turn with another oversized result forces a second pass.
 		entries.push(entry(user("next")));
 		entries.push(entry(withCall("c-next")));
-		entries.push(entry(result("c-next", HUGE_B)));
+		entries.push(entry(readResult("c-next", HUGE_B)));
 
 		const second = prepareCompaction(entries, settings(10_000));
 		expect(second).toBeDefined();
@@ -191,7 +156,7 @@ describe("a failed compaction pass rolls its tail elisions back", () => {
 
 		// The entry moved on after the preparation was made: rollback must not
 		// restore over a message some newer owner installed.
-		const newer = result("c-last", "newer bytes");
+		const newer = readResult("c-last", "newer bytes");
 		elidedEntry.message = newer;
 		expect(rollbackTailElisions(entries, first!.tailElisions!)).toBe(0);
 		expect(elidedEntry.message).toBe(newer);

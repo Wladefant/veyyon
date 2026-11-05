@@ -20,12 +20,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 29 ? "NEEDLE line 30" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
@@ -34,43 +37,6 @@ const OTHER_FILES = 40;
 
 function otherFile(i: number): string {
 	return path.join("other", i < OTHER_FILES / 2 ? "a" : "b", `f${i}.txt`);
-}
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		hasEditTool: true,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
-		enableLsp: false,
-	} as ToolSession;
-}
-
-function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await fs.writeFile(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
 }
 
 function tagFromOutput(text: string, file: string): string {
@@ -95,7 +61,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		for (let i = 0; i < OTHER_FILES; i++) {
 			await fs.writeFile(path.join(tmpDir, otherFile(i)), `FILLER ${i}\nsecond line\n`);
 		}
-		session = createSession(tmpDir);
+		session = makeWorkspaceToolSession(tmpDir);
 	});
 	afterEach(async () => {
 		await removeWithRetries(tmpDir);
@@ -103,7 +69,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 
 	async function readFirstLines(): Promise<string> {
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
-		return tagFromOutput(resultText(read), file);
+		return tagFromOutput(toolResultText(read), file);
 	}
 
 	function expectEvicted(): void {
@@ -117,9 +83,9 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		}
 		expectEvicted();
 		const reread = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
-		expect(tagFromOutput(resultText(reread), file)).toBe(tag);
+		expect(tagFromOutput(toolResultText(reread), file)).toBe(tag);
 
-		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
 	});
 
@@ -134,9 +100,9 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		}
 		expectEvicted();
 		const hit = await new SearchTool(session).execute("s2", { type: "text", input: "NEEDLE", path: file });
-		expect(tagFromOutput(resultText(hit), file)).toBe(tag);
+		expect(tagFromOutput(toolResultText(hit), file)).toBe(tag);
 
-		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
 	});
 
@@ -149,7 +115,7 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 		await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
 
 		await expect(
-			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 18.=18:\n+EDITED`, session)),
+			executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 18.=18:\n+EDITED`, session)),
 		).rejects.toThrow(/never displayed \(it showed/);
 		expect(await fs.readFile(file, "utf8")).toBe(CONTENT);
 	});
@@ -160,15 +126,15 @@ describe("a line read before its snapshot was evicted stays editable", () => {
 			await new ReadTool(session).execute(`o${i}`, { path: path.join(tmpDir, otherFile(i)) });
 		}
 		expectEvicted();
-		const edited = resultText(
-			await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
+		const edited = toolResultText(
+			await executeHashlineSingle(hashlineExecOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session)),
 		);
 		const editedTag = tagFromOutput(edited, file);
 		const reread = await new ReadTool(session).execute("r2", { path: `${file}:34-36` });
-		expect(tagFromOutput(resultText(reread), file)).toBe(editedTag);
+		expect(tagFromOutput(toolResultText(reread), file)).toBe(editedTag);
 
 		await executeHashlineSingle(
-			execOptions(`[notes.txt#${editedTag}]\nSWAP 1.=3:\n+ONE\n+TWO\n+THREE\nSWAP 35.=35:\n+LATER`, session),
+			hashlineExecOptions(`[notes.txt#${editedTag}]\nSWAP 1.=3:\n+ONE\n+TWO\n+THREE\nSWAP 35.=35:\n+LATER`, session),
 		);
 		expect(await fs.readFile(file, "utf8")).toBe(
 			CONTENT.replace("line 1\nline 2\nline 3\n", "ONE\nTWO\nTHREE\n").replace("line 35\n", "LATER\n"),

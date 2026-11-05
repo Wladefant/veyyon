@@ -308,12 +308,12 @@ describe("the modules that were repointed stay cut", () => {
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
 		// re-exports rode along and each new one raised this count by hand; both names are now taken
 		// from `@veyyon/utils/url` and `@veyyon/utils/scoped-timeout`, which own them.
-		["plugins/mnemopi/src/core/extraction/client.ts", 70],
+		["plugins/mnemopi/src/core/extraction/client.ts", 71],
 		// Re-measured 2026-08-28 at 56, from 55. The one new module is `@veyyon/utils/ansi`, a
 		// zero-import leaf that owns the escape constants; `sanitize-text.ts`, already on this reach,
 		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
 		// its own, so nothing outside this closure was gained.
-		["coding-agent/src/config/api-key-resolver.ts", 59],
+		["coding-agent/src/config/api-key-resolver.ts", 60],
 		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The

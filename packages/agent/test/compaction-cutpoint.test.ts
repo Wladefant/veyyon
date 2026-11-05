@@ -9,6 +9,7 @@ import {
 	getLastAssistantUsage,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, ToolResultMessage, Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const IMAGE_TOKEN_ESTIMATE = 1200;
 const FRAME_TOKEN_ESTIMATE = 5024;
@@ -19,15 +20,7 @@ function messageEntry(message: AgentMessage): SessionMessageEntry {
 }
 
 function usage(over: Partial<Usage> = {}): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		...over,
-	};
+	return { ...emptyUsage(), ...over };
 }
 
 function assistant(content: AssistantMessage["content"], over: Partial<AssistantMessage> = {}): AssistantMessage {

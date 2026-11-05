@@ -1,7 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { Api, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { isSubcommand } from "@veyyon/coding-agent/cli-commands";
 import { getDefault, getEnumValues, getUi } from "@veyyon/coding-agent/config/settings-schema";
 import { TinyTitleDownloadProgressComponent } from "@veyyon/coding-agent/modes/terminal/components/chrome/tiny-title-download-progress";
@@ -24,12 +23,7 @@ import {
 import { createTinyTitleSubprocess, tinyTitleClient } from "@veyyon/coding-agent/tiny/title-client";
 import { generateSessionTitle } from "@veyyon/coding-agent/utils/title-generator";
 import type { Subprocess } from "bun";
-
-function getModelOrThrow(id: string): Model<Api> {
-	const model = getBundledModel("anthropic", id);
-	if (!model) throw new Error(`Expected model ${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function createSettings(model: Model<Api>, tinyModel: string) {
 	return {
@@ -94,7 +88,7 @@ afterEach(() => {
 
 describe("tiny title generator routing", () => {
 	it("keeps online-only behavior when Tiny Model is Online", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const local = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Local Title");
 		const online = mockOnlineTitle("Online Title");
 
@@ -110,7 +104,7 @@ describe("tiny title generator routing", () => {
 	});
 
 	it("uses the local client for selected local models", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const local = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Local Title");
 		const online = mockOnlineTitle("Online Title");
 
@@ -126,7 +120,7 @@ describe("tiny title generator routing", () => {
 	});
 
 	it("passes the resolved TITLE_SYSTEM.md prompt to the local client", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const customPrompt = "Generate lowercase colon-delimited session names.";
 		const local = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Local Title");
 		const online = mockOnlineTitle("Online Title");
@@ -147,7 +141,7 @@ describe("tiny title generator routing", () => {
 	});
 
 	it("does NOT fall back to online when local returns null (issue #3187)", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const local = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue(null);
 		const online = mockOnlineTitle("Billed Online Title");
 
@@ -163,7 +157,7 @@ describe("tiny title generator routing", () => {
 	});
 
 	it("does NOT fall back to online when local throws", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		vi.spyOn(tinyTitleClient, "generate").mockRejectedValue(new Error("worker crashed"));
 		const online = mockOnlineTitle("Billed Online Title");
 
@@ -178,7 +172,7 @@ describe("tiny title generator routing", () => {
 	});
 
 	it("does NOT call the local worker or online path for an unknown tinyModel key", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const local = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Late Local");
 		const online = mockOnlineTitle("Billed Online Title");
 

@@ -19,6 +19,7 @@
 - An online host backend sends a `__proto__` key of its request payload instead of dropping it.
 
 ## [1.5.6] - 2026-10-10
+## [1.5.9] - 2026-10-22
 
 ### Changed
 

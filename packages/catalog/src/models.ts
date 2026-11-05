@@ -89,9 +89,14 @@ export function setEnrichedRegistrySnapshotStore(store: EnrichedRegistrySnapshot
  * Stable content digest of the bundled catalog text. Registry-level snapshots
  * (for example the coding-agent model registry's persisted static stage) fold
  * it into their fingerprints so a catalog regeneration invalidates them.
+ *
+ * A compiled binary embeds the catalog, so its digest is fixed when the binary is built:
+ * the build defines `process.env.VEYYON_CATALOG_DIGEST` as this function's result, and a
+ * launch does not read and hash the 2.3 MB file to learn it again.
  */
 export function bundledCatalogDigest(): string {
-	catalogDigest ??= createHash("sha256").update(readFileSync(modelsPath)).digest("hex");
+	catalogDigest ??=
+		process.env.VEYYON_CATALOG_DIGEST || createHash("sha256").update(readFileSync(modelsPath)).digest("hex");
 	return catalogDigest;
 }
 

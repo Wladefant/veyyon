@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
+import { toolResultText } from "../../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./chromium";
 
 const PICKER_TYPES = ["date", "datetime-local", "month", "week", "time", "color"] as const;
@@ -36,10 +37,6 @@ beforeAll(() => {
 afterAll(async () => {
 	if (CHROMIUM_AVAILABLE) await tool.execute("close", { action: "close", all: true, kill: true });
 });
-
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
-}
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("an observation with a picker open", () => {
 	for (const type of PICKER_TYPES) {
@@ -67,7 +64,7 @@ for (const element of seen.elements) await tab.id(element.id).evaluate(el => el.
 await tab.id(seen.elements.find(element => element.role === "button" && element.name === "Go").id).click();
 return { grew: open > closed, roles: seen.elements.map(element => element.role + " " + (element.name ?? "")), pressed: await tab.evaluate(() => document.getElementById("b").dataset.pressed) };`,
 			});
-			const observed = JSON.parse(text(result)) as { grew: boolean; roles: string[]; pressed: string };
+			const observed = JSON.parse(toolResultText(result, "")) as { grew: boolean; roles: string[]; pressed: string };
 			expect(observed.grew).toBe(true);
 			expect(observed.roles).toContain("textbox Query");
 			expect(observed.roles).toContain("button Go");

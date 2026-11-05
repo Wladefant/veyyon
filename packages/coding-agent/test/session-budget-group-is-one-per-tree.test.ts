@@ -40,7 +40,7 @@ import {
 } from "./helpers/fake-cgroup";
 
 afterEach(async () => {
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	await removeCgroupRoots();
 });
 

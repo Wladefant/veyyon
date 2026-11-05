@@ -1165,7 +1165,7 @@ async def _run_compiled_async(code, ns: dict, *, want_value: bool) -> Any:
 
 
 def _compile_source(source: str) -> tuple[Any, Any | None, bool]:
-    module = ast.parse(source, mode="exec")
+    module = ast.parse(source, filename="<cell>", mode="exec")
     if not module.body:
         return None, None, False
 
@@ -1404,15 +1404,29 @@ async def _handle_request_async(req: dict) -> None:
         _CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS.reset(displayed_matplotlib_token)
 
 
+def _cell_traceback(exc: BaseException):
+    """The traceback from the first frame of cell code on.
+
+    The runner frames that dispatched the cell come first and are not code the
+    cell ran. An error with no cell frame at all, such as a cell that did not
+    compile, is shown as the exception alone."""
+    tb = exc.__traceback__
+    while tb is not None and tb.tb_frame.f_code.co_filename != "<cell>":
+        tb = tb.tb_next
+    return tb
+
+
 def _emit_error(rid: str, exc: BaseException) -> None:
-    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    # Joined before splitting: a chained exception's separator chunk ends in a
+    # blank line, which a per-chunk rstrip removed.
+    text = "".join(traceback.format_exception(type(exc), exc, _cell_traceback(exc)))
     _emit(
         {
             "type": "error",
             "id": rid,
             "ename": type(exc).__name__,
             "evalue": str(exc),
-            "traceback": [line.rstrip("\n") for line in tb_lines],
+            "traceback": text.rstrip("\n").split("\n"),
         }
     )
 

@@ -49,7 +49,7 @@ const procRoots: string[] = [];
 
 afterEach(async () => {
 	for (const limiter of live.splice(0)) await limiter.dispose();
-	resetSessionCpuLimitsForTests();
+	await resetSessionCpuLimitsForTests();
 	for (const root of procRoots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 	await removeCgroupRoots();
 });

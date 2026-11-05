@@ -13,13 +13,13 @@ import { type Component, CURSOR_MARKER, type Focusable } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { Key, matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -279,11 +279,10 @@ export class MoveOverlay implements Component, Focusable {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
 		const body: string[] = [this.#renderInput(), ""];
@@ -302,16 +301,17 @@ export class MoveOverlay implements Component, Focusable {
 			}
 		}
 
-		const shell = renderModalShell({
-			title: "Move",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
-			body,
-			shortcuts: MOVE_SHORTCUTS,
-			hoveredShortcutId: this.#hoveredShortcutId,
-			showClose: true,
-		});
+		const shell = renderModalShell(
+			planModalChrome(dims, {
+				shortcuts: MOVE_SHORTCUTS,
+				hoveredShortcutId: this.#hoveredShortcutId,
+			}),
+			{
+				title: "Move",
+				body,
+				showClose: true,
+			},
+		);
 		this.#shellGeometry = shell.geometry;
 		// The body leads with the input line and a blank before the suggestion rows.
 		this.#listRowStart = (shell.geometry?.bodyRowStart ?? 0) + 2;
@@ -342,10 +342,7 @@ export class MoveOverlay implements Component, Focusable {
 			onHoverRow: () => {
 				const index = event.row - this.#listRowStart;
 				const hovered = index >= 0 && index < shown ? index : null;
-				if (hovered !== this.#hover.key) {
-					this.#hover.set(hovered);
-					this.#onRequestRender?.();
-				}
+				if (this.#hover.set(hovered)) this.#onRequestRender?.();
 			},
 			onClickRow: () => {
 				const index = event.row - this.#listRowStart;

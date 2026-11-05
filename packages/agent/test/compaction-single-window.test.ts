@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentMessage } from "@veyyon/agent-core";
 import {
 	assertValidCompactionResult,
 	type CompactionEntry,
@@ -11,6 +10,7 @@ import {
 	REMOTE_COMPACTION_PRESERVE_KEY,
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
+import { createUserMessage } from "./helpers";
 
 /**
  * Server-side compaction is single-window: when `compaction.remote` is on and
@@ -63,17 +63,13 @@ function preparation(): CompactionPreparation {
 	};
 }
 
-function makeUserMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
-}
-
 function makeMessageEntry(id: string, parentId: string | undefined, text: string): SessionEntry {
 	return {
 		type: "message",
 		id,
 		parentId,
 		timestamp: new Date().toISOString(),
-		message: makeUserMessage(text),
+		message: createUserMessage(text),
 	} as SessionEntry;
 }
 

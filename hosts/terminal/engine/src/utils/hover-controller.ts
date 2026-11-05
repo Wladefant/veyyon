@@ -11,9 +11,15 @@ export class HoverController<K = number | string> {
 		return this.#key;
 	}
 
-	set(key: K | null): void {
+	/**
+	 * Point at a row (null for "the pointer left the list"). Returns true when the hovered row
+	 * changed and the host must repaint; a report naming the row already hovered changes nothing.
+	 */
+	set(key: K | null): boolean {
+		if (key === this.#key) return false;
 		this.#key = key;
 		this.#fade?.set(key);
+		return true;
 	}
 
 	setMotion(options: HoverFadeOptions): void {

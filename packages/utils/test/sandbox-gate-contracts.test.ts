@@ -19,7 +19,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CONFIG_DIR_NAME } from "@veyyon/utils/dirs";
+import { CONFIG_DIR_NAME } from "@veyyon/utils/config-root";
 import { SANDBOX_MARKER_ENV_KEY } from "../src/dir-env-keys";
 import {
 	type Breach,
@@ -278,7 +278,8 @@ describe("VEYYON_CONFIG_DIR", () => {
 	 */
 	it("rejects a bare directory name at import, before anything can be written", () => {
 		const { code, output } = runChild(
-			`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/dirs";\n` +
+			`import "${REPO_ROOT}/packages/utils/src/dirs";\n` +
+				`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/config-root";\n` +
 				`try { getConfigRootOverride(); console.log("ACCEPTED"); } catch (e) { console.log("REFUSED:" + e.message); }`,
 			{ VEYYON_CONFIG_DIR: `${CONFIG_DIR_NAME}-mysuite`, [SANDBOX_MARKER_ENV_KEY]: undefined },
 		);
@@ -296,7 +297,7 @@ describe("VEYYON_CONFIG_DIR", () => {
 	 */
 	it("rejects an absolute path that lands inside the real home", () => {
 		const { output } = runChild(
-			`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/dirs";\n` +
+			`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/config-root";\n` +
 				`import * as os from "node:os";\n` +
 				`process.env.VEYYON_CONFIG_DIR = os.homedir() + "/${CONFIG_DIR_NAME}-explicit";\n` +
 				`try { getConfigRootOverride(); console.log("ACCEPTED"); } catch (e) { console.log("REFUSED:" + e.message); }`,
@@ -317,7 +318,7 @@ describe("VEYYON_CONFIG_DIR", () => {
 		const outside = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-gate-root-"));
 		try {
 			const { output } = runChild(
-				`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/dirs";\n` +
+				`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/config-root";\n` +
 					`console.log("ROOT:" + getConfigRootOverride());`,
 				{ VEYYON_CONFIG_DIR: outside, [SANDBOX_MARKER_ENV_KEY]: undefined },
 			);
@@ -344,7 +345,7 @@ describe("VEYYON_CONFIG_DIR", () => {
 	 */
 	it("accepts a path under the home when the sandbox marker is present", () => {
 		const { code, output } = runChild(
-			`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/dirs";\n` +
+			`import { getConfigRootOverride } from "${REPO_ROOT}/packages/utils/src/config-root";\n` +
 				`import * as os from "node:os";\n` +
 				`process.env.VEYYON_CONFIG_DIR = os.homedir() + "/${CONFIG_DIR_NAME}-sandboxed";\n` +
 				`console.log("ROOT:" + getConfigRootOverride());`,

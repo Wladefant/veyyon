@@ -31,14 +31,8 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { zip } from "@veyyon/coding-agent/utils/zip";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
 
 function createSession(cwd: string): ToolSession {
 	return makeToolSession({
@@ -76,7 +70,7 @@ describe("an archive read starts at the offset it was asked for", () => {
 		const result = await tool.execute("read-archive-member-offset", {
 			path: `${archivePath}:lines.txt:raw:50-50`,
 		});
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("LINE-050");
 		// `drop-offset` answers from the beginning; `off-by-one` answers from line 51.
@@ -94,7 +88,7 @@ describe("an archive read starts at the offset it was asked for", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-archive-listing-offset", { path: `${archivePath}:dir:20` });
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("entry-020");
 		// `drop-offset` lists from the first entry; `off-by-one` skips to the 21st.

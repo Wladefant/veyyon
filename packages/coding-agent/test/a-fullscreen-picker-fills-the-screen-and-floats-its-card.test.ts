@@ -49,10 +49,10 @@ import {
 	MODAL_SIZING_LARGE,
 	sizingForArea,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
-import { renderModalShell } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
+import { paintCard } from "./helpers/modal-card";
 
 beforeAll(async () => {
 	await initTheme();
@@ -254,7 +254,7 @@ describe("the shell shrinks a card and re-centres it in the whole area", () => {
 		const wrong: string[] = [];
 		for (let bodyRows = 1; bodyRows <= 40; bodyRows++) {
 			const body = Array.from({ length: bodyRows }, (_, i) => `row ${i}`);
-			const shell = renderModalShell({
+			const shell = paintCard({
 				title: "Resume Session",
 				sizing,
 				areaWidth: WIDTH,

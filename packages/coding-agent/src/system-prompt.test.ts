@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { APP_NAME, DIR_OVERRIDE_ENV_KEYS } from "@veyyon/utils";
+import { restorePlatform, setPlatform } from "../../utils/test/helpers/platform-override";
 import { buildSystemPrompt } from "./system-prompt";
 import { __resetCpuStateForTests } from "./utils/host-environment";
 
@@ -450,8 +451,7 @@ describe.skipIf(process.platform !== "linux")("system prompt CPU model", () => {
 
 describe("non-Linux system prompt CPU model", () => {
 	it("includes the model returned by os.cpus", async () => {
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { value: "darwin" });
+		setPlatform("darwin");
 		__resetCpuStateForTests();
 		const cpus = spyOn(os, "cpus").mockImplementation(() => [
 			{
@@ -481,7 +481,7 @@ describe("non-Linux system prompt CPU model", () => {
 		} finally {
 			cpus.mockRestore();
 			__resetCpuStateForTests();
-			Object.defineProperty(process, "platform", { value: originalPlatform });
+			restorePlatform();
 		}
 	});
 });

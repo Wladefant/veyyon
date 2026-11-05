@@ -23,38 +23,16 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { SettingsSnapshotEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 const KNOWN_PATH = "agent.maxConcurrency";
 const KNOWN_VALUE = 7;
-
-function assistantMessage(text: string) {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
-	return {
-		role: "assistant" as const,
-		content: [{ type: "text" as const, text }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop" as const,
-		timestamp: Date.now(),
-	};
-}
 
 function snapshotEntries(entries: readonly { type: string }[]): SettingsSnapshotEntry[] {
 	return entries.filter((e): e is SettingsSnapshotEntry => e.type === "settings_snapshot");
@@ -90,7 +68,7 @@ describe("GRAN-3: effective-settings snapshot", () => {
 		if (!sessionFile) throw new Error("Expected a persisted session file path");
 
 		const settings = Settings.isolated({ [KNOWN_PATH]: KNOWN_VALUE });
-		manager.appendMessage(assistantMessage("configured run"));
+		manager.appendMessage(createAssistantMessage("configured run"));
 		manager.appendSettingsSnapshot(settings.getEffectiveSnapshot());
 		manager.flushSync();
 		await manager.close();
@@ -146,7 +124,7 @@ describe("GRAN-3: effective-settings snapshot", () => {
 			if (!sessionFile) throw new Error("Expected a persisted session file path");
 
 			const first = await createAgentSession(baseOptions(cwd, manager));
-			manager.appendMessage(assistantMessage("first turn"));
+			manager.appendMessage(createAssistantMessage("first turn"));
 			manager.flushSync();
 			await first.session.dispose();
 
@@ -160,7 +138,7 @@ describe("GRAN-3: effective-settings snapshot", () => {
 			// Resume the persisted session — no second snapshot is written.
 			const resumeManager = await SessionManager.open(sessionFile, sessionDir);
 			const resumed = await createAgentSession(baseOptions(cwd, resumeManager));
-			resumeManager.appendMessage(assistantMessage("second turn"));
+			resumeManager.appendMessage(createAssistantMessage("second turn"));
 			resumeManager.flushSync();
 			await resumed.session.dispose();
 

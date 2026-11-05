@@ -15,14 +15,8 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { zip } from "@veyyon/coding-agent/utils/zip";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
-}
 
 function createSession(cwd: string): ToolSession {
 	return makeToolSession({
@@ -51,7 +45,7 @@ describe("archive in-memory read binary detection (F8)", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-archive-nul", { path: `${archivePath}:binary.dat` });
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("Cannot read binary archive entry");
 	});
@@ -64,7 +58,7 @@ describe("archive in-memory read binary detection (F8)", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-archive-invalid-utf8", { path: `${archivePath}:garbage.bin` });
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("Cannot read binary archive entry");
 	});
@@ -75,7 +69,7 @@ describe("archive in-memory read binary detection (F8)", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-archive-text", { path: `${archivePath}:notes.txt` });
-		const output = getText(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("hello from inside the zip");
 		expect(output).not.toContain("Cannot read binary archive entry");

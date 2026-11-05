@@ -35,10 +35,11 @@
 // depend on history, and that a styled row gets its own bytes back.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { getThemeByName, paintBand, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { paintBand, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import { getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "./helpers/require-theme";
 
 const originalColorterm = Bun.env.COLORTERM;
 const originalAnsiPolicy = getAnsiPolicy();
@@ -80,8 +81,7 @@ beforeAll(async () => {
 	originalTheme = theme;
 	setAnsiPolicy("full");
 	Bun.env.COLORTERM = "truecolor";
-	const loaded = await getThemeByName("titanium");
-	if (!loaded) throw new Error("titanium theme unavailable in test env");
+	const loaded = await requireTheme("titanium");
 	if (loaded.getColorMode() !== "truecolor") {
 		throw new Error(`titanium built as ${loaded.getColorMode()}, wanted truecolor`);
 	}

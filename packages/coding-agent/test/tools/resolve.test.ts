@@ -1,12 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ResolveTool } from "@veyyon/coding-agent/tools/agent/resolve";
 import { resolveToolView } from "@veyyon/coding-agent/tools/agent/resolve-view";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 import { useFullColor } from "../helpers/theme-assertions";
+import { firstToolResultText } from "../helpers/tool-result-text";
 
 // Several cases below assert the exact painted bytes of a rendered block, which
 // `theme.fg` only produces when colour is on. See useFullColor.
@@ -22,10 +23,6 @@ function createSession(handler?: (input: unknown) => Promise<unknown>, clearPend
 		peekQueueInvoker: handler ? () => handler : () => undefined,
 		clearPendingInvokers,
 	};
-}
-
-function getText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content.find(part => part.type === "text")?.text ?? "";
 }
 
 function getRequiredFields(schema: { json?: { required?: Array<{ key: string }> } }): string[] {
@@ -68,7 +65,7 @@ describe("ResolveTool", () => {
 			reason: "Abandoning the staged edit.",
 		});
 		expect(result.isError ?? false).toBe(false);
-		expect(getText(result)).toContain("Nothing to discard");
+		expect(firstToolResultText(result)).toContain("Nothing to discard");
 		expect(result.details).toMatchObject({ action: "discard", reason: "Abandoning the staged edit." });
 		expect(clearRuns).toBe(1);
 	});
@@ -97,7 +94,7 @@ describe("ResolveTool", () => {
 			reason: "Preview changed wrong callsites",
 		});
 
-		expect(getText(result)).toContain("Rejected pending preview.");
+		expect(firstToolResultText(result)).toContain("Rejected pending preview.");
 		expect(discardedReason).toBe("Preview changed wrong callsites");
 		expect(result.details).toEqual({
 			action: "discard",
@@ -132,7 +129,7 @@ describe("ResolveTool", () => {
 		});
 
 		expect(appliedReason).toBe("Preview is correct");
-		expect(getText(result)).toContain("Applied 1 replacement in 1 file.");
+		expect(firstToolResultText(result)).toContain("Applied 1 replacement in 1 file.");
 		expect(result.details).toEqual({
 			action: "apply",
 			reason: "Preview is correct",
@@ -143,9 +140,7 @@ describe("ResolveTool", () => {
 });
 
 it("renders a highlighted apply summary", async () => {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	const uiTheme = theme!;
+	const uiTheme = await requireTheme("dark");
 
 	const component = drawToolView(
 		resolveToolView.renderResult(
@@ -173,9 +168,7 @@ it("renders a highlighted apply summary", async () => {
 });
 
 it("keeps the inverse block color across the full line (no mid-line fg reset)", async () => {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	const uiTheme = theme!;
+	const uiTheme = await requireTheme("dark");
 
 	const component = drawToolView(
 		resolveToolView.renderResult(

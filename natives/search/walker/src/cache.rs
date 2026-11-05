@@ -170,12 +170,20 @@ where
 	with_walk_pool(|| items.par_iter().try_for_each(operation))
 }
 
-/// Run traversal-adjacent work with per-worker state on the centralized walker
-/// pool.
-pub fn parallel_for_each_init<T, S, E>(
+/// Run traversal-adjacent work over `items` in chunks of at most `chunk_len`.
+///
+/// Each worker of the centralized walker pool keeps state made by `init`.
+/// Whether the work runs in parallel depends on the number of items, not of
+/// chunks.
+///
+/// # Panics
+///
+/// Panics when `chunk_len` is zero.
+pub fn parallel_for_each_chunk_init<T, S, E>(
 	items: &[T],
+	chunk_len: usize,
 	init: impl Fn() -> S + Send + Sync,
-	operation: impl Fn(&mut S, &T) -> std::result::Result<(), E> + Send + Sync,
+	operation: impl Fn(&mut S, &[T]) -> std::result::Result<(), E> + Send + Sync,
 ) -> std::result::Result<(), E>
 where
 	T: Sync,
@@ -185,10 +193,14 @@ where
 	if !should_parallelize(items.len()) {
 		let mut state = init();
 		return items
-			.iter()
-			.try_for_each(|item| operation(&mut state, item));
+			.chunks(chunk_len)
+			.try_for_each(|chunk| operation(&mut state, chunk));
 	}
-	with_walk_pool(|| items.par_iter().try_for_each_init(init, operation))
+	with_walk_pool(|| {
+		items
+			.par_chunks(chunk_len)
+			.try_for_each_init(init, operation)
+	})
 }
 
 fn evict_oldest() {

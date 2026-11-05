@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { handleBluesky } from "../../src/scrapers/bluesky";
 import * as scraperTypes from "../../src/scrapers/types";
+import { requireRender } from "../helpers/scrapers";
 
 /**
  * WHY: a Bluesky URL renders from AT Protocol API records. This suite pins what each record shape
@@ -38,13 +39,6 @@ function servePages(pages: Record<string, unknown>): { mockRestore: () => void }
 			status: 200,
 		};
 	});
-}
-
-function render(result: scraperTypes.RenderResult | scraperTypes.ScraperDegrade | null): scraperTypes.RenderResult {
-	if (result === null || scraperTypes.isScraperDegrade(result)) {
-		throw new Error(`expected a render, got ${JSON.stringify(result)}`);
-	}
-	return result;
 }
 
 function post(handle: string, text: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -110,7 +104,7 @@ describe("a Bluesky post renders its thread and a profile its counts", () => {
 			},
 		});
 
-		const result = render(await handleBluesky("https://bsky.app/profile/alice.bsky.social/post/abc", 10));
+		const result = requireRender(await handleBluesky("https://bsky.app/profile/alice.bsky.social/post/abc", 10));
 
 		const head = [
 			"# Bluesky Post",
@@ -169,7 +163,7 @@ describe("a Bluesky post renders its thread and a profile its counts", () => {
 			[THREAD_URL]: { thread: { post: post("alice.bsky.social", "Just text", { likeCount: 0 }), replies: [] } },
 		});
 
-		const result = render(await handleBluesky("https://www.bsky.app/profile/alice.bsky.social/post/abc", 10));
+		const result = requireRender(await handleBluesky("https://www.bsky.app/profile/alice.bsky.social/post/abc", 10));
 
 		expect(result.content).toBe(
 			["# Bluesky Post", "", "**alice.bsky.social** (@alice.bsky.social)", `*${POST_DATE}*`, "", "Just text"].join(
@@ -191,7 +185,7 @@ describe("a Bluesky post renders its thread and a profile its counts", () => {
 			},
 		});
 
-		const result = render(await handleBluesky("https://bsky.app/profile/alice.bsky.social", 10));
+		const result = requireRender(await handleBluesky("https://bsky.app/profile/alice.bsky.social", 10));
 
 		const joined = new Date("2023-01-02T12:00:00.000Z").toLocaleDateString("en-US", {
 			year: "numeric",

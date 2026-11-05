@@ -16,6 +16,7 @@ Both are persisted as session entries and converted into agent-attributed develo
 - `packages/agent/src/compaction/utils.ts`
 - `kernel/src/session/session-manager.ts`
 - `packages/coding-agent/src/session/agent-session.ts`
+- `packages/coding-agent/src/session/runtime/turn-context-check.ts` (the threshold checks before a prompt, between provider calls and after a turn, and context promotion)
 - `packages/coding-agent/src/session/messages.ts`
 - `packages/coding-agent/src/extensibility/hooks/types.ts`
 - `packages/coding-agent/src/config/settings-schema.ts`

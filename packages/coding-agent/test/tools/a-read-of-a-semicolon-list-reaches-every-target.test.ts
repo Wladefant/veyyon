@@ -29,13 +29,7 @@ import { cwdEscapingTargets } from "@veyyon/coding-agent/tools/core/cwd-boundary
 import { splitDelimitedPathEntry } from "@veyyon/coding-agent/tools/core/path-utils";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
-
-function resultText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text ?? "")
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 describe("a read of a semicolon-delimited list", () => {
 	let tmpDir: string;
@@ -89,7 +83,7 @@ describe("a read of a semicolon-delimited list", () => {
 			path: "skill://demo/platforms/one.md;skill://demo/platforms/two.md",
 		});
 
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain(
 			"Note: interpreted as 2 paths: skill://demo/platforms/one.md, skill://demo/platforms/two.md",
 		);
@@ -106,7 +100,7 @@ describe("a read of a semicolon-delimited list", () => {
 			path: "skill://demo/platforms/one.md:raw:2-2;skill://demo/platforms/two.md:raw:1-1",
 		});
 
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain(
 			"Note: interpreted as 2 paths: skill://demo/platforms/one.md:raw:2-2, skill://demo/platforms/two.md:raw:1-1",
 		);
@@ -120,7 +114,7 @@ describe("a read of a semicolon-delimited list", () => {
 			path: "skill://demo/platforms/one.md;.templates/FINDING_TEMPLATE.md",
 		});
 
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("one-first-line");
 		expect(text).toContain("Could not read .templates/FINDING_TEMPLATE.md");
 		expect(text).toContain(
@@ -135,7 +129,7 @@ describe("a read of a semicolon-delimited list", () => {
 	it("reads a resource whose own name contains a semicolon as one target", async () => {
 		const result = await new ReadTool(session()).execute("call", { path: "skill://demo/weird;name.md" });
 
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("semicolon-in-the-filename");
 		expect(text).not.toContain("interpreted as");
 		expect(result.details?.displayReadTargets).toBeUndefined();
@@ -151,7 +145,7 @@ describe("a read of a semicolon-delimited list", () => {
 		await fs.writeFile(path.join(tmpDir, "alpha.md"), "alpha-body\n");
 		await fs.writeFile(path.join(tmpDir, "beta.md"), "beta-body\n");
 
-		const text = resultText(await new ReadTool(session()).execute("call", { path: "alpha.md;beta.md" }));
+		const text = toolResultText(await new ReadTool(session()).execute("call", { path: "alpha.md;beta.md" }));
 
 		expect(text).toContain("alpha-body");
 		expect(text).toContain("beta-body");
@@ -160,7 +154,7 @@ describe("a read of a semicolon-delimited list", () => {
 	it("mixes a file and an internal resource in one list, spaced as the description writes it", async () => {
 		await fs.writeFile(path.join(tmpDir, "alpha.md"), "alpha-body\n");
 
-		const text = resultText(
+		const text = toolResultText(
 			await new ReadTool(session()).execute("call", { path: "alpha.md; skill://demo/platforms/two.md" }),
 		);
 

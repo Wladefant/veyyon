@@ -25,23 +25,18 @@
  */
 
 import { describe, expect, test } from "bun:test";
+
 import {
 	type GenerateBranchSummaryOptions,
 	generateBranchSummary,
 	prepareBranchEntries,
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model, Usage } from "@veyyon/ai";
+
+import type { AssistantMessage, Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function modelWithWindow(contextWindow: number): Model {
 	return buildModel({
@@ -96,7 +91,7 @@ async function promptFor(options: Partial<GenerateBranchSummaryOptions> & { mode
 			api: "mock",
 			provider: "mock",
 			model: "mock-model",
-			usage: ZERO_USAGE,
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		} as AssistantMessage;

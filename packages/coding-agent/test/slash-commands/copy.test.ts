@@ -3,10 +3,7 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
 import * as clipboard from "@veyyon/coding-agent/utils/clipboard";
-
-function assistantText(text: string): AgentMessage {
-	return { role: "assistant", content: [{ type: "text", text }] } as unknown as AgentMessage;
-}
+import { assistantMsg } from "../helpers/session-messages";
 
 function assistantCalls(toolCalls: Array<{ name: string; arguments: Record<string, unknown> }>): AgentMessage {
 	return {
@@ -45,8 +42,8 @@ describe("/copy slash command", () => {
 	it("copies the last assistant code block without opening the picker", async () => {
 		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
 		const harness = createRuntimeHarness([
-			assistantText("old\n```ts\nconst oldValue = 1;\n```"),
-			assistantText("new\n```sh\necho first\n```\n```py\nprint('last')\n```"),
+			assistantMsg("old\n```ts\nconst oldValue = 1;\n```"),
+			assistantMsg("new\n```sh\necho first\n```\n```py\nprint('last')\n```"),
 		]);
 
 		expect(await executeBuiltinSlashCommand("/copy code", harness.runtime)).toBe(true);
@@ -74,7 +71,7 @@ describe("/copy slash command", () => {
 
 	it("keeps bare /copy on the picker", async () => {
 		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
-		const harness = createRuntimeHarness([assistantText("answer")]);
+		const harness = createRuntimeHarness([assistantMsg("answer")]);
 
 		expect(await executeBuiltinSlashCommand("/copy", harness.runtime)).toBe(true);
 

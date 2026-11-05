@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import { Agent, type AgentTool } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
-import type { Model, TextContent } from "@veyyon/ai";
+import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as codexSessionState from "@veyyon/ai/providers/openai-codex/session-state";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -16,6 +16,8 @@ import { TodoTool, USER_TODO_EDIT_CUSTOM_TYPE } from "@veyyon/coding-agent/tools
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { messageText } from "./helpers/tool-result-text";
 
 // Re-injecting eager preludes after compaction: the first-message preludes are the
 // oldest messages, so compaction summarizes them away and the agent silently loses
@@ -63,11 +65,6 @@ type Harness = {
 	waitForCall: WaitForCall;
 };
 
-function isTextContentBlock(value: unknown): value is TextContent {
-	if (!value || typeof value !== "object") return false;
-	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
-}
-
 function getToolChoiceName(choice: unknown): string | undefined {
 	if (!choice) return undefined;
 	if (typeof choice === "string") return choice;
@@ -78,16 +75,6 @@ function getToolChoiceName(choice: unknown): string | undefined {
 	return undefined;
 }
 
-function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) return "";
-	if (typeof message.content === "string") return message.content;
-	if (!Array.isArray(message.content)) return "";
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
-}
-
 function createAssistantResponse(text: string) {
 	return {
 		role: "assistant" as const,
@@ -95,14 +82,7 @@ function createAssistantResponse(text: string) {
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
@@ -128,14 +108,7 @@ function emitHighUsageTurn(session: AgentSession): void {
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
 		stopReason: "stop" as const,
-		usage: {
-			input: 190_000,
-			output: 1_000,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 191_000,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 190_000, output: 1_000, totalTokens: 191_000 },
 		timestamp: Date.now(),
 	};
 	session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
@@ -167,8 +140,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			predicate: (call: ObservedPromptCall) => boolean;
 			resolve: (call: ObservedPromptCall) => void;
 		}> = [];
-		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!defaultModel) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const defaultModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const selectedModel = opts.model ?? defaultModel;
 		// Pin the window and output reservation: usage figures below trip the
 		// context-full strategy at a 200k/64k threshold; catalog regeneration must
@@ -241,7 +213,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			streamFn: (_model, context, options) => {
 				const call: ObservedPromptCall = {
 					toolChoice: getToolChoiceName(options?.toolChoice),
-					messageTexts: context.messages.map(message => getMessageText(message)),
+					messageTexts: context.messages.map(messageText),
 				};
 				observedCalls.push(call);
 				for (let i = waiters.length - 1; i >= 0; i--) {
@@ -404,8 +376,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 	});
 
 	it("resets Codex provider history after successful auto-compaction", async () => {
-		const model = getBundledModel("openai-codex", "gpt-5.6-terra");
-		if (!model) throw new Error("Expected gpt-5.6-terra model to exist");
+		const model = requireBundledModel("openai-codex", "gpt-5.6-terra");
 		const resetSpy = vi.spyOn(codexSessionState, "resetOpenAICodexHistoryAfterCompaction");
 		const { session, waitForCall } = await createHarness({}, { model });
 		stubCompaction();

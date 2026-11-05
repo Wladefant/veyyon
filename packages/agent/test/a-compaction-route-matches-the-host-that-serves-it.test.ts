@@ -47,8 +47,9 @@ import {
 	SERVER_COMPACTION_WIRE_APIS,
 	serverCompactionRouteAbsent,
 } from "@veyyon/ai/providers/openai-compaction";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
+import { requireBundledModel } from "./helpers";
 
 /** A ChatGPT OAuth access token is a JWT; the account id is read out of its payload. */
 function fakeCodexToken(accountId: string): string {
@@ -56,12 +57,6 @@ function fakeCodexToken(accountId: string): string {
 		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
 	).toString("base64url");
 	return `header.${payload}.signature`;
-}
-
-function bundled(provider: Parameters<typeof getBundledModel>[0], id: string): Model {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected built-in ${provider}/${id} to exist`);
-	return model;
 }
 
 /**
@@ -138,7 +133,7 @@ interface RouteCase {
 const ROUTES: Record<string, RouteCase> = {
 	// Documented on the official host: POST /v1/responses/compact.
 	"openai-responses": {
-		model: () => bundled("openai", "gpt-5.1"),
+		model: () => requireBundledModel("openai", "gpt-5.1"),
 		apiKey: "sk-unit-test",
 		pathnameEndsWith: "/v1/responses/compact",
 		compactSuffix: true,
@@ -146,7 +141,10 @@ const ROUTES: Record<string, RouteCase> = {
 	},
 	// Azure serves the same route, api-version as a query parameter.
 	"azure-openai-responses": {
-		model: () => ({ ...bundled("azure", "gpt-4"), baseUrl: "https://unit-test.openai.azure.com/openai/v1" }),
+		model: () => ({
+			...requireBundledModel("azure", "gpt-4"),
+			baseUrl: "https://unit-test.openai.azure.com/openai/v1",
+		}),
 		apiKey: "azure-unit-test-key",
 		pathnameEndsWith: "/responses/compact",
 		compactSuffix: true,
@@ -156,7 +154,7 @@ const ROUTES: Record<string, RouteCase> = {
 	// item. The route and that declaration are one decision; see
 	// `the-codex-compaction-wire-does-not-regress.test.ts`.
 	"openai-codex-responses": {
-		model: () => bundled("openai-codex", "gpt-5.1-codex"),
+		model: () => requireBundledModel("openai-codex", "gpt-5.1-codex"),
 		apiKey: fakeCodexToken("acct-9"),
 		pathnameEndsWith: "/backend-api/codex/responses",
 		compactSuffix: false,
@@ -236,7 +234,7 @@ describe("a compaction route matches the host that serves it", () => {
 
 describe("a compaction request declares the implementation it is sent as", () => {
 	test("codex names responses_compaction_v2, matching the turn route", async () => {
-		const model = bundled("openai-codex", "gpt-5.1-codex");
+		const model = requireBundledModel("openai-codex", "gpt-5.1-codex");
 		const calls: CapturedCall[] = [];
 
 		await compactWithProvider(makePreparation(), model, fakeCodexToken("acct-9"), "base system prompt", undefined, {
@@ -275,7 +273,7 @@ describe("a compaction route that answers 404 stands down, and nothing else does
 	const TRANSIENT = [400, 401, 403, 408, 429, 500, 502, 503] as const;
 
 	test("a 404 disables server-side compaction for the rest of the process", async () => {
-		const model = bundled("openai-codex", "gpt-5.1-codex");
+		const model = requireBundledModel("openai-codex", "gpt-5.1-codex");
 		const transport = resolveServerCompactionTransport(model);
 		if (!transport) throw new Error("Expected the codex row to resolve a transport before the 404");
 
@@ -297,7 +295,7 @@ describe("a compaction route that answers 404 stands down, and nothing else does
 
 	for (const status of TRANSIENT) {
 		test(`a ${status} leaves server-side compaction enabled`, async () => {
-			const model = bundled("openai-codex", "gpt-5.1-codex");
+			const model = requireBundledModel("openai-codex", "gpt-5.1-codex");
 			const transport = resolveServerCompactionTransport(model);
 			if (!transport) throw new Error("Expected the codex row to resolve a transport");
 
@@ -319,8 +317,8 @@ describe("a compaction route that answers 404 stands down, and nothing else does
 	test("the stand-down is per model, not per process", async () => {
 		// One host retiring a route must not silence a different host that
 		// still serves one.
-		const codex = bundled("openai-codex", "gpt-5.1-codex");
-		const official = bundled("openai", "gpt-5.1");
+		const codex = requireBundledModel("openai-codex", "gpt-5.1-codex");
+		const official = requireBundledModel("openai", "gpt-5.1");
 		const transport = resolveServerCompactionTransport(codex);
 		if (!transport) throw new Error("Expected the codex row to resolve a transport");
 
@@ -348,14 +346,7 @@ function makeAssistantStop(text: string): AgentMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	} as AgentMessage;
 }

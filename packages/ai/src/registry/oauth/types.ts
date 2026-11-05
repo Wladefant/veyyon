@@ -76,6 +76,12 @@ export interface OAuthProviderInfo {
 	 * entry back to the model provider it authenticates.
 	 */
 	storeCredentialsAs?: string;
+	/**
+	 * The mechanism this login differs by, without the provider's name ("API key", "device code"),
+	 * set when `storeCredentialsAs` is. A surface listing it under the provider it stores into
+	 * labels it with this; a custom provider that omits it falls back to `name`.
+	 */
+	loginMethod?: string;
 }
 
 export interface OAuthController {

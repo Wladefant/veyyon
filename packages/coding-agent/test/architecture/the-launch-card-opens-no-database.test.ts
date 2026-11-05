@@ -132,10 +132,15 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * to skip its paint for a bare `--resume`. It imports a type only, and `commands/launch.ts` evaluates
  * it before it imports the card, so a launch evaluates nothing it did not before.
  *
+ * 320 rather than 317 is three modules split out of `@veyyon/utils/dirs`, which the card already
+ * evaluates, with no code added: `config-root.ts`, `global-config.ts` and `global-config-write.ts`,
+ * the config root, the reader of the global `config.yml` and its writer, each importing only what
+ * its source did.
+ *
  * The floor is what stops a resolution table that stopped resolving from satisfying the ceiling with
  * a handful of modules while measuring nothing.
  */
-const LAUNCH_CARD_CEILING = 317;
+const LAUNCH_CARD_CEILING = 320;
 const LAUNCH_CARD_FLOOR = 150;
 
 describe("the launch card opens no database", () => {

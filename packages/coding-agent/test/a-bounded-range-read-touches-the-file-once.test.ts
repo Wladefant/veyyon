@@ -2,13 +2,12 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { recordFileSnapshot } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 import { makeToolSession } from "./helpers/tool-session";
 
 // WHY THIS SUITE EXISTS (BACKLOG PERF-READ-RANGE-ONEPASS)
@@ -84,13 +83,6 @@ function createSession(cwd: string): ToolSession {
 	});
 }
 
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
-
 /** The 1-based file lines a hashline body actually rendered, from each `N:` prefix. */
 function renderedLineNumbers(text: string): number[] {
 	const numbers: number[] = [];
@@ -135,10 +127,10 @@ describe("a bounded range read touches the file once", () => {
 			expect(result.isError).toBeFalsy();
 			// The header proves the one read also produced the anchor tag: a snapshot
 			// that re-reads is either a second read or, when the read fails, no tag.
-			expect(textOutput(result)).toMatch(/^\[big\.ts#[0-9A-F]{4}]\n199:/);
+			expect(toolResultText(result)).toMatch(/^\[big\.ts#[0-9A-F]{4}]\n199:/);
 			// 1 line of leading context, the 20 requested, 3 trailing: the in-memory
 			// collector stops at the same line the streamer would.
-			expect(renderedLineNumbers(textOutput(result))).toEqual(Array.from({ length: 24 }, (_, i) => 199 + i));
+			expect(renderedLineNumbers(toolResultText(result))).toEqual(Array.from({ length: 24 }, (_, i) => 199 + i));
 			expect(ledger.texts.get(file)).toBe(1);
 			expect(ledger.opens.get(file)).toBeUndefined();
 		});
@@ -166,7 +158,7 @@ describe("a bounded range read touches the file once", () => {
 			const tool = new ReadTool(session);
 
 			const result = await tool.execute("call-window", { path: "big.ts:200-219" });
-			const displayed = textOutput(result).match(/^\[big\.ts#([0-9A-F]{4})\]/)?.[1];
+			const displayed = toolResultText(result).match(/^\[big\.ts#([0-9A-F]{4})\]/)?.[1];
 			// A second session re-reads the file itself, so the two tags agree only
 			// when the window read fingerprinted the whole normalized file.
 			const reread = await recordFileSnapshot(createSession(dir), file);
@@ -182,11 +174,11 @@ describe("a bounded range read touches the file once", () => {
 			await fs.writeFile(file, lfSource());
 			const tool = new ReadTool(createSession(dir));
 
-			const before = textOutput(await tool.execute("call-before", { path: "big.ts:200-219" })).match(
+			const before = toolResultText(await tool.execute("call-before", { path: "big.ts:200-219" })).match(
 				/^\[big\.ts#([0-9A-F]{4})\]/,
 			)?.[1];
 			await fs.writeFile(file, `${lfSource()}const appended = 1;\n`);
-			const after = textOutput(await tool.execute("call-after", { path: "big.ts:200-219" })).match(
+			const after = toolResultText(await tool.execute("call-after", { path: "big.ts:200-219" })).match(
 				/^\[big\.ts#([0-9A-F]{4})\]/,
 			)?.[1];
 
@@ -202,7 +194,7 @@ describe("a bounded range read touches the file once", () => {
 			const ledger = ledgerFileReads();
 			const tool = new ReadTool(createSession(dir));
 
-			const output = textOutput(await tool.execute("call-crlf", { path: "crlf.txt:2-4" }));
+			const output = toolResultText(await tool.execute("call-crlf", { path: "crlf.txt:2-4" }));
 
 			// The raw split carries a byte the normalized one does not, so the
 			// window comes from the streamer even though the text is materialized.
@@ -219,7 +211,7 @@ describe("a bounded range read touches the file once", () => {
 			const ledger = ledgerFileReads();
 			const tool = new ReadTool(createSession(dir));
 
-			const output = textOutput(await tool.execute("call-bom", { path: "bom.txt:2-4" }));
+			const output = toolResultText(await tool.execute("call-bom", { path: "bom.txt:2-4" }));
 
 			// `readFileText` drops a BOM and the streamer keeps it, so a
 			// materialization that decodes the ordinary way would show a first line
@@ -241,7 +233,7 @@ describe("a bounded range read touches the file once", () => {
 			const result = await tool.execute("call-wide", { path: "wide.txt:1-3" });
 			const truncation = result.details?.truncation;
 
-			expect(textOutput(result)).toContain(
+			expect(toolResultText(result)).toContain(
 				"Line 1 is 195.3KB, exceeds 50.0KB limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.",
 			);
 			expect(truncation?.truncatedBy).toBe("bytes");
@@ -260,7 +252,7 @@ describe("a bounded range read touches the file once", () => {
 
 			const result = await tool.execute("call-wide-whole", { path: "wide-whole.txt" });
 
-			expect(textOutput(result)).toContain(
+			expect(toolResultText(result)).toContain(
 				"Line 1 is 195.3KB, exceeds 50.0KB limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.",
 			);
 			expect(result.details?.truncation?.firstLineExceedsLimit).toBe(true);

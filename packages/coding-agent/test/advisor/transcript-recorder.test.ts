@@ -16,6 +16,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { AdvisorTranscriptRecorder } from "@veyyon/coding-agent/advisor/transcript-recorder";
 import { removeWithRetries } from "@veyyon/utils";
 import { ADVISOR_TRANSCRIPT_FILENAME } from "@veyyon/utils/session-file";
@@ -59,14 +60,7 @@ function assistantMessage(text: string, inputTokens: number): AgentMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "test-advisor-model",
-		usage: {
-			input: inputTokens,
-			output: 3,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: inputTokens + 3,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: inputTokens, output: 3, totalTokens: inputTokens + 3 },
 		stopReason: "stop" as const,
 		timestamp: 1,
 	};

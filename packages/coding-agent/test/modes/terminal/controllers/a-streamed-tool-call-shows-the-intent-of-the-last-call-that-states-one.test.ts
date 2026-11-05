@@ -18,6 +18,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
 import { interruptHint } from "@veyyon/coding-agent/modes/terminal/shared";
@@ -155,14 +156,7 @@ function streamingMessage(content: AssistantMessage["content"]): AssistantMessag
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "toolUse",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: 0,
 	};
 }

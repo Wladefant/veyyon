@@ -5,6 +5,7 @@ import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifec
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 
 interface SessionStub {
 	session: AgentSession;
@@ -148,7 +149,7 @@ function registerSub(registry: AgentRegistry, id: string, session: AgentSession,
 
 /** Settle the async unfocus chain (registry event → void unfocus() → #attach). */
 async function flushAsync(): Promise<void> {
-	for (let i = 0; i < 5; i++) await Promise.resolve();
+	await drainMicrotasks(5);
 }
 
 describe("SessionFocusController", () => {

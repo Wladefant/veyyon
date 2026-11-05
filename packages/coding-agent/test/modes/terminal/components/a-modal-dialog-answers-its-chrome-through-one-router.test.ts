@@ -40,6 +40,7 @@ import type { AccountInventory } from "@veyyon/coding-agent/session/account-inve
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import type { TUI } from "@veyyon/tui";
+import { clickAt, motionAt } from "../../../helpers/sgr-pointer";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -59,14 +60,6 @@ afterEach(() => {
 	geometry.restore();
 	vi.restoreAllMocks();
 });
-
-/** SGR left press, motion (button 32+3) at 1-based screen coordinates. */
-function clickAt(row1: number, col1: number): string {
-	return `\x1b[<0;${col1};${row1}M`;
-}
-function motionAt(row1: number, col1: number): string {
-	return `\x1b[<35;${col1};${row1}M`;
-}
 
 interface Host {
 	render(width: number): readonly string[];

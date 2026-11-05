@@ -18,6 +18,13 @@ export interface FakeLspServer {
 	send(message: RpcMessage): void;
 	/** Resolve the process `exited` promise and close stdout. */
 	exit(code?: number): void;
+	/**
+	 * Close stdout, then record exit `code` with `stderr` a turn later: a process whose closed output is
+	 * read before its exit is reaped.
+	 */
+	crash(code: number, stderr: string): void;
+	/** Close stdout and keep running: a server whose output broke while it lives on. */
+	closeOutput(): void;
 	/** Whether the client invoked `proc.kill()` (production's hard-kill fallback). */
 	readonly killed: boolean;
 	/** Resolve once a received message matches `predicate` (already-seen or future). */
@@ -42,7 +49,14 @@ export function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
 	}> = [];
 	let exitCode: number | null = null;
 	let killed = false;
+	let stderr = "";
 	let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+	let outputClosed = false;
+	const closeOutput = () => {
+		if (outputClosed) return;
+		outputClosed = true;
+		controller?.close();
+	};
 	const { promise: exited, resolve: resolveExited } = Promise.withResolvers<number>();
 
 	const frame = (message: RpcMessage): Uint8Array => {
@@ -59,14 +73,21 @@ export function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
 	const server: FakeLspServer = {
 		received,
 		send(message) {
-			if (controller && exitCode === null) controller.enqueue(frame(message));
+			if (controller && !outputClosed) controller.enqueue(frame(message));
 		},
 		exit(code = 0) {
 			if (exitCode !== null) return;
 			exitCode = code;
-			controller?.close();
+			closeOutput();
 			resolveExited(code);
 		},
+		crash(code, text) {
+			if (exitCode !== null) return;
+			stderr = text;
+			closeOutput();
+			setImmediate(() => server.exit(code));
+		},
+		closeOutput,
 		get killed() {
 			return killed;
 		},
@@ -134,7 +155,7 @@ export function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
 			end: async () => 0,
 		},
 		stdout,
-		peekStderr: () => "",
+		peekStderr: () => stderr,
 		kill() {
 			killed = true;
 			server.exit(0);

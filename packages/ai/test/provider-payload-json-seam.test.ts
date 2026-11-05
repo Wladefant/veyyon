@@ -62,12 +62,14 @@ import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import { streamPiNative } from "@veyyon/ai/providers/pi-native-client";
 import { streamSimple } from "@veyyon/ai/stream";
-import type { AssistantMessage, Context, FetchImpl, Model, ModelSpec, Tool, ToolResultMessage } from "@veyyon/ai/types";
+import type { AssistantMessage, Context, Model, ModelSpec, Tool, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { GetUserJwtResponseSchema } from "@veyyon/catalog/discovery/devin-gen/exa/auth_pb/auth_pb";
 import { emptyUsage, getBundledModel, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
 import * as piUtils from "@veyyon/utils";
 import { type as arkType } from "arktype";
+import { restoreEnv } from "../../utils/test/helpers/restore-global";
+import { mockFetch, sseResponse } from "./helpers/fetch-mock";
 
 // ---------------------------------------------------------------------------
 // JSON-expressibility walker (test-local mirror of the mapJsonStrings domain)
@@ -199,21 +201,6 @@ type CaptureHook = (payload: unknown) => undefined;
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-function asFetch(implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>): FetchImpl {
-	return Object.assign(implementation, { preconnect: fetch.preconnect });
-}
-
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
-function sseResponse(...chunks: unknown[]): Response {
-	const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
-	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
-
 /** Top-level `candidates` chunk (public Generative Language + Vertex). */
 function genaiChunk(text: string): Record<string, unknown> {
 	return {
@@ -282,7 +269,7 @@ function startAnthropic(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => cap(payload),
 		},
 	);
@@ -305,7 +292,7 @@ function startAzure(cap: CaptureHook): Streamish {
 		apiKey: "test-key",
 		azureBaseUrl: model.baseUrl,
 		azureApiVersion: "v1",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => cap(payload),
 	});
 }
@@ -327,8 +314,8 @@ function startBedrock(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			signal: abortedSignal(),
-			fetch: asFetch(async () => new Response("", { status: 200 })),
+			signal: AbortSignal.abort(),
+			fetch: mockFetch(async () => new Response("", { status: 200 })),
 			onPayload: payload => cap(payload),
 		},
 	);
@@ -371,7 +358,7 @@ function startDevin(cap: CaptureHook): Streamish {
 	// the abort inside the hook does not cut the flow first.
 	const emptyFrame = new Uint8Array(5);
 	new DataView(emptyFrame.buffer).setUint32(1, 0, false);
-	const fetchImpl = asFetch(async input => {
+	const fetchImpl = mockFetch(async input => {
 		if (String(input).includes("GetUserJwt")) return new Response(authResponse);
 		return new Response(emptyFrame);
 	});
@@ -404,7 +391,7 @@ function startDevin(cap: CaptureHook): Streamish {
 
 function startGitLabDuo(cap: CaptureHook): Streamish {
 	const controller = new AbortController();
-	const fetchImpl = asFetch(async input => {
+	const fetchImpl = mockFetch(async input => {
 		const url = String(input);
 		if (url.includes("/api/graphql")) {
 			return new Response(
@@ -494,7 +481,7 @@ function startGeminiCli(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
-			fetch: asFetch(async () => sseResponse({ response: genaiChunk("hi") })),
+			fetch: mockFetch(async () => sseResponse([{ response: genaiChunk("hi") }])),
 			signal: controller.signal,
 			onPayload: payload => {
 				const result = cap(payload);
@@ -523,7 +510,7 @@ function startGoogle(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			fetch: asFetch(async () => sseResponse(genaiChunk("hi"))),
+			fetch: mockFetch(async () => sseResponse([genaiChunk("hi")])),
 			signal: controller.signal,
 			onPayload: payload => {
 				const result = cap(payload);
@@ -536,12 +523,12 @@ function startGoogle(cap: CaptureHook): Streamish {
 
 function startVertex(cap: CaptureHook): Streamish {
 	const controller = new AbortController();
-	const fetchImpl = asFetch(async input => {
+	const fetchImpl = mockFetch(async input => {
 		const url = input instanceof Request ? input.url : String(input);
 		if (url.includes("oauth2.googleapis.com/token") || url.includes("metadata.google.internal")) {
 			return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }));
 		}
-		return sseResponse(genaiChunk("hi"));
+		return sseResponse([genaiChunk("hi")]);
 	});
 	return streamGoogleVertex(
 		buildModel({
@@ -573,7 +560,7 @@ function startVertex(cap: CaptureHook): Streamish {
 
 function startOllama(cap: CaptureHook): Streamish {
 	const controller = new AbortController();
-	const fetchImpl = asFetch(
+	const fetchImpl = mockFetch(
 		async () =>
 			new Response(
 				`${JSON.stringify({
@@ -639,7 +626,7 @@ function startCodex(cap: CaptureHook): Streamish {
 	};
 	return streamOpenAICodexResponses(model, batteryContext(), {
 		apiKey: token,
-		fetch: asFetch(async () => {
+		fetch: mockFetch(async () => {
 			const events = [
 				`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "hi" })}`,
 				`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8, input_tokens_details: { cached_tokens: 0 } } } })}`,
@@ -675,8 +662,8 @@ function startOpenAICompletions(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			fetch: asFetch(async () => sseResponse("[DONE]")),
-			signal: abortedSignal(),
+			fetch: mockFetch(async () => sseResponse(["[DONE]"])),
+			signal: AbortSignal.abort(),
 			onPayload: payload => cap(payload),
 		},
 	);
@@ -699,7 +686,7 @@ function startOpenAIResponses(cap: CaptureHook): Streamish {
 		batteryContext(),
 		{
 			apiKey: "test-key",
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			onPayload: payload => cap(payload),
 		},
 	);
@@ -710,8 +697,8 @@ function startOpenrouter(cap: CaptureHook): Streamish {
 	// Responses request build (VEYYON_OPENROUTER_RESPONSES unset).
 	return streamSimple(getBundledModel("openrouter", "anthropic/claude-sonnet-4"), batteryContext(), {
 		apiKey: "test-key",
-		fetch: asFetch(async () => sseResponse("[DONE]")),
-		signal: abortedSignal(),
+		fetch: mockFetch(async () => sseResponse(["[DONE]"])),
+		signal: AbortSignal.abort(),
 		onPayload: payload => cap(payload),
 	});
 }
@@ -722,7 +709,7 @@ function startKimiCode(cap: CaptureHook): Streamish {
 	const model = getBundledModel("kimi-code", "kimi-for-coding") as Model<"openai-completions">;
 	return streamKimi(model, batteryContext(), {
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => cap(payload),
 	});
 }
@@ -739,7 +726,7 @@ function startPiNative(cap: CaptureHook): Streamish {
 		stopReason: "stop",
 		timestamp: 0,
 	};
-	const fetchImpl = asFetch(async () => sseResponse({ type: "done", reason: "stop", message: doneMessage }));
+	const fetchImpl = mockFetch(async () => sseResponse([{ type: "done", reason: "stop", message: doneMessage }]));
 	return streamPiNative(
 		buildModel({
 			id: "claude-sonnet-4-5",
@@ -821,14 +808,6 @@ afterEach(() => {
 	piUtils.__resetDirsFromEnvForTests();
 	vi.restoreAllMocks();
 });
-
-function restoreEnv(name: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete Bun.env[name];
-		return;
-	}
-	Bun.env[name] = value;
-}
 
 describe("provider onPayload JSON seam battery", () => {
 	for (const kase of BATTERY) {

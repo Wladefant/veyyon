@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { $which, errorMessage, logger, readPipeText, Snowflake, settleWithin } from "@veyyon/utils";
+import { $which, errorMessage, logger, privateTempDir, readPipeText, Snowflake, settleWithin } from "@veyyon/utils";
 import { $, type Subprocess } from "bun";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
 import { ensureTool, getToolPath } from "../../utils/tools-manager";
@@ -251,7 +250,7 @@ function removeRecordingScript(scriptPath: string): void {
 
 async function startPowerShellRecording(outputPath: string): Promise<RecordingHandle> {
 	// Write script to temp file — avoids quoting/escaping issues with -Command
-	const scriptPath = path.join(os.tmpdir(), `veyyon-stt-record-${Snowflake.next()}.ps1`);
+	const scriptPath = path.join(privateTempDir(), `veyyon-stt-record-${Snowflake.next()}.ps1`);
 	await Bun.write(scriptPath, PS_RECORD_SCRIPT);
 
 	const proc = Bun.spawn(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, outputPath], {

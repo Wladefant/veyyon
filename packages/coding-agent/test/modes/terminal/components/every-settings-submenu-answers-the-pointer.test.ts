@@ -36,13 +36,9 @@ import {
 	type SettingPath,
 } from "@veyyon/coding-agent/config/settings-schema";
 import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
-import { HELPER_IDS } from "@veyyon/coding-agent/task/helper-settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
-
-function strip(s: string): string {
-	return stripVTControlCharacters(s);
-}
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 let previousAnsiPolicy: AnsiPolicy;
 
@@ -59,18 +55,12 @@ afterAll(() => {
 	setAnsiPolicy(previousAnsiPolicy);
 });
 
-let geometryStub: { restore(): void } | undefined;
+let geometryStub: StubbedStdoutGeometry | undefined;
 
 beforeEach(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
-	const rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-	Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 40, set: () => {} });
-	geometryStub = {
-		restore() {
-			if (rowsDesc) Object.defineProperty(process.stdout, "rows", rowsDesc);
-		},
-	};
+	geometryStub = stubStdoutGeometry({ rows: 40 });
 });
 
 afterEach(() => {
@@ -126,7 +116,7 @@ const clickAt = (row: number): string => `\x1b[<0;${COL};${row}M`;
 
 function rowIndex(component: SettingsSelectorComponent, rowText: string): number {
 	const lines = component.render(WIDTH);
-	const index = lines.findIndex(line => strip(line).includes(rowText));
+	const index = lines.findIndex(line => stripVTControlCharacters(line).includes(rowText));
 	if (index === -1) throw new Error(`no rendered row contains "${rowText}"`);
 	return index;
 }
@@ -137,13 +127,13 @@ function rowIndex(component: SettingsSelectorComponent, rowText: string): number
  */
 function expectHoverBand(component: SettingsSelectorComponent, rowText: string): void {
 	const before = component.render(WIDTH);
-	const index = before.findIndex(line => strip(line).includes(rowText));
+	const index = before.findIndex(line => stripVTControlCharacters(line).includes(rowText));
 	if (index === -1) throw new Error(`no rendered row contains "${rowText}"`);
 
 	component.handleInput(motionAt(index + 1));
 
 	const after = component.render(WIDTH);
-	expect(strip(after[index] ?? "")).toContain(rowText);
+	expect(stripVTControlCharacters(after[index] ?? "")).toContain(rowText);
 	expect(after[index]).not.toBe(before[index]);
 	// The hover band is a background fill; fg-only styling cannot produce "48;".
 	expect(after[index]).toContain("48;");
@@ -158,13 +148,13 @@ async function awaitRow(
 	awaitRenderRequest: () => Promise<void>,
 	rowText: string,
 ): Promise<void> {
-	while (component.render(WIDTH).every(line => !strip(line).includes(rowText))) {
+	while (component.render(WIDTH).every(line => !stripVTControlCharacters(line).includes(rowText))) {
 		await awaitRenderRequest();
 	}
 }
 
 function frameText(component: SettingsSelectorComponent): string {
-	return component.render(WIDTH).map(strip).join("\n");
+	return component.render(WIDTH).map(stripVTControlCharacters).join("\n");
 }
 
 describe("settings submenus answer the pointer", () => {
@@ -202,13 +192,15 @@ describe("settings submenus answer the pointer", () => {
 			component.openTab("agents");
 			expect(component.selectSetting("agent.agents")).toBe(true);
 			component.handleInput("\n");
-			await awaitRow(component, awaitRenderRequest, "Session Title");
+			await awaitRow(component, awaitRenderRequest, "designer");
+			// The helpers follow the subagents; Up from the first row wraps to the last helper,
+			// which scrolls the helpers into the window and leaves Speech as a row the band owns.
+			component.handleInput("\x1b[A");
 
-			// Row 0 (Advisor) is the selected one; hover another helper, which the band owns.
-			expectHoverBand(component, "Session Title");
+			expectHoverBand(component, "Speech");
 
-			component.handleInput(clickAt(rowIndex(component, "Advisor") + 1));
-			expect(frameText(component)).toContain("Helper: Advisor");
+			component.handleInput(clickAt(rowIndex(component, "Speech") + 1));
+			expect(frameText(component)).toContain("Helper: Speech");
 		},
 		{ timeout: 30_000 },
 	);
@@ -220,11 +212,9 @@ describe("settings submenus answer the pointer", () => {
 			component.openTab("agents");
 			expect(component.selectSetting("agent.agents")).toBe(true);
 			component.handleInput("\n");
-			await awaitRow(component, awaitRenderRequest, "Session Title");
-			// The Helpers section leads the roster; step past it so the list scrolls to the agents.
-			// The first agent is then selected, and the second is the row the band can own.
-			for (let i = 0; i < HELPER_IDS.length; i++) component.handleInput("\x1b[B");
-
+			await awaitRow(component, awaitRenderRequest, "designer");
+			// The subagents lead the roster: the first agent is selected, and the second is the row
+			// the band can own.
 			expectHoverBand(component, "designer");
 
 			component.handleInput(clickAt(rowIndex(component, "designer") + 1));

@@ -14,6 +14,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
@@ -509,14 +510,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 		} as unknown as InteractiveModeContext;
 		helpers = new UiHelpers(ctx);
 
-		const usage = {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
+		const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 		const assistant = {
 			role: "assistant",
 			content: [
@@ -594,14 +588,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 		} as unknown as InteractiveModeContext;
 		helpers = new UiHelpers(ctx);
 
-		const usage = {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
+		const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 		const assistant = {
 			role: "assistant",
 			content: [{ type: "toolCall", id: "todo-1", name: "todo", arguments: { op: "view" } }],

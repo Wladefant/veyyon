@@ -42,7 +42,6 @@ import { isFoundryEnabled } from "./utils/foundry";
  */
 export type KeyResolver = string | (() => string | undefined);
 
-/** The sentinel a probe returns when credentials exist but are not a readable string. */
 /**
  * Returned in place of a key when the provider is authenticated some other way, an OAuth credential or an
  * ambient cloud identity, so a caller can tell "signed in" from "no credential at all".

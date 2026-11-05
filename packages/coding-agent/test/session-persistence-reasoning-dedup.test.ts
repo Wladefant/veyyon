@@ -1,19 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, ProviderPayload, Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { BlobStore, isTextBlobRef } from "@veyyon/kernel/session/blob-store";
 import type { FileEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
 import { prepareEntryForPersistence } from "@veyyon/kernel/session/session-persistence";
 import { TempDir } from "@veyyon/utils";
 
-const usage = (): Usage => ({
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
+const usage = (): Usage => ({ ...emptyUsage(), input: 1, output: 1, totalTokens: 2 });
 
 function reasoningItem(id: string, encryptedContent: string): Record<string, unknown> {
 	return { type: "reasoning", id, encrypted_content: encryptedContent };

@@ -287,15 +287,31 @@ function safeMCPErrorMessage(error: unknown, rawParams: unknown): string {
 	return "the server's error message echoed this call's arguments back, so it was withheld to keep credentials out of the transcript. Change the arguments and call again, or ask the operator to check the server's own logs for the real error.";
 }
 
-/** Build a CustomToolResult from a callTool response. */
+/**
+ * One execution of an MCP tool: what it sends, and which server and source its result names.
+ *
+ * `source` attributes the result when the connection that served it has no source of its own: the
+ * connection the tool was built on, or the server's discovered source for a tool built before its
+ * server connected.
+ */
+interface MCPCall {
+	readonly tool: MCPToolDefinition;
+	readonly serverName: string;
+	readonly source: SourceMeta | undefined;
+	readonly rawParams: unknown;
+	readonly ctx: CustomToolContext;
+	readonly signal: AbortSignal | undefined;
+}
+
+/** Build a CustomToolResult from the callTool response `connection` returned. */
 function buildResult(
+	call: MCPCall,
+	connection: MCPServerConnection,
 	result: MCPToolCallResult,
-	serverName: string,
-	mcpToolName: string,
-	provider: string | undefined,
-	providerName: string | undefined,
-	rawParams: unknown,
 ): CustomToolResult<MCPToolDetails> {
+	const { serverName, rawParams } = call;
+	const mcpToolName = call.tool.name;
+	const source = connection._source ?? call.source;
 	const text = formatMCPContent(result.content);
 	const leaksRawArgs = result.isError === true && containsRawToolArgument(text, rawParams);
 	const details: MCPToolDetails = {
@@ -303,8 +319,8 @@ function buildResult(
 		mcpToolName,
 		isError: result.isError,
 		...(leaksRawArgs ? {} : { rawContent: result.content }),
-		provider,
-		providerName,
+		provider: source?.provider,
+		providerName: source?.providerName,
 	};
 	const contentText = result.isError
 		? mcpToolFailureText(
@@ -322,19 +338,25 @@ function buildResult(
 	return toolResult;
 }
 
-/** Build an error CustomToolResult from a caught exception. */
+/** Build an error CustomToolResult from a caught exception; `connection` is the one the call failed on, if any. */
 function buildErrorResult(
+	call: MCPCall,
+	connection: MCPServerConnection | undefined,
 	error: unknown,
-	serverName: string,
-	mcpToolName: string,
-	provider: string | undefined,
-	providerName: string | undefined,
-	rawParams: unknown,
 ): CustomToolResult<MCPToolDetails> {
-	const message = safeMCPErrorMessage(error, rawParams);
+	const { serverName } = call;
+	const mcpToolName = call.tool.name;
+	const source = connection?._source ?? call.source;
+	const message = safeMCPErrorMessage(error, call.rawParams);
 	return {
 		content: [{ type: "text", text: mcpToolFailureText(serverName, mcpToolName, message) }],
-		details: { serverName, mcpToolName, isError: true, provider, providerName },
+		details: {
+			serverName,
+			mcpToolName,
+			isError: true,
+			provider: source?.provider,
+			providerName: source?.providerName,
+		},
 		isError: true,
 	};
 }
@@ -424,14 +446,6 @@ async function reconnectForFutureCalls(
 	}
 }
 
-/**
- * Create a unique tool name for an MCP tool.
- *
- * Prefixes with server name to avoid conflicts. If the tool name already
- * starts with the server name (e.g., server "puppeteer" with tool
- * "puppeteer_screenshot"), strips the redundant prefix to produce
- * "mcp__puppeteer_screenshot" instead of "mcp__puppeteer_puppeteer_screenshot".
- */
 /**
  * Reduce a server or tool name to the characters a tool name may contain.
  *
@@ -526,12 +540,10 @@ export function parseMCPToolName(name: string): { serverName: string; toolName: 
 }
 
 /**
- * CustomTool wrapping an MCP tool with an active connection.
+ * The fields every MCP-backed tool exposes, built from its server name and tool definition. The
+ * subclass sets how a call reaches the server.
  */
-export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
-	// A later explicit call invalidates connection adoption from an older,
-	// still-pending post-dispatch readiness attempt.
-	#reconnectGeneration = 0;
+export abstract class MCPToolBase implements CustomTool<TSchema, MCPToolDetails> {
 	readonly name: string;
 	readonly label: string;
 	readonly description: string;
@@ -550,7 +562,34 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	 * explicit `false`; an omitted flag would leave nothing to preserve.
 	 */
 	readonly strict = false as const;
+	/** The card this tool draws, bound to the `server/tool` its call row names. */
+	readonly view: Required<ToolViewRenderer<unknown, CustomToolResult<MCPToolDetails>>>;
 
+	constructor(serverName: string, tool: MCPToolDefinition) {
+		this.name = createMCPToolName(serverName, tool.name);
+		this.label = `${serverName}/${tool.name}`;
+		this.description = tool.description ?? `MCP tool from ${serverName}`;
+		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
+		this.mcpToolName = tool.name;
+		this.mcpServerName = serverName;
+		this.view = createMCPToolView(this.label);
+	}
+
+	abstract execute(
+		toolCallId: string,
+		params: unknown,
+		onUpdate: AgentToolUpdateCallback<MCPToolDetails> | undefined,
+		ctx: CustomToolContext,
+		signal?: AbortSignal,
+	): Promise<CustomToolResult<MCPToolDetails>>;
+}
+
+/**
+ * CustomTool wrapping an MCP tool with an active connection.
+ */
+export class MCPTool extends MCPToolBase {
+	// A later explicit call invalidates late adoption from an older readiness attempt.
+	#reconnectGeneration = 0;
 	/** Create MCPTool instances for all tools from an MCP server connection */
 	static fromTools(connection: MCPServerConnection, tools: MCPToolDefinition[], reconnect?: MCPReconnect): MCPTool[] {
 		return tools.map(tool => new MCPTool(connection, tool, reconnect));
@@ -561,42 +600,38 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		private readonly tool: MCPToolDefinition,
 		private readonly reconnect?: MCPReconnect,
 	) {
-		this.name = createMCPToolName(connection.name, tool.name);
-		this.label = `${connection.name}/${tool.name}`;
-		this.description = tool.description ?? `MCP tool from ${connection.name}`;
-		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
-		this.mcpToolName = tool.name;
-		this.mcpServerName = connection.name;
-		this.view = createMCPToolView(this.label);
+		super(connection.name, tool);
 	}
 
-	/** The card this tool draws, bound to the `server/tool` its call row names. */
-	readonly view: Required<ToolViewRenderer<unknown, CustomToolResult<MCPToolDetails>>>;
 
 	async execute(
 		_toolCallId: string,
 		params: unknown,
 		_onUpdate: AgentToolUpdateCallback<MCPToolDetails> | undefined,
-		_ctx: CustomToolContext,
+		ctx: CustomToolContext,
 		signal?: AbortSignal,
 	): Promise<CustomToolResult<MCPToolDetails>> {
 		throwIfAborted(signal);
-		const rawParams = params;
-		const provider = this.connection._source?.provider;
-		const providerName = this.connection._source?.providerName;
-		const failedServerName = this.connection.name;
+		const call: MCPCall = {
+			tool: this.tool,
+			serverName: this.mcpServerName,
+			source: this.connection._source,
+			rawParams: params,
+			ctx,
+			signal,
+		};
 		const attemptedConnection = this.connection;
 		const generation = ++this.#reconnectGeneration;
 		let callAttempted = false;
 
 		try {
-			const args = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
+			const args = await prepareOutboundArgs(call.rawParams, this.tool.inputSchema, ctx);
 			throwIfAborted(signal);
 			callAttempted = true;
 			// Argument expansion can yield while another explicit call reconnects;
 			// this invocation dispatches only on the connection it captured.
 			const result = await callTool(attemptedConnection, this.tool.name, args, { signal });
-			return buildResult(result, attemptedConnection.name, this.tool.name, provider, providerName, rawParams);
+			return buildResult(call, attemptedConnection, result);
 		} catch (error) {
 			rethrowIfAborted(error, signal);
 			const timedOutAfterDispatch = callAttempted && isAttemptedMCPToolRequestDeadline(error, attemptedConnection);
@@ -620,9 +655,11 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 						}
 					});
 				}
-				return buildUnknownOutcomeResult(failedServerName, this.tool.name, provider, providerName);
+				return buildUnknownOutcomeResult(
+					call.serverName, this.tool.name, call.source?.provider, call.source?.providerName,
+				);
 			}
-			return buildErrorResult(error, failedServerName, this.tool.name, provider, providerName, rawParams);
+			return buildErrorResult(call, attemptedConnection, error);
 		}
 	}
 }
@@ -630,24 +667,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 /**
  * CustomTool wrapping an MCP tool with deferred connection resolution.
  */
-export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
-	readonly name: string;
-	readonly label: string;
-	readonly description: string;
-	readonly parameters: TSchema;
-	/** Original MCP tool name (before normalization) */
-	readonly mcpToolName: string;
-	/** Server name */
-	readonly mcpServerName: string;
-	readonly approval = "write" as const;
-	/** Render completed MCP calls with the result header replacing the pending call header. */
-	readonly mergeCallAndResult = true;
-	/** See {@link MCPTool.strict}: MCP servers own validation, so stay non-strict. */
-	readonly strict = false as const;
-
-	readonly #fallbackProvider: string | undefined;
-	readonly #fallbackProviderName: string | undefined;
-
+export class DeferredMCPTool extends MCPToolBase {
 	/** Create DeferredMCPTool instances for all tools from an MCP server */
 	static fromTools(
 		serverName: string,
@@ -660,118 +680,58 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	}
 
 	constructor(
-		private readonly serverName: string,
+		serverName: string,
 		private readonly tool: MCPToolDefinition,
 		private readonly getConnection: () => Promise<MCPServerConnection>,
-		source?: SourceMeta,
+		private readonly source?: SourceMeta,
 		private readonly reconnect?: MCPReconnect,
 	) {
-		this.name = createMCPToolName(serverName, tool.name);
-		this.label = `${serverName}/${tool.name}`;
-		this.description = tool.description ?? `MCP tool from ${serverName}`;
-		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
-		this.mcpToolName = tool.name;
-		this.mcpServerName = serverName;
-		this.#fallbackProvider = source?.provider;
-		this.#fallbackProviderName = source?.providerName;
-		this.view = createMCPToolView(this.label);
+		super(serverName, tool);
 	}
-
-	/** The card this tool draws, bound to the `server/tool` its call row names. */
-	readonly view: Required<ToolViewRenderer<unknown, CustomToolResult<MCPToolDetails>>>;
 
 	async execute(
 		_toolCallId: string,
 		params: unknown,
 		_onUpdate: AgentToolUpdateCallback<MCPToolDetails> | undefined,
-		_ctx: CustomToolContext,
+		ctx: CustomToolContext,
 		signal?: AbortSignal,
 	): Promise<CustomToolResult<MCPToolDetails>> {
 		throwIfAborted(signal);
-		const rawParams = params;
-		const provider = this.#fallbackProvider;
-		const providerName = this.#fallbackProviderName;
-
+		const call: MCPCall = {
+			tool: this.tool,
+			serverName: this.mcpServerName,
+			source: this.source,
+			rawParams: params,
+			ctx,
+			signal,
+		};
+		let connection: MCPServerConnection;
 		try {
-			const connection = await untilAborted(signal, () => this.getConnection());
+			connection = await untilAborted(signal, () => this.getConnection());
 			throwIfAborted(signal);
-			let callAttempted = false;
-			try {
-				const args = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
-				throwIfAborted(signal);
-				callAttempted = true;
-				const result = await callTool(connection, this.tool.name, args, { signal });
-				return buildResult(
-					result,
-					this.serverName,
-					this.tool.name,
-					connection._source?.provider ?? provider,
-					connection._source?.providerName ?? providerName,
-					rawParams,
-				);
-			} catch (callError) {
-				rethrowIfAborted(callError, signal);
-				const timedOutAfterDispatch = callAttempted && isAttemptedMCPToolRequestDeadline(callError, connection);
-				if (callAttempted && (timedOutAfterDispatch || mcpFailureWarrantsReconnect(callError))) {
-					if (!timedOutAfterDispatch && this.reconnect) await reconnectForFutureCalls(this.reconnect, signal);
-					return buildUnknownOutcomeResult(
-						this.serverName,
-						this.tool.name,
-						connection._source?.provider ?? provider,
-						connection._source?.providerName ?? providerName,
-					);
-				}
-				return buildErrorResult(callError, this.serverName, this.tool.name, provider, providerName, rawParams);
+		} catch (error) {
+			rethrowIfAborted(error, signal);
+			// Lookup failed before dispatch; recovery permits the first attempt, never a replay.
+			const recovered = this.reconnect ? await reconnectWithAbort(this.reconnect, signal) : null;
+			if (!recovered) return buildErrorResult(call, undefined, error);
+			connection = recovered;
+		}
+		let callAttempted = false;
+		try {
+			const args = await prepareOutboundArgs(call.rawParams, this.tool.inputSchema, ctx);
+			throwIfAborted(signal);
+			callAttempted = true;
+			const result = await callTool(connection, this.tool.name, args, { signal });
+			return buildResult(call, connection, result);
+		} catch (error) {
+			rethrowIfAborted(error, signal);
+			const timedOutAfterDispatch = callAttempted && isAttemptedMCPToolRequestDeadline(error, connection);
+			if (callAttempted && (timedOutAfterDispatch || mcpFailureWarrantsReconnect(error))) {
+				if (!timedOutAfterDispatch && this.reconnect) await reconnectForFutureCalls(this.reconnect, signal);
+				const source = connection._source ?? call.source;
+				return buildUnknownOutcomeResult(call.serverName, this.tool.name, source?.provider, source?.providerName);
 			}
-		} catch (connError) {
-			// getConnection() failed — server never connected or connection lost.
-			// This is always worth a reconnect attempt for deferred tools, since the
-			// error ("MCP server not connected") isn't a network error from callTool.
-			rethrowIfAborted(connError, signal);
-			if (this.reconnect) {
-				const newConn = await reconnectWithAbort(this.reconnect, signal);
-				if (newConn) {
-					// The original connection lookup failed *before* dispatch, so
-					// this is the first safe tools/call attempt, not a replay.
-					let firstCallAttempted = false;
-					try {
-						const firstArgs = await prepareOutboundArgs(rawParams, this.tool.inputSchema, _ctx);
-						throwIfAborted(signal);
-						firstCallAttempted = true;
-						const result = await callTool(newConn, this.tool.name, firstArgs, { signal });
-						return buildResult(
-							result,
-							this.serverName,
-							this.tool.name,
-							newConn._source?.provider ?? provider,
-							newConn._source?.providerName ?? providerName,
-							rawParams,
-						);
-					} catch (firstError) {
-						rethrowIfAborted(firstError, signal);
-						if (
-							firstCallAttempted &&
-							(isAttemptedMCPToolRequestDeadline(firstError, newConn) || mcpFailureWarrantsReconnect(firstError))
-						) {
-							return buildUnknownOutcomeResult(
-								this.serverName,
-								this.tool.name,
-								newConn._source?.provider ?? provider,
-								newConn._source?.providerName ?? providerName,
-							);
-						}
-						return buildErrorResult(
-							firstError,
-							this.serverName,
-							this.tool.name,
-							provider,
-							providerName,
-							rawParams,
-						);
-					}
-				}
-			}
-			return buildErrorResult(connError, this.serverName, this.tool.name, provider, providerName, rawParams);
+			return buildErrorResult(call, connection, error);
 		}
 	}
 }

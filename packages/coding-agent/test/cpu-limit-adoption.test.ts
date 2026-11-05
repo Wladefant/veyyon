@@ -67,8 +67,9 @@
  *
  * These wired sites have no reachable in-process entry point and are covered
  * by NOTHING here:
- *   - utils/jj.ts: `ensureAvailable()` calls `$which("jj")` before spawning,
- *     and that answer is fixed at process start (constraint 2).
+ *   - utils/jj.ts as an entry point: `git.ensureInstalled("jj")` calls `$which("jj")` before
+ *     spawning, and that answer is fixed at process start (constraint 2). Its spawn is
+ *     `runCommand` in utils/git.ts, the site "git runs are adopted" drives.
  *   - tools/browser/registry.ts: needs a real Chromium and a CDP endpoint.
  *   - tools/web/fetch.ts, web/scrapers/youtube.ts, utils/tools-manager.ts,
  *     extensibility/plugins/manager.ts: every entry point performs network I/O
@@ -96,7 +97,9 @@ import {
 	primarySessionCpuAdoption,
 	resetSessionCpuLimitsForTests,
 	type SessionCpuLimit,
+	SPAWN_NICE,
 	sessionCpuBudgetName,
+	sessionCpuExecHooks,
 } from "../src/session/cpu-limit";
 import { startRecording } from "../src/speech/stt/recorder";
 import { playAudioFile } from "../src/speech/tts/player";
@@ -157,8 +160,8 @@ afterAll(async () => {
 	await fs.rm(stubDir, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-	resetSessionCpuLimitsForTests();
+beforeEach(async () => {
+	await resetSessionCpuLimitsForTests();
 });
 
 afterEach(async () => {
@@ -171,7 +174,7 @@ afterEach(async () => {
 		// belonging to this one. Deregistering first leaves a late adopt with no
 		// target, which is what the production path does for an ended session.
 		await disposeOwnedResources("session", ROOT_SESSION);
-		resetSessionCpuLimitsForTests();
+		await resetSessionCpuLimitsForTests();
 
 		for (const pid of startedPids) {
 			try {
@@ -307,10 +310,13 @@ async function readProcs(budget: Budget): Promise<string> {
 }
 
 /**
- * The exact assertion: the group holds this pid and only this pid.
+ * The exact assertion: the group holds this pid and only this pid, and the
+ * pid runs at the level every spawn starts at.
  *
  * Equality, not `toContain`. A substring check passes on `"1234"` when the pid
  * is `123`, and passes on a group that also holds three unrelated processes.
+ * The priority is set before the group write, so it is final once the pid
+ * shows up. A runner already niced past SPAWN_NICE hands its own level down.
  */
 async function expectAdopted(budget: Budget, pid: number): Promise<void> {
 	const seen = await poll(`pid ${pid} to appear in ${budget.procsFile}`, async () => {
@@ -320,6 +326,7 @@ async function expectAdopted(budget: Budget, pid: number): Promise<void> {
 		throw new Error(`${(error as Error).message}; file currently holds ${JSON.stringify(await readProcs(budget))}`);
 	});
 	expect(seen).toBe(String(pid));
+	expect(os.getPriority(pid)).toBe(Math.max(os.getPriority(), SPAWN_NICE));
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +360,7 @@ describe("the harness can tell adoption from ambient membership", () => {
 			// the absence meaningful rather than merely early.
 			await Bun.sleep(750);
 			expect(await readProcs(budget)).toBe("");
+			expect(os.getPriority(pid), "an unwired child keeps the runner's own priority").toBe(os.getPriority());
 		},
 		CASE_TIMEOUT_MS,
 	);
@@ -397,6 +405,28 @@ describe("spawn sites that take the binary as an argument adopt their child", ()
 			runSite(
 				execCommand(stub.argv[0], stub.argv.slice(1), stubDir, {
 					adoptPid: primarySessionCpuAdoption(),
+					timeout: 20_000,
+				}),
+			);
+			await expectAdopted(budget, await stubPid(stub));
+		},
+		CASE_TIMEOUT_MS,
+	);
+
+	/**
+	 * sdk.ts: the hooks a session hands custom tools, commands and hooks
+	 * resolve the limiter by the session's live id through `sessionCpuAdoption`,
+	 * the closure the eval kernels and `launch` adopt through as well. The cases
+	 * around it reach the budget through the root session instead.
+	 */
+	it(
+		"execCommand adopts through the session's exec hooks",
+		async () => {
+			const budget = await startRootBudget();
+			const stub = await makeStub("stub-exec-session-hooks");
+			runSite(
+				execCommand(stub.argv[0], stub.argv.slice(1), stubDir, {
+					adoptPid: sessionCpuExecHooks(() => ROOT_SESSION).adoptPid,
 					timeout: 20_000,
 				}),
 			);

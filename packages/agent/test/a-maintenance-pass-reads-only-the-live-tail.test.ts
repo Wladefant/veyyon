@@ -37,6 +37,7 @@ import {
 	type ProtectedToolMatcher,
 } from "@veyyon/agent-core/compaction/tool-protection";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const T = 1_700_000_000_000;
 const PROTECTED: ProtectedToolMatcher[] = ["skill", isSkillReadToolResult];
@@ -56,14 +57,7 @@ function assistant(content: AssistantMessage["content"]): SessionMessageEntry {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	});
 }

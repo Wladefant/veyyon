@@ -2,6 +2,7 @@ import "./warm-natives"; // load the native addon under the real platform before
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { chunkForConPTY, ProcessTerminal } from "@veyyon/tui/terminal";
 import { setTerminalHeadless } from "@veyyon/utils";
+import { restorePlatform, setPlatform } from "../../../../packages/utils/test/helpers/platform-override";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/2034
 //
@@ -189,7 +190,6 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 	describe("ProcessTerminal#write platform gate", () => {
 		const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 		const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 		const originalWslDistro = Bun.env.WSL_DISTRO_NAME;
 		const originalWslInterop = Bun.env.WSL_INTEROP;
 		// This block drives the real ProcessTerminal#write path, so it opts out of
@@ -213,7 +213,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 		afterEach(() => {
 			vi.restoreAllMocks();
 			setTerminalHeadless(previousHeadless);
-			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+			restorePlatform();
 			if (stdinIsTtyDescriptor) Object.defineProperty(process.stdin, "isTTY", stdinIsTtyDescriptor);
 			else Reflect.deleteProperty(process.stdin, "isTTY");
 			if (stdoutIsTtyDescriptor) Object.defineProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
@@ -248,7 +248,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 		}
 
 		it("splits >16 KiB writes into chunks on win32 so ConPTY can track the viewport", () => {
-			Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+			setPlatform("win32");
 			const writes = captureStdoutWrites();
 			const terminal = new ProcessTerminal();
 			const payload = buildFullPaint(2000, 60);
@@ -264,7 +264,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 		});
 
 		it("splits >16 KiB writes inside WSL because stdout still crosses ConPTY at wslhost", () => {
-			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+			setPlatform("linux");
 			setEnv("WSL_DISTRO_NAME", "Ubuntu");
 			setEnv("WSL_INTEROP", "/run/WSL/123_interop");
 			const writes = captureStdoutWrites();
@@ -282,7 +282,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 		});
 
 		it("keeps the single-write fast path on non-ConPTY platforms (clean linux, darwin)", () => {
-			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+			setPlatform("linux");
 			const writes = captureStdoutWrites();
 			const terminal = new ProcessTerminal();
 			const payload = buildFullPaint(2000, 60);
@@ -293,7 +293,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 		});
 
 		it("does not chunk small writes on win32", () => {
-			Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+			setPlatform("win32");
 			const writes = captureStdoutWrites();
 			const terminal = new ProcessTerminal();
 			const payload = `${ESC}[H${ESC}[K`;
@@ -344,7 +344,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			// 200 BMP code units / row × 3 bytes each = 600 bytes / row. 30 rows
 			// = 6000 code units but 18 KiB UTF-8 bytes — code-unit check alone
 			// would let the whole burst through as a single oversized WriteFile.
-			Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+			setPlatform("win32");
 			const writes = captureStdoutWrites();
 			const terminal = new ProcessTerminal();
 			const row = "字".repeat(200);

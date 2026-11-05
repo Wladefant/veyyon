@@ -97,6 +97,7 @@ type ToolArgsRevealControllerOptions = {
 	requestRender(component: Component): void;
 };
 
+
 type RevealEntry = {
 	component: ToolArgsRevealComponent | undefined;
 	/** Latest raw streamed argument text (JSON for function tools, raw text for custom tools). */

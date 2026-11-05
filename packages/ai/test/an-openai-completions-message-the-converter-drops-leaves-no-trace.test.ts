@@ -20,15 +20,9 @@ import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@veyyon/ai/providers/openai-completions";
 import type { AssistantMessage, Message, Model, ToolResultMessage, Usage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
-const usage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: Usage = emptyUsage();
 
 function openAIModel(provider: string, id: string, baseUrl: string): Model<"openai-completions"> {
 	return buildModel({

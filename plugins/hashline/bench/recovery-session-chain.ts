@@ -22,7 +22,7 @@
  * Sizes (50/500/5000 lines) × edit batch (1/8 anchors) so the O(N) split cost
  * in `verifyAnchorContent` and the O(K) anchor walk both surface.
  */
-import { InMemorySnapshotStore, parsePatch, RECOVERY_SESSION_REPLAY_WARNING, Recovery } from "../src";
+import { InMemorySnapshotStore, parsePatch, RECOVERY_SESSION_CHAIN_WARNING, Recovery } from "../src";
 
 const ITERATIONS = Number(Bun.env.HASHLINE_BENCH_ITERATIONS ?? "5000");
 const PATH = "/tmp/__hashline-recovery-bench__.ts";
@@ -51,7 +51,7 @@ function seed(lines: number, rewrittenLine: number): Fixture {
 
 /** Build an N-anchor edit batch whose anchor lines are distinct rows. */
 function batchPatch(anchors: readonly number[]): string {
-	return anchors.map(line => `${line}-${line}:\n|line ${line} MODEL`).join("\n");
+	return anchors.map(line => `SWAP ${line}.=${line}:\n+line ${line} MODEL`).join("\n");
 }
 
 interface Case {
@@ -118,7 +118,7 @@ for (const c of cases) {
 
 	// Sanity: every iteration must hit the expected branch. Otherwise the
 	// numbers measure the wrong path. Accept cases additionally must surface
-	// RECOVERY_SESSION_REPLAY_WARNING — its only emitter is the replay
+	// RECOVERY_SESSION_CHAIN_WARNING — its only emitter is the replay
 	// fallback past verifyAnchorContent, so its absence proves we never
 	// reached the gate this bench is supposed to pin.
 	const probe = recovery.tryRecover(args);
@@ -127,9 +127,9 @@ for (const c of cases) {
 		expectedNullVerified++;
 	} else {
 		if (probe === null) throw new Error(`expected recovery for ${c.name}, got null`);
-		if (!probe.warnings.includes(RECOVERY_SESSION_REPLAY_WARNING)) {
+		if (!probe.warnings.includes(RECOVERY_SESSION_CHAIN_WARNING)) {
 			throw new Error(
-				`expected ${c.name} to surface RECOVERY_SESSION_REPLAY_WARNING (the only signal that the replay path executed); got warnings=${JSON.stringify(probe.warnings)}`,
+				`expected ${c.name} to surface RECOVERY_SESSION_CHAIN_WARNING (the only signal that the replay path executed); got warnings=${JSON.stringify(probe.warnings)}`,
 			);
 		}
 		expectedNonNullVerified++;

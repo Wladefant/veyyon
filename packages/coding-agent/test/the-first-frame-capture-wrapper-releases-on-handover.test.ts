@@ -36,6 +36,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { setTerminalHeadless } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
+import { restoreProperty } from "../../utils/test/helpers/restore-global";
 import { parseArgs } from "../src/cli/args";
 import { clearFirstFrameRecording, recordFirstFrame } from "../src/cli/first-frame-recorder";
 import { type FirstFrameRecording, recordingPath } from "../src/cli/first-frame-replay";
@@ -55,14 +56,6 @@ const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawMode = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 let previousHeadless = false;
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
 
 function send(data: string): void {
 	process.stdin.emit("data", data);

@@ -4,8 +4,8 @@
  * The script is derived entirely from the declarative command/flag metadata
  * (see `cli/completion-gen.ts`), so it never drifts from the actual CLI surface.
  */
-import { APP_ALIAS, APP_NAME, errorMessage, VERSION } from "@veyyon/utils";
-import { Args, CLI_EXIT_USAGE, type CliConfig, Command, type CommandCtor, Flags } from "@veyyon/utils/cli";
+import { APP_ALIAS, APP_NAME, VERSION } from "@veyyon/utils";
+import { Args, type CliConfig, CliUsageError, Command, type CommandCtor, Flags } from "@veyyon/utils/cli";
 import { buildSpec, generateCompletion, type Shell } from "../cli/completion-gen";
 import { commands } from "../cli-commands";
 
@@ -43,27 +43,14 @@ export default class Completions extends Command {
 		// hand. The hand-rolled scan was a second parser that disagreed with the
 		// declaration it sat next to: `--no-alias=true` never matched its
 		// `argv.includes("--no-alias")` test, so the alias was bound anyway, and a
-		// stray trailing token was silently dropped.
-		let shell: string | undefined;
-		let noAlias = false;
-		try {
-			const parsed = await this.parse(Completions);
-			shell = parsed.args.shell;
-			noAlias = parsed.flags["no-alias"];
-		} catch (error) {
-			process.stderr.write(`Error: ${errorMessage(error)}\n`);
-			process.stderr.write(`Usage: ${APP_NAME} completions <${SHELLS.join("|")}>\n`);
-			process.exitCode = CLI_EXIT_USAGE;
-			return;
-		}
-		if (!isShell(shell)) {
-			// Unreachable while `options` is declared above, which is the point: the
-			// narrowing below is a type guard, not a second validation.
-			process.stderr.write(`Error: unsupported shell "${shell}"\n`);
-			process.stderr.write(`Usage: ${APP_NAME} completions <${SHELLS.join("|")}>\n`);
-			process.exitCode = CLI_EXIT_USAGE;
-			return;
-		}
+		// stray trailing token was silently dropped. A usage mistake throws a
+		// `CliUsageError`, which the runner prints with the USAGE line and exit 2.
+		const { args, flags } = await this.parse(Completions);
+		const shell = args.shell;
+		// Unreachable while `options` is declared above: the narrowing is a type
+		// guard, not a second validation.
+		if (!isShell(shell)) throw new CliUsageError(`Expected shell to be one of: ${SHELLS.join(", ")}`);
+		const noAlias = flags["no-alias"];
 
 		// Load every command class so we can read its static flag/arg descriptors,
 		// and collect aliases from both the registration table and the class.

@@ -2,18 +2,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test"
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
-import {
-	getWorktreeDir,
-	getWorktreesDir,
-	hashPath,
-	normalizePathForComparison,
-	normalizeProfileName,
-	pathIsWithin,
-	relativePathWithinRoot,
-	resolveEquivalentPath,
-	resolveProfileEnv,
-	setWorktreesDir,
-} from "../src/dirs";
+import { normalizeProfileName } from "../src/config-root";
+import { getWorktreeDir, getWorktreesDir, hashPath, resolveProfileEnv, setWorktreesDir } from "../src/dirs";
+import { normalizePathForComparison, pathIsWithin, relativePathWithinRoot, resolveEquivalentPath } from "../src/path";
 
 // dirs.ts owns veyyon's on-disk layout: profile-name validation, path
 // containment checks, the short path hash used to name worktree dirs, and the

@@ -35,16 +35,13 @@ import {
 	railIdleHeadAtMs,
 } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
-import type { TodoItem, TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
+import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { todoPhase } from "../../../helpers/todo-phase";
 
 const EXPECTED_MOTION_FIELDS = ["agentInMotion", "live", "transitions"] as const;
 
 type MotionField = (typeof EXPECTED_MOTION_FIELDS)[number];
-
-function phase(name: string, tasks: Array<[string, TodoItem["status"]]>): TodoPhase {
-	return { name, tasks: tasks.map(([content, status]) => ({ content, status })) };
-}
 
 function options(overrides: Partial<TodoBoardOptions> = {}): TodoBoardOptions {
 	return {
@@ -174,7 +171,7 @@ describe("the todo board moves only while the agent does", () => {
 
 	describe("renderTodoBoardLines animation integration", () => {
 		const testPhases = [
-			phase("Active Phase", [
+			todoPhase("Active Phase", [
 				["Active Task", "in_progress"],
 				["Pending Task", "pending"],
 			]),
@@ -230,7 +227,7 @@ describe("the todo board moves only while the agent does", () => {
 		});
 
 		it("advances the board frame once per TODO_BOARD_FRAME_DIVISOR clock steps, holding glyph identical across each step block", () => {
-			const testPhases = [phase("Active Phase", [["Active Task", "in_progress"]])];
+			const testPhases = [todoPhase("Active Phase", [["Active Task", "in_progress"]])];
 			const low = theme.symbol("status.shadowed");
 			const high = theme.symbol("status.done");
 

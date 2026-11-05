@@ -142,12 +142,6 @@ interface ResponsesRequest {
 	tools: unknown[];
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 /** The payload a stream hands to `onPayload`; rejects when the stream settles without building one. */
 async function capturePayload(
 	start: (onPayload: (payload: unknown) => undefined) => { result(): Promise<unknown> },
@@ -178,7 +172,7 @@ const RESPONSES_REQUESTS: Partial<Record<Api, (model: Model<Api>, context: Conte
 		capturePayload(onPayload =>
 			streamOpenAIResponses(model as Model<"openai-responses">, context, {
 				apiKey: "test-key",
-				signal: abortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload,
 			}),
 		),
@@ -188,7 +182,7 @@ const RESPONSES_REQUESTS: Partial<Record<Api, (model: Model<Api>, context: Conte
 				apiKey: "test-key",
 				azureBaseUrl: model.baseUrl,
 				azureApiVersion: "v1",
-				signal: abortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload,
 			}),
 		),
@@ -196,7 +190,7 @@ const RESPONSES_REQUESTS: Partial<Record<Api, (model: Model<Api>, context: Conte
 		toRequest(await buildTransformedCodexRequestBody(model as Model<"openai-codex-responses">, context, undefined)),
 	openrouter: (model, context) =>
 		capturePayload(onPayload =>
-			streamSimple(model, context, { apiKey: "test-key", signal: abortedSignal(), onPayload }),
+			streamSimple(model, context, { apiKey: "test-key", signal: AbortSignal.abort(), onPayload }),
 		),
 };
 

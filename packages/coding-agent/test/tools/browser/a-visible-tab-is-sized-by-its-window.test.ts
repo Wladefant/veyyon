@@ -30,6 +30,7 @@ import { getTab } from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
 import type { Browser, Page } from "puppeteer-core";
+import { toolResultText } from "../../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./chromium";
 
 const PAGE = `data:text/html,${encodeURIComponent("<!doctype html><title>sized</title><p>sized</p>")}`;
@@ -52,17 +53,13 @@ let root: TempDir;
 let dirOverrides: DirOverridesSnapshot | undefined;
 let tool: BrowserTool;
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 async function open(params: Record<string, unknown>): Promise<Viewport | undefined> {
 	const result = await tool.execute("open", { action: "open", ...params } as never);
 	return (result.details as { viewport?: Viewport } | undefined)?.viewport;
 }
 
 async function readSize(name: string): Promise<PageSize> {
-	return JSON.parse(text(await tool.execute("run", { action: "run", name, code: READ_SIZE }))) as PageSize;
+	return JSON.parse(toolResultText(await tool.execute("run", { action: "run", name, code: READ_SIZE }))) as PageSize;
 }
 
 async function refusal(params: Record<string, unknown>): Promise<string> {
@@ -102,7 +99,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a visible tab", () => {
 		const size = await readSize("plain");
 		expect(size.emulated).toBeNull();
 		expect(reported).toEqual(size.window);
-		const observed = text(
+		const observed = toolResultText(
 			await tool.execute("run", {
 				action: "run",
 				name: "plain",

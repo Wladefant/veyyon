@@ -7,6 +7,8 @@ import { AskDialogComponent } from "@veyyon/coding-agent/modes/terminal/componen
 import { activityColorToken, getShimmerActivity, setShimmerActivity } from "@veyyon/coding-agent/theme/shimmer";
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireTheme } from "../../../helpers/require-theme";
+import { stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 import { useFullColor } from "../../../helpers/theme-assertions";
 
 const DOWN = "\x1b[B";
@@ -24,8 +26,7 @@ function render(component: AskDialogComponent): string {
 
 describe("AskDialogComponent", () => {
 	beforeAll(async () => {
-		darkTheme = await getThemeByName("dark");
-		if (!darkTheme) throw new Error("Failed to load dark theme");
+		darkTheme = await requireTheme("dark");
 	});
 
 	beforeEach(() => {
@@ -329,6 +330,32 @@ describe("AskDialogComponent", () => {
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual([]);
 		expect(onSubmit.mock.calls[0][0].results[1].selectedOptions).toEqual(["B2"]);
+	});
+
+	it("Shift+Tab from the first question wraps to Submit, and Tab from Submit wraps to the first question", () => {
+		const onSubmit = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{ id: "q1", question: "Q1?", options: [{ label: "A1" }, { label: "B1" }] },
+			{ id: "q2", question: "Q2?", options: [{ label: "A2" }, { label: "B2" }] },
+		];
+		const component = new AskDialogComponent(questions, {
+			onSubmit,
+			onCancel: vi.fn(),
+			onPrompt: vi.fn(),
+		});
+
+		// Shift+Tab from Q1 -> Submit, Tab from Submit -> Q1.
+		component.handleInput(SHIFT_TAB);
+		component.handleInput(TAB);
+		// Down to B1, Enter answers Q1 and advances to Q2, Tab -> Submit, Enter submits.
+		component.handleInput(DOWN);
+		component.handleInput(ENTER);
+		component.handleInput(TAB);
+		component.handleInput(ENTER);
+
+		expect(onSubmit.mock.calls.length).toBe(1);
+		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["B1"]);
+		expect(onSubmit.mock.calls[0][0].results[1].selectedOptions).toEqual([]);
 	});
 
 	it("Submit tab shows unanswered warning but Enter still submits", () => {
@@ -1149,28 +1176,32 @@ describe("AskDialogComponent", () => {
 				multi: true,
 			},
 		];
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 40 });
-		const component = new AskDialogComponent(questions, {
-			onSubmit: vi.fn(),
-			onCancel: vi.fn(),
-			onPrompt: vi.fn(),
-		});
-		const questionTab = component.render(80);
-		expect(questionTab.length).toBe(40);
-		expect(questionTab.join("\n")).toContain("Ask");
-		expect(questionTab.join("\n")).toContain("[x]");
+		const geometry = stubStdoutGeometry({ rows: 40 });
+		try {
+			const component = new AskDialogComponent(questions, {
+				onSubmit: vi.fn(),
+				onCancel: vi.fn(),
+				onPrompt: vi.fn(),
+			});
+			const questionTab = component.render(80);
+			expect(questionTab.length).toBe(40);
+			expect(questionTab.join("\n")).toContain("Ask");
+			expect(questionTab.join("\n")).toContain("[x]");
 
-		// The submit tab renders at exactly the same height — the shell fills
-		// the terminal once; tab content never resizes the frame.
-		component.handleInput(TAB);
-		const submitTab = component.render(80);
-		expect(submitTab.length).toBe(questionTab.length);
+			// The submit tab renders at exactly the same height — the shell fills
+			// the terminal once; tab content never resizes the frame.
+			component.handleInput(TAB);
+			const submitTab = component.render(80);
+			expect(submitTab.length).toBe(questionTab.length);
 
-		// Toggling an option (which changes the review summary) does not
-		// resize the box either.
-		component.handleInput(SHIFT_TAB);
-		component.handleInput(SPACE);
-		expect(component.render(80).length).toBe(questionTab.length);
+			// Toggling an option (which changes the review summary) does not
+			// resize the box either.
+			component.handleInput(SHIFT_TAB);
+			component.handleInput(SPACE);
+			expect(component.render(80).length).toBe(questionTab.length);
+		} finally {
+			geometry.restore();
+		}
 	});
 
 	it("clears the custom answer when the Other prompt is submitted empty", async () => {

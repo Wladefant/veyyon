@@ -382,28 +382,6 @@ export function readLaunchFacts(): LaunchFacts {
 	};
 }
 
-/**
- * Merge `update` into what this project and this model have recorded, and write it when anything
- * changed.
- *
- * Each fact lands in the map whose key it answers to, so a launch here contributes the model's
- * display name to every project that uses it while its gauge stays this project's alone. A gauge
- * recorded under a model that has since moved is DROPPED rather than carried onto the new one: a
- * percentage taken against another window is worse than none, because the card would state it with
- * the same confidence as a correct one. The dirty marker is kept, since it describes the working
- * tree rather than the model.
- *
- * Other entries in both maps are carried through untouched. When a map is full the oldest write
- * leaves, so a machine that opens hundreds of directories keeps the ones it returns to.
- *
- * A caller reaches this on every redraw of an idle session, so an update that changes nothing
- * returns before it touches the disk. The write is atomic, so a crash cannot leave a half-written
- * file, and unflushed, because losing it to power loss costs exactly one frame.
- *
- * The returned promise settles when the file is on disk and never rejects; callers discard it. A
- * failed write is not retried on the next frame — that would turn an unwritable cache directory
- * into a warning per redraw — and the next changed fact tries again.
- */
 /** Whether the update carries a fact at all, and so is worth waking the card for. */
 function carriesUpdate(update: LaunchFactsUpdate): boolean {
 	return Object.values(update).some(value => value !== undefined);
@@ -507,6 +485,28 @@ export function recordRestLaunchFacts(
 	return recordLaunchFacts(update);
 }
 
+/**
+ * Merge `update` into what this project and this model have recorded, and write it when anything
+ * changed.
+ *
+ * Each fact lands in the map whose key it answers to, so a launch here contributes the model's
+ * display name to every project that uses it while its gauge stays this project's alone. A gauge
+ * recorded under a model that has since moved is DROPPED rather than carried onto the new one: a
+ * percentage taken against another window is worse than none, because the card would state it with
+ * the same confidence as a correct one. The dirty marker is kept, since it describes the working
+ * tree rather than the model.
+ *
+ * Other entries in both maps are carried through untouched. When a map is full the oldest write
+ * leaves, so a machine that opens hundreds of directories keeps the ones it returns to.
+ *
+ * A caller reaches this on every redraw of an idle session, so an update that changes nothing
+ * returns before it touches the disk. The write is atomic, so a crash cannot leave a half-written
+ * file, and unflushed, because losing it to power loss costs exactly one frame.
+ *
+ * The returned promise settles when the file is on disk and never rejects; callers discard it. A
+ * failed write is not retried on the next frame — that would turn an unwritable cache directory
+ * into a warning per redraw — and the next changed fact tries again.
+ */
 export function recordLaunchFacts(update: LaunchFactsUpdate): Promise<void> {
 	// Each key is read once, so the entry this call merges into and the entry it writes back are
 	// the same one even though the settings store is free to move between statements.

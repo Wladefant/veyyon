@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 interface SessionStub {
 	session: AgentSession;
@@ -48,17 +49,9 @@ function makeSessionStub(): SessionStub {
 	return { session: stub as unknown as AgentSession, disposeCalls: () => disposeCount };
 }
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-	let resolve!: () => void;
-	const promise = new Promise<void>(r => {
-		resolve = r;
-	});
-	return { promise, resolve };
-}
-
 /** Let the microtask chain inside ensureLive reach its first await. */
 async function flushAsync(): Promise<void> {
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 describe("a revive racing a prune leaks no session", () => {
@@ -105,7 +98,7 @@ describe("a revive racing a prune leaks no session", () => {
 	 * the orphan.
 	 */
 	it("refuses a prune while a revive is in flight, and the woken session is the one the registry owns", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		const runs = { n: 0 };
 		parkAdopted("Waking", gate.promise, revived, runs);
@@ -143,7 +136,7 @@ describe("a revive racing a prune leaks no session", () => {
 	 * session handed to a caller with no registry entry behind it.
 	 */
 	it("rejects and disposes the rebuilt session when the ref is released mid-revive", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		const runs = { n: 0 };
 		parkAdopted("Dropped", gate.promise, revived, runs);
@@ -176,7 +169,7 @@ describe("a revive racing a prune leaks no session", () => {
 	 * distinguishes the two generations.
 	 */
 	it("rejects and disposes a revived session when the id was re-registered mid-revive", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		const runs = { n: 0 };
 		parkAdopted("Reused", gate.promise, revived, runs);
@@ -210,7 +203,7 @@ describe("a revive racing a prune leaks no session", () => {
 	 * identity must still guard against attaching the old sessionFile or reviving a replaced ref.
 	 */
 	it("rejects and disposes a revived session when the ref was replaced even if session matched", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		const runs = { n: 0 };
 		parkAdopted("ReplacedSameSession", gate.promise, revived, runs);
@@ -245,7 +238,7 @@ describe("a revive racing a prune leaks no session", () => {
 	 * would make the prune budget dead.
 	 */
 	it("still declines to prune an agent that finished waking, and disposes nothing", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const revived = makeSessionStub();
 		const runs = { n: 0 };
 		parkAdopted("Awake", gate.promise, revived, runs);

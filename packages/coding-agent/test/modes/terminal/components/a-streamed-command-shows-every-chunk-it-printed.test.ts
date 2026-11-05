@@ -15,29 +15,35 @@
  * Not caught: SIXEL images cut by the streaming cap (the cap cut them before this change too), and a memory
  * bound on held chunks between draws, which changes no output.
  */
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, onTestFinished } from "bun:test";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
 import { EvalExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/eval-execution";
 import {
 	EXECUTION_STREAMING_LINE_CAP,
 	StreamedOutputLines,
 } from "@veyyon/coding-agent/modes/terminal/components/transcript/execution-shared";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "../../../helpers/require-theme";
 
 const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 beforeEach(async () => {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	setThemeInstance(theme!);
+	const theme = await requireTheme("dark");
+	setThemeInstance(theme);
 });
 
 type ExecutionBlock = BashExecutionComponent | EvalExecutionComponent;
 
+/** A block disposed when the test that opened it ends, so a block left running stops its loader. */
+function opened(block: ExecutionBlock): ExecutionBlock {
+	onTestFinished(() => block.dispose());
+	return block;
+}
+
 const BLOCKS: Array<[string, () => ExecutionBlock]> = [
-	["the bash block", () => new BashExecutionComponent("cmd", ui)],
-	["the eval block", () => new EvalExecutionComponent("print()", ui)],
+	["the bash block", () => opened(new BashExecutionComponent("cmd", ui))],
+	["the eval block", () => opened(new EvalExecutionComponent("print()", ui))],
 ];
 
 function numbered(count: number, trailingNewline: boolean): string {

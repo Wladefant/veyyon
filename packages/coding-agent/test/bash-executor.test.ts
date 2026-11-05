@@ -2,17 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { resetSettingsForTest, Settings, type ShellMinimizerSettings } from "@veyyon/coding-agent/config/settings";
-import { buildMinimizerOptions, executeBash } from "@veyyon/coding-agent/exec/bash-executor";
+import {
+	buildMinimizerOptions,
+	executeBash,
+	reapRetainedShellsForTests,
+} from "@veyyon/coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
 import * as shellSnapshot from "@veyyon/coding-agent/utils/shell-snapshot";
 import type { Shell, ShellRunResult } from "@veyyon/natives";
 import * as piNatives from "@veyyon/natives";
 import { $which, removeSyncWithRetries } from "@veyyon/utils";
 
-// Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
-// OutputSink when bash-executor pulls settings via resolveOutputSinkHeadBytes.
-const ARTIFACT_HEAD_BYTES_DEFAULT = 20 * 1024;
 const BACKGROUND_COMPLETION_RACE_MS = 750;
 // Killed-vs-orphaned proof: the command's marker write is gated on a `release`
 // file the test creates only AFTER the cancel has landed. A truly killed process
@@ -791,8 +793,8 @@ exit 64
 		// Once raw output exceeds the truncation cap, the streaming + middle-elision
 		// path is volume-independent, so a few hundred KB exercises the same
 		// no-freeze / no-OOM contract the original 40MB did without paying several
-		// seconds to generate it. 100k lines of `seq` is ~690KB — an order of
-		// magnitude past the ~71KB head+tail cap asserted below.
+		// seconds to generate it. 100k lines of `seq` is ~690KB, an order of
+		// magnitude past the inline budget asserted below.
 		const lineCount = 100_000;
 		let chunkCount = 0;
 		const start = Date.now();
@@ -812,10 +814,11 @@ exit 64
 		// Output summary reflects every line even though the visible text is capped.
 		expect(result.totalLines).toBeGreaterThanOrEqual(lineCount);
 
-		// Truncated output stays bounded by head + tail + marker overhead
-		// (middle-elision keeps the head budget plus the tail spill window) — proof
-		// the full ~690KB stream was never accumulated in the visible buffer.
-		expect(result.outputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + ARTIFACT_HEAD_BYTES_DEFAULT + 1024);
+		// The head, the elision marker and the tail together fit the inline budget a
+		// session-less caller gets: proof the full ~690KB stream was never accumulated
+		// in the visible buffer, and that the windows leave the marker its room.
+		expect(result.outputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+		expect(Buffer.byteLength(result.output, "utf-8")).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
 
 		// The tail should still contain numeric values near the end of the range.
 		// BSD `seq` on macOS formats large numbers in scientific notation, so parse
@@ -1203,6 +1206,16 @@ describe("executeBash :async: background retention", () => {
 					alive = false;
 				}
 				expect(alive).toBe(true);
+
+				// Once the job exits, the shell is dropped and its reaper interval ends with it.
+				process.kill(pid, "SIGKILL");
+				const deadline = Date.now() + 4000;
+				let retained = await reapRetainedShellsForTests();
+				while (retained > 0 && Date.now() < deadline) {
+					await sleep(5);
+					retained = await reapRetainedShellsForTests();
+				}
+				expect(retained).toBe(0);
 			} finally {
 				if (pid !== undefined) {
 					try {

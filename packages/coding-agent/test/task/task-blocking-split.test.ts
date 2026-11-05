@@ -28,6 +28,7 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams, TaskToolDetails } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // Spawning a task writes a session under the ACTIVE PROFILE's agent dir, so
@@ -103,11 +104,6 @@ function mockDiscovery(): void {
 	});
 }
 
-function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
-	const content = result.content.find(part => part.type === "text");
-	return content?.type === "text" ? (content.text ?? "") : "";
-}
-
 describe("task per-item blocking split", () => {
 	const managers: AsyncJobManager[] = [];
 
@@ -170,7 +166,7 @@ describe("task per-item blocking split", () => {
 		gates.get("ScoutOne")!.resolve();
 		const result = await executePromise;
 
-		const text = firstText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain('id="ScoutOne"');
 		expect(text).toContain("ScoutOne output.");
 		expect(text).toContain("Spawned 1 background agent");
@@ -217,7 +213,7 @@ describe("task per-item blocking split", () => {
 			} as TaskParams,
 			undefined,
 			update => {
-				if (update.details) updates.push({ text: firstText(update), details: update.details });
+				if (update.details) updates.push({ text: firstToolResultText(update), details: update.details });
 			},
 		);
 
@@ -298,7 +294,7 @@ describe("task per-item blocking split", () => {
 			tasks: [{ name: "ScoutOff", agent: "scout", task: "Research." }],
 		} as TaskParams);
 
-		const text = firstText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain('Agent "scout" is disabled');
 		expect(text).toContain("agent.agents.scout.enabled");
 		expect(executed).toEqual([]);
@@ -326,7 +322,7 @@ describe("task per-item blocking split", () => {
 		} as TaskParams);
 
 		expect(executed).toEqual(["ScoutOn"]);
-		expect(firstText(result)).toContain("ScoutOn output.");
+		expect(firstToolResultText(result)).toContain("ScoutOn output.");
 		expect(result.details?.results.map(r => r.id)).toEqual(["ScoutOn"]);
 		expect(result.details?.async).toBeUndefined();
 	});
@@ -354,7 +350,7 @@ describe("task per-item blocking split", () => {
 		} as TaskParams);
 		filler.resolve("done");
 
-		const text = firstText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain('id="ScoutThree"');
 		expect(text).toContain("Failed to schedule 1 spawn");
 		expect(text).toContain("WorkerThree");

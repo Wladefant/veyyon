@@ -8,10 +8,10 @@ import type {
 	AgentTool,
 	SteeringQueueState,
 } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message, TextContent, ToolCall, ToolResultMessage, UserMessage } from "@veyyon/ai";
+import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage, UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -20,6 +20,7 @@ import { normalizeCustomMessagePayload } from "@veyyon/coding-agent/session/mess
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { identityConverter, requireBundledModel } from "../../agent/test/helpers";
 import { loopSource, unionMembers } from "../../agent/test/support/invented-tool-result-sources";
 
 /**
@@ -47,10 +48,6 @@ import { loopSource, unionMembers } from "../../agent/test/support/invented-tool
  *  - Consumer: in `agent-session.ts`, force `const todoCallDidNotFail = false;`
  *    (the text-classifying behaviour the discriminator replaced).
  */
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 const todoSchema = type({ op: "string" });
 
@@ -146,14 +143,7 @@ describe("an interrupted todo call is not a payload refusal", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse",
-			usage: {
-				input: 50,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 60,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 50, output: 10, totalTokens: 60 },
 			timestamp: Date.now(),
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
@@ -202,14 +192,7 @@ describe("an interrupted todo call is not a payload refusal", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 100,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 120,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 			timestamp: Date.now(),
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: msg });
@@ -223,8 +206,7 @@ describe("an interrupted todo call is not a payload refusal", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),

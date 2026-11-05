@@ -1,15 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 
 import { HookInputComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/hook-input";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { DEFAULT_MASK_CHAR, type TUI } from "@veyyon/tui";
 import { PASTE_END, PASTE_START } from "@veyyon/utils/bracketed-paste";
+import { requireTheme } from "./helpers/require-theme";
 
 beforeAll(async () => {
-	const theme = await getThemeByName("dark");
-	if (!theme) {
-		throw new Error("Failed to load dark theme for tests");
-	}
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 describe("HookInputComponent timeout", () => {

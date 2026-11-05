@@ -1,17 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import type { Message, Usage } from "@veyyon/ai";
+import type { Message } from "@veyyon/ai";
 import { type Dialect, getDialectDefinition } from "@veyyon/ai/dialect";
-
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const messages: Message[] = [
 	{ role: "user", content: "Find pi", timestamp: 1 },
@@ -25,7 +15,7 @@ const messages: Message[] = [
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 2,
 	},
@@ -43,7 +33,7 @@ const messages: Message[] = [
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 4,
 	},
@@ -122,7 +112,7 @@ describe("dialect transcript rendering", () => {
 				api: "mock",
 				provider: "mock",
 				model: "mock",
-				usage: usage(),
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 1,
 			},
@@ -148,7 +138,7 @@ describe("dialect transcript rendering", () => {
 				api: "mock",
 				provider: "mock",
 				model: "mock",
-				usage: usage(),
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 1,
 			},
@@ -174,7 +164,7 @@ describe("dialect transcript rendering", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock",
-					usage: usage(),
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: 1,
 				},
@@ -198,7 +188,7 @@ describe("dialect transcript rendering", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock",
-					usage: usage(),
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: 1,
 				},
@@ -218,7 +208,7 @@ describe("dialect transcript rendering", () => {
 				api: "mock",
 				provider: "mock",
 				model: "mock",
-				usage: usage(),
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 1,
 			},

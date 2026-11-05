@@ -24,12 +24,12 @@ import { afterEach, beforeEach, describe, expect, it, setSystemTime, vi } from "
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 /**
  * Each case is one instant and two zones' worth of disagreement about which day it
@@ -77,8 +77,7 @@ describe("the session-state block states the host local day", () => {
 	});
 
 	async function createSession(): Promise<AgentSession> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected the bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 		});

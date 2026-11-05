@@ -38,8 +38,9 @@ import {
 	extractToolResultContent,
 	extractToolResultDetails,
 	isToolCallRecord,
-	normalizeToolResultContent,
+	projectToolCallDisplay,
 	projectToolDisplay,
+	projectToolResultDisplay,
 } from "../presentation/web-tool-display";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 
@@ -130,24 +131,7 @@ function toWireMessage(
 			const content = (message.content as WireAssistantMessage["content"]).map(block => {
 				if (isToolCallRecord(block)) {
 					const existingDisplay = "display" in block && isRecord(block.display) ? block.display : undefined;
-					const matchingResult = toolResultLookup?.get(block.id);
-					const display =
-						existingDisplay ??
-						projectToolDisplay({
-							toolName: block.name,
-							toolCallId: block.id,
-							args: block.arguments,
-							result: matchingResult
-								? {
-										content: normalizeToolResultContent(matchingResult.content),
-										details: matchingResult.details,
-										isError: matchingResult.isError,
-									}
-								: undefined,
-							isError: matchingResult?.isError,
-							isPartial: matchingResult === undefined,
-							expanded: true,
-						});
+					const display = existingDisplay ?? projectToolCallDisplay(block, toolResultLookup?.get(block.id));
 					return {
 						type: block.type,
 						id: block.id,
@@ -172,23 +156,7 @@ function toWireMessage(
 		}
 		case "toolResult": {
 			const existingDisplay = "display" in message && isRecord(message.display) ? message.display : undefined;
-			const matchingCall = toolCallLookup?.get(message.toolCallId);
-			const toolName = message.toolName || matchingCall?.toolName || "";
-			const display =
-				existingDisplay ??
-				projectToolDisplay({
-					toolName,
-					toolCallId: message.toolCallId,
-					args: matchingCall?.args,
-					result: {
-						content: normalizeToolResultContent(message.content),
-						details: message.details,
-						isError: message.isError,
-					},
-					isPartial: false,
-					timestamp: message.timestamp,
-					expanded: true,
-				});
+			const display = existingDisplay ?? projectToolResultDisplay(message, toolCallLookup?.get(message.toolCallId));
 			return {
 				role: "toolResult",
 				toolCallId: message.toolCallId,
@@ -708,9 +676,8 @@ export type CollabFrame =
 	 * chunking, a multi-MB session has to fit one giant frame inside the
 	 * 30 s first-welcome budget. The last chunk carries `final: true` so the
 	 * guest can finalize the replica session.
-	 */
-	/**
-	 * Wire entries, not the host's. Build them with {@link toWireSessionEntry}.
+	 *
+	 * `entries` holds wire entries, not the host's. Build them with {@link toWireSessionEntry}.
 	 *
 	 * Typed as the narrower shape on purpose. Declaring the host's `SessionEntry` here is what let
 	 * every undeclared field reach every guest: assignability runs the permissive way, so a host

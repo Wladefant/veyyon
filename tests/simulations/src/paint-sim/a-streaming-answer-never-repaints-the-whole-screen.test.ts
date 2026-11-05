@@ -68,7 +68,7 @@ describe("a streaming answer never repaints the whole screen", () => {
 	}).map(shape => ({ ...shape, scrollbackRebuild: Boolean(shape.scrollbackRebuild) }));
 
 	for (const shape of sweep) {
-		test(
+		test.concurrent(
 			label(shape),
 			async () => {
 				const report = await paintSim(shape);
@@ -94,7 +94,7 @@ describe("a streaming answer never repaints the whole screen", () => {
 		);
 	}
 
-	test(
+	test.concurrent(
 		"a plain container is the control: no drops, no repaints",
 		async () => {
 			const report = await paintSim({ ...BASE, virtualized: false });
@@ -105,7 +105,7 @@ describe("a streaming answer never repaints the whole screen", () => {
 		CASE_TIMEOUT_MS,
 	);
 
-	test(
+	test.concurrent(
 		"the rebuild knob changes nothing while nothing diverges",
 		async () => {
 			// Exact parity: the setting decides how a GENUINE divergence is
@@ -121,7 +121,7 @@ describe("a streaming answer never repaints the whole screen", () => {
 		CASE_TIMEOUT_MS,
 	);
 
-	test(
+	test.concurrent(
 		"a frame writes a screenful at most, so no frame can be a hidden replay",
 		async () => {
 			// A whole-screen repaint that somehow did not increment the counter is

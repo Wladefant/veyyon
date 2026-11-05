@@ -30,8 +30,6 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
-import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { getEnumValues, getType, SETTINGS_SCHEMA, type SettingPath } from "@veyyon/coding-agent/config/settings-schema";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -43,6 +41,7 @@ import {
 } from "@veyyon/coding-agent/system-prompt-builder/gate-registry";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
+import { createMockModel } from "./helpers/mock-model";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const TOOL_SHAPE_PATHS = Object.keys(TOOL_SHAPE_SETTING_PATHS);
@@ -59,21 +58,6 @@ const TOOL_SHAPE_PATHS = Object.keys(TOOL_SHAPE_SETTING_PATHS);
  * every write.
  */
 const UNGATED_PATHS = ["tui.tight", "async.maxJobs", "todo.reminders"];
-
-function createModel(): Model<"openai-responses"> {
-	return buildModel({
-		id: "mock",
-		name: "mock",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	});
-}
 
 function readTool(): AgentTool {
 	return {
@@ -138,7 +122,7 @@ describe("a settings write rebuilds the prompt it changes", () => {
 		const tool = readTool();
 		session = new AgentSession({
 			agent: new Agent({
-				initialState: { model: createModel(), systemPrompt: ["initial"], tools: [tool], messages: [] },
+				initialState: { model: createMockModel(), systemPrompt: ["initial"], tools: [tool], messages: [] },
 			}),
 			sessionManager: SessionManager.inMemory(),
 			settings,

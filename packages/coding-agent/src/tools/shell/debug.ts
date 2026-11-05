@@ -8,6 +8,7 @@ import type {
 } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { isEnoent, lazy, prompt } from "@veyyon/utils";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import type {
@@ -101,7 +102,7 @@ const debugActionSchema = lazy(() =>
 		"sessions",
 	),
 );
-const debugSchema = lazy(() =>
+const debugSchema = toolSchema("debug", () =>
 	type({
 		action: debugActionSchema.value,
 		"program?": type("string").describe("debug target path; Delve accepts Go package directories"),
@@ -930,6 +931,9 @@ export class DebugTool implements AgentTool<typeof debugSchema.value, DebugToolD
 	readonly description: string;
 	get parameters(): typeof debugSchema.value {
 		return debugSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return debugSchema.wire;
 	}
 	readonly strict = true;
 	readonly view = debugToolView;

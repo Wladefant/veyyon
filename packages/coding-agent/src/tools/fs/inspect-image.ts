@@ -5,7 +5,8 @@ import { withAuth } from "@veyyon/ai/auth-retry";
 import { completeSimple } from "@veyyon/ai/stream";
 import "@veyyon/ai/usage/defaults";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy, prompt } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { prompt } from "@veyyon/utils";
 import { extractTextContent } from "../../commit/utils";
 import { normalizeModelPatternList } from "../../config/model-pattern-list";
 import { getModelMatchPreferences, resolveModelFromString } from "../../config/model-resolver";
@@ -23,7 +24,7 @@ import { ToolError } from "../core/tool-errors";
 import type { ToolSession } from "../index";
 import { inspectImageToolView } from "./inspect-image-view";
 
-const inspectImageSchema = lazy(() =>
+const inspectImageSchema = toolSchema("inspect_image", () =>
 	type({
 		path: type("string").describe("image file path, Image #N label, or attachment://N URI"),
 		question: type("string").describe("question about image"),
@@ -117,6 +118,9 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema.val
 	readonly description: string;
 	get parameters(): typeof inspectImageSchema.value {
 		return inspectImageSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return inspectImageSchema.wire;
 	}
 	readonly strict = false;
 	readonly view = inspectImageToolView;

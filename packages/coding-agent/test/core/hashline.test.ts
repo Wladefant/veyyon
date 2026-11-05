@@ -20,6 +20,7 @@ import {
 } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
 import { type Type, type } from "arktype";
+import { inertDeferredDiagnostics } from "../helpers/hashline-exec";
 import { makeToolSession } from "../helpers/tool-session";
 
 beforeAll(async () => {
@@ -78,11 +79,7 @@ function hashlineExecuteOptions(
 			await Bun.write(targetPath, content);
 			return undefined;
 		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
+		beginDeferredDiagnosticsForPath: inertDeferredDiagnostics,
 	};
 }
 
@@ -504,11 +501,7 @@ describe("hashline — filename+tag path recovery", () => {
 			const guardFs = new HashlineFilesystem({
 				session: makeHashlineSession(tempDir),
 				writethrough: async () => undefined,
-				beginDeferredDiagnosticsForPath: () => ({
-					onDeferredDiagnostics: () => {},
-					signal: new AbortController().signal,
-					finalize: () => {},
-				}),
+				beginDeferredDiagnosticsForPath: inertDeferredDiagnostics,
 			});
 			const root = canonicalSnapshotKey(tempDir);
 			const inside = path.join(root, "pkg", "test", "file.ts");
@@ -540,11 +533,7 @@ describe("hashline — filename+tag path recovery", () => {
 			return new HashlineFilesystem({
 				session,
 				writethrough: async () => undefined,
-				beginDeferredDiagnosticsForPath: () => ({
-					onDeferredDiagnostics: () => {},
-					signal: new AbortController().signal,
-					finalize: () => {},
-				}),
+				beginDeferredDiagnosticsForPath: inertDeferredDiagnostics,
 			});
 		}
 

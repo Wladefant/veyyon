@@ -28,6 +28,7 @@ import { HookSelectorComponent } from "@veyyon/coding-agent/modes/terminal/compo
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { formatApprovalCard } from "@veyyon/coding-agent/tools/core/approval";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { clickAt } from "../../../helpers/sgr-pointer";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -65,11 +66,6 @@ function cardFor(command: string, onSelect: (label: string) => void = () => {}):
 		() => {},
 		{ initialIndex: 0, selectionMarker: "radio" },
 	);
-}
-
-/** An SGR left press at a 1-based screen row, mid-card. */
-function clickAt(row1: number): string {
-	return `\x1b[<0;40;${row1}M`;
 }
 
 /** A command long enough to wrap past the card's body budget at this geometry. */

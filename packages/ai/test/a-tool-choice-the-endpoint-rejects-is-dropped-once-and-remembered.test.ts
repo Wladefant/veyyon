@@ -47,6 +47,7 @@ import { mapToOpenAICompletionsToolChoice } from "@veyyon/ai/utils/tool-choice";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
 import { type } from "arktype";
+import { sseResponse } from "./helpers/fetch-mock";
 
 type OpenAIShapedApi = "openai-completions" | "openai-responses";
 
@@ -114,16 +115,6 @@ function gatewayModel(api: OpenAIShapedApi, id: string): Model<OpenAIShapedApi> 
 	} as ModelSpec<OpenAIShapedApi>) as Model<OpenAIShapedApi>;
 }
 
-function sse(events: readonly unknown[]): Response {
-	return new Response(
-		`${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`,
-		{
-			status: 200,
-			headers: { "content-type": "text/event-stream" },
-		},
-	);
-}
-
 function successFor(api: OpenAIShapedApi): Response {
 	if (api === "openai-completions") {
 		const chunk = (delta: unknown, finish: string | null) => ({
@@ -132,9 +123,9 @@ function successFor(api: OpenAIShapedApi): Response {
 			created: 0,
 			choices: [{ index: 0, delta, finish_reason: finish }],
 		});
-		return sse([chunk({ content: "ok" }, null), chunk({}, "stop"), "[DONE]"]);
+		return sseResponse([chunk({ content: "ok" }, null), chunk({}, "stop"), "[DONE]"]);
 	}
-	return sse([
+	return sseResponse([
 		{
 			type: "response.output_item.added",
 			output_index: 0,

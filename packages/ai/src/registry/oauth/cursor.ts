@@ -1,10 +1,11 @@
 import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as AIError from "../../error";
+import { loginStep, waitForNextLoginPoll } from "./device-code";
 import { credentialExpiryFromJwtExp } from "./expiry";
 import { generatePKCE } from "./pkce";
 import { requireTokenResponseObject } from "./token-response";
-import type { OAuthCredentials } from "./types";
+import type { OAuthController, OAuthCredentials } from "./types";
 
 const CURSOR_LOGIN_URL = "https://cursor.com/loginDeepControl";
 const CURSOR_POLL_URL = `${CURSOR_API_ENDPOINT}/auth/poll`;
@@ -38,49 +39,49 @@ export async function generateCursorAuthParams(): Promise<CursorAuthParams> {
 	return { verifier, challenge, uuid, loginUrl };
 }
 
-export async function pollCursorAuth(
+interface CursorTokens {
+	accessToken: string;
+	refreshToken: string;
+}
+
+/** One poll: the tokens once the browser has approved, "pending" before that, "failed" when it errored. */
+async function pollCursorOnce(
 	uuid: string,
 	verifier: string,
-): Promise<{ accessToken: string; refreshToken: string }> {
+	signal: AbortSignal | undefined,
+): Promise<CursorTokens | "pending" | "failed"> {
+	try {
+		const response = await fetch(`${CURSOR_POLL_URL}?uuid=${uuid}&verifier=${verifier}`, { signal });
+		if (response.status === 404) return "pending";
+		if (!response.ok) return "failed";
+		const data = (await response.json()) as CursorTokens;
+		return { accessToken: data.accessToken, refreshToken: data.refreshToken };
+	} catch {
+		return "failed";
+	}
+}
+
+export async function pollCursorAuth(uuid: string, verifier: string, signal?: AbortSignal): Promise<CursorTokens> {
 	let delay = POLL_BASE_DELAY;
 	let consecutiveErrors = 0;
 
 	for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
-		await Bun.sleep(delay);
+		await waitForNextLoginPoll(delay, signal);
+		const result = await loginStep(signal, () => pollCursorOnce(uuid, verifier, signal));
 
-		try {
-			const response = await fetch(`${CURSOR_POLL_URL}?uuid=${uuid}&verifier=${verifier}`);
+		if (result === "pending") {
+			consecutiveErrors = 0;
+			delay = Math.min(delay * POLL_BACKOFF_MULTIPLIER, POLL_MAX_DELAY);
+			continue;
+		}
+		if (result !== "failed") return result;
 
-			if (response.status === 404) {
-				consecutiveErrors = 0;
-				delay = Math.min(delay * POLL_BACKOFF_MULTIPLIER, POLL_MAX_DELAY);
-				continue;
-			}
-
-			if (response.ok) {
-				const data = (await response.json()) as {
-					accessToken: string;
-					refreshToken: string;
-				};
-				return {
-					accessToken: data.accessToken,
-					refreshToken: data.refreshToken,
-				};
-			}
-
-			throw new AIError.OAuthError(`Poll failed: ${response.status}`, {
+		consecutiveErrors++;
+		if (consecutiveErrors >= 3) {
+			throw new AIError.OAuthError("Too many consecutive errors during Cursor auth polling", {
 				kind: "polling",
 				provider: "cursor",
-				status: response.status,
 			});
-		} catch {
-			consecutiveErrors++;
-			if (consecutiveErrors >= 3) {
-				throw new AIError.OAuthError("Too many consecutive errors during Cursor auth polling", {
-					kind: "polling",
-					provider: "cursor",
-				});
-			}
 		}
 	}
 
@@ -90,16 +91,13 @@ export async function pollCursorAuth(
 	});
 }
 
-export async function loginCursor(
-	onAuthUrl: (url: string) => void,
-	onPollStart?: () => void,
-): Promise<OAuthCredentials> {
+export async function loginCursor(ctrl: OAuthController): Promise<OAuthCredentials> {
 	const { verifier, uuid, loginUrl } = await generateCursorAuthParams();
 
-	onAuthUrl(loginUrl);
-	onPollStart?.();
+	ctrl.onAuth?.({ url: loginUrl });
+	ctrl.onProgress?.("Waiting for browser authentication...");
 
-	const { accessToken, refreshToken } = await pollCursorAuth(uuid, verifier);
+	const { accessToken, refreshToken } = await pollCursorAuth(uuid, verifier, ctrl.signal);
 
 	const expiresAt = getTokenExpiry(accessToken);
 

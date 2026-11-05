@@ -23,7 +23,6 @@ import { Agent } from "@veyyon/agent-core";
 import type { Model, ProviderResponseMetadata, RawSseEvent, SimpleStreamOptions } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { RawSseDebugBuffer, resolveRawSseDebugBuffer } from "@veyyon/coding-agent/debug/raw-sse-buffer";
@@ -33,6 +32,7 @@ import type { AgentSessionConfig } from "@veyyon/coding-agent/session/agent-sess
 import { type CreateAgentSessionOptions, isSubagentSession } from "@veyyon/coding-agent/session/factory-options";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const FRAME: RawSseEvent = { event: "message_start", data: "{}", raw: ["event: message_start", "data: {}"] };
 const RESPONSE: ProviderResponseMetadata = { status: 200, headers: {}, requestId: "req_fake_0001" };
@@ -46,8 +46,7 @@ const ROLES: Record<string, Partial<CreateAgentSessionOptions>> = {
 };
 
 function bundledModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("missing bundled model anthropic/claude-sonnet-4-5");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 	return model as Model;
 }
 

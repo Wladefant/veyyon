@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { GoogleOAuthFlow, type GoogleOAuthFlowConfig } from "@veyyon/ai/oauth/google-oauth-shared";
 import type { OAuthController } from "@veyyon/ai/oauth/types";
 import { extractGoogleValidationUrl } from "@veyyon/ai/utils/google-validation";
+import { requestUrl } from "./helpers/fetch-mock";
 
 const VALIDATION_URL = "https://accounts.google.com/signin/continue?sarp=1&scc=1&plt=AKgnsbtTOKEN";
 
@@ -55,12 +56,6 @@ describe("extractGoogleValidationUrl", () => {
 
 const TOKEN_URL = "https://oauth2.example.com/token";
 
-function urlOf(input: string | URL | Request): string {
-	if (typeof input === "string") return input;
-	if (input instanceof URL) return input.href;
-	return input.url;
-}
-
 function makeConfig(discoverProject: GoogleOAuthFlowConfig["discoverProject"]): GoogleOAuthFlowConfig {
 	return {
 		clientId: "client-id",
@@ -79,7 +74,7 @@ function stubTokenAndUserInfo(email?: string): void {
 	vi.spyOn(globalThis, "fetch").mockImplementation(
 		Object.assign(
 			async (input: string | URL | Request) => {
-				if (urlOf(input).includes("userinfo")) {
+				if (requestUrl(input).includes("userinfo")) {
 					if (!email) return new Response("{}", { status: 401 });
 					return new Response(JSON.stringify({ email }), {
 						status: 200,

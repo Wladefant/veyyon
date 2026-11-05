@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery DEL accept when deleted anchors are unchanged and later lines drifted.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/del.ts";
 
 describe("Recovery DEL accept", () => {
 	it("deletes an early unchanged line while preserving late drift", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C", "D"]);
-		const v1 = text(["A", "B", "C", "D-DRIFT"]);
+		const v0 = linesText(["A", "B", "C", "D"]);
+		const v1 = linesText(["A", "B", "C", "D-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({
@@ -36,8 +33,8 @@ describe("Recovery DEL accept", () => {
 
 	it("refuses DEL when the deleted line itself drifted", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C"]);
-		const v1 = text(["A", "B-x", "C"]);
+		const v0 = linesText(["A", "B", "C"]);
+		const v1 = linesText(["A", "B-x", "C"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({

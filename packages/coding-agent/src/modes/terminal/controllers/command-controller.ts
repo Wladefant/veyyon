@@ -1,5 +1,4 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { CompactionCancelledError, type CompactionOutcome } from "@veyyon/agent-core/compaction";
 import type { UsageReport } from "@veyyon/ai";
@@ -18,6 +17,7 @@ import {
 	formatDuration,
 	isAbortError,
 	logger,
+	privateTempDir,
 	Snowflake,
 	stripAnsi,
 } from "@veyyon/utils";
@@ -54,14 +54,13 @@ import { MemoryCommandController } from "./memory-command-controller";
 import { renderSessionInfo } from "./session-info-view";
 import { renderUsageReports } from "./usage-report-view";
 /**
- * The slice of the interactive context this controller uses: 37 members of the
+ * The slice of the interactive context this controller uses: 36 members of the
  * 215 `InteractiveModeContext` requires. See `CollabHostContext` for why the
  * full interface cannot be used as a parameter type: nothing but the real TUI
  * can satisfy it, so every test has to cast a stub into place unchecked.
  */
 export type CommandControllerContext = Pick<
 	InteractiveModeContext,
-	| "applyCwdChange"
 	| "attachMainSession"
 	| "bashComponent"
 	| "chatContainer"
@@ -136,17 +135,10 @@ export class CommandController {
 		openPath(urlOrPath);
 	}
 
-	async handleExportCommand(text: string): Promise<void> {
-		const parts = text.split(/\s+/);
-		const arg = parts.length > 1 ? parts[1] : undefined;
-
-		if (arg === "--copy" || arg === "clipboard" || arg === "copy") {
-			this.ctx.showWarning("Use /dump to copy the session to clipboard.");
-			return;
-		}
-
+	/** Writes the export `/export` parsed (`parseExportTarget`) and opens it in the browser. */
+	async handleExportCommand(outputPath: string | undefined): Promise<void> {
 		try {
-			const filePath = await this.ctx.session.exportToHtml(arg);
+			const filePath = await this.ctx.session.exportToHtml(outputPath);
 			this.ctx.showStatus(`Session exported to: ${filePath}`);
 			this.openInBrowser(filePath);
 		} catch (error: unknown) {
@@ -210,7 +202,7 @@ export class CommandController {
 				this.ctx.showError("No messages to dump yet.");
 				return;
 			}
-			const tmpPath = path.join(os.tmpdir(), `${Snowflake.next()}-tmp.txt`);
+			const tmpPath = path.join(privateTempDir(), `${Snowflake.next()}-tmp.txt`);
 			await Bun.write(tmpPath, `${rendered}\n`);
 			this.ctx.showStatus(`Debug transcript written to:\n${tmpPath}`);
 		} catch (error: unknown) {
@@ -262,7 +254,7 @@ export class CommandController {
 	 * the script runs shows nothing, since cancelling already restored the editor; the export is deleted either way.
 	 */
 	async #runCustomShare(customShare: LoadedCustomShare, loader: ComposerLoader): Promise<void> {
-		const tmpFile = path.join(os.tmpdir(), `${Snowflake.next()}.html`);
+		const tmpFile = path.join(privateTempDir(), `${Snowflake.next()}.html`);
 		try {
 			await this.ctx.session.exportToHtml(tmpFile);
 			const result = await customShare.fn(tmpFile);
@@ -480,8 +472,8 @@ export class CommandController {
 			.catch(error => this.ctx.showWarning(errorMessage(error)));
 	}
 
-	handleMemoryCommand(text: string): Promise<void> {
-		return this.#memory.handle(text);
+	handleMemoryCommand(args: string): Promise<void> {
+		return this.#memory.handle(args);
 	}
 
 	/**
@@ -716,8 +708,11 @@ export class CommandController {
 		if (resolvedPath === path.resolve(this.ctx.sessionManager.getCwd())) return false;
 
 		const previousState = this.ctx.sessionManager.captureState();
+		// The session moves storage and every cwd-derived input as one transaction, re-roots the
+		// wire's path relativization and records the change for the model, exactly as `/move` does in
+		// ACP. Its `cwd_changed` event runs `applyCwdChange`, which refreshes what only the terminal draws.
 		try {
-			await this.ctx.sessionManager.moveTo(resolvedPath);
+			await this.ctx.session.moveToCwd(resolvedPath);
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${errorMessage(err)}`);
 			return false;
@@ -736,10 +731,6 @@ export class CommandController {
 	}
 
 	async #restoreAfterMoveFailure(previousState: SessionManagerStateSnapshot, error?: unknown): Promise<void> {
-		// moveTo already relocated the journal and artifacts on disk. Restoring the in-memory
-		// snapshot alone would claim the old path while the files sit at the new one, so the
-		// physical move is reversed first. If that fails the manager keeps describing the new
-		// location, which is where the files really are.
 		try {
 			await this.ctx.sessionManager.moveTo(previousState.cwd, previousState.sessionDir);
 		} catch (reverseError) {

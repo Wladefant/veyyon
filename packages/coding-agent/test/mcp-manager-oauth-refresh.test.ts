@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai";
 import { MCPAuthRequiredError } from "@veyyon/coding-agent/mcp/auth-failure";
 import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
+import type { MCPStoredOAuthCredential } from "@veyyon/coding-agent/mcp/oauth-flow";
 import * as oauthFlow from "@veyyon/coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@veyyon/coding-agent/mcp/types";
 import { removeWithRetries } from "@veyyon/utils";
@@ -219,8 +220,16 @@ describe("MCPManager OAuth refresh failure", () => {
 		const prepared = await manager.prepareConfig(serverConfig);
 
 		expect(getAuthorizationHeader(prepared)).toBe("Bearer fresh-access");
-		const remaining = authStorage.get(CREDENTIAL_ID);
-		expect(remaining).toMatchObject({ type: "oauth", access: "fresh-access", refresh: "fresh-refresh" });
+		const remaining = authStorage.get(CREDENTIAL_ID) as MCPStoredOAuthCredential | undefined;
+		expect(remaining).toMatchObject({
+			type: "oauth",
+			access: "fresh-access",
+			refresh: "fresh-refresh",
+			tokenUrl: TOKEN_URL,
+		});
+		// The server URL was sent as the resource only because none was stated; storing it would turn a
+		// stand-in into a stated resource that every later refresh sends without the same-origin filter.
+		expect(remaining?.resource).toBeUndefined();
 	});
 
 	// The token request is not aborted when the connection stops waiting for it: a provider that

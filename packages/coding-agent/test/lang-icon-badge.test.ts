@@ -23,7 +23,8 @@
 import { describe, expect, it } from "bun:test";
 import { getBuiltinThemes } from "@veyyon/coding-agent/theme/builtin-themes";
 import { SYMBOL_PRESETS } from "@veyyon/coding-agent/theme/symbols";
-import { createTheme, getThemeByName, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { createTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "./helpers/require-theme";
 
 /**
  * Every language name the theme accepts, read off the map that resolves them.
@@ -79,8 +80,7 @@ const LANGS = [
 ];
 
 async function unicodeTheme(): Promise<Theme> {
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
+	const theme = await requireTheme("dark");
 	// The shipped dark theme is the unicode surface the defect lived on. A preset is fixed at
 	// construction, so the other two are read off their own tables below rather than swapped in here.
 	expect(theme?.getSymbolPreset()).toBe("unicode");

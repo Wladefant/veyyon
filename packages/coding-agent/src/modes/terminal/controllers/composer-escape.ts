@@ -203,6 +203,7 @@ export class ComposerEscape {
 			this.#draftDiscardArmedAt = 0;
 		} else {
 			this.#draftDiscardArmedAt = now;
+			this.ctx.ui.holdFrameForInput();
 		}
 		this.ctx.lastEscapeTime = 0;
 	}
@@ -223,6 +224,7 @@ export class ComposerEscape {
 			this.ctx.lastEscapeTime = 0;
 		} else {
 			this.ctx.lastEscapeTime = now;
+			this.ctx.ui.holdFrameForInput();
 		}
 	}
 }

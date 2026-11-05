@@ -39,7 +39,6 @@ packages/coding-agent/src/cli.ts
 packages/coding-agent/src/cli/profile-cli.ts
 packages/coding-agent/src/cli/runtime-stages.ts
 packages/coding-agent/src/cli/stats-cli.ts
-packages/coding-agent/src/cli/ttsr-cli.ts
 packages/coding-agent/src/commands/launch.ts
 packages/coding-agent/src/cursor-bridge-tools.ts
 packages/coding-agent/src/debug/profiler.ts
@@ -69,7 +68,7 @@ packages/coding-agent/src/modes/terminal/controllers/voice-controller.ts
 packages/coding-agent/src/modes/terminal/interactive-mode.ts
 packages/coding-agent/src/modes/terminal/setup-wizard/lazy.ts
 packages/coding-agent/src/sdk.ts
-packages/coding-agent/src/session/agent-session.ts
+packages/coding-agent/src/session/runtime/transcript-exports.ts
 packages/coding-agent/src/slash-commands/acp-builtins.ts
 packages/coding-agent/src/slash-commands/builtin-completions.ts
 packages/coding-agent/src/slash-commands/builtin-setup.ts

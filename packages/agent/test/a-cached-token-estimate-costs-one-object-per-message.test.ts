@@ -24,6 +24,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { estimateTokens } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const TURNS = 1000;
 
@@ -44,14 +45,7 @@ function assistantMessage(turn: number): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 	};
 }

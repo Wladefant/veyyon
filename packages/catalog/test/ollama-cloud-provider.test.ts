@@ -6,6 +6,7 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { ollamaCloudModelManagerOptions } from "@veyyon/catalog/provider-models/ollama";
 import type { FetchImpl, Model } from "@veyyon/catalog/types";
+import { emptyUsage } from "../src/models";
 
 const originalApiKey = Bun.env.OLLAMA_CLOUD_API_KEY;
 
@@ -453,14 +454,7 @@ describe("ollama-cloud provider support", () => {
 					api: "ollama-chat",
 					provider: "ollama-cloud",
 					model: "gpt-oss:120b",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				},
@@ -525,14 +519,7 @@ describe("ollama-cloud provider support", () => {
 					api: "ollama-chat",
 					provider: "ollama-cloud",
 					model: "gpt-oss:120b",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				},

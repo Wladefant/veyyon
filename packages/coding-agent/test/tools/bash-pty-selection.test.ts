@@ -1,24 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { canUseInteractiveBashPty } from "@veyyon/coding-agent/tools/shell/bash-pty-selection";
+import { restorePlatform, setPlatform } from "../../../utils/test/helpers/platform-override";
 
-const originalPlatform = process.platform;
 const originalNoPty = Bun.env.VEYYON_NO_PTY;
-
-function setPlatform(platform: NodeJS.Platform): void {
-	Object.defineProperty(process, "platform", {
-		value: platform,
-		configurable: true,
-		writable: true,
-	});
-}
-
-function restorePlatform(): void {
-	Object.defineProperty(process, "platform", {
-		value: originalPlatform,
-		configurable: true,
-		writable: true,
-	});
-}
 
 function setNoPty(value: string | undefined): void {
 	delete Bun.env.VEYYON_NO_PTY;

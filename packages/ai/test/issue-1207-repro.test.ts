@@ -19,12 +19,6 @@ function contextWithTools(tools: Tool[] = [echoTool]): Context {
 	};
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 async function capturePayload(
 	model: Model<"openai-completions">,
 	tools?: Tool[],
@@ -33,7 +27,7 @@ async function capturePayload(
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, contextWithTools(tools), {
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		reasoning,
 		toolChoice: "auto",
 		maxTokens: 123,

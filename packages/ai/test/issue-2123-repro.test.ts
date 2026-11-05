@@ -58,12 +58,6 @@ const firstTurnContext: Context = {
 	tools: [todoTool],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 type CapturedPayload = {
 	thinking?: unknown;
 	context_management?: unknown;
@@ -75,7 +69,7 @@ function capturePayload(toolChoice: "any" | { type: "tool"; name: string }): Pro
 	void streamAnthropic(OPUS_46_OAUTH, firstTurnContext, {
 		apiKey: "sk-ant-oat-test",
 		isOAuth: true,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		thinkingEnabled: true,
 		reasoning: Effort.High,
 		toolChoice,

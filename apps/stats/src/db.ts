@@ -56,6 +56,29 @@ const TOOL_CALLS_BACKFILL_KEY = "tool_calls_v1";
 function shouldResetBackfill(value: string | undefined): boolean {
 	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
 }
+/** The `user_messages` table and its indexes, created at init and again when a stale table is dropped. */
+const USER_MESSAGES_SCHEMA = `
+	CREATE TABLE IF NOT EXISTS user_messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_file TEXT NOT NULL,
+		entry_id TEXT NOT NULL,
+		folder TEXT NOT NULL,
+		timestamp INTEGER NOT NULL,
+		model TEXT,
+		provider TEXT,
+		chars INTEGER NOT NULL,
+		words INTEGER NOT NULL,
+		yelling INTEGER NOT NULL,
+		profanity INTEGER NOT NULL,
+		anguish INTEGER NOT NULL,
+		negation INTEGER NOT NULL DEFAULT 0,
+		repetition INTEGER NOT NULL DEFAULT 0,
+		blame INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(session_file, entry_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
+`;
 /**
  * Initialize the database and create tables.
  */
@@ -126,27 +149,7 @@ function prepareStatsDb(db: Database): Database {
 			last_modified INTEGER NOT NULL
 		);
 
-		CREATE TABLE IF NOT EXISTS user_messages (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_file TEXT NOT NULL,
-			entry_id TEXT NOT NULL,
-			folder TEXT NOT NULL,
-			timestamp INTEGER NOT NULL,
-			model TEXT,
-			provider TEXT,
-			chars INTEGER NOT NULL,
-			words INTEGER NOT NULL,
-			yelling INTEGER NOT NULL,
-			profanity INTEGER NOT NULL,
-			anguish INTEGER NOT NULL,
-			negation INTEGER NOT NULL DEFAULT 0,
-			repetition INTEGER NOT NULL DEFAULT 0,
-			blame INTEGER NOT NULL DEFAULT 0,
-			UNIQUE(session_file, entry_id)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
+		${USER_MESSAGES_SCHEMA}
 
 		CREATE TABLE IF NOT EXISTS tool_calls (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -232,28 +235,7 @@ function prepareStatsDb(db: Database): Database {
 	const hasOldUserMessages = userMessageColumns.length > 0;
 	if (hasStaleColumn || (hasOldUserMessages && !hasV4Columns)) {
 		db.run("DROP TABLE user_messages");
-		db.run(`
-			CREATE TABLE user_messages (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				session_file TEXT NOT NULL,
-				entry_id TEXT NOT NULL,
-				folder TEXT NOT NULL,
-				timestamp INTEGER NOT NULL,
-				model TEXT,
-				provider TEXT,
-				chars INTEGER NOT NULL,
-				words INTEGER NOT NULL,
-				yelling INTEGER NOT NULL,
-				profanity INTEGER NOT NULL,
-				anguish INTEGER NOT NULL,
-				negation INTEGER NOT NULL DEFAULT 0,
-				repetition INTEGER NOT NULL DEFAULT 0,
-				blame INTEGER NOT NULL DEFAULT 0,
-				UNIQUE(session_file, entry_id)
-			);
-			CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp ON user_messages(timestamp);
-			CREATE INDEX IF NOT EXISTS idx_user_messages_timestamp_model ON user_messages(timestamp, model, provider);
-		`);
+		db.run(USER_MESSAGES_SCHEMA);
 	}
 	backfillUserMessages(db);
 	backfillToolCalls(db);
@@ -588,14 +570,18 @@ function buildAggregatedStats(rows: AggregateRow[]): AggregatedStats {
 }
 
 /**
- * Get overall aggregated stats.
+ * One AggregateRow per distinct value of the `groupBy` columns among the messages at or after
+ * `cutoff`, most requests first, or one row over all of them when `groupBy` is empty.
  */
-export function getOverallStats(cutoff?: number): AggregatedStats {
-	if (!db) return buildAggregatedStats([]);
-
+function queryAggregateRows<Group>(
+	database: Database,
+	cutoff: number | undefined,
+	groupBy: string,
+): (AggregateRow & Group)[] {
 	const hasCutoff = cutoff !== undefined && cutoff > 0;
-	const stmt = db.prepare(`
+	const stmt = database.prepare(`
 		SELECT
+			${groupBy ? `${groupBy},` : ""}
 			COUNT(*) as total_requests,
 			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as failed_requests,
 			SUM(input_tokens) as total_input_tokens,
@@ -611,43 +597,24 @@ export function getOverallStats(cutoff?: number): AggregatedStats {
 			MAX(timestamp) as last_timestamp
 		FROM messages
 		${hasCutoff ? "WHERE timestamp >= ?" : ""}
+		${groupBy ? `GROUP BY ${groupBy} ORDER BY total_requests DESC` : ""}
 	`);
-
-	const rows = hasCutoff ? stmt.all(cutoff) : stmt.all();
-	return buildAggregatedStats(rows as AggregateRow[]);
+	return (hasCutoff ? stmt.all(cutoff) : stmt.all()) as (AggregateRow & Group)[];
 }
+
+/**
+ * Get overall aggregated stats.
+ */
+export function getOverallStats(cutoff?: number): AggregatedStats {
+	return buildAggregatedStats(db ? queryAggregateRows(db, cutoff, "") : []);
+}
+
 /**
  * Get stats grouped by model.
  */
 export function getStatsByModel(cutoff?: number): ModelStats[] {
 	if (!db) return [];
-
-	const hasCutoff = cutoff !== undefined && cutoff > 0;
-	const stmt = db.prepare(`
-		SELECT
-			model,
-			provider,
-			COUNT(*) as total_requests,
-			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as failed_requests,
-			SUM(input_tokens) as total_input_tokens,
-			SUM(output_tokens) as total_output_tokens,
-			SUM(cache_read_tokens) as total_cache_read_tokens,
-			SUM(cache_write_tokens) as total_cache_write_tokens,
-			SUM(premium_requests) as total_premium_requests,
-			SUM(cost_total) as total_cost,
-			AVG(duration) as avg_duration,
-			AVG(ttft) as avg_ttft,
-			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,
-			MIN(timestamp) as first_timestamp,
-			MAX(timestamp) as last_timestamp
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY model, provider
-		ORDER BY total_requests DESC
-	`);
-
-	const rows = (hasCutoff ? stmt.all(cutoff) : stmt.all()) as (AggregateRow & { model: string; provider: string })[];
-	return rows.map(row => ({
+	return queryAggregateRows<{ model: string; provider: string }>(db, cutoff, "model, provider").map(row => ({
 		model: row.model,
 		provider: row.provider,
 		...buildAggregatedStats([row]),
@@ -659,32 +626,7 @@ export function getStatsByModel(cutoff?: number): ModelStats[] {
  */
 export function getStatsByFolder(cutoff?: number): FolderStats[] {
 	if (!db) return [];
-
-	const hasCutoff = cutoff !== undefined && cutoff > 0;
-	const stmt = db.prepare(`
-		SELECT
-			folder,
-			COUNT(*) as total_requests,
-			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as failed_requests,
-			SUM(input_tokens) as total_input_tokens,
-			SUM(output_tokens) as total_output_tokens,
-			SUM(cache_read_tokens) as total_cache_read_tokens,
-			SUM(cache_write_tokens) as total_cache_write_tokens,
-			SUM(premium_requests) as total_premium_requests,
-			SUM(cost_total) as total_cost,
-			AVG(duration) as avg_duration,
-			AVG(ttft) as avg_ttft,
-			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second,
-			MIN(timestamp) as first_timestamp,
-			MAX(timestamp) as last_timestamp
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY folder
-		ORDER BY total_requests DESC
-	`);
-
-	const rows = (hasCutoff ? stmt.all(cutoff) : stmt.all()) as (AggregateRow & { folder: string })[];
-	return rows.map(row => ({
+	return queryAggregateRows<{ folder: string }>(db, cutoff, "folder").map(row => ({
 		folder: row.folder,
 		...buildAggregatedStats([row]),
 	}));
@@ -726,30 +668,49 @@ export function getStatsByAgentType(cutoff?: number): AgentTypeStats[] {
 }
 
 /**
- * Get time series data.
+ * `columns` of `table` aggregated per `bucketMs` bucket and per `groupBy`, oldest bucket first.
+ * A `null` cutoff reads every row; an omitted one reads the last `windowMs`.
  */
-export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 * 60 * 1000): TimeSeriesPoint[] {
+function bucketedRows<Row>(
+	table: "messages" | "tool_calls",
+	columns: string,
+	groupBy: string | undefined,
+	windowMs: number,
+	cutoff: number | null | undefined,
+	bucketMs: number,
+): Row[] {
 	if (!db) return [];
-
 	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - hours * 60 * 60 * 1000) : 0;
-
 	const stmt = db.prepare(`
 		SELECT
 			(timestamp / ?) * ? as bucket,
-			COUNT(*) as requests,
-			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as errors,
-			SUM(total_tokens) as tokens,
-			SUM(cost_total) as cost
-		FROM messages
+			${columns}
+		FROM ${table}
 		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket
+		GROUP BY bucket${groupBy ? `, ${groupBy}` : ""}
 		ORDER BY bucket ASC
 	`);
-
 	const rows = hasCutoff
-		? (stmt.all(bucketMs, bucketMs, seriesCutoff) as TimeSeriesRow[])
-		: (stmt.all(bucketMs, bucketMs) as TimeSeriesRow[]);
+		? stmt.all(bucketMs, bucketMs, cutoff ?? Date.now() - windowMs)
+		: stmt.all(bucketMs, bucketMs);
+	return rows as Row[];
+}
+
+/**
+ * Get time series data.
+ */
+export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 * 60 * 1000): TimeSeriesPoint[] {
+	const rows = bucketedRows<TimeSeriesRow>(
+		"messages",
+		`COUNT(*) as requests,
+			SUM(CASE WHEN stop_reason = 'error' THEN 1 ELSE 0 END) as errors,
+			SUM(total_tokens) as tokens,
+			SUM(cost_total) as cost`,
+		undefined,
+		hours * 60 * 60 * 1000,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		requests: row.requests,
@@ -760,31 +721,17 @@ export function getTimeSeries(hours = 24, cutoff?: number | null, bucketMs = 60 
 }
 
 /**
- * Get daily performance time series data for the last N days.
- */
-/**
  * Get daily model usage time series data for the last N days.
  */
 export function getModelTimeSeries(days = 14, cutoff?: number | null, bucketMs = DAY_MS): ModelTimeSeriesPoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ?) * ? as bucket,
-			model,
-			provider,
-			COUNT(*) as requests
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, model, provider
-		ORDER BY bucket ASC
-	`);
-
-	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
-	const rows = rowsRaw as Array<{ bucket: number; model: string; provider: string; requests: number }>;
+	const rows = bucketedRows<{ bucket: number; model: string; provider: string; requests: number }>(
+		"messages",
+		"model, provider, COUNT(*) as requests",
+		"model, provider",
+		days * DAY_MS,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,
@@ -801,34 +748,25 @@ export function getModelPerformanceSeries(
 	cutoff?: number | null,
 	bucketMs = DAY_MS,
 ): ModelPerformancePoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ?) * ? as bucket,
-			model,
-			provider,
-			COUNT(*) as requests,
-			AVG(ttft) as avg_ttft,
-			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, model, provider
-		ORDER BY bucket ASC
-	`);
-
-	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
-	const rows = rowsRaw as Array<{
+	const rows = bucketedRows<{
 		bucket: number;
 		model: string;
 		provider: string;
 		requests: number;
 		avg_ttft: number | null;
 		avg_tokens_per_second: number | null;
-	}>;
+	}>(
+		"messages",
+		`model,
+			provider,
+			COUNT(*) as requests,
+			AVG(ttft) as avg_ttft,
+			AVG(CASE WHEN duration > 0 THEN output_tokens * 1000.0 / duration ELSE NULL END) as avg_tokens_per_second`,
+		"model, provider",
+		days * DAY_MS,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,
@@ -924,29 +862,21 @@ export function getMessageById(id: number): MessageStats | null {
  * Get daily cost time series data for the last N days, broken down by model.
  */
 export function getCostTimeSeries(days = 90, cutoff?: number | null): CostTimeSeriesPoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ${DAY_MS}) * ${DAY_MS} as bucket,
-			model,
+	const rows = bucketedRows<CostSeriesRow>(
+		"messages",
+		`model,
 			provider,
 			SUM(cost_total) as cost,
 			SUM(cost_input) as cost_input,
 			SUM(cost_output) as cost_output,
 			SUM(cost_cache_read) as cost_cache_read,
 			SUM(cost_cache_write) as cost_cache_write,
-			COUNT(*) as requests
-		FROM messages
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, model, provider
-		ORDER BY bucket ASC
-	`);
-
-	const rows = hasCutoff ? (stmt.all(seriesCutoff) as CostSeriesRow[]) : (stmt.all() as CostSeriesRow[]);
+			COUNT(*) as requests`,
+		"model, provider",
+		days * DAY_MS,
+		cutoff,
+		DAY_MS,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		model: row.model,
@@ -1559,25 +1489,14 @@ export function getToolStatsByModel(cutoff?: number): ToolModelStats[] {
  * Get tool-call time series (one point per bucket per tool).
  */
 export function getToolTimeSeries(days = 14, cutoff?: number | null, bucketMs = DAY_MS): ToolTimeSeriesPoint[] {
-	if (!db) return [];
-
-	const hasCutoff = cutoff !== null;
-	const seriesCutoff = hasCutoff ? (cutoff ?? Date.now() - days * DAY_MS) : 0;
-
-	const stmt = db.prepare(`
-		SELECT
-			(timestamp / ?) * ? as bucket,
-			tool_name,
-			COUNT(*) as calls,
-			SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) as errors
-		FROM tool_calls
-		${hasCutoff ? "WHERE timestamp >= ?" : ""}
-		GROUP BY bucket, tool_name
-		ORDER BY bucket ASC
-	`);
-
-	const rowsRaw = hasCutoff ? stmt.all(bucketMs, bucketMs, seriesCutoff) : stmt.all(bucketMs, bucketMs);
-	const rows = rowsRaw as Array<{ bucket: number; tool_name: string; calls: number; errors: number }>;
+	const rows = bucketedRows<{ bucket: number; tool_name: string; calls: number; errors: number }>(
+		"tool_calls",
+		"tool_name, COUNT(*) as calls, SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) as errors",
+		"tool_name",
+		days * DAY_MS,
+		cutoff,
+		bucketMs,
+	);
 	return rows.map(row => ({
 		timestamp: row.bucket,
 		tool: row.tool_name,

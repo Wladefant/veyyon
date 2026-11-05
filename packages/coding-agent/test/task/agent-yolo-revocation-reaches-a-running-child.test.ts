@@ -28,7 +28,6 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@veyyon/agent-core";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
@@ -36,6 +35,7 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 
@@ -43,8 +43,7 @@ import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 // this the suite writes into the developer's real `~/.veyyon`.
 useIsolatedAgentDir();
 
-const model = getBundledModel("openai", "gpt-4o-mini");
-if (!model) throw new Error("expected bundled gpt-4o-mini");
+const model = requireBundledModel("openai", "gpt-4o-mini");
 
 const agentDefinition: AgentDefinition = {
 	name: "task",

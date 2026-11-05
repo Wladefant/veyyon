@@ -221,7 +221,7 @@ export const CONTEXT_HANDLERS = {
 		},
 		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleMemoryCommand(command.text);
+			await runtime.ctx.handleMemoryCommand(command.args);
 		},
 	},
 } satisfies Partial<BuiltinSlashCommandHandlers>;

@@ -576,15 +576,16 @@ export class SelectorController {
 		return settingEffect(id)?.(this.ctx, value);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean }): void {
-		this.#showModelPicker(options?.temporaryOnly === true);
+	showModelSelector(options?: { temporaryOnly?: boolean; query?: string }): void {
+		this.#showModelPicker(options?.temporaryOnly === true, options?.query);
 	}
 
 	/**
 	 * Compact session model picker (alt+p / `/switch` / `/model`): a floating
-	 * bottom-anchored overlay over the transcript.
+	 * bottom-anchored overlay over the transcript. `query` seeds its search,
+	 * which is how `/model <query>` reaches the models it names.
 	 */
-	#showModelPicker(temporaryOnly: boolean): void {
+	#showModelPicker(temporaryOnly: boolean, query?: string): void {
 		const currentContextTokens = this.ctx.session.getContextUsage()?.tokens ?? 0;
 		const current = this.ctx.session.model;
 		this.showModalSelector(done => {
@@ -621,6 +622,7 @@ export class SelectorController {
 				{
 					currentContextTokens,
 					currentSelector: current ? `${current.provider}/${current.id}` : undefined,
+					initialQuery: query,
 				},
 			);
 			return { component: picker, focus: picker };

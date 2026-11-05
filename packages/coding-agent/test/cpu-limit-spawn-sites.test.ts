@@ -182,13 +182,9 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		wired: true,
 		reason: "the streaming audio backend is adopted",
 	},
-	"packages/coding-agent/src/extensibility/plugins/manager.ts": {
-		wired: true,
-		reason: "bun install/update/uninstall runs are adopted",
-	},
 	"packages/coding-agent/src/extensibility/plugins/bun-git-cache.ts": {
 		wired: true,
-		reason: "the git cache refresh commands are adopted",
+		reason: "the git cache refresh commands and the plugin manager's bun install/update/uninstall runs are adopted",
 	},
 	"packages/coding-agent/src/ssh/ssh-executor.ts": { wired: true, reason: "the ssh client process is adopted" },
 	"packages/coding-agent/src/ssh/file-transfer.ts": {
@@ -210,9 +206,8 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 	"packages/coding-agent/src/utils/git.ts": {
 		wired: true,
 		reason:
-			"the git and gh runners are adopted; the four spawnSync HEAD reads are not, because a synchronous child has already exited when the call returns",
+			"the git, gh and jj runners share one adopted spawn in `runCommand`; the four spawnSync HEAD reads are not, because a synchronous child has already exited when the call returns",
 	},
-	"packages/coding-agent/src/utils/jj.ts": { wired: true, reason: "the jj runner is adopted" },
 	"packages/coding-agent/src/internal-urls/vault-protocol.ts": {
 		wired: true,
 		reason: "the vault CLI bridge process is adopted",

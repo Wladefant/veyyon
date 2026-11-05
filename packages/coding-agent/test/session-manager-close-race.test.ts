@@ -24,7 +24,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	MemorySessionStorage,
@@ -34,6 +34,7 @@ import {
 } from "@veyyon/kernel/session/session-storage";
 import type { SessionTitleUpdate } from "@veyyon/kernel/session/session-title-slot";
 import type { PathState } from "@veyyon/utils/fs-optional";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 class CloseHoldingStorage implements SessionStorage {
 	readonly #inner = new MemorySessionStorage();
@@ -164,8 +165,7 @@ describe("SessionManager close/appendMessage race", () => {
 	it("appendMessage during in-flight close() does not stash a persistError", async () => {
 		const storage = new CloseHoldingStorage();
 		const sm = SessionManager.create("/cwd", "/sessions", storage);
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		// Seed an assistant message so persist activates (the `#ensuredOnDisk`
 		// guard gates the first write on the first assistant entry). This
@@ -176,14 +176,7 @@ describe("SessionManager close/appendMessage race", () => {
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		});

@@ -34,10 +34,9 @@
  * regardless. A dead repaint hook is a logged warning, never a rolled-back theme.
  */
 
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import {
 	getCurrentThemeName,
-	getThemeByName,
 	getThemeEpoch,
 	onThemeChange,
 	setTheme,
@@ -45,42 +44,21 @@ import {
 	type Theme,
 	type ThemeChangeEvent,
 } from "@veyyon/coding-agent/theme/theme";
-import { logger } from "@veyyon/utils";
-
-/** One captured `logger.warn` call. */
-interface WarnEntry {
-	message: string;
-	fields?: Record<string, unknown>;
-}
-
-/** A live `logger.warn` capture plus its restore hook. */
-interface WarnCapture {
-	entries: WarnEntry[];
-	restore: () => void;
-}
-
-/**
- * Capture `logger.warn` so the degradation is asserted to be LOUD.
- *
- * Silently swallowing the listener throw would also stop the false fallback, and
- * would be the wrong fix: a repaint hook that never runs means the screen stops
- * matching the theme, and nobody would ever find out why.
- */
-function captureWarnings(): WarnCapture {
-	const entries: WarnEntry[] = [];
-	const spy = vi.spyOn(logger, "warn").mockImplementation(((message: string, fields?: Record<string, unknown>) => {
-		entries.push({ message, fields });
-	}) as unknown as typeof logger.warn);
-	return { entries, restore: () => spy.mockRestore() };
-}
+import { captureWarnings, type WarnCapture } from "./helpers/capture-warnings";
+import { requireTheme } from "./helpers/require-theme";
 
 let dark: Theme;
+
+/**
+ * `logger.warn` is captured so the degradation is asserted to be LOUD. Silently swallowing the
+ * listener throw would also stop the false fallback, and would be the wrong fix: a repaint hook
+ * that never runs means the screen stops matching the theme, and nobody would ever find out why.
+ */
 let warnings: WarnCapture | undefined;
 let releaseListener: (() => void) | undefined;
 
 beforeAll(async () => {
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("Expected the built-in dark theme to exist");
+	const loaded = await requireTheme("dark");
 	dark = loaded;
 });
 

@@ -3,6 +3,7 @@ import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
 import type { AssistantMessage, Message, Model, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * Regression test for: "messages.X.content.Y: `thinking` or `redacted_thinking` blocks in
@@ -43,14 +44,7 @@ describe("transformMessages drops thinking-only assistant turns", () => {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason,
 		timestamp: Date.now(),
 	});
@@ -65,14 +59,7 @@ describe("transformMessages drops thinking-only assistant turns", () => {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	});
@@ -168,14 +155,7 @@ describe("transformMessages drops thinking-only assistant turns", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "length",
 			timestamp: 2,
 		};

@@ -1,7 +1,14 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import { join } from "node:path";
-import { ensureWithinRoot, isWithinRoot } from "@veyyon/coding-agent/internal-urls/filesystem-resource";
+import {
+	ensureWithinRoot,
+	isWithinRoot,
+	realPathWithinRoot,
+} from "@veyyon/coding-agent/internal-urls/filesystem-resource";
+import { removeWithRetries } from "@veyyon/utils";
 
 /**
  * Locks the single owner of the internal-URL root-containment predicate. The
@@ -57,6 +64,61 @@ describe("ensureWithinRoot", () => {
 
 	it("rejects the name-prefix sibling for every scheme", () => {
 		expect(() => ensureWithinRoot(`${root}-secret/x`, root, "vault")).toThrow("vault:// URL escapes vault root");
+	});
+});
+
+/**
+ * `realPathWithinRoot` is the one confinement sequence `local://` and `memory://` resolve
+ * through: the lexical target, the real path of its parent and its own real path must each stay
+ * inside the root. Each escape below is reachable by one of those three checks only.
+ */
+describe.skipIf(process.platform === "win32")("realPathWithinRoot", () => {
+	let tempDir = "";
+	let root = "";
+	let outside = "";
+
+	beforeEach(async () => {
+		tempDir = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "root-containment-")));
+		root = join(tempDir, "root");
+		outside = join(tempDir, "outside");
+		await fs.mkdir(join(root, "notes"), { recursive: true });
+		await fs.mkdir(outside, { recursive: true });
+		await fs.writeFile(join(root, "notes", "plan.md"), "plan");
+		await fs.writeFile(join(outside, "secret.md"), "secret");
+		await fs.symlink(outside, join(root, "linked-dir"));
+		await fs.symlink(join(outside, "secret.md"), join(root, "linked-file.md"));
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(tempDir);
+	});
+
+	it("returns the real path of a file inside the root", async () => {
+		await expect(realPathWithinRoot(join(root, "notes", "plan.md"), root, "local")).resolves.toBe(
+			join(root, "notes", "plan.md"),
+		);
+	});
+
+	it("returns null for a missing file inside the root", async () => {
+		await expect(realPathWithinRoot(join(root, "notes", "absent.md"), root, "memory")).resolves.toBeNull();
+	});
+
+	it("rejects a lexical path outside the root that does not exist", async () => {
+		await expect(realPathWithinRoot(join(tempDir, "nowhere", "secret.md"), root, "local")).rejects.toThrow(
+			"local:// URL escapes local root",
+		);
+	});
+
+	it("rejects a missing file under a directory symlinked outside the root", async () => {
+		await expect(realPathWithinRoot(join(root, "linked-dir", "absent.md"), root, "memory")).rejects.toThrow(
+			"memory:// URL escapes memory root",
+		);
+	});
+
+	it("rejects a file symlinked outside the root", async () => {
+		await expect(realPathWithinRoot(join(root, "linked-file.md"), root, "local")).rejects.toThrow(
+			"local:// URL escapes local root",
+		);
 	});
 });
 

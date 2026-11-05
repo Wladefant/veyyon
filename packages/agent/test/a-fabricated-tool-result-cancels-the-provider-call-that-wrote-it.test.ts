@@ -17,18 +17,13 @@
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 const TOOL_CALL_TEXT = "<tool_call>echo\n<arg_key>msg</arg_key>\n<arg_value>hi</arg_value>\n</tool_call>\n";
 const FABRICATED = "FABRICATED RESULT";
 const FABRICATION_TEXT = `<tool_response>\n${FABRICATED}\n</tool_response>`;
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 /** The text an assistant message or a tool result carries; other messages carry none this suite reads. */
 function textOf(message: AgentMessage): string {

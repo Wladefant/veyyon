@@ -2,7 +2,8 @@ import { beforeAll, describe, expect, it, vi } from "bun:test";
 import type { UsageReport } from "@veyyon/ai";
 import { CommandController } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "../../../helpers/require-theme";
 
 interface RenderableBlock {
 	render(width: number): string[];
@@ -22,8 +23,7 @@ function renderPresentedBlocks(value: unknown): string {
 
 describe("CommandController /usage", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Expected dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 

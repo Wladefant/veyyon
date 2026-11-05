@@ -5,14 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("SearchTool limit exact adversarial", () => {
 	let tmpDir: string;
@@ -41,7 +35,7 @@ describe("SearchTool limit exact adversarial", () => {
 
 	it("limit 1 returns at most one file path line for src/**/*.ts", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g1", { type: "files", input: "src/**/*.ts", limit: 1 }));
+		const text = toolResultText(await tool.execute("g1", { type: "files", input: "src/**/*.ts", limit: 1 }));
 		const hits = text.split("\n").filter(l => /\.ts\b/.test(l) && /f\d+/.test(l));
 		expect(hits.length).toBeLessThanOrEqual(3); // allow status lines
 		// At least something was returned or a no-files notice.
@@ -50,7 +44,7 @@ describe("SearchTool limit exact adversarial", () => {
 
 	it("limit 5 does not list all 30 files without a truncation notice or cap", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g2", { type: "files", input: "src/**/*.ts", limit: 5 }));
+		const text = toolResultText(await tool.execute("g2", { type: "files", input: "src/**/*.ts", limit: 5 }));
 		const hits = text.split("\n").filter(l => /f\d+\.ts/.test(l));
 		// Product may list exactly 5 or 5 + footer; never all 30 silent.
 		expect(hits.length).toBeLessThanOrEqual(30);
@@ -61,7 +55,7 @@ describe("SearchTool limit exact adversarial", () => {
 
 	it("exact filename glob returns that file only", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g3", { type: "files", input: "src/f05.ts" }));
+		const text = toolResultText(await tool.execute("g3", { type: "files", input: "src/f05.ts" }));
 		expect(text).toContain("f05.ts");
 		expect(text.includes("f06.ts") && !/no files/i.test(text)).toBe(false);
 	});

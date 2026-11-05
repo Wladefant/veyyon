@@ -62,12 +62,6 @@ const CONTEXT: Context = {
 	messages: [{ role: "user", content: "weather in paris?", timestamp: Date.now() }],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 type CapturedPayload = {
 	thinking?: { type: string };
 	tool_choice?: { type: string };
@@ -82,7 +76,7 @@ function capturePayload(
 	streamAnthropic(model, CONTEXT, {
 		apiKey: "sk-ant-oat-test",
 		isOAuth: true,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as CapturedPayload),
 		...opts,
 	});
@@ -157,7 +151,7 @@ describe("a request the model cannot serve terminates instead of hanging", () =>
 		return streamAnthropic(model, CONTEXT, {
 			apiKey: "sk-ant-oat-test",
 			isOAuth: true,
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			reasoning,
 			thinkingEnabled: true,
 		}).result();

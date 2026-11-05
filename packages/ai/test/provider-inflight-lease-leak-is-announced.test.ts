@@ -35,6 +35,7 @@ import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import { __providerInFlightForTesting, streamSimple } from "@veyyon/ai/stream";
 import type { Context } from "@veyyon/ai/types";
 import { logger } from "@veyyon/utils";
+import { canRestrictAccess } from "../../utils/test/helpers/mode-bits";
 
 const LEAK_MESSAGE = "Provider in-flight lease could not be removed; it will hold a slot for this provider";
 /** Older than PROVIDER_INFLIGHT_LEASE_STALE_MS (30s), so the sweep treats the lease as dead. */
@@ -59,11 +60,6 @@ function context(): Context {
 
 function leaks(): Array<Record<string, unknown>> {
 	return warnings.filter(entry => entry.message === LEAK_MESSAGE).map(entry => entry.fields);
-}
-
-/** Mode bits do not restrict root, and Windows does not honour them at all. */
-function canRestrictAccess(): boolean {
-	return process.platform !== "win32" && process.getuid?.() !== 0;
 }
 
 async function denyWrites(dir: string): Promise<void> {

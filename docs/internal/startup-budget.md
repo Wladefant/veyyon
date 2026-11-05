@@ -11,9 +11,11 @@ than evaluating the `@veyyon/ai` package barrel. Usage providers and credential-
 strategies remain available when these entry points load independently.
 
 Interactive startup starts background model discovery after terminal initialization
-and an event-loop yield. Initial model resolution still completes before session
-construction returns. ACP, RPC, noninteractive launches and subsequent session
-creation retain their existing discovery order.
+and an event-loop yield. A `-p` or `--mode json` run starts it once its first
+response starts streaming, so discovery runs while the provider generates instead of
+delaying the first request. Initial model resolution still completes before session
+construction returns. ACP, RPC and subsequent session creation start discovery once
+the session exists.
 
 The launch and session composer footlines use the same filesystem-derived repository
 and linked-worktree location context and draft-token estimate. Typing before session

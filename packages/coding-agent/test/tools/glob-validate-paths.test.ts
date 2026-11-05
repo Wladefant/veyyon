@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RenderResultOptions } from "@veyyon/coding-agent/extensibility/custom-tools/types";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 import {
 	expandDelimitedPathEntries,
 	parseFindPattern,
@@ -15,6 +15,7 @@ import type { SearchToolDetails, SearchToolInput } from "@veyyon/coding-agent/to
 import { resolveToolSearchScope } from "@veyyon/coding-agent/tools/search/search-scope";
 import type { Component } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 
 /**
  * The production `search` entry, which is the card a session draws. `search` is a view the terminal
@@ -26,8 +27,7 @@ let uiTheme: Theme;
 
 beforeAll(async () => {
 	await initTheme(false, undefined, undefined, "dark", "light");
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("Missing dark theme");
+	const theme = await requireTheme("dark");
 	uiTheme = theme;
 });
 const renderOptions: RenderResultOptions = {

@@ -22,6 +22,7 @@
  * to the wizard while a filtered list was still on screen.
  */
 import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ImportCandidate } from "@veyyon/coding-agent/discovery/import-scan";
 import {
@@ -120,7 +121,7 @@ const SIZES: ReadonlyArray<readonly [number, number]> = [
 ];
 
 function plain(frame: readonly string[]): string {
-	return frame.map(row => row.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+	return frame.map(row => stripVTControlCharacters(row)).join("\n");
 }
 
 /**

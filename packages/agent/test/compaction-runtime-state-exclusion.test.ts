@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { DEFAULT_COMPACTION_SETTINGS, prepareCompaction, type SessionEntry } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function messageEntry(id: string, parentId: string | undefined, message: AgentMessage): SessionEntry {
 	return {
@@ -21,14 +22,7 @@ function assistantMessage(text: string): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 20_000,
-			output: 100,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 20_100,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 20_000, output: 100, totalTokens: 20_100 },
 		stopReason: "stop",
 	};
 }

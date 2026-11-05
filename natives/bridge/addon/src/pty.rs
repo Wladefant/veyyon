@@ -443,14 +443,15 @@ fn run_pty_sync(
 		*child_process_slot.lock() = candidate_process;
 	}
 	drop(pair.slave);
-	// Adopt the child into the session CPU budget group before it can
-	// accumulate unsampled runtime. Best-effort inside the backend: the write
-	// races with an early exit and with session dispose, and neither may fail
-	// the run.
-	if let Some(budget_id) = config.cpu_budget_id.as_ref()
-		&& let Some(pid) = child.process_id()
-	{
-		veyyon_shell::cpu_budget::adopt_into_budget(budget_id, pid as i32);
+	// Start the child below the desktop's CPU priority, then adopt it into the
+	// session CPU budget group before it can accumulate unsampled runtime.
+	// Best-effort inside the backend: the write races with an early exit and
+	// with session dispose, and neither may fail the run.
+	if let Some(pid) = child.process_id() {
+		veyyon_shell::cpu_budget::lower_spawn_priority(pid as i32);
+		if let Some(budget_id) = config.cpu_budget_id.as_ref() {
+			veyyon_shell::cpu_budget::adopt_into_budget(budget_id, pid as i32);
+		}
 	}
 	ct.heartbeat()
 		.map_err(|err| to_napi_with("PTY setup cancelled before reader", err))?;

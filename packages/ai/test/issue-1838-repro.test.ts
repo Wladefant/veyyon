@@ -36,13 +36,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { AssistantMessage, Context, FetchImpl, Model, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
-
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 
 function sseDoneResponse(): Response {
 	return new Response("data: [DONE]\n\n", {
@@ -96,7 +90,7 @@ async function capturePayload(
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 		...opts,
 		fetch: mockFetch(),
@@ -238,14 +232,7 @@ describe("issue #1838 — kimi-k2.6 preserves historical reasoning across tool c
 			api: "openai-completions",
 			provider: "moonshot",
 			model: "kimi-k2.6",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};

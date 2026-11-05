@@ -1,19 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { resolveThresholdTokens, shouldCompact } from "@veyyon/agent-core/compaction";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
+import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { CompactionEntry } from "@veyyon/kernel/session/session-entries";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { getProjectAgentDir, TempDir } from "@veyyon/utils";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { TempDir } from "@veyyon/utils";
+import { createCompactionSession, highUsageAssistant } from "./helpers/compaction-session";
 
 /**
  * Regression test for the auto-compaction thrash loop.
@@ -42,84 +38,9 @@ describe("AgentSession auto-compaction progress guard", () => {
 	const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
 
 	beforeEach(async () => {
-		tempDir = TempDir.createSync("@pi-auto-compaction-progress-");
-
-		// Short-circuit the actual summarization so the test makes no LLM call: the
-		// hook supplies the compaction result, then the production tail (events,
-		// progress guard, continuation scheduling) runs exactly as in a real pass.
-		const extensionsDir = path.join(getProjectAgentDir(tempDir.path()), "extensions");
-		fs.mkdirSync(extensionsDir, { recursive: true });
-		const extensionPath = path.join(extensionsDir, "compaction-short-circuit.ts");
-		fs.writeFileSync(
-			extensionPath,
-			[
-				"export default function(pi) {",
-				'\tpi.on("session_before_compact", async (event) => {',
-				"\t\treturn {",
-				"\t\t\tcompaction: {",
-				'\t\t\t\tsummary: "compacted",',
-				"\t\t\t\tshortSummary: undefined,",
-				"\t\t\t\tfirstKeptEntryId: event.preparation.firstKeptEntryId,",
-				"\t\t\t\ttokensBefore: event.preparation.tokensBefore,",
-				"\t\t\t\tdetails: {},",
-				"\t\t\t},",
-				"\t\t};",
-				"\t});",
-				"}",
-			].join("\n"),
-		);
-
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage);
-		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
-
-		const extensionsResult = await loadExtensions([extensionPath], tempDir.path(), undefined, undefined, {
-			configuredPaths: [extensionPath],
-		});
-		const extensionRunner = new ExtensionRunner(
-			extensionsResult.extensions,
-			extensionsResult.runtime,
-			tempDir.path(),
-			sessionManager,
-			modelRegistry,
-		);
-
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) {
-			throw new Error("Expected built-in anthropic model to exist");
-		}
-		// Pin the window and output reservation: every usage figure below is tuned
-		// to a 200k/64k threshold, so catalog regeneration must not shift the
-		// headroom math.
-		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
-
-		const agent = new Agent({
-			initialState: {
-				model,
-				systemPrompt: ["Test"],
-				tools: [],
-				messages: [],
-			},
-		});
-
-		// Seed a minimal branch so prepareCompaction() returns a preparation.
-		sessionManager.appendMessage({
-			role: "user",
-			content: "hello",
-			timestamp: Date.now(),
-		});
-
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings: Settings.isolated({
-				// Auto-continue ON so the guarded auto-continue path is exercised.
-				"compaction.autoContinue": true,
-			}),
-			modelRegistry,
-			extensionRunner,
-		});
+		({ tempDir, session, sessionManager, authStorage, modelRegistry } = await createCompactionSession(
+			"@pi-auto-compaction-progress-",
+		));
 	});
 
 	afterEach(async () => {
@@ -132,27 +53,6 @@ describe("AgentSession auto-compaction progress guard", () => {
 		}
 	});
 
-	/** Build a threshold-tripping assistant turn (contextWindow 200k, ~80% threshold). */
-	function highUsageAssistant() {
-		return {
-			role: "assistant" as const,
-			content: [{ type: "text" as const, text: "Done." }],
-			api: "anthropic-messages" as const,
-			provider: "anthropic" as const,
-			model: "claude-sonnet-4-5",
-			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
-	}
-
 	/** Build a context-overflow assistant turn (input exceeds the 200k window). */
 	function overflowAssistant(content = [{ type: "text" as const, text: "" }]) {
 		return {
@@ -163,14 +63,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			model: "claude-sonnet-4-5",
 			stopReason: "error" as const,
 			errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
-			usage: {
-				input: 250000,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 250000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 250000, totalTokens: 250000 },
 			timestamp: Date.now(),
 		};
 	}
@@ -575,14 +468,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 1000,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1050,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1000, output: 50, totalTokens: 1050 },
 				timestamp: Date.now(),
 			});
 			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
@@ -864,14 +750,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "length" as const,
-			usage: {
-				input: 10_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 11_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10_000, output: 1_000, totalTokens: 11_000 },
 			timestamp: Date.now(),
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
@@ -907,14 +786,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 100,
-					output: 10,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 110,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 				timestamp: Date.now(),
 			});
 			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
@@ -962,14 +834,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "stop",
-				usage: {
-					input: 100,
-					output: 10,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 110,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 				timestamp: Date.now(),
 			});
 			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
@@ -1085,14 +950,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			timestamp: now - 180,
 		});
 		sessionManager.appendMessage({
@@ -1114,14 +972,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "toolUse",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				timestamp: ts,
 			});
 			sessionManager.appendMessage({
@@ -1177,14 +1028,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: finalAssistant });
@@ -1468,14 +1312,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "toolUse",
-				usage: {
-					input: 100,
-					output: 10,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 110,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 				timestamp: Date.now() - 2,
 			});
 			sessionManager.appendMessage({

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lazy } from "@veyyon/utils/abortable";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
@@ -48,6 +49,13 @@ export interface OpenAICodexModelManagerConfig {
 	accessToken?: string;
 	/** `chatgpt-account-id` of `accessToken`'s account. */
 	accountId?: string;
+	/**
+	 * Every signed-in account discovery lists, resolved when a listing runs, so a launch served from the
+	 * cache refreshes no token. Each account is listed the models its tier may use, and the listings merge.
+	 */
+	accounts?: () => Promise<readonly CodexDiscoveryAccount[]>;
+	/** Ids of the accounts `accounts` resolves. They select the model cache row; see {@link openaiCodexCacheProviderId}. */
+	accountIds?: readonly string[];
 	clientVersion?: string;
 	fetch?: FetchImpl;
 	cacheProviderId?: string;
@@ -57,6 +65,19 @@ export interface OpenAICodexModelManagerConfig {
 	 * unions results by id. Returns null on failure to keep previous models.
 	 */
 	resolveAccounts?: () => Promise<readonly OpenAICodexAccount[] | null>;
+}
+
+/**
+ * The model cache row Codex discovery reads and writes for a set of accounts. The listing differs by
+ * account tier, so each account set has its own row: a login, logout or account switch reads a row that
+ * does not exist yet and lists again. Ids are hashed, so the row name is bounded and holds no account id.
+ * The bare provider id when no account id is known.
+ */
+export function openaiCodexCacheProviderId(accountIds: readonly string[] = []): string {
+	const ids = accountIds.filter((id, index) => id.trim() !== "" && accountIds.indexOf(id) === index).sort();
+	if (ids.length === 0) return "openai-codex";
+	const digest = createHash("sha256").update(ids.join("\u0000")).digest("hex").slice(0, 16);
+	return `openai-codex:accounts-${digest}`;
 }
 
 export function openaiCodexModelManagerOptions(

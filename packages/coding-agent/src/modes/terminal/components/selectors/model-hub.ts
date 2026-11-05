@@ -15,12 +15,11 @@ import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { getCatalogProviderEntry } from "@veyyon/catalog/provider-models";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { type Component, ScrollView, type TUI } from "@veyyon/tui";
-import { clampLow, errorMessage } from "@veyyon/utils";
+import { clampLow, errorMessage, wrapIndex } from "@veyyon/utils";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import type { ModelRegistry } from "../../../../config/model-registry";
 import type { Settings } from "../../../../config/settings";
@@ -36,7 +35,7 @@ import {
 	getConfiguredThinkingLevelMetadata,
 } from "../../../../thinking";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_LARGE, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_LARGE } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -1139,11 +1138,11 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, "left") || matchesKey(data, "up") || matchesKey(data, "shift+tab")) {
-			strip.index = (strip.index - 1 + strip.chips.length) % strip.chips.length;
+			strip.index = wrapIndex(strip.index - 1, strip.chips.length);
 			return;
 		}
 		if (matchesKey(data, "right") || matchesKey(data, "down") || matchesKey(data, "tab")) {
-			strip.index = (strip.index + 1) % strip.chips.length;
+			strip.index = wrapIndex(strip.index + 1, strip.chips.length);
 			return;
 		}
 		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
@@ -1158,7 +1157,7 @@ export class ModelHubComponent implements Component {
 		let index = this.#entries.findIndex(entry => entry.id === this.#activeEntryId);
 		if (index < 0) index = 0;
 		for (let step = 0; step < count; step++) {
-			index = (index + delta + count) % count;
+			index = wrapIndex(index + delta, count);
 			const entry = this.#entries[index];
 			if (entry && !this.#isHopSkipped(entry)) {
 				// Scope changes keep an active assignment (scoping helps find the
@@ -1205,7 +1204,7 @@ export class ModelHubComponent implements Component {
 			const next = index + delta;
 			if (next < 0 || next >= count) {
 				if (!wrap) return from;
-				index = (next + count) % count;
+				index = wrapIndex(next, count);
 			} else {
 				index = next;
 			}
@@ -1930,11 +1929,10 @@ export class ModelHubComponent implements Component {
 	 */
 	render(width: number): string[] {
 		const height = this.#tui.terminal?.rows || process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_LARGE, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_LARGE);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 		const contentWidth = dims.contentWidth;
 		const sidebarWidth = this.#sidebarWidth();
@@ -1952,10 +1950,7 @@ export class ModelHubComponent implements Component {
 		// `planModalChrome` is the one owner, and it accounts for wrapped chips and
 		// the short-card shrink order too, which a static minimum cannot.
 		const shortcuts = this.#shortcuts();
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 		});
@@ -1989,14 +1984,9 @@ export class ModelHubComponent implements Component {
 		this.#splitRowCount = splitRows;
 		body.push(this.#renderStripRow(contentWidth));
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: "Models",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
 			body,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 

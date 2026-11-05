@@ -39,6 +39,7 @@ export {
 	namesDeadSocket,
 	STREAM_READ_ERROR_PATTERN,
 	TRANSIENT_TRANSPORT_PATTERN,
+	UNREACHABLE_PEER_ERRNOS,
 } from "./domains/network";
 export {
 	matchesCompiledGrammarTooLargeText,

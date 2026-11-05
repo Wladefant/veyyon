@@ -11,6 +11,7 @@ import {
 	estimateTokens,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage } from "@veyyon/ai";
+import { createAssistantMessage } from "./helpers";
 
 let idCounter = 0;
 function nextId(): string {
@@ -30,26 +31,6 @@ function toolResultMessage(toolName: string, text: string, extra?: Partial<ToolR
 		isError: false,
 		timestamp: Date.now(),
 		...extra,
-	};
-}
-
-function assistantMessage(content: AssistantMessage["content"]): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		timestamp: Date.now(),
-		provider: "mock",
-		model: "mock",
-		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
 	};
 }
 
@@ -123,7 +104,7 @@ describe("collectShakeRegions — fenced / XML blocks", () => {
 	test("detects a large fenced block and applyShakeRegion splices it out", () => {
 		const fence = fencedBlock(120);
 		const text = `intro line\n${fence}\noutro line`;
-		const entry = messageEntry(assistantMessage([{ type: "text", text }]));
+		const entry = messageEntry(createAssistantMessage([{ type: "text", text }]));
 		const regions = collectShakeRegions([entry], cfg());
 
 		expect(regions).toHaveLength(1);
@@ -139,14 +120,14 @@ describe("collectShakeRegions — fenced / XML blocks", () => {
 
 	test("ignores fenced blocks below fenceMinTokens", () => {
 		const text = "intro\n```ts\nconst a = 1;\n```\noutro";
-		const entry = messageEntry(assistantMessage([{ type: "text", text }]));
+		const entry = messageEntry(createAssistantMessage([{ type: "text", text }]));
 		expect(collectShakeRegions([entry], cfg({ fenceMinTokens: 400 }))).toHaveLength(0);
 	});
 
 	test("detects a top-level XML block", () => {
 		const xml = xmlBlock(120);
 		const text = `before\n${xml}\nafter`;
-		const entry = messageEntry(assistantMessage([{ type: "text", text }]));
+		const entry = messageEntry(createAssistantMessage([{ type: "text", text }]));
 		const regions = collectShakeRegions([entry], cfg());
 
 		expect(regions).toHaveLength(1);
@@ -159,7 +140,11 @@ describe("collectShakeRegions — fenced / XML blocks", () => {
 		const fence = fencedBlock(120);
 		const toolCall: ToolCall = { type: "toolCall", id: "tc-1", name: "read", arguments: { path: "x" } };
 		const entry = messageEntry(
-			assistantMessage([{ type: "text", text: "tiny" }, toolCall, { type: "text", text: `pre\n${fence}\npost` }]),
+			createAssistantMessage([
+				{ type: "text", text: "tiny" },
+				toolCall,
+				{ type: "text", text: `pre\n${fence}\npost` },
+			]),
 		);
 		const regions = collectShakeRegions([entry], cfg());
 
@@ -170,8 +155,8 @@ describe("collectShakeRegions — fenced / XML blocks", () => {
 	});
 
 	test("does not cross message boundaries — each large block stays in its own entry", () => {
-		const a = messageEntry(assistantMessage([{ type: "text", text: `a\n${fencedBlock(120)}\na` }]));
-		const b = messageEntry(assistantMessage([{ type: "text", text: `b\n${fencedBlock(120, "py")}\nb` }]));
+		const a = messageEntry(createAssistantMessage([{ type: "text", text: `a\n${fencedBlock(120)}\na` }]));
+		const b = messageEntry(createAssistantMessage([{ type: "text", text: `b\n${fencedBlock(120, "py")}\nb` }]));
 		const regions = collectShakeRegions([a, b], cfg());
 
 		expect(regions).toHaveLength(2);
@@ -181,7 +166,7 @@ describe("collectShakeRegions — fenced / XML blocks", () => {
 
 	test("ignores unterminated fences (conservative)", () => {
 		const text = `intro\n\`\`\`ts\n${"const a = 1;\n".repeat(60)}`; // never closes
-		const entry = messageEntry(assistantMessage([{ type: "text", text }]));
+		const entry = messageEntry(createAssistantMessage([{ type: "text", text }]));
 		expect(collectShakeRegions([entry], cfg())).toHaveLength(0);
 	});
 });
@@ -191,7 +176,7 @@ describe("applyShakeRegions — multi-region ordering", () => {
 		const first = fencedBlock(80);
 		const second = fencedBlock(80, "py");
 		const text = `head\n${first}\nmiddle\n${second}\ntail`;
-		const entry = messageEntry(assistantMessage([{ type: "text", text }]));
+		const entry = messageEntry(createAssistantMessage([{ type: "text", text }]));
 		const regions = collectShakeRegions([entry], cfg());
 		expect(regions).toHaveLength(2);
 
@@ -347,7 +332,7 @@ describe("collectRedundantToolResultRegions — identical re-reads / re-runs", (
 	): { assistant: SessionMessageEntry; result: SessionMessageEntry; toolResult: ToolResultMessage } {
 		const id = `tc-${idCounter++}`;
 		const toolCall: ToolCall = { type: "toolCall", id, name: toolName, arguments: args };
-		const assistant = messageEntry(assistantMessage([toolCall]));
+		const assistant = messageEntry(createAssistantMessage([toolCall]));
 		const toolResult = toolResultMessage(toolName, output, { toolCallId: id, ...extra });
 		return { assistant, result: messageEntry(toolResult), toolResult };
 	}
@@ -412,7 +397,8 @@ describe("collectRedundantToolResultRegions — identical re-reads / re-runs", (
 	test("ignores the protect-recent window and the savings gate (a duplicate is always eligible)", () => {
 		// collectShakeRegions would protect both recent copies and gate on minSavings;
 		// dedup elides the older copy regardless because it carries no unique info.
-		const body = "SMALL\n".repeat(4);
+		// The body is small against both limits and still larger than its marker.
+		const body = "SMALL\n".repeat(40);
 		const first = messageEntry(toolResultMessage("read", body));
 		const second = messageEntry(toolResultMessage("read", body));
 		const entries = [first, second];

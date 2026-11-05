@@ -5,7 +5,7 @@
  * Endpoint: POST https://api.synthetic.new/v2/search
  */
 
-import type { ApiKey, AuthStorage, FetchImpl } from "@veyyon/ai";
+import type { ApiKey, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { resolveProviderTextTransform, transformProviderPayload } from "../../../../provider-boundary";
@@ -28,15 +28,6 @@ interface SyntheticSearchResult {
 
 interface SyntheticSearchResponse {
 	results: SyntheticSearchResult[];
-}
-
-/** Resolve Synthetic API key through the shared auth storage pipeline. */
-export function findApiKey(
-	authStorage: AuthStorage,
-	sessionId?: string,
-	signal?: AbortSignal,
-): Promise<string | undefined> {
-	return authStorage.getApiKey("synthetic", sessionId, { signal });
 }
 
 /** Call Synthetic search API. */

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { CustomEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
@@ -23,14 +24,7 @@ describe("SessionManager.saveCustomEntry", () => {
 			api: "openai-responses",
 			provider: "openai",
 			model: "gpt-5-mini",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			providerPayload: { type: "openaiResponsesHistory", provider: "openai", items: nativeHistory },
 			timestamp: 2,

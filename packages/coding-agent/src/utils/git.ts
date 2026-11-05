@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { isAbortError } from "@veyyon/utils/abortable";
 import { Snowflake } from "@veyyon/utils/snowflake";
+import { privateTempDir } from "@veyyon/utils/temp";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { $which } from "@veyyon/utils/which";
@@ -46,7 +46,8 @@ export type {
 // Types
 // ════════════════════════════════════════════════════════════════════════════
 
-export interface GitCommandResult {
+/** What a git, gh or jj subprocess run through {@link runCommand} returned. */
+export interface CommandResult {
 	exitCode: number;
 	stdout: string;
 	stderr: string;
@@ -174,10 +175,10 @@ export interface GitWorktreeEntry {
 
 export class GitCommandError extends Error {
 	readonly args: readonly string[];
-	readonly result: GitCommandResult;
+	readonly result: CommandResult;
 
-	constructor(args: readonly string[], result: GitCommandResult) {
-		super(formatCommandFailure(args, result));
+	constructor(args: readonly string[], result: CommandResult) {
+		super(formatCommandFailure("git", args, result));
 		this.name = "GitCommandError";
 		this.args = args.slice();
 		this.result = result;
@@ -223,24 +224,30 @@ export const GIT_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
  * commands keep the short one.
  */
 export const GIT_NETWORK_TIMEOUT_MS = 30 * 60 * 1000;
-/** Maximum captured stdout or stderr bytes retained from git and gh subprocesses. */
+/** Maximum captured stdout or stderr bytes retained from git, gh and jj subprocesses. */
 export const GIT_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 
 const GIT_COMMAND_TIMEOUT_EXIT_CODE = 124;
+const GIT_COMMAND_TERMINATE_GRACE_MS = 5_000;
+
+/** Every CLI {@link runCommand} spawns, each under the same deadline and output cap. */
+export const CAPTURED_COMMANDS = ["git", "gh", "jj"] as const;
+export type CapturedCommand = (typeof CAPTURED_COMMANDS)[number];
+
 /**
- * The line appended in place of output dropped at {@link GIT_COMMAND_OUTPUT_LIMIT_BYTES}.
+ * The line appended in place of `command` output dropped at {@link GIT_COMMAND_OUTPUT_LIMIT_BYTES}.
  *
  * Split from the surrounding newlines so parsers can compare a whole line
- * against it. Every parser that consumes capped git output MUST recognise it:
+ * against it. Every parser that consumes capped output MUST recognise it:
  * it is prose in the middle of machine-readable text, and a parser that does not
  * know it either mistakes it for a record or, worse, silently returns a short
  * answer as if the output had ended naturally.
  */
-const GIT_OUTPUT_TRUNCATED_NOTICE = "[git subprocess output truncated after 8 MiB]";
-const GIT_OUTPUT_TRUNCATED_MARKER = `\n${GIT_OUTPUT_TRUNCATED_NOTICE}\n`;
-const GIT_COMMAND_TERMINATE_GRACE_MS = 5_000;
+export function truncationNotice(command: CapturedCommand): string {
+	return `[${command} subprocess output truncated after 8 MiB]`;
+}
 
-type CommandName = "git" | "gh";
+const GIT_OUTPUT_TRUNCATED_NOTICE = truncationNotice("git");
 
 function resolveTimeoutMs(timeoutMs: number | undefined, fallback: number = GIT_COMMAND_TIMEOUT_MS): number {
 	if (timeoutMs === undefined) return fallback;
@@ -254,7 +261,7 @@ function resolveOutputLimit(maxOutputBytes: number | undefined): number {
 	return Math.trunc(maxOutputBytes);
 }
 
-function formatCommandLabel(command: CommandName, args: readonly string[]): string {
+function formatCommandLabel(command: CapturedCommand, args: readonly string[]): string {
 	return `${command} ${args.join(" ")}`.trim();
 }
 
@@ -310,7 +317,11 @@ async function waitForExitWithTimeout(
 	}
 }
 
-async function readCappedText(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<string> {
+async function readCappedText(
+	stream: ReadableStream<Uint8Array>,
+	maxBytes: number,
+	command: CapturedCommand,
+): Promise<string> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	const chunks: string[] = [];
@@ -332,7 +343,7 @@ async function readCappedText(stream: ReadableStream<Uint8Array>, maxBytes: numb
 			truncated = true;
 		}
 		chunks.push(decoder.decode());
-		if (truncated) chunks.push(GIT_OUTPUT_TRUNCATED_MARKER);
+		if (truncated) chunks.push(`\n${truncationNotice(command)}\n`);
 		return chunks.join("");
 	} finally {
 		reader.releaseLock();
@@ -348,19 +359,19 @@ async function cancelOutput(stream: ReadableStream<Uint8Array>): Promise<void> {
 }
 
 async function collectSubprocessResult(
-	command: CommandName,
+	command: CapturedCommand,
 	args: readonly string[],
 	child: Subprocess,
-	options: Pick<CommandOptions, "maxOutputBytes" | "timeoutMs"> = {},
-): Promise<GitCommandResult> {
+	options: Pick<RunCommandOptions, "maxOutputBytes" | "timeoutMs">,
+): Promise<CommandResult> {
 	const stdoutStream = child.stdout;
 	const stderrStream = child.stderr;
 	if (!(stdoutStream instanceof ReadableStream) || !(stderrStream instanceof ReadableStream)) {
 		throw new Error(`Failed to capture ${command} command output.`);
 	}
 	const maxOutputBytes = resolveOutputLimit(options.maxOutputBytes);
-	const stdoutPromise = readCappedText(stdoutStream, maxOutputBytes);
-	const stderrPromise = readCappedText(stderrStream, maxOutputBytes);
+	const stdoutPromise = readCappedText(stdoutStream, maxOutputBytes, command);
+	const stderrPromise = readCappedText(stderrStream, maxOutputBytes, command);
 	const exit = await waitForExitWithTimeout(
 		child,
 		formatCommandLabel(command, args),
@@ -379,16 +390,49 @@ async function collectSubprocessResult(
 	return { exitCode: exit.exitCode ?? 0, stdout, stderr };
 }
 
-interface CommandOptions {
+/** How {@link runCommand} spawns a command. `env` is the child's whole environment; unset passes this process's. */
+export interface RunCommandOptions {
 	readonly env?: Record<string, string | undefined>;
 	readonly maxOutputBytes?: number;
-	readonly readOnly?: boolean;
 	readonly signal?: AbortSignal;
 	readonly stdin?: string | Uint8Array | ArrayBuffer | SharedArrayBuffer;
 	readonly timeoutMs?: number;
 }
 
-function normalizeStdin(input: CommandOptions["stdin"]): "ignore" | Uint8Array {
+/**
+ * Run `command args` in `cwd`, charged to the session's CPU budget, and collect its output. Every git, gh
+ * and jj subprocess goes through here, so each one ends at its deadline ({@link GIT_COMMAND_TIMEOUT_MS} unless
+ * `timeoutMs` says otherwise) with exit code 124, and keeps at most {@link GIT_COMMAND_OUTPUT_LIMIT_BYTES} of
+ * each stream followed by {@link truncationNotice}.
+ */
+export async function runCommand(
+	command: CapturedCommand,
+	args: readonly string[],
+	cwd: string,
+	options: RunCommandOptions = {},
+): Promise<CommandResult> {
+	const child = Bun.spawn([command, ...args], {
+		cwd,
+		// `process.env` rather than unset: Bun resolves a bare command against the PATH of the env it is given,
+		// and against the PATH this process started with when given none.
+		env: options.env ?? process.env,
+		signal: options.signal,
+		stdin: normalizeStdin(options.stdin),
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+	});
+	adoptIntoPrimarySessionCpuBudget(child.pid);
+	return await collectSubprocessResult(command, args, child, options);
+}
+
+interface CommandOptions extends Omit<RunCommandOptions, "env"> {
+	/** Variables layered over this process's environment, under git's own non-interactive ones. */
+	readonly env?: Record<string, string | undefined>;
+	readonly readOnly?: boolean;
+}
+
+function normalizeStdin(input: RunCommandOptions["stdin"]): "ignore" | Uint8Array {
 	if (input === undefined) return "ignore";
 	if (typeof input === "string") return new TextEncoder().encode(input);
 	if (input instanceof Uint8Array) return input;
@@ -405,37 +449,29 @@ function buildGitEnv(overrides?: Record<string, string | undefined>): Record<str
 	};
 }
 
-function ensureAvailable(): void {
-	if (!$which("git")) {
-		throw new Error("git is not installed.");
+/** Throw when `command` is not on PATH, before a run that would fail to spawn it. */
+export function ensureInstalled(command: CapturedCommand): void {
+	if (!$which(command)) {
+		throw new Error(`${command} is not installed.`);
 	}
 }
 
-function formatCommandFailure(
+/** The message a failed `command args` run reports: its stderr, else its stdout, else its exit code. */
+export function formatCommandFailure(
+	command: CapturedCommand,
 	args: readonly string[],
-	result: Pick<GitCommandResult, "exitCode" | "stdout" | "stderr">,
+	result: Pick<CommandResult, "exitCode" | "stdout" | "stderr">,
 ): string {
 	const stderr = result.stderr.trim();
 	if (stderr) return stderr;
 	const stdout = result.stdout.trim();
 	if (stdout) return stdout;
-	return `git ${args.join(" ")} failed with exit code ${result.exitCode}`;
+	return `${command} ${args.join(" ")} failed with exit code ${result.exitCode}`;
 }
 
-async function git(cwd: string, args: readonly string[], options: CommandOptions = {}): Promise<GitCommandResult> {
+async function git(cwd: string, args: readonly string[], options: CommandOptions = {}): Promise<CommandResult> {
 	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : args.slice());
-	const child = Bun.spawn(["git", ...commandArgs], {
-		cwd,
-		env: buildGitEnv(options.env),
-		signal: options.signal,
-		stdin: normalizeStdin(options.stdin),
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-	adoptIntoPrimarySessionCpuBudget(child.pid);
-
-	return await collectSubprocessResult("git", commandArgs, child, options);
+	return runCommand("git", commandArgs, cwd, { ...options, env: buildGitEnv(options.env) });
 }
 
 function withNoOptionalLocks(args: readonly string[]): string[] {
@@ -462,12 +498,8 @@ function hasGitConfig(args: readonly string[], key: string, value: string): bool
 	return false;
 }
 
-async function runChecked(
-	cwd: string,
-	args: readonly string[],
-	options: CommandOptions = {},
-): Promise<GitCommandResult> {
-	ensureAvailable();
+async function runChecked(cwd: string, args: readonly string[], options: CommandOptions = {}): Promise<CommandResult> {
+	ensureInstalled("git");
 	const result = await git(cwd, args, options);
 	if (result.exitCode !== 0) {
 		throw new GitCommandError(args, result);
@@ -488,7 +520,7 @@ async function tryText(
 	args: readonly string[],
 	options: CommandOptions = {},
 ): Promise<string | undefined> {
-	ensureAvailable();
+	ensureInstalled("git");
 	const result = await git(cwd, args, options);
 	if (result.exitCode !== 0) return undefined;
 	return result.stdout;
@@ -586,7 +618,7 @@ function buildApplyArgs(patchPath: string, options: PatchOptions): string[] {
 }
 
 async function writeTempPatch(content: string): Promise<string> {
-	const tempPath = path.join(os.tmpdir(), `veyyon-git-patch-${Snowflake.next()}.patch`);
+	const tempPath = path.join(privateTempDir(), `veyyon-git-patch-${Snowflake.next()}.patch`);
 	await Bun.write(tempPath, content);
 	return tempPath;
 }
@@ -616,7 +648,7 @@ async function queryGitOrNull(
 	repoRoot: string,
 	args: readonly string[],
 	signal: AbortSignal | undefined,
-): Promise<GitCommandResult | null> {
+): Promise<CommandResult | null> {
 	throwIfAborted(signal);
 	return git(repoRoot, args, { readOnly: true, signal }).catch(err => {
 		if (signal?.aborted || isAbortError(err)) {
@@ -626,72 +658,49 @@ async function queryGitOrNull(
 	});
 }
 
-async function resolveHeadStateReftable(repository: GitRepository, signal?: AbortSignal): Promise<GitHeadState | null> {
-	const symResult = await queryGitOrNull(repository.repoRoot, ["symbolic-ref", "HEAD"], signal);
-	const revResult = await queryGitOrNull(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], signal);
-	const commit = revResult && revResult.exitCode === 0 ? revResult.stdout.trim() || null : null;
-
-	if (symResult && symResult.exitCode === 0) {
-		const ref = symResult.stdout.trim();
-		const branchName = ref.startsWith(LOCAL_BRANCH_PREFIX) ? ref.slice(LOCAL_BRANCH_PREFIX.length) : null;
-		return {
-			...repository,
-			kind: "ref",
-			ref,
-			branchName,
-			commit,
-			headContent: `${HEAD_REF_PREFIX} ${ref}`,
-		};
+/** The HEAD state of a reftable repository from its symbolic HEAD (null when detached) and the commit HEAD resolves to. */
+function reftableHeadState(repository: GitRepository, symbolicRef: string | null, commit: string | null): GitHeadState {
+	if (symbolicRef === null) {
+		return { ...repository, kind: "detached", commit, headContent: commit || "" };
 	}
-
+	const branchName = symbolicRef.startsWith(LOCAL_BRANCH_PREFIX)
+		? symbolicRef.slice(LOCAL_BRANCH_PREFIX.length)
+		: null;
 	return {
 		...repository,
-		kind: "detached",
+		kind: "ref",
+		ref: symbolicRef,
+		branchName,
 		commit,
-		headContent: commit || "",
+		headContent: `${HEAD_REF_PREFIX} ${symbolicRef}`,
 	};
 }
 
+async function resolveHeadStateReftable(repository: GitRepository, signal?: AbortSignal): Promise<GitHeadState | null> {
+	const symResult = await queryGitOrNull(repository.repoRoot, ["symbolic-ref", "HEAD"], signal);
+	const revResult = await queryGitOrNull(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], signal);
+	const symbolicRef = symResult && symResult.exitCode === 0 ? symResult.stdout.trim() : null;
+	const commit = revResult && revResult.exitCode === 0 ? revResult.stdout.trim() || null : null;
+	return reftableHeadState(repository, symbolicRef, commit);
+}
+
+/** Trimmed stdout of a read-only git command run synchronously, or null when it exits non-zero. */
+function queryGitSync(repoRoot: string, args: readonly string[]): string | null {
+	const result = Bun.spawnSync(["git", ...withShortLivedGitConfig(withNoOptionalLocks(args))], {
+		cwd: repoRoot,
+		env: buildGitEnv(),
+		stdout: "pipe",
+		stderr: "pipe",
+		windowsHide: true,
+	});
+	return result.exitCode === 0 ? result.stdout.toString("utf8").trim() : null;
+}
+
 function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState | null {
-	ensureAvailable();
-	const symArgs = withShortLivedGitConfig(withNoOptionalLocks(["symbolic-ref", "HEAD"]));
-	const symResult = Bun.spawnSync(["git", ...symArgs], {
-		cwd: repository.repoRoot,
-		env: buildGitEnv(),
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-
-	const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "--verify", "HEAD"]));
-	const revResult = Bun.spawnSync(["git", ...revArgs], {
-		cwd: repository.repoRoot,
-		env: buildGitEnv(),
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-	const commit = revResult.exitCode === 0 ? new TextDecoder().decode(revResult.stdout).trim() || null : null;
-
-	if (symResult.exitCode === 0) {
-		const ref = new TextDecoder().decode(symResult.stdout).trim();
-		const branchName = ref.startsWith(LOCAL_BRANCH_PREFIX) ? ref.slice(LOCAL_BRANCH_PREFIX.length) : null;
-		return {
-			...repository,
-			kind: "ref",
-			ref,
-			branchName,
-			commit,
-			headContent: `${HEAD_REF_PREFIX} ${ref}`,
-		};
-	}
-
-	return {
-		...repository,
-		kind: "detached",
-		commit,
-		headContent: commit || "",
-	};
+	ensureInstalled("git");
+	const symbolicRef = queryGitSync(repository.repoRoot, ["symbolic-ref", "HEAD"]);
+	const commit = queryGitSync(repository.repoRoot, ["rev-parse", "--verify", "HEAD"]) || null;
+	return reftableHeadState(repository, symbolicRef, commit);
 }
 
 async function readRef(repository: GitRepository, targetRef: string, signal?: AbortSignal): Promise<string | null> {
@@ -1042,7 +1051,7 @@ export const stage = {
 // ════════════════════════════════════════════════════════════════════════════
 
 /** Create a commit with the given message (passed via stdin). */
-export async function commit(cwd: string, message: string, options: CommitOptions = {}): Promise<GitCommandResult> {
+export async function commit(cwd: string, message: string, options: CommitOptions = {}): Promise<CommandResult> {
 	const args = ["commit", "-F", "-"];
 	if (options.author) {
 		args.push(`--author=${options.author.name} <${options.author.email}>`);
@@ -1506,7 +1515,7 @@ export const cherryPick = Object.assign(
 export const stash = {
 	/** Stash working tree + index changes. Returns true when git created a new stash entry. */
 	async push(cwd: string, message?: string): Promise<boolean> {
-		ensureAvailable();
+		ensureInstalled("git");
 		const previousStash = await ref.resolve(cwd, "refs/stash");
 		const args = ["stash", "push", "--include-untracked"];
 		if (message) args.push("-m", message);
@@ -1590,7 +1599,7 @@ export const stash = {
 // ════════════════════════════════════════════════════════════════════════════
 
 export async function clone(url: string, targetDir: string, options: CloneOptions = {}): Promise<void> {
-	ensureAvailable();
+	ensureInstalled("git");
 	const absoluteTarget = path.resolve(targetDir);
 	await fs.promises.mkdir(path.dirname(absoluteTarget), { recursive: true });
 
@@ -1883,12 +1892,6 @@ async function resolveHead(cwd: string, signal?: AbortSignal): Promise<GitHeadSt
 // API: github (GitHub CLI)
 // ════════════════════════════════════════════════════════════════════════════
 
-export interface GhCommandResult {
-	exitCode: number;
-	stdout: string;
-	stderr: string;
-}
-
 export interface GhCommandOptions {
 	repoProvided?: boolean;
 	trimOutput?: boolean;
@@ -1918,30 +1921,20 @@ export const github = {
 	},
 
 	/** Run a raw `gh` CLI command. Does not throw on non-zero exit. */
-	async run(cwd: string, args: string[], signal?: AbortSignal, options?: GhCommandOptions): Promise<GhCommandResult> {
+	async run(cwd: string, args: string[], signal?: AbortSignal, options?: GhCommandOptions): Promise<CommandResult> {
 		throwIfAborted(signal);
 		if (!$which("gh")) {
 			throw new ToolError("GitHub CLI (gh) is not installed. Install it from https://cli.github.com/.");
 		}
 		try {
-			const child = Bun.spawn(["gh", ...args], {
-				cwd,
-				env: {
-					...process.env,
-					...GH_NON_INTERACTIVE_ENV,
-				},
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-				windowsHide: true,
+			const { stdout, stderr, exitCode } = await runCommand("gh", args, cwd, {
+				env: { ...process.env, ...GH_NON_INTERACTIVE_ENV },
 				signal,
 			});
-			adoptIntoPrimarySessionCpuBudget(child.pid);
-			const { stdout, stderr, exitCode } = await collectSubprocessResult("gh", args, child, {});
 			throwIfAborted(signal);
 			const trim = options?.trimOutput !== false;
 			return {
-				exitCode: exitCode ?? 0,
+				exitCode,
 				stdout: trim ? stdout.trim() : stdout,
 				stderr: trim ? stderr.trim() : stderr,
 			};

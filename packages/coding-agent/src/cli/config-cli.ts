@@ -85,13 +85,25 @@ export function suggestSettingPaths(key: string, limit = 3): string[] {
 	return nearestNames(key, Object.keys(SETTINGS_SCHEMA), limit);
 }
 
+const LIST_HINT = `\nRun '${APP_NAME} config list' to see available keys`;
+
+/** Print a `config` verb's usage line and exit with the usage code. */
+function exitWithUsage(usage: string): never {
+	console.error(chalk.red(`Usage: ${APP_NAME} config ${usage}`));
+	console.error(chalk.dim(LIST_HINT));
+	process.exit(EXIT_USAGE);
+}
+
 /**
- * Report a key that matches no setting, naming near misses when there are any.
+ * The setting a `get`, `set` or `reset` key names, or a report and exit.
  *
- * One owner for the message so `get`, `set`, and `reset` cannot drift into
- * helping by different rules.
+ * A missing key prints `usage`; a key that matches no setting prints its near misses. Both exit
+ * with the usage code, so the three verbs cannot drift into reporting a bad key by different rules.
  */
-function reportUnknownSetting(key: string): void {
+function settingForKeyOrExit(key: string | undefined, usage: string): CliSettingDef {
+	if (!key) exitWithUsage(usage);
+	const def = findSettingDef(key);
+	if (def) return def;
 	console.error(chalk.red(`Unknown setting: ${key}`));
 	const suggestions = suggestSettingPaths(key);
 	if (suggestions.length > 0) {
@@ -100,7 +112,8 @@ function reportUnknownSetting(key: string): void {
 			console.error(chalk.dim(`  ${suggestion}`));
 		}
 	}
-	console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
+	console.error(chalk.dim(LIST_HINT));
+	process.exit(EXIT_USAGE);
 }
 
 /** Get available values for a setting */
@@ -413,17 +426,7 @@ async function handleList(flags: { json?: boolean }): Promise<void> {
 }
 
 function handleGet(key: string | undefined, flags: { json?: boolean }): void {
-	if (!key) {
-		console.error(chalk.red(`Usage: ${APP_NAME} config get <key>`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
-		process.exit(EXIT_USAGE);
-	}
-
-	const def = findSettingDef(key);
-	if (!def) {
-		reportUnknownSetting(key);
-		process.exit(EXIT_USAGE);
-	}
+	const def = settingForKeyOrExit(key, "get <key>");
 
 	const value = settings.get(def.path);
 
@@ -470,17 +473,8 @@ async function persistOrExit(): Promise<void> {
 }
 
 async function handleSet(key: string | undefined, value: string | undefined, flags: { json?: boolean }): Promise<void> {
-	if (!key || value === undefined) {
-		console.error(chalk.red(`Usage: ${APP_NAME} config set <key> <value>`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
-		process.exit(EXIT_USAGE);
-	}
-
-	const def = findSettingDef(key);
-	if (!def) {
-		reportUnknownSetting(key);
-		process.exit(EXIT_USAGE);
-	}
+	if (value === undefined) exitWithUsage("set <key> <value>");
+	const def = settingForKeyOrExit(key, "set <key> <value>");
 
 	try {
 		parseAndSetValue(def.path, value);
@@ -508,17 +502,7 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 }
 
 async function handleReset(key: string | undefined, flags: { json?: boolean }): Promise<void> {
-	if (!key) {
-		console.error(chalk.red(`Usage: ${APP_NAME} config reset <key>`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
-		process.exit(EXIT_USAGE);
-	}
-
-	const def = findSettingDef(key);
-	if (!def) {
-		reportUnknownSetting(key);
-		process.exit(EXIT_USAGE);
-	}
+	const def = settingForKeyOrExit(key, "reset <key>");
 
 	const path = def.path as SettingPath;
 	// Reset REMOVES the key rather than writing the default back into the file.

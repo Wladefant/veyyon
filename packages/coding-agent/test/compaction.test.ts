@@ -18,7 +18,7 @@ import {
 import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
 import * as ai from "@veyyon/ai";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai/types";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type {
 	CompactionEntry,
@@ -28,6 +28,7 @@ import type {
 	ThinkingLevelChangeEntry,
 } from "@veyyon/kernel/session/session-entries";
 import { migrateSessionEntries } from "@veyyon/kernel/session/session-migrations";
+import { createUserMessage, requireBundledModel } from "../../agent/test/helpers";
 import { e2eApiKey } from "./helpers/e2e-session";
 
 // ============================================================================
@@ -148,17 +149,13 @@ function buildLargeSessionEntries(): SessionEntry[] {
 
 function createMockUsage(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {
 	return {
+		...emptyUsage(),
 		input,
 		output,
 		cacheRead,
 		cacheWrite,
 		totalTokens: input + output + cacheRead + cacheWrite,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
-}
-
-function createUserMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
 }
 
 function createAssistantMessage(text: string, usage?: Usage): AssistantMessage {
@@ -567,8 +564,7 @@ describe("estimateTokens excludeEncryptedReasoning (compaction floor)", () => {
 
 describe("bigint tool arguments", () => {
 	it("preserves exact values through local compaction estimation and summary rendering", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected anthropic/claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const toolCallMessage: AssistantMessage = {
 			...createAssistantMessage("", createMockUsage(1_000, 100)),
@@ -651,9 +647,7 @@ function makeSummarizerPreparation(settings?: Partial<CompactionSettings>) {
 }
 
 function getSummarizerModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
-	return model;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 describe("compaction.remoteEndpoint summarizer", () => {

@@ -142,22 +142,16 @@ describe("inspect_image tool differential", () => {
 		expect(stripVTControlCharacters(inHome.join(""))).toContain("Inspect: ~/shots/error.png");
 	});
 
-	it("exception cell: the question under a call row opens no empty colour runs", () => {
+	it("draws the question under a call row with main's bytes", () => {
 		const question = "What error text is visible?";
 		const drawn = renderCompLines(drawToolView(inspectImageToolView.renderCall(args, COLLAPSED), theme));
 		const oracle = renderCompLines(
 			inspectImageOracle.inspectImageToolRenderer.renderCall(args, HOST_COLLAPSED, theme),
 		);
-		const asked = `${theme.fg("dim", "Question:")} ${theme.fg("accent", question)}`;
-		const emptyRuns = `${theme.fg("muted", "")}${theme.fg("accent", "")}${theme.fg("muted", "")}`;
-		// Main built the two rows as one `Text`, whose wrapping closed the colours the header above had
-		// opened, leaving three zero-width runs between the indent and the question. The host emits a
-		// run only for a span with something in it, so the question draws in the same colours with
-		// fewer bytes.
-		expect(drawn[1]).toBe(`  ${asked}`);
-		expect(oracle[1]).toBe(`  ${emptyRuns}${asked}`);
-		expect(stripVTControlCharacters(drawn[1] ?? "")).toBe(stripVTControlCharacters(oracle[1] ?? ""));
-		expect(drawn[0]).toBe(oracle[0]);
+		// Main built the two rows as one `Text`, whose SGR carry once re-opened the header's closed colours
+		// as empty runs before the question. The carry now holds only what is set, so both arms agree.
+		expect(drawn[1]).toBe(`  ${theme.fg("dim", "Question:")} ${theme.fg("accent", question)}`);
+		expect(drawn).toEqual(oracle);
 	});
 
 	it("fills the panel main filled, row for row, at every width and disclosure", () => {
@@ -259,10 +253,7 @@ describe("inspect_image tool differential", () => {
 		// own, at column zero, under a row that had already said what was inspected; the row carries
 		// them itself, which is where every other converted card puts the same detail.
 		expect(viewLines(empty, COLLAPSED)).toEqual([`${title} ${meta}`]);
-		expect(oracleLines(empty, HOST_COLLAPSED)).toEqual([
-			title,
-			`${theme.fg("accent", "")}${theme.fg("muted", "")}${meta}`,
-		]);
+		expect(oracleLines(empty, HOST_COLLAPSED)).toEqual([title, meta]);
 		// A card told nothing about the request is one row in both arms, so the second row above is
 		// the metadata and not a blank the frame left behind.
 		const bare: InspectImageViewResult = { content: [] };

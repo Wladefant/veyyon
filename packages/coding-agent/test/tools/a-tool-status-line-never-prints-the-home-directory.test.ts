@@ -22,10 +22,11 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import os from "node:os";
 import type { Theme } from "@veyyon/coding-agent/theme/theme";
-import { getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { sanitizeText } from "@veyyon/utils";
 import { formatScopeMeta, TRUNCATE_LENGTHS } from "../../src/tools/core/render-utils";
 import { toolRenderers } from "../../src/tools/renderers";
+import { requireTheme } from "../helpers/require-theme";
 
 /**
  * The production `search` entry, which is the card a session draws. `search` is a view the terminal
@@ -40,9 +41,8 @@ let uiTheme: Theme;
 
 beforeAll(async () => {
 	await initTheme();
-	const theme = await getThemeByName("dark");
-	expect(theme).toBeDefined();
-	uiTheme = theme!;
+	const theme = await requireTheme("dark");
+	uiTheme = theme;
 });
 
 function plain(component: { render(width: number): readonly string[] }): string {

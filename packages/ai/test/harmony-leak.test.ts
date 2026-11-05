@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, Model, ToolCall, Usage } from "@veyyon/ai";
+import type { AssistantMessage, Model, ToolCall } from "@veyyon/ai";
 import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeak,
@@ -9,7 +9,7 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@veyyon/ai/utils/harmony-leak";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import corpus from "./fixtures/harmony-leak-corpus.json" with { type: "json" };
 
 interface CorpusPositive {
@@ -39,20 +39,9 @@ function createAssistantMessage(
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: createUsage(),
+		usage: emptyUsage(),
 		stopReason,
 		timestamp: Date.now(),
-	};
-}
-
-function createUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 }
 

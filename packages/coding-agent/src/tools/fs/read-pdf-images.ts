@@ -4,13 +4,13 @@
  */
 
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { formatBoundedList, formatBytes, formatMoreLines } from "@veyyon/utils/format";
 import { isMissingPath } from "@veyyon/utils/fs-error";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import { isSessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
+import { privateTempDir } from "@veyyon/utils/temp";
 import type { ToolSession } from "../../sdk";
 import { truncateHead } from "../../session/streaming-output";
 import { loadImageInput, MAX_IMAGE_INPUT_BYTES, webpExclusionForModel } from "../../utils/image-loading";
@@ -55,10 +55,7 @@ function pdfImageCacheDir(session: ToolSession, absolutePdfPath: string): string
 		const sessionFile = session.getSessionFile();
 		// `sessionFileStem`, not `slice(0, -6)`: that 6 was the length of ".jsonl" written as a number,
 		// which is the same value again in the form a grep for the extension never finds.
-		root =
-			sessionFile && isSessionFileName(sessionFile)
-				? sessionFileStem(sessionFile)
-				: path.join(os.tmpdir(), "veyyon-read-pdf-images");
+		root = sessionFile && isSessionFileName(sessionFile) ? sessionFileStem(sessionFile) : privateTempDir();
 	}
 	const basename = path.basename(absolutePdfPath).replace(/[^A-Za-z0-9._-]/g, "_");
 	return path.join(root, "read-pdf-images", `${basename}-${Bun.hash(absolutePdfPath).toString(36)}`);

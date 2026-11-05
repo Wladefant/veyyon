@@ -34,20 +34,15 @@
 import { describe, expect, it } from "bun:test";
 import type { DaemonSnapshot } from "@veyyon/coding-agent/launch/protocol";
 import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
-import { streamingStringKeysForTool } from "@veyyon/coding-agent/tools/core/streamed-tool-args";
+import { streamingStringKeysForTool } from "@veyyon/coding-agent/modes/terminal/controllers/tool-args-reveal"
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { LaunchToolDetails } from "@veyyon/coding-agent/tools/shell/launch";
 import { sanitizeText } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
+import { requireTheme } from "../helpers/require-theme";
 
 /** The card the registry draws for `launch`, which every op below is swept through. */
 const launchToolRenderer = toolRenderers.launch;
-
-async function theme() {
-	const t = await getThemeByName("dark");
-	expect(t).toBeDefined();
-	return t!;
-}
 
 const lines = (component: { render: (w: number) => readonly string[] }, width = 200) =>
 	sanitizeText(component.render(width).join("\n")).split("\n");
@@ -70,7 +65,7 @@ const sampleDaemon: DaemonSnapshot = {
 describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", () => {
 	describe("renderCall handles missing op, intent, and streaming args cleanly", () => {
 		it("renders 'Launch' without ellipsis suffix when op is undefined", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rendered = lines(launchToolRenderer.renderCall({}, { expanded: false, isPartial: true }, uiTheme));
 			expect(rendered).toHaveLength(1);
 			expect(rendered[0]).toContain("Launch");
@@ -79,7 +74,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("keeps the harness intent out of the block, because the working message already carries it", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rendered = lines(
 				launchToolRenderer.renderCall(
 					{ [INTENT_FIELD]: "Starting dev server" } as never,
@@ -92,7 +87,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("prints the command once when a name is also present, at both truncation lengths", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const short = lines(
 				launchToolRenderer.renderCall(
 					{ op: "start", application: "bun", args: ["run", "dev"] },
@@ -116,7 +111,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("surfaces application and args when op is start or streaming", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rendered = lines(
 				launchToolRenderer.renderCall(
 					{ application: "bun", args: ["run", "dev"] },
@@ -129,7 +124,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("surfaces target name and command cleanly when name is present", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rendered = lines(
 				launchToolRenderer.renderCall(
 					{ op: "start", name: "dev-server", application: "bun", args: ["run", "dev"] },
@@ -143,7 +138,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("enumerates all operations in renderCall and produces valid headers", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			for (const op of ALL_LAUNCH_OPS) {
 				const rendered = lines(
 					launchToolRenderer.renderCall({ op, name: "worker" }, { expanded: false, isPartial: true }, uiTheme),
@@ -157,7 +152,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 
 	describe("renderResult falls back to text content when details or daemons are missing", () => {
 		it("renders fallback text for list when details are absent", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rawText = "- web: running pid=4321 uptime=10s\n- api: running pid=4322 uptime=10s";
 			const rendered = lines(
 				launchToolRenderer.renderResult(
@@ -174,7 +169,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("renders fallback text for describe when spec is absent", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rawText = "web: running pid=4321\nCommand: bun run dev\nCwd: /app";
 			const rendered = lines(
 				launchToolRenderer.renderResult(
@@ -190,7 +185,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("renders fallback text for start when daemon is absent", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rawText = "Started web: running pid=4321 uptime=0s";
 			const rendered = lines(
 				launchToolRenderer.renderResult(
@@ -205,7 +200,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("renders fallback text for stop, restart, wait, and send when daemon is absent", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const ops: Array<{ op: "stop" | "restart" | "wait" | "send"; text: string }> = [
 				{ op: "stop", text: "Stopped web: exited exit=0 uptime=12s" },
 				{ op: "restart", text: "Restarted web: running pid=5432 uptime=0s" },
@@ -227,7 +222,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("renders (no output) placeholder for logs when output is empty", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			const rendered = lines(
 				launchToolRenderer.renderResult(
 					{
@@ -244,7 +239,7 @@ describe("launch-tool-renders-non-empty-on-all-operations-and-missing-details", 
 		});
 
 		it("renders every operation with structured details without regression", async () => {
-			const uiTheme = await theme();
+			const uiTheme = await requireTheme("dark");
 			for (const op of ALL_LAUNCH_OPS) {
 				const details: LaunchToolDetails =
 					op === "list"

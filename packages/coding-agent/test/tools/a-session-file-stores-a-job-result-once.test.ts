@@ -23,16 +23,18 @@ import * as fs from "node:fs";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { MIN_CODED_TEXT } from "@veyyon/coding-agent/tools/core/output-notice";
 import type { JobSnapshot, JobToolDetails } from "@veyyon/coding-agent/tools/shell/job";
 import { jobResultCodec } from "@veyyon/coding-agent/tools/shell/job-result-codec";
 import { jobToolView } from "@veyyon/coding-agent/tools/shell/job-view";
 // Register all domain codecs through the composition root
 import "@veyyon/coding-agent/tools/index";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { requireTheme } from "../helpers/require-theme";
 
 function assistantCalling(ids: readonly string[]): AssistantMessage {
 	return {
@@ -43,14 +45,7 @@ function assistantCalling(ids: readonly string[]): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-test",
 		stopReason: "toolUse",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 	};
 }
 
@@ -110,8 +105,7 @@ describe("a session file stores a job result once", () => {
 		await initTheme();
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("dark theme missing");
+		const dark = await requireTheme("dark");
 		theme = dark;
 	});
 

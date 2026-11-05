@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+
 import type { AgentMessage } from "@veyyon/agent-core";
+
 import {
 	type CompactionEntry,
 	type CompactionPreparation,
@@ -11,8 +13,10 @@ import {
 	REMOTE_COMPACTION_PRESERVE_KEY,
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Model } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+
+import type { Model } from "@veyyon/ai";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
+
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 
 /**
@@ -66,14 +70,6 @@ function markers(value: unknown, out: string[] = []): string[] {
 	return out;
 }
 
-const USAGE: AssistantMessage["usage"] = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 /** Enough text per message that the budget sweep lands the cut on every message. */
 const BODY = " lorem ipsum".repeat(20);
 const BASE_TIME = 1_700_000_000_000;
@@ -151,7 +147,7 @@ function buildBranch(artifacts: readonly Artifact[], opensTurn: readonly boolean
 							api: MODEL.api,
 							provider: MODEL.provider,
 							model: MODEL.id,
-							usage: USAGE,
+							usage: emptyUsage(),
 							stopReason: "stop",
 							timestamp,
 						};

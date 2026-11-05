@@ -111,6 +111,23 @@ describe("after a resize", () => {
 
 		expect(afterWide).toBe(frame(card(), 120));
 	});
+
+	it("shows the rows a shorter terminal hid once the terminal grows taller", () => {
+		// A short terminal fits the list to the rows its card has. The fit belongs to that frame, so
+		// a taller terminal shows the whole list again rather than the short terminal's count.
+		let rows = 10;
+		const items = Array.from({ length: 20 }, (_, index) => ({ value: `${index}`, label: `Item ${index}` }));
+		const make = () =>
+			new ModalSelectListComponent(
+				{ title: "Items", items, theme: getSelectListTheme(), getTerminalRows: () => rows },
+				{ onSelect: () => {}, onCancel: () => {} },
+			);
+		const resized = make();
+		resized.render(80);
+		rows = 40;
+
+		expect(frame(resized, 80)).toBe(frame(make(), 80));
+	});
 });
 
 describe("within one width", () => {

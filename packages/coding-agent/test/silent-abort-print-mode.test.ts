@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { type PrintModeSession, runPrintMode } from "@veyyon/coding-agent/modes/print-mode";
 import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
 
@@ -19,14 +20,7 @@ function makeAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assist
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: Date.now(),
 		...overrides,
 	};
@@ -55,6 +49,7 @@ function createMockSession(messages: AssistantMessage[]): PrintModeSession {
 		// today, but a stub that lies about the signature is how the next drift
 		// goes unnoticed.
 		prompt: async () => true,
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForAdvisorCatchup: async () => true,

@@ -7,13 +7,10 @@
  */
 
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
+import { contentText } from "@veyyon/utils/content-text";
 import { TOOL } from "../tools/core/builtin-names";
 import type { CompletedRewindState } from "../tools/fs/checkpoint";
-import {
-	customMessageContentText,
-	reportFromRewindReportContent,
-	stringProperty,
-} from "./agent-session-message-shapes";
+import { reportFromRewindReportContent, stringProperty } from "./agent-session-message-shapes";
 
 /**
  * The completed rewind a `rewind-report` entry records, or undefined for any
@@ -28,8 +25,7 @@ export function completedRewindFromEntry(entry: SessionEntry): CompletedRewindSt
 	const rewoundAt = stringProperty(details, "rewoundAt");
 	if (!startedAt || !rewoundAt) return undefined;
 	const report =
-		stringProperty(details, "report")?.trim() ||
-		reportFromRewindReportContent(customMessageContentText(entry.content));
+		stringProperty(details, "report")?.trim() || reportFromRewindReportContent(contentText(entry.content));
 	return report.length > 0 ? { report, startedAt, rewoundAt } : undefined;
 }
 

@@ -30,6 +30,7 @@ import { TreeSelectorComponent } from "@veyyon/coding-agent/modes/terminal/compo
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionEntry, SessionTreeNode } from "@veyyon/kernel/session/session-entries";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { clickAt, motionAt, wheelAt } from "../../../helpers/sgr-pointer";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -49,17 +50,6 @@ afterEach(() => {
 	setAnsiPolicy(policy);
 	geometry.restore();
 });
-
-/** SGR motion (button 32+3=35), left press, and wheel at 1-based screen coords. */
-function motionAt(row1: number, col1 = 40): string {
-	return `\x1b[<35;${col1};${row1}M`;
-}
-function clickAt(row1: number, col1 = 40): string {
-	return `\x1b[<0;${col1};${row1}M`;
-}
-function wheelAt(direction: "up" | "down", row1: number, col1 = 40): string {
-	return `\x1b[<${direction === "down" ? 65 : 64};${col1};${row1}M`;
-}
 
 let counter = 0;
 function userNode(text: string, parentId: string | null = null): SessionTreeNode {

@@ -14,8 +14,8 @@
  * `model-hub.test.ts` failed on it and every one reported an empty `│ … │`
  * line, which named neither the strip nor the budget.
  *
- * `minModalChromeRows` is the one owner of those terms and exists precisely
- * because `ask-dialog.ts` made the identical mistake; the hub now calls it.
+ * `planModalChrome` is the one owner of those terms, and `ask-dialog.ts` made
+ * the identical mistake; the hub now sizes against the plan it paints.
  *
  * Reclaiming the two rows made the chain pane genuinely shorter, which exposed
  * the second defect: the chain list drew from index 0 until it ran out of
@@ -37,20 +37,19 @@ import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
-	computeModalDims,
+	layoutModalCard,
 	MODAL_SIZING_LARGE,
+	type ModalSizing,
 	sizingForArea,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
-import {
-	minModalChromeRows,
-	planModalChrome,
-	renderModalShell,
-} from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
+import { planModalChrome } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import { ModelHubComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-hub";
 import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import type { TUI } from "@veyyon/tui";
+import { paintCard } from "./helpers/modal-card";
+import { requireTheme } from "./helpers/require-theme";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -118,24 +117,31 @@ function enterChainView(hub: ModelHubComponent): void {
 }
 
 describe("the shell's chrome reservation has one owner", () => {
+	/** The rows a plan for a 200x40 card of `sizing` spends outside the body, with no chips. */
+	function chromeRowsOf(sizing: ModalSizing): number {
+		const card = layoutModalCard(200, 40, sizing);
+		if (!card) throw new Error("no card on a 200x40 area");
+		return planModalChrome(card).nonBody;
+	}
+
 	/**
 	 * The exact off-by-vPad that hid the strip row. `3 + footerLines + vPad` is
 	 * the restatement the hub carried; it is two rows short of the truth, and
 	 * this pins that they are not interchangeable so nobody "simplifies" the
 	 * call back into an inline sum.
 	 */
-	test("minModalChromeRows charges vPad above AND below the body", () => {
+	test("a plan charges vPad above AND below the body", () => {
 		const sizing = MODAL_SIZING_LARGE;
 		expect(sizing.vPad).toBe(2);
-		expect(minModalChromeRows(sizing)).toBe(3 + sizing.footerLines + 2 * sizing.vPad);
-		expect(minModalChromeRows(sizing)).toBe(3 + sizing.footerLines + sizing.vPad + 2);
+		expect(chromeRowsOf(sizing)).toBe(3 + sizing.footerLines + 2 * sizing.vPad);
+		expect(chromeRowsOf(sizing)).toBe(3 + sizing.footerLines + sizing.vPad + 2);
 	});
 
 	/** The compact strip drops vPad entirely, so the two forms coincide there — which is why a short-terminal test would not have caught the bug. */
 	test("the compact sizing collapses vPad, where both forms agree", () => {
 		const compact = sizingForArea(MODAL_SIZING_LARGE, 10);
 		expect(compact.vPad).toBe(0);
-		expect(minModalChromeRows(compact)).toBe(3 + compact.footerLines + compact.vPad);
+		expect(chromeRowsOf(compact)).toBe(3 + compact.footerLines + compact.vPad);
 	});
 });
 
@@ -250,15 +256,14 @@ describe("no component restates the chrome arithmetic", () => {
 		const restated = "const chrome = 3 + sizing.vPad + Math.max(sizing.footerLines, 1);";
 		expect(/vPad/.test(restated) && /footerLines/.test(restated)).toBe(true);
 		// And the sanctioned call must not match either form.
-		const sanctioned = "const chrome = planModalChrome({ sizing, modalHeight: dims.modalHeight, contentWidth });";
+		const sanctioned = "const chrome = planModalChrome(card, { shortcuts });";
 		expect(/\bmodalHeight\s*-\s*\d/.test(sanctioned)).toBe(false);
 	});
 });
 
 describe("planModalChrome is the contract callers size against", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 
@@ -266,10 +271,8 @@ describe("planModalChrome is the contract callers size against", () => {
 
 	function renderBody(rows: number, bodyRows: number): string[] {
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, rows);
-		const dims = computeModalDims(200, rows, sizing);
-		if (!dims) throw new Error("no dims");
 		const body = Array.from({ length: bodyRows }, (_, i) => `BODY-${i}`);
-		const shell = renderModalShell({
+		const shell = paintCard({
 			title: "T",
 			sizing,
 			areaWidth: 200,
@@ -283,14 +286,9 @@ describe("planModalChrome is the contract callers size against", () => {
 
 	function budgetFor(rows: number): number {
 		const sizing = sizingForArea(MODAL_SIZING_LARGE, rows);
-		const dims = computeModalDims(200, rows, sizing);
-		if (!dims) throw new Error("no dims");
-		return planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
-			shortcuts: SHORTCUTS,
-		}).maxBodyRows;
+		const card = layoutModalCard(200, rows, sizing);
+		if (!card) throw new Error("no card");
+		return planModalChrome(card, { shortcuts: SHORTCUTS }).maxBodyRows;
 	}
 
 	/**
@@ -333,23 +331,70 @@ describe("planModalChrome is the contract callers size against", () => {
 	test("maxBodyRows plus chrome equals the modal height it was planned for", () => {
 		for (const rows of [24, 30, 40, 60]) {
 			const sizing = sizingForArea(MODAL_SIZING_LARGE, rows);
-			const dims = computeModalDims(200, rows, sizing)!;
-			const plan = planModalChrome({
-				sizing,
-				modalHeight: dims.modalHeight,
-				contentWidth: dims.contentWidth,
-				shortcuts: SHORTCUTS,
-			});
-			expect(plan.nonBody + plan.maxBodyRows).toBe(dims.modalHeight);
+			const card = layoutModalCard(200, rows, sizing);
+			if (!card) throw new Error("no card");
+			const plan = planModalChrome(card, { shortcuts: SHORTCUTS });
+			expect(plan.nonBody + plan.maxBodyRows).toBe(card.modalHeight);
 			expect(plan.maxBodyRows).toBeGreaterThan(0);
 		}
+	});
+
+	/**
+	 * A card that asks for body rows gets them out of its decoration before its content is dropped:
+	 * the tip gap, the tip, the vertical padding, then the footer's reserved blank rows, in that
+	 * order, and never a chip row. An ask dialog on a 10-row terminal kept two rows of padding on
+	 * each side of a one-row body and dropped every option under its question.
+	 */
+	test("a body floor sheds the tip gap, the tip, the padding and the reserved footer, in that order", () => {
+		// 40 rows: the shortest LARGE card that still carries its padding, since a card pinned to its
+		// floor has shed it before any body floor is asked for.
+		const card = layoutModalCard(200, 40, MODAL_SIZING_LARGE);
+		if (!card) throw new Error("no card");
+		const chrome = { shortcuts: SHORTCUTS, tipCandidates: ["a tip"] };
+		const free = planModalChrome(card, chrome);
+		const chipRows = free.layoutRows.length;
+		const mandatory = 1 + 1 + chipRows + 1;
+		expect([free.tipGap, free.tipRows, free.vPad]).toEqual([1, 1, MODAL_SIZING_LARGE.vPad]);
+		expect(free.footerBand).toBeGreaterThan(chipRows);
+
+		const shed: string[] = [];
+		let previous = free;
+		for (let floor = 0; floor <= card.modalHeight + 2; floor++) {
+			const plan = planModalChrome(card, { ...chrome, minBodyRows: floor });
+			expect(plan.layoutRows.length).toBe(chipRows);
+			expect(plan.nonBody + plan.maxBodyRows).toBe(card.modalHeight);
+			// Every floor the card can hold is met, nothing is shed for a floor already met, and no
+			// more is shed than one step past it (a padding step frees a row above and one below).
+			const held = Math.min(floor, card.modalHeight - mandatory);
+			if (floor <= free.maxBodyRows) expect(plan.maxBodyRows).toBe(free.maxBodyRows);
+			else expect([held, held + 1]).toContain(plan.maxBodyRows);
+			if (plan.tipGap < previous.tipGap) shed.push("tip gap");
+			if (plan.tipRows < previous.tipRows) shed.push("tip");
+			if (plan.vPad < previous.vPad) shed.push("padding");
+			const tipKept = plan.tipGap === previous.tipGap && plan.tipRows === previous.tipRows;
+			if (plan.footerBand < previous.footerBand && tipKept) shed.push("footer");
+			previous = plan;
+		}
+		expect([...new Set(shed)]).toEqual(["tip gap", "tip", "padding", "footer"]);
+		expect([previous.tipGap, previous.tipRows, previous.vPad, previous.footerBand]).toEqual([0, 0, 0, chipRows]);
+	});
+
+	test("a floor that is not a positive row count changes nothing", () => {
+		const card = layoutModalCard(200, 24, MODAL_SIZING_LARGE);
+		if (!card) throw new Error("no card");
+		const free = planModalChrome(card, { shortcuts: SHORTCUTS, tipCandidates: ["a tip"] });
+		for (const floor of [0, -5, Number.NaN, Number.NEGATIVE_INFINITY]) {
+			const plan = planModalChrome(card, { shortcuts: SHORTCUTS, tipCandidates: ["a tip"], minBodyRows: floor });
+			expect(plan.maxBodyRows).toBe(free.maxBodyRows);
+		}
+		const unbounded = planModalChrome(card, { shortcuts: SHORTCUTS, minBodyRows: Number.POSITIVE_INFINITY });
+		expect(unbounded.maxBodyRows).toBe(card.modalHeight - (1 + 1 + unbounded.layoutRows.length + 1));
 	});
 });
 
 describe("ModelHub strip row", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 
@@ -425,8 +470,7 @@ describe("ModelHub strip row", () => {
 
 describe("session picker card height", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 
@@ -491,8 +535,7 @@ describe("session picker card height", () => {
 
 describe("ModelHub chain list windowing", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Failed to load dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 

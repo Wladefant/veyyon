@@ -28,3 +28,7 @@ Before calling `goal({op:"complete"})`, you MUST perform a completion audit agai
 Call `goal({op:"complete"})` only when every deliverable has direct, current-state evidence proving it is satisfied. The completion call is a load-bearing claim; it ends the autonomous loop and surfaces a "done" report to the user.
 
 If the work is not done, just keep working. NEVER narrate that you are continuing — execute.
+{{#if idleTurns}}
+
+Your {{idleTurns}} ended without a tool call, and the goal is still active. A status report is not progress. NEVER restate what has been ruled out or announce that the goal remains incomplete. Pick an approach toward the objective that has not been tried yet and start it with a tool call in this turn. If every approach you can name has been tried, widen the search: list the inputs, components, and hypotheses not yet examined, and test the first one.
+{{/if}}

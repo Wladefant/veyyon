@@ -10,6 +10,7 @@ import {
 	isEnoent,
 	isRecord,
 	logger,
+	parseYaml,
 	pathStateSync,
 	reportFault,
 	truncate,
@@ -417,13 +418,15 @@ export class ConfigFile<T> implements IConfigFile<T> {
 
 	/** Parse `content` by the read path's format and validate it against the schema. */
 	#validateContent(content: string, readPath: string): { value: T } | { error: ConfigError } {
-		let parsed: unknown;
-		if (readPath.endsWith(".json") || readPath.endsWith(".jsonc")) {
-			parsed = JSONC.parse(content);
-		} else if (readPath.endsWith(".yml") || readPath.endsWith(".yaml")) {
-			parsed = YAML.parse(content);
-		} else {
+		const isJson = readPath.endsWith(".json") || readPath.endsWith(".jsonc");
+		if (!isJson && !readPath.endsWith(".yml") && !readPath.endsWith(".yaml")) {
 			throw new Error(`Invalid config file path: ${readPath}`);
+		}
+		let parsed: unknown;
+		try {
+			parsed = isJson ? JSONC.parse(content) : parseYaml(content);
+		} catch (error) {
+			return { error: new ConfigError(this.id, undefined, { err: error, stage: "Parse" }, readPath) };
 		}
 		const checked = this.schema(parsed);
 		if (!isArkErrors(checked)) return { value: checked as T };
@@ -477,18 +480,35 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		try {
 			content = fs.readFileSync(this.#resolveReadPath(), "utf-8").trim();
 		} catch (error) {
-			if (isEnoent(error)) {
-				return this.#storeCache({ status: "not-found" });
-			}
-			logger.warn("Failed to read config file", { path: this.path(), error });
-			return this.#storeCache({
-				error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }, this.#resolveReadPath()),
-				status: "error",
-			});
+			return this.#readFailed(error);
 		}
 		return this.#parseContent(content);
 	}
 
+	async tryLoadAsync(): Promise<LoadResult<T>> {
+		if (this.#cache) return this.#cache;
+		this.#ensureMigrated();
+
+		let content: string;
+		try {
+			content = (await fs.promises.readFile(this.#resolveReadPath(), "utf-8")).trim();
+		} catch (error) {
+			return this.#readFailed(error);
+		}
+		return this.#parseContent(content);
+	}
+
+	/** The cached result for a file that could not be read: not found when absent, else a read error. */
+	#readFailed(error: unknown): LoadResult<T> {
+		if (isEnoent(error)) {
+			return this.#storeCache({ status: "not-found" });
+		}
+		logger.warn("Failed to read config file", { path: this.path(), error });
+		return this.#storeCache({
+			error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }, this.#resolveReadPath()),
+			status: "error",
+		});
+	}
 	load(): T | null {
 		return this.tryLoad().value ?? null;
 	}

@@ -31,6 +31,7 @@
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { setTerminalHeadless, TempDir } from "@veyyon/utils";
+import { restoreProperty } from "../../utils/test/helpers/restore-global";
 import { Settings } from "../src/config/settings";
 import { type FirstFrame, paintFirstFrame, takeFirstFrame } from "../src/modes/terminal/first-frame";
 import * as ttyInputFlush from "../src/modes/terminal/tty-input-flush";
@@ -48,14 +49,6 @@ const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdinSetRawMode = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 let previousHeadless = false;
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
 
 /** A painted card, plus the bytes the terminal wrote while it was up. */
 interface PaintedCard {

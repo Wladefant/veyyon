@@ -3,7 +3,6 @@ import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { MODAL_SIZING_LARGE } from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-geometry";
@@ -16,6 +15,8 @@ import {
 import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { configuredThinkingLevelsForModel } from "@veyyon/coding-agent/thinking";
 import type { TUI } from "@veyyon/tui";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { requireTheme } from "./helpers/require-theme";
 
 function normalize(lines: readonly string[]): string {
 	return stripVTControlCharacters(lines.join("\n")).replace(/\s+/g, " ").trim();
@@ -169,10 +170,7 @@ const ESC = "\x1b";
 
 describe("ModelHub", () => {
 	beforeAll(async () => {
-		testTheme = await getThemeByName("dark");
-		if (!testTheme) {
-			throw new Error("Failed to load dark theme for ModelHub tests");
-		}
+		testTheme = await requireTheme("dark");
 	});
 
 	afterEach(() => {
@@ -232,8 +230,7 @@ describe("ModelHub", () => {
 
 	describe("pick strip", () => {
 		test("Enter opens the pick strip; default sets the default model and opens the thinking strip", () => {
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const model = requireBundledModel("openai", "gpt-5.5");
 			const settings = Settings.isolated({});
 			const { hub } = createHub({ models: [model], scoped: true, settings });
 
@@ -257,8 +254,7 @@ describe("ModelHub", () => {
 		});
 
 		test("renders max as a real final tier on max-capable models (gpt-5.6)", () => {
-			const model = getBundledModel("openai", "gpt-5.6");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.6");
+			const model = requireBundledModel("openai", "gpt-5.6");
 			const { hub } = createHub({ models: [model], scoped: true });
 
 			hub.handleInput("\n");
@@ -269,8 +265,7 @@ describe("ModelHub", () => {
 		});
 
 		test("a thinking chip re-saves the default with the picked effort", () => {
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const model = requireBundledModel("openai", "gpt-5.5");
 			const settings = Settings.isolated({});
 			const { hub, onSetDefault } = createHub({ models: [model], scoped: true, settings });
 
@@ -357,8 +352,7 @@ describe("ModelHub", () => {
 			enterChainView(unset.hub);
 			expect(normalize(unset.hub.render(220))).toContain("default (auto-select on launch)");
 
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const model = requireBundledModel("openai", "gpt-5.5");
 			const set = createHub({
 				models: [model],
 				scoped: true,
@@ -400,8 +394,7 @@ describe("ModelHub", () => {
 		});
 
 		test("t on the default row opens its thinking strip, and does nothing with no default", () => {
-			const model = getBundledModel("openai", "gpt-5.5");
-			if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+			const model = requireBundledModel("openai", "gpt-5.5");
 
 			const set = createHub({
 				models: [model],

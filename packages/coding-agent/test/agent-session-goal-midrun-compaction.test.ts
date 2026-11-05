@@ -4,7 +4,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@veyyon/coding-agent/extensibility/extensions/loader";
@@ -16,6 +16,7 @@ import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function activeGoalState(): GoalModeState {
 	const now = Date.now();
@@ -36,14 +37,7 @@ function activeGoalState(): GoalModeState {
 }
 
 function highUsage(input: number) {
-	return {
-		input,
-		output: 100,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: input + 100,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input, output: 100, totalTokens: input + 100 };
 }
 
 describe("AgentSession mid-run threshold compaction", () => {
@@ -71,8 +65,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		sessionManager: SessionManager;
 	}> {
 		const observedContexts: string[][] = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");

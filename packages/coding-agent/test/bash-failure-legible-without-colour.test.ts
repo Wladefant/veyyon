@@ -21,6 +21,7 @@
  * code, so that class of failure previously rendered no marker of any kind.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { createToolExecution } from "./helpers/tool-execution";
@@ -42,7 +43,7 @@ function render(opts: { details?: unknown; isError: boolean; width?: number }): 
 	);
 	return component
 		.render(opts.width ?? WIDTH)
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""))
+		.map(line => stripVTControlCharacters(line))
 		.join("\n");
 }
 

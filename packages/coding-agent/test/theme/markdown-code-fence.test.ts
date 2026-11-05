@@ -11,13 +11,14 @@
  * literal backticks (or a louder, animated fence) fails immediately.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { getMarkdownTheme } from "@veyyon/coding-agent/theme/markdown-theme";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { Markdown } from "@veyyon/tui";
 
 function plain(lines: readonly string[]): string[] {
-	return lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+	return lines.map(line => stripVTControlCharacters(line).trimEnd());
 }
 
 describe("markdown code fence chrome", () => {

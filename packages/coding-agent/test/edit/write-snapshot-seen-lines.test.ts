@@ -42,26 +42,8 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { Patch, Patcher } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	} as ToolSession;
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const HASHLINE_HEADER_LINE = /^\[([^#\r\n]+)#([0-9A-F]{4})\]$/;
 
@@ -152,10 +134,10 @@ describe("write tool snapshot provenance", () => {
 
 	it("records every written line as seen, not an empty provenance set", async () => {
 		const filePath = path.join(tmpDir, "module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const result = await new WriteTool(session).execute("call-1", { path: filePath, content: TEN_LINES });
-		const match = HASHLINE_HEADER_LINE.exec(resultText(result).split("\n")[0] ?? "");
+		const match = HASHLINE_HEADER_LINE.exec(toolResultText(result).split("\n")[0] ?? "");
 		expect(match).not.toBeNull();
 
 		const snapshot = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(filePath), match![2]!);
@@ -167,10 +149,10 @@ describe("write tool snapshot provenance", () => {
 
 	it("lets a post-write edit anchor at a line no read ever displayed", async () => {
 		const filePath = path.join(tmpDir, "config.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const writeResult = await new WriteTool(session).execute("call-1", { path: filePath, content: TEN_LINES });
-		const headerLine = resultText(writeResult).split("\n")[0] ?? "";
+		const headerLine = toolResultText(writeResult).split("\n")[0] ?? "";
 		expect(HASHLINE_HEADER_LINE.test(headerLine)).toBe(true);
 
 		// Line 9 is deep in the body and was never read back. Under a correct
@@ -189,10 +171,10 @@ describe("write tool snapshot provenance", () => {
 		// session, and the suite would prove nothing about provenance at all.
 		const filePath = path.join(tmpDir, "partial.ts");
 		await fs.writeFile(filePath, TEN_LINES, "utf8");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 
 		const readResult = await new ReadTool(session).execute("call-1", { path: `${filePath}:1-3` });
-		const headerLine = resultText(readResult)
+		const headerLine = toolResultText(readResult)
 			.split("\n")
 			.find(line => HASHLINE_HEADER_LINE.test(line));
 		expect(headerLine).toBeDefined();

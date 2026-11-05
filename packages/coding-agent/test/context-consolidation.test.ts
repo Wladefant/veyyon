@@ -5,6 +5,7 @@ import { estimateTokens } from "@veyyon/agent-core/compaction/token-estimate";
 import type { AssistantMessage, Message, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line";
@@ -39,14 +40,7 @@ describe("Context usage consolidation", () => {
 				{
 					content: ["response text"],
 					stopReason: "stop",
-					usage: {
-						input: 100,
-						output: 20,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 120,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 				},
 			],
 		});
@@ -116,14 +110,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 100,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 120,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 			contextSnapshot: { promptTokens: 100, nonMessageTokens: 10 },
 			timestamp: 2000,
 		} as AssistantMessage);
@@ -138,14 +125,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 500,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 520,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 500, output: 20, totalTokens: 520 },
 			contextSnapshot: { promptTokens: 500, nonMessageTokens: 10 },
 			timestamp: 3000,
 		} as AssistantMessage);
@@ -159,14 +139,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 200,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 220,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 200, output: 20, totalTokens: 220 },
 			contextSnapshot: { promptTokens: 200, nonMessageTokens: 10 },
 			timestamp: 5000,
 		} as AssistantMessage);
@@ -192,14 +165,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 150,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 170,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 150, output: 20, totalTokens: 170 },
 			contextSnapshot: { promptTokens: 150, nonMessageTokens: 10 },
 			timestamp: 2000,
 		} as AssistantMessage);
@@ -212,14 +178,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 300,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 320,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 300, output: 20, totalTokens: 320 },
 			contextSnapshot: { promptTokens: 300, nonMessageTokens: 10 },
 			timestamp: 4000,
 		} as AssistantMessage);
@@ -245,14 +204,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 150,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 170,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 150, output: 20, totalTokens: 170 },
 			contextSnapshot: { promptTokens: 150, nonMessageTokens: 10 },
 			timestamp: 1000,
 		} as AssistantMessage);
@@ -278,14 +230,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 150,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 170,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 150, output: 20, totalTokens: 170 },
 			contextSnapshot: { promptTokens: 150, nonMessageTokens: 10 },
 			timestamp: 2000,
 		} as AssistantMessage);
@@ -321,14 +266,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 250,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 270,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 250, output: 20, totalTokens: 270 },
 			contextSnapshot: { promptTokens: 250, nonMessageTokens: 10 },
 			timestamp: 2000,
 		} as AssistantMessage);
@@ -358,14 +296,7 @@ describe("Context usage consolidation", () => {
 		const assistant: AssistantMessage = {
 			role: "assistant",
 			content: [{ type: "text", text: "text content" }],
-			usage: {
-				input: 250,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 270,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 250, output: 20, totalTokens: 270 },
 			contextSnapshot: { promptTokens: 250, nonMessageTokens: 10 },
 			timestamp: 2000,
 			stopReason: "stop",
@@ -439,14 +370,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "toolUse",
-			usage: {
-				input: 9000,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 9020,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 9000, output: 20, totalTokens: 9020 },
 			contextSnapshot: { promptTokens: 9000, nonMessageTokens: 10 },
 			timestamp: 6000,
 		} as AssistantMessage);
@@ -479,14 +403,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 5000,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 5020,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 20, totalTokens: 5020 },
 			contextSnapshot: { promptTokens: 5000, nonMessageTokens: 10 },
 			timestamp: 2000,
 		} as AssistantMessage);
@@ -583,14 +500,7 @@ describe("Context usage consolidation", () => {
 			provider: mockModel.provider,
 			model: mockModel.id,
 			stopReason: "stop",
-			usage: {
-				input: 100,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 120,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 			timestamp: 1000,
 		} as AssistantMessage);
 

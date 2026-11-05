@@ -116,7 +116,7 @@ describe("/mcp enable and disable", () => {
 		});
 		const { controller, mcpManager, refreshMCPTools } = createController();
 
-		await controller.handle("/mcp disable mcp1");
+		await controller.handle("disable mcp1");
 
 		expect(mcpManager.disconnectServer).toHaveBeenCalledWith("mcp1");
 		expect(refreshMCPTools).toHaveBeenCalledWith([]);
@@ -132,7 +132,7 @@ describe("/mcp enable and disable", () => {
 		});
 		const { controller, mcpManager } = createController();
 
-		await controller.handle("/mcp enable mcp1");
+		await controller.handle("enable mcp1");
 
 		expect(mcpManager.disconnectAll).not.toHaveBeenCalled();
 		expect(mcpManager.discoverAndConnect).not.toHaveBeenCalled();

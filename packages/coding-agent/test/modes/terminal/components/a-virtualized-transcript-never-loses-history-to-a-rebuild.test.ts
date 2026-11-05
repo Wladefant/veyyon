@@ -170,9 +170,11 @@ describe("a virtualized transcript never loses history to a rebuild", () => {
 		{ rebuild: true, virtualized: true, header: 5 },
 	] as const;
 
+	// Each arm drives its own terminal and engine and spends nearly all of its time waiting out frame
+	// timers in settleFrames, so the arms run concurrently.
 	for (const arm of arms) {
 		const label = `scrollbackRebuild=${arm.rebuild} virtualized=${arm.virtualized} header=${arm.header}`;
-		it(
+		it.concurrent(
 			`keeps every turn in the terminal (${label})`,
 			async () => {
 				const rig = await conversation(arm);
@@ -196,7 +198,7 @@ describe("a virtualized transcript never loses history to a rebuild", () => {
 		);
 	}
 
-	it(
+	it.concurrent(
 		"is unaffected by the rebuild knob while the transcript only grows",
 		async () => {
 			// Exact parity between the arms: the setting decides how a GENUINE
@@ -211,7 +213,7 @@ describe("a virtualized transcript never loses history to a rebuild", () => {
 		CASE_TIMEOUT_MS,
 	);
 
-	it(
+	it.concurrent(
 		"still erases and replays when committed rows genuinely change, and replays the whole transcript",
 		async () => {
 			const rig = await conversation({ rebuild: true, virtualized: true });

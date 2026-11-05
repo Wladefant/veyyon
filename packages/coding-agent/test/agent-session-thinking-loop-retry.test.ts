@@ -16,6 +16,7 @@ import * as AIError from "@veyyon/ai/error";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { withGeminiThinkingLoopGuard } from "@veyyon/ai/utils/thinking-loop";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -29,17 +30,6 @@ const LOOP_PARAGRAPHS = [
 	"I am now verifying the test module once more to ensure there are no compile errors and the code stays completely safe.",
 	"I am now re-verifying the test module to confirm there are no compile errors and the code remains completely safe.",
 ];
-
-function emptyUsage(): AssistantMessage["usage"] {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 function chunkedThinkingLoopStream(model: Model<Api>, options?: SimpleStreamOptions): AssistantMessageEventStream {
 	const inner = new AssistantMessageEventStream();

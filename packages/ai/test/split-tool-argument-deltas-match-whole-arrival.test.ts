@@ -44,6 +44,7 @@ import type {
 import { kStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import { getBundledModels, getBundledProviders } from "@veyyon/catalog";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@veyyon/catalog/provider-models";
 
 function createTestModel(): Model<"openai-responses"> {
@@ -69,14 +70,7 @@ function createEmptyOutput(): AssistantMessage {
 		provider: "openai",
 		model: "gpt-4o",
 		api: "openai-responses",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }

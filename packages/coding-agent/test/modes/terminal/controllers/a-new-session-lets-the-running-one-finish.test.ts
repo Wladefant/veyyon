@@ -25,7 +25,8 @@ import {
 	type NextSessionFactory,
 	SHUTDOWN_DRAIN_TIMEOUT_MS,
 } from "@veyyon/coding-agent/session/background-sessions";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "../../../helpers/require-theme";
 
 function createContainer() {
 	return {
@@ -194,8 +195,7 @@ const SESSION_SWITCH_COMMANDS = Object.getOwnPropertyNames(CommandController.pro
 
 describe("/new while a turn is running", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Expected dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 

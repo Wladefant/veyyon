@@ -1,16 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { INTENT_FIELD } from "@veyyon/wire";
 import type { AssistantMessage } from "../src/types";
 import { ToolCallLoopGuard } from "../src/utils/tool-call-loop-guard";
 
-const zeroUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-} satisfies AssistantMessage["usage"];
+const zeroUsage = emptyUsage() satisfies AssistantMessage["usage"];
 
 describe("ToolCallLoopGuard", () => {
 	test("detects the fifth consecutive identical tool call", () => {

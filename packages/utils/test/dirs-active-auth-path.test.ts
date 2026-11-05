@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getSharedAuthDir } from "@veyyon/utils/config-root";
 import {
 	__resetDirsFromEnvForTests,
 	getActiveAuthDbPath,
 	getAgentDbPath,
-	getSharedAuthDir,
 	getSharedAuthStoreDirIfEnabled,
 } from "@veyyon/utils/dirs";
 

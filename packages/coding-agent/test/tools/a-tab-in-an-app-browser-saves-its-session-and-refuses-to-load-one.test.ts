@@ -24,6 +24,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 import { type DebuggableChromium, launchDebuggableChromium } from "../helpers/debuggable-chromium";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 let server: http.Server;
@@ -33,12 +34,8 @@ let chromium: DebuggableChromium | undefined;
 let tool: BrowserTool;
 const TAB = `app-browser-${process.pid}`;
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 async function run(code: string): Promise<string> {
-	return text(await tool.execute("run", { action: "run", name: TAB, code }));
+	return toolResultText(await tool.execute("run", { action: "run", name: TAB, code }));
 }
 
 async function failureOf(code: string): Promise<string> {
@@ -91,7 +88,7 @@ afterAll(async () => {
 describe.skipIf(!CHROMIUM_AVAILABLE)("a tab in a connected browser", () => {
 	it("saves its session with save_state and tab.storageState()", async () => {
 		const saved = await tool.execute("save_state", { action: "save_state", name: TAB, storage_state: "ada.json" });
-		expect(text(saved)).toBe(`Saved 1 cookie and no localStorage to ${path.join(dir, "ada.json")}`);
+		expect(toolResultText(saved)).toBe(`Saved 1 cookie and no localStorage to ${path.join(dir, "ada.json")}`);
 		const file = JSON.parse(fs.readFileSync(path.join(dir, "ada.json"), "utf8")) as {
 			cookies: Array<{ name: string; value: string }>;
 		};

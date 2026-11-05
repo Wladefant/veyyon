@@ -20,27 +20,11 @@
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
-import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
-
-function createModel(): Model<"openai-responses"> {
-	return buildModel({
-		id: "mock",
-		name: "mock",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	});
-}
+import { createMockModel } from "./helpers/mock-model";
 
 const sessions: AgentSession[] = [];
 afterEach(async () => {
@@ -63,7 +47,7 @@ function makeSession(prompts: () => string[]): AgentSession {
 		},
 	};
 	const agent = new Agent({
-		initialState: { model: createModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
+		initialState: { model: createMockModel(), systemPrompt: ["initial"], tools: [readTool], messages: [] },
 	});
 	const session = new AgentSession({
 		agent,

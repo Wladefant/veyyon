@@ -777,14 +777,14 @@ export const SETUP_HANDLERS = {
 		handle: async (command, runtime) => (await import("./helpers/mcp")).handleMcpAcp(command, runtime),
 		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleMCPCommand(command.text);
+			await runtime.ctx.handleMCPCommand(command.args);
 		},
 	},
 	ssh: {
 		handle: async (command, runtime) => (await import("./helpers/ssh")).handleSshAcp(command, runtime),
 		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleSSHCommand(command.text);
+			await runtime.ctx.handleSSHCommand(command.args);
 		},
 	},
 	profile: {

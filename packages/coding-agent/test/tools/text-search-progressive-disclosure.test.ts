@@ -18,14 +18,8 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { BROAD_SEARCH_INLINE_MAX_BYTES } from "@veyyon/coding-agent/tools/search/text-search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function extractText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text ?? "")
-		.join("\n");
-}
 
 describe("SearchTool (text) progressive disclosure contract", () => {
 	let tmpDir: string;
@@ -95,7 +89,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ".",
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("artifact://");
 		expect(text).toContain("30 matches in 6 files");
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(inlineCapForTurn(BROAD_SEARCH_INLINE_MAX_BYTES, 0));
@@ -147,7 +141,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ".",
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		const artifactMatch = text.match(/artifact:\/\/([^\]\s]+)/);
 		expect(artifactMatch).not.toBeNull();
 		const artifactId = artifactMatch ? artifactMatch[1] : "";
@@ -194,7 +188,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ".",
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("artifact://");
 
 		// Inspect snapshot store seenLines for first.ts
@@ -235,7 +229,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ".",
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		// Since artifact allocation failed, it did not compact into an unrecoverable state
 		expect(text).not.toContain("artifact://");
 		// All files and their full matches are retained under generic head bounds
@@ -261,7 +255,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ".",
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		expect(text).not.toContain("artifact://");
 		for (let i = 1; i <= 4; i++) {
 			expect(text).toContain(`nostore_${i}.ts`);
@@ -285,7 +279,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			input: "SINGLE_SCOPE_NEEDLE",
 			path: "single.ts",
 		});
-		const singleText = extractText(singleResult);
+		const singleText = toolResultText(singleResult);
 		expect(singleText).not.toContain("artifact://");
 		for (let i = 1; i <= 80; i++) {
 			expect(singleText).toContain(`SINGLE_SCOPE_NEEDLE_${i}`);
@@ -297,7 +291,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			input: "SINGLE_SCOPE_NEEDLE",
 			path: "single.ts:1-10",
 		});
-		const selectorText = extractText(selectorResult);
+		const selectorText = toolResultText(selectorResult);
 		expect(selectorText).not.toContain("artifact://");
 		for (let i = 1; i <= 10; i++) {
 			expect(selectorText).toContain(`SINGLE_SCOPE_NEEDLE_${i}`);
@@ -318,7 +312,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			input: "GENERIC_HEAD_NEEDLE",
 			path: "large-single.ts",
 		});
-		const text = extractText(result);
+		const text = toolResultText(result);
 		expect(result.details?.type).toBe("text");
 		if (result.details?.type !== "text") throw new Error("Expected text search details");
 		expect(result.details.result.truncation?.truncated).toBe(true);
@@ -346,7 +340,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ".",
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		expect(text).not.toContain("artifact://");
 		expect(text).toContain("small_1.ts");
 		expect(text).toContain("small_2.ts");
@@ -371,7 +365,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ["warning-cap-1.ts", "warning-cap-2.ts", ...missingPaths].join(";"),
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(inlineCapForTurn(BROAD_SEARCH_INLINE_MAX_BYTES, 0));
 		expect(text).toContain("artifact://");
 		expect(result.details?.type).toBe("text");
@@ -405,7 +399,7 @@ describe("SearchTool (text) progressive disclosure contract", () => {
 			path: ".",
 		});
 
-		const text = extractText(result);
+		const text = toolResultText(result);
 		// Warning is retained in the compact output
 		expect(text).toContain("searched for it literally instead");
 		expect(text).toContain("artifact://");

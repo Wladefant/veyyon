@@ -7,6 +7,7 @@ import { ToolError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -14,13 +15,6 @@ import { makeToolSession } from "../helpers/tool-session";
  * tree block, empty path, and successful create with exact byte report.
  * Drives the shipped WriteTool.execute path end to end on a real temp tree.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("WriteTool fail paths and boundaries", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -68,7 +62,7 @@ describe("WriteTool fail paths and boundaries", () => {
 		const content = "export const n = 1;\n";
 		const tool = new WriteTool(session());
 		const result = await tool.execute("w1", { path: filePath, content });
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(await Bun.file(filePath).text()).toBe(content);
 		expect(text).toContain(`Successfully wrote ${content.length} bytes`);
 		expect(text).toMatch(/\[[^\]]+#[0-9A-Fa-f]{4}\]/);
@@ -102,7 +96,7 @@ describe("WriteTool fail paths and boundaries", () => {
 			path: "local://plan-notes.md",
 			content: "# plan\n",
 		});
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text.toLowerCase()).not.toContain("working tree is read-only");
 		const onDisk = path.join(artifacts, "local", "plan-notes.md");
 		expect(await Bun.file(onDisk).text()).toBe("# plan\n");
@@ -128,7 +122,7 @@ describe("WriteTool fail paths and boundaries", () => {
 		const tool = new WriteTool(session());
 		const result = await tool.execute("w5", { path: filePath, content: "" });
 		expect(await Bun.file(filePath).text()).toBe("");
-		expect(textOf(result)).toContain("Successfully wrote 0 bytes");
+		expect(toolResultText(result)).toContain("Successfully wrote 0 bytes");
 	});
 
 	it("unicode content round-trips exact bytes", async () => {
@@ -210,6 +204,6 @@ describe("WriteTool fail paths and boundaries", () => {
 		expect(onDisk.length).toBe(content.length);
 		expect(onDisk.startsWith("// start\n")).toBe(true);
 		expect(onDisk.endsWith("// end\n")).toBe(true);
-		expect(textOf(result)).toContain(`Successfully wrote ${content.length} bytes`);
+		expect(toolResultText(result)).toContain(`Successfully wrote ${content.length} bytes`);
 	});
 });

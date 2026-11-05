@@ -31,16 +31,11 @@ use veyyon_ast::{
 use crate::{
 	cores, heap_pages, iofs,
 	napi_error::{to_napi, to_napi_with},
+	readahead::{self, PREFETCH_BATCH},
 	task,
 };
 
 const DEFAULT_FIND_LIMIT: u32 = 50;
-
-/// Files a walk thread opens before reading the first of them. A tree search is
-/// bound by disk latency when its files are not cached, and the walk pool is
-/// small, so each thread asks for a batch's reads together: the disk serves 32
-/// requests per thread at once instead of one.
-const PREFETCH_BATCH: usize = 32;
 
 /// Parse threads a tree search starts: one per core the walker pool leaves.
 fn parse_thread_count() -> usize {
@@ -933,11 +928,7 @@ impl<'a> FindRun<'a> {
 		let opened: Vec<_> = batch
 			.into_iter()
 			.map(|(path, display_path)| {
-				let file = File::open(&path).ok();
-				#[cfg(target_os = "linux")]
-				if let Some(file) = &file {
-					advise_will_read(file);
-				}
+				let file = readahead::open_ahead(&path, None).ok();
 				(path, display_path, file)
 			})
 			.collect();
@@ -1273,19 +1264,6 @@ fn binding_texts<D: Doc>(env: &MetaVarEnv<'_, D>) -> HashMap<String, String> {
 /// is walked to tell an ERROR node from a missing one.
 fn holds_error_node<L: LanguageExt>(root: &Node<'_, StrDoc<L>>) -> bool {
 	root.get_inner_node().has_error() && root.dfs().any(|node| node.is_error())
-}
-
-/// Ask the kernel to start reading `file` into the page cache without waiting
-/// for it. The advice changes no result: when it fails, the read that follows
-/// waits for the disk as it would have.
-#[cfg(target_os = "linux")]
-fn advise_will_read(file: &File) {
-	use std::os::fd::AsRawFd;
-	// SAFETY: `file` holds the descriptor open for the call, and the advice reads
-	// and writes no memory of this process.
-	unsafe {
-		libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_WILLNEED);
-	}
 }
 
 /// What reading one file decided before any parse.

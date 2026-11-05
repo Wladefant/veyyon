@@ -33,21 +33,17 @@
  * `a-git-read-that-lands-late-repaints-the-status-row.test.ts` holds for the row it affects.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
 import { setTimeout } from "node:timers/promises";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetLaunchFactsForTest } from "@veyyon/coding-agent/config/launch-facts";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { paintFirstFrame, takeFirstFrame } from "@veyyon/coding-agent/modes/terminal/first-frame";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { ProcessTerminal, type RenderRequestOptions, Text, TUI, type TUIStartOptions } from "@veyyon/tui";
 import { setTerminalHeadless, TempDir } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 
 let isolated: IsolatedConfigRoot;
 let previousHeadless: boolean;
@@ -127,16 +123,7 @@ describe("a repaint of rows that did not change is bytes on the wire", () => {
 async function freshSession(): Promise<AgentSession> {
 	const tempDir = TempDir.createSync("@pi-handover-repaint-");
 	await Settings.init({ inMemory: true, cwd: tempDir.path() });
-	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-	const modelRegistry = new ModelRegistry(authStorage);
-	const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-	const session = new AgentSession({
-		agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-		sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-		settings: Settings.isolated(),
-		modelRegistry,
-	});
+	const { authStorage, session } = await createTestAgentSession(tempDir.path());
 	opened.push(async () => {
 		await session.dispose();
 		authStorage.close();

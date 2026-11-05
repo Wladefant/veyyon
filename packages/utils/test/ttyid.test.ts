@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getTerminalId } from "@veyyon/utils/ttyid";
+import { restoreProperty } from "./helpers/restore-global";
 
 const stdinIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const terminalEnvKeys = [
@@ -13,14 +14,6 @@ const terminalEnvKeys = [
 	"WT_SESSION",
 ] as const;
 const originalTerminalEnv = Object.fromEntries(terminalEnvKeys.map(key => [key, process.env[key]]));
-
-function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
-	if (descriptor) {
-		Object.defineProperty(target, key, descriptor);
-		return;
-	}
-	delete (target as Record<string, unknown>)[key];
-}
 
 function setTerminalEnv(overrides: Partial<Record<(typeof terminalEnvKeys)[number], string>>): void {
 	for (const key of terminalEnvKeys) {

@@ -12,7 +12,8 @@ import type {
 	Usage,
 } from "@veyyon/ai/types";
 import { createOpenAIResponsesHistoryPayload } from "@veyyon/ai/utils";
-import { getBundledModel } from "@veyyon/catalog/models";
+import type { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
@@ -20,16 +21,10 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function createUsage(): Usage {
-	return {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 }
 
 function createUserHistoryPayload(provider = "openai"): ProviderPayload {
@@ -246,10 +241,7 @@ async function createSessionHarness(
 	options: { provider?: Parameters<typeof getBundledModel>[0]; modelId?: string } = {},
 ): Promise<{ session: AgentSession }> {
 	const { provider = "openai", modelId = "gpt-5-mini" } = options;
-	const model = getBundledModel(provider, modelId);
-	if (!model) {
-		throw new Error(`Expected bundled test model ${provider}/${modelId}`);
-	}
+	const model = requireBundledModel(provider, modelId);
 
 	const { session } = await createAgentSession({
 		cwd: tempDir,

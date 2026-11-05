@@ -42,3 +42,28 @@ export function createWizardList(
 export function filterEscapeHint(list: SelectList): SetupKeyHint | undefined {
 	return list.hasActiveFilter() ? { keys: "esc", label: "clear search" } : undefined;
 }
+
+/** The value of a checklist step's confirming row, distinct from every value the step toggles. */
+export const CHECKLIST_CONTINUE = "__continue";
+
+/** The footer keys of a checklist step: space toggles a row, enter confirms the step. */
+export const CHECKLIST_KEY_HINTS: readonly SetupKeyHint[] = [
+	{ keys: "↑↓", label: "select" },
+	{ keys: "space", label: "toggle" },
+	{ keys: "enter", label: "confirm" },
+];
+
+/**
+ * Routes a key to a checklist step. Space on an item row calls `toggle` with the row's value; every
+ * other key, and space on the {@link CHECKLIST_CONTINUE} row, goes to the list.
+ */
+export function handleChecklistInput(list: SelectList, data: string, toggle: (value: string) => void): void {
+	if (data === " ") {
+		const item = list.getSelectedItem();
+		if (item && item.value !== CHECKLIST_CONTINUE) {
+			toggle(item.value);
+			return;
+		}
+	}
+	list.handleInput(data);
+}

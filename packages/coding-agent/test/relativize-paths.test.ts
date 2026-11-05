@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	normalizeRoots,
 	type RelativizeResult,
@@ -10,17 +11,6 @@ import { escapeRegExp } from "@veyyon/utils";
 const ROOT = "/tmp/veyyon-fixture";
 const OTHER = "/tmp/other-checkout";
 
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
 	return {
 		role: "assistant",
@@ -29,7 +19,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }

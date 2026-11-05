@@ -367,7 +367,7 @@ describe("veyyon completions (integration / drift)", () => {
 		// The message names the shell that was rejected AND the ones that work, so
 		// the reader does not have to go looking for the list.
 		expect(stderr).toContain('Expected shell to be one of: bash, zsh, fish, powershell; got "tcsh"');
-		expect(stderr).toContain("Usage: veyyon completions <bash|zsh|fish|powershell>");
+		expect(stderr).toContain("$ veyyon completions SHELL [FLAGS]");
 	}, 30000);
 });
 
@@ -454,8 +454,10 @@ describe("veyyon completions argument handling", () => {
 	it("names the missing shell rather than printing an empty error", async () => {
 		const { stderr, exitCode } = await run();
 		expect(exitCode).toBe(EXIT_USAGE);
-		expect(stderr).toContain("Missing required argument: shell");
-		expect(stderr).toContain("Usage: veyyon completions <bash|zsh|fish|powershell>");
+		// The choices are in the error itself: a missing shell is answered with the
+		// four that work, not only with a pointer to --help.
+		expect(stderr).toContain("Missing required argument: shell (one of: bash, zsh, fish, powershell)");
+		expect(stderr).toContain("$ veyyon completions SHELL [FLAGS]");
 	}, 30000);
 });
 

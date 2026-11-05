@@ -43,8 +43,10 @@ import { describe, expect, it } from "bun:test";
 import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { convertMessages } from "@veyyon/ai/providers/openai-completions";
 import { applyChatCompletionsReasoningParams, type OpenAICompletionsParams } from "@veyyon/ai/providers/openai-shared";
-import type { AssistantMessage, Message, Model, ModelSpec, ThinkingContent, UserMessage } from "@veyyon/ai/types";
+import type { AssistantMessage, Message, Model, ModelSpec, ThinkingContent } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { userMessage } from "./helpers";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -77,10 +79,6 @@ function llamaCppQwenModel(overrides?: Partial<ModelSpec<"openai-completions">>)
 	} satisfies ModelSpec<"openai-completions">);
 }
 
-function userMessage(text: string): UserMessage {
-	return { role: "user", content: text, timestamp: 0 };
-}
-
 function assistantWithReasoning(reasoning: string, answer: string): AssistantMessage {
 	return {
 		role: "assistant",
@@ -91,14 +89,7 @@ function assistantWithReasoning(reasoning: string, answer: string): AssistantMes
 			{ type: "thinking", thinking: reasoning, thinkingSignature: "reasoning_content" } satisfies ThinkingContent,
 			{ type: "text", text: answer },
 		],
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};
@@ -256,14 +247,7 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 				} satisfies ThinkingContent,
 				{ type: "text", text: "Switched-in answer." },
 			],
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		};
@@ -300,14 +284,7 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 				{ type: "thinking", thinking: "trace A", thinkingSignature: "reasoning" } satisfies ThinkingContent,
 				{ type: "text", text: "answer A" },
 			],
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		};
@@ -340,14 +317,7 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 				} satisfies ThinkingContent,
 				{ type: "text", text: "answer B" },
 			],
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		};
@@ -371,14 +341,7 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 			provider: "llama.cpp",
 			model: "qwen-3.6-27b",
 			content: [{ type: "text", text: "plain answer" }],
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		};

@@ -5,13 +5,21 @@ import {
 	renderToolBatchLedger,
 	type ToolBatchLedger,
 } from "@veyyon/agent-core/tool-batch-ledger";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
+import type {
+	AgentContext,
+	AgentEvent,
+	AgentLoopConfig,
+	AgentMessage,
+	AgentTool,
+	StreamFn,
+} from "@veyyon/agent-core/types";
+import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { kCursorExecResolved, setStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 /**
  * A batch of tool calls that is cut short must report which calls ran and which
@@ -21,19 +29,6 @@ import { createUserMessage } from "./helpers";
  *
  * These tests drive the real loop and assert on the strings the model reads.
  */
-
-const NO_USAGE = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 function toolResultTexts(events: AgentEvent[]): string[] {
 	const seen = new Set<string>();
@@ -67,29 +62,28 @@ function ledgerBlock(texts: string[], required = true): string {
 }
 
 describe("partial completion ledger on a provider stream abort", () => {
-	it("names the tool call that ran and the ones that never ran, and keeps the completed result", async () => {
-		const context: AgentContext = {
-			systemPrompt: [""],
-			messages: [
-				// Cursor's exec channel already ran this call server-side and its
-				// buffered result landed in the transcript before the reset.
-				{
-					role: "toolResult",
-					toolCallId: "exec-done-1",
-					toolName: "read",
-					content: [{ type: "text", text: "REAL_TOOL_OUTPUT_THAT_MUST_NOT_BE_ECHOED".repeat(20) }],
-					details: {},
-					isError: false,
-					timestamp: Date.now(),
-				} satisfies ToolResultMessage,
-			],
-			tools: [],
+	it("names the tool call that ran and the ones that never ran", async () => {
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [] };
+		// The exec channel delivers a finished call's result to this handler while the turn is open; the host holds it
+		// until the assistant message ends, so the loop's context never contains it.
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			cursorOnToolResult: () => undefined,
 		};
-		const config: AgentLoopConfig = { model: createMockModel().model, convertToLlm: identityConverter };
+		const execResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "exec-done-1",
+			toolName: "read",
+			content: [{ type: "text", text: "REAL_TOOL_OUTPUT_THAT_MUST_NOT_BE_ECHOED".repeat(20) }],
+			details: {},
+			isError: false,
+			timestamp: Date.now(),
+		};
 
-		const streamFn = () => {
+		const streamFn: StreamFn = (_model, _context, options) => {
 			const stream = new AssistantMessageEventStream();
-			queueMicrotask(() => {
+			queueMicrotask(async () => {
 				const execResolved = {
 					type: "toolCall" as const,
 					id: "exec-done-1",
@@ -107,11 +101,12 @@ describe("partial completion ledger on a provider stream abort", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
 				stream.push({ type: "start", partial });
+				await options?.cursorOnToolResult?.(execResult);
 				// Every call finished streaming its arguments, so all three survive
 				// `retainCompletedToolCalls` and reach the abort branch.
 				partial.content.forEach((block, contentIndex) => {
@@ -151,15 +146,6 @@ describe("partial completion ledger on a provider stream abort", () => {
 		// Bounded: the ledger is ids and outcomes, never a re-dump of tool output.
 		expect(ledger).not.toContain("REAL_TOOL_OUTPUT_THAT_MUST_NOT_BE_ECHOED");
 		expect(ledger.length).toBeLessThan(700);
-
-		// The completed result survives the abort with its content intact.
-		const survivor = context.messages.find(
-			(m): m is ToolResultMessage => m.role === "toolResult" && m.toolCallId === "exec-done-1",
-		);
-		expect(survivor?.content[0]).toEqual({
-			type: "text",
-			text: "REAL_TOOL_OUTPUT_THAT_MUST_NOT_BE_ECHOED".repeat(20),
-		});
 
 		// Structured form for consumers that must not string-match.
 		const structured = events
@@ -229,7 +215,7 @@ describe("partial completion ledger on a mid-batch interrupt", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: turn === 1 ? "toolUse" : "stop",
 					timestamp: Date.now(),
 				};
@@ -320,7 +306,7 @@ async function runStreamErrorTurn(options: {
 				api: "anthropic-messages",
 				provider: "anthropic",
 				model: "claude",
-				usage: NO_USAGE,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			};
@@ -780,7 +766,7 @@ describe("a cut-short turn that left no placeholder to carry the ledger", () => 
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
@@ -845,7 +831,7 @@ describe("a cut-short turn that left no placeholder to carry the ledger", () => 
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				};
@@ -933,7 +919,7 @@ describe("a single call cut off after it entered execution", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: turn === 1 ? "toolUse" : "stop",
 					timestamp: Date.now(),
 				};
@@ -1038,7 +1024,7 @@ describe("a batch with one call cut off mid-execution and one never dispatched",
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: "claude",
-					usage: NO_USAGE,
+					usage: emptyUsage(),
 					stopReason: turn === 1 ? "toolUse" : "stop",
 					timestamp: Date.now(),
 				};

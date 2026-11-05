@@ -35,7 +35,7 @@ import { isMissingPath } from "@veyyon/utils/fs-error";
 import { escapeTerminalText } from "@veyyon/utils/terminal-safe";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { applyOwnerOnlyWindowsAcl, verifyOwnerOnlyWindowsAcl } from "@veyyon/utils/windows-acl";
-import { moveNoReplace } from "./atomic-path";
+import { moveNoReplace, removePathIfSameInode, sameInode } from "./atomic-path";
 import { noteSecretsCondition } from "./notices";
 
 /** Name of the key file inside the cross-profile config root. */
@@ -129,10 +129,6 @@ function safeText(value: string): string {
 
 function safeError(error: unknown): string {
 	return escapeTerminalText(errorMessage(error));
-}
-
-function sameInode(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "ino">): boolean {
-	return left.dev === right.dev && left.ino === right.ino;
 }
 
 function keySnapshot(stat: Stats): KeySnapshot {
@@ -506,58 +502,6 @@ async function pathPresent(target: string): Promise<boolean> {
 	}
 }
 
-async function removePathIfSameInode(target: string, identity: Pick<Stats, "dev" | "ino">): Promise<boolean> {
-	let current: Stats;
-	try {
-		current = await fs.lstat(target);
-	} catch (error) {
-		if (isMissingPath(error)) return false;
-		throw error;
-	}
-	if (!current.isFile() || !sameInode(current, identity)) return false;
-
-	const quarantinePath = `${target}.${crypto.randomUUID()}.removing`;
-	let moved: boolean;
-	try {
-		moved = moveNoReplace(target, quarantinePath);
-	} catch (error) {
-		try {
-			await fs.lstat(target);
-		} catch (pathError) {
-			if (isMissingPath(pathError)) return false;
-		}
-		throw error;
-	}
-	if (!moved) {
-		throw new Error("A vault key cleanup quarantine path already exists. Refusing to remove either entry.");
-	}
-
-	const quarantined = await fs.lstat(quarantinePath);
-	if (!quarantined.isFile() || !sameInode(quarantined, identity)) {
-		let restored: boolean;
-		try {
-			restored = moveNoReplace(quarantinePath, target);
-		} catch (error) {
-			throw new Error(
-				`A racing vault key cleanup entry could not be restored safely (${safeError(error)}). Refusing to continue.`,
-			);
-		}
-		if (!restored) {
-			throw new Error("A racing vault key cleanup entry was isolated but its original path is occupied.");
-		}
-		throw new Error("A vault key cleanup entry changed before removal. It was restored without deleting its bytes.");
-	}
-
-	await fs.rm(quarantinePath);
-	try {
-		await fs.lstat(quarantinePath);
-		return false;
-	} catch (error) {
-		if (isMissingPath(error)) return true;
-		throw error;
-	}
-}
-
 async function syncDirectory(pin: KeyRootPin): Promise<void> {
 	await verifyKeyRootPin(pin);
 	if (process.platform !== "win32") {
@@ -642,7 +586,7 @@ async function recoverPublishedKey(pin: KeyRootPin, keyPath: string, publishedSt
 		// Only a third link is suspicious, and `assertKeyPathSafe` above already refuses that.
 		if (finalNow.nlink === 1) return true;
 		await syncDirectory(pin);
-		if (!(await removePathIfSameInode(candidatePath, candidate))) {
+		if (!(await removePathIfSameInode(candidatePath, candidate, "vault key"))) {
 			// `removePathIfSameInode` returns false for two different facts: the path is already
 			// GONE, or it now holds SOMETHING ELSE. Only the second is suspicious, and conflating
 			// them is what lost the race. Removal is a CAS in two steps — rename the path to a
@@ -699,7 +643,7 @@ async function cleanupUnpublishedStages(pin: KeyRootPin): Promise<void> {
 				await handle.close();
 			}
 		}
-		changed = (await removePathIfSameInode(candidatePath, stat)) || changed;
+		changed = (await removePathIfSameInode(candidatePath, stat, "vault key")) || changed;
 	}
 	if (changed) await syncDirectory(pin);
 }
@@ -903,7 +847,7 @@ export async function loadOrCreateVaultKey(globalConfigRoot: string): Promise<Bu
 					} finally {
 						generated.fill(0);
 						if (!published && stagedStat !== null) {
-							if (await removePathIfSameInode(temporaryPath, stagedStat).catch(() => false)) {
+							if (await removePathIfSameInode(temporaryPath, stagedStat, "vault key").catch(() => false)) {
 								await syncDirectory(pin).catch(() => {});
 							}
 						}

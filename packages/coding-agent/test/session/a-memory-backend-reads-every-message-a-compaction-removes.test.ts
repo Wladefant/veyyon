@@ -17,7 +17,6 @@ import { Agent, type AgentMessage, type CompactionPreparation, DEFAULT_COMPACTIO
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { UserMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { MemoryBackend } from "@veyyon/coding-agent/memory/backend";
@@ -25,6 +24,7 @@ import * as memoryBackendModule from "@veyyon/coding-agent/memory/backend";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 function userText(text: string, timestamp: number): UserMessage {
 	return { role: "user", content: [{ type: "text", text }], timestamp };
@@ -55,8 +55,7 @@ describe("a memory backend reads every message a compaction removes", () => {
 	});
 
 	it("passes the summarized messages and the cut turn's prefix, and forwards its answer", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected a bundled anthropic model");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		dir = TempDir.createSync("@memory-compaction-reads-");
 		authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");

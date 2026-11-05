@@ -199,6 +199,13 @@ function resolveGlobScopePattern(
 	};
 }
 
+/** A `provider/modelId` string split into its parts, with any thinking-level suffix. */
+export interface ParsedModelString {
+	provider: string;
+	id: string;
+	thinkingLevel?: ConfiguredThinkingLevel;
+}
+
 /**
  * Parse a model string in "provider/modelId" format.
  * Returns undefined if the format is invalid, which includes a selector that
@@ -206,10 +213,7 @@ function resolveGlobScopePattern(
  * matches nothing, so returning one hands every caller a selector that fails
  * later at model lookup instead of failing here where the text is still visible.
  */
-export function parseModelString(
-	modelStr: string,
-	options?: ModelStringParseOptions,
-): { provider: string; id: string; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
+export function parseModelString(modelStr: string, options?: ModelStringParseOptions): ParsedModelString | undefined {
 	const slashIdx = modelStr.indexOf("/");
 	if (slashIdx <= 0) return undefined;
 	const id = modelStr.slice(slashIdx + 1);
@@ -1474,6 +1478,7 @@ export function resolveCliModel(options: {
 	// failure, and a `Model "x" not found` here blamed the id for it whenever the
 	// selector carried a `:level` suffix or an explicit `--provider`.
 	const failureView: ModelRegistryView = {
+		getProviders: () => [...new Set(availableModels.map(model => model.provider))],
 		getAll: () => availableModels,
 		getAvailable: () =>
 			modelRegistry.getAvailable?.() ??

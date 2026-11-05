@@ -217,6 +217,11 @@ export async function searchPublicWeb(
 	// genuinely holds nothing for this query. Only the third is an empty result, and reporting the
 	// other two as one told the caller the web was empty when the deadline was what ran out.
 	//
+	// The error states the outcome of every engine. An engine that answered with no results is not
+	// a failure, and leaving it out of "All public engines failed" reported a query that found
+	// nothing as a search that was blocked everywhere, so the caller retried the same query instead
+	// of loosening it.
+	//
 	// An engine is counted as unanswered on the absence of a RESPONSE, never on the presence of a
 	// failure: `straggler.abort()` above rejects the in-flight fetches, but those rejections reach
 	// their `catch` on a later microtask than this line, so an engine cancelled at the deadline
@@ -225,22 +230,23 @@ export async function searchPublicWeb(
 		const unanswered = engineIds.filter(
 			(_, index) => responses[index] === undefined && failures[index] === undefined,
 		);
-		if (unanswered.length === 0 && orderedFailures.length > 0) {
+		const answeredEmpty = engineIds.filter((_, index) => responses[index] !== undefined);
+		if (unanswered.length === 0 && answeredEmpty.length === 0) {
 			throw new SearchProviderError(
 				"public",
 				`All public engines failed: ${formatSearchProviderFailures(orderedFailures)}`,
 				503,
 			);
 		}
-		if (unanswered.length > 0) {
-			const alsoFailed =
+		if (unanswered.length > 0 || orderedFailures.length > 0) {
+			const head =
+				unanswered.length > 0
+					? `No public engine returned a result within ${formatDeadline(hardMs)}; ${unanswered.join(", ")} did not answer.`
+					: "No public engine returned a result.";
+			const empty = answeredEmpty.length > 0 ? ` ${answeredEmpty.join(", ")} found no results for this query.` : "";
+			const failed =
 				orderedFailures.length > 0 ? ` Other engines failed: ${formatSearchProviderFailures(orderedFailures)}` : "";
-			throw new SearchProviderError(
-				"public",
-				`No public engine returned a result within ${formatDeadline(hardMs)}; ` +
-					`${unanswered.join(", ")} did not answer.${alsoFailed}`,
-				504,
-			);
+			throw new SearchProviderError("public", `${head}${empty}${failed}`, unanswered.length > 0 ? 504 : 503);
 		}
 	}
 

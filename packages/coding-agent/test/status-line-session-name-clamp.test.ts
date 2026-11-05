@@ -16,9 +16,10 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { TRUNCATE_LENGTHS } from "@veyyon/coding-agent/tools/core/render-utils";
 import { stripAnsi } from "@veyyon/utils";
 import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
+import { segmentContext } from "./helpers/segment-context";
 
 function ctxWithSessionName(name: string): SegmentContext {
-	return { facts: { ...NO_SESSION_FACTS, sessionName: name } } as unknown as SegmentContext;
+	return segmentContext({ facts: { ...NO_SESSION_FACTS, sessionName: name } });
 }
 
 describe("session_name footline chip", () => {

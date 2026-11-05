@@ -25,6 +25,14 @@ import { getAllPluginToolPaths } from "../plugins/loader";
 import { createNoOpUIContext, resolvePath, withExitGuard } from "../utils";
 import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
 
+/** A custom tool's pending action as the session queues it, with its source tool name resolved. */
+export interface QueuedPendingAction {
+	label: string;
+	sourceToolName: string;
+	apply(reason: string): Promise<AgentToolResult<unknown>>;
+	reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
+}
+
 interface LoadToolResult {
 	tools: LoadedCustomTool[];
 	errors: ToolLoadError[];
@@ -153,12 +161,7 @@ export class CustomToolLoader {
 		pi: CodingAgentApi,
 		cwd: string,
 		builtInToolNames: string[],
-		pushPendingAction?: (action: {
-			label: string;
-			sourceToolName: string;
-			apply(reason: string): Promise<AgentToolResult<unknown>>;
-			reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
-		}) => void,
+		pushPendingAction?: (action: QueuedPendingAction) => void,
 		adoptSpawnedPid?: (pid: number) => void,
 		gateSpawn?: (what: string) => Promise<void>,
 	) {
@@ -238,12 +241,7 @@ export async function loadCustomTools(
 	pathsWithSources: ToolPathWithSource[],
 	cwd: string,
 	builtInToolNames: string[],
-	pushPendingAction?: (action: {
-		label: string;
-		sourceToolName: string;
-		apply(reason: string): Promise<AgentToolResult<unknown>>;
-		reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
-	}) => void,
+	pushPendingAction?: (action: QueuedPendingAction) => void,
 	adoptSpawnedPid?: (pid: number) => void,
 	gateSpawn?: (what: string) => Promise<void>,
 ) {
@@ -355,12 +353,7 @@ export async function discoverAndLoadCustomTools(
 	configuredPaths: string[],
 	cwd: string,
 	builtInToolNames: string[],
-	pushPendingAction?: (action: {
-		label: string;
-		sourceToolName: string;
-		apply(reason: string): Promise<AgentToolResult<unknown>>;
-		reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
-	}) => void,
+	pushPendingAction?: (action: QueuedPendingAction) => void,
 	agentDir?: string,
 ) {
 	const pathsWithSources = await discoverCustomToolPaths(configuredPaths, cwd, agentDir);

@@ -16,24 +16,24 @@
  *
  * The two conventions are worse than duplication, because they are product surface. `VEYYON_RUBY_IPC_TRACE`
  * is a name a user types, and with each kernel formatting its own there was nothing anywhere stating the
- * convention and no reason a fourth language would follow it. Same for the runner cache directory: the layout
- * under the temp directory was a coincidence, so a stale-runner cleanup had nothing to ask.
+ * convention and no reason a fourth language would follow it. The runner cache directory now comes from
+ * `getKernelRunnerDir` in `@veyyon/utils`, beside every other veyyon cache rather than in the shared temp
+ * directory, where another account could replace the script a kernel runs.
  *
- * These tests hold the arrangement behaviourally (the helpers produce the exact names the three languages
- * already use, and the path helper is separator-correct) and structurally (nobody retypes a budget, and every
+ * These tests hold the arrangement behaviourally (the helpers produce the names each language uses, and the
+ * runner directory sits in the user's cache root) and structurally (nobody retypes a budget, and every
  * kernel imports the owner).
  */
 
 import { describe, expect, it } from "bun:test";
-import * as os from "node:os";
 import * as path from "node:path";
+import { getArgotCacheDir, getKernelRunnerDir } from "@veyyon/utils";
 import { namedImportsFrom } from "@veyyon/utils/module-reach";
 import {
 	DEFAULT_KERNEL_STARTUP_TIMEOUT_MS,
 	KERNEL_INTERRUPT_ESCALATION_MS,
 	KERNEL_SHUTDOWN_GRACE_MS,
 	kernelIpcTraceEnvVar,
-	kernelRunnerCacheDir,
 } from "../kernel-base";
 
 const EVAL_SRC = path.resolve(import.meta.dir, "..");
@@ -101,28 +101,20 @@ describe("the IPC trace variable convention", () => {
 });
 
 describe("the runner cache directory convention", () => {
-	/** The exact directories the three languages already used, so an existing cached runner is still found. */
-	it("produces the directory each language already used", () => {
-		expect(kernelRunnerCacheDir("/tmp", "python")).toBe(path.join("/tmp", "veyyon-python-runner"));
-		expect(kernelRunnerCacheDir("/tmp", "ruby")).toBe(path.join("/tmp", "veyyon-ruby-runner"));
-		expect(kernelRunnerCacheDir("/tmp", "julia")).toBe(path.join("/tmp", "veyyon-julia-runner"));
-	});
-
 	/**
-	 * Joined with `path.join`, not with a slash. The three call sites used `path.join`, and a helper that
-	 * concatenated would produce a mixed-separator path on Windows for every kernel at once, which is the
-	 * failure mode a unification is supposed to make impossible rather than universal.
+	 * Beside every other veyyon cache, under the user's config root or `$XDG_CACHE_HOME`. The directory was
+	 * `<tmpdir>/veyyon-<language>-runner`, which any account on the host can create first, so the file a
+	 * kernel ran could be someone else's.
 	 */
-	it("joins with the platform separator rather than a literal slash", () => {
-		const joined = kernelRunnerCacheDir(os.tmpdir(), "python");
-		expect(joined).toBe(path.join(os.tmpdir(), "veyyon-python-runner"));
-		expect(path.basename(joined)).toBe("veyyon-python-runner");
-		expect(path.dirname(joined)).toBe(os.tmpdir());
+	it("puts the runner directory in the user's cache root", () => {
+		for (const language of ["python", "ruby", "julia"]) {
+			expect(path.dirname(getKernelRunnerDir(language))).toBe(path.dirname(getArgotCacheDir()));
+		}
 	});
 
 	/** Each language gets its own directory, so two kernels cannot overwrite one another's runner script. */
 	it("gives each language a distinct directory", () => {
-		const dirs = ["python", "ruby", "julia"].map(language => kernelRunnerCacheDir("/tmp", language));
+		const dirs = ["python", "ruby", "julia"].map(language => getKernelRunnerDir(language));
 		expect(new Set(dirs).size).toBe(3);
 	});
 });

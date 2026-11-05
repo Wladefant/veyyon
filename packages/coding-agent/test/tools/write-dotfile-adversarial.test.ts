@@ -7,14 +7,8 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("write/read dotfiles adversarial", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -62,7 +56,7 @@ describe("write/read dotfiles adversarial", () => {
 		const content = "SECRET=1\nOTHER=2\n";
 		await new WriteTool(s).execute("w", { path: file, content });
 		expect(await Bun.file(file).text()).toBe(content);
-		expect(textOf(await new ReadTool(s).execute("r", { path: file }))).toContain("SECRET=1");
+		expect(toolResultText(await new ReadTool(s).execute("r", { path: file }))).toContain("SECRET=1");
 	});
 
 	it("writes nested .config/app.json", async () => {

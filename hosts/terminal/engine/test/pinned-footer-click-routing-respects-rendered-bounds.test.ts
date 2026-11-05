@@ -33,17 +33,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { Component } from "@veyyon/tui";
 import { TUI } from "@veyyon/tui/tui";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
+import { sgrPress, sgrRelease } from "./helpers/sgr-mouse";
 import { VirtualTerminal } from "./virtual-terminal";
-
-/** SGR left-button press report at 0-based (row, col). */
-function pressAt(row: number, col = 0): string {
-	return `\x1b[<0;${col + 1};${row + 1}M`;
-}
-
-/** SGR left-button release report at 0-based (row, col). */
-function releaseAt(row: number, col = 0): string {
-	return `\x1b[<0;${col + 1};${row + 1}m`;
-}
 
 const WHEEL_UP = "\x1b[<64;5;5M";
 
@@ -96,7 +87,7 @@ async function createHarness(cols: number, rows: number, setup: (tui: TUI) => vo
 		harness.selectionAttempts += 1;
 	};
 	tui.start();
-	await term.waitForRender();
+	await term.waitForRender(tui);
 	return harness;
 }
 
@@ -125,36 +116,36 @@ describe("pinned footer click routing respects rendered bounds", () => {
 		cleanup = () => harness.tui.stop();
 
 		// 1. Click on transcript (row 1, col 4) -> should NOT route to footer
-		harness.term.sendInput(pressAt(1, 4));
-		harness.term.sendInput(releaseAt(1, 10)); // drag across -> selection attempt
+		harness.term.sendInput(sgrPress(1, 4));
+		harness.term.sendInput(sgrRelease(1, 10)); // drag across -> selection attempt
 		expect(harness.selectionAttempts).toBe(1);
 		expect(footer.calls).toEqual([]);
 
 		// 2. Click exactly on the last content row (row 2, col 3) -> transcript region
-		harness.term.sendInput(pressAt(2, 3));
-		harness.term.sendInput(releaseAt(2, 8)); // drag across -> selection attempt
+		harness.term.sendInput(sgrPress(2, 3));
+		harness.term.sendInput(sgrRelease(2, 8)); // drag across -> selection attempt
 		expect(harness.selectionAttempts).toBe(2);
 		expect(footer.calls).toEqual([]);
 		// 3. Click exactly on the first footer row (row 3, col 5) -> routes to footer line 0
-		harness.term.sendInput(pressAt(3, 5));
-		harness.term.sendInput(releaseAt(3, 5));
+		harness.term.sendInput(sgrPress(3, 5));
+		harness.term.sendInput(sgrRelease(3, 5));
 		expect(footer.calls).toEqual([{ line: 0, col: 5, leftClick: true }]);
 		footer.clear();
 
 		// 4. Click on the second footer row (row 4, col 2) -> routes to footer line 1
-		harness.term.sendInput(pressAt(4, 2));
-		harness.term.sendInput(releaseAt(4, 2));
+		harness.term.sendInput(sgrPress(4, 2));
+		harness.term.sendInput(sgrRelease(4, 2));
 		expect(footer.calls).toEqual([{ line: 1, col: 2, leftClick: true }]);
 		footer.clear();
 
 		// 5. Click on empty space below content (row 5) -> neither footer nor drag selection
-		harness.term.sendInput(pressAt(5, 0));
-		harness.term.sendInput(releaseAt(5, 10));
+		harness.term.sendInput(sgrPress(5, 0));
+		harness.term.sendInput(sgrRelease(5, 10));
 		expect(footer.calls).toEqual([]);
 
 		// 6. Click on empty space near terminal bottom (row 8 = HEIGHT - 2) -> must not route
-		harness.term.sendInput(pressAt(8, 0));
-		harness.term.sendInput(releaseAt(8, 0));
+		harness.term.sendInput(sgrPress(8, 0));
+		harness.term.sendInput(sgrRelease(8, 0));
 		expect(footer.calls).toEqual([]);
 	});
 
@@ -171,17 +162,17 @@ describe("pinned footer click routing respects rendered bounds", () => {
 		cleanup = () => tui.stop();
 
 		// Click screen row 0 -> should map to footer line 2
-		term.sendInput(pressAt(0, 7));
+		term.sendInput(sgrPress(0, 7));
 		expect(footer.calls).toEqual([{ line: 2, col: 7, leftClick: true }]);
 		footer.clear();
 
 		// Click screen row 1 -> should map to footer line 3
-		term.sendInput(pressAt(1, 3));
+		term.sendInput(sgrPress(1, 3));
 		expect(footer.calls).toEqual([{ line: 3, col: 3, leftClick: true }]);
 		footer.clear();
 
 		// Click screen row 3 -> should map to footer line 5
-		term.sendInput(pressAt(3, 11));
+		term.sendInput(sgrPress(3, 11));
 		expect(footer.calls).toEqual([{ line: 5, col: 11, leftClick: true }]);
 		footer.clear();
 	});
@@ -199,7 +190,7 @@ describe("pinned footer click routing respects rendered bounds", () => {
 		cleanup = () => tui.stop();
 
 		// Click screen row 0 -> routes to footer line 1
-		term.sendInput(pressAt(0, 4));
+		term.sendInput(sgrPress(0, 4));
 		expect(footer.calls).toEqual([{ line: 1, col: 4, leftClick: true }]);
 	});
 
@@ -213,8 +204,8 @@ describe("pinned footer click routing respects rendered bounds", () => {
 		cleanup = () => harness.tui.stop();
 
 		// Click row 0, release row 0 (different col) -> triggers selection attempt
-		harness.term.sendInput(pressAt(0, 2));
-		harness.term.sendInput(releaseAt(0, 8));
+		harness.term.sendInput(sgrPress(0, 2));
+		harness.term.sendInput(sgrRelease(0, 8));
 		expect(harness.selectionAttempts).toBe(1);
 	});
 
@@ -236,31 +227,31 @@ describe("pinned footer click routing respects rendered bounds", () => {
 		cleanup = () => tui.stop();
 
 		// Click row 2 -> footerA line 0
-		term.sendInput(pressAt(2, 5));
+		term.sendInput(sgrPress(2, 5));
 		expect(footerA.calls).toEqual([{ line: 0, col: 5, leftClick: true }]);
 		expect(footerB.calls).toEqual([]);
 		footerA.clear();
 
 		// Click row 3 -> footerA line 1
-		term.sendInput(pressAt(3, 1));
+		term.sendInput(sgrPress(3, 1));
 		expect(footerA.calls).toEqual([{ line: 1, col: 1, leftClick: true }]);
 		expect(footerB.calls).toEqual([]);
 		footerA.clear();
 
 		// Click row 4 -> footerB line 0
-		term.sendInput(pressAt(4, 8));
+		term.sendInput(sgrPress(4, 8));
 		expect(footerA.calls).toEqual([]);
 		expect(footerB.calls).toEqual([{ line: 0, col: 8, leftClick: true }]);
 		footerB.clear();
 
 		// Click row 6 -> footerB line 2
-		term.sendInput(pressAt(6, 9));
+		term.sendInput(sgrPress(6, 9));
 		expect(footerA.calls).toEqual([]);
 		expect(footerB.calls).toEqual([{ line: 2, col: 9, leftClick: true }]);
 		footerB.clear();
 
 		// Click row 7 (empty space) -> no calls
-		term.sendInput(pressAt(7, 0));
+		term.sendInput(sgrPress(7, 0));
 		expect(footerA.calls).toEqual([]);
 		expect(footerB.calls).toEqual([]);
 	});
@@ -278,19 +269,19 @@ describe("pinned footer click routing respects rendered bounds", () => {
 
 		// Scroll up into history
 		term.sendInput(WHEEL_UP);
-		await term.waitForRender();
+		await term.waitForRender(tui);
 		expect(tui.virtualScrollActive).toBe(true);
 
 		// In virtual scroll on a 10-row terminal with 2 footer rows:
 		// rows 0..7 are frozen transcript
 		// rows 8..9 are pinned live footer
 		// Click on transcript (row 3) -> should not resume live tail, no footer route
-		term.sendInput(pressAt(3, 4));
+		term.sendInput(sgrPress(3, 4));
 		expect(footer.calls).toEqual([]);
 		expect(tui.virtualScrollActive).toBe(true);
 
 		// Click on pinned footer (row 8) -> routes to footer line 0 and resumes live tail
-		term.sendInput(pressAt(8, 6));
+		term.sendInput(sgrPress(8, 6));
 		expect(footer.calls).toEqual([{ line: 0, col: 6, leftClick: true }]);
 		expect(tui.virtualScrollActive).toBe(false);
 	});

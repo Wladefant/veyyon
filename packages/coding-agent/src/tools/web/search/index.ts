@@ -7,7 +7,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { AuthStorage } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { formatCount, lazy, prompt, truncate } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { formatCount, prompt, truncate } from "@veyyon/utils";
 import { formatAge } from "@veyyon/utils/format";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../../config/settings-instance";
@@ -48,7 +49,7 @@ async function discoverAuthStorage(): Promise<AuthStorage> {
 }
 
 /** Web search tool parameters schema */
-export const webSearchSchema = lazy(() =>
+export const webSearchSchema = toolSchema("web_search", () =>
 	type({
 		query: "string",
 		recency: "'day' | 'week' | 'month' | 'year'?",
@@ -309,6 +310,9 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema.value, Se
 	readonly description: string;
 	get parameters(): typeof webSearchSchema.value {
 		return webSearchSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return webSearchSchema.wire;
 	}
 	readonly strict = true;
 	readonly loadMode = "discoverable";

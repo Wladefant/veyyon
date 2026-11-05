@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { writeOwnerReceipt } from "../../../scripts/install-tests/installer-artifacts";
 import { sweepStaleBackups } from "../src/cli/update-cli";
+import { standInBinary } from "./helpers/stand-in-binary";
 
 /**
  * Every pathname a `veyyon update` attempt leaves behind must be reclaimed, by
@@ -38,26 +39,6 @@ import { sweepStaleBackups } from "../src/cli/update-cli";
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..");
 const UPDATE_CLI = path.join(REPO_ROOT, "packages/coding-agent/src/cli/update-cli.ts");
 const INSTALL_SH = path.join(REPO_ROOT, "scripts/install.sh");
-
-/**
- * A stand-in release binary that answers the three things `verifyBinaryUsable`
- * asks of a freshly installed one: `--version` in the `veyyon/X.Y.Z` shape it
- * parses, `grep --help`, and a `grep` that really finds the file it is pointed
- * at. A stub that faked the search would satisfy the probe even if the update had
- * stopped pointing it anywhere, which is the failure the probe exists to catch.
- */
-function standInBinary(version: string): string {
-	return `#!/bin/sh
-set -u
-case "\${1:-}" in
-	--version) echo "veyyon/${version}"; exit 0 ;;
-	grep)
-		[ "\${2:-}" = "--help" ] && { echo "usage: veyyon grep <pattern> <path>"; exit 0; }
-		exec grep -rl -- "$2" "$3" ;;
-	*) echo "unknown command: \${1:-}" >&2; exit 2 ;;
-esac
-`;
-}
 
 interface Attempt {
 	/** Basenames the real update created beside the binary, in creation order. */

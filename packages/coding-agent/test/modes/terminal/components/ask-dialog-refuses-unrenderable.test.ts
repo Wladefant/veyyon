@@ -7,8 +7,9 @@ import type {
 	ExtensionAskDialogQuestion,
 } from "@veyyon/coding-agent/extensibility/extensions/types";
 import { AskDialogComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/ask-dialog";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireTheme } from "../../../helpers/require-theme";
 
 /**
  * WHY: the ask dialog renders its fields with no fallback, so one absent string
@@ -204,8 +205,7 @@ async function rendererCannotSurviveWithout(target: "question" | "option", field
 
 describe("the ask dialog refuses a question it cannot render", () => {
 	beforeAll(async () => {
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("Failed to load dark theme");
+		const dark = await requireTheme("dark");
 		setThemeInstance(dark);
 	});
 

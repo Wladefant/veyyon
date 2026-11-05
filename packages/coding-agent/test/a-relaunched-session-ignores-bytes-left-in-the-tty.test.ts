@@ -1,15 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { createTestAgentSession } from "./helpers/test-agent-session";
 
 /**
  * `/profile switch <name>` respawns the CLI on the same tty. Between the parent
@@ -62,17 +59,7 @@ describe("a relaunched session ignores bytes left in the tty", () => {
 		deliverToStdinReader = undefined;
 		tempDir = TempDir.createSync("@pi-relaunch-tty-backlog-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path()));
 		mode = new InteractiveMode(session, "test");
 		// Installed before `init()`: the leaked backlog is delivered during
 		// startup, so a callback attached afterwards would miss the very

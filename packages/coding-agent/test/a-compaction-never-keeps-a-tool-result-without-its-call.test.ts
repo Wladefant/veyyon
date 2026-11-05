@@ -22,17 +22,28 @@
  * before it instead of by id: a late result answering an older call is not recognized there.
  */
 import { describe, expect, test } from "bun:test";
+
 import type { AgentMessage } from "@veyyon/agent-core";
+
 import { prepareCompaction } from "@veyyon/agent-core/compaction/compaction";
+
 import { REMOTE_COMPACTION_PRESERVE_KEY } from "@veyyon/agent-core/compaction/remote-compaction-entry";
+
 import { DEFAULT_COMPACTION_SETTINGS } from "@veyyon/agent-core/compaction/threshold";
+
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
-import type { AssistantMessage, ToolCall, ToolResultMessage, Usage } from "@veyyon/ai/types";
-import { getBundledModel } from "@veyyon/catalog/models";
+
+import type { AssistantMessage, ToolCall, ToolResultMessage } from "@veyyon/ai/types";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
+
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
+
 import { shellDomain } from "@veyyon/coding-agent/tools/shell/manifest";
+
 import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
+
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
+
 import type { CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
 
 // The tool registry registers every domain's message kinds before a session converts a transcript;
@@ -41,15 +52,6 @@ registerAgentMessageKinds(shellDomain.messageKinds);
 
 const MODEL = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 const STAMP = "2026-08-06T00:00:00.000Z";
-
-const zeroUsage = (): Usage => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
 
 const text = (label: string, words: number) => `${label} ${"lorem ".repeat(words)}`.trim();
 
@@ -65,7 +67,7 @@ const assistantMessage = (content: AssistantMessage["content"]): AssistantMessag
 	api: "anthropic-messages",
 	provider: "anthropic",
 	model: "claude-sonnet-4-5",
-	usage: zeroUsage(),
+	usage: emptyUsage(),
 	stopReason: content.some(block => block.type === "toolCall") ? "toolUse" : "stop",
 	timestamp: 1,
 });

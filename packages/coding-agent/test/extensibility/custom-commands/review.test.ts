@@ -51,7 +51,7 @@ interface NotifyCall {
 	type: "info" | "warning" | "error" | undefined;
 }
 
-function makePrDiffLookup(unified: string): ViewLookupResult<PrDiffPayload> {
+function makePrDiffLookup(unified: string): CacheLookupResult<PrDiffPayload> {
 	return {
 		rendered: unified,
 		sourceUrl: undefined,

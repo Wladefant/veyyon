@@ -1155,15 +1155,6 @@ export function assembleSection(
 export type StatementOverrides = Readonly<Record<string, string | null>>;
 
 /**
- * Validate a raw `statement id -> replacement` map into a typed one, failing closed on every way it
- * could silently do nothing.
- *
- * Mirrors `resolveSectionOverrides` deliberately, down to the error wording, because the two are the
- * same instrument at two granularities and an operator who has used one should not have to learn the
- * other. The section version additionally requires a replacement to keep its banner; there is no
- * banner inside a statement, so the equivalent check here is only that the id exists.
- */
-/**
  * Parse the raw JSON payload of a per-statement override into a validated map.
  *
  * Lives here rather than in `system-prompt.ts` for the same reason
@@ -1188,6 +1179,15 @@ export function parseStatementOverridesJson(raw: string | undefined): StatementO
 	return resolveStatementOverrides(parsed);
 }
 
+/**
+ * Validate a raw `statement id -> replacement` map into a typed one, failing closed on every way it
+ * could silently do nothing.
+ *
+ * Mirrors `resolveSectionOverrides` deliberately, down to the error wording, because the two are the
+ * same instrument at two granularities and an operator who has used one should not have to learn the
+ * other. The section version additionally requires a replacement to keep its banner; there is no
+ * banner inside a statement, so the equivalent check here is only that the id exists.
+ */
 export function resolveStatementOverrides(raw: Readonly<Record<string, unknown>> | undefined): StatementOverrides {
 	if (!raw) return {};
 	const out: Record<string, string | null> = {};

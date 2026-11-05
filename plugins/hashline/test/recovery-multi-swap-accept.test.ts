@@ -1,21 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { InMemorySnapshotStore, parsePatch, Recovery } from "@veyyon/hashline";
+import { linesText } from "./support/apply-patch";
 
 /**
  * Recovery with multi-line SWAP when only non-anchor later lines drifted.
  */
-
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
 
 const PATH = "src/ms.ts";
 
 describe("Recovery multi-line SWAP accept", () => {
 	it("replaces two early lines while preserving late drift", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C", "D", "E"]);
-		const v1 = text(["A", "B", "C", "D", "E-DRIFT"]);
+		const v0 = linesText(["A", "B", "C", "D", "E"]);
+		const v1 = linesText(["A", "B", "C", "D", "E-DRIFT"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({
@@ -32,8 +29,8 @@ describe("Recovery multi-line SWAP accept", () => {
 
 	it("refuses multi-line SWAP when first anchor diverged", () => {
 		const store = new InMemorySnapshotStore();
-		const v0 = text(["A", "B", "C"]);
-		const v1 = text(["A-x", "B", "C"]);
+		const v0 = linesText(["A", "B", "C"]);
+		const v1 = linesText(["A-x", "B", "C"]);
 		const h0 = store.record(PATH, v0);
 		store.record(PATH, v1);
 		const recovered = new Recovery(store).tryRecover({

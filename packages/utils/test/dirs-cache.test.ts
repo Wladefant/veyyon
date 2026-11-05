@@ -3,25 +3,18 @@ import { mkdtempSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getConfigDirName } from "@veyyon/utils/config-root";
 import {
 	__resetDirsFromEnvForTests,
 	APP_NAME,
 	getActiveProfile,
 	getAuthBrokerSnapshotCachePath,
-	getConfigDirName,
 	getDocumentConversionCacheDir,
 	getGithubCacheDbPath,
 	getProfileRootDir,
 	setAgentDir,
 } from "@veyyon/utils/dirs";
-
-function restoreEnv(key: string, value: string | undefined): void {
-	if (value === undefined) {
-		delete process.env[key];
-	} else {
-		process.env[key] = value;
-	}
-}
+import { restoreEnv } from "./helpers/restore-global";
 
 describe("document conversion cache directory", () => {
 	let tempRoot = "";

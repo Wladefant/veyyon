@@ -403,3 +403,91 @@ describe("the real-data tripwire refuses writes into the real veyyon directory",
 		});
 	});
 });
+
+/**
+ * No test may remove the repository checkout, a directory above it, or an entry at its top level.
+ *
+ * The defect class: a test cleans up with a recursive remove of a path its own factory built, and
+ * a factory that answers a shared parent instead of a fresh child sends that remove at the
+ * checkout. A mutation of a scratch-directory factory did this to the checkout's gitignored
+ * `.internal`, which has no copy anywhere.
+ *
+ * Every real removal below is one that cannot destroy anything without the tripwire: `rmdir` of a
+ * non-empty directory fails with ENOTEMPTY and `unlink` of a directory with EISDIR, so a missing
+ * guard turns these tests red rather than turning the checkout into a casualty. The assertions
+ * require the tripwire's own message.
+ *
+ * NOT CAUGHT: a child process (`rm -rf`) that removes the checkout, which the spawn guard does not
+ * inspect for this rule; a remove of one directory below a top-level entry, such as a single tool
+ * directory inside `.internal`; and `Bun.$`/`Bun.spawn` removals, which never reach `node:fs`.
+ */
+describe("the tripwire refuses to remove the repository checkout", () => {
+	const packagesDir = path.join(__tripwire.REPOSITORY_ROOT, "packages");
+
+	/** Refuses to run a real removal unless this module's own bindings are the guarded ones. */
+	function requireGuardedRemovals(): void {
+		for (const fn of [fs.rmdirSync, fs.unlinkSync, fs.promises.rmdir, fs.rmSync]) {
+			if (!__tripwire.isGuarded(fn) || !__tripwire.ENABLED) {
+				throw new Error("the tripwire is not bound to this module's fs removals, so this suite refuses to probe");
+			}
+		}
+	}
+
+	it("lists the checkout's top-level entries as they stood when the process started", () => {
+		expect(__tripwire.TOP_LEVEL_ENTRIES.has(packagesDir)).toBe(true);
+		expect(__tripwire.TOP_LEVEL_ENTRIES.has(path.join(__tripwire.REPOSITORY_ROOT, "package.json"))).toBe(true);
+	});
+
+	it("refuses rmdirSync and promises.rmdir of a top-level directory before the call returns", () => {
+		requireGuardedRemovals();
+		expect(() => fs.rmdirSync(packagesDir)).toThrow(/repository checkout/);
+		// The guard runs before the promise exists, as it does for every promise-form mutator here.
+		expect(() => fs.promises.rmdir(packagesDir)).toThrow(/repository checkout/);
+		expect(fs.existsSync(packagesDir)).toBe(true);
+	});
+
+	it("refuses unlinkSync of the checkout and of the directory above it", () => {
+		requireGuardedRemovals();
+		expect(() => fs.unlinkSync(__tripwire.REPOSITORY_ROOT)).toThrow(/repository checkout/);
+		expect(() => fs.unlinkSync(path.dirname(__tripwire.REPOSITORY_ROOT))).toThrow(/repository checkout/);
+	});
+
+	it("refuses a recursive remove and a rename aimed at a top-level entry, by the path it resolves to", () => {
+		// Checked without performing the operation: without the guard these would really remove.
+		expect(() => __tripwire.assertNotRepositoryEntry("fs.rmSync", packagesDir)).toThrow(/repository checkout/);
+		expect(() =>
+			__tripwire.assertNotRepositoryEntry("fs.rmSync", path.join(packagesDir, "utils", "..", "..", "packages")),
+		).toThrow(/repository checkout/);
+		expect(() => __tripwire.assertNotRepositoryEntry("fs.renameSync", pathToFileURL(packagesDir))).toThrow(
+			/repository checkout/,
+		);
+		expect(() => __tripwire.assertNotRepositoryEntry("fs.rmSync", "/")).toThrow(/repository checkout/);
+	});
+
+	it("allows removing a path below a top-level entry, and a top-level name that did not exist at start", () => {
+		requireGuardedRemovals();
+		const below = path.join(packagesDir, `__tripwire_absent_${process.pid}__`);
+		expect(() => __tripwire.assertNotRepositoryEntry("fs.rmSync", below)).not.toThrow();
+		fs.rmSync(below, { recursive: true, force: true });
+		const late = path.join(__tripwire.REPOSITORY_ROOT, `__tripwire_absent_${process.pid}__`);
+		expect(() => __tripwire.assertNotRepositoryEntry("fs.rmSync", late)).not.toThrow();
+		expect(() => __tripwire.assertNotRepositoryEntry("fs.rmSync", path.join(os.tmpdir(), "x"))).not.toThrow();
+	});
+
+	it("refuses a top-level entry reached through a linked parent, and allows removing a link to the checkout", () => {
+		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "tripwire-checkout-link-"));
+		const link = path.join(scratch, "checkout");
+		fs.symlinkSync(__tripwire.REPOSITORY_ROOT, link, "dir");
+		try {
+			// Checked without performing the operation.
+			expect(() => __tripwire.assertNotRepositoryEntry("fs.rmSync", path.join(link, "packages"))).toThrow(
+				/repository checkout/,
+			);
+			expect(() => __tripwire.assertNotRepositoryEntry("fs.unlinkSync", link)).not.toThrow();
+		} finally {
+			// unlink removes the link and never its target; the directory is then empty.
+			fs.unlinkSync(link);
+			fs.rmdirSync(scratch);
+		}
+	});
+});

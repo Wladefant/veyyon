@@ -755,6 +755,11 @@ export interface LoadedSessionFile {
 	layout: SessionFileLayout | undefined;
 	/** What a load asked to {@link SessionLoadOptions.coolCompactedHistory} moved to disk. */
 	cold?: LoadedColdHistory;
+	/**
+	 * The file's last byte is not a line feed: a write that never finished cut its last line off,
+	 * and a byte appended to the file would continue that line instead of starting one.
+	 */
+	endsMidLine: boolean;
 }
 
 /** Exported for testing */
@@ -781,12 +786,12 @@ export async function loadSessionFile(
 				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath }, storage)
 				: parseSessionContent(await storage.readText(filePath), { ...options, source: options.source ?? filePath });
 	} catch (err) {
-		if (isEnoent(err)) return { entries: [], layout: undefined };
+		if (isEnoent(err)) return { entries: [], layout: undefined, endsMidLine: false };
 		throw err;
 	}
 	const { entries } = loaded;
 
-	if (before.size === 0) return { entries: [], layout: undefined };
+	if (before.size === 0) return { entries: [], layout: undefined, endsMidLine: false };
 	if (entries.length === 0) {
 		throw new CorruptSessionFileError(filePath, "the non-empty file has no readable session header");
 	}
@@ -795,7 +800,24 @@ export async function loadSessionFile(
 		throw new CorruptSessionFileError(filePath, "the first readable record is not a session header");
 	}
 
-	return { entries, layout: verifiedLayout(storage, filePath, before, loaded.layout), cold: loaded.cold };
+	const layout = verifiedLayout(storage, filePath, before, loaded.layout);
+	// A verified layout ends just past a record's line feed at the file's size, so only a file
+	// without one can end inside a line.
+	const endsMidLine = layout === undefined && (await endsInsideALine(storage, filePath));
+	return { entries, layout, cold: loaded.cold, endsMidLine };
+}
+
+/** Whether the last byte of the file at `filePath` is there and is not a line feed. */
+async function endsInsideALine(storage: SessionStorage, filePath: string): Promise<boolean> {
+	let last: string;
+	try {
+		[, last] = await storage.readTextSlices(filePath, 0, 1);
+	} catch (err) {
+		// Gone since the load: an append creates the file again and starts on its first byte.
+		if (isEnoent(err)) return false;
+		throw err;
+	}
+	return last.length > 0 && last !== "\n";
 }
 
 /**

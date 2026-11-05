@@ -1,16 +1,16 @@
 import { type Component, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clampLow, formatCount } from "@veyyon/utils";
+import { clamp, clampLow, formatCount, wrapIndex } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import type { ResetUsageAccount } from "../../../../slash-commands/helpers/reset-usage";
 import { theme } from "../../../../theme/theme-binding";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
+	planModalChrome,
 	pointerMotionEnabled,
 	renderModalShell,
 } from "../chrome/modal-shell";
@@ -79,9 +79,15 @@ export class ResetUsageSelectorComponent implements Component {
 		return this.#pendingIndex !== null ? this.#accounts[this.#pendingIndex] : undefined;
 	}
 
-	#buildBody(width: number): string[] {
+	/** Rows the status message takes under the list: a blank and the message. */
+	#statusRows(): number {
+		return this.#statusMessage ? 2 : 0;
+	}
+
+	/** The account rows, at most `listRows` of them around the cursor, then the status message. */
+	#buildBody(width: number, listRows: number): string[] {
 		const total = this.#accounts.length;
-		const maxVisible = RESET_SELECTOR_MAX_VISIBLE;
+		const maxVisible = clamp(Math.floor(listRows), 1, RESET_SELECTOR_MAX_VISIBLE);
 		const startIndex =
 			total <= maxVisible ? 0 : clampLow(this.#selectedIndex - Math.floor(maxVisible / 2), 0, total - maxVisible);
 		const endIndex = Math.min(startIndex + maxVisible, total);
@@ -166,13 +172,13 @@ export class ResetUsageSelectorComponent implements Component {
 
 		if (matchesSelectUp(keyData)) {
 			if (this.#accounts.length > 0) {
-				this.#selectedIndex = this.#selectedIndex === 0 ? this.#accounts.length - 1 : this.#selectedIndex - 1;
+				this.#selectedIndex = wrapIndex(this.#selectedIndex - 1, this.#accounts.length);
 			}
 			this.#pendingIndex = null;
 			this.#statusMessage = undefined;
 		} else if (matchesSelectDown(keyData)) {
 			if (this.#accounts.length > 0) {
-				this.#selectedIndex = this.#selectedIndex === this.#accounts.length - 1 ? 0 : this.#selectedIndex + 1;
+				this.#selectedIndex = wrapIndex(this.#selectedIndex + 1, this.#accounts.length);
 			}
 			this.#pendingIndex = null;
 			this.#statusMessage = undefined;
@@ -223,15 +229,7 @@ export class ResetUsageSelectorComponent implements Component {
 			onConfirm: () => this.handleInput("\n"),
 			onWheel: delta => {
 				if (this.#accounts.length > 0) {
-					const total = this.#accounts.length;
-					this.#selectedIndex =
-						delta < 0
-							? this.#selectedIndex === 0
-								? total - 1
-								: this.#selectedIndex - 1
-							: this.#selectedIndex === total - 1
-								? 0
-								: this.#selectedIndex + 1;
+					this.#selectedIndex = wrapIndex(this.#selectedIndex + delta, this.#accounts.length);
 					this.#pendingIndex = null;
 					this.#statusMessage = undefined;
 					this.#onRequestRender?.();
@@ -240,10 +238,7 @@ export class ResetUsageSelectorComponent implements Component {
 			listRowStart: this.#listRowStart,
 			hitRows: this.#hitRows,
 			onHoverRow: index => {
-				if (index !== this.#hover.key) {
-					this.#hover.set(index);
-					this.#onRequestRender?.();
-				}
+				if (this.#hover.set(index)) this.#onRequestRender?.();
 			},
 			onClickRow: index => {
 				const account = this.#accounts[index];
@@ -261,22 +256,28 @@ export class ResetUsageSelectorComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(width, height, sizing);
+		const dims = layoutModalCard(width, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(width));
+			return emptyModalArea(width, height);
 		}
 
-		const shell = renderModalShell({
-			title: "Spend reset",
-			sizing,
-			areaWidth: width,
-			areaHeight: height,
-			body: this.#buildBody(dims.contentWidth),
-			tipCandidates: this.#tipCandidates(),
-			shortcuts: this.#pendingIndex !== null ? RESET_PENDING_SHORTCUTS : RESET_SHORTCUTS,
+		// A short card sheds its padding before the list shows fewer accounts, and the status
+		// message keeps its rows under whatever the list shows. While a spend waits for its second
+		// Enter the tip states what that Enter spends, so the card keeps the tip and asks only for
+		// the cursor row.
+		const statusRows = this.#statusRows();
+		const pending = this.#pendingIndex !== null;
+		const listRows = pending ? 1 : clamp(this.#accounts.length, 1, RESET_SELECTOR_MAX_VISIBLE);
+		const chrome = planModalChrome(dims, {
+			shortcuts: pending ? RESET_PENDING_SHORTCUTS : RESET_SHORTCUTS,
 			hoveredShortcutId: this.#hoveredShortcutId,
+			tipCandidates: this.#tipCandidates(),
+			minBodyRows: listRows + statusRows,
+		});
+		const shell = renderModalShell(chrome, {
+			title: "Spend reset",
+			body: this.#buildBody(dims.contentWidth, chrome.maxBodyRows - statusRows),
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

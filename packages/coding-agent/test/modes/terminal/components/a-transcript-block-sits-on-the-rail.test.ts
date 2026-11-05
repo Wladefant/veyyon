@@ -32,6 +32,7 @@
  * render-proof images.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { TinyTitleDownloadProgressComponent } from "@veyyon/coding-agent/modes/terminal/components/chrome/tiny-title-download-progress";
 import { COMPOSER_INSET_COLS } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
@@ -57,17 +58,13 @@ import type { Component, TUI } from "@veyyon/tui";
 
 const WIDTH = 100;
 
-function strip(s: string): string {
-	return s.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
 function stubUi(): TUI {
 	return { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 }
 
 /** Every painted row, ANSI removed, in render order. */
 function paintedRows(component: { render(width: number): readonly string[] }): string[] {
-	return component.render(WIDTH).map(strip);
+	return component.render(WIDTH).map(stripVTControlCharacters);
 }
 
 function assertOnTheRail(rows: string[], label: string): void {

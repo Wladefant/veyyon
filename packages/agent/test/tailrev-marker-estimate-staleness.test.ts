@@ -17,66 +17,31 @@
  */
 import { describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
+import type { SessionEntry } from "@veyyon/agent-core/compaction";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateTokens,
 	prepareCompaction,
 	renderTailElisionMarker,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { ToolResultMessage } from "@veyyon/ai";
+import { assistant, messageEntries, readResult, user } from "./support/compaction-session";
 
-let idCounter = 0;
-
-const usage = (): Usage => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
-
-function entry(message: AgentMessage): SessionMessageEntry {
-	return { type: "message", id: `e-${idCounter++}`, parentId: null, timestamp: "2026-08-06T00:00:00.000Z", message };
-}
-
-const user = (text: string): AgentMessage => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
-
-const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
-	role: "assistant",
-	content,
-	timestamp: 1,
-	provider: "mock",
-	model: "mock",
-	api: "mock",
-	usage: usage(),
-	stopReason: "stop",
-});
-
-const result = (toolCallId: string, text: string): ToolResultMessage => ({
-	role: "toolResult",
-	toolCallId,
-	toolName: "read",
-	content: [{ type: "text", text }],
-	isError: false,
-	timestamp: 1,
-});
+const { entry } = messageEntries();
 
 /** Six small turns, then a final turn whose one result dwarfs the budget. */
 function sessionEndingInAHugeResult(): SessionEntry[] {
-	idCounter = 0;
 	const entries: SessionEntry[] = [];
 	for (let turn = 0; turn < 6; turn++) {
 		entries.push(entry(user(`q${turn}`)));
 		entries.push(
 			entry(assistant([{ type: "toolCall", id: `c${turn}`, name: "read", arguments: { path: `f${turn}` } }])),
 		);
-		entries.push(entry(result(`c${turn}`, "small")));
+		entries.push(entry(readResult(`c${turn}`, "small")));
 	}
 	entries.push(entry(user("last")));
 	entries.push(entry(assistant([{ type: "toolCall", id: "c-last", name: "read", arguments: { path: "big" } }])));
-	entries.push(entry(result("c-last", "x".repeat(400_000))));
+	entries.push(entry(readResult("c-last", "x".repeat(400_000))));
 	return entries;
 }
 

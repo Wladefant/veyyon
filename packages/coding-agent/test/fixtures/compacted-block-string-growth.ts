@@ -50,7 +50,7 @@ import { COLLAB_PROMPT_MESSAGE_TYPE } from "@veyyon/wire";
 import type { CustomBlockDisplay } from "@veyyon/wire/presentation";
 import { settleFrames } from "../../../../hosts/terminal/engine/test/helpers/settle-frames";
 import { VirtualTerminal } from "../../../../hosts/terminal/engine/test/virtual-terminal";
-import { liveStringBytes } from "../../../utils/test/helpers/live-string-bytes";
+import { liveStringBytes, liveStringBytesGrownSince } from "../../../utils/test/helpers/live-string-bytes";
 
 export interface CompactedBlockGrowth {
 	/** A message role, `display:<variant>`, `<role>:<setting group>` (each optionally `:expanded`), or `card:<tool>`. */
@@ -63,7 +63,10 @@ export interface CompactedBlockGrowth {
 	rowChars: number;
 	/** Rows the container still returned after it was told every row is in scrollback. */
 	keptRows: number;
-	/** String bytes live after the drop, less the bytes live before the first draw. */
+	/**
+	 * String bytes live after the drop, less the bytes live before the first draw. Below the growth
+	 * limit the fixture was given, this is the first sample below it rather than the least sample.
+	 */
 	grown: number;
 	/** Whether a replay drew the same rows the first draw did. */
 	replayMatches: boolean;
@@ -368,6 +371,7 @@ async function measure(
 	group: string,
 	build: (copies: number) => Promise<TranscriptContainer>,
 	targetChars: number,
+	growthLimit: number,
 ): Promise<CompactedBlockGrowth> {
 	const probe = await build(1);
 	const copies = Math.max(1, Math.ceil(targetChars / Math.max(1, drawnChars(probe))));
@@ -393,7 +397,7 @@ async function measure(
 	chat.setNativeScrollbackRetainRows(0);
 	chat.setNativeScrollbackCommittedRows(first.length);
 	const keptRows = chat.render(WIDTH).length;
-	const grown = (await liveStringBytes()) - before;
+	const grown = await liveStringBytesGrownSince(before, growthLimit);
 
 	chat.prepareNativeScrollbackReplay();
 	const replayMatches = digestOf(chat.render(WIDTH)) === digest;
@@ -468,9 +472,18 @@ if (import.meta.main) {
 			process.stdout.write(`${JSON.stringify(listing)}\n`);
 		} else {
 			const targetChars = Number(process.argv[2]);
-			const selection = (process.argv[3] ?? "").split(",").filter(name => name !== "");
-			if (!Number.isInteger(targetChars) || targetChars < 1 || selection.length === 0) {
-				throw new Error("usage: compacted-block-string-growth.ts list | <target-chars> <group>[,<group>...]");
+			const growthLimit = Number(process.argv[3]);
+			const selection = (process.argv[4] ?? "").split(",").filter(name => name !== "");
+			if (
+				!Number.isInteger(targetChars) ||
+				targetChars < 1 ||
+				!Number.isInteger(growthLimit) ||
+				growthLimit < 1 ||
+				selection.length === 0
+			) {
+				throw new Error(
+					"usage: compacted-block-string-growth.ts list | <target-chars> <growth-limit> <group>[,<group>...]",
+				);
 			}
 			// The first heap snapshot of a process leaves strings of its own behind; this one is not counted.
 			await liveStringBytes();
@@ -478,7 +491,7 @@ if (import.meta.main) {
 			for (const name of selection) {
 				const build = groups.get(name);
 				if (build === undefined) throw new Error(`no group named ${name}`);
-				report.groups.push(await measure(name, build, targetChars));
+				report.groups.push(await measure(name, build, targetChars, growthLimit));
 			}
 			process.stdout.write(`${JSON.stringify(report)}\n`);
 		}

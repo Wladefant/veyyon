@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type StreamFn } from "@veyyon/agent-core";
-import type { AssistantMessage, Model } from "@veyyon/ai";
+import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { type GeneratedProvider, getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -13,22 +13,7 @@ import { Semaphore } from "@veyyon/coding-agent/task/parallel";
 import { wrapStreamFnWithProviderConcurrency } from "@veyyon/coding-agent/task/provider-concurrency";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
-function requireModel(provider: GeneratedProvider, id: string): Model {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected bundled model ${provider}/${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("issue #3464: ollama-cloud task backoff", () => {
 	let tempDir: TempDir;
@@ -60,8 +45,8 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 	});
 
 	it("uses the default fallback chain for a model with no chain of its own", async () => {
-		const primary = requireModel("anthropic", "claude-sonnet-4-5");
-		const fallback = requireModel("openai", "gpt-4o-mini");
+		const primary = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = requireBundledModel("openai", "gpt-4o-mini");
 		const requestedModels: string[] = [];
 		const mock = createMockModel();
 		let primaryAttempts = 0;
@@ -97,7 +82,7 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 	});
 
 	it("bounds concurrent ollama-cloud LLM streams by the configured maxConcurrency", async () => {
-		const cloudModel = requireModel("ollama-cloud", "gpt-oss:120b");
+		const cloudModel = requireBundledModel("ollama-cloud", "gpt-oss:120b");
 		const settings = Settings.isolated({
 			"providers.ollama-cloud.maxConcurrency": 2,
 		});
@@ -105,9 +90,9 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 		let inFlight = 0;
 		let peakInFlight = 0;
 		let invocations = 0;
-		const gates: Deferred[] = [];
+		const gates: PromiseWithResolvers<void>[] = [];
 		const base: StreamFn = model => {
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.push(gate);
 			invocations++;
 			inFlight++;
@@ -121,14 +106,7 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 					api: model.api,
 					provider: model.provider,
 					model: model.id,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: Date.now(),
 				};
@@ -181,7 +159,7 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 			() => {},
 		);
 
-		const nextStarted = deferred();
+		const nextStarted = Promise.withResolvers<void>();
 		const next = (async () => {
 			await semaphore.acquire();
 			nextStarted.resolve();

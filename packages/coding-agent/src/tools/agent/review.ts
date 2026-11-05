@@ -10,7 +10,8 @@
 
 import type { AgentTool } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { isRecord, lazy } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { isRecord } from "@veyyon/utils";
 import type { TextBlockView, ViewSpan, ViewTone } from "@veyyon/view";
 import { subprocessToolRegistry } from "../../task/subprocess-tool-registry";
 import type { ReviewFinding } from "../../task/types";
@@ -80,7 +81,7 @@ export function findingTitle(title: string): string {
 }
 
 // report_finding schema
-const ReportFindingParams = lazy(() =>
+const ReportFindingParams = toolSchema("review:report-finding", () =>
 	type({
 		title: type("string").describe("prefixed imperative title"),
 		body: type("string").describe("problem explanation"),
@@ -169,6 +170,9 @@ export const reportFindingTool: AgentTool<typeof ReportFindingParams.value, Repo
 	description: "Report a code review finding. Use this for each issue found. Call yield when done.",
 	get parameters() {
 		return ReportFindingParams.value;
+	},
+	get wireParameters(): Record<string, unknown> {
+		return ReportFindingParams.wire;
 	},
 	intent: "omit",
 	async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {

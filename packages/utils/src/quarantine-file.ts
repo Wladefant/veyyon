@@ -7,6 +7,8 @@ export interface QuarantinedFile {
 	path: string;
 	/** Where its original contents were copied so they are not lost. */
 	quarantinePath: string;
+	/** Why it could not be parsed, such as a YAML syntax error with its line and column. */
+	reason: string;
 }
 
 /** Where the preserved copy of `filePath` lives. */

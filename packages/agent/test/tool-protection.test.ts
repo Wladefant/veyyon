@@ -2,18 +2,8 @@ import { describe, expect, it } from "bun:test";
 import type { SessionMessageEntry } from "@veyyon/agent-core/compaction/entries";
 import { DEFAULT_PRUNE_CONFIG, pruneToolOutputs } from "@veyyon/agent-core/compaction/pruning";
 import { AGGRESSIVE_SHAKE_CONFIG, collectShakeRegions } from "@veyyon/agent-core/compaction/shake";
-import type { AssistantMessage, TextContent, ToolResultMessage, Usage } from "@veyyon/ai";
-
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
+import type { AssistantMessage, TextContent, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function messageEntry(id: string, message: AssistantMessage | ToolResultMessage): SessionMessageEntry {
 	return {
@@ -32,7 +22,7 @@ function assistantReadCall(toolCallId: string, path: string): SessionMessageEntr
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	});
@@ -75,8 +65,9 @@ describe("conditional tool-result protection", () => {
 	});
 
 	it("shakes regular read results but excludes skill:// reads", () => {
-		const skillResult = readResult("skill-read", "skill read output that must not be shaken");
-		const fileResult = readResult("file-read", "file read output that is eligible for shake");
+		// Both results are larger than a shake marker, so only the skill:// protection keeps one.
+		const skillResult = readResult("skill-read", "skill read output that must not be shaken ".repeat(20));
+		const fileResult = readResult("file-read", "file read output that is eligible for shake ".repeat(20));
 		const entries = [
 			assistantReadCall("skill-read", "skill://session-memory"),
 			skillResult,

@@ -93,7 +93,6 @@ function sseResponse(...chunks: unknown[]): Response {
 	const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("");
 	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
-
 function genaiChunk(text: string): Record<string, unknown> {
 	return {
 		candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }],
@@ -754,7 +753,6 @@ function restoreEnv(name: string, value: string | undefined): void {
 	}
 	Bun.env[name] = value;
 }
-
 beforeEach(() => {
 	vi.spyOn(piUtils, "getInstallId").mockReturnValue("00000000-0000-4000-8000-000000000001");
 });
@@ -846,7 +844,6 @@ describe("the instruction closes the last turn without opening a new one", () =>
 		]);
 		expect(content).toHaveLength(2);
 	});
-
 	it("adds a text block to a closing tool result", () => {
 		const result: Message = {
 			role: "toolResult",

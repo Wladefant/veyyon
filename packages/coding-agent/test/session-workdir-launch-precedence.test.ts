@@ -5,20 +5,14 @@ import * as path from "node:path";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
 import { applySessionWorkdir, applyStartupCwd } from "@veyyon/coding-agent/cli/startup-cwd";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { getProjectDir, normalizePathForComparison, setProjectDir, TempDir } from "@veyyon/utils";
+import { getProjectDir, normalizePathForComparison, setProjectDir } from "@veyyon/utils";
+import { useTempDirs } from "./helpers/temp-dirs";
 
 const originalProjectDir = getProjectDir();
-const tempDirs: TempDir[] = [];
-
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
+const makeTempDir = useTempDirs();
 
 afterEach(async () => {
 	setProjectDir(originalProjectDir);
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
 });
 
 describe("launch cwd precedence: CLI > session.workdir > process.cwd", () => {

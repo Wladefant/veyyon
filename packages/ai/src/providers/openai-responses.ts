@@ -1313,6 +1313,7 @@ function planResponsesTools(
 	}
 	return { tools, offeredTools, toolChoice, strictToolsApplied };
 }
+
 /** @internal Exported for tests. */
 export function mapOpenAIResponsesToolChoiceForTools(
 	choice: ToolChoice | undefined,

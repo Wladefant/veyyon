@@ -34,8 +34,9 @@ import {
 import { bashToolView } from "@veyyon/coding-agent/tools/shell/bash-view";
 import { evalToolView } from "@veyyon/coding-agent/tools/shell/eval-view";
 import { resetKeybindingsForTests, setKeybindings } from "@veyyon/utils/keybindings";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../helpers/stdout-geometry";
 
-const ORIGINAL_ROWS = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+let geometry: StubbedStdoutGeometry | undefined;
 
 function plain(lines: readonly string[]): string[] {
 	return lines.map(line => Bun.stripANSI(line));
@@ -203,12 +204,11 @@ describe("the collapsed card window", () => {
 		setKeybindings(KeybindingsManager.inMemory());
 		// A 30-row terminal leaves a 10-visual-row tail window, which is smaller
 		// than the wall of progress lines below.
-		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 30 });
+		geometry = stubStdoutGeometry({ rows: 30 });
 	});
 	afterEach(() => {
 		resetKeybindingsForTests();
-		if (ORIGINAL_ROWS) Object.defineProperty(process.stdout, "rows", ORIGINAL_ROWS);
-		else Reflect.deleteProperty(process.stdout, "rows");
+		geometry?.restore();
 	});
 
 	test("the uncollapsed tail of the same capture hides the anomaly", () => {

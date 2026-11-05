@@ -26,6 +26,7 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+import { firstToolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // Spawning a task writes a session (and, for worktree runs, a checkout) under the
@@ -57,11 +58,6 @@ function createSession(
 function getSchemaProperties(tool: TaskTool): Record<string, unknown> {
 	const wire = toolWireSchema(tool) as { properties?: Record<string, unknown> };
 	return wire.properties ?? {};
-}
-
-function getFirstText(result: { content: Array<{ type: string; text?: string }> }): string {
-	const content = result.content.find(part => part.type === "text");
-	return content?.type === "text" ? (content.text ?? "") : "";
 }
 
 function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleResult {
@@ -151,7 +147,7 @@ describe("task.batch validation", () => {
 		mockDiscovery();
 		const tool = await TaskTool.create(createSession({ settings }));
 		const result = await tool.execute("tool-call", params);
-		return getFirstText(result);
+		return firstToolResultText(result);
 	}
 
 	it("rejects a schema argument regardless of batch mode", async () => {
@@ -254,7 +250,7 @@ describe("task.batch spawning", () => {
 			],
 		} as TaskParams);
 
-		const text = getFirstText(result);
+		const text = firstToolResultText(result);
 		expect(text).toContain("Spawned 2 background agents");
 		expect(text).toContain("- `Alpha`");
 		expect(text).toContain("- `Beta`");
@@ -301,7 +297,7 @@ describe("task.batch spawning", () => {
 			tasks: [{ name: "Solo", task: "Do the thing." }],
 		} as TaskParams);
 
-		expect(getFirstText(result)).toContain("Spawned agent `Solo`");
+		expect(firstToolResultText(result)).toContain("Spawned agent `Solo`");
 		const job = manager.getJob(result.details!.async!.jobId)!;
 		await job.promise;
 		expect(job.status).toBe("completed");
@@ -325,7 +321,7 @@ describe("task.batch spawning", () => {
 			task: "Do the thing.",
 		} as TaskParams);
 
-		expect(getFirstText(result)).toContain("Spawned agent `Flat`");
+		expect(firstToolResultText(result)).toContain("Spawned agent `Flat`");
 		const job = manager.getJob(result.details!.async!.jobId)!;
 		await job.promise;
 		expect(job.status).toBe("completed");
@@ -352,7 +348,7 @@ describe("task.batch spawning", () => {
 			],
 		} as TaskParams);
 
-		expect(getFirstText(result)).toContain("All done.");
+		expect(firstToolResultText(result)).toContain("All done.");
 		expect(result.details?.async).toBeUndefined();
 		expect(result.details?.results.map(item => item.id).sort()).toEqual(["Alpha", "Beta"]);
 		expect(manager.getJob("Alpha")).toBeUndefined();

@@ -16,12 +16,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 /** A registry entry the way the task executor writes one. */
 function register(id: string, status: "running" | "idle" | "parked" | "aborted"): void {
@@ -43,7 +42,7 @@ afterEach(() => {
 
 /** The card's frame with styling stripped, and the roster rows in it. */
 function frameOf(dashboard: AgentDashboard): { text: string; rows: string[] } {
-	const lines = dashboard.render(120).map(line => line.replace(ANSI_PATTERN, ""));
+	const lines = dashboard.render(120).map(line => stripVTControlCharacters(line));
 	return { text: lines.join("\n"), rows: lines.filter(line => line.includes("reviewer")) };
 }
 

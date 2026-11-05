@@ -31,9 +31,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, type Theme } from "@veyyon/coding-agent/theme/theme";
 import { ReadTool, type ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import type { ReadDisplayContent } from "@veyyon/coding-agent/tools/fs/read-display";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
@@ -43,6 +44,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { requireTheme } from "../helpers/require-theme";
 import { makeToolSession } from "../helpers/tool-session";
 
 const FIXTURE = `${[
@@ -102,14 +104,7 @@ function assistantCalling(ids: readonly string[]): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-test",
 		stopReason: "toolUse",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 	};
 }
 
@@ -143,8 +138,7 @@ describe("a session file stores a read card once", () => {
 		await initTheme();
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
-		const dark = await getThemeByName("dark");
-		if (!dark) throw new Error("dark theme missing");
+		const dark = await requireTheme("dark");
 		theme = dark;
 	});
 

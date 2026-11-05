@@ -61,6 +61,7 @@ import { HomeAnchorLayout } from "@veyyon/coding-agent/modes/terminal/controller
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type Component, Container, CURSOR_MARKER, type Focusable, TUI } from "@veyyon/tui";
 import { settleFrames } from "../../../../../../hosts/terminal/engine/test/helpers/settle-frames";
+import { lastPaintedRow } from "../../../../../../hosts/terminal/engine/test/helpers/terminal-output";
 import { VirtualTerminal } from "../../../../../../hosts/terminal/engine/test/virtual-terminal";
 
 /** A block whose height is set from the test, the way live content changes it. */
@@ -81,13 +82,6 @@ class Composer implements Component, Focusable {
 	render(): string[] {
 		return [`> ask anything${CURSOR_MARKER}`];
 	}
-}
-
-function lastPaintedRow(term: VirtualTerminal): number {
-	return term
-		.getViewport()
-		.map(row => Bun.stripANSI(row).trimEnd())
-		.reduce((last, row, i) => (row.trim().length > 0 ? i : last), -1);
 }
 
 /** One observed state: what the content asked for, and the frames it composed. */
@@ -232,7 +226,10 @@ describe("no frame composes past the viewport while slack remains", () => {
 		// virtualized transcript reports a different frame than a plain one.
 		for (const kind of ["plain", "virtualized"] as const) {
 			for (const paint of PAINTS) {
-				test(`${name}, ${kind} transcript, ${paint} repaint`, async () => {
+				// Each arm builds its own terminal, engine and layout and spends its
+				// time waiting out frame timers, so the arms share nothing and run
+				// at once.
+				test.concurrent(`${name}, ${kind} transcript, ${paint} repaint`, async () => {
 					const term = new VirtualTerminal(80, 24, 5_000);
 					const tui = new TUI(term, true);
 					const transcript = kind === "plain" ? new Container() : new TranscriptContainer();

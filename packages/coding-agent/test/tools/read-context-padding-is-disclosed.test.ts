@@ -23,19 +23,12 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { ReadTool, type ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
+import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
 
 function createSession(cwd: string): ToolSession {
 	const settings = Settings.isolated();
@@ -84,7 +77,7 @@ afterEach(async () => {
 
 async function read(selector: string): Promise<string> {
 	const tool = new ReadTool(createSession(tmpDir));
-	return textOutput(await tool.execute(`call-${selector}`, { path: `${filePath}:${selector}` }));
+	return toolResultText(await tool.execute(`call-${selector}`, { path: `${filePath}:${selector}` }));
 }
 
 describe("a range padded only at the end", () => {
@@ -170,7 +163,7 @@ describe("a read that was not padded", () => {
 	 */
 	it("carries no notice for a whole-file read", async () => {
 		const tool = new ReadTool(createSession(tmpDir));
-		const text = textOutput(await tool.execute("call-whole", { path: filePath }));
+		const text = toolResultText(await tool.execute("call-whole", { path: filePath }));
 
 		expect(renderedLineNumbers(text)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
 		expect(paddingNotice(text)).toBeUndefined();

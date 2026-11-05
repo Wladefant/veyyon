@@ -161,7 +161,7 @@ export function checkVerdict(runs: readonly RunSummary[], required: readonly str
  * the same sha, or a repository-level cancellation, and the answer is the same
  * either way.
  */
-export function failureAdvice(failures: readonly RunSummary[], tag: string): string[] {
+export function failureAdvice(failures: readonly RunSummary[], tag: string, sha: string): string[] {
 	if (failures.length > 0 && failures.every(run => run.conclusion === "cancelled")) {
 		return [
 			"Nothing failed. Every run on this commit was CANCELLED, so there is no verdict to",
@@ -169,13 +169,32 @@ export function failureAdvice(failures: readonly RunSummary[], tag: string): str
 			...failures.map(run => `    gh run rerun ${run.databaseId}   # ${run.workflowName}`),
 			"",
 			"Then tag that commit:",
-			`    git tag ${tag} && git push origin ${tag}`,
+			`    ${tagCommand(tag, sha)}`,
 		];
 	}
 	return [
 		"The bump commit is on main. Fix main, then tag the green commit:",
 		`    git tag ${tag} && git push origin ${tag}`,
 	];
+}
+
+/** The by-hand command that publishes `sha` as `tag`. It names the commit, because HEAD moves. */
+function tagCommand(tag: string, sha: string): string {
+	return `git tag ${tag} ${sha} && git push origin ${tag}`;
+}
+
+/**
+ * Tag `sha`, the commit whose checks passed, and push the tag. Never HEAD: a commit made on main
+ * while the checks ran would be tagged, and published, without having been tested. `run` is the
+ * git runner, a parameter so a test can point it at a scratch repository.
+ */
+export async function tagVerifiedCommit(
+	tag: string,
+	sha: string,
+	run: (...args: string[]) => Promise<string> = git,
+): Promise<void> {
+	await run("tag", tag, sha);
+	await run("push", "origin", tag);
 }
 
 /**
@@ -329,7 +348,7 @@ export async function shipRelease(version: string): Promise<void> {
 					`${tag} was not tagged: the checks on ${sha.slice(0, 12)} did not pass.`,
 					...named,
 					"",
-					...failureAdvice(verdict.failures, tag),
+					...failureAdvice(verdict.failures, tag, sha),
 				].join("\n"),
 			);
 		}
@@ -340,7 +359,7 @@ export async function shipRelease(version: string): Promise<void> {
 					`Still waiting on: ${verdict.waitingOn.join(", ")}`,
 					"",
 					"Nothing is wrong with the release; it just is not green yet. Once it is:",
-					`    git tag ${tag} && git push origin ${tag}`,
+					`    ${tagCommand(tag, sha)}`,
 				].join("\n"),
 			);
 		}
@@ -354,9 +373,8 @@ export async function shipRelease(version: string): Promise<void> {
 		await sleep(POLL_INTERVAL_MS);
 	}
 
-	console.log(`Tagging ${tag}...`);
-	await git("tag", tag);
-	await git("push", "origin", tag);
+	console.log(`Tagging ${tag} at ${sha.slice(0, 12)}...`);
+	await tagVerifiedCommit(tag, sha);
 	console.log(`\nPublished ${tag}. The tagged CI run builds and releases it:`);
 	console.log(`    gh run watch --exit-status`);
 }

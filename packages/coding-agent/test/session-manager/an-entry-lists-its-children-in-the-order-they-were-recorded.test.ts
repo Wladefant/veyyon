@@ -19,10 +19,7 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-
-function userMessage(text: string) {
-	return { role: "user" as const, content: text, timestamp: Date.now() };
-}
+import { userMsg } from "../helpers/session-messages";
 
 function childIds(manager: SessionManager, parentId: string): string[] {
 	return manager.getChildren(parentId).map(entry => entry.id);
@@ -31,10 +28,10 @@ function childIds(manager: SessionManager, parentId: string): string[] {
 describe("an entry lists its children in the order they were recorded", () => {
 	it("lists every child of a branch point in record order, and none for a leaf or an unknown id", () => {
 		const manager = SessionManager.inMemory();
-		const root = manager.appendMessage(userMessage("root"));
-		const first = manager.appendMessage(userMessage("first answer"));
+		const root = manager.appendMessage(userMsg("root"));
+		const first = manager.appendMessage(userMsg("first answer"));
 		manager.branch(root);
-		const second = manager.appendMessage(userMessage("second answer"));
+		const second = manager.appendMessage(userMsg("second answer"));
 		const summary = manager.branchWithSummary(root, "the abandoned branch");
 		manager.branch(root);
 		const label = manager.appendLabelChange(first, "kept");
@@ -50,11 +47,11 @@ describe("an entry lists its children in the order they were recorded", () => {
 		const file = path.join(dir, "session.jsonl");
 
 		const writer = await SessionManager.open(file, dir);
-		const root = writer.appendMessage(userMessage("root"));
-		const first = writer.appendMessage(userMessage("first answer"));
+		const root = writer.appendMessage(userMsg("root"));
+		const first = writer.appendMessage(userMsg("first answer"));
 		writer.branch(root);
-		const second = writer.appendMessage(userMessage("second answer"));
-		writer.appendMessage(userMessage("under the second answer"));
+		const second = writer.appendMessage(userMsg("second answer"));
+		writer.appendMessage(userMsg("under the second answer"));
 		await writer.flush();
 
 		const reader = await SessionManager.open(file, dir);
@@ -67,9 +64,9 @@ describe("an entry lists its children in the order they were recorded", () => {
 
 	it("does not list a grandchild as a child", () => {
 		const manager = SessionManager.inMemory();
-		const root = manager.appendMessage(userMessage("root"));
-		const child = manager.appendMessage(userMessage("child"));
-		const grandchild = manager.appendMessage(userMessage("grandchild"));
+		const root = manager.appendMessage(userMsg("root"));
+		const child = manager.appendMessage(userMsg("child"));
+		const grandchild = manager.appendMessage(userMsg("grandchild"));
 
 		expect(childIds(manager, root)).toEqual([child]);
 		expect(childIds(manager, child)).toEqual([grandchild]);
@@ -77,8 +74,8 @@ describe("an entry lists its children in the order they were recorded", () => {
 
 	it("returns a list the caller may edit without changing the next answer", () => {
 		const manager = SessionManager.inMemory();
-		const root = manager.appendMessage(userMessage("root"));
-		const child = manager.appendMessage(userMessage("child"));
+		const root = manager.appendMessage(userMsg("root"));
+		const child = manager.appendMessage(userMsg("child"));
 
 		const handed = manager.getChildren(root);
 		handed.length = 0;

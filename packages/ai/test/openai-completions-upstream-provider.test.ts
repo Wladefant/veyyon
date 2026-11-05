@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const model = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
@@ -10,14 +11,6 @@ const model = {
 
 function baseContext(): Context {
 	return { messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }] };
-}
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\ndata: [DONE]\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
 }
 
 function chunk(extra: Record<string, unknown>): Record<string, unknown> {
@@ -31,13 +24,14 @@ describe("openai-completions upstream provider capture", () => {
 	it("records the aggregator-reported upstream provider from the stream", async () => {
 		const fetchMock: FetchImpl = () =>
 			Promise.resolve(
-				createSseResponse([
+				sseResponse([
 					chunk({ provider: "Anthropic", choices: [{ index: 0, delta: { content: "Hi" } }] }),
 					chunk({
 						provider: "Anthropic",
 						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
 						usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 					}),
+					"[DONE]",
 				]),
 			);
 
@@ -54,12 +48,13 @@ describe("openai-completions upstream provider capture", () => {
 	it("leaves upstreamProvider undefined when no provider field is present", async () => {
 		const fetchMock: FetchImpl = () =>
 			Promise.resolve(
-				createSseResponse([
+				sseResponse([
 					chunk({ choices: [{ index: 0, delta: { content: "Hi" } }] }),
 					chunk({
 						choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
 						usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 					}),
+					"[DONE]",
 				]),
 			);
 

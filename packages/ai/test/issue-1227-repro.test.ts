@@ -19,14 +19,8 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { AssistantMessage, Context, Model, ModelSpec, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { type } from "arktype";
-
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
 
 function bedrockModel(): Model<"openai-completions"> {
 	const base = getBundledModel("openai", "gpt-4o-mini");
@@ -49,7 +43,7 @@ async function capturePayload(
 	streamOpenAICompletions(bedrockModel(), context, {
 		...opts,
 		apiKey: "test-key",
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload),
 	});
 	return (await promise) as Record<string, unknown>;
@@ -62,14 +56,7 @@ function assistantWithToolCall(): AssistantMessage {
 		api: "openai-completions",
 		provider: "litellm-bedrock",
 		model: "bedrock-claude-sonnet-4-6",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};

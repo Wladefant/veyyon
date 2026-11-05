@@ -13,7 +13,8 @@ import { Settings } from "../src/config/settings";
 import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
 import { StatusPresentationProducer } from "../src/presentation/status-producer";
 import type { AgentSession } from "../src/session/agent-session";
-import { getThemeByName, setThemeInstance } from "../src/theme/theme";
+import { setThemeInstance } from "../src/theme/theme";
+import { requireTheme } from "./helpers/require-theme";
 import { statusLineSessionParts } from "./helpers/status-line-session";
 
 interface FakeJob {
@@ -56,8 +57,7 @@ function settledNumbersOnBar(statusLine: StatusLineComponent, width = 200): numb
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 });
 

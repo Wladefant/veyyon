@@ -36,7 +36,9 @@ import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output
 // The real shape the tool emits. A local all-optional copy used to stand here,
 // which let every assertion in this file read a field the type said might not
 // exist, so nothing could prove one was actually populated.
-import type { OutputMeta, TruncationMeta } from "@veyyon/coding-agent/tools/core/output-meta";
+import type { OutputMeta } from "@veyyon/coding-agent/tools/core/output-meta";
+import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
+import type { TruncationMeta } from "@veyyon/coding-agent/tools/core/output-notice"
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
@@ -57,31 +59,33 @@ afterEach(async () => {
 	await removeWithRetries(tmpDir);
 });
 
+/** The tool as the session registers it, so the text read here is the text the model reads. */
 function bashTool(): BashTool {
-	return new BashTool(
-		makeToolSession({
-			cwd: tmpDir,
-			hasUI: false,
-			skills: [],
-			getSessionFile: () => null,
-			getSessionId: () => "bash-huge-output",
-			allocateOutputArtifact: async (kind: string) => {
-				const file = path.join(tmpDir, `${kind}-${artifactPaths.length}.txt`);
-				artifactPaths.push(file);
-				return { id: `${kind}-${artifactPaths.length}`, path: file };
-			},
-			settings: {
-				get(key: string) {
-					if (key === "async.enabled") return false;
-					if (key === "bash.autoBackground.enabled") return false;
-					if (key === "bashInterceptor.enabled") return false;
-					if (key === "tools.artifactMaxBytes") return 0;
-					return undefined;
+	return wrapToolWithMetaNotice(
+		new BashTool(
+			makeToolSession({
+				cwd: tmpDir,
+				hasUI: false,
+				skills: [],
+				getSessionFile: () => null,
+				getSessionId: () => "bash-huge-output",
+				allocateOutputArtifact: async (kind: string) => {
+					const file = path.join(tmpDir, `${kind}-${artifactPaths.length}.txt`);
+					artifactPaths.push(file);
+					return { id: `${kind}-${artifactPaths.length}`, path: file };
 				},
-				getBashInterceptorRules: () => [],
-			},
-			getClientBridge: () => undefined,
-		}) as never,
+				settings: {
+					get(key: string) {
+						if (key === "async.enabled") return false;
+						if (key === "bash.autoBackground.enabled") return false;
+						if (key === "bashInterceptor.enabled") return false;
+						return undefined;
+					},
+					getBashInterceptorRules: () => [],
+				},
+				getClientBridge: () => undefined,
+			}) as never,
+		),
 	);
 }
 
@@ -209,11 +213,10 @@ describe("the elision is reported, never silent", () => {
 	 * The two fields are measured against different things, and the arithmetic here
 	 * is written to say so rather than to paper over it. `elidedBytes` counts bytes
 	 * of the ORIGINAL that were dropped, while `outputBytes` counts bytes of the
-	 * COMPOSED result, which additionally contains the elision marker and the two
-	 * newlines around it. So they overshoot the total by exactly the marker, and
-	 * that exact overshoot is the assertion. Demanding a plain sum instead fails by
-	 * a couple of dozen bytes and looks like a real accounting bug, which is how
-	 * this test was first written.
+	 * COMPOSED result, which additionally contains the marker on a line of its own:
+	 * the marker and the line break that ends it. The head window ends at a line
+	 * break, so the marker needs no second one in front of it. That exact overshoot
+	 * is the assertion.
 	 */
 	it("reconciles kept plus elided against the total, to the byte", async () => {
 		const { text, truncation } = await run("reconcile", "seq 1 400000");
@@ -222,7 +225,8 @@ describe("the elision is reported, never silent", () => {
 		expect(marker).toBeTruthy();
 
 		const overshoot = (truncation?.elidedBytes ?? 0) + (truncation?.outputBytes ?? 0) - (truncation?.totalBytes ?? 0);
-		expect(overshoot).toBe(Buffer.byteLength(marker as string, "utf-8") + 2);
+		expect(text).toContain(`\n${marker}\n`);
+		expect(overshoot).toBe(Buffer.byteLength(marker as string, "utf-8") + 1);
 	});
 
 	/** A visible marker in the text itself, since the model reads the text and not

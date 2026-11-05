@@ -12,21 +12,6 @@ export type OAuthManualInputClaim = {
 export class OAuthManualInputManager {
 	#pending?: PendingInput;
 
-	waitForInput(providerId: string): Promise<string> {
-		if (this.#pending) {
-			this.clear("Manual OAuth input superseded by a new login");
-		}
-
-		const pending = createPending(providerId);
-		this.#pending = pending;
-		return pending.promise;
-	}
-
-	tryWaitForInput(providerId: string): Promise<string> | undefined {
-		if (this.#pending) return undefined;
-		return this.waitForInput(providerId);
-	}
-
 	tryClaimInput(providerId: string): OAuthManualInputClaim | undefined {
 		if (this.#pending) return undefined;
 		const pending = createPending(providerId);

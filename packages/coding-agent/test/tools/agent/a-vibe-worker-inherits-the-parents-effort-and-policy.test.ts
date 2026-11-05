@@ -58,16 +58,6 @@ function makeResult(id: string, overrides: Partial<SingleResult> = {}): SingleRe
 	};
 }
 
-interface Deferred {
-	promise: Promise<void>;
-	resolve: () => void;
-}
-
-function deferred(): Deferred {
-	const { promise, resolve } = Promise.withResolvers<void>();
-	return { promise, resolve };
-}
-
 async function pollUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
 	const start = Date.now();
 	while (!predicate()) {
@@ -512,7 +502,7 @@ describe("vibe session registry", () => {
 	});
 
 	it("spawn returns immediately and self-delivers a turn result with activity trace + response", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
 				id: options.id,
@@ -568,7 +558,7 @@ describe("vibe session registry", () => {
 	});
 
 	it("send steers a streaming mid-turn worker and queues for a non-steerable one", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const fake = createFakeWorkerSession({ streaming: true });
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
@@ -614,7 +604,7 @@ describe("vibe session registry", () => {
 	});
 
 	it("send to an idle session starts a follow-up turn on the same worker", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
 				id: options.id,
@@ -694,7 +684,7 @@ describe("vibe session registry", () => {
 	});
 
 	it("wait wakes on the first settling turn among concurrent sessions and suppresses its re-delivery", async () => {
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
 				id: options.id,
@@ -704,7 +694,7 @@ describe("vibe session registry", () => {
 				session: createFakeWorkerSession().session,
 				status: "running",
 			});
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(options.id, gate);
 			await gate.promise;
 			AgentRegistry.global().setStatus(options.id, "idle");
@@ -735,7 +725,7 @@ describe("vibe session registry", () => {
 	});
 
 	it("wait reports the settled turn even when a queued follow-up starts immediately", async () => {
-		const firstGate = deferred();
+		const firstGate = Promise.withResolvers<void>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
 				id: options.id,
@@ -749,7 +739,7 @@ describe("vibe session registry", () => {
 			AgentRegistry.global().setStatus(options.id, "idle");
 			return makeResult(options.id, { output: "First turn done." });
 		});
-		const followUpGate = deferred();
+		const followUpGate = Promise.withResolvers<void>();
 		vi.spyOn(executorModule, "runSubagentFollowUpTurn").mockImplementation(async options => {
 			await followUpGate.promise;
 			return makeResult(options.id, { output: "Follow-up done." });
@@ -793,7 +783,7 @@ describe("vibe session registry", () => {
 	 * return value and once as an async job-completion follow-up.
 	 */
 	it("wait does not also deliver the report it returns", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
 				id: options.id,
@@ -833,7 +823,7 @@ describe("vibe session registry", () => {
 	});
 
 	it("kill cancels the in-flight turn and releases the worker session", async () => {
-		const gate = deferred();
+		const gate = Promise.withResolvers<void>();
 		const fake = createFakeWorkerSession();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
@@ -866,7 +856,7 @@ describe("vibe session registry", () => {
 	});
 
 	it("killAll terminates every session for the owner (mode-exit path)", async () => {
-		const gates = new Map<string, Deferred>();
+		const gates = new Map<string, PromiseWithResolvers<void>>();
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			AgentRegistry.global().register({
 				id: options.id,
@@ -876,7 +866,7 @@ describe("vibe session registry", () => {
 				session: createFakeWorkerSession().session,
 				status: "running",
 			});
-			const gate = deferred();
+			const gate = Promise.withResolvers<void>();
 			gates.set(options.id, gate);
 			await gate.promise;
 			return makeResult(options.id);

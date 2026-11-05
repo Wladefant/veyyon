@@ -263,8 +263,7 @@ export async function executeSSH(
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
-		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
-		headBytes: resolveOutputSinkHeadBytes(settings),
+		...resolveOutputSinkWindow(settings, options?.spillThreshold ?? DEFAULT_MAX_BYTES),
 		maxColumns: resolveOutputMaxColumns(settings),
 		chunkThrottleMs: options?.onChunk ? LIVE_OUTPUT_INTERVAL_MS : 0,
 	});

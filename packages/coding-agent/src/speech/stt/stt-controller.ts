@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { collapseWhitespace, errorMessage, isAbortError, logger, Snowflake } from "@veyyon/utils";
+import { collapseWhitespace, errorMessage, isAbortError, logger, privateTempDir, Snowflake } from "@veyyon/utils";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import { settings } from "../../config/settings-instance";
 import { type SttStreamHandle, sttClient } from "./asr-client";
@@ -304,7 +303,7 @@ export class STTController {
 
 	async #startBatchRecording(options: ToggleOptions): Promise<void> {
 		const id = Snowflake.next();
-		this.#tempFile = path.join(os.tmpdir(), `veyyon-stt-${id}.wav`);
+		this.#tempFile = path.join(privateTempDir(), `veyyon-stt-${id}.wav`);
 		try {
 			this.#recordingHandle = await startRecording(this.#tempFile);
 			this.#setState("recording", options);

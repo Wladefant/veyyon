@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 /** Minimal durable session exposing the flush-before-dispose boundary park drives. */
 function makeSessionStub(): { session: AgentSession; disposeCalls: () => number } {
@@ -42,7 +43,7 @@ function makeSessionStub(): { session: AgentSession; disposeCalls: () => number 
 
 /** Settle the async park chain (timer callback → park() → dispose → setStatus). */
 async function flushAsync(): Promise<void> {
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 const TTL = 20;

@@ -116,18 +116,13 @@ describe("agent roster and unset settings visibility contracts", () => {
 			rendered = Promise.withResolvers<void>();
 		}
 
-		// The helpers lead the list, so walk down past them until a discovered agent is in the window.
-		const isAgentRow = (line: string): boolean => line.includes("scout") || line.includes("task");
-		for (let step = 0; step < 40 && !strippedFrame(component, 131).some(isAgentRow); step++) {
-			component.handleInput("\u001b[B");
-		}
-
+		// The subagents lead the list, so the first frame already shows a discovered agent row.
 		const frame = strippedFrame(component, 131);
 
-		// Discovered agent rows, CUSTOM_AGENT_HINT and navigation controls must be present
-		const agentRow = frame.find(isAgentRow);
+		// Discovered agent rows, CUSTOM_AGENT_HINT and the card's sub-pane keys must be present
+		const agentRow = frame.find(line => line.includes("scout"));
 		const hintLine = frame.find(line => line.includes("~/.veyyon/subagents/"));
-		const navLine = frame.find(line => line.includes("Enter to configure") && line.includes("Esc to go back"));
+		const navLine = frame.find(line => line.includes("enter confirm") && line.includes("esc back"));
 
 		expect(agentRow, frame.join("\n")).toBeDefined();
 		expect(hintLine, frame.join("\n")).toBeDefined();

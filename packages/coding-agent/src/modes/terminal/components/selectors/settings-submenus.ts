@@ -3,7 +3,14 @@
  * model-picker panel and status frame, the model-chain summary, and the plain select submenu.
  */
 import type { Model } from "@veyyon/ai";
-import { type Component, Container, type SelectItem, SelectList, Text } from "@veyyon/tui";
+import {
+	type Component,
+	Container,
+	type SelectItem,
+	SelectList,
+	type SelectListLayoutOptions,
+	Text,
+} from "@veyyon/tui";
 import { clamp, formatCount } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import type { ModelRegistry } from "../../../../config/model-registry";
@@ -35,29 +42,21 @@ export function createFocusedSelectList(
 	items: ReadonlyArray<SelectItem>,
 	visibleRows: number,
 	focusedValue?: string,
-	options?: {
+	options?: SelectListLayoutOptions & {
 		onSelect?: (item: SelectItem) => void;
 		onCancel?: () => void;
 		onSelectionChange?: (item: SelectItem) => void;
-		minPrimaryColumnWidth?: number;
-		maxPrimaryColumnWidth?: number;
 	},
 ): SelectList {
-	const columnWidths =
-		options?.minPrimaryColumnWidth !== undefined || options?.maxPrimaryColumnWidth !== undefined
-			? {
-					minPrimaryColumnWidth: options.minPrimaryColumnWidth,
-					maxPrimaryColumnWidth: options.maxPrimaryColumnWidth,
-				}
-			: undefined;
-	const list = new SelectList(items, clamp(visibleRows, 1, 12), getSelectListTheme(), columnWidths);
+	const { onSelect, onCancel, onSelectionChange, ...layout } = options ?? {};
+	const list = new SelectList(items, clamp(visibleRows, 1, 12), getSelectListTheme(), layout);
 	if (focusedValue !== undefined) {
 		const index = items.findIndex(item => item.value === focusedValue);
 		if (index >= 0) list.setSelectedIndex(index);
 	}
-	if (options?.onSelect) list.onSelect = options.onSelect;
-	if (options?.onCancel) list.onCancel = options.onCancel;
-	if (options?.onSelectionChange) list.onSelectionChange = options.onSelectionChange;
+	if (onSelect) list.onSelect = onSelect;
+	if (onCancel) list.onCancel = onCancel;
+	if (onSelectionChange) list.onSelectionChange = onSelectionChange;
 	return list;
 }
 

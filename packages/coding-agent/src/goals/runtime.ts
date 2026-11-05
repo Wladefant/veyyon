@@ -88,13 +88,18 @@ export function goalTokenDelta(current: GoalTokenUsage, baseline: GoalTokenUsage
 	);
 }
 
-export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal, options?: { budgetsEnabled?: boolean }): string {
+export function renderGoalPrompt(
+	kind: GoalPromptKind,
+	goal: Goal,
+	options?: { budgetsEnabled?: boolean; idleTurns?: number },
+): string {
 	const template =
 		kind === "active"
 			? goalsPrompts["goals/goal-mode-active"].text
 			: kind === "continuation"
 				? goalsPrompts["goals/goal-continuation"].text
 				: goalsPrompts["goals/goal-budget-limit"].text;
+	const idleTurns = options?.idleTurns ?? 0;
 	return prompt.render(template, {
 		budgetsEnabled: options?.budgetsEnabled ?? true,
 		objective: escapeXmlText(goal.objective),
@@ -102,6 +107,7 @@ export function renderGoalPrompt(kind: GoalPromptKind, goal: Goal, options?: { b
 		tokenBudget: budgetValue(goal),
 		remainingTokens: remainingValue(goal),
 		timeUsedSeconds: String(goal.timeUsedSeconds),
+		idleTurns: idleTurns === 0 ? undefined : idleTurns === 1 ? "previous turn" : `last ${idleTurns} turns`,
 	});
 }
 
@@ -600,11 +606,18 @@ export class GoalRuntime {
 		return state?.enabled && active ? renderGoalPrompt("active", state.goal, { budgetsEnabled }) : undefined;
 	}
 
-	buildContinuationPrompt(): string | undefined {
+	/**
+	 * The hidden prompt that opens a continuation turn. `idleTurns` counts the consecutive turns
+	 * just settled without a tool call; when it is not zero the prompt says so, so a model that
+	 * answered the last continuation with a status report is steered back to work.
+	 */
+	buildContinuationPrompt(idleTurns: number): string | undefined {
 		const state = this.#host.getState();
 		const budgetsEnabled = this.#host.budgetsEnabled();
 		const active = state?.goal.status === "active" || (!budgetsEnabled && state?.goal.status === "budget-limited");
-		return state?.enabled && active ? renderGoalPrompt("continuation", state.goal, { budgetsEnabled }) : undefined;
+		return state?.enabled && active
+			? renderGoalPrompt("continuation", state.goal, { budgetsEnabled, idleTurns })
+			: undefined;
 	}
 
 	async #sendBudgetLimitSteer(goal: Goal): Promise<void> {

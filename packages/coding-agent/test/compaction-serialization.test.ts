@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { serializeConversation } from "@veyyon/agent-core/compaction/utils";
 import type { Message } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 describe("serializeConversation", () => {
 	it("truncates long tool results in serialized summaries", () => {
@@ -57,14 +58,7 @@ describe("serializeConversation", () => {
 				api: "anthropic",
 				provider: "anthropic",
 				model: "test",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			},

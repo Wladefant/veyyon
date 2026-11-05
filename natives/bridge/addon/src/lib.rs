@@ -50,6 +50,7 @@ pub mod iso;
 pub mod prof;
 pub mod ps;
 pub mod pty;
+mod readahead;
 pub mod session_skim;
 pub mod shell;
 pub mod summary;

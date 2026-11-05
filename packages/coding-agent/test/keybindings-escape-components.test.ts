@@ -1,5 +1,4 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { KeybindingsManager } from "@veyyon/coding-agent/config/keybindings";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -9,6 +8,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import type { TUI } from "@veyyon/tui";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 beforeAll(() => {
 	initTheme();
@@ -66,10 +66,7 @@ describe("component escape bindings", () => {
 		});
 		setKeybindings(keybindings);
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) {
-			throw new Error("Expected bundled model anthropic/claude-sonnet-4-5");
-		}
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const settings = Settings.isolated({ defaultModel: `${model.provider}/${model.id}` });
 		const modelRegistry = {

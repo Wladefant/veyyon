@@ -61,7 +61,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 	// 410 -> 469: image and binary file support for github file-read.
 	"tools/github": 469,
 	"tools/goal": 162,
-	"tools/search": 703,
+	"tools/search": 698,
 	"tools/image-attachment-describe": 142,
 	"tools/image-attachment-describe-system": 196,
 	"tools/image-gen": 110,
@@ -105,7 +105,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 21992;
+const RECORDED_TOTAL = 22067;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),

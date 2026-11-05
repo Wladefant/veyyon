@@ -21,6 +21,7 @@ import * as oauthDiscovery from "@veyyon/coding-agent/mcp/oauth-discovery";
 import type { MCPServerConfig } from "@veyyon/coding-agent/mcp/types";
 import { MCPAddWizard } from "@veyyon/coding-agent/modes/terminal/components/dialogs/mcp-add-wizard";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { drainMicrotasks } from "../../../../../utils/test/helpers/drain-microtasks";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -85,10 +86,6 @@ function submitHttpUrl(wizard: MCPAddWizard): void {
 	wizard.handleInput("\n");
 }
 
-async function settle(): Promise<void> {
-	for (let i = 0; i < 10; i++) await Promise.resolve();
-}
-
 describe("a successful connection check", () => {
 	it("repaints the outcome and then the review step without waiting for a key", async () => {
 		const h = makeWizard(async () => {});
@@ -97,7 +94,7 @@ describe("a successful connection check", () => {
 
 		h.wizard.handleInput("\n");
 		const beforeCheck = h.repaints();
-		await settle();
+		await drainMicrotasks(10);
 
 		expect(h.body()).toContain("Connection successful!");
 		expect(h.repaints()).toBeGreaterThan(beforeCheck);
@@ -113,7 +110,7 @@ describe("a successful connection check", () => {
 		const h = makeWizard(async () => {});
 		reachArgumentsStep(h.wizard);
 		h.wizard.handleInput("\n");
-		await settle();
+		await drainMicrotasks(10);
 		expect(h.body()).toContain("Connection successful!");
 
 		h.wizard.handleInput("\x1b");
@@ -134,7 +131,7 @@ describe("a successful connection check", () => {
 		expect(h.body()).toContain("Step 3: Command");
 
 		resolve();
-		await settle();
+		await drainMicrotasks(10);
 		vi.advanceTimersByTime(SUCCESS_PAUSE_MS * 5);
 
 		expect(h.body()).toContain("Step 3: Command");
@@ -146,7 +143,7 @@ describe("a successful connection check", () => {
 		const h = makeWizard(async () => {});
 		reachArgumentsStep(h.wizard);
 		h.wizard.handleInput("\n");
-		await settle();
+		await drainMicrotasks(10);
 		expect(h.body()).toContain("Connection successful!");
 
 		h.wizard.dispose();
@@ -166,7 +163,7 @@ describe("a failed connection check", () => {
 		reachArgumentsStep(h.wizard);
 		h.wizard.handleInput("\n");
 		const beforeCheck = h.repaints();
-		await settle();
+		await drainMicrotasks(10);
 
 		expect(h.body()).toContain("Connection failed");
 		expect(h.repaints()).toBeGreaterThan(beforeCheck);
@@ -186,7 +183,7 @@ describe("a failed connection check", () => {
 		});
 		reachArgumentsStep(h.wizard);
 		h.wizard.handleInput("\n");
-		await settle();
+		await drainMicrotasks(10);
 		expect(h.body()).toContain("Connection failed");
 
 		h.wizard.handleInput("\x1b");
@@ -206,7 +203,7 @@ describe("a check abandoned while it is in flight", () => {
 
 		h.wizard.handleInput("\x1b");
 		reject(new Error("spawn node ENOENT"));
-		await settle();
+		await drainMicrotasks(10);
 		vi.advanceTimersByTime(FAILURE_PAUSE_MS * 5);
 
 		expect(h.body()).toContain("Step 3: Command");
@@ -221,13 +218,13 @@ describe("a check abandoned while it is in flight", () => {
 			throw new Error("401 Unauthorized: API key required");
 		});
 		submitHttpUrl(h.wizard);
-		await settle();
+		await drainMicrotasks(10);
 
 		h.wizard.handleInput("\x1b");
 		expect(h.body()).toContain("Step 2: Transport Type");
 
 		discovery.resolve(null);
-		await settle();
+		await drainMicrotasks(10);
 
 		expect(h.body()).toContain("Step 2: Transport Type");
 		expect(h.body()).not.toContain("API Key Required");
@@ -242,7 +239,7 @@ describe("a check that needs a credential", () => {
 		});
 		submitHttpUrl(h.wizard);
 		const beforeCheck = h.repaints();
-		await settle();
+		await drainMicrotasks(10);
 
 		expect(h.body()).toContain("API Key Required");
 		expect(h.repaints()).toBeGreaterThan(beforeCheck);
@@ -260,9 +257,9 @@ describe("a check superseded by a newer one", () => {
 		h.wizard.handleInput("\n");
 
 		newer.resolve();
-		await settle();
+		await drainMicrotasks(10);
 		older.reject(new Error("spawn node ENOENT"));
-		await settle();
+		await drainMicrotasks(10);
 
 		expect(h.body()).toContain("Connection successful!");
 		expect(h.body()).not.toContain("Connection failed");

@@ -1,3 +1,5 @@
+import { toError } from "@veyyon/utils/type-guards";
+
 /**
  * Whether an RPC `prompt` reached the agent.
  *
@@ -22,7 +24,7 @@ export function reportLocalOnlyPromptResult(input: {
 			}
 		})
 		.catch(error => {
-			input.onError(error instanceof Error ? error : new Error(String(error)));
+			input.onError(toError(error));
 		});
 }
 

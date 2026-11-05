@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { discoverNestedRepos } from "@veyyon/coding-agent/task/worktree";
 import { logger } from "@veyyon/utils";
+import { canRestrictAccess } from "../../../utils/test/helpers/mode-bits";
 
 const created: string[] = [];
 
@@ -42,11 +43,6 @@ function nestedRepo(root: string, relative: string): string {
 	const dir = path.join(root, relative);
 	fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
 	return dir;
-}
-
-/** Mode bits do not restrict root, and Windows does not honour them. */
-function canRestrictAccess(): boolean {
-	return process.platform !== "win32" && process.getuid?.() !== 0;
 }
 
 /**

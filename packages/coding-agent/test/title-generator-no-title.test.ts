@@ -18,13 +18,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { Api, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai/stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { autoTitleDisabled, generateSessionTitle } from "@veyyon/coding-agent/utils/title-generator";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function model(): Model<Api> {
-	const m = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!m) throw new Error("expected bundled model");
-	return m;
+	return requireBundledModel("anthropic", "claude-sonnet-4-5");
 }
 
 function settings(m: Model<Api>) {

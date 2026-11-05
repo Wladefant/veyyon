@@ -2,7 +2,7 @@ import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import { isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
-import { pollOAuthDeviceCodeFlow } from "./device-code";
+import { loginStep, pollOAuthDeviceCodeFlow } from "./device-code";
 import { credentialExpiryFromExpiresIn, credentialExpiryFromJwtExp } from "./expiry";
 import { emitOAuthSuccessPage } from "./success-page";
 import { requireTokenResponseObject } from "./token-response";
@@ -186,7 +186,6 @@ async function requestDeviceAuthorization(fetchImpl: FetchImpl, signal?: AbortSi
 			signal,
 		});
 	} catch (cause) {
-		if (signal?.aborted) throw new AIError.LoginCancelledError();
 		throw new AIError.OAuthError(
 			"Could not start Nous Portal login. Check the network connection, then retry the browser or headless login.",
 			{ kind: "device-auth", provider: PROVIDER_ID, cause },
@@ -239,6 +238,7 @@ async function pollForToken(
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: device.expiresInSeconds,
 		signal,
+		provider: PROVIDER_ID,
 		poll: async () => {
 			let response: Response;
 			try {
@@ -256,7 +256,6 @@ async function pollForToken(
 					signal,
 				});
 			} catch (cause) {
-				if (signal?.aborted) throw new AIError.LoginCancelledError();
 				throw new AIError.OAuthError("Nous Portal device token request failed", {
 					kind: "polling",
 					provider: PROVIDER_ID,
@@ -285,7 +284,7 @@ export async function loginNousResearch(options: OAuthController): Promise<OAuth
 		);
 	}
 	const fetchImpl = options.fetch ?? fetch;
-	const device = await requestDeviceAuthorization(fetchImpl, options.signal);
+	const device = await loginStep(options.signal, () => requestDeviceAuthorization(fetchImpl, options.signal));
 	options.onAuth({
 		url: device.verificationUriComplete,
 		instructions:

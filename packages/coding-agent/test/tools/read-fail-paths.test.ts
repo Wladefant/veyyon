@@ -7,18 +7,12 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
  * ReadTool missing/empty/range contracts with exact error text or content.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("ReadTool fail paths and boundaries", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -61,7 +55,7 @@ describe("ReadTool fail paths and boundaries", () => {
 		const filePath = path.join(tmpDir, "a.ts");
 		await Bun.write(filePath, "line1\nline2\n");
 		const tool = new ReadTool(session());
-		const out = textOf(await tool.execute("r1", { path: filePath }));
+		const out = toolResultText(await tool.execute("r1", { path: filePath }));
 		expect(out).toMatch(/\[[^\]]+#[0-9A-Fa-f]{4}\]/);
 		expect(out).toContain("line1");
 		expect(out).toContain("line2");
@@ -77,7 +71,7 @@ describe("ReadTool fail paths and boundaries", () => {
 		const filePath = path.join(tmpDir, "empty.ts");
 		await Bun.write(filePath, "");
 		const tool = new ReadTool(session());
-		const out = textOf(await tool.execute("r3", { path: filePath }));
+		const out = toolResultText(await tool.execute("r3", { path: filePath }));
 		// Header may exist; body must not invent lines.
 		expect(out.includes("invented")).toBe(false);
 		const body = out
@@ -93,7 +87,7 @@ describe("ReadTool fail paths and boundaries", () => {
 		const content = "const 値 = 1;\n";
 		await Bun.write(filePath, content);
 		const tool = new ReadTool(session());
-		const out = textOf(await tool.execute("r4", { path: filePath }));
+		const out = toolResultText(await tool.execute("r4", { path: filePath }));
 		expect(out).toContain("値");
 	});
 
@@ -102,7 +96,7 @@ describe("ReadTool fail paths and boundaries", () => {
 		const lines = Array.from({ length: 20 }, (_, i) => `L${i + 1}`);
 		await Bun.write(filePath, `${lines.join("\n")}\n`);
 		const tool = new ReadTool(session());
-		const out = textOf(await tool.execute("r5", { path: `${filePath}:5-7` }));
+		const out = toolResultText(await tool.execute("r5", { path: `${filePath}:5-7` }));
 		expect(out).toContain("L5");
 		expect(out).toContain("L6");
 		expect(out).toContain("L7");
@@ -115,7 +109,7 @@ describe("ReadTool fail paths and boundaries", () => {
 		const filePath = path.join(tmpDir, "raw.ts");
 		await Bun.write(filePath, "one\ntwo\nthree\n");
 		const tool = new ReadTool(session());
-		const out = textOf(await tool.execute("r6", { path: `${filePath}:raw:1-2` }));
+		const out = toolResultText(await tool.execute("r6", { path: `${filePath}:raw:1-2` }));
 		expect(out).toContain("one");
 		expect(out).toContain("two");
 		expect(out.includes("four")).toBe(false);
@@ -124,7 +118,7 @@ describe("ReadTool fail paths and boundaries", () => {
 	it("relative path resolves under session cwd", async () => {
 		await Bun.write(path.join(tmpDir, "rel.ts"), "relative-body\n");
 		const tool = new ReadTool(session());
-		const out = textOf(await tool.execute("r7", { path: "rel.ts" }));
+		const out = toolResultText(await tool.execute("r7", { path: "rel.ts" }));
 		expect(out).toContain("relative-body");
 	});
 
@@ -132,8 +126,8 @@ describe("ReadTool fail paths and boundaries", () => {
 		const filePath = path.join(tmpDir, "stable.ts");
 		await Bun.write(filePath, "stable\n");
 		const tool = new ReadTool(session());
-		const h1 = textOf(await tool.execute("r8a", { path: filePath })).split("\n")[0]!;
-		const h2 = textOf(await tool.execute("r8b", { path: filePath })).split("\n")[0]!;
+		const h1 = toolResultText(await tool.execute("r8a", { path: filePath })).split("\n")[0]!;
+		const h2 = toolResultText(await tool.execute("r8b", { path: filePath })).split("\n")[0]!;
 		expect(h1).toMatch(/^\[.+#[0-9A-Fa-f]{4}\]$/);
 		expect(h1).toBe(h2);
 	});
@@ -142,9 +136,9 @@ describe("ReadTool fail paths and boundaries", () => {
 		const filePath = path.join(tmpDir, "mutate.ts");
 		await Bun.write(filePath, "v1\n");
 		const tool = new ReadTool(session());
-		const h1 = textOf(await tool.execute("r9a", { path: filePath })).split("\n")[0]!;
+		const h1 = toolResultText(await tool.execute("r9a", { path: filePath })).split("\n")[0]!;
 		await Bun.write(filePath, "v2-changed\n");
-		const h2 = textOf(await tool.execute("r9b", { path: filePath })).split("\n")[0]!;
+		const h2 = toolResultText(await tool.execute("r9b", { path: filePath })).split("\n")[0]!;
 		expect(h1).toMatch(/^\[.+#[0-9A-Fa-f]{4}\]$/);
 		expect(h2).toMatch(/^\[.+#[0-9A-Fa-f]{4}\]$/);
 		expect(h1).not.toBe(h2);
@@ -158,7 +152,7 @@ describe("ReadTool fail paths and boundaries", () => {
 		let out = "";
 		let threw = false;
 		try {
-			out = textOf(await tool.execute("r10", { path: dir }));
+			out = toolResultText(await tool.execute("r10", { path: dir }));
 		} catch (e) {
 			threw = true;
 			out = String(e);
@@ -175,7 +169,7 @@ describe("ReadTool fail paths and boundaries", () => {
 		const filePath = path.join(tmpDir, "null.ts");
 		await Bun.write(filePath, "a\0b\n");
 		const tool = new ReadTool(session());
-		const out = textOf(await tool.execute("r11", { path: filePath }));
+		const out = toolResultText(await tool.execute("r11", { path: filePath }));
 		expect(out.includes("a")).toBe(true);
 		expect(out.includes("b")).toBe(true);
 	});

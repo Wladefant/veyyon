@@ -4,7 +4,7 @@ import type { Context, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { clampThinkingLevelForModel } from "@veyyon/catalog/model-thinking";
-import { ollamaModelManagerOptions } from "@veyyon/catalog/provider-models/openai-compat";
+import { ollamaModelManagerOptions } from "@veyyon/catalog/provider-models/ollama";
 import type { FetchImpl, ModelSpec } from "@veyyon/catalog/types";
 
 interface OllamaRequestBody {

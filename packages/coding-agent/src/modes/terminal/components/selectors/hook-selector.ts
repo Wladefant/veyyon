@@ -16,10 +16,9 @@ import {
 } from "@veyyon/tui";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { type KeyId, matchesKey } from "@veyyon/utils/keys";
-import { clampLow } from "@veyyon/utils/math";
+import { clamp, clampLow } from "@veyyon/utils/math";
 import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { padding } from "@veyyon/utils/padding";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
@@ -33,7 +32,7 @@ import {
 	matchesSelectUp,
 } from "../../utils/keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
-import { computeModalDims, MODAL_SIZING_MEDIUM, sizingForArea } from "../chrome/modal-geometry";
+import { emptyModalArea, layoutModalCard, MODAL_SIZING_MEDIUM } from "../chrome/modal-geometry";
 import {
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -174,7 +173,14 @@ export class HookSelectorComponent extends Container {
 	#checkedIndices: Set<number>;
 	#markableCount: number;
 	#maxVisible: number;
+	/**
+	 * Option rows the card's plan has room for, the status row aside. Unset for an embedded
+	 * selector, whose host sizes it.
+	 */
+	#rowCap: number | undefined;
 	#filterable: boolean | undefined;
+	/** Rows every option takes with its description, and the width they were counted at. */
+	#fullRows: { width: number | undefined; rows: number } | undefined;
 	#keyShortcuts: Partial<Record<KeyId, number>> | Record<string, number> | undefined;
 	#multi: boolean;
 	#onSelectValuesCallback: ((values: readonly string[]) => void) | undefined;
@@ -407,12 +413,20 @@ export class HookSelectorComponent extends Container {
 		return rows;
 	}
 
-	#totalOptionRows(options: HookSelectorOption[], renderWidth?: number, mdTheme?: MarkdownTheme): number {
+	/**
+	 * Rows every option takes with its description at `renderWidth`. The options are fixed at
+	 * construction, so the sum is counted once per width: it is read on every key, and counting it
+	 * renders the markdown of every option.
+	 */
+	#fullOptionRows(renderWidth: number | undefined, mdTheme?: MarkdownTheme): number {
+		const cached = this.#fullRows;
+		if (cached !== undefined && cached.width === renderWidth) return cached.rows;
 		const themeForRows = mdTheme ?? getMarkdownTheme();
 		let rows = 0;
-		for (const option of options) {
+		for (const option of this.#options) {
 			rows += this.#optionRowCount(option, renderWidth, false, themeForRows, "full");
 		}
+		this.#fullRows = { width: renderWidth, rows };
 		return rows;
 	}
 
@@ -429,7 +443,7 @@ export class HookSelectorComponent extends Container {
 		// #updateList), so the window is sized to keep as many labels visible as
 		// possible rather than letting one long description swallow the budget.
 		const descMode: number | "full" = compact ? 0 : "full";
-		const rowBudget = Math.max(1, this.#maxVisible);
+		const rowBudget = this.#windowRows();
 		const selectedIndex = clampLow(this.#selectedIndex, 0, total - 1);
 		let startIndex = selectedIndex;
 		let endIndex = selectedIndex + 1;
@@ -508,7 +522,7 @@ export class HookSelectorComponent extends Container {
 			}
 			// Reserve one row for the status line; give the remainder to the
 			// highlighted option's description.
-			selectedDescRows = Math.max(0, Math.max(1, this.#maxVisible) - labelRows - 1);
+			selectedDescRows = Math.max(0, this.#windowRows() - labelRows - 1);
 		}
 
 		for (let i = startIndex; i < endIndex; i++) {
@@ -550,6 +564,11 @@ export class HookSelectorComponent extends Container {
 			this.#listContainer.addChild(child);
 			if (row.option !== undefined) this.#optionRows.set(child, row.option);
 		}
+	}
+
+	/** Option rows the window holds: `#maxVisible`, or fewer when the card has fewer rows. */
+	#windowRows(): number {
+		return this.#rowCap === undefined ? this.#maxVisible : clamp(this.#rowCap, 1, this.#maxVisible);
 	}
 
 	/** Countdown tick: the card shows it in the title bar, an embedded selector
@@ -612,7 +631,7 @@ export class HookSelectorComponent extends Container {
 
 	#isSearchEnabled(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
 		if (this.#filterable !== undefined) return this.#filterable;
-		return this.#totalOptionRows(this.#options, renderWidth, mdTheme) > this.#maxVisible;
+		return this.#fullOptionRows(renderWidth, mdTheme) > this.#maxVisible;
 	}
 
 	#shouldRenderSearchStatus(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
@@ -882,9 +901,8 @@ export class HookSelectorComponent extends Container {
 			if (option !== undefined) this.#hitRows[visibleHead.length + index] = option;
 		}
 		const rows = [...visibleHead, ...tail];
-		// A terminal too short for the option list alone: the list is already windowed
-		// to `#maxVisible` around the cursor, so what a clip here can still take is a
-		// row the cursor is not on.
+		// The card windows the options to the rows its plan has (see `render`), so a clip here
+		// takes a row only when one option is taller than the card.
 		return maxRows === undefined ? rows : rows.slice(0, maxRows);
 	}
 
@@ -935,37 +953,31 @@ export class HookSelectorComponent extends Container {
 		}
 
 		const height = process.stdout.rows || 40;
-		const sizing = sizingForArea(MODAL_SIZING_MEDIUM, height);
-		const dims = computeModalDims(renderWidth, height, sizing);
+		const dims = layoutModalCard(renderWidth, height, MODAL_SIZING_MEDIUM);
 		if (!dims) {
 			this.#shellGeometry = null;
-			return Array.from({ length: height }, () => padding(renderWidth));
+			return emptyModalArea(renderWidth, height);
 		}
-		if (this.#lastRenderWidth !== dims.contentWidth) {
-			this.#lastRenderWidth = dims.contentWidth;
-			this.#updateList(dims.contentWidth);
-		}
-
 		const shortcuts = this.#shortcuts();
-		const chrome = planModalChrome({
-			sizing,
-			modalHeight: dims.modalHeight,
-			contentWidth: dims.contentWidth,
+		const chrome = planModalChrome(dims, {
 			shortcuts,
 			hoveredShortcutId: this.#hoveredShortcutId,
 		});
+		// The option window takes the rows the card has, less the status row under it, so a short
+		// card shows the options around the cursor rather than the top of a window the card clips.
+		const rowCap = chrome.maxBodyRows - 1;
+		if (this.#lastRenderWidth !== dims.contentWidth || this.#rowCap !== rowCap) {
+			this.#lastRenderWidth = dims.contentWidth;
+			this.#rowCap = rowCap;
+			this.#updateList(dims.contentWidth);
+		}
 
 		const body = this.#assembleBody(dims.contentWidth, chrome.maxBodyRows);
 
-		const shell = renderModalShell({
+		const shell = renderModalShell(chrome, {
 			title: truncateToWidth(this.#cardTitle + this.#countdownSuffix, dims.contentWidth, Ellipsis.Unicode),
-			sizing,
-			areaWidth: renderWidth,
-			areaHeight: height,
 			body,
 			preferredBodyRows: body.length,
-			shortcuts,
-			hoveredShortcutId: this.#hoveredShortcutId,
 			showClose: true,
 		});
 		this.#shellGeometry = shell.geometry;

@@ -45,13 +45,6 @@ export function retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimi
 	return parts.join("; ");
 }
 
-/** Whether the turn ended on a content-classifier refusal or sensitivity stop. */
-export function isClassifierRefusal(message: AssistantMessage): boolean {
-	if (message.stopReason !== "error") return false;
-	const stopType = message.stopDetails?.type;
-	return stopType === "refusal" || stopType === "sensitive";
-}
-
 /**
  * Retried turns remove the failed assistant message from active context, so
  * the question here is whether replaying it can double-apply a side effect.

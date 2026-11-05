@@ -1,5 +1,6 @@
 /**
- * The names of every environment variable that redirects where veyyon keeps its files. A leaf: no imports.
+ * The names of every environment variable that redirects where veyyon keeps its files, and the reader that
+ * picks one out of the environment. A leaf: no imports.
  *
  * WHY THE NAMES LIVE APART FROM THE RESOLVER THAT READS THEM. Two modules need this list and one of them
  * runs before the other exists. `dirs.ts` reads the variables to resolve its paths; `dotenv-home.ts` needs
@@ -98,3 +99,12 @@ export const DIR_LOCATION_ENV_KEYS: readonly string[] = [
 	...CONFIG_DIR_ENV_KEYS,
 	...XDG_BASE_ENV_KEYS,
 ];
+
+/** The value of the first of `keys` present in the environment, empty included, or `undefined` when none is. */
+export function pickProcessEnv(...keys: readonly string[]): string | undefined {
+	for (const key of keys) {
+		const value = process.env[key];
+		if (value !== undefined) return value;
+	}
+	return undefined;
+}

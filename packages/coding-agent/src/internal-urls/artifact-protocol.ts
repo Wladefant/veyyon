@@ -208,18 +208,9 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 
 	async complete(): Promise<UrlCompletion[]> {
 		const ids = new Set<string>();
-		for (const dir of artifactsDirsFromRegistry()) {
-			let files: string[];
-			try {
-				files = await fs.readdir(dir);
-			} catch (err) {
-				if (isEnoent(err)) continue;
-				throw err;
-			}
-			for (const f of files) {
-				const m = f.match(/^(\d+)\./);
-				if (m) ids.add(m[1]!);
-			}
+		for (const name of await artifactFileNamesFromRegistry()) {
+			const m = name.match(/^(\d+)\./);
+			if (m) ids.add(m[1]!);
 		}
 		return Array.from(ids)
 			.sort((a, b) => Number(a) - Number(b))

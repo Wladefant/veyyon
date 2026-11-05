@@ -54,7 +54,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
 import type { AgentContext, AgentEvent, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import type { TSchema } from "@veyyon/ai/types";
 import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
@@ -65,6 +64,7 @@ import { BUILTIN_TOOLS, HIDDEN_TOOLS } from "@veyyon/coding-agent/tools/index";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { ArgotSession } from "argot";
+import { identityConverter } from "../../../agent/test/helpers";
 import { makeToolSession } from "../helpers/tool-session";
 
 // Every tool in the registry is constructed once and driven through a full loop
@@ -109,10 +109,6 @@ function requiredArguments(tool: ToolUnderTest): string[] {
 	const required = schema.required;
 	if (!Array.isArray(required)) return [];
 	return required.filter((key): key is string => typeof key === "string" && key !== INTENT_FIELD);
-}
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
 }
 
 /**

@@ -7,10 +7,11 @@ import type {
 	AgentToolUpdateCallback,
 } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { escapeXmlAttribute, escapeXmlText, lazy } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { escapeXmlAttribute, escapeXmlText } from "@veyyon/utils";
 import { advisorPrompts } from "../prompts/advisor/rows";
 
-const adviseSchema = lazy(() =>
+const adviseSchema = toolSchema("advise", () =>
 	type({
 		note: type("string").describe(
 			"One concrete piece of advice for the agent you are watching. Terse, specific, actionable.",
@@ -184,6 +185,9 @@ export class AdviseTool implements AgentTool<typeof adviseSchema.value, AdviseDe
 	readonly description = advisorPrompts["advisor/advise-tool"].text;
 	get parameters(): typeof adviseSchema.value {
 		return adviseSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return adviseSchema.wire;
 	}
 	readonly intent = "omit" as const;
 	/** Highest delivered severity rank per normalized note. A new call passes

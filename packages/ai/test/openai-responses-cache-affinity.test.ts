@@ -4,6 +4,7 @@ import { stream as streamModel, streamSimple } from "@veyyon/ai/stream";
 import type { Context, FetchImpl, Model, ProviderSessionState, SimpleStreamOptions } from "@veyyon/ai/types";
 import { buildOpenAIResponsesCompat } from "@veyyon/catalog/compat/openai";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 const openRouterResponsesModel: Model<"openai-responses"> = {
@@ -47,14 +48,6 @@ const xaiOAuthResponsesModel: Model<"openai-responses"> = {
 	}),
 };
 
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
 function getHeader(headers: RequestInit["headers"], name: string): string | null {
 	return new Headers(headers).get(name);
 }
@@ -79,7 +72,7 @@ async function captureOpenAIResponseHeaders(
 		captured.clientRequestId = getHeader(init?.headers, "x-client-request-id");
 		captured.headers = new Headers(init?.headers);
 		captured.body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
-		return createSseResponse([
+		return sseResponse([
 			{
 				type: "response.output_item.added",
 				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
@@ -144,7 +137,7 @@ async function captureDispatchedOpenAIResponseHeaders(
 		captured.clientRequestId = getHeader(init?.headers, "x-client-request-id");
 		captured.headers = new Headers(init?.headers);
 		captured.body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
-		return createSseResponse([
+		return sseResponse([
 			{
 				type: "response.output_item.added",
 				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
@@ -196,7 +189,7 @@ async function captureSimpleOpenAIResponseBody(
 	let body: Record<string, unknown> | null = null;
 	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 		body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
-		return createSseResponse([
+		return sseResponse([
 			{
 				type: "response.output_item.added",
 				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
@@ -435,7 +428,7 @@ describe("openai-responses cache affinity", () => {
 			if (bodies.length === 1) {
 				return new Response("temporary", { status: 503, headers: { "retry-after": "0" } });
 			}
-			return createSseResponse([
+			return sseResponse([
 				{
 					type: "response.output_item.added",
 					item: { type: "message", id: "msg_retry", role: "assistant", status: "in_progress", content: [] },
@@ -503,7 +496,7 @@ describe("openai-responses cache affinity", () => {
 				apiKey: "test-key",
 				fetch: async () => {
 					fetchCalls += 1;
-					return createSseResponse([
+					return sseResponse([
 						{
 							type: "response.completed",
 							response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
@@ -545,7 +538,7 @@ describe("openai-responses cache affinity", () => {
 			}
 
 			const responseId = requestBodies.length === 1 ? "resp_first" : "resp_retry";
-			return createSseResponse([
+			return sseResponse([
 				{ type: "response.created", response: { id: responseId, status: "in_progress" } },
 				{
 					type: "response.output_item.added",

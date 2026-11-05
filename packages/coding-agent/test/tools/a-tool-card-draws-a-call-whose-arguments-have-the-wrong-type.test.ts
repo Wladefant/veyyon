@@ -19,6 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { Tool } from "@veyyon/ai";
 import { toolWireSchema } from "@veyyon/ai";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -131,7 +132,7 @@ function withValueAt(root: unknown, slotPath: (string | number)[], value: unknow
 function flatten(component: Component): string {
 	return component
 		.render(160)
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""))
+		.map(line => stripVTControlCharacters(line))
 		.join(" ");
 }
 

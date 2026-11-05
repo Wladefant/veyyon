@@ -28,7 +28,6 @@ import type { AgentTool, AgentToolContext } from "@veyyon/agent-core";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
@@ -40,6 +39,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { SettingPath } from "@veyyon/kernel/settings/schema";
 import { type } from "arktype";
 import * as YAML from "yaml";
+import { requireBundledModel } from "../../../agent/test/helpers";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
 
 const makeDir = useTrackedTempDirs("veyyon-misspelled-approval-mode-");
@@ -167,8 +167,7 @@ describe("the session reports a configured value that does not match its declara
 	});
 
 	function sessionFor(settings: Settings): AgentSession {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected a bundled model for the session fixture");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const mock = createMockModel();
 		const agent = new Agent({
 			getApiKey: () => "anthropic-test-key",

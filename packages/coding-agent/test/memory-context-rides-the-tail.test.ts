@@ -15,17 +15,18 @@
  * `systemPromptInvalidations()` — rather than trusting the call graph, and they pin the
  * de-duplication too, because a block re-sent every turn would trade a cache miss for
  * unbounded context growth.
+ *
+ * The last case holds the other end of the session: the retains a session queued reach the server
+ * before its dispose drops the Hindsight state, which a dispose that skips the memory release, or
+ * clears the state before flushing it, loses.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { AgentMessage, AsideMessage } from "@veyyon/agent-core";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { hindsightBackend } from "@veyyon/coding-agent/memory/hindsight/backend";
@@ -35,26 +36,16 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
-
-function createModel(): Model<"openai-responses"> {
-	return buildModel({
-		id: "mock",
-		name: "mock",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	});
-}
+import { createMockModel } from "./helpers/mock-model";
 
 interface Harness {
 	session: AgentSession;
-	/** Drain the aside provider the session installed, as the agent loop does at a step boundary. */
+	/**
+	 * Drain the aside provider the session installed and land what it returns in the context, as the
+	 * agent loop does at a step boundary.
+	 */
 	drainAsides(): AgentMessage[];
 }
 
@@ -83,7 +74,7 @@ async function harness(): Promise<Harness> {
 		},
 	};
 	const agent = new Agent({
-		initialState: { model: createModel(), systemPrompt: ["base"], tools: [readTool], messages: [] },
+		initialState: { model: createMockModel(), systemPrompt: ["base"], tools: [readTool], messages: [] },
 	});
 	// The provider is private on the Agent, so capture the function the session installs.
 	// Wrapping the setter keeps this test at the real seam without adding test-only API.
@@ -121,9 +112,11 @@ async function harness(): Promise<Harness> {
 		drainAsides() {
 			const thunks = provider?.();
 			if (!thunks || thunks instanceof Promise) return [];
-			return thunks
+			const delivered = thunks
 				.map(entry => (typeof entry === "function" ? entry() : entry))
 				.filter((message): message is AgentMessage => message !== null);
+			for (const message of delivered) session.agent.appendMessage(message);
+			return delivered;
 		},
 	};
 }
@@ -351,8 +344,7 @@ describe("the first turn of a session", () => {
 	/** A session wired to a stub model that records what each request carried. */
 	async function promptHarness(): Promise<{ session: AgentSession; calls: PromptCall[] }> {
 		const calls: PromptCall[] = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in the bundled catalog");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
@@ -472,5 +464,25 @@ describe("the first turn of a session", () => {
 			text.includes("the user prefers tabs over spaces"),
 		).length;
 		expect(secondTurnCopies).toBe(1);
+	});
+});
+
+describe("a session that ends", () => {
+	it("sends the retains it queued before it drops its Hindsight state", async () => {
+		// One retain is under the batch size, so only the flush dispose runs sends it before the
+		// assertion below; dropped first, the queue discards it as `session vanished`.
+		const sent: string[][] = [];
+		vi.spyOn(HindsightApi.prototype, "retainBatch").mockImplementation(async (_bankId, items) => {
+			sent.push(items.map(item => item.content));
+			return {} as never;
+		});
+		vi.spyOn(HindsightApi.prototype, "createBank").mockResolvedValue({} as never);
+		const { session } = await harness();
+		session.getHindsightSessionState()?.enqueueRetain("durable fact", "test context");
+
+		await session.dispose();
+
+		expect(sent).toEqual([["durable fact"]]);
+		expect(session.getHindsightSessionState()).toBeUndefined();
 	});
 });

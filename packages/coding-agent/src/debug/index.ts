@@ -4,6 +4,7 @@
  * Provides tools for debugging, bug report generation, and system diagnostics.
  */
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as url from "node:url";
 import { getWorkProfile } from "@veyyon/natives";
 import {
@@ -16,7 +17,7 @@ import {
 	type TerminalNotification,
 	Text,
 } from "@veyyon/tui";
-import { errorMessage, getSessionsDir } from "@veyyon/utils";
+import { errorMessage, getSessionsDir, privateTempDir } from "@veyyon/utils";
 import { formatBytes } from "@veyyon/utils/format";
 import { ModalSelectListComponent } from "../modes/terminal/components/selectors/modal-select-list";
 import {
@@ -33,11 +34,19 @@ import { buildSampleImage, ProtocolProbeComponent } from "./protocol-probe";
 import { RawSseViewerComponent } from "./raw-sse";
 import { resolveRawSseDebugBuffer } from "./raw-sse-buffer";
 import { getRemoteDebugger, type RemoteDebuggerInfo, startRemoteDebuggerServer } from "./remote-debugger";
-import { clearArtifactCache, createDebugLogSource, createReportBundle, getArtifactCacheStats } from "./report-bundle";
+import {
+	clearArtifactCache,
+	createDebugLogSource,
+	createReportBundle,
+	getArtifactCacheStats,
+	type ReportBundleOptions,
+} from "./report-bundle";
 import { collectSystemInfo, formatSystemInfo } from "./system-info";
 import { collectTerminalState, formatTerminalState } from "./terminal-info";
 
-/** Debug menu options */
+/** What one kind of report adds to the bundle beyond the session file, settings and SSE capture. */
+type ReportPayload = Pick<ReportBundleOptions, "cpuProfile" | "heapSnapshot" | "workProfile">;
+
 /**
  * The slice of the interactive context the debug selector uses.
  *
@@ -64,6 +73,7 @@ export type DebugSelectorContext = Pick<
 	| "ui"
 >;
 
+/** Debug menu options */
 const DEBUG_MENU_ITEMS: SelectItem[] = [
 	{ value: "open-artifacts", label: "Open: artifact folder", description: "Open session artifacts in file manager" },
 	{ value: "performance", label: "Report: performance issue", description: "Profile CPU, reproduce, then bundle" },
@@ -225,41 +235,10 @@ export class DebugSelectorComponent {
 
 		await promise;
 
-		// Stop profiling and create report
-		const loader = new Loader(
-			this.ctx.ui,
-			spinner => theme.fg("accent", spinner),
-			text => theme.fg("muted", text),
-			"Generating report...",
-			getSymbolTheme().spinnerFrames,
-		);
-		this.ctx.statusContainer.addChild(loader);
-		this.ctx.ui.requestRender();
-
-		try {
-			const cpuProfile = await session.stop();
-			const workProfile = getWorkProfile(30);
-			const result = await createReportBundle({
-				sessionFile: this.ctx.sessionManager.getSessionFile(),
-				settings: this.#getResolvedSettings(),
-				rawSseText: this.#getRawSseText(),
-				cpuProfile,
-				workProfile,
-			});
-
-			loader.stop();
-			this.ctx.statusContainer.clear();
-
-			const block = new TranscriptBlock();
-			block.addChild(new Text(theme.fg("success", `+ Performance report saved`), 1, 0));
-			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
-			this.ctx.present(block);
-		} catch (err) {
-			loader.stop();
-			this.ctx.statusContainer.clear();
-			this.ctx.showError(`Failed to create report: ${errorMessage(err)}`);
-		}
+		await this.#saveReportBundle("Generating report...", "Performance report saved", async () => ({
+			cpuProfile: await session.stop(),
+			workProfile: getWorkProfile(30),
+		}));
 	}
 
 	async #handleWorkReport(): Promise<void> {
@@ -272,7 +251,7 @@ export class DebugSelectorComponent {
 			}
 
 			// Write SVG to temp file and open in browser
-			const tmpPath = `/tmp/work-profile-${Date.now()}.svg`;
+			const tmpPath = path.join(privateTempDir(), `work-profile-${Date.now()}.svg`);
 			await Bun.write(tmpPath, workProfile.svg);
 
 			openPath(tmpPath);
@@ -287,65 +266,51 @@ export class DebugSelectorComponent {
 	}
 
 	async #handleDumpReport(): Promise<void> {
-		const loader = new Loader(
-			this.ctx.ui,
-			spinner => theme.fg("accent", spinner),
-			text => theme.fg("muted", text),
-			"Creating report bundle...",
-			getSymbolTheme().spinnerFrames,
-		);
-		this.ctx.statusContainer.addChild(loader);
-		this.ctx.ui.requestRender();
-
-		try {
-			const result = await createReportBundle({
-				sessionFile: this.ctx.sessionManager.getSessionFile(),
-				settings: this.#getResolvedSettings(),
-				rawSseText: this.#getRawSseText(),
-			});
-
-			loader.stop();
-			this.ctx.statusContainer.clear();
-
-			const block = new TranscriptBlock();
-			block.addChild(new Text(theme.fg("success", `+ Report bundle saved`), 1, 0));
-			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
-			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
-			this.ctx.present(block);
-		} catch (err) {
-			loader.stop();
-			this.ctx.statusContainer.clear();
-			this.ctx.showError(`Failed to create report: ${errorMessage(err)}`);
-		}
+		await this.#saveReportBundle("Creating report bundle...", "Report bundle saved", () => ({}));
 	}
 
 	async #handleMemoryReport(): Promise<void> {
+		await this.#saveReportBundle("Generating heap snapshot...", "Memory report saved", loader => {
+			const heapSnapshot = generateHeapSnapshotData();
+			loader.setText("Creating report bundle...");
+			return { heapSnapshot };
+		});
+	}
+
+	/**
+	 * Writes a report bundle while a loader spins in the status line, then presents where it was saved.
+	 * `collect` gathers the report's own payload before the session state is read, and may relabel
+	 * the loader while it runs.
+	 */
+	async #saveReportBundle(
+		loaderText: string,
+		savedTitle: string,
+		collect: (loader: Loader) => ReportPayload | Promise<ReportPayload>,
+	): Promise<void> {
 		const loader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
 			text => theme.fg("muted", text),
-			"Generating heap snapshot...",
+			loaderText,
 			getSymbolTheme().spinnerFrames,
 		);
 		this.ctx.statusContainer.addChild(loader);
 		this.ctx.ui.requestRender();
 
 		try {
-			const heapSnapshot = generateHeapSnapshotData();
-			loader.setText("Creating report bundle...");
-
+			const payload = await collect(loader);
 			const result = await createReportBundle({
 				sessionFile: this.ctx.sessionManager.getSessionFile(),
 				settings: this.#getResolvedSettings(),
 				rawSseText: this.#getRawSseText(),
-				heapSnapshot,
+				...payload,
 			});
 
 			loader.stop();
 			this.ctx.statusContainer.clear();
 
 			const block = new TranscriptBlock();
-			block.addChild(new Text(theme.fg("success", `+ Memory report saved`), 1, 0));
+			block.addChild(new Text(theme.fg("success", `+ ${savedTitle}`), 1, 0));
 			block.addChild(new Text(theme.fg("dim", formatFileHyperlink(result.path)), 1, 0));
 			block.addChild(new Text(theme.fg("dim", `Files: ${result.files.length}`), 1, 0));
 			this.ctx.present(block);

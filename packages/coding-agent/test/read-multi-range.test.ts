@@ -3,24 +3,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { getFileSnapshotStore } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import { HashlineFilesystem } from "@veyyon/coding-agent/edit/hashline/filesystem";
 import { writethroughNoop } from "@veyyon/coding-agent/lsp";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { Patch, Patcher } from "@veyyon/hashline";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { removeWithRetries } from "@veyyon/utils";
-
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
-}
+import { toolResultText } from "./helpers/tool-result-text";
 
 function createSession(cwd: string, bridge?: ClientBridge): ToolSession {
 	const settings = Settings.isolated();
@@ -63,7 +55,7 @@ describe("read tool multi-range selector", () => {
 		await fs.writeFile(filePath, "alpha\nbeta\n");
 
 		const tool = new ReadTool(createSession(tmpDir));
-		const text = textOutput(await tool.execute("call-filename-header", { path: filePath }));
+		const text = toolResultText(await tool.execute("call-filename-header", { path: filePath }));
 		const firstLine = text.split("\n")[0];
 
 		expect(firstLine).toMatch(/^\[numbered\.txt#[0-9A-F]{4}\]$/);
@@ -77,7 +69,7 @@ describe("read tool multi-range selector", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("call-multi", { path: `${filePath}:3-5,20-22` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 		const firstLine = text.split("\n")[0];
 		expect(firstLine).toMatch(/^\[numbered\.txt#[0-9A-F]{4}\]$/);
 
@@ -111,7 +103,7 @@ describe("read tool multi-range selector", () => {
 		);
 
 		const tool = new ReadTool(createSession(tmpDir));
-		const text = textOutput(await tool.execute("call-bracket-close", { path: `${filePath}:1-1` }));
+		const text = toolResultText(await tool.execute("call-bracket-close", { path: `${filePath}:1-1` }));
 
 		expect(text).toContain("function outer() {");
 		expect(text).toContain("…");
@@ -137,7 +129,7 @@ describe("read tool multi-range selector", () => {
 		);
 
 		const tool = new ReadTool(createSession(tmpDir));
-		const text = textOutput(await tool.execute("call-bracket-open", { path: `${filePath}:7-7` }));
+		const text = toolResultText(await tool.execute("call-bracket-open", { path: `${filePath}:7-7` }));
 
 		expect(text.indexOf("function outer() {")).toBeLessThan(text.indexOf("}"));
 		expect(text).toContain("…");
@@ -168,7 +160,7 @@ describe("read tool multi-range selector", () => {
 		// Python has no closing delimiter, so a bracket scan would surface
 		// nothing; tree-sitter surfaces the def's last body line (9) as the
 		// block boundary, behind an ellipsis for the skipped middle.
-		const text = textOutput(await tool.execute("call-py-def", { path: `${filePath}:1-1` }));
+		const text = toolResultText(await tool.execute("call-py-def", { path: `${filePath}:1-1` }));
 
 		expect(text).toContain("def greet(name):");
 		expect(text).toContain("…");
@@ -183,7 +175,7 @@ describe("read tool multi-range selector", () => {
 		const tool = new ReadTool(createSession(tmpDir));
 		// 3-7 and 6-9 overlap → merged into 3-9 (collapses to a single-range read).
 		const result = await tool.execute("call-merge", { path: `${filePath}:3-7,6-9` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		// All lines from the merged range present
 		for (const i of [3, 4, 5, 6, 7, 8, 9]) {
@@ -199,7 +191,7 @@ describe("read tool multi-range selector", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("call-sort", { path: `${filePath}:30-32,5-7` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		const indexEarly = text.indexOf("line 5");
 		const indexLate = text.indexOf("line 30");
@@ -213,7 +205,7 @@ describe("read tool multi-range selector", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("call-oob", { path: `${filePath}:3-5,999-1000` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("line 3");
 		expect(text).toContain("line 5");
@@ -226,7 +218,7 @@ describe("read tool multi-range selector", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("call-plus", { path: `${filePath}:2+2,20+2` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("line 2");
 		expect(text).toContain("line 3");
@@ -241,8 +233,8 @@ describe("read tool multi-range selector", () => {
 		await fs.writeFile(filePath, makeNumberedContent(30));
 
 		const tool = new ReadTool(createSession(tmpDir));
-		const dotdot = textOutput(await tool.execute("call-dotdot", { path: `${filePath}:3..5` }));
-		const dash = textOutput(await tool.execute("call-dash", { path: `${filePath}:3-5` }));
+		const dotdot = toolResultText(await tool.execute("call-dotdot", { path: `${filePath}:3..5` }));
+		const dash = toolResultText(await tool.execute("call-dash", { path: `${filePath}:3-5` }));
 
 		expect(dotdot).toContain("line 3");
 		expect(dotdot).toContain("line 5");
@@ -256,7 +248,7 @@ describe("read tool multi-range selector", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("call-dotdot-multi", { path: `${filePath}:3..5,20..22` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("line 3");
 		expect(text).toContain("line 5");
@@ -284,7 +276,7 @@ describe("read tool multi-range selector", () => {
 
 		const tool = new ReadTool(createSession(tmpDir, bridge));
 		const result = await tool.execute("call-bridge", { path: `${filePath}:1-2,4-5` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("bridge one");
 		expect(text).toContain("bridge two");

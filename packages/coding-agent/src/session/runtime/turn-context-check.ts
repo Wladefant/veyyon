@@ -1,13 +1,14 @@
 /**
- * The end-of-turn context check: after a turn settles, and before a prompt starts its loop, whether
- * the context has to be recovered or maintained, and the recovery each case runs.
+ * The context checks at a turn's boundaries: before a prompt starts its loop, between the provider
+ * calls of a tool loop, and after a turn settles. Each decides whether the context has to be
+ * recovered or maintained, and runs the recovery: a switch to a larger-context model when one is
+ * available, otherwise a compaction.
  *
  * This is a session collaborator. It holds no state of its own and reaches the session through
  * {@link TurnContextCheckSession} and {@link TurnContextCheckHost}. The compaction pass a case starts is
- * `CompactionRuntime`'s; the switch to a larger-context model is the session's, which the pre-prompt
- * and mid-run checks share.
+ * `CompactionRuntime`'s.
  */
-import { type Agent, toolResultNeverRan } from "@veyyon/agent-core";
+import { type Agent, type AgentMessage, type AgentTurnEndContext, toolResultNeverRan } from "@veyyon/agent-core";
 import {
 	type CompactionSettings,
 	calculateContextTokens,
@@ -25,7 +26,7 @@ import {
 } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { logger } from "@veyyon/utils";
+import { errorMessage, logger } from "@veyyon/utils";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { GoalModeState } from "../../goals/state";
@@ -42,7 +43,15 @@ export interface TurnContextCheckSession {
 	readonly sessionManager: Pick<SessionManager, "getBranch" | "appendMessage">;
 	readonly settings: Pick<Settings, "get" | "getGroup">;
 	readonly model: Model | undefined;
-	readonly modelRegistry: Pick<ModelRegistry, "find" | "getAvailable">;
+	readonly modelRegistry: Pick<ModelRegistry, "find" | "getAvailable" | "getApiKey">;
+	readonly sessionId: string;
+	readonly isCompacting: boolean;
+	readonly isGeneratingHandoff: boolean;
+	getContextBreakdown(options: {
+		contextWindow: number;
+		pendingMessages: AgentMessage[];
+	}): { usedTokens: number } | undefined;
+	setModelTemporary(model: Model, thinkingLevel: undefined, options: { ephemeral: true }): Promise<void>;
 }
 
 /** What {@link TurnContextCheck} needs from the session beyond its public surface. */
@@ -59,14 +68,17 @@ export interface TurnContextCheckHost {
 	discardAssistantTurn(message: AssistantMessage): void;
 	/** Drop an assistant turn, and the never-ran tool results after it, from the live context only. */
 	removeAssistantFromActiveContext(message: AssistantMessage): void;
-	/** Switch to a larger-context model; true when the model was switched. */
-	promoteContextModel(): Promise<boolean>;
 	scheduleAgentContinue(options: ScheduledAgentContinueOptions): void;
 	/** Run an automatic compaction pass. */
 	runAutoCompaction(
 		reason: AutoCompactionReason,
 		willRetry: boolean,
-		options: { autoContinue: boolean; triggerContextTokens?: number; phase: "pre_turn" | "mid_turn" },
+		options: {
+			autoContinue: boolean;
+			suppressContinuation?: boolean;
+			triggerContextTokens?: number;
+			phase: "pre_turn" | "mid_turn";
+		},
 	): Promise<CompactionCheckResult>;
 	/** Warn once per context window about a capped, retired or unparseable compaction threshold. */
 	noticeCompactionThresholdClamp(contextWindow: number, compactionSettings: CompactionSettings): void;
@@ -76,6 +88,10 @@ export interface TurnContextCheckHost {
 	pruneOverflow(): Promise<PruneOutcome | undefined>;
 	/** Tokens the stored conversation holds, estimated locally. */
 	estimateStoredContextTokens(): number;
+	/** Whether the session has begun disposing. */
+	isDisposed(): boolean;
+	/** Persist the just-finished turn before a mid-run compaction rewrites history; false when it cannot be. */
+	persistTurnForMidRunCompaction(context: AgentTurnEndContext | undefined): Promise<boolean>;
 }
 
 /**
@@ -220,6 +236,171 @@ export class TurnContextCheck {
 			predatesCompaction,
 			autoContinue,
 		);
+	}
+
+	/**
+	 * Before a prompt starts its loop: when the pending prompt carries the context past the compaction
+	 * threshold, switch to a larger-context model, otherwise compact. Promotion goes first, because a
+	 * switch keeps the history whole; the post-turn check orders the two the same way.
+	 */
+	async beforePrompt(messages: AgentMessage[]): Promise<void> {
+		const model = this.#session.model;
+		if (!model) return;
+		const contextWindow = model.contextWindow ?? 0;
+		if (contextWindow <= 0) return;
+		const compactionSettings = this.#session.settings.getGroup("compaction");
+		// The local-estimate floor is applied in getContextBreakdown, so this is the exact number the
+		// footline gauge shows.
+		const contextTokens =
+			this.#session.getContextBreakdown({ contextWindow, pendingMessages: messages })?.usedTokens ?? 0;
+		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+
+		if (await this.promoteContextModel()) {
+			logger.debug("Pre-prompt context promotion avoided compaction", {
+				contextTokens,
+				contextWindow,
+				model: `${model.provider}/${model.id}`,
+			});
+			return;
+		}
+
+		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
+			contextTokens,
+			contextWindow,
+			model: `${model.provider}/${model.id}`,
+		});
+		await this.#host.runAutoCompaction("threshold", false, {
+			autoContinue: false,
+			triggerContextTokens: contextTokens,
+			phase: "pre_turn",
+		});
+	}
+
+	/**
+	 * Between the provider calls of a tool loop: compact a run that will continue before its next
+	 * provider request.
+	 *
+	 * `onTurnEnd` is the safe boundary: tool results for the just-finished turn are already paired in
+	 * `activeMessages`, the live array the agent loop reads before its next model call. Before
+	 * compacting, the just-finished turn is persisted if async message hooks have not reached the
+	 * normal append path yet. The compacted history replaces `activeMessages` in place.
+	 */
+	async betweenProviderCalls(
+		activeMessages: AgentMessage[],
+		signal: AbortSignal | undefined,
+		context: AgentTurnEndContext | undefined,
+	): Promise<void> {
+		const session = this.#session;
+		if (
+			signal?.aborted ||
+			this.#host.isDisposed() ||
+			session.isCompacting ||
+			session.isGeneratingHandoff ||
+			!context?.willContinue
+		)
+			return;
+
+		const model = session.model;
+		const contextWindow = model?.contextWindow ?? 0;
+		if (contextWindow <= 0) return;
+
+		const compactionSettings = session.settings.getGroup("compaction");
+		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
+			return;
+		}
+
+		const lastAssistant = activeMessages.findLast(
+			(message): message is AssistantMessage => message.role === "assistant",
+		);
+		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
+
+		if (!(await this.#host.persistTurnForMidRunCompaction(context))) return;
+
+		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
+		const storedContextTokens = this.#host.estimateStoredContextTokens();
+		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
+		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+
+		// Promotion before compaction, as in the pre-prompt and post-turn checks. Without it a long
+		// tool loop that crosses the threshold compacts the history, and can reach the no-progress
+		// dead end on a single oversized turn, on a model a larger window should have replaced.
+		if (await this.promoteContextModel()) {
+			logger.debug("Mid-run context promotion avoided compaction", {
+				contextTokens,
+				contextWindow,
+				from: `${model?.provider}/${model?.id}`,
+			});
+			return;
+		}
+
+		const messagesBefore = activeMessages.length;
+		await this.#host.runAutoCompaction("threshold", false, {
+			autoContinue: false,
+			suppressContinuation: true,
+			triggerContextTokens: contextTokens,
+			phase: "mid_turn",
+		});
+
+		if (signal?.aborted) return;
+		const compactedMessages = session.agent.state.messages;
+		if (compactedMessages !== activeMessages) {
+			activeMessages.splice(0, activeMessages.length, ...compactedMessages);
+		}
+		const goal = this.#host.goalMode();
+		logger.debug("Mid-run compaction ran between provider calls", {
+			contextTokens,
+			contextWindow,
+			strategy: compactionSettings.strategy,
+			goalActive: goal?.enabled === true && goal.goal.status === "active",
+			messagesBefore,
+			messagesAfter: activeMessages.length,
+		});
+	}
+
+	/**
+	 * Switch to a larger-context sibling when context promotion is enabled and a target with a
+	 * strictly larger window and a usable key exists. True when the model was switched, so the caller
+	 * retries without compacting.
+	 */
+	async promoteContextModel(): Promise<boolean> {
+		if (!this.#session.settings.getGroup("contextPromotion").enabled) return false;
+		const currentModel = this.#session.model;
+		if (!currentModel) return false;
+		const contextWindow = currentModel.contextWindow ?? 0;
+		if (contextWindow <= 0) return false;
+		const targetModel = await this.promotionTarget(currentModel, contextWindow);
+		if (!targetModel) return false;
+
+		try {
+			await this.#session.setModelTemporary(targetModel, undefined, { ephemeral: true });
+			logger.debug("Context promotion switched model on overflow", {
+				from: `${currentModel.provider}/${currentModel.id}`,
+				to: `${targetModel.provider}/${targetModel.id}`,
+			});
+			return true;
+		} catch (error) {
+			logger.warn("Context promotion failed", {
+				from: `${currentModel.provider}/${currentModel.id}`,
+				to: `${targetModel.provider}/${targetModel.id}`,
+				error: errorMessage(error),
+			});
+			return false;
+		}
+	}
+
+	/** The larger-context sibling of `currentModel` that has a usable key, or undefined. */
+	async promotionTarget(currentModel: Model, contextWindow: number): Promise<Model | undefined> {
+		const registry = this.#session.modelRegistry;
+		const availableModels = registry.getAvailable();
+		if (availableModels.length === 0) return undefined;
+
+		const candidate = contextPromotionTarget(currentModel, availableModels);
+		if (!candidate) return undefined;
+		if (modelsAreEqual(candidate, currentModel)) return undefined;
+		if (candidate.contextWindow == null || candidate.contextWindow <= contextWindow) return undefined;
+		const apiKey = await registry.getApiKey(candidate, this.#session.sessionId);
+		if (!apiKey) return undefined;
+		return candidate;
 	}
 
 	/**
@@ -502,6 +683,6 @@ export class TurnContextCheck {
 		// switched away from; only promote when the failing turn was this model.
 		if (assistantMessage.provider !== currentModel.provider || assistantMessage.model !== currentModel.id)
 			return false;
-		return this.#host.promoteContextModel();
+		return this.promoteContextModel();
 	}
 }

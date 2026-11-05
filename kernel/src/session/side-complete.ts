@@ -16,7 +16,7 @@ import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions } from 
  * silent, and the cap is what stops several from leaving at once.
  *
  * So a site that builds its own options names {@link AgentSession.sideComplete}
- * (`#sideCompleteImpl` from inside the session) rather than writing the adapter
+ * (`ProviderTransport.sideComplete` from inside the session) rather than writing the adapter
  * again. One shape, one name, so a new side request cannot forget it by accident.
  */
 export type SideCompleteImpl = <TApi extends Api>(

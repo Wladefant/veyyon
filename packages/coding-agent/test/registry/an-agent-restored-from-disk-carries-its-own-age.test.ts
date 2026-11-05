@@ -38,6 +38,7 @@ import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifec
 import { type AgentKind, type AgentRef, AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { registerPersistedAgents } from "@veyyon/coding-agent/registry/persisted-agents";
 import { Snowflake } from "@veyyon/utils";
+import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
 
 const HOUR = 60 * 60_000;
 /** The operator's "Prune After", chosen so one fixture sits either side of it. */
@@ -61,7 +62,7 @@ async function seedTranscript(file: string, ageMs: number): Promise<number> {
 
 /** Settle the async prune chain (timer callback → prune() → release() → unregister). */
 async function flushAsync(): Promise<void> {
-	for (let i = 0; i < 8; i++) await Promise.resolve();
+	await drainMicrotasks(8);
 }
 
 /** Install the budget the non-ACP bootstrap installs, with no reviver available. */

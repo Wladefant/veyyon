@@ -525,9 +525,6 @@ async function callGeminiDeveloperSearch(
 }
 
 /**
- * Executes a web search using Google Gemini with Google Search grounding.
- */
-/**
  * Did the model actually run a web search? A grounded Gemini/antigravity response
  * carries at least one grounding signal: a source, a citation, or a search query
  * the model issued. When the model answers conversationally WITHOUT searching (a
@@ -542,6 +539,9 @@ export function geminiPerformedSearch(
 	return result.sources.length > 0 || result.citations.length > 0 || result.searchQueries.length > 0;
 }
 
+/**
+ * Executes a web search using Google Gemini with Google Search grounding.
+ */
 export async function searchGemini(params: GeminiSearchParams): Promise<SearchResponse> {
 	const selectedModel = resolveGeminiSearchModel(params.geminiModel);
 	const seed = await findGeminiAuth(params.authStorage, params.sessionId, params.signal);

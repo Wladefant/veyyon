@@ -1,13 +1,13 @@
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import type { ptree } from "@veyyon/utils";
-import { lazy } from "@veyyon/utils/abortable";
 import { describeTimeoutParam } from "../tools/core/tool-timeouts";
 
 // =============================================================================
 // Tool Schema
 // =============================================================================
 
-export const lspSchema = lazy(() =>
+export const lspSchema = toolSchema("lsp", () =>
 	type({
 		action:
 			"'diagnostics' | 'definition' | 'references' | 'hover' | 'symbols' | 'rename' | 'rename_file' | 'code_actions' | 'type_definition' | 'implementation' | 'incoming_calls' | 'outgoing_calls' | 'status' | 'reload' | 'capabilities' | 'request'",
@@ -330,11 +330,8 @@ export type LinterClientFactory = (config: ServerConfig, cwd: string) => LinterC
 // =============================================================================
 
 export interface ServerCapabilities {
+	/** The `diagnostics` action runs the server's compiler check (`rust-analyzer/runFlycheck`) and waits for it. */
 	flycheck?: boolean;
-	ssr?: boolean;
-	expandMacro?: boolean;
-	runnables?: boolean;
-	relatedTests?: boolean;
 }
 
 export interface ServerConfig {
@@ -348,8 +345,9 @@ export interface ServerConfig {
 	/** Per-server warmup timeout in milliseconds. Overrides the global WARMUP_TIMEOUT_MS for this server during startup. */
 	warmupTimeoutMs?: number;
 	/**
-	 * Per-server overrides for rust-analyzer workspace-ready polling. When omitted, the module
-	 * defaults are used. Primarily a tuning/test seam to bound the multi-second settle window.
+	 * Per-server overrides for the rust-analyzer workspace wait. `timeoutMs` bounds the whole wait, for
+	 * `quiescent: true` or for the `analyzerStatus` poll; `pollMs`, `settleMs` and `statusRequestTimeoutMs`
+	 * apply to the poll, which runs only for a server that reports no `experimental/serverStatus`.
 	 */
 	workspaceReadyTimings?: {
 		timeoutMs?: number;

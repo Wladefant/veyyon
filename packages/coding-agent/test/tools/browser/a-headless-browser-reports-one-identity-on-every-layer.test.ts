@@ -35,6 +35,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 import { TempDir } from "@veyyon/utils";
+import { toolResultText } from "../../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./chromium";
 
 const TAB = `identity-${process.pid}`;
@@ -168,10 +169,6 @@ afterAll(async () => {
 	await closed.promise;
 });
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
-}
-
 /** Load the page again on tab `name`, collect every layer and the geometry, and click the target once. */
 async function collectOn(name: string, load: number): Promise<Collected> {
 	const result = await tool.execute("run", {
@@ -184,7 +181,7 @@ await tab.click("#target");
 const clicks = await tab.evaluate(() => window.clicks);
 return { ...collected, clicks };`,
 	});
-	return JSON.parse(text(result)) as Collected;
+	return JSON.parse(toolResultText(result, "")) as Collected;
 }
 
 /**
@@ -302,7 +299,10 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a headless browser", () => {
 			name: probed,
 			code: "return await tab.evaluate(() => window.nativeLikeness());",
 		});
-		const likeness = JSON.parse(text(result)) as Record<"native" | "toString" | "getParameter", unknown>;
+		const likeness = JSON.parse(toolResultText(result, "")) as Record<
+			"native" | "toString" | "getParameter",
+			unknown
+		>;
 		expect(likeness.native).toEqual({
 			cycle: "TypeError",
 			reflected: false,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
 import type { AssistantMessage, Model, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const model: Model<"anthropic-messages"> = buildModel({
 	api: "anthropic-messages",
@@ -40,14 +41,7 @@ describe("Anthropic thinking replay immutability", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: Date.now(),
 		};

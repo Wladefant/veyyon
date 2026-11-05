@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as AIError from "@veyyon/ai/error";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
 import type {
@@ -109,14 +110,7 @@ describe("Agent hub silent-abort regression", () => {
 					model: "claude-sonnet-4-5",
 					stopReason: "aborted",
 					errorMessage: SILENT_ABORT_MARKER,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					timestamp: Date.now(),
 				},
 			},
@@ -166,14 +160,7 @@ describe("Agent hub silent-abort regression", () => {
 					model: "claude-sonnet-4-5",
 					stopReason: "aborted",
 					errorId: AIError.create(AIError.Flag.SilentAbort),
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					timestamp: Date.now(),
 				},
 			},
@@ -218,14 +205,7 @@ describe("Agent hub silent-abort regression", () => {
 					model: "claude-sonnet-4-5",
 					stopReason: "error",
 					errorMessage: "Connection timed out",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					timestamp: Date.now(),
 				},
 			},

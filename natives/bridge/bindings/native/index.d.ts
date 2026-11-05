@@ -1747,7 +1747,13 @@ export interface SliceResult {
  */
 export declare function sliceWithWidth(line: string, startCol: number, length: number, strict: boolean | undefined | null, tabWidth: number): SliceResult
 
-export declare function summarizeCode(options: SummaryOptions): SummaryResult
+/**
+ * Summarize `options.code` into kept and elided segments.
+ *
+ * The parse runs on the thread pool, so a large source never holds the event
+ * loop, and summaries of several sources parse in parallel.
+ */
+export declare function summarizeCode(options: SummaryOptions): Promise<SummaryResult>
 
 export interface SummaryOptions {
   /** Source code to summarize. */

@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, Model } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { collapseWhitespace, prompt } from "@veyyon/utils";
+import { contentText } from "@veyyon/utils/content-text";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import { commitPrompts } from "../../prompts/commit/rows";
@@ -181,13 +182,8 @@ export async function runCommitAgentSession(input: CommitAgentInput): Promise<Co
 	}
 }
 
-function extractMessagePreview(content: Array<{ type: string; text?: string }>): string | null {
-	const textBlocks = content
-		.filter(block => block.type === "text" && typeof block.text === "string")
-		.map(block => block.text?.trim())
-		.filter((value): value is string => Boolean(value));
-	if (textBlocks.length === 0) return null;
-	return collapseWhitespace(textBlocks.join(" "));
+function extractMessagePreview(content: Array<{ type: string; text?: string }>): string {
+	return collapseWhitespace(contentText(content, { separator: " " }));
 }
 
 function extractMessageText(content: Array<{ type: string; text?: string }>): string | null {

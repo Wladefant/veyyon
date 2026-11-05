@@ -18,6 +18,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type CaptureAttempt, hedgeCapture } from "@veyyon/coding-agent/tools/web/browser/screenshot-capture";
+import { drainMicrotasks } from "../../../../utils/test/helpers/drain-microtasks";
 
 const HEDGE_MS = 1_000;
 const MAX_ATTEMPTS = 3;
@@ -64,7 +65,7 @@ function race(start: () => CaptureAttempt, signal?: AbortSignal): { readonly out
 
 /** Lets every settled attempt's reactions and the race's own run. */
 async function flush(): Promise<void> {
-	for (let i = 0; i < 10; i++) await Promise.resolve();
+	await drainMicrotasks(10);
 }
 
 /** Every outcome sequence for MAX_ATTEMPTS attempts, cut at the first answer. */

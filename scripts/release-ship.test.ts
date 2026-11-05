@@ -13,10 +13,22 @@
  * `gh run list` conclusions instead of by cutting releases.
  */
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { checkVerdict, failureAdvice, REQUIRED_WORKFLOWS, type RunSummary, runsForSha } from "./release-ship";
+import {
+	checkVerdict,
+	failureAdvice,
+	git,
+	REQUIRED_WORKFLOWS,
+	type RunSummary,
+	runsForSha,
+	tagVerifiedCommit,
+} from "./release-ship";
+
+/** A commit id of the right shape for advice text; no repository holds it. */
+const VERIFIED_SHA = "0123456789abcdef0123456789abcdef01234567";
 
 /** Run ids ascend in construction order, so a later-built run is the newer one. */
 let nextRunId = 1;
@@ -176,7 +188,9 @@ describe("checkVerdict", () => {
  */
 describe("failureAdvice", () => {
 	it("offers a re-run, and never says fix main, when every failure is a cancellation", () => {
-		const advice = failureAdvice([done("CI", "cancelled"), done("Checks", "cancelled")], "v9.9.9").join("\n");
+		const advice = failureAdvice([done("CI", "cancelled"), done("Checks", "cancelled")], "v9.9.9", VERIFIED_SHA).join(
+			"\n",
+		);
 		expect(advice).toContain("CANCELLED");
 		expect(advice).toContain("gh run rerun");
 		expect(advice).toContain("no defect to look for");
@@ -186,26 +200,84 @@ describe("failureAdvice", () => {
 	it("names each cancelled run's id, so the re-run does not have to be looked up", () => {
 		const ci = done("CI", "cancelled");
 		const checks = done("Checks", "cancelled");
-		const advice = failureAdvice([ci, checks], "v9.9.9").join("\n");
+		const advice = failureAdvice([ci, checks], "v9.9.9", VERIFIED_SHA).join("\n");
 		expect(advice).toContain(`gh run rerun ${ci.databaseId}`);
 		expect(advice).toContain(`gh run rerun ${checks.databaseId}`);
 	});
 
 	it("says fix main when a cancellation sits beside a real failure", () => {
-		const advice = failureAdvice([done("CI", "cancelled"), done("Checks", "failure")], "v9.9.9").join("\n");
+		const advice = failureAdvice([done("CI", "cancelled"), done("Checks", "failure")], "v9.9.9", VERIFIED_SHA).join(
+			"\n",
+		);
 		expect(advice).toContain("Fix main");
 		expect(advice).not.toContain("gh run rerun");
 	});
 
 	it("says fix main for a plain failure", () => {
-		const advice = failureAdvice([done("Checks", "timed_out")], "v9.9.9").join("\n");
+		const advice = failureAdvice([done("Checks", "timed_out")], "v9.9.9", VERIFIED_SHA).join("\n");
 		expect(advice).toContain("Fix main");
 	});
 
-	/** Both branches end at the same place: the commit is on main and still tag-able. */
-	it("always ends with the tag command for this version", () => {
-		for (const failures of [[done("CI", "cancelled")], [done("CI", "failure")]]) {
-			expect(failureAdvice(failures, "v9.9.9").join("\n")).toContain("git tag v9.9.9 && git push origin v9.9.9");
+	/**
+	 * A cancelled run leaves the bump commit unjudged and still the one to publish, so the command
+	 * names it: HEAD may have moved on. A failure is fixed by a new commit, so that command cannot.
+	 */
+	it("ends with the tag command, naming the commit when it is the bump", () => {
+		expect(failureAdvice([done("CI", "cancelled")], "v9.9.9", VERIFIED_SHA).join("\n")).toContain(
+			`git tag v9.9.9 ${VERIFIED_SHA} && git push origin v9.9.9`,
+		);
+		expect(failureAdvice([done("CI", "failure")], "v9.9.9", VERIFIED_SHA).join("\n")).toContain(
+			"git tag v9.9.9 && git push origin v9.9.9",
+		);
+	});
+});
+
+/**
+ * WHY. The waiter polls the checks of the bump commit and then tags. It tagged HEAD, so a commit
+ * pushed to main during the wait (minutes to an hour) was published under the version tag without
+ * its checks having finished. The tag must name the commit the verdict was about.
+ *
+ * Driven against a scratch repository with a bare remote, through the same runner shape the release
+ * uses. What this does NOT catch: the prompt and the polling around the call, which need a terminal
+ * and GitHub.
+ */
+describe("tagVerifiedCommit", () => {
+	const identity = {
+		GIT_AUTHOR_NAME: "release-test",
+		GIT_AUTHOR_EMAIL: "release-test@example.invalid",
+		GIT_COMMITTER_NAME: "release-test",
+		GIT_COMMITTER_EMAIL: "release-test@example.invalid",
+	};
+
+	function sh(cwd: string, ...args: string[]): string {
+		return execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args], {
+			cwd,
+			env: { ...process.env, ...identity },
+			encoding: "utf8",
+		}).trim();
+	}
+
+	it("tags the commit whose checks passed, not the HEAD that moved during the wait", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-ship-tag-"));
+		try {
+			const remote = path.join(root, "remote.git");
+			const work = path.join(root, "work");
+			sh(root, "init", "-q", "--bare", remote);
+			sh(root, "init", "-q", work);
+			sh(work, "remote", "add", "origin", remote);
+			sh(work, "commit", "-q", "--allow-empty", "-m", "chore: bump version to v9.9.9");
+			const verified = sh(work, "rev-parse", "HEAD");
+			sh(work, "commit", "-q", "--allow-empty", "-m", "fix: landed while the checks ran");
+			expect(sh(work, "rev-parse", "HEAD")).not.toBe(verified);
+
+			await tagVerifiedCommit("v9.9.9", verified, (...args) =>
+				git("-C", work, "-c", "core.hooksPath=/dev/null", ...args),
+			);
+
+			expect(sh(work, "rev-parse", "v9.9.9^{commit}")).toBe(verified);
+			expect(sh(remote, "rev-parse", "v9.9.9^{commit}")).toBe(verified);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
 });

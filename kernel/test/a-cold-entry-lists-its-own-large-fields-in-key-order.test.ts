@@ -3,6 +3,7 @@ import { REMOTE_COMPACTION_PRESERVE_KEY } from "@veyyon/agent-core/compaction/re
 import { ColdEntryPayloads, coldFieldsOf, MIN_COLD_STRING_LENGTH } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { mulberry32 } from "../../packages/utils/test/helpers/mulberry32";
 
 /**
  * WHY: cooling an entry replaces each large field with an accessor and records which fields it
@@ -28,18 +29,6 @@ import { isRecord } from "@veyyon/utils/type-guards";
  * What it does NOT catch: blob references, which the generator never writes, and the read-back of a
  * line whose bytes changed under the handle; the session manager suites cover both.
  */
-
-/** A deterministic generator, so a failing seed reproduces. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 const FIELD_NAMES = ["alpha", "beta", "gamma", "delta", "epsilon"];
 const MESSAGE_FIELD_NAMES = [...FIELD_NAMES, "usage"];

@@ -15,12 +15,25 @@ export interface ToolInputMemo {
 	input: string | undefined;
 }
 
-/** The arguments as a block states them: a string as it is, anything else as indented JSON. */
+/**
+ * Hands every value through unchanged. Passing it moves `JSON.stringify` onto the path that checks for
+ * a cycle at each object it enters. Without a replacer, an indented stringify of a cyclic value
+ * recurses until its depth limit before it throws, writing the indentation of every level on the way
+ * down: under Bun 1.4.3 that took 250-830 ms per call, against 0.002 ms with this replacer.
+ */
+function keepValue(_key: string, value: unknown): unknown {
+	return value;
+}
+
+/**
+ * The arguments as a block states them: a string as it is, nothing as empty text, anything else as
+ * indented JSON, and a value JSON cannot hold (a cycle, a bigint) as `[unserializable]`.
+ */
 export function serializeToolInput(args: unknown): string {
 	if (typeof args === "string") return args;
 	if (args === undefined) return "";
 	try {
-		return typeof args === "object" && args !== null ? JSON.stringify(args, null, 2) : JSON.stringify(args);
+		return JSON.stringify(args, keepValue, 2) ?? "";
 	} catch {
 		return "[unserializable]";
 	}

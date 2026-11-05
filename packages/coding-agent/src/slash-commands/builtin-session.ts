@@ -11,9 +11,9 @@ import { resolveResumableSession } from "@veyyon/kernel/session/session-listing"
 import { settings } from "../config/settings-instance";
 import type { FreshSessionResult } from "../session/agent-session-types";
 import { veyyonRelaunchArgv } from "../task/veyyon-command";
-import { resolveToCwd } from "../tools/core/path-utils";
+import { normalizePathLikeInput, resolveToCwd } from "../tools/core/path-utils";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
-import { commandConsumed, errorMessage, usage } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { ParsedSlashCommand, SlashCommandResult, TuiSlashCommandRuntime } from "./types";
 
 export function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -30,21 +30,37 @@ export const shutdownHandlerTui = (
 	return commandConsumed();
 };
 
+const SESSION_USAGE = "Usage: /session [info|delete]";
+
+/**
+ * The verb one `/session` invocation names, read the same way by the text and TUI handlers so a
+ * word one surface runs is never refused by the other. Bare `/session` is `info`; anything else,
+ * including trailing words after a verb, is `undefined` and gets the usage line.
+ */
+function parseSessionVerb(rawArgs: string): "info" | "delete" | undefined {
+	const { verb, rest } = parseSubcommand(rawArgs);
+	if (rest) return undefined;
+	if (!verb || verb === "info") return "info";
+	if (verb === "delete") return "delete";
+	return undefined;
+}
+
 /** What the session builtins DO, keyed by the name each is declared under. */
 export const SESSION_HANDLERS = {
 	session: {
 		handle: async (command, runtime) => {
-			if (!command.args || command.args === "info") {
+			const verb = parseSessionVerb(command.args);
+			if (verb === "info") {
 				await runtime.output(
 					[
 						`Session: ${runtime.session.sessionId}`,
-						`Title: ${runtime.session.sessionName}`,
+						`Title: ${runtime.session.sessionName ?? "(untitled)"}`,
 						`CWD: ${runtime.cwd}`,
 					].join("\n"),
 				);
 				return commandConsumed();
 			}
-			if (command.args === "delete") {
+			if (verb === "delete") {
 				if (runtime.session.isStreaming) return usage("Cannot delete the session while streaming.", runtime);
 				const sessionFile = runtime.sessionManager.getSessionFile();
 				if (!sessionFile) return usage("No session file to delete (in-memory session).", runtime);
@@ -63,18 +79,18 @@ export const SESSION_HANDLERS = {
 				);
 				return commandConsumed();
 			}
-			return usage("Usage: /session [info|delete]", runtime);
+			return usage(SESSION_USAGE, runtime);
 		},
 		handleTui: async (command, runtime) => {
-			const sub = command.args.trim().toLowerCase() || "info";
-			if (sub === "delete") {
+			const verb = parseSessionVerb(command.args);
+			if (verb === "info") {
+				await runtime.ctx.handleSessionCommand();
 				runtime.ctx.editor.setText("");
-				await runtime.ctx.handleSessionDeleteCommand();
 				return;
 			}
-			// Default: show session info
-			await runtime.ctx.handleSessionCommand();
 			runtime.ctx.editor.setText("");
+			if (verb === "delete") await runtime.ctx.handleSessionDeleteCommand();
+			else runtime.ctx.showWarning(SESSION_USAGE);
 		},
 	},
 	branch: {
@@ -167,13 +183,12 @@ export const SESSION_HANDLERS = {
 	rename: {
 		handle: async (command, runtime) => {
 			if (!command.args) return usage("Usage: /rename <title>", runtime);
+			// A user rename always replaces the title; `false` means the title held nothing once its
+			// control characters were cleaned out.
 			const ok = await runtime.sessionManager.setSessionName(command.args, "user");
-			if (!ok) {
-				await runtime.output("Session name not changed (a user-set name takes precedence).");
-				return commandConsumed();
-			}
+			if (!ok) return usage("Session name cannot be empty.", runtime);
 			await runtime.notifyTitleChanged?.();
-			await runtime.output(`Session renamed to ${command.args}.`);
+			await runtime.output(`Session renamed to ${runtime.sessionManager.getSessionName()}.`);
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
@@ -190,8 +205,10 @@ export const SESSION_HANDLERS = {
 	move: {
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot move while streaming.", runtime);
-			if (!command.args) return usage("Usage: /move <path>", runtime);
-			const resolvedPath = resolveToCwd(command.args, runtime.cwd);
+			// The path is read the way the terminal reads it: trimmed, outer double quotes stripped.
+			const target = normalizePathLikeInput(command.args);
+			if (!target) return usage("Usage: /move <path>", runtime);
+			const resolvedPath = resolveToCwd(target, runtime.cwd);
 			try {
 				const stat = await fs.stat(resolvedPath);
 				if (!stat.isDirectory()) {
@@ -202,15 +219,13 @@ export const SESSION_HANDLERS = {
 			}
 			try {
 				// One owner moves storage and every cwd-derived runtime input as a
-				// transaction. A failed re-scope rolls the storage move back.
+				// transaction. A failed re-scope rolls the storage move back. Its
+				// `cwd_changed` event is where each host reloads and re-advertises its
+				// cwd-local command surface, as for `/cwd` and the `set_cwd` tool.
 				await runtime.session.moveToCwd(resolvedPath);
 			} catch (err) {
 				return usage(`Move failed: ${errorMessage(err)}`, runtime);
 			}
-			// Protocol modes still need to re-advertise their cwd-local command
-			// surface after the shared session re-scope has completed.
-			await runtime.reloadPlugins();
-			await runtime.notifyConfigChanged?.();
 			await runtime.notifyTitleChanged?.();
 			await runtime.output(`Moved to ${runtime.sessionManager.getCwd()}.`);
 			return commandConsumed();

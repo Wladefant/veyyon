@@ -9,12 +9,12 @@
  */
 
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy } from "@veyyon/utils/abortable";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { parseApplyPatch, parseApplyPatchStreaming } from "../apply-patch/parser";
 import { ApplyPatchError } from "../diff";
 import type { PatchEditEntry } from "./patch";
 
-export const applyPatchSchema = lazy(() =>
+export const applyPatchSchema = toolSchema("edit:apply-patch", () =>
 	type({
 		input: "string",
 	}),

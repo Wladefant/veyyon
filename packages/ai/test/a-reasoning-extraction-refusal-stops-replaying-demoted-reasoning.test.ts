@@ -10,6 +10,7 @@ import type {
 	ProviderSessionState,
 } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * WHY: a request to a signing Anthropic endpoint that replays a prior turn's
@@ -76,14 +77,7 @@ const crossModelPriorTurn: Context = {
 			api: "anthropic-messages",
 			provider: "openrouter",
 			model: "deepseek-reasoner",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		} satisfies AssistantMessage,
@@ -94,14 +88,7 @@ const crossModelPriorTurn: Context = {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-fable-5-1",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		} satisfies AssistantMessage,
@@ -402,14 +389,7 @@ describe("a gateway that demotes unsigned thinking without being a known signing
 				api: "anthropic-messages",
 				provider: "opencode-zen",
 				model: "minimax-m3",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 0,
 			} satisfies AssistantMessage,
@@ -494,14 +474,7 @@ describe("an unsigned block beside a signed one in the same turn", () => {
 				api: "anthropic-messages",
 				provider: "opencode-zen",
 				model: "claude-fable-5-1",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 0,
 			} satisfies AssistantMessage,

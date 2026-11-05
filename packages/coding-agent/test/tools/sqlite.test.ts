@@ -17,19 +17,9 @@ import {
 } from "@veyyon/coding-agent/tools/core/sqlite-reader";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
-
-type ToolTextResult = {
-	content: Array<{ type: string; text?: string }>;
-};
+import { toolResultText } from "../helpers/tool-result-text";
 
 type SessionLike = ConstructorParameters<typeof ReadTool>[0];
-
-function getText(result: ToolTextResult): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text ?? "")
-		.join("\n");
-}
 
 function createSession(cwd: string, overrides: Partial<SessionLike> = {}): SessionLike {
 	return {
@@ -216,7 +206,7 @@ describe("SQLite tool support", () => {
 
 	it("lists tables for a .sqlite database and excludes sqlite internal tables", async () => {
 		const result = await readTool.execute("sqlite-list", { path: sqlitePath });
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("users (6 rows)");
 		expect(text).toContain("slugs (2 rows)");
@@ -226,17 +216,17 @@ describe("SQLite tool support", () => {
 
 	it("lists tables for a .db database when the magic bytes match SQLite", async () => {
 		const result = await readTool.execute("sqlite-db-list", { path: sqliteDbPath });
-		expect(getText(result)).toContain("users (6 rows)");
+		expect(toolResultText(result)).toContain("users (6 rows)");
 	});
 
 	it("falls through to plain file reading for non-SQLite .db files", async () => {
 		const result = await readTool.execute("sqlite-invalid-db", { path: invalidDbPath });
-		expect(getText(result)).toContain("not sqlite");
+		expect(toolResultText(result)).toContain("not sqlite");
 	});
 
 	it("shows table schema and sample rows", async () => {
 		const result = await readTool.execute("sqlite-schema", { path: `${sqlitePath}:users` });
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("CREATE TABLE users");
 		expect(text).toContain("Sample rows:");
@@ -245,7 +235,7 @@ describe("SQLite tool support", () => {
 
 	it("returns a row by integer primary key", async () => {
 		const result = await readTool.execute("sqlite-row-int", { path: `${sqlitePath}:users:2` });
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("id: 2");
 		expect(text).toContain("name: Bob");
@@ -254,7 +244,7 @@ describe("SQLite tool support", () => {
 
 	it("returns a row by text primary key", async () => {
 		const result = await readTool.execute("sqlite-row-text", { path: `${sqlitePath}:slugs:welcome` });
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("slug: welcome");
 		expect(text).toContain("title: Welcome");
@@ -262,7 +252,7 @@ describe("SQLite tool support", () => {
 
 	it("falls back to ROWID lookups for tables without a declared primary key", async () => {
 		const result = await readTool.execute("sqlite-row-rowid", { path: `${sqlitePath}:notes:1` });
-		expect(getText(result)).toContain("body: First note");
+		expect(toolResultText(result)).toContain("body: First note");
 	});
 
 	it("errors on composite primary key row lookups", async () => {
@@ -273,7 +263,7 @@ describe("SQLite tool support", () => {
 
 	it("supports pagination and includes a continuation hint", async () => {
 		const result = await readTool.execute("sqlite-page", { path: `${sqlitePath}:users?limit=2&offset=1` });
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("Bob");
 		expect(text).toContain("Carol");
@@ -285,7 +275,7 @@ describe("SQLite tool support", () => {
 		const result = await readTool.execute("sqlite-sel-query", {
 			path: `${sqlitePath}:users?where=status='active'&order=created:desc&limit=2`,
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("Frank");
 		expect(text).toContain("Eve");
@@ -306,7 +296,7 @@ describe("SQLite tool support", () => {
 		const result = await readTool.execute("sqlite-sel-semicolon-literal", {
 			path: `${sqlitePath}:notes?where=body LIKE '%;%'&limit=5`,
 		});
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("Third; note");
 	});
@@ -346,7 +336,7 @@ describe("SQLite tool support", () => {
 		}
 
 		const result = await readTool.execute("sqlite-raw-row-cap", { path: `${capDbPath}?q=SELECT * FROM big` });
-		const text = getText(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("val_1000_end");
 		expect(text).not.toContain("val_1001_end");

@@ -97,6 +97,49 @@ export function projectToolDisplay(params: ToolExecutionBuildParams): ToolExecut
 	};
 }
 
+/** A tool result as the display projections read it, from a session message or a correlation map. */
+interface ToolResultForDisplay {
+	content: unknown;
+	details?: unknown;
+	isError?: boolean;
+}
+
+/** The display of tool call `call`, finished when its `result` is known and running until then. */
+export function projectToolCallDisplay(
+	call: { id: string; name: string; arguments?: unknown },
+	result: ToolResultForDisplay | undefined,
+): ToolExecutionDisplay {
+	return projectToolDisplay({
+		toolName: call.name,
+		toolCallId: call.id,
+		args: call.arguments,
+		result: result
+			? { content: normalizeToolResultContent(result.content), details: result.details, isError: result.isError }
+			: undefined,
+		isError: result?.isError,
+		isPartial: result === undefined,
+		expanded: true,
+	});
+}
+
+/** The display of tool result message `message`, drawn with the arguments of the `call` it answers when known. */
+export function projectToolResultDisplay(
+	message: ToolResultForDisplay & { toolCallId: string; toolName?: string; timestamp?: number },
+	call: { toolName: string; args: unknown } | undefined,
+): ToolExecutionDisplay {
+	const isError = message.isError === true;
+	return projectToolDisplay({
+		toolName: message.toolName || call?.toolName || "",
+		toolCallId: message.toolCallId,
+		args: call?.args,
+		result: { content: normalizeToolResultContent(message.content), details: message.details, isError },
+		isError,
+		isPartial: false,
+		timestamp: message.timestamp,
+		expanded: true,
+	});
+}
+
 export interface ToolCallCorrelation {
 	toolCallId: string;
 	toolName: string;
@@ -194,26 +237,7 @@ export function projectSessionEntriesForExport(entries: readonly SessionEntry[])
 			const projectedContent = msg.content.map(block => {
 				if (isToolCallRecord(block)) {
 					changed = true;
-					const matchingResult = toolResults.get(block.id);
-					const display = projectToolDisplay({
-						toolName: block.name,
-						toolCallId: block.id,
-						args: block.arguments,
-						result: matchingResult
-							? {
-									content: normalizeToolResultContent(matchingResult.content),
-									details: matchingResult.details,
-									isError: matchingResult.isError,
-								}
-							: undefined,
-						isError: matchingResult?.isError,
-						isPartial: matchingResult === undefined,
-						expanded: true,
-					});
-					return {
-						...block,
-						display,
-					};
+					return { ...block, display: projectToolCallDisplay(block, toolResults.get(block.id)) };
 				}
 				return block;
 			});
@@ -229,22 +253,7 @@ export function projectSessionEntriesForExport(entries: readonly SessionEntry[])
 		}
 
 		if (msg.role === "toolResult" && typeof msg.toolCallId === "string") {
-			const matchingCall = toolCalls.get(msg.toolCallId);
-			const toolName = msg.toolName || matchingCall?.toolName || "";
-			const display = projectToolDisplay({
-				toolName,
-				toolCallId: msg.toolCallId,
-				args: matchingCall?.args,
-				result: {
-					content: normalizeToolResultContent(msg.content),
-					details: msg.details,
-					isError: msg.isError === true,
-				},
-				isError: msg.isError === true,
-				isPartial: false,
-				timestamp: msg.timestamp,
-				expanded: true,
-			});
+			const display = projectToolResultDisplay(msg, toolCalls.get(msg.toolCallId));
 
 			return {
 				...entry,

@@ -17,7 +17,12 @@
  */
 import { describe, expect, it } from "bun:test";
 import { Editor } from "@veyyon/tui/components/editor";
-import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@veyyon/utils/autocomplete";
+import type {
+	AppliedCompletion,
+	AutocompleteItem,
+	AutocompleteProvider,
+	AutocompleteSuggestions,
+} from "@veyyon/utils/autocomplete";
 import { defaultEditorTheme } from "./test-themes";
 
 /** Suggests one item for the `@`, `#` or `/` token ending at the cursor, and rewrites `:joy:`. */
@@ -40,7 +45,7 @@ class TokenProvider implements AutocompleteProvider {
 		cursorCol: number,
 		_item: AutocompleteItem,
 		_prefix: string,
-	): { lines: string[]; cursorLine: number; cursorCol: number } {
+	): AppliedCompletion {
 		return { lines, cursorLine, cursorCol };
 	}
 

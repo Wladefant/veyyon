@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { type AgentMessage, filterProviderReplayMessages } from "@veyyon/agent-core";
 import type { ImageContent, Message, TextContent } from "@veyyon/ai";
 import { inferCopilotInitiator } from "@veyyon/ai/providers/github-copilot-headers";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { convertToLlm, SKILL_PROMPT_MESSAGE_TYPE } from "@veyyon/coding-agent/session/messages";
 import { wrapSteeringForModel } from "@veyyon/coding-agent/session/steering-envelope";
 
@@ -72,14 +73,7 @@ describe("assistant refusal replay policy", () => {
 				api: "anthropic",
 				provider: "anthropic",
 				model: "claude-opus-4",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				timestamp: 2,
 			},
 			{ role: "user", content: [{ type: "text", text: "recover" }], timestamp: 3 },

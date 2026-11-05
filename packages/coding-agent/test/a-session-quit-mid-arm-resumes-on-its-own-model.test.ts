@@ -19,7 +19,7 @@ import { Agent } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { enterArm, leaveArm } from "@veyyon/coding-agent/autoresearch/arm-model";
 import { createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
@@ -30,13 +30,8 @@ import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createCtx } from "./helpers/autoresearch-session";
-
-function bundled(id: string): Model<Api> {
-	const model = getBundledModel("anthropic", id);
-	if (!model) throw new Error(`Expected anthropic model ${id} to exist`);
-	return model;
-}
 
 describe("a session quit mid-arm resumes on its own model", () => {
 	let sharedDir: TempDir;
@@ -99,14 +94,7 @@ describe("a session quit mid-arm resumes on its own model", () => {
 			api: ownModel.api,
 			provider: ownModel.provider,
 			model: ownModel.id,
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
@@ -146,8 +134,8 @@ describe("a session quit mid-arm resumes on its own model", () => {
 	}
 
 	it("returns to the session's own model after an ephemeral switch, and stays on a plain one", async () => {
-		const own = bundled("claude-sonnet-4-5");
-		const arm = bundled("claude-sonnet-4-6");
+		const own = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const arm = requireBundledModel("anthropic", "claude-sonnet-4-6");
 
 		const ephemeral = liveSession(own);
 		expect(await runExtensionSetModel(ephemeral.session, arm, { ephemeral: true })).toBe(true);
@@ -164,8 +152,8 @@ describe("a session quit mid-arm resumes on its own model", () => {
 	});
 
 	it("makes every arm switch ephemeral: onto the arm, back off it, and out of a stranded one", async () => {
-		const own = bundled("claude-sonnet-4-5");
-		const armModel = bundled("claude-sonnet-4-6");
+		const own = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const armModel = requireBundledModel("anthropic", "claude-sonnet-4-6");
 		let current: Model<Api> | undefined = own;
 		let accept = true;
 		const switches: Array<{ id: string; options: SetModelOptions | undefined }> = [];

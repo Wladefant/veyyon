@@ -13,8 +13,9 @@
  */
 import { describe, expect, it } from "bun:test";
 import { highlightCode } from "@veyyon/coding-agent/theme/highlight";
-import { getThemeByName, type Theme } from "@veyyon/coding-agent/theme/theme";
+import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import { highlightCode as nativeHighlightCode, supportsLanguage } from "@veyyon/natives";
+import { requireTheme } from "./helpers/require-theme";
 
 /** Sources that open a construct on one line and close it on a later one. */
 const SOURCES: ReadonlyArray<{ lang: string | undefined; source: string }> = [
@@ -57,15 +58,9 @@ function prefixes(source: string): string[] {
 	return Array.from({ length: source.length }, (_, index) => source.slice(0, index + 1));
 }
 
-async function loadTheme(name: string): Promise<Theme> {
-	const theme = await getThemeByName(name);
-	if (theme === undefined) throw new Error(`theme ${name} is not bundled`);
-	return theme;
-}
-
 describe("a source highlighted as it grows", () => {
 	it("draws every frame as the whole frame is drawn", async () => {
-		const theme = await loadTheme("dark");
+		const theme = await requireTheme("dark");
 		for (const { lang, source } of SOURCES) {
 			for (const frame of prefixes(source)) {
 				const rows = highlightCode(frame, lang, theme);
@@ -77,7 +72,7 @@ describe("a source highlighted as it grows", () => {
 	});
 
 	it("keeps two sources streaming at once apart", async () => {
-		const theme = await loadTheme("dark");
+		const theme = await requireTheme("dark");
 		const [first, second] = [SOURCES[0], SOURCES[1]];
 		const firstFrames = prefixes(first.source);
 		const secondFrames = prefixes(second.source);
@@ -93,7 +88,7 @@ describe("a source highlighted as it grows", () => {
 	});
 
 	it("draws the same text in two languages in each language's colours", async () => {
-		const theme = await loadTheme("dark");
+		const theme = await requireTheme("dark");
 		const source = "# heading or comment\nlet x = 'value'\n";
 		for (const frame of prefixes(source)) {
 			for (const lang of ["python", "ts"]) {
@@ -106,7 +101,7 @@ describe("a source highlighted as it grows", () => {
 	});
 
 	it("draws a source that changed behind the highlighted part as the new source", async () => {
-		const theme = await loadTheme("dark");
+		const theme = await requireTheme("dark");
 		const { lang, source } = SOURCES[0];
 		for (const frame of prefixes(source)) highlightCode(frame, lang, theme);
 		const rewritten = `/* an earlier line changed */\n${source.slice(source.indexOf("\n") + 1)}`;
@@ -117,8 +112,8 @@ describe("a source highlighted as it grows", () => {
 	});
 
 	it("draws the rest of a stream in the theme it switched to", async () => {
-		const dark = await loadTheme("dark");
-		const light = await loadTheme("light");
+		const dark = await requireTheme("dark");
+		const light = await requireTheme("light");
 		const { lang, source } = SOURCES[0];
 		const frames = prefixes(source);
 		const switchAt = Math.floor(frames.length / 2);

@@ -237,8 +237,11 @@ const ANSI_16: readonly (readonly [number, number, number])[] = [
 ];
 const CUBE_STEPS = [0, 95, 135, 175, 215, 255] as const;
 
-/** Parse a 256-color palette index (0–255) to RGB (0..255). */
-function paletteToRgb(index: number): RGB | undefined {
+/**
+ * The RGB an xterm 256-color palette index stands for: the 16 base colors, the 6×6×6 cube and the
+ * 24-step grey ramp. Undefined when `index` is not an integer from 0 to 255.
+ */
+export function ansi256ToRgb(index: number): RGB | undefined {
 	if (!Number.isInteger(index) || index < 0 || index > 255) return undefined;
 	if (index < 16) {
 		const rgb = ANSI_16[index];
@@ -256,9 +259,15 @@ function paletteToRgb(index: number): RGB | undefined {
 	return { r: gray, g: gray, b: gray };
 }
 
+/** The `#rrggbb` of an xterm 256-color palette index, or undefined when `index` is not an integer from 0 to 255. */
+export function ansi256ToHex(index: number): string | undefined {
+	const rgb = ansi256ToRgb(index);
+	return rgb === undefined ? undefined : rgbToHex(rgb);
+}
+
 /** Parse a theme color value — `#rgb`/`#rrggbb` hex or 256-color palette index — to RGB (0..255). */
 function toRgb(value: string | number): RGB | undefined {
-	if (typeof value === "number") return paletteToRgb(value);
+	if (typeof value === "number") return ansi256ToRgb(value);
 	if (typeof value !== "string" || value[0] !== "#") return undefined;
 	if (value.length !== 4 && value.length !== 7) return undefined;
 	const rgb = hexToRgb(value);

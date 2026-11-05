@@ -2,32 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
-
-function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text" && typeof c.text === "string")
-		.map(c => c.text as string)
-		.join("\n");
-}
-
-function makeSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "session"),
-		allocateOutputArtifact: async (toolType: string) => ({
-			id: "a1",
-			path: path.join(cwd, "session", `a1.${toolType}.log`),
-		}),
-		settings: Settings.isolated(),
-	};
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 describe("read tool directory listings honor line selectors (regression: was silently dropping offset)", () => {
 	let testDir: string;
@@ -39,7 +17,7 @@ describe("read tool directory listings honor line selectors (regression: was sil
 		for (let i = 1; i <= 60; i++) {
 			fs.writeFileSync(path.join(testDir, `file-${String(i).padStart(3, "0")}.txt`), "");
 		}
-		tool = new ReadTool(makeSession(testDir));
+		tool = new ReadTool(makeWorkspaceToolSession(testDir));
 	});
 
 	afterEach(() => {
@@ -48,7 +26,7 @@ describe("read tool directory listings honor line selectors (regression: was sil
 
 	it("returns the full listing when no selector is given", async () => {
 		const result = await tool.execute("call-bare", { path: testDir });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(result.details?.isDirectory).toBe(true);
 		expect(output).toContain("file-001.txt");
@@ -57,7 +35,7 @@ describe("read tool directory listings honor line selectors (regression: was sil
 
 	it("returns a slice of the listing for `:start-end`", async () => {
 		const result = await tool.execute("call-range", { path: `${testDir}:30-40` });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 		const lines = output.split("\n").filter(line => line.includes("file-"));
 
 		// 11-line window (30..40 inclusive) — every line in the slice must be a file row.
@@ -69,7 +47,7 @@ describe("read tool directory listings honor line selectors (regression: was sil
 
 	it("returns from offset to end for `:start`", async () => {
 		const result = await tool.execute("call-offset", { path: `${testDir}:30` });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 		const lines = output.split("\n").filter(line => line.includes("file-"));
 
 		// 60 files + a header line; offset 30 leaves roughly 31 trailing lines.
@@ -80,7 +58,7 @@ describe("read tool directory listings honor line selectors (regression: was sil
 
 	it("emits a clear `beyond end` notice instead of returning an empty body", async () => {
 		const result = await tool.execute("call-beyond", { path: `${testDir}:9999` });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toMatch(/Line 9999 is beyond end of listing/);
 		expect(output).toMatch(/lines total/);

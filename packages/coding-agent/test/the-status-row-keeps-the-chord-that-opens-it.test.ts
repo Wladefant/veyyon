@@ -39,6 +39,7 @@ import type { AutoresearchRuntime, ExperimentResult } from "@veyyon/coding-agent
 import type { ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
 import { stripAnsi } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
+import { stubStdoutGeometry } from "./helpers/stdout-geometry";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 function result(overrides: Partial<ExperimentResult> = {}): ExperimentResult {
@@ -118,16 +119,6 @@ function ctxWriting(rows: Array<string | undefined>): ExtensionContext {
 			},
 		},
 	} as unknown as ExtensionContext;
-}
-
-/** Pretend the terminal is `columns` wide, and hand back the real descriptor. */
-function withColumns(columns: number): () => void {
-	const original = Object.getOwnPropertyDescriptor(process.stdout, "columns");
-	Object.defineProperty(process.stdout, "columns", { value: columns, configurable: true });
-	return () => {
-		if (original) Object.defineProperty(process.stdout, "columns", original);
-		else Reflect.deleteProperty(process.stdout, "columns");
-	};
 }
 
 describe("the status row keeps the chord that opens it", () => {
@@ -265,12 +256,12 @@ describe("the status row keeps the chord that opens it", () => {
 		const rows: Array<string | undefined> = [];
 		const controller = createDashboardController();
 		const runtime = loudestRuntime();
-		const restore = withColumns(200);
+		const geometry = stubStdoutGeometry({ columns: 200 });
 		try {
 			controller.update(ctxWriting(rows), runtime);
 			expect(stripAnsi(rows.at(-1) ?? "")).toContain("conf 2.5x");
 
-			withColumns(34);
+			geometry.setColumns(34);
 			process.stdout.emit("resize");
 			const narrowed = stripAnsi(rows.at(-1) ?? "");
 			expect(narrowed).not.toContain("conf 2.5x");
@@ -278,7 +269,7 @@ describe("the status row keeps the chord that opens it", () => {
 			expect(visibleWidth(narrowed)).toBeLessThanOrEqual(34);
 		} finally {
 			controller.clear(ctxWriting(rows));
-			restore();
+			geometry.restore();
 		}
 	});
 

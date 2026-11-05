@@ -7,6 +7,8 @@ It explicitly excludes context-overflow recovery via auto-compaction. Overflow i
 ## Implementation files
 
 - [`../src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts)
+- [`../src/session/runtime/stop-settlement.ts`](../../packages/coding-agent/src/session/runtime/stop-settlement.ts)
+- [`../src/session/runtime/provider-usage.ts`](../../packages/coding-agent/src/session/runtime/provider-usage.ts)
 - [`../src/session/runtime/retry-runtime.ts`](../../packages/coding-agent/src/session/runtime/retry-runtime.ts)
 - [`../src/session/runtime/retry-fallback.ts`](../../packages/coding-agent/src/session/runtime/retry-fallback.ts)
 - [`../src/session/runtime/stop-retries.ts`](../../packages/coding-agent/src/session/runtime/stop-retries.ts)
@@ -22,11 +24,13 @@ It explicitly excludes context-overflow recovery via auto-compaction. Overflow i
 
 ## Scope boundary vs compaction
 
-Retry and compaction are checked from the same `agent_end` maintenance path (`#runAgentEndMaintenance`, then `#settleStop` in `agent-session.ts`), in this order:
+The settle acts on the last assistant message in agent state when `agent_end` arrives. For a run that threw, that is the failure agent-core appended without a `message_end`, not the last reply a `message_end` delivered.
 
-1. A successful `yield` this run (or a pending yield termination) suppresses all retry/continuation; only an active goal still runs `#trackedCompactionCheck(...)`.
+Retry and compaction are checked from the same `agent_end` maintenance path (`StopSettlement.run`, then `#settleStop` in `stop-settlement.ts`), in this order:
+
+1. A successful `yield` this run (or a pending yield termination) suppresses all retry/continuation; only an active goal still runs the compaction check (`TurnContextCheck.check(...)`).
 2. `StopRetries.onEmptyStop(...)` strips and self-retries empty stops before anything else.
-3. With an active goal, `#trackedCompactionCheck(...)` runs as a **pre-empt** before retry; a scheduled or blocked automatic continuation ends the turn there.
+3. With an active goal, `TurnContextCheck.check(...)` runs as a **pre-empt** before retry; a scheduled or blocked automatic continuation ends the turn there.
 4. `StopRetries.onUnexpectedStop(...)` handles a reply that stopped short of an action it announced.
 5. `RetryRuntime.recoverFailedTurn(...)` runs the failed-turn ladder:
    1. `#isRetryableReasonlessAbort(...)` retries empty reason-less provider aborts (no model fallback).
@@ -36,7 +40,7 @@ Retry and compaction are checked from the same `agent_end` maintenance path (`#r
    5. Otherwise, `RetryFallback.hardErrorEligible(...)` gives a non-retryable hard error one fallback-chain consult (`hardErrorFallback: true`); if no model switch happens, the error surfaces instead of backoff-retrying the failing model.
    6. `#continueAfterUnreplayableBatch(...)` continues a turn whose retry was refused only for replay safety (see [Unreplayable tool batches](#unreplayable-tool-batches)).
 6. A classifier refusal that nothing retried is removed from active context.
-7. If nothing retried, the bottom `#trackedCompactionCheck(...)` runs (unless the active-goal pre-empt already did), followed by the settle-time continuations and `session_stop`.
+7. If nothing retried, the bottom `TurnContextCheck.check(...)` runs (unless the active-goal pre-empt already did), followed by the settle-time continuations and `session_stop`.
 
 Context-overflow errors are hard-excluded from retry classification (`AIError.isContextOverflow(...)` short-circuits `RetryRuntime.#isRetryableError`), so overflow always falls through to compaction recovery. Overload/rate/server/network-style failures use this retry policy.
 
@@ -52,7 +56,7 @@ Classification is **typed**, not ad-hoc regex at the call site: `RetryRuntime.#c
 
 `AIError.retriable` semantics (`packages/ai/src/error/registry.ts`, derived from `ERROR_DOMAINS`):
 
-- retryable kinds: every family whose turn-stage recovery is `retry`: `Transient` (`transport`), `UsageLimit` (`quota`), `ProviderFinishError` and `StaleResponsesItem` (`stream`), `ThinkingLoop` (`thinking-loop`), and `MalformedFunctionCall` (`tool-call`). The `timeout` family recovers by switching models, so a `Timeout` failure retries only when a retryable flag such as `Transient` is also set.
+- retryable kinds: every family whose turn-stage recovery is `retry`: `Transient` (`transport`), `UsageLimit` and `ModelNotInPlan` (`quota`), `ProviderFinishError` and `StaleResponsesItem` (`stream`), `ThinkingLoop` (`thinking-loop`), and `MalformedFunctionCall` (`tool-call`). The `timeout` family recovers by switching models, so a `Timeout` failure retries only when a retryable flag such as `Transient` is also set.
 - vetoing kinds refuse a retry for the whole failure however the rest classified: `ContentBlocked` (`content`), `TransportRefused` (`refusal`), and `Abort` / `UserInterrupt` / `SilentAbort` (`interrupt`)
 - `MalformedFunctionCall` is replay-safe: it retries even when `replayUnsafe` is set
 - `replayUnsafe` kills retry for everything else. It is set by `hasReplayUnsafeToolOutput(message, context)` (`session/failed-turn.ts`). A tool call in a failed turn is not evidence that the tool ran: an `error` stop returns before `executeToolCalls` and pairs every retained call with a never-ran placeholder result. Two shapes are unsafe: a Cursor exec-channel block carrying `kCursorExecResolved`, which dispatched inside the provider stream, and a call answered in context by a result that is not a never-ran placeholder.
@@ -69,7 +73,7 @@ Beyond `#isRetryableError(...)`, a narrower trigger feeds the same retry engine:
 - Counts on its own allowance (`#batchContinues`), sized by the resolved `maxRetries`, so a turn that already retried arrives with its continuation budget intact.
 - Waits `unreplayableContinueDelayMs(policy, attempt)`: the retry backoff, capped by `retry.maxDelayMs` when that is positive.
 - Warns through `operatorNotices` (`unreplayable-batch`), holds the retry gate, and emits `auto_retry_start` / `auto_retry_end` with `mode: "continue"`. Escape cancels the wait (`Continuation cancelled`).
-- A landed turn resets the allowance; an empty turn does not. A prompt that accepts an empty completion as terminal closes the announced wait through `endAnnouncedContinuationWait(...)`.
+- A landed turn resets the allowance, and so does a new prompt (`resetForPrompt()`); an empty turn does not. A prompt that accepts an empty completion as terminal closes the announced wait through `endAnnouncedContinuationWait(...)`.
 
 ## Retry lifecycle and state transitions
 
@@ -80,6 +84,7 @@ Beyond `#isRetryableError(...)`, a narrower trigger feeds the same retry engine:
 - `#release: (() => void) | undefined` (resolves `#gate`)
 - `#abortController: AbortController | undefined` (cancels the backoff sleep)
 - `#batchContinues: number` (the unreplayable-batch continuation allowance spent this prompt)
+- `#pendingRecoveredErrors` (the failed turns a successful retry marks recovered in `auto_retry_end.recoveredErrors`)
 
 Flow (`#handleRetryableError`, which wraps `#attemptRetry`):
 
@@ -89,9 +94,9 @@ Flow (`#handleRetryableError`, which wraps `#attemptRetry`):
 4. Create the retry gate once (`#ensureGate()`, first attempt in a chain).
 5. Exceeding `maxRetries` does **not** fail immediately: the fallback chain below gets one last consult (credential rotation can spend the whole budget without the fallback branch ever running). Only if no model switch happens does it persist the error message, emit the final failure event, and stop. A successful last-resort switch resets the counter to `1`: the fallback model gets a fresh retry budget.
 6. Compute capped jittered local delay via `calculateRetryBackoffDelayMs` (`kernel/src/session/retry-policy.ts`): `min(baseDelayMs * 2^(attempt-1), RETRY_BACKOFF_MAX_DELAY_MS)`, with `RETRY_BACKOFF_MAX_DELAY_MS` = 8000 ms, reduced by up to `RETRY_BACKOFF_JITTER_RATIO` (25%). Stale OpenAI Responses replay errors skip the backoff entirely (delay `0`) after resetting the cached provider session.
-7. For usage-limit errors, take the retry hint from the message or, absent one, the rate-limit backoff for the parsed reason, and call auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, including spending a banked Codex reset via the opt-in auto-redeem, force delay to `0`. Otherwise wait for whichever comes first, the provider's retry-after/backoff hint, or the earliest moment a temporarily blocked sibling credential frees up (`retryAtMs` + `SIBLING_UNBLOCK_BUFFER_MS`, 1s) so the next attempt can pick it up.
+7. For a usage-limit error with retry budget left, `#parkUsageLimit` calls `parkUsageLimitedCredential(...)` (`provider-usage.ts`), which takes the retry hint from the message or, absent one, the rate-limit backoff for the parsed reason, and calls auth storage (`markUsageLimitReached(...)`); if credential switching succeeds, including spending a banked Codex reset via the opt-in auto-redeem, force delay to `0`. Otherwise the park wait is whichever comes first, the provider's retry-after/backoff hint or the earliest moment a temporarily blocked sibling credential frees up (`retryAtMs` + `SIBLING_UNBLOCK_BUFFER_MS`, 1s), and the delay becomes the longer of that wait and the backoff.
 8. If no credential switch occurred and `retry.modelFallback` is enabled, suppress the current model selector for cooldown (`RetryFallback.noteCooldown`) and try configured retry model fallback chains (`RetryFallback.tryChain`), forcing delay to `0` on model switch. Classifier refusals skip the cooldown, pin the fallback, and never use the exhausted-budget last resort; with no fallback applied, the chain ends without an `auto_retry_start`. `fireworksFastFallback` / `hardErrorFallback` entries that fail to switch also bail out here rather than backoff-retrying a model the generic classifier would not retry.
-9. If the final delay exceeds `maxDelayMs` and no credential/model switch happened, persist the error message, emit final failure, and do not sleep.
+9. A `ModelNotInPlan` failure that neither a sibling credential nor a fallback model absorbed persists the error message, emits final failure, and does not sleep: no wait changes what the plan serves. If the final delay exceeds `maxDelayMs` and no credential/model switch happened, the same failure path runs.
 10. Record the pending recovered-retry error (surfaced later in `auto_retry_end.recoveredErrors`) and emit `auto_retry_start` (includes the classified `errorId`).
 11. Remove the trailing assistant error message from agent runtime state (kept in persisted session history). For a `ThinkingLoop`-classified error with `model.loopGuard.enabled`, inject a hidden redirect so the retried turn breaks the repeated pattern instead of re-sampling the same stalled reasoning.
 12. Sleep with abort support. An abort that lands before the sleep starts cancels it.
@@ -107,13 +112,14 @@ A step that throws (the auth store, a credential lookup, the session file) ends 
 - retry cancellation during backoff sleep
 - max retries exceeded path
 - max delay exceeded path
+- a `ModelNotInPlan` failure no credential or model switch absorbed
 - classifier refusal with no fallback model applied (chain ends silently, no retry started)
 - a Fireworks Fast or hard-error fallback entry that could not switch
 - a throw inside the retry sequence
 - the empty-stop retry cap (`failAtEmptyStopCap`)
 - a manual `retry()` of the last failed turn (`retryLastFailedTurn`), which starts a fresh budget
 
-The retry gate resolves and clears through `RetryRuntime.resolve()` when the chain ends: success (from the settle path), cancellation, max-exceeded, max-delay failure, classifier-refusal stop, or empty-stop cap.
+The retry gate resolves and clears through `RetryRuntime.resolve()` when the chain ends: success (from the settle path), cancellation, max-exceeded, max-delay failure, `ModelNotInPlan` failure, classifier-refusal stop, a fallback entry that could not switch, or empty-stop cap.
 
 ## Backoff and max-attempt semantics
 
@@ -162,14 +168,14 @@ If abort hits while sleeping, catch path emits:
 
 ### TUI interaction
 
-On `auto_retry_start`, EventController (`#handleAutoRetryStart`):
+On `auto_retry_start`, EventController dispatches to `TurnRecovery.retryStarted` (`modes/terminal/controllers/turn-recovery.ts`), which:
 
 - stops the working loader and clears the status container
 - renders a `retryLoader` whose text is `formatRetryLine(...)` (`modes/retry-display.ts`): `Retrying (attempt/maxAttempts) in Ns` (`Continuing …` for `mode: "continue"`), then a plain-language reason derived from `errorId`/`errorMessage` (`timed out`, `usage limit`, `stream stalled`, …), then `policySource` when a non-global policy set the budget, joined by ` · ` and followed by `…` plus the maintenance esc-hint (e.g. `(esc to cancel)`)
 
-`Esc` cancellation dispatches on live session state rather than a swapped handler: the input controller checks `viewSession.isRetrying` and calls `viewSession.abortRetry()` (alongside its compaction/handoff abort checks).
+`Esc` cancellation dispatches on live session state rather than a swapped handler: `ComposerEscape` (`modes/terminal/controllers/composer-escape.ts`) checks `viewSession.isRetrying` and calls `viewSession.abortRetry()` (alongside its compaction/handoff abort checks).
 
-On `auto_retry_end` (`#handleAutoRetryEnd`), it stops and clears the `retryLoader` and status container. The session projection (`recordAutoRetryEnd` in `presentation/session-projection-engine.ts`) supplies the lines. On success it leaves a durable one-line summary from `formatRetrySummary(...)` (`Recovered after N retries (Xs waiting) · reason`), so a turn that recovered through retries does not read as a merely slow one.
+On `auto_retry_end`, `TurnRecovery.retryEnded` stops and clears the `retryLoader` and status container. The session projection (`recordAutoRetryEnd` in `presentation/session-projection-engine.ts`) supplies the lines. On success it leaves a durable one-line summary from `formatRetrySummary(...)` (`Recovered after N retries (Xs waiting) · reason`), so a turn that recovered through retries does not read as a merely slow one.
 
 ## Streaming and prompt completion behavior
 
@@ -250,6 +256,7 @@ Retry stops and will not auto-continue when any of these occur:
 - error is not retry-classified
 - error is context overflow (delegated to compaction path)
 - max retries exceeded
+- the model is not on any credential's plan and no fallback model took over
 - provider-requested delay exceeds `retry.maxDelayMs` and no credential/model switch is available
 - the unreplayable-batch continuation allowance is spent
 - user cancels retry (`abort_retry` or `Esc` during retry loader)
@@ -264,4 +271,4 @@ A new retry chain can still start later on a future retryable error after counte
 - `RpcSessionState` currently exposes `autoCompactionEnabled` but not an `autoRetryEnabled` field; RPC callers must track their own toggle state or query settings through other APIs.
 - Model fallback changes append temporary `model_change` entries and may later restore the primary model when its cooldown expires, depending on `retry.fallbackRevertPolicy`. Restoration runs only between retry sequences (`maybeRestoreFallbackPrimary` returns while `#attempt > 0`).
 
-*Verified against `deea84f9a0` on 2026-10-06.*
+*Verified against `8e0ac19579dfa9684b7596e9a104c957814b3f75` on 2026-10-27.*

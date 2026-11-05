@@ -31,7 +31,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 import { parseDaemonCompletionsFile, readDaemonCompletions } from "../../src/launch/completions";
@@ -42,6 +41,7 @@ import {
 	managedDaemonsRoot,
 } from "../../src/launch/paths";
 import type { DaemonSnapshot, DaemonSpec } from "../../src/launch/protocol";
+import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-restarting-tests");
@@ -79,28 +79,10 @@ async function tempDir(prefix: string): Promise<string> {
 	return dir;
 }
 
-async function waitUntil(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<boolean> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (await condition()) return true;
-		await delay(50);
-	}
-	return condition();
-}
-
 async function connect(projectDir: string, runtimeDir: string, idleGraceMs = 10_000): Promise<DaemonBrokerClient> {
 	const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs });
 	cleanupClients.push(client);
 	return client;
-}
-
-async function shutdown(client: DaemonBrokerClient): Promise<void> {
-	try {
-		await client.request({ op: "shutdown" });
-	} catch {
-		// broker may have already closed
-	}
-	client.close();
 }
 
 describe("a restarting daemon settles cleanly on recovery and stop", () => {
@@ -185,7 +167,7 @@ describe("a restarting daemon settles cleanly on recovery and stop", () => {
 			const persisted = JSON.parse(await fs.readFile(managedDaemonMetaPath(daemonDir), "utf8"));
 			expect(persisted.daemon.ownershipUncertain).toBeTrue();
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 
@@ -259,7 +241,7 @@ describe("a restarting daemon settles cleanly on recovery and stop", () => {
 				expect(listCompletions.length).toBe(1);
 			}
 		} finally {
-			await shutdown(client);
+			await shutdownBroker(client);
 		}
 	}, 20_000);
 });

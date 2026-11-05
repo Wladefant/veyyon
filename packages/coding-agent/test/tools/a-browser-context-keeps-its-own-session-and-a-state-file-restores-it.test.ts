@@ -30,6 +30,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
+import { toolResultText } from "../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./browser/chromium";
 
 let server: http.Server;
@@ -55,10 +56,6 @@ function base(host: "127.0.0.1" | "localhost" = "127.0.0.1"): string {
 	return `http://${host}:${port}`;
 }
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 async function open(name: string, params: { url?: string; context?: string; storage_state?: string } = {}) {
 	opened.add(name);
 	return await tool.execute("open", { action: "open", name, ...params });
@@ -71,7 +68,7 @@ async function sentCookies(name: string, url: string): Promise<string> {
 		name,
 		code: `await tab.goto(${JSON.stringify(url)}); return await tab.evaluate(() => document.getElementById("sent").textContent);`,
 	});
-	return text(result);
+	return toolResultText(result);
 }
 
 async function close(name: string): Promise<void> {
@@ -139,8 +136,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("an isolated browser context", () => {
 			'Tab "dave" is open in context "dave"; close it first, or open context "erin" under another tab name.',
 		);
 		const again = await open("dave", { url: `${base()}/whoami` });
-		expect(text(again)).toContain('Reused tab "dave"');
-		expect(text(again)).toContain('in context "dave"');
+		expect(toolResultText(again)).toContain('Reused tab "dave"');
+		expect(toolResultText(again)).toContain('in context "dave"');
 		expect(await sentCookies("dave", `${base()}/whoami`)).toBe("sid=dave");
 		await close("dave");
 	}, 90_000);
@@ -149,8 +146,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("an isolated browser context", () => {
 		await open("fay", { context: "fay", url: `${base()}/login?user=fay` });
 		// A new policy recreates the tab; its context, and the cookies in it, stay.
 		const reopened = await tool.execute("open", { action: "open", name: "fay", dialogs: "accept" });
-		expect(text(reopened)).toContain('Opened tab "fay"');
-		expect(text(reopened)).toContain('in context "fay"');
+		expect(toolResultText(reopened)).toContain('Opened tab "fay"');
+		expect(toolResultText(reopened)).toContain('in context "fay"');
 		expect(await sentCookies("fay", `${base()}/whoami`)).toBe("sid=fay");
 		await close("fay");
 	}, 90_000);
@@ -167,14 +164,17 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("an isolated browser context", () => {
 			tool.execute("close", { action: "close", name: "wes-1" }),
 		]);
 		opened.delete("wes-1");
-		expect(closes.map(text).sort()).toEqual(['Closed tab "wes-1"', 'No tab named "wes-1"']);
+		expect(closes.map(result => toolResultText(result)).sort()).toEqual([
+			'Closed tab "wes-1"',
+			'No tab named "wes-1"',
+		]);
 		// An open of a name whose tab is closing waits for the close rather than releasing the tab again.
 		const [, reopened] = await Promise.all([
 			tool.execute("close", { action: "close", name: "wes-2" }),
 			open("wes-2", { context: "wes" }),
 		]);
-		expect(text(reopened)).toContain('Opened tab "wes-2"');
-		expect(text(reopened)).toContain('in context "wes"');
+		expect(toolResultText(reopened)).toContain('Opened tab "wes-2"');
+		expect(toolResultText(reopened)).toContain('in context "wes"');
 		await close("wes-3");
 		await close("wes-keeper");
 		// wes-2 now holds the context and the browser alone.
@@ -198,7 +198,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a storage state file", () => {
 			name: "sam-a",
 			storage_state: "state/sam.json",
 		});
-		expect(text(saved)).toBe(`Saved 2 cookies and localStorage for ${base()} to ${file}`);
+		expect(toolResultText(saved)).toBe(`Saved 2 cookies and localStorage for ${base()} to ${file}`);
 
 		const state = JSON.parse(fs.readFileSync(file, "utf8")) as {
 			cookies: Array<{ name: string; value: string; domain: string; httpOnly: boolean }>;
@@ -225,7 +225,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a storage state file", () => {
 		);
 		requests.length = 0;
 		const openedTab = await open("rita", { context: "rita", storage_state: file, url: `${base()}/whoami` });
-		expect(text(openedTab)).toContain(`Loaded 1 cookie and localStorage for ${base()} from ${file}`);
+		expect(toolResultText(openedTab)).toContain(`Loaded 1 cookie and localStorage for ${base()} from ${file}`);
 		// Writing localStorage reached no server: the tab's own page is the first request, and it is signed in.
 		expect(requests.filter(request => !request.startsWith("/favicon.ico"))).toEqual(["/whoami sid=rita"]);
 		const first = await tool.execute("run", {
@@ -233,7 +233,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a storage state file", () => {
 			name: "rita",
 			code: 'return { sent: await tab.evaluate(() => document.getElementById("sent").textContent), token: await tab.evaluate(() => localStorage.getItem("token")) };',
 		});
-		expect(JSON.parse(text(first))).toEqual({ sent: "sid=rita", token: "t-1" });
+		expect(JSON.parse(toolResultText(first))).toEqual({ sent: "sid=rita", token: "t-1" });
 
 		// The site signs out on its own and reloads: a state written on every new document would sign it back in.
 		const reloaded = await tool.execute("run", {
@@ -241,7 +241,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a storage state file", () => {
 			name: "rita",
 			code: `await tab.evaluate(() => localStorage.removeItem("token")); await tab.goto(${JSON.stringify(`${base()}/whoami`)}); return await tab.evaluate(() => localStorage.getItem("token"));`,
 		});
-		expect(text(reloaded)).toBe("null");
+		expect(toolResultText(reloaded)).toBe("null");
 		await close("rita");
 	}, 90_000);
 
@@ -252,7 +252,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a storage state file", () => {
 			name: "tess",
 			code: `return await tab.loadStorageState({ cookies: [{ name: "sid", value: "tess", domain: "127.0.0.1", path: "/" }], origins: [] });`,
 		});
-		expect(JSON.parse(text(loaded))).toEqual({ cookies: 1, origins: [] });
+		expect(JSON.parse(toolResultText(loaded))).toEqual({ cookies: 1, origins: [] });
 		expect(await sentCookies("tess", `${base()}/whoami`)).toBe("sid=tess");
 		await close("tess");
 	}, 90_000);
@@ -271,7 +271,7 @@ const shown = await tab.evaluate(() => document.visibilityState);
 await tab.click("#go");
 return shown;`,
 		});
-		expect(text(loaded)).toBe("visible");
+		expect(toolResultText(loaded)).toBe("visible");
 		await close("xan-1");
 		await close("xan-2");
 	}, 90_000);
@@ -286,8 +286,8 @@ return shown;`,
 		await open("uma", { context: "uma", url: `${base()}/whoami` });
 		await open("uma-other", { context: "uma-other" });
 		const again = await open("uma", { storage_state: file });
-		expect(text(again)).toContain('Reused tab "uma"');
-		expect(text(again)).toContain(`Loaded 1 cookie and no localStorage from ${file}`);
+		expect(toolResultText(again)).toContain('Reused tab "uma"');
+		expect(toolResultText(again)).toContain(`Loaded 1 cookie and no localStorage from ${file}`);
 		expect({
 			uma: await sentCookies("uma", `${base()}/whoami`),
 			other: await sentCookies("uma-other", `${base()}/whoami`),

@@ -186,7 +186,7 @@ export function formatOutOfBoundsMessage(
 }
 
 /** The lines a range read collects: the requested start, the context padded around it, and its budgets. */
-interface RangeWindow {
+export interface RangeWindow {
 	requestedStart: number;
 	startLine: number;
 	startLineDisplay: number;
@@ -201,9 +201,10 @@ export function computeRangeWindow(
 	rawSelector: boolean,
 	defaultLimit: number,
 	pricingSession: InlinePricingSource,
+	padStart = true,
 ): RangeWindow {
 	const requestedStart = offset ? Math.max(0, offset - 1) : 0;
-	const expandStart = !rawSelector && offset !== undefined && offset > 1;
+	const expandStart = padStart && !rawSelector && offset !== undefined && offset > 1;
 	const expandEnd = !rawSelector && limit !== undefined;
 	const { leading: leadingContext, trailing: trailingContext } = rangeContextLines(
 		requestedStart,
@@ -224,6 +225,24 @@ export function computeRangeWindow(
 		selectedLineLimit,
 		maxBytesForRead,
 	};
+}
+
+/**
+ * Whether leading context kept the requested line out of a window: the window starts on a context
+ * line and stopped at its byte budget before the line the caller named. Leading context is there to
+ * save a follow-up read, so such a window is collected again without it. Kept, it would answer
+ * `:N` with a continuation naming line N, which pads the same way and stops at the same place.
+ */
+export function contextHidRequestedLine(
+	window: { startLine: number; requestedStart: number },
+	shownLines: number,
+	stoppedByBytes: boolean,
+): boolean {
+	return (
+		stoppedByBytes &&
+		window.startLine < window.requestedStart &&
+		window.startLine + shownLines <= window.requestedStart
+	);
 }
 
 /** What a bounded window of a file's lines came to, however the lines were obtained. */

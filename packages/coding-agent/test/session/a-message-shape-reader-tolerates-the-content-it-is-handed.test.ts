@@ -24,7 +24,6 @@ import {
 	sanitizeAssistantForReparentedHistory,
 	stringProperty,
 	textFromContent,
-	thinkingFromContent,
 	titleConversationTurnFromMessage,
 	toolCallOpFromMessage,
 } from "../../src/session/agent-session-message-shapes";
@@ -65,21 +64,6 @@ describe("a message shape reader tolerates the content it is handed", () => {
 		expect(textFromContent(null)).toBe("");
 		expect(textFromContent(42)).toBe("");
 		expect(textFromContent({ type: "text", text: "not a list" })).toBe("");
-	});
-
-	it("reads thinking only from thinking blocks carrying a string", () => {
-		expect(
-			thinkingFromContent([
-				{ type: "text", text: "visible" },
-				{ type: "thinking", thinking: " reasoned " },
-				{ type: "thinking", thinking: "   " },
-				{ type: "thinking", thinking: 7 },
-				{ type: "thinking" },
-				{ type: "thinking", thinking: "more" },
-			]),
-		).toBe("reasoned\n\nmore");
-		expect(thinkingFromContent("thinking as a string")).toBe("");
-		expect(thinkingFromContent(undefined)).toBe("");
 	});
 
 	it("drops redacted thinking and the provider payload from a reparented assistant turn", () => {
@@ -123,7 +107,7 @@ describe("a message shape reader tolerates the content it is handed", () => {
 		expect(toolCallOpFromMessage(user, "call-a")).toBeUndefined();
 	});
 
-	it("builds a title turn only for a user or assistant message that says something", () => {
+	it("builds a title turn from the visible text of a user or assistant message, and nothing else", () => {
 		const user: AgentMessage = {
 			role: "user",
 			content: [{ type: "text", text: "rename the thing" }],
@@ -138,10 +122,10 @@ describe("a message shape reader tolerates the content it is handed", () => {
 					{ type: "thinking", thinking: "considered" },
 				] as AssistantMessage["content"]),
 			),
-		).toEqual({ role: "assistant", text: "done", thinking: "considered" });
+		).toEqual({ role: "assistant", text: "done" });
 	});
 
-	it("omits a title turn's thinking on a user message and skips an empty turn entirely", () => {
+	it("skips a title turn with no visible text, even when the turn holds hidden blocks", () => {
 		const userWithThinking: AgentMessage = {
 			role: "user",
 			content: [
@@ -155,6 +139,11 @@ describe("a message shape reader tolerates the content it is handed", () => {
 		expect(titleConversationTurnFromMessage(assistant([]))).toBeUndefined();
 		expect(
 			titleConversationTurnFromMessage(assistant([{ type: "text", text: "   " }] as AssistantMessage["content"])),
+		).toBeUndefined();
+		expect(
+			titleConversationTurnFromMessage(
+				assistant([{ type: "thinking", thinking: "hidden" }] as AssistantMessage["content"]),
+			),
 		).toBeUndefined();
 	});
 

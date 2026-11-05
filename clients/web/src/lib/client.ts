@@ -21,9 +21,15 @@ import type {
 	WireSessionEntry,
 	WireSessionHeader,
 } from "@veyyon/wire";
-import { SNAPSHOT_PROGRESS_TIMEOUT_MS, TRANSCRIPT_TIMEOUT_MS, WELCOME_TIMEOUT_MS } from "@veyyon/wire";
+import {
+	COLLAB_PROTO,
+	encodeBase64Url,
+	parseCollabLink,
+	SNAPSHOT_PROGRESS_TIMEOUT_MS,
+	TRANSCRIPT_TIMEOUT_MS,
+	WELCOME_TIMEOUT_MS,
+} from "@veyyon/wire";
 import { importRoomKey } from "./codec";
-import { COLLAB_PROTO, encodeBase64Url, parseCollabLink } from "./link";
 import { CollabSocket } from "./socket";
 
 type HostEvent = Extract<HostFrame, { t: "event" }>["event"];

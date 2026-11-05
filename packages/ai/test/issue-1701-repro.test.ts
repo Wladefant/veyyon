@@ -100,12 +100,6 @@ const presentTodoContext: Context = {
 
 const forcedTodoChoice: ToolChoice = { type: "tool", name: "todo" };
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function createCodexToken(accountId: string): string {
 	const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
 	const payload = Buffer.from(
@@ -119,7 +113,7 @@ function captureCompletionsPayload(context: Context): Promise<Record<string, unk
 	streamOpenAICompletions(completionsModel, context, {
 		apiKey: "test-key",
 		toolChoice: forcedTodoChoice,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as Record<string, unknown>),
 	});
 	return promise;
@@ -130,7 +124,7 @@ function captureResponsesPayload(context: Context): Promise<Record<string, unkno
 	streamOpenAIResponses(responsesModel, context, {
 		apiKey: "test-key",
 		toolChoice: forcedTodoChoice,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as Record<string, unknown>),
 	});
 	return promise;
@@ -143,7 +137,7 @@ function captureAzurePayload(context: Context): Promise<Record<string, unknown>>
 		azureBaseUrl: azureModel.baseUrl,
 		azureApiVersion: "v1",
 		toolChoice: forcedTodoChoice,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as Record<string, unknown>),
 	});
 	return promise;
@@ -154,7 +148,7 @@ function captureCodexPayload(context: Context): Promise<Record<string, unknown>>
 	streamOpenAICodexResponses(codexModel, context, {
 		apiKey: createCodexToken("acct_test"),
 		toolChoice: forcedTodoChoice,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as Record<string, unknown>),
 	});
 	return promise;

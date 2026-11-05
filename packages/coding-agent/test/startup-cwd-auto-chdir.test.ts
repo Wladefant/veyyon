@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
 import { applySessionWorkdir, applyStartupCwd } from "@veyyon/coding-agent/cli/startup-cwd";
-import { directoryExists, getProjectDir, normalizePathForComparison, setProjectDir, TempDir } from "@veyyon/utils";
+import { directoryExists, getProjectDir, normalizePathForComparison, setProjectDir } from "@veyyon/utils";
+import { useTempDirs } from "./helpers/temp-dirs";
 
 // WHY THIS SUITE EXISTS
 // ---------------------
@@ -34,7 +35,7 @@ function workdirSettings(workdir: string | undefined) {
 const originalProjectDir = getProjectDir();
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-const tempDirs: TempDir[] = [];
+const makeTempDir = useTempDirs();
 let written: string[] = [];
 
 function captureOutput(): void {
@@ -47,19 +48,12 @@ function captureOutput(): void {
 	process.stdout.write = capture;
 }
 
-function makeTempDir(prefix: string): string {
-	const dir = TempDir.createSync(prefix);
-	tempDirs.push(dir);
-	return dir.path();
-}
-
 beforeEach(captureOutput);
 
 afterEach(async () => {
 	process.stderr.write = originalStderrWrite;
 	process.stdout.write = originalStdoutWrite;
 	setProjectDir(originalProjectDir);
-	await Promise.all(tempDirs.splice(0).map(dir => dir.remove()));
 });
 
 describe("startup cwd resolution", () => {

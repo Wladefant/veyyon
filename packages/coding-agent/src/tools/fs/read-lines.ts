@@ -83,7 +83,9 @@ export function prependHashlineHeader(text: string, context: HashlineHeaderConte
 /**
  * What a read shows for a first line wider than the byte budget: the snippet that fits, or a
  * bracketed reason when none can be shown, since a hashline preview needs whole lines and an
- * empty snippet means no valid UTF-8 prefix fit.
+ * empty snippet means no valid UTF-8 prefix fit. `offersRaw` is set by a reader whose `:raw`
+ * selector returns the same text verbatim, so the refusal can name the read that shows the line's
+ * start; elsewhere `:raw` means another thing (a URL's markup, a notebook's JSON).
  */
 export function oversizedFirstLineText(
 	lineDisplay: number,
@@ -92,6 +94,7 @@ export function oversizedFirstLineText(
 	snippet: string,
 	hashLines: boolean,
 	formatText: (content: string, startNum: number) => string,
+	offersRaw: boolean,
 ): string {
 	if (!hashLines) {
 		const formatted = formatText(snippet, lineDisplay);
@@ -101,7 +104,8 @@ export function oversizedFirstLineText(
 		snippet.length === 0
 			? "Unable to display a valid UTF-8 snippet."
 			: "Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.";
-	return `[Line ${lineDisplay} is ${formatBytes(lineBytes)}, exceeds ${formatBytes(budget)} limit. ${reason}]`;
+	const remedy = offersRaw && snippet.length > 0 ? ` Use :${lineDisplay}:raw to see the start of the line.` : "";
+	return `[Line ${lineDisplay} is ${formatBytes(lineBytes)}, exceeds ${formatBytes(budget)} limit. ${reason}${remedy}]`;
 }
 
 export function formatTextWithMode(

@@ -1,5 +1,14 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Args, CLI_EXIT_USAGE, Command, type CommandEntry, Flags, run, tokenizeQuotedArgs } from "../src/cli";
+import {
+	Args,
+	CLI_EXIT_USAGE,
+	Command,
+	type CommandCtor,
+	type CommandEntry,
+	Flags,
+	run,
+	tokenizeQuotedArgs,
+} from "../src/cli";
 
 class GoodCommand extends Command {
 	static description = "prints good things";
@@ -19,6 +28,22 @@ class BenchLikeCommand extends Command {
 	};
 	async run(): Promise<void> {
 		await this.parse(BenchLikeCommand);
+	}
+}
+
+let ranCount = 0;
+
+/** A command like `licenses`: declares nothing and never parses its argv. */
+class QuietCommand extends Command {
+	async run(): Promise<void> {
+		ranCount++;
+	}
+}
+
+class LenientQuietCommand extends Command {
+	static strict = false;
+	async run(): Promise<void> {
+		ranCount++;
 	}
 }
 
@@ -73,9 +98,38 @@ describe("run() usage errors", () => {
 			process.exitCode = prevExitCode ?? 0;
 		}
 		const out = errs.join("");
-		expect(out).toContain("Error: Missing required argument: models");
+		expect(out).toContain("Error: Missing required argument: models\n");
 		expect(out).toContain("$ veyyon bench MODELS... [FLAGS]");
 		expect(out).not.toContain("dist/cli.js");
+	});
+
+	// Contract: a missing arg limited to a fixed set lists the set in the error, so the reader
+	// learns the accepted values without a second run with --help. An arg with no `options`
+	// keeps the bare message, which has no list to offer.
+	it("lists the accepted values when a fixed-choice argument is missing", async () => {
+		class ShellLikeCommand extends Command {
+			static args = {
+				shell: Args.string({ description: "target shell", required: true, options: ["bash", "zsh"] }),
+			};
+			async run(): Promise<void> {}
+		}
+		const commands: CommandEntry[] = [{ name: "completions", load: async () => ShellLikeCommand }];
+		const errs: string[] = [];
+		const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+			errs.push(String(chunk));
+			return true;
+		});
+		const prevExitCode = process.exitCode;
+		let exitCode: typeof process.exitCode;
+		try {
+			await run({ bin: "veyyon", version: "0.0.0", argv: ["completions"], commands });
+			exitCode = process.exitCode;
+		} finally {
+			stderrSpy.mockRestore();
+			process.exitCode = prevExitCode ?? 0;
+		}
+		expect(exitCode).toBe(CLI_EXIT_USAGE);
+		expect(errs.join("")).toStartWith("Error: Missing required argument: shell (one of: bash, zsh)\n\n");
 	});
 
 	// Contract: `--help` USAGE renders a required variadic as `MODELS...`, never
@@ -144,8 +198,42 @@ describe("run() usage errors", () => {
 			process.exitCode = prevExitCode ?? 0;
 		}
 		const out = errs.join("");
-		expect(out).toContain("Error: Unknown option '--unknown'");
+		expect(out).toContain("Error: Unknown flag: --unknown\n");
+		expect(out).not.toContain("Did you mean");
 		expect(out).toContain("$ veyyon bench MODELS... [FLAGS]");
+	});
+
+	// Contract: a mistyped subcommand flag is answered with the declared flag it resembles, the way a
+	// mistyped launch flag is, and not with node:util's advice about positionals that start with `-`.
+	it.each([
+		["a transposition", ["--rnus"], "Error: Unknown flag: --rnus\nDid you mean `--runs`?\n"],
+		["a prefix", ["--run=3"], "Error: Unknown flag: --run\nDid you mean `--runs`?\n"],
+		[
+			"a typo after a declared flag",
+			["--runs", "3", "--rnus"],
+			"Error: Unknown flag: --rnus\nDid you mean `--runs`?\n",
+		],
+		["a short flag", ["-x"], "Error: Unknown flag: -x\n\n"],
+	])("names the declared flag nearest %s", async (_label, flags, expected) => {
+		const commands: CommandEntry[] = [{ name: "bench", load: async () => BenchLikeCommand }];
+		const errs: string[] = [];
+		const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+			errs.push(String(chunk));
+			return true;
+		});
+		const prevExitCode = process.exitCode;
+		let observedExitCode: number | string | null | undefined;
+		try {
+			await run({ bin: "veyyon", version: "0.0.0", argv: ["bench", "gpt", ...flags], commands });
+			observedExitCode = process.exitCode;
+		} finally {
+			stderrSpy.mockRestore();
+			process.exitCode = prevExitCode ?? 0;
+		}
+		const out = errs.join("");
+		expect(observedExitCode).toBe(CLI_EXIT_USAGE);
+		expect(out).toStartWith(expected);
+		expect(out).not.toContain("place it at the end");
 	});
 
 	// Contract: a positional beyond what the declared args consume must fail
@@ -252,6 +340,60 @@ describe("run() usage errors", () => {
 		}
 		expect(observedExitCode).toBe(CLI_EXIT_USAGE);
 		expect(errs.join("")).toContain("Error: Unknown command 'nope'");
+	});
+
+	// Contract: the runner checks a command line against the command's declarations before run(). A
+	// command whose run() never parsed (`veyyon licenses`) ran on `--typo` and on a stray word at exit
+	// 0; the check sits in the runner so a new command that forgets to parse cannot reopen that.
+	describe("a command whose run() reads no argv", () => {
+		async function runQuiet(
+			ctor: CommandCtor,
+			argv: string[],
+		): Promise<{ ran: number; exitCode: number | string | null | undefined; stderr: string }> {
+			ranCount = 0;
+			const commands: CommandEntry[] = [{ name: "quiet", load: async () => ctor }];
+			const errs: string[] = [];
+			const stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+				errs.push(String(chunk));
+				return true;
+			});
+			const prevExitCode = process.exitCode;
+			let exitCode: number | string | null | undefined;
+			try {
+				process.exitCode = 0;
+				await run({ bin: "veyyon", version: "0.0.0", argv: ["quiet", ...argv], commands });
+				exitCode = process.exitCode;
+			} finally {
+				stderrSpy.mockRestore();
+				process.exitCode = prevExitCode ?? 0;
+			}
+			return { ran: ranCount, exitCode, stderr: errs.join("") };
+		}
+
+		it.each([
+			["an unknown flag", ["--zzzz"], "zzzz"],
+			["a stray positional", ["stray"], 'Unexpected argument: "stray"'],
+		])("refuses %s without running it", async (_label, argv, named) => {
+			const result = await runQuiet(QuietCommand, argv);
+
+			expect(result.ran).toBe(0);
+			expect(result.exitCode).toBe(CLI_EXIT_USAGE);
+			expect(result.stderr).toContain(named);
+		});
+
+		it("runs once on an empty command line", async () => {
+			const result = await runQuiet(QuietCommand, []);
+
+			expect(result.ran).toBe(1);
+			expect(result.exitCode).toBe(0);
+		});
+
+		it("leaves a lenient command's argv to the command's own parser", async () => {
+			const result = await runQuiet(LenientQuietCommand, ["--zzzz", "stray"]);
+
+			expect(result.ran).toBe(1);
+			expect(result.exitCode).toBe(0);
+		});
 	});
 });
 

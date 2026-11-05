@@ -6,9 +6,14 @@ import { discoverAgents } from "../../../../task/discovery";
 import type { AgentDefinition } from "../../../../task/types";
 import { theme } from "../../../../theme/theme-binding";
 import type { SetupKeyHint, SetupScene, SetupSceneController, SetupSceneHost, SetupWizardContext } from "./types";
-import { createWizardList, filterEscapeHint } from "./wizard-list";
+import {
+	CHECKLIST_CONTINUE,
+	CHECKLIST_KEY_HINTS,
+	createWizardList,
+	filterEscapeHint,
+	handleChecklistInput,
+} from "./wizard-list";
 
-const CONTINUE_VALUE = "__continue";
 const MAX_VISIBLE = 10;
 
 export class AgentsSceneController implements SetupSceneController {
@@ -43,7 +48,7 @@ export class AgentsSceneController implements SetupSceneController {
 			value: agent.name,
 			label: `${this.#selected.has(agent.name) ? theme.checkbox.checked : theme.checkbox.unchecked} ${agent.name}`,
 		}));
-		items.push({ value: CONTINUE_VALUE, label: `Continue with ${this.#selected.size} enabled` });
+		items.push({ value: CHECKLIST_CONTINUE, label: `Continue with ${this.#selected.size} enabled` });
 		const list = createWizardList(items, Math.min(this.#rows, items.length));
 		list.setSelectedIndex(selectedIndex);
 		list.onSelect = item => this.#activate(item.value);
@@ -57,7 +62,7 @@ export class AgentsSceneController implements SetupSceneController {
 		if (budget <= 1) return [];
 		const value = this.#list.getSelectedItem()?.value;
 		const text =
-			value === CONTINUE_VALUE
+			value === CHECKLIST_CONTINUE
 				? this.#selected.size === 0
 					? "No agents enabled: every task stays with the main agent."
 					: `${this.#selected.size} enabled. The model may start these on its own.`
@@ -69,7 +74,7 @@ export class AgentsSceneController implements SetupSceneController {
 
 	#activate(value: string): void {
 		if (this.#committing) return;
-		if (value === CONTINUE_VALUE) {
+		if (value === CHECKLIST_CONTINUE) {
 			void this.#commit();
 			return;
 		}
@@ -80,7 +85,7 @@ export class AgentsSceneController implements SetupSceneController {
 
 	#rebuild(selectedValue: string): void {
 		const index =
-			selectedValue === CONTINUE_VALUE
+			selectedValue === CHECKLIST_CONTINUE
 				? this.agents.length
 				: Math.max(
 						0,
@@ -118,23 +123,12 @@ export class AgentsSceneController implements SetupSceneController {
 
 	/** Space is this scene's real verb: rows are toggled, not picked once. */
 	keyHints(): readonly SetupKeyHint[] {
-		return [
-			{ keys: "↑↓", label: "select" },
-			{ keys: "space", label: "toggle" },
-			{ keys: "enter", label: "confirm" },
-		];
+		return CHECKLIST_KEY_HINTS;
 	}
 
 	handleInput(data: string): void {
 		if (this.#committing) return;
-		if (data === " ") {
-			const item = this.#list.getSelectedItem();
-			if (item && item.value !== CONTINUE_VALUE) {
-				this.#activate(item.value);
-				return;
-			}
-		}
-		this.#list.handleInput(data);
+		handleChecklistInput(this.#list, data, value => this.#activate(value));
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {

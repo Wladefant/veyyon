@@ -20,11 +20,12 @@ export type BarrelStillExportsTheControlMessage = RelayControlMessage;
 /**
  * The collab relay's fatal close codes and the client-side send bound, and the one place they are decided.
  *
- * Three programs speak this protocol: the relay, which chooses the code, and two independent clients, the
- * CLI's `collab/relay-client.ts` in `@veyyon/coding-agent` and the browser's `lib/socket.ts` in
- * `@veyyon/collab-web`. Each client carried its own copy of the fatal-code table, character for character
- * including the doc comment, and its own `MAX_PENDING_SENDS = 256`. The dev relay in
- * `collab-web/scripts/local-relay.ts` spelled the same four reason strings inline as it closed sockets.
+ * Three programs speak this protocol: the relay, which chooses the code, and `RelayClient` in
+ * `src/relay-client.ts` beside this file, which the CLI binds in `collab/relay-client.ts` of
+ * `@veyyon/coding-agent` and the browser binds in `lib/socket.ts` of `@veyyon/collab-web`. Each binding was
+ * once a whole client with its own copy of the fatal-code table, character for character including the doc
+ * comment, and its own `MAX_PENDING_SENDS = 256`. The dev relay in `collab-web/scripts/local-relay.ts`
+ * spelled the same four reason strings inline as it closed sockets.
  *
  * A CODE THE TABLE DOES NOT KNOW IS TRANSIENT, which is what makes a copy dangerous rather than untidy. Add a
  * fatal code to the relay, teach one client, and the other reconnects in a loop against a condition that will
@@ -35,10 +36,11 @@ export type BarrelStillExportsTheControlMessage = RelayControlMessage;
  * the table load-bearing, and the ownership cases fail if a client goes back to its own copy.
  */
 
-// `contracts/wire/test` -> repo root. The two relay clients sit under different roots, so each is
-// spelled from the repository root rather than from `packages/`.
+// `contracts/wire/test` -> repo root. The two bindings sit under different roots, so each is spelled from
+// the repository root rather than from `packages/`.
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..");
-const CLIENTS = ["packages/coding-agent/src/collab/relay-client.ts", "clients/web/src/lib/socket.ts"];
+const RELAY_CLIENT = "contracts/wire/src/relay-client.ts";
+const BINDINGS = ["packages/coding-agent/src/collab/relay-client.ts", "clients/web/src/lib/socket.ts"];
 
 describe("the fatal relay close codes", () => {
 	/**
@@ -125,13 +127,13 @@ describe("the reconnect send bound", () => {
 
 describe("the relay protocol has one owner", () => {
 	/**
-	 * The ratchet. Neither client, nor the dev relay, may spell a reason string or the bound again. Keyed on
-	 * the reason bytes because that is what a copy actually contains, and a copy with the codes but different
-	 * wording would be a worse bug than a copy with both.
+	 * The ratchet. Neither binding, the relay client, nor the dev relay may spell a reason string or the bound
+	 * again. Keyed on the reason bytes because that is what a copy actually contains, and a copy with the codes
+	 * but different wording would be a worse bug than a copy with both.
 	 */
 	it("spells no reason string outside the owner", async () => {
 		const offenders: string[] = [];
-		const scanned = [...CLIENTS, "clients/web/scripts/local-relay.ts"];
+		const scanned = [RELAY_CLIENT, ...BINDINGS, "clients/web/scripts/local-relay.ts"];
 		for (const file of scanned) {
 			const code = withoutComments(await Bun.file(path.join(REPO_ROOT, file)).text());
 			for (const reason of Object.values(RELAY_FATAL_CLOSE_REASONS)) {
@@ -146,16 +148,25 @@ describe("the relay protocol has one owner", () => {
 	});
 
 	/**
-	 * The positive half with a non-vacuity check built in: each client imports both names from the owner, and
-	 * reading the file proves the scan above was looking at real content rather than at nothing.
+	 * The positive half with a non-vacuity check built in: the relay client imports both names from the owner,
+	 * and reading the file proves the scan above was looking at real content rather than at nothing.
 	 */
-	it("has both clients importing the table and the bound from the owner", async () => {
-		for (const file of CLIENTS) {
+	it("has the relay client importing the table and the bound from the owner", async () => {
+		const text = await Bun.file(path.join(REPO_ROOT, RELAY_CLIENT)).text();
+		expect(namedImportsFrom(text, "./relay")).toEqual(
+			expect.arrayContaining(["RELAY_FATAL_CLOSE_REASONS", "RELAY_MAX_PENDING_SENDS"]),
+		);
+		expect(text.length).toBeGreaterThan(1_000);
+	});
+
+	/**
+	 * Each side binds the one client rather than keeping its own. A binding that grows back into a client
+	 * stops importing `RelayClient`, which is the drift that left the browser guest without backpressure.
+	 */
+	it("has both sides binding the one relay client", async () => {
+		for (const file of BINDINGS) {
 			const text = await Bun.file(path.join(REPO_ROOT, file)).text();
-			expect(namedImportsFrom(text, "@veyyon/wire/relay"), file).toEqual(
-				expect.arrayContaining(["RELAY_FATAL_CLOSE_REASONS", "RELAY_MAX_PENDING_SENDS"]),
-			);
-			expect(text.length).toBeGreaterThan(1_000);
+			expect(namedImportsFrom(text, "@veyyon/wire/relay-client"), file).toContain("RelayClient");
 		}
 	});
 

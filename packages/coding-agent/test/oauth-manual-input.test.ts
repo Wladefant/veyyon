@@ -2,26 +2,26 @@ import { describe, expect, it } from "bun:test";
 import { OAuthManualInputManager } from "@veyyon/coding-agent/modes/terminal/oauth-manual-input";
 
 describe("OAuthManualInputManager", () => {
-	it("resolves waitForInput with submitted value", async () => {
+	it("resolves a claim with the submitted value", async () => {
 		const manager = new OAuthManualInputManager();
-		const promise = manager.waitForInput("openai-codex");
+		const claim = manager.tryClaimInput("mcp");
 
 		const submitted = manager.submit("callback-url");
 
 		expect(submitted).toBe(true);
-		expect(await promise).toBe("callback-url");
+		expect(await claim?.promise).toBe("callback-url");
 		expect(manager.hasPending()).toBe(false);
 	});
 
-	it("does not replace pending input when using tryWaitForInput", async () => {
+	it("does not replace a pending claim", async () => {
 		const manager = new OAuthManualInputManager();
-		const first = manager.waitForInput("openai-codex");
+		const first = manager.tryClaimInput("mcp");
 
-		expect(manager.tryWaitForInput("mcp")).toBeUndefined();
-		expect(manager.pendingProviderId).toBe("openai-codex");
+		expect(manager.tryClaimInput("other-server")).toBeUndefined();
+		expect(manager.pendingProviderId).toBe("mcp");
 
 		expect(manager.submit("callback-url")).toBe(true);
-		expect(await first).toBe("callback-url");
+		expect(await first?.promise).toBe("callback-url");
 	});
 
 	it("returns false when no pending input", () => {
@@ -32,7 +32,7 @@ describe("OAuthManualInputManager", () => {
 
 	it("clears pending input and rejects promise", async () => {
 		const manager = new OAuthManualInputManager();
-		const promise = manager.waitForInput("anthropic");
+		const promise = manager.tryClaimInput("mcp")?.promise;
 
 		manager.clear();
 

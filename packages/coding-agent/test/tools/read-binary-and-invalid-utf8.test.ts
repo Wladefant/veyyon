@@ -6,6 +6,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -74,10 +75,7 @@ describe("reading bytes that are not text", () => {
 	/** Read through the real tool and return its text plus the unavailability marker. */
 	async function read(target: string): Promise<{ text: string; reason: string | undefined }> {
 		const result = await new ReadTool(session()).execute("r1", { path: target });
-		const text = result.content
-			.filter((block): block is { type: "text"; text: string } => block.type === "text")
-			.map(block => block.text)
-			.join("\n");
+		const text = toolResultText(result);
 		const details = result.details as { contentUnavailable?: { reason: string } } | undefined;
 		return { text, reason: details?.contentUnavailable?.reason };
 	}

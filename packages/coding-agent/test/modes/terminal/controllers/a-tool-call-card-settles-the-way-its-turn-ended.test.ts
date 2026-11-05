@@ -13,7 +13,7 @@
  *
  * Subject: `modes/terminal/controllers/tool-call-cards.ts`, driven through `ToolCallCards`.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "bun:test";
 import type { ImageContent, ToolCall } from "@veyyon/ai";
 import { setStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
@@ -52,6 +52,8 @@ afterEach(() => {
 
 function createRig(options: { smoothStreaming?: boolean } = {}) {
 	const chatContainer = new TranscriptContainer();
+	// A card left pending is live and its rail ticks until the card is disposed.
+	onTestFinished(() => chatContainer.disposeChildren());
 	const working: string[] = [];
 	const approvals: unknown[] = [];
 	const inlined: { toolCallId: string; images: ImageContent[] }[] = [];

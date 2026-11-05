@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import { ollamaModelManagerOptions } from "@veyyon/catalog/provider-models/openai-compat";
+import { ollamaModelManagerOptions } from "@veyyon/catalog/provider-models/ollama";
 import type { FetchImpl } from "@veyyon/catalog/types";
 
 afterEach(() => {

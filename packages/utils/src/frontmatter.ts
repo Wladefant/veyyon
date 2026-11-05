@@ -94,17 +94,20 @@ function keyValueFrontmatter(
 	return normalizeKeys(frontmatter);
 }
 
-export class FrontmatterError extends Error {
+/**
+ * A parse failure that records the input it failed on. `toString` prints the message, the source
+ * and the cause's stack, falling back to the error's own stack.
+ */
+export class SourcedParseError extends Error {
 	constructor(
-		error: Error,
+		message: string,
+		cause: Error,
 		readonly source?: unknown,
 	) {
-		super(`Failed to parse YAML frontmatter (${source}): ${error.message}`, { cause: error });
-		this.name = "FrontmatterError";
+		super(message, { cause });
 	}
 
 	toString(): string {
-		// Format the error with stack and detail, including the error message, stack, and source if present
 		const details: string[] = [this.message];
 		if (this.source !== undefined) {
 			details.push(`Source: ${JSON.stringify(this.source)}`);
@@ -115,6 +118,13 @@ export class FrontmatterError extends Error {
 			details.push(`Stack:\n${this.stack}`);
 		}
 		return details.join("\n\n");
+	}
+}
+
+export class FrontmatterError extends SourcedParseError {
+	constructor(error: Error, source?: unknown) {
+		super(`Failed to parse YAML frontmatter (${source}): ${error.message}`, error, source);
+		this.name = "FrontmatterError";
 	}
 }
 

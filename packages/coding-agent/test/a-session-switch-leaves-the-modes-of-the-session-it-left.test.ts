@@ -93,7 +93,7 @@ describe("a session switch leaves the modes of the session it left", () => {
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {

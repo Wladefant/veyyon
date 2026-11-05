@@ -82,9 +82,77 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * RE-MEASURED 2026-10-17 at 7423: extension and custom slash-command resolution, and the command
  * context a session builds when no extension runner does, left as the `agent-session-commands.ts`
  * sibling (-228); it reads the session through a host interface the session satisfies structurally.
- * RE-MEASURED 2026-10-17: fork additions sit on top of upstream extractions; measured at 7897.
+ * RE-MEASURED 2026-10-26 at 7271: IRC delivery (the incoming record, its steer, inbox, context or
+ * wake-turn route, the auto-reply and the stranded-record resume and flush) left as the
+ * `irc-delivery.ts` collaborator (-176); it holds the IRC inbox.
+ * RE-MEASURED 2026-10-26 at 7215: the `session_stop` hook pass and its continuation chain left as
+ * the `session-stop-hook.ts` collaborator (-56).
+ * RE-MEASURED 2026-10-26 at 7142: the hidden next-turn queue and the turn a queued message requests
+ * left as the `next-turn-messages.ts` collaborator (-73).
+ * RE-MEASURED 2026-10-26 at 6962: the saved switch, the session-only switch and the Ctrl+P cycle
+ * left as the `model-selection.ts` collaborator with the scoped models (-180).
+ * RE-MEASURED 2026-10-27 at 6930: the session budget registration, its id-change rekey and its
+ * settings listener left as `bindSessionBudget` in `cpu-limit.ts` (-32).
+ * RE-MEASURED 2026-10-27 at 6769: the owned background jobs (late result delivery, the job
+ * snapshot, descendant cancellation, the settle wake and the ACP delivery drain) left as the
+ * `owned-async-jobs.ts` collaborator (-161).
+ * RE-MEASURED 2026-10-27 at 6655: the release of what a conversation ends with (its spawned agents,
+ * registry scope, IRC traffic, standing grants and eval kernels) left as the
+ * `conversation-release.ts` collaborator (-114).
+ * RE-MEASURED 2026-10-27 at 6459: the routing of a run that ended (the yield short-circuit, stop
+ * recovery, the compaction check, the stop-time continuation passes and the `session_stop` hooks)
+ * left as the `stop-settlement.ts` collaborator (-196).
+ * RE-MEASURED 2026-10-27 at 6245: the steers and follow-ups on the agent's queues (queueing a user
+ * or hidden developer message, the drain that starts a turn on them, the count, the chips, clear and
+ * pop) left as the `queued-messages.ts` collaborator (-171 from 6416, after the unusable-credential
+ * message moved to `missing-credentials.ts`).
+ * RE-MEASURED 2026-10-27 at 6138: running a shell command or Python cell the user typed (the
+ * `user_bash` and `user_python` extension hand-off, the run, the record and the artifact holding a
+ * command's unminimized output) moved into the `user-executions.ts` collaborator (-107).
+ * RE-MEASURED 2026-10-27 at 5967: the threshold checks before a prompt and between the provider
+ * calls of a tool loop, and the switch to a larger-context model they share with the post-turn
+ * check, moved into the `turn-context-check.ts` collaborator (-171).
+ * RE-MEASURED 2026-10-27 at 5729: starting a new transcript with `/new` or `/drop` and forking one
+ * with `/fork` moved into the `session-switch.ts` collaborator (-136 from 5963), then the session-state
+ * block and the eager delegate reminders a turn carries ahead of its message moved into the
+ * `turn-preludes.ts` collaborator (-98).
+ * RE-MEASURED 2026-10-27 at 5653: the per-family service tiers, `/fast` and the tier each request
+ * resolves to moved into the `service-tiers.ts` collaborator (-76).
+ * RE-MEASURED 2026-10-27 at 5545: the command registries, the resolution of a typed prompt through
+ * extension, custom and file-based commands and the prompt templates, and the agents a `/` command
+ * grants for its turn moved into the `prompt-commands.ts` collaborator (-108).
+ * RE-MEASURED 2026-10-27 at 5455: the display copy of assistant content, tool intents, streamed
+ * deltas and rebuilt transcripts, with the stream decoder it holds, moved into the `display-copy.ts`
+ * collaborator (-90).
+ * RE-MEASURED 2026-10-27 at 5340: the latest images a tool addresses, the normalization of a
+ * message's images for the active model and the description a text-only model reads in their place
+ * moved into the `image-attachments.ts` collaborator (-115).
+ * RE-MEASURED 2026-10-27 at 5212: the response and raw SSE interceptors every request runs with,
+ * the raw SSE capture, the side stream function and the side-request option preparation moved into
+ * the `provider-transport.ts` collaborator (-128).
+ * RE-MEASURED 2026-10-27 at 5115: the `/move` marker nothing set was removed with its dispose step
+ * (-9), and the tool start markers and the exit entry moved into the `exit-record.ts`
+ * collaborator (-88).
+ * RE-MEASURED 2026-10-27 at 5029: the subscriber list, the extension event forwarder and the held
+ * wire-level `agent_end` moved into the `session-events.ts` collaborator, and a doc comment that
+ * documented no member was dropped (-86).
+ * RE-MEASURED 2026-10-27 at 4917: the scheduled `agent.continue()`, the auto-continue prompt a
+ * compaction resumes with, their cancel and the recovery wait a prompt runs moved into the
+ * `turn-continuations.ts` collaborator (-112).
+ * RE-MEASURED 2026-10-27 at 4833: the HTML export, the copy texts, the plain-text dump and the
+ * request snapshot moved into the `transcript-exports.ts` collaborator, taking the session's one
+ * dynamic import with them (-84).
+ * RE-MEASURED 2026-10-27 at 4755: the next-turn lease a prompt holds until the agent takes its input
+ * added 11 lines (4844), then the mode blocks, the `@path` mention reads and the `before_agent_start`
+ * extension input moved into the `turn-input.ts` collaborator (-89).
+ * RE-MEASURED 2026-10-27 at 4692: the release at dispose of the session's jobs, owned job manager,
+ * eval kernels, session-scoped resources and MCP hold moved into the `session-release.ts`
+ * collaborator, and the memory backends' release into `memory-context.ts` (-63).
+ * RE-MEASURED 2026-10-27 at 4548: how a custom message reaches the conversation, queued, held for
+ * the next turn, run as a turn or appended, and the custom-message prompt with its keyword notices
+ * moved into the `custom-messages.ts` collaborator (-144).
  */
-const RUNTIME_CEILING = 7_950;
+const RUNTIME_CEILING = 4_600;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -101,37 +169,58 @@ const COLLABORATORS = [
 	"compaction-runtime.ts",
 	"compaction-summarizer.ts",
 	"context-accounting.ts",
+	"conversation-release.ts",
+	"custom-messages.ts",
+	"display-copy.ts",
+	"exit-record.ts",
 	"extension-event-forwarder.ts",
 	"finalize-reminders.ts",
 	"history-rewrites.ts",
+	"image-attachments.ts",
+	"irc-delivery.ts",
 	"irc-inbox.ts",
 	"loop-guards.ts",
 	"max-concurrency-runtime.ts",
 	"memory-context.ts",
 	"message-persistence.ts",
 	"model-handoff.ts",
+	"model-selection.ts",
+	"next-turn-messages.ts",
+	"owned-async-jobs.ts",
 	"plan-mode-runtime.ts",
 	"post-prompt-tasks.ts",
+	"prompt-commands.ts",
 	"provider-sessions.ts",
+	"provider-transport.ts",
 	"provider-usage.ts",
 	"provider-wire.ts",
+	"queued-messages.ts",
 	"replan-title-refresh.ts",
 	"retry-fallback.ts",
 	"retry-runtime.ts",
+	"service-tiers.ts",
 	"session-approvals.ts",
 	"session-branch.ts",
+	"session-events.ts",
 	"session-handoff.ts",
+	"session-release.ts",
 	"session-scope.ts",
 	"session-secrets.ts",
+	"session-stop-hook.ts",
 	"session-switch.ts",
 	"stop-retries.ts",
+	"stop-settlement.ts",
 	"streaming-edit-guard.ts",
 	"thinking-runtime.ts",
 	"todo-runtime.ts",
 	"tool-activation.ts",
 	"tool-discovery.ts",
+	"transcript-exports.ts",
 	"ttsr-runtime.ts",
 	"turn-context-check.ts",
+	"turn-continuations.ts",
+	"turn-input.ts",
+	"turn-preludes.ts",
 	"turns-in-flight.ts",
 	"user-executions.ts",
 	"yield-tracker.ts",
@@ -144,8 +233,13 @@ const COLLABORATOR_CEILING = 1_028;
 /** MEASURED: the largest sibling is `agent-session-types.ts` at 782 lines. */
 const SIBLING_CEILING = 900;
 
-/** MEASURED: the facade is 342 lines. */
-const FACADE_CEILING = 500;
+/**
+ * MEASURED: the facade is 342 lines. It was also held under a twentieth of the runtime, but the
+ * runtime is the file every extraction shrinks: at 6769 lines that ratio turned red with the facade
+ * unchanged, so it measured the decomposition rather than the facade. The ceiling ratchets instead,
+ * like the runtime's, and 345 sits under the 346 the ratio last allowed.
+ */
+const FACADE_CEILING = 345;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
@@ -229,8 +323,8 @@ describe("the facade's size", () => {
 		expect(lineCount(FACADE)).toBeLessThanOrEqual(FACADE_CEILING);
 	});
 
-	it("is a small fraction of the runtime it wraps", () => {
-		expect(lineCount(FACADE) * 20).toBeLessThan(lineCount(RUNTIME));
+	it("has a ceiling tight enough to fail on real growth", () => {
+		expect(FACADE_CEILING).toBeLessThanOrEqual(Math.round(lineCount(FACADE) * 1.05));
 	});
 });
 

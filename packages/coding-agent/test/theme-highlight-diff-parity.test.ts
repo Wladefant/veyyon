@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { getThemeByName, highlightCode, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { highlightCode, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "./helpers/require-theme";
 
 const unifiedDiffChunks = [
 	[
@@ -26,8 +27,7 @@ const unifiedDiff = unifiedDiffChunks.join("\n");
 const diffLanguages: Array<"diff" | "patch"> = ["diff", "patch"];
 
 beforeAll(async () => {
-	const darkTheme = await getThemeByName("dark");
-	if (!darkTheme) throw new Error("Expected dark theme to exist");
+	const darkTheme = await requireTheme("dark");
 	setThemeInstance(darkTheme);
 });
 

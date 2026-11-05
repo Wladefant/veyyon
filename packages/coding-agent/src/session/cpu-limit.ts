@@ -82,6 +82,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { formatLimitFileValue, formatSystemdCpuQuota, memoryCapControls } from "@veyyon/kernel/session/cgroup-format";
 import {
@@ -113,7 +114,7 @@ import { CpuBudgetGroup as NativeCpuBudgetGroup } from "@veyyon/natives";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { Settings } from "../config/settings";
-import { settingsOrNull } from "../config/settings-instance";
+import { RESOURCES_SETTINGS } from "../config/settings-domains/resources";
 
 /** Default watcher cadence: one usage sample per second. */
 export const CPU_LIMIT_WATCH_INTERVAL_MS = 1_000;
@@ -127,8 +128,34 @@ export const CPU_LIMIT_WINDOW_SAMPLES = 3;
 /** Fraction of the budget that counts as "at the wall" for a single sample. */
 const SATURATION_RATIO = 0.95;
 
+/**
+ * Nice level every process a session spawns starts at: bash commands, eval
+ * kernels, `launch` processes, MCP and language servers, the managed browser.
+ * Agent work then yields the CPU to the desktop, the terminal and the harness
+ * itself whenever they contend, and loses nothing on an idle machine. On
+ * Windows the same value selects `BELOW_NORMAL_PRIORITY_CLASS`. The native
+ * spawn points (brush external commands, the PTY) apply the same level from
+ * `veyyon_shell::cpu_budget::SPAWN_NICE`.
+ */
+export const SPAWN_NICE = 10;
+
 /** Nice level applied to budget members on sustained saturation where no kernel quota exists. */
-export const CPU_LIMIT_SATURATION_NICE = 10;
+export const CPU_LIMIT_SATURATION_NICE = 19;
+
+/**
+ * Start a freshly spawned child at {@link SPAWN_NICE}. A child inherits the
+ * harness level, so a harness already at or below that priority leaves it
+ * alone. Best-effort: a child that already exited, or a host that refuses the
+ * change, keeps the level it inherited and the spawn proceeds.
+ */
+export function lowerSpawnPriority(pid: number): void {
+	try {
+		if (os.getPriority() >= SPAWN_NICE) return;
+		os.setPriority(pid, SPAWN_NICE);
+	} catch (error) {
+		logger.debug("Spawn priority: setPriority failed", { pid, error: errorMessage(error) });
+	}
+}
 
 /** The piece of the native `CpuBudgetGroup` the limiter drives. */
 export interface CpuBudgetGroupHandle {
@@ -283,12 +310,6 @@ export class SessionCpuLimit {
 	/** Notice keys already shown, so a refused limit reports once and not per attempt. */
 	readonly #noticed = new Set<string>();
 	/**
-	 * Whether a caller has supplied the non-CPU limits. Until one has, the group
-	 * falls back to the configured values, so a spawn path that never passes
-	 * through a gate is still capped.
-	 */
-	#limitsSupplied: boolean;
-	/**
 	 * Whether the MACHINE tier has any limit set. Read once here, synchronously
 	 * from the global config, because it decides whether a group is created at
 	 * all — a question that has to be answered before the first spawn, not
@@ -304,10 +325,6 @@ export class SessionCpuLimit {
 		this.#writeBudgetKill = options.writeBudgetKill ?? false;
 		this.#maxProcesses = options.maxProcesses ?? 0;
 		this.#memoryLimitGb = options.memoryLimitGb ?? 0;
-		this.#limitsSupplied =
-			options.writeBudgetGb !== undefined ||
-			options.maxProcesses !== undefined ||
-			options.memoryLimitGb !== undefined;
 		// An unreadable global config is reported by the placement, which names
 		// the file. Here it must only decide whether to bother with a group, and
 		// "no machine limit" is the safe reading of a config nobody can parse.
@@ -320,24 +337,6 @@ export class SessionCpuLimit {
 		this.#machineLimitActive = machineLimits !== undefined && anyMachineLimitActive(machineLimits);
 		this.#machineWriteBudgetGb = machineLimits?.writeBudgetGb ?? 0;
 		this.#probe = Promise.resolve(options.probe);
-	}
-
-	/**
-	 * Apply the operator's non-CPU limits when no gate has supplied them yet.
-	 *
-	 * `agent-session.ts` registers a session with cores and kill only, so a
-	 * session that never runs bash, launch, write or edit would reach a spawn
-	 * with the disk, memory and process caps still unset: an eval kernel or an
-	 * MCP server would join a group carrying no `memory.max` and no `pids.max`,
-	 * and a runaway allocation in a Python cell would meet no ceiling at all.
-	 *
-	 * A gate that DOES supply limits wins permanently, because an agent's
-	 * cloned settings are a better answer than the process-wide singleton.
-	 */
-	async #applyConfiguredLimits(): Promise<void> {
-		if (this.#limitsSupplied) return;
-		const limits = configuredBudgetLimits();
-		if (limits) await this.updateLimits(limits);
 	}
 
 	get cores(): number {
@@ -359,6 +358,23 @@ export class SessionCpuLimit {
 		return this.#writes.source;
 	}
 
+	/**
+	 * Report at session start, before any group exists, that a configured
+	 * memory cap has no controller to hold it. Shares its key with the report
+	 * group creation makes, so the operator reads it once rather than twice.
+	 */
+	async reportMemoryAtStart(): Promise<void> {
+		if (this.#memoryLimitGb <= 0) return;
+		const probe = await this.#probe;
+		if (probe.kernelLimits.memory) return;
+		this.#emitNoticeOnce(
+			"memory-unenforceable",
+			`session.memoryLimitGb is set to ${this.#memoryLimitGb} but the memory controller is not ` +
+				`available here (${probe.detail}), so a memory cap cannot be enforced. New commands will be ` +
+				`refused rather than run unbounded. Fix: set session.memoryLimitGb to 0.`,
+		);
+	}
+
 	/** A one-line state summary for diagnostics (doctor, logs). */
 	async statusLine(): Promise<string> {
 		const probe = await this.#probe;
@@ -369,7 +385,8 @@ export class SessionCpuLimit {
 		if (this.#setupFailed) return `configured for ${this.#cores} core(s) but group setup failed${suffix}`;
 		const mode = probe.throttles ? "kernel-throttled" : "policy-only (no kernel throttle on this OS)";
 		const state = this.#group ? "enforcing" : "armed, group created on first spawn";
-		return `${this.#cores} core(s), ${mode}, via ${probe.detail}; ${state}${this.#denied ? "; saturated, refusing new commands" : ""}${suffix}`;
+		const kill = this.#killEnabled ? "; kill on sustained saturation" : "";
+		return `${this.#cores} core(s), ${mode}, via ${probe.detail}; ${state}${kill}${this.#denied ? "; saturated, refusing new commands" : ""}${suffix}`;
 	}
 
 	#extraStatusParts(): string[] {
@@ -379,8 +396,9 @@ export class SessionCpuLimit {
 				this.#writes.source === "none"
 					? "harness tool writes only, spawned writes unmeterable here"
 					: `spawned writes via ${this.#writes.source}`;
+			const kill = this.#writeBudgetKill ? ", kill when exceeded" : "";
 			parts.push(
-				`write budget ${this.#writeBudgetGb} GB, ${formatWriteBytes(this.#writes.totalBytes)} used (${source})`,
+				`write budget ${this.#writeBudgetGb} GB${kill}, ${formatWriteBytes(this.#writes.totalBytes)} used (${source})`,
 			);
 		}
 		if (this.#maxProcesses > 0) {
@@ -424,15 +442,12 @@ export class SessionCpuLimit {
 	}
 
 	/**
-	 * Pick up a change to the three non-CPU limits. Partial on purpose:
-	 * `undefined` means "leave this one alone", because the session's own
-	 * settings watcher knows about CPU only and must not wipe the others by
-	 * omitting them. Turning a limit off never destroys the group and never
-	 * resets the cumulative write total, which is the only reading of
-	 * "cumulative" that an operator cannot clear by toggling a setting.
+	 * Pick up a change to the non-CPU limits. `undefined` leaves a limit as it
+	 * is. Turning a limit off never destroys the group and never resets the
+	 * cumulative write total, which is the only reading of "cumulative" that an
+	 * operator cannot clear by toggling a setting.
 	 */
 	async updateLimits(limits: SessionBudgetLimits): Promise<void> {
-		this.#limitsSupplied = true;
 		const previousWriteBudget = this.#writeBudgetGb;
 		const previousMaxProcesses = this.#maxProcesses;
 		const previousMemory = this.#memoryLimitGb;
@@ -488,7 +503,7 @@ export class SessionCpuLimit {
 			this.#denied = false;
 			this.#window = [];
 			if (this.#reniced) {
-				this.#group?.renice(0);
+				this.#group?.renice(SPAWN_NICE);
 				this.#reniced = false;
 			}
 			if (this.#group) await this.#setQuota(0);
@@ -510,9 +525,6 @@ export class SessionCpuLimit {
 	 */
 	async ensureGroup(): Promise<CpuBudgetGroupHandle | undefined> {
 		if (this.#disposed) return undefined;
-		// Before the active check, not after: a limit nobody has told this limiter
-		// about yet still has to create the group that will carry it.
-		await this.#applyConfiguredLimits();
 		if (!this.#anyLimitActive) return undefined;
 		if (this.#group) return this.#group;
 		if (this.#setupFailed) return undefined;
@@ -756,7 +768,7 @@ export class SessionCpuLimit {
 			this.#denied = false;
 			this.#killWave = 0;
 			if (this.#reniced) {
-				group.renice(0);
+				group.renice(SPAWN_NICE);
 				this.#reniced = false;
 			}
 		}
@@ -1283,9 +1295,11 @@ export function rekeySessionCpuLimit(previousId: string, nextId: string): Sessio
  * An adoption closure for spawn sites that know their session only by a
  * live id lookup. Resolves the limiter at each call, so a limiter registered
  * after the closure is created (session construction order) still applies.
+ * The child starts at {@link SPAWN_NICE} whether or not any budget is set.
  */
 export function sessionCpuAdoption(getSessionId: () => string | null): (pid: number) => void {
 	return pid => {
+		lowerSpawnPriority(pid);
 		const limiter = sessionCpuLimit(getSessionId());
 		if (!limiter) return;
 		void limiter
@@ -1330,9 +1344,11 @@ export function sessionCpuExecHooks(getSessionId: () => string | null): SessionC
  * language servers, debug adapters, the managed browser, speech, and plugin
  * installs. Every session in the process shares those, so pinning them to
  * whichever session happened to trigger them would be arbitrary; the root
- * session's budget is the one that outlives them all.
+ * session's budget is the one that outlives them all. The child starts at
+ * {@link SPAWN_NICE} whether or not any budget is set.
  */
 export function adoptIntoPrimarySessionCpuBudget(pid: number): void {
+	lowerSpawnPriority(pid);
 	const limiter = primarySessionCpuLimit();
 	if (!limiter) return;
 	void limiter
@@ -1425,14 +1441,19 @@ export function resolvedMachineBudgetPlacement(): Promise<MachineBudgetPlacement
 	return undefined;
 }
 
-/** Reset the registry, probe cache and machine placement. Test-only. */
-export function resetSessionCpuLimitsForTests(): void {
+/**
+ * Reset the registry, probe cache and machine placement, and dispose every limiter the registry
+ * held, so its watcher interval and group handle end with the test that created them. Test-only.
+ */
+export async function resetSessionCpuLimitsForTests(): Promise<void> {
+	const live = new Set(limiters.values());
 	limiters.clear();
 	registrationOrder.length = 0;
 	aliasOwners.clear();
 	aliasesByOwner.clear();
 	cachedProbe = undefined;
 	machinePlacements.clear();
+	await Promise.all([...live].map(limiter => limiter.dispose()));
 }
 
 /**
@@ -1442,7 +1463,7 @@ export function resetSessionCpuLimitsForTests(): void {
  * An AsyncLocalStorage scope rather than a parameter because the session that
  * needs to read it is constructed several layers below the code that knows the
  * answer: `runSubprocess` -> `createAgentSession` -> `new AgentSession` ->
- * `initSessionCpuLimit`, and `AgentSession` belongs to another lane. The
+ * `bindSessionBudget` -> `initSessionCpuLimit`. The
  * constructor runs synchronously inside the scope, so the store is visible
  * without threading an argument through the composition root.
  */
@@ -1514,7 +1535,7 @@ export async function initSessionCpuLimit(options: InitSessionCpuLimitOptions): 
 	// selected. Nothing does today; resolving once means nothing can.
 	//
 	// Resolved synchronously so this function reaches `limiters.set` before it
-	// yields: `AgentSession` launches it with `void`, and a spawn site that
+	// yields: `bindSessionBudget` launches it with `void`, and a spawn site that
 	// resolves the limiter by session id in the same tick would otherwise find
 	// nothing registered and run the command outside every budget.
 	const env = options.env ?? resolveCpuLimitEnvironment();
@@ -1537,17 +1558,68 @@ export async function initSessionCpuLimit(options: InitSessionCpuLimitOptions): 
 		const result = await probe;
 		if (!result.supported) options.onNotice(unsupportedText(options.cores, result));
 	}
-	if ((options.memoryLimitGb ?? 0) > 0) {
-		const result = await probe;
-		if (!result.kernelLimits.memory) {
-			options.onNotice(
-				`session.memoryLimitGb is set to ${options.memoryLimitGb} but the memory controller is not ` +
-					`available here (${result.detail}), so a memory cap cannot be enforced. New commands will be ` +
-					`refused rather than run unbounded. Fix: set session.memoryLimitGb to 0.`,
-			);
-		}
-	}
+	await limiter.reportMemoryAtStart();
 	return limiter;
+}
+
+/** What {@link bindSessionBudget} reads from a session's manager. */
+export interface BudgetSessionIds {
+	getSessionId(): string;
+	onSessionIdChanged(listener: (sessionId: string) => void): () => void;
+}
+
+export interface BindSessionBudgetOptions {
+	sessionStore: BudgetSessionIds;
+	settings: Pick<Settings, "get" | "onEffectiveSettingChanged">;
+	onNotice: (text: string) => void;
+}
+
+/**
+ * Keep a session's budget registered under its current id and in step with
+ * every Resources row.
+ *
+ * Registration carries all of the limits, so an eval kernel or an MCP server
+ * spawned before any bash, launch, write or edit gate runs still joins a group
+ * with `memory.max` and `pids.max` written. `/new`, `/resume`, a fork and a
+ * branch mint a fresh id on the same live process, and spawn sites resolve the
+ * limiter by the current id, so the registration follows the id. A changed
+ * Resources row is pushed into the live limiter at once rather than when the
+ * next gate runs. Returns the release for both subscriptions.
+ */
+export function bindSessionBudget(options: BindSessionBudgetOptions): () => void {
+	const { sessionStore, settings, onNotice } = options;
+	const register = (sessionId: string): void => {
+		void initSessionCpuLimit({
+			sessionId,
+			cores: settings.get("session.cpuLimitCores"),
+			kill: settings.get("session.cpuLimitKill"),
+			...sessionBudgetLimits(settings),
+			onNotice,
+		}).catch(error => logger.warn("Session budget registration failed", { sessionId, error: errorMessage(error) }));
+	};
+	let boundId = sessionStore.getSessionId();
+	if (boundId) register(boundId);
+	const releaseIds = sessionStore.onSessionIdChanged(nextId => {
+		if (!nextId) return;
+		const previous = boundId;
+		boundId = nextId;
+		if (previous && rekeySessionCpuLimit(previous, nextId)) return;
+		register(nextId);
+	});
+	const releaseSettings = settings.onEffectiveSettingChanged(path => {
+		if (!Object.hasOwn(RESOURCES_SETTINGS, path)) return;
+		void sessionCpuLimit(sessionStore.getSessionId())
+			?.update(
+				settings.get("session.cpuLimitCores"),
+				settings.get("session.cpuLimitKill"),
+				sessionBudgetLimits(settings),
+			)
+			.catch(error => logger.warn("Session budget update failed", { path, error: errorMessage(error) }));
+	});
+	return () => {
+		releaseIds();
+		releaseSettings();
+	};
 }
 
 registerOwnedResourceDisposer({
@@ -1620,29 +1692,15 @@ export function budgetedFileCommit<A extends unknown[], R>(
 }
 
 /**
- * The three non-CPU limits as the operator set them. One reader so every
- * gate (bash, launch, the write and edit tools) sees the same values, and so
- * a new row is wired in one place rather than four.
+ * The non-CPU limits as the operator set them. One reader so the session
+ * binding and every gate (bash, launch, the write and edit tools) see the same
+ * values, and so a new row is wired in one place rather than five.
  */
-export function sessionBudgetLimits(settings: Settings): SessionBudgetLimits {
+export function sessionBudgetLimits(settings: Pick<Settings, "get">): SessionBudgetLimits {
 	return {
 		writeBudgetGb: settings.get("session.writeBudgetGb"),
 		writeBudgetKill: settings.get("session.writeBudgetKill"),
 		maxProcesses: settings.get("session.maxProcesses"),
 		memoryLimitGb: settings.get("session.memoryLimitGb"),
 	};
-}
-
-/**
- * The operator's non-CPU limits, or undefined when settings are not loaded.
- *
- * The slot is empty before the config file is read, which is not an error here:
- * it means nothing has been configured for this process yet, so the group has no
- * limits to write. Asking the SLOT rather than `Settings.instance` also keeps the
- * store off this module's import graph, and off every graph that reaches a spawn
- * site through it (see `test/architecture/leveraged-imports-stay-cut.test.ts`).
- */
-function configuredBudgetLimits(): SessionBudgetLimits | undefined {
-	const settings = settingsOrNull();
-	return settings ? sessionBudgetLimits(settings) : undefined;
 }

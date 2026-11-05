@@ -74,9 +74,7 @@ const EAGER_AT_STARTUP = [
 	"arktype",
 	"chalk",
 	"diff",
-	"handlebars",
 	"lru-cache",
-	"smol-toml",
 	"yaml",
 ];
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
 import { isContextOverflow } from "@veyyon/ai/error";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function createErrorMessage(errorMessage: string): AssistantMessage {
 	return {
@@ -9,14 +10,7 @@ function createErrorMessage(errorMessage: string): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "error",
 		errorMessage,
 		timestamp: Date.now(),

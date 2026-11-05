@@ -27,10 +27,10 @@ import {
 	parseFrontmatter as parseOmpFrontmatter,
 } from "@veyyon/utils";
 import { formatBytes } from "@veyyon/utils/format";
-import type { PromptTemplate } from "../config/prompt-templates";
+import { firstLineDescription, type PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
-import { formatExitCodeNotice } from "../exec/exit-notice";
+import { appendNotice, formatExitCodeNotice } from "../exec/exit-notice";
 import { type LoadExtensionsResult, createAgentSession as ompCreateAgentSession } from "../sdk";
 import {
 	discoverContextFiles,
@@ -337,10 +337,6 @@ function normalizeLegacyLimit(limit: number | undefined, fallback: number): numb
 	return Math.max(1, Math.floor(limit));
 }
 
-function appendStatus(text: string, status: string): string {
-	return text ? `${text}\n\n${status}` : status;
-}
-
 function legacyBashSnapshot(output: string): { text: string; details?: { truncation: TruncationResult } } {
 	const truncation = truncateTail(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
 	if (!truncation.truncated) {
@@ -382,17 +378,17 @@ async function executeLegacyBashOperations(
 		const snapshot = legacyBashSnapshot(output);
 		const text = snapshot.text || "(no output)";
 		if (result.exitCode !== 0 && result.exitCode !== null) {
-			throw new Error(appendStatus(text, formatExitCodeNotice(result.exitCode)));
+			throw new Error(appendNotice(text, formatExitCodeNotice(result.exitCode)));
 		}
 		return { content: [{ type: "text", text }], details: snapshot.details };
 	} catch (err) {
 		const snapshot = legacyBashSnapshot(output);
 		const text = snapshot.text;
 		if (err instanceof Error && err.message === "aborted") {
-			throw new Error(appendStatus(text, "Command aborted"));
+			throw new Error(appendNotice(text, "Command aborted"));
 		}
 		if (err instanceof Error && err.message.startsWith("timeout:")) {
-			throw new Error(appendStatus(text, `Command timed out after ${err.message.slice("timeout:".length)} seconds`));
+			throw new Error(appendNotice(text, `Command timed out after ${err.message.slice("timeout:".length)} seconds`));
 		}
 		throw err;
 	}
@@ -1082,16 +1078,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 					const raw = await Bun.file(filePath).text();
 					const { frontmatter, body } = parseFrontmatter(raw);
 					const rawDescription = frontmatter.description;
-					let description = typeof rawDescription === "string" ? rawDescription : "";
-					if (!description) {
-						const firstLine = body.split("\n").find(line => line.trim());
-						if (firstLine) {
-							description = firstLine.slice(0, 60);
-							if (firstLine.length > 60) {
-								description += "...";
-							}
-						}
-					}
+					const description =
+						(typeof rawDescription === "string" ? rawDescription : "") || firstLineDescription(body);
 
 					const source = "(legacy-resource-loader)";
 					prompts.push({

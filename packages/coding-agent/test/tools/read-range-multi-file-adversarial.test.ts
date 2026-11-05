@@ -6,14 +6,8 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("ReadTool range multi-file adversarial", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -55,7 +49,7 @@ describe("ReadTool range multi-file adversarial", () => {
 	it("open-ended :25- includes line 25 and later", async () => {
 		const tool = new ReadTool(session());
 		const file = path.join(tmpDir, "big.ts");
-		const out = textOf(await tool.execute("r1", { path: `${file}:25-` }));
+		const out = toolResultText(await tool.execute("r1", { path: `${file}:25-` }));
 		expect(out).toContain("ROW25");
 		expect(out).toContain("ROW30");
 		// Early lines should be absent (allowing small context padding).
@@ -65,14 +59,14 @@ describe("ReadTool range multi-file adversarial", () => {
 	it("single-line :10-10 returns ROW10", async () => {
 		const tool = new ReadTool(session());
 		const file = path.join(tmpDir, "big.ts");
-		const out = textOf(await tool.execute("r2", { path: `${file}:10-10` }));
+		const out = toolResultText(await tool.execute("r2", { path: `${file}:10-10` }));
 		expect(out).toContain("ROW10");
 	});
 
 	it("reading two different files returns independent bodies", async () => {
 		const tool = new ReadTool(session());
-		const a = textOf(await tool.execute("ra", { path: path.join(tmpDir, "big.ts") }));
-		const b = textOf(await tool.execute("rb", { path: path.join(tmpDir, "small.ts") }));
+		const a = toolResultText(await tool.execute("ra", { path: path.join(tmpDir, "big.ts") }));
+		const b = toolResultText(await tool.execute("rb", { path: path.join(tmpDir, "small.ts") }));
 		expect(a).toContain("ROW1");
 		expect(b).toContain("only");
 		expect(b.includes("ROW15")).toBe(false);
@@ -83,7 +77,7 @@ describe("ReadTool range multi-file adversarial", () => {
 		const file = path.join(tmpDir, "small.ts");
 		let out = "";
 		try {
-			out = textOf(await tool.execute("r3", { path: `${file}:50-60` }));
+			out = toolResultText(await tool.execute("r3", { path: `${file}:50-60` }));
 		} catch (e) {
 			out = String(e);
 		}

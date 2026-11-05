@@ -10,9 +10,8 @@ import type {
 	WireSessionEntry,
 	WireSessionHeader,
 } from "@veyyon/wire";
-import { SNAPSHOT_PROGRESS_TIMEOUT_MS } from "@veyyon/wire";
+import { COLLAB_PROTO, encodeBase64Url, SNAPSHOT_PROGRESS_TIMEOUT_MS } from "@veyyon/wire";
 import { GuestClient } from "../src/lib/client";
-import { COLLAB_PROTO, encodeBase64Url } from "../src/lib/link";
 import { CollabSocket } from "../src/lib/socket";
 
 const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;

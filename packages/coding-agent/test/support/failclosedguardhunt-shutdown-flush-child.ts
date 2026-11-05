@@ -11,19 +11,18 @@
  */
 
 import { Agent } from "@veyyon/agent-core";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { LoadedCustomCommand } from "@veyyon/coding-agent/extensibility/custom-commands";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const markerPath = process.argv[2];
 if (!markerPath) throw new Error("child requires a marker path argument");
 const disposeDelayMs = Number(process.argv[3] ?? "50");
 
-const model = getBundledModel("openai", "gpt-4o-mini");
-if (!model) throw new Error("expected bundled gpt-4o-mini");
+const model = requireBundledModel("openai", "gpt-4o-mini");
 
 // The custom-command path never reads the registry, and a real one needs auth
 // storage on disk.

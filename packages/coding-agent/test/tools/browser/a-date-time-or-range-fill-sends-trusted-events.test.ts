@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
+import { toolResultText } from "../../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./chromium";
 
 /** Each case: the input's markup, the value filled, and whether script sets it. */
@@ -74,10 +75,6 @@ for (const { id, value } of CASES) {
 }
 return outcomes;`;
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
-}
-
 let server: Bun.Server<undefined> | undefined;
 
 beforeAll(() => {
@@ -104,7 +101,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a date, time or range fill", () => {
 				await tool.execute("open", { action: "open", name: tab, url: `http://127.0.0.1:${server!.port}/` });
 				const code = SWEEP.replace("CASES", JSON.stringify(CASES.map(({ id, value }) => ({ id, value }))));
 				const outcomes = JSON.parse(
-					text(await tool.execute("run", { action: "run", name: tab, timeout: 240, code })),
+					toolResultText(await tool.execute("run", { action: "run", name: tab, timeout: 240, code }), ""),
 				) as Array<{
 					id: string;
 					value: string;

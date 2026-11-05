@@ -29,30 +29,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { resolveStoredPathCase } from "@veyyon/coding-agent/tools/core/path-utils";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated(),
-		enableLsp: false,
-	} as ToolSession;
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 /**
  * Whether `dir` stores names case-insensitively, decided by asking the
@@ -149,18 +130,18 @@ describe("write tool filename reporting", () => {
 		// The ordinary path, and the one that must not regress while fixing the
 		// case-insensitive one: no rewriting when there is nothing to correct.
 		const filePath = path.join(tmpDir, "module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		await fs.writeFile(filePath, "old\n", "utf8");
 
 		const result = await new WriteTool(session).execute("call-1", { path: filePath, content: "new\n" });
-		expect(resultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
+		expect(toolResultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
 	});
 
 	it("reports the stored spelling, not the requested one, when they differ only in case", async () => {
 		const stored = path.join(tmpDir, "module.ts");
 		const requested = path.join(tmpDir, "Module.ts");
-		const session = createSession(tmpDir);
+		const session = makeWorkspaceToolSession(tmpDir);
 		session.settings.set("edit.mode", "replace");
 		await fs.writeFile(stored, "old\n", "utf8");
 
@@ -171,13 +152,13 @@ describe("write tool filename reporting", () => {
 			// volume `Module.ts` is a DIFFERENT file, so the correct report names
 			// it, and the divergence this row exists for cannot occur here. The
 			// assertion still runs, so the case-sensitive behaviour is pinned too.
-			expect(resultText(result)).toBe(`Successfully wrote 4 bytes to Module.ts`);
+			expect(toolResultText(result)).toBe(`Successfully wrote 4 bytes to Module.ts`);
 			expect(await fs.readFile(stored, "utf8")).toBe("old\n");
 			return;
 		}
 
 		// The write landed in the existing entry, and the report names that entry.
-		expect(resultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
+		expect(toolResultText(result)).toBe(`Successfully wrote 4 bytes to module.ts`);
 		expect(await fs.readFile(stored, "utf8")).toBe("new\n");
 		// And the directory still holds exactly one entry: the write updated the
 		// file rather than creating a second one under the other spelling.

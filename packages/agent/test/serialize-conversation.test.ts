@@ -1,19 +1,13 @@
 import { describe, expect, test } from "bun:test";
+
 import {
 	serializeConversation,
 	serializeConversationForSummary,
 	truncateToolResultForSummary,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@veyyon/ai";
 
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function assistantMessage(content: AssistantMessage["content"]): Message {
 	return {
@@ -22,7 +16,7 @@ function assistantMessage(content: AssistantMessage["content"]): Message {
 		api: "mock",
 		provider: "mock",
 		model: "mock",
-		usage: ZERO_USAGE,
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

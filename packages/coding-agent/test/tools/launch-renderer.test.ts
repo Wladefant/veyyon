@@ -7,10 +7,10 @@
 import { describe, expect, it } from "bun:test";
 import type { DaemonSnapshot } from "@veyyon/coding-agent/launch/protocol";
 import { renderTerminalOutput } from "@veyyon/coding-agent/launch/terminal-output";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import type { LaunchToolDetails } from "@veyyon/coding-agent/tools/shell/launch";
 import { sanitizeText } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 
 /**
  * The card the registry draws for `launch`, which is the one a rebuilt transcript reaches.
@@ -20,12 +20,6 @@ import { sanitizeText } from "@veyyon/utils";
  * this suite on the path a card actually takes.
  */
 const launchToolRenderer = toolRenderers.launch;
-
-async function theme() {
-	const t = await getThemeByName("dark");
-	expect(t).toBeDefined();
-	return t!;
-}
 
 const lines = (component: { render: (w: number) => readonly string[] }, width = 200) =>
 	sanitizeText(component.render(width).join("\n")).split("\n");
@@ -52,7 +46,7 @@ describe("launchToolRenderer", () => {
 	});
 
 	it("folds a stop result into one header with op, name, and exit state", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const rendered = lines(
 			launchToolRenderer.renderResult(
 				{
@@ -75,7 +69,7 @@ describe("launchToolRenderer", () => {
 	});
 
 	it("renders log lines without the trailing cursor-status suffix, surfacing it as header meta", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const rendered = lines(
 			launchToolRenderer.renderResult(
 				{
@@ -124,7 +118,7 @@ describe("launchToolRenderer", () => {
 		if (terminalRows === undefined) throw new Error("terminal replay failed");
 		expect(Bun.stripANSI(terminalRows[0] ?? "")).toBe("           ready");
 
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const component = launchToolRenderer.renderResult(
 			{
 				content: [{ type: "text", text: "ready\n[web: running; cursor=2210]" }],
@@ -148,7 +142,7 @@ describe("launchToolRenderer", () => {
 	});
 
 	it("caps a collapsed list to the preview item limit with a more-items row", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const daemons = Array.from({ length: 11 }, (_, i) => daemon({ name: `svc-${i}`, id: `d-${i}` }));
 		const rendered = lines(
 			launchToolRenderer.renderResult(
@@ -179,7 +173,7 @@ describe("launchToolRenderer", () => {
 	});
 
 	it("marks a failed start with the daemon's exit reason even though the result is not an error", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const rendered = lines(
 			launchToolRenderer.renderResult(
 				{
@@ -205,7 +199,7 @@ describe("launchToolRenderer", () => {
 	});
 
 	it("names the unmet readiness condition instead of a contradictory Ready + timed-out pair", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const rendered = lines(
 			launchToolRenderer.renderResult(
 				{
@@ -244,7 +238,7 @@ describe("launchToolRenderer", () => {
 	 * operator who expands a failure is asking for the whole trace.
 	 */
 	it("truncates a long launch target in the pending header", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const command = `bunx ${"--define=SOME_VERY_LONG_FLAG_NAME=1 ".repeat(20)}vite`;
 		const [header] = lines(
 			launchToolRenderer.renderCall(
@@ -258,7 +252,7 @@ describe("launchToolRenderer", () => {
 	});
 
 	it("collapses a long failure to a few lines with a count of the rest", async () => {
-		const uiTheme = await theme();
+		const uiTheme = await requireTheme("dark");
 		const trace = Array.from({ length: 40 }, (_, i) => `    at frame ${i}`).join("\n");
 		const render = (expanded: boolean) =>
 			lines(

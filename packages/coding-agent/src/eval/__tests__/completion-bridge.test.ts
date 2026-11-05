@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
 import * as ai from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { TempDir } from "@veyyon/utils";
 import { $ } from "bun";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -88,14 +89,7 @@ function assistant(opts: {
 		api: "openai-responses",
 		provider: "p",
 		model: "default",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: opts.stopReason ?? "stop",
 		errorMessage: opts.errorMessage,
 		timestamp: Date.now(),

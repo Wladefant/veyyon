@@ -112,10 +112,10 @@ async function dispatchPluginCommand(cmd: PluginCommandArgs): Promise<void> {
 			await handleConfig(manager, cmd.args, cmd.flags);
 			break;
 		case "enable":
-			await handleEnable(manager, cmd.args, cmd.flags);
+			await handleSetEnabled(manager, cmd.args, cmd.flags, true);
 			break;
 		case "disable":
-			await handleDisable(manager, cmd.args, cmd.flags);
+			await handleSetEnabled(manager, cmd.args, cmd.flags, false);
 			break;
 		case "marketplace":
 			await handleMarketplace(cmd.args, cmd.flags);
@@ -432,47 +432,18 @@ async function handleInstall(
 	}
 }
 
-async function handleUninstall(
+function handleUninstall(
 	manager: PluginManager,
 	packages: string[],
 	flags: { json?: boolean; scope?: "user" | "project" },
 ): Promise<void> {
-	if (packages.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin uninstall <package> ...`));
-		process.exit(EXIT_USAGE);
-	}
-
-	// For uninstall, check the installed plugins registry directly.
-	// This works even if the marketplace entry was later removed from marketplaces.json.
-	const mktMgr = await makeMarketplaceManager();
-	const installedPlugins = new Set((await mktMgr.listInstalledPlugins()).map(p => p.id));
-
-	for (const name of packages) {
-		if (installedPlugins.has(name)) {
-			// Exact match against installed marketplace plugin IDs (name@marketplace)
-			try {
-				await mktMgr.uninstallPlugin(name, flags.scope);
-				console.log(chalk.green(`${theme.status.success} Uninstalled ${name}`));
-			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to uninstall ${name}: ${errorMessage(err)}`));
-				process.exit(1);
-			}
-			continue;
-		}
-
-		// npm path
-		try {
-			await manager.uninstall(name);
-			if (flags.json) {
-				console.log(JSON.stringify({ uninstalled: name }));
-			} else {
-				console.log(chalk.green(`${theme.status.success} Uninstalled ${name}`));
-			}
-		} catch (err) {
-			console.error(chalk.red(`${theme.status.error} Failed to uninstall ${name}: ${errorMessage(err)}`));
-			process.exit(1);
-		}
-	}
+	return applyToEachPlugin(
+		packages,
+		flags,
+		PLUGIN_LIFECYCLE_VERBS.uninstall,
+		(marketplace, name) => marketplace.uninstallPlugin(name, flags.scope),
+		name => manager.uninstall(name),
+	);
 }
 
 async function handleList(manager: PluginManager, flags: { json?: boolean }): Promise<void> {
@@ -856,65 +827,70 @@ async function handleConfigValidate(manager: PluginManager, flags: { json?: bool
 	}
 }
 
-async function handleEnable(
-	manager: PluginManager,
-	plugins: string[],
-	flags: { json?: boolean; scope?: "user" | "project" },
-): Promise<void> {
-	return handleSetEnabled(manager, plugins, flags, true);
-}
-
-async function handleDisable(
-	manager: PluginManager,
-	plugins: string[],
-	flags: { json?: boolean; scope?: "user" | "project" },
-): Promise<void> {
-	return handleSetEnabled(manager, plugins, flags, false);
-}
-
-async function handleSetEnabled(
+function handleSetEnabled(
 	manager: PluginManager,
 	plugins: string[],
 	flags: { json?: boolean; scope?: "user" | "project" },
 	enabled: boolean,
 ): Promise<void> {
-	const action = enabled ? "enable" : "disable";
-	const pastTense = enabled ? "Enabled" : "Disabled";
-	const jsonKey = enabled ? "enabled" : "disabled";
+	return applyToEachPlugin(
+		plugins,
+		flags,
+		enabled ? PLUGIN_LIFECYCLE_VERBS.enable : PLUGIN_LIFECYCLE_VERBS.disable,
+		(marketplace, name) => marketplace.setPluginEnabled(name, enabled, flags.scope),
+		name => manager.setEnabled(name, enabled),
+	);
+}
 
-	if (plugins.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin ${action} <plugin> ...`));
+/** One lifecycle verb as its usage line, success line, failure line and `--json` record print it. */
+interface PluginVerb {
+	action: string;
+	operand: "package" | "plugin";
+	done: string;
+	jsonKey: string;
+}
+
+/** Every lifecycle verb that acts on installed plugins by name, keyed by its subcommand. */
+export const PLUGIN_LIFECYCLE_VERBS = {
+	uninstall: { action: "uninstall", operand: "package", done: "Uninstalled", jsonKey: "uninstalled" },
+	enable: { action: "enable", operand: "plugin", done: "Enabled", jsonKey: "enabled" },
+	disable: { action: "disable", operand: "plugin", done: "Disabled", jsonKey: "disabled" },
+} as const satisfies Partial<Record<PluginAction, PluginVerb>>;
+
+/**
+ * Apply one lifecycle verb to each named plugin and print each outcome in the requested format.
+ *
+ * A name in the installed marketplace registry (`name@marketplace`) goes to `onMarketplace`; any
+ * other name is an npm or linked plugin and goes to `onNpm`. The registry is read directly, so a
+ * plugin whose marketplace entry was removed from `marketplaces.json` later still resolves. The
+ * first failure exits 1.
+ */
+async function applyToEachPlugin(
+	names: string[],
+	flags: { json?: boolean },
+	verb: PluginVerb,
+	onMarketplace: (marketplace: MarketplaceManager, name: string) => Promise<unknown>,
+	onNpm: (name: string) => Promise<unknown>,
+): Promise<void> {
+	if (names.length === 0) {
+		console.error(chalk.red(`Usage: ${APP_NAME} plugin ${verb.action} <${verb.operand}> ...`));
 		process.exit(EXIT_USAGE);
 	}
 
-	const mktMgr = await makeMarketplaceManager();
-	const installedPlugins = new Set((await mktMgr.listInstalledPlugins()).map(p => p.id));
+	const marketplace = await makeMarketplaceManager();
+	const installed = new Set((await marketplace.listInstalledPlugins()).map(p => p.id));
 
-	for (const name of plugins) {
-		if (installedPlugins.has(name)) {
-			try {
-				await mktMgr.setPluginEnabled(name, enabled, flags.scope);
-				if (flags.json) {
-					console.log(JSON.stringify({ [jsonKey]: name }));
-				} else {
-					console.log(chalk.green(`${theme.status.success} ${pastTense} ${name}`));
-				}
-			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to ${action} ${name}: ${errorMessage(err)}`));
-				process.exit(1);
-			}
-			continue;
-		}
-
+	for (const name of names) {
 		try {
-			await manager.setEnabled(name, enabled);
+			if (installed.has(name)) await onMarketplace(marketplace, name);
+			else await onNpm(name);
 			if (flags.json) {
-				console.log(JSON.stringify({ [jsonKey]: name }));
+				console.log(JSON.stringify({ [verb.jsonKey]: name }));
 			} else {
-				console.log(chalk.green(`${theme.status.success} ${pastTense} ${name}`));
+				console.log(chalk.green(`${theme.status.success} ${verb.done} ${name}`));
 			}
 		} catch (err) {
-			console.error(chalk.red(`${theme.status.error} Failed to ${action} ${name}: ${errorMessage(err)}`));
+			console.error(chalk.red(`${theme.status.error} Failed to ${verb.action} ${name}: ${errorMessage(err)}`));
 			process.exit(1);
 		}
 	}

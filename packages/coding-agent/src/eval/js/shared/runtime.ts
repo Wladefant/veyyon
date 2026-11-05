@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { Writable } from "node:stream";
 import * as util from "node:util";
 
+import { stringifyJsonSafe } from "@veyyon/utils/json";
 import * as logger from "@veyyon/utils/logger";
 import { createHelpers, type HelperBundle } from "./helpers";
 import { awaitMaybePromise, indirectEval } from "./indirect-eval";

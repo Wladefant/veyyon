@@ -1,10 +1,9 @@
 /**
- * Shared rendering primitives for bash/eval execution components.
+ * The bash and eval execution blocks: {@link ExecutionBlockComponent} and the rendering primitives it draws with.
  *
- * Each helper isolates a piece of structure both components share verbatim
- * (frame layout, collapsed preview, post-run status line). Differences in
- * how each component prepares its header, output lines, or sixel masking
- * stay in their respective files.
+ * Both blocks stream output, fold it on draw, preview its tail, and settle with a status footer through the one
+ * class below. What differs between them is passed in: the header (`$ command` vs the highlighted `>>>` cell),
+ * how output is sanitized and clamped, and which rows draw raw (sixel images in the bash block).
  */
 
 import { Ellipsis } from "@veyyon/natives";
@@ -202,7 +201,7 @@ export type ExecutionColorKey = "dim" | "bashMode" | "pythonMode";
  * header, and two full-bleed rules around two short lines read as chrome
  * shouting over content.
  */
-export function buildExecutionFrame(
+function buildExecutionFrame(
 	parent: Container,
 	ui: TUI,
 	colorKey: ExecutionColorKey,
@@ -225,7 +224,7 @@ export function buildExecutionFrame(
  * Wrap a styled preview block in a render-time visual-line truncator.
  * Recomputed per render width so wrapping stays in sync with terminal size.
  */
-export function createCollapsedPreview(previewText: string, previewLines: number): Component {
+function createCollapsedPreview(previewText: string, previewLines: number): Component {
 	return {
 		render: (width: number) => truncateToVisualLines(previewText, previewLines, width, 2).visualLines,
 		invalidate: () => {},
@@ -252,15 +251,13 @@ export function buildStatusFooter(opts: {
 	 * gone, and a hint that says "ctrl+o to expand" would promise something that cannot happen.
 	 */
 	droppedLineCount?: number;
-	/** Suppress the "… N more lines" hint (used when sixel passthrough renders the full output). */
-	suppressHiddenCount?: boolean;
 }): Text | undefined {
 	const parts: string[] = [];
 
 	if ((opts.droppedLineCount ?? 0) > 0) {
 		parts.push(theme.fg("warning", `… ${opts.droppedLineCount} earlier lines dropped while streaming`));
 	}
-	if (opts.hiddenLineCount > 0 && !opts.suppressHiddenCount) {
+	if (opts.hiddenLineCount > 0) {
 		// The gesture is `app.tools.expand`, which is remappable, so the hint is read
 		// rather than written out. The COUNT is stated either way: a block that hid
 		// eighty lines silently reads as a block that had none.
@@ -289,8 +286,165 @@ export function buildStatusFooter(opts: {
  * Derive the post-run status from an exit code + cancellation flag using the
  * same precedence both execution components apply.
  */
-export function resolveExecutionStatus(exitCode: number | undefined, cancelled: boolean): ExecutionStatus {
+function resolveExecutionStatus(exitCode: number | undefined, cancelled: boolean): ExecutionStatus {
 	if (cancelled) return "cancelled";
 	if (exitCode !== 0 && exitCode !== undefined && exitCode !== null) return "error";
 	return "complete";
+}
+
+/** What one kind of execution block supplies to {@link ExecutionBlockComponent}. */
+export interface ExecutionBlockConfig {
+	ui: TUI;
+	colorKey: ExecutionColorKey;
+	/** The header line(s). Built with the block and again after `invalidate()`, so a theme change reaches it. */
+	header: () => Text;
+	/** Applied to the final output before it replaces the streamed lines. */
+	sanitize: (text: string) => string;
+	/** Clamps freshly split lines for display, returning one line for each it receives. */
+	clampLines: (lines: string[]) => string[];
+	/**
+	 * Which kept lines draw as they are rather than dimmed, or undefined when none can. A block holding such a
+	 * line shows its whole output, since a raw row (a sixel image) cut by the preview would draw garbage.
+	 */
+	rawLineMask?: (lines: readonly string[]) => boolean[] | undefined;
+}
+
+/**
+ * A command or cell run from the composer, with its streamed output and post-run status.
+ *
+ * Streamed chunks are held until the next draw, so a burst of chunks costs one fold and one rebuild, and the
+ * header is built once rather than on every chunk.
+ */
+export class ExecutionBlockComponent extends Container {
+	readonly #config: ExecutionBlockConfig;
+	readonly #output: StreamedOutputLines;
+	readonly #contentContainer: Container;
+	readonly #loader: Loader;
+	#header: Text | undefined;
+	#status: ExecutionStatus = "running";
+	#exitCode: number | undefined;
+	#signal: string | undefined;
+	#truncation: TruncationMeta | undefined;
+	#expanded = false;
+	#displayDirty = false;
+
+	constructor(config: ExecutionBlockConfig) {
+		super();
+		this.#config = config;
+		this.#output = new StreamedOutputLines(config.clampLines);
+		const { contentContainer, loader } = buildExecutionFrame(this, config.ui, config.colorKey);
+		this.#contentContainer = contentContainer;
+		this.#loader = loader;
+		this.#header = config.header();
+		this.#contentContainer.addChild(this.#header);
+		this.#contentContainer.addChild(this.#loader);
+	}
+
+	/**
+	 * Transcript finalization contract (see `FinalizableBlock`): the collapsed streaming preview rewrites its tail
+	 * window every chunk, so the block stays out of native scrollback until the run completes.
+	 */
+	isTranscriptBlockFinalized(): boolean {
+		return this.#status !== "running";
+	}
+
+	/** Show the full output (`true`) or the preview of its tail. */
+	setExpanded(expanded: boolean): void {
+		this.#expanded = expanded;
+		this.#updateDisplay();
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		this.#header = undefined;
+		this.#displayDirty = false;
+		this.#updateDisplay();
+	}
+
+	appendOutput(chunk: string): void {
+		// Held until the next draw, so a burst of chunks costs one fold.
+		this.#output.push(chunk);
+		this.#displayDirty = true;
+	}
+
+	setComplete(
+		exitCode: number | undefined,
+		cancelled: boolean,
+		options?: { output?: string; truncation?: TruncationMeta; signal?: string },
+	): void {
+		this.#exitCode = exitCode;
+		this.#signal = options?.signal;
+		this.#status = options?.signal !== undefined ? "error" : resolveExecutionStatus(exitCode, cancelled);
+		this.#truncation = options?.truncation;
+		if (options?.output !== undefined) {
+			this.#setOutput(options.output);
+		}
+		this.#loader.stop();
+		this.#updateDisplay();
+	}
+
+	setOutput(output: string): void {
+		this.#setOutput(output);
+		this.#updateDisplay();
+	}
+
+	/** The output kept for display: the streamed tail while running, all of it once the final output arrives. */
+	getOutput(): string {
+		return this.#output.lines().join("\n");
+	}
+
+	override render(width: number): readonly string[] {
+		if (this.#displayDirty) {
+			this.#displayDirty = false;
+			this.#updateDisplay();
+		}
+		return super.render(width);
+	}
+
+	#updateDisplay(): void {
+		const availableLines = this.#output.lines();
+		const rawLineMask = this.#config.rawLineMask?.(availableLines);
+		const hasRawLines = rawLineMask?.some(Boolean) ?? false;
+		// A block holding a raw line draws all of it, as an expanded one does, and then nothing is hidden.
+		const showsAll = this.#expanded || hasRawLines;
+		const previewLogicalLines = showsAll ? availableLines : availableLines.slice(-EXECUTION_PREVIEW_LINES);
+		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
+
+		this.#contentContainer.clear();
+		this.#header ??= this.#config.header();
+		this.#contentContainer.addChild(this.#header);
+
+		if (availableLines.length > 0) {
+			if (showsAll) {
+				const displayText = availableLines
+					.map((line, index) => (rawLineMask?.[index] ? line : theme.fg("muted", line)))
+					.join("\n");
+				this.#contentContainer.addChild(new Text(`\n${displayText}`, 2, 0));
+			} else {
+				// Visual truncation, recomputed per render width.
+				const styledOutput = previewLogicalLines.map(line => theme.fg("muted", line)).join("\n");
+				this.#contentContainer.addChild(createCollapsedPreview(`\n${styledOutput}`, EXECUTION_PREVIEW_LINES));
+			}
+		}
+
+		if (this.#status === "running") {
+			this.#contentContainer.addChild(this.#loader);
+		} else {
+			const footer = buildStatusFooter({
+				status: this.#status,
+				exitCode: this.#exitCode,
+				signal: this.#signal,
+				truncation: this.#truncation,
+				hiddenLineCount,
+				droppedLineCount: this.#output.dropped(),
+			});
+			if (footer) this.#contentContainer.addChild(footer);
+		}
+	}
+
+	#setOutput(output: string): void {
+		const clean = this.#config.sanitize(output);
+		// The authoritative output replaces whatever streaming kept, so nothing is missing any more.
+		this.#output.replace(clean ? this.#config.clampLines(clean.split("\n")) : []);
+	}
 }

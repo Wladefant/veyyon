@@ -8,6 +8,8 @@
  * meanwhile fallen behind the shipped parser.
  */
 
+import type { KeyId } from "@veyyon/utils/keys";
+
 /**
  * A sample the two parsers are timed on.
  *
@@ -19,7 +21,7 @@
 export interface Sample {
 	name: string;
 	data: string;
-	expected: string;
+	expected: KeyId;
 	legacyJs?: string;
 }
 

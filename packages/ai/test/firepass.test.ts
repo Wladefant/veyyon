@@ -10,14 +10,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function sseResponse(events: unknown[]): Response {
-	const payload = `${events.map(e => `data: ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
+import { sseResponse } from "./helpers/fetch-mock";
 
 describe("Fire Pass provider", () => {
 	it("ships a bundled Kimi K2.6 Turbo entry on the firepass provider", () => {

@@ -17,6 +17,7 @@ import { isMainThread } from "node:worker_threads";
 // consumers that import postmortem early (e.g. the JS eval process entry).
 import * as logger from "./logger";
 import { restoreTerminalStderr } from "./stderr-guard";
+import { toError } from "./type-guards";
 
 // Cleanup reasons, in order of priority/meaning.
 export enum Reason {
@@ -63,7 +64,7 @@ function runCleanup(reason: Reason): Promise<void> {
 	const cleanupSettled = Promise.allSettled(promises).then(results => {
 		for (const result of results) {
 			if (result.status === "rejected") {
-				const err = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+				const err = toError(result.reason);
 				logger.error("Cleanup callback failed", { err, stack: err.stack });
 			}
 		}
@@ -312,7 +313,7 @@ if (isMainThread) {
 			process.exit(1);
 		})
 		.on("unhandledRejection", async reason => {
-			const err = reason instanceof Error ? reason : new Error(String(reason));
+			const err = toError(reason);
 			// EPIPE from an IPC `send()` (`syscall: "send"`) originates from a
 			// worker subprocess whose pipe broke between the exit being observed
 			// and the next `proc.send()` — a race window that Bun surfaces as an
@@ -409,7 +410,7 @@ export function register(id: string, callback: (reason: Reason) => void | Promis
 		try {
 			return callback(reason);
 		} catch (e) {
-			const err = e instanceof Error ? e : new Error(String(e));
+			const err = toError(e);
 			logger.error("Cleanup callback failed", { err, id, stack: err.stack });
 		}
 	};
@@ -429,7 +430,7 @@ export function register(id: string, callback: (reason: Reason) => void | Promis
 		try {
 			callback(Reason.MANUAL);
 		} catch (e) {
-			const err = e instanceof Error ? e : new Error(String(e));
+			const err = toError(e);
 			logger.error("Cleanup callback failed", { err, id, stack: err.stack });
 		}
 		return () => {};

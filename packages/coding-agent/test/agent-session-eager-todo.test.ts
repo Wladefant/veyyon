@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
-import type { AssistantMessage, Context, TextContent, ToolCall } from "@veyyon/ai";
+import type { AssistantMessage, Context, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { PROMPTS } from "@veyyon/coding-agent/prompts/registry";
@@ -14,8 +14,11 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { contentText } from "@veyyon/utils/content-text";
 import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { messageText } from "./helpers/tool-result-text";
 
 type ObservedPromptCall = {
 	toolChoice: string | undefined;
@@ -34,11 +37,6 @@ type ObservedPromptCall = {
 };
 
 const SESSION_STATE_PREFIX = "<session-state>";
-
-function isTextContentBlock(value: unknown): value is TextContent {
-	if (!value || typeof value !== "object") return false;
-	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
-}
 
 function getToolChoiceName(choice: unknown): string | undefined {
 	if (!choice) return undefined;
@@ -63,14 +61,7 @@ function createToolCallAssistantMessage(name: string, args: Record<string, unkno
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: Date.now(),
 	};
@@ -86,22 +77,6 @@ function createAssistantMessageWithThinking(text: string, thinking: string): Ass
 	};
 }
 
-function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) {
-		return "";
-	}
-	if (typeof message.content === "string") {
-		return message.content;
-	}
-	if (!Array.isArray(message.content)) {
-		return "";
-	}
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
-}
-
 /**
  * The context a side request carried. The replan title refresh runs on the
  * session's side transport (`sideStreamFn`), which is what puts the operator's
@@ -110,13 +85,7 @@ function getMessageText(message: AgentMessage): string {
  * the assertion passes while the real request leaves for the network.
  */
 function firstMessageText(context: Context): string {
-	const content = context.messages[0]?.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter(isTextContentBlock)
-		.map(block => block.text)
-		.join("\n");
+	return contentText(context.messages[0]?.content);
 }
 
 describe("AgentSession eager todo enforcement", () => {
@@ -130,8 +99,7 @@ describe("AgentSession eager todo enforcement", () => {
 	const sideCalls: Context[] = [];
 
 	async function createSession(settingsOverride: Record<string, unknown> = {}): Promise<void> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
@@ -181,15 +149,15 @@ describe("AgentSession eager todo enforcement", () => {
 					throw new Error("Expected prompt context to include a message");
 				}
 				const turnMessages = context.messages.filter(
-					message => !getMessageText(message).startsWith(SESSION_STATE_PREFIX),
+					message => !messageText(message).startsWith(SESSION_STATE_PREFIX),
 				);
 				observedCalls.push({
 					toolChoice: getToolChoiceName(options?.toolChoice),
 					toolNames: (context.tools ?? []).map(tool => tool.name),
 					messageRoles: turnMessages.map(message => message.role),
-					messageTexts: turnMessages.map(message => getMessageText(message)),
+					messageTexts: turnMessages.map(messageText),
 					lastMessageRole: lastMessage.role,
-					lastMessageText: getMessageText(lastMessage),
+					lastMessageText: messageText(lastMessage),
 					sessionState: turnMessages.length !== context.messages.length,
 				});
 				const response = scriptedResponses.shift() ?? createAssistantMessage("done");
@@ -328,7 +296,7 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(session.getTodoPhases()[0]?.tasks[0]?.content).toBe("List all git worktrees in the current repository");
 	});
 
-	it("refreshes an auto title on todo init from recent user, assistant, and thinking context", async () => {
+	it("refreshes an auto title on todo init from the visible text of recent turns, never their reasoning", async () => {
 		await recreateSession({ "title.refreshOnReplan": true });
 		await session.setSessionName("Old auto title", "auto");
 		const priorUser: AgentMessage = {
@@ -361,7 +329,7 @@ describe("AgentSession eager todo enforcement", () => {
 		const titleInput = firstMessageText(sideCalls[0] as Context);
 		expect(titleInput).toContain("fix parser recovery");
 		expect(titleInput).toContain("I found the parser recovery path.");
-		expect(titleInput).toContain("The recovery heuristic should drive the replan title.");
+		expect(titleInput).not.toContain("The recovery heuristic should drive the replan title.");
 		expect(titleInput).toContain("replan parser diagnostics");
 	});
 

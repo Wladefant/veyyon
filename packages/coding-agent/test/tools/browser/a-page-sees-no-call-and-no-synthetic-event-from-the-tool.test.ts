@@ -30,6 +30,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
 import { TempDir } from "@veyyon/utils";
+import { toolResultText } from "../../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./chromium";
 
 /** Installed in the page's head, before anything else runs in it. */
@@ -172,10 +173,6 @@ afterAll(async () => {
 	await closed.promise;
 });
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
-}
-
 /** The `tab` members that run no code in the page, and why. Every other member is driven below. */
 const LEAVE_THE_PAGE_ALONE: Record<string, string> = {
 	name: "the tab's name",
@@ -286,7 +283,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a page that hooks the DOM", () => {
 					JSON.stringify(origin),
 				);
 				const result = await tool.execute("run", { action: "run", name: tab, timeout: 90, code });
-				const { done, members } = JSON.parse(text(result)) as { done: string[]; members: string[] };
+				const { done, members } = JSON.parse(toolResultText(result, "")) as { done: string[]; members: string[] };
 				expect(done.filter(entry => entry.includes(" failed: "))).toEqual([]);
 				expect([...members].sort()).toEqual([...DRIVEN, ...Object.keys(LEAVE_THE_PAGE_ALONE)].sort());
 				// One more run, so the challenge probe after the last one has read the last page too.

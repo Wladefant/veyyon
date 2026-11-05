@@ -36,19 +36,19 @@ import {
 	runSecretCommandForSurface,
 	type SecretCommandOutcome,
 } from "@veyyon/coding-agent/slash-commands/helpers/secret";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import { DEFAULT_MASK_CHAR } from "@veyyon/tui";
 import { stripAnsi } from "@veyyon/utils";
 import { PASTE_END, PASTE_START } from "@veyyon/utils/bracketed-paste";
+import { requireTheme } from "../helpers/require-theme";
 
 let home: string;
 let project: string;
 
 beforeAll(async () => {
 	// The dialog builds real themed components, so the theme has to be installed first.
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("Failed to load dark theme for tests");
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 

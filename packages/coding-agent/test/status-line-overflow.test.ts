@@ -5,7 +5,7 @@ import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/st
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { getProjectDir, setProjectDir } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
-import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
+import { segmentContext } from "./helpers/segment-context";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
 
 // Tracked temp directories: the factory deletes what it made when this file finishes.
@@ -29,12 +29,9 @@ afterAll(() => {
 	setProjectDir(originalProjectDir);
 });
 
-/** Minimal SegmentContext factory — only path/git fields matter for these tests. */
+/** Only the path and git fields matter for these tests. */
 function createCtx(overrides?: { pathMaxLength?: number; branch?: string | null }): SegmentContext {
-	return {
-		facts: NO_SESSION_FACTS,
-		width: 120,
-		compactThinkingLevel: false,
+	return segmentContext({
 		options: {
 			path: {
 				abbreviate: false,
@@ -42,43 +39,8 @@ function createCtx(overrides?: { pathMaxLength?: number; branch?: string | null 
 				stripWorkPrefix: false,
 			},
 		},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
-		goalMode: null,
-		vibeMode: null,
-		collab: null,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-		},
-		contextPercent: 0,
-		contextWindow: 0,
-		contextLimit: 0,
-		contextLimitKind: "window" as const,
-		autoCompactEnabled: false,
-		agentCount: 0,
-		backgroundSessionCount: 0,
-		activeMs: 0,
-		activeRepo: null,
-		worktree: null,
-		git: {
-			branch: overrides?.branch ?? null,
-			status: null,
-			pr: null,
-		},
-		account: null,
-		usage: null,
-	};
+		git: { branch: overrides?.branch ?? null, status: null, pr: null },
+	});
 }
 
 describe("path segment truncation at varying maxLength", () => {

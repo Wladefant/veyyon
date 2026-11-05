@@ -8,15 +8,14 @@
 
 import { afterEach, describe, expect, it } from "bun:test";
 import { Agent } from "@veyyon/agent-core";
-import { getBundledModel } from "@veyyon/catalog/models";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { LoadedCustomCommand } from "@veyyon/coding-agent/extensibility/custom-commands";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { requireBundledModel } from "../../agent/test/helpers";
 
-const model = getBundledModel("openai", "gpt-4o-mini");
-if (!model) throw new Error("expected bundled gpt-4o-mini");
+const model = requireBundledModel("openai", "gpt-4o-mini");
 
 let session: AgentSession | undefined;
 afterEach(async () => {

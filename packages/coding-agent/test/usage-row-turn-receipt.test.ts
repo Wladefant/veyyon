@@ -18,6 +18,7 @@
  * wrong ones is the failure mode this whole row exists to fix.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { Usage } from "@veyyon/ai";
 import { createUsageRowBlock } from "@veyyon/coding-agent/modes/terminal/components/transcript/usage-row";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -34,7 +35,7 @@ function usage(over: Partial<Usage> = {}): Usage {
 function row(u: Usage, durationMs?: number, ttftMs?: number): string {
 	return createUsageRowBlock(u, durationMs, ttftMs)
 		.render(120)
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""))
+		.map(line => stripVTControlCharacters(line))
 		.join(" ")
 		.replace(/\s+/g, " ")
 		.trim();

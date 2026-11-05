@@ -14,6 +14,7 @@
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import {
+	formatModelString,
 	getModelMatchPreferences,
 	parseModelString,
 	resolveCompactionModelPatterns,
@@ -21,11 +22,6 @@ import {
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { AUTO_THINKING } from "../thinking";
-
-/** The identity a model is deduplicated, memoized and reported under. */
-export function modelKey(model: Model): string {
-	return `${model.provider}/${model.id}`;
-}
 
 /**
  * The model a configured target string names, or undefined when it names nothing available.
@@ -67,7 +63,7 @@ export function compactionTarget(currentModel: Model, availableModels: Model[]):
 /**
  * The models compaction may try, in the order it tries them.
  *
- * Deduplicated by {@link modelKey}, so a model named twice is tried once and the first position it
+ * Deduplicated by {@link formatModelString}, so a model named twice is tried once and the first position it
  * earned is the one it keeps.
  */
 export function compactionModelCandidates(
@@ -81,7 +77,7 @@ export function compactionModelCandidates(
 
 	const addCandidate = (model: Model | undefined): void => {
 		if (!model) return;
-		const key = modelKey(model);
+		const key = formatModelString(model);
 		if (seen.has(key)) return;
 		seen.add(key);
 		if (filter && !filter(model)) return;
@@ -165,7 +161,7 @@ export function configuredCompactionEfforts(settings: Settings, availableModels:
 			resolved.thinkingLevel !== undefined &&
 			resolved.thinkingLevel !== AUTO_THINKING
 		) {
-			const key = modelKey(resolved.model);
+			const key = formatModelString(resolved.model);
 			if (!efforts.has(key)) efforts.set(key, resolved.thinkingLevel);
 		}
 	}

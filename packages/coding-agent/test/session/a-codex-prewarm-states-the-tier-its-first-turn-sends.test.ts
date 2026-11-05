@@ -18,13 +18,14 @@ import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const ROUTING_HINT = "x-codex-routing-hint";
 const originalWebSocket = global.WebSocket;
@@ -78,8 +79,7 @@ function recordUpgrades(): Array<Record<string, string>> {
 }
 
 async function startCodexSession(tier: string): Promise<Array<Record<string, string>>> {
-	const bundled = getBundledModel("openai-codex", "gpt-5.5");
-	if (!bundled) throw new Error("Expected bundled model openai-codex/gpt-5.5");
+	const bundled = requireBundledModel("openai-codex", "gpt-5.5");
 	const model: Model = { ...bundled, baseUrl: "https://codex.example/backend-api", preferWebsockets: true };
 	const upgrades = recordUpgrades();
 	const tempDir = TempDir.createSync("veyyon-codex-prewarm-tier-");

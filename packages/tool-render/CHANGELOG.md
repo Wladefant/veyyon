@@ -5,6 +5,15 @@
 ## [Unreleased]
 
 ## [1.6.0] - 2026-10-28
+### Changed
+
+- `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
+
+## [1.5.6] - 2026-10-13
+
+### Changed
+
+- The edit card reads its target paths through `editInputPaths` from `@veyyon/utils/fs-tool-args`; rendered output is unchanged.
 
 ### Fixed
 

@@ -1,7 +1,8 @@
 import { Ellipsis } from "@veyyon/natives";
 import type { Component } from "@veyyon/tui/core/component-types";
 import { TERMINAL } from "@veyyon/tui/terminal-capabilities";
-import { APP_NAME, DEFAULT_PROFILE_DIR_NAME, getActiveProfileOrDefault } from "@veyyon/utils/dirs";
+import { DEFAULT_PROFILE_DIR_NAME } from "@veyyon/utils/config-root";
+import { APP_NAME, getActiveProfileOrDefault } from "@veyyon/utils/dirs";
 import { clamp01 } from "@veyyon/utils/math";
 import { centerLine, padding } from "@veyyon/utils/padding";
 import { replaceTabs } from "@veyyon/utils/tab-width";

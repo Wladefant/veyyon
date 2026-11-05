@@ -38,18 +38,12 @@ function model(overrides: Partial<ModelSpec<"openai-completions">>): Model<"open
 	} satisfies ModelSpec<"openai-completions">);
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function capturePayload(target: Model<"openai-completions">): Promise<ChatCompletionsPayload> {
 	const { promise, resolve } = Promise.withResolvers<ChatCompletionsPayload>();
 	streamOpenAICompletions(target, context, {
 		apiKey: "test-key",
 		toolChoice: forcedResolve,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as ChatCompletionsPayload),
 	});
 	return promise;

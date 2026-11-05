@@ -4,6 +4,7 @@
 		"bench",
 		"native",
 		"scripts",
+		"src",
 		"test"
 	]
 }

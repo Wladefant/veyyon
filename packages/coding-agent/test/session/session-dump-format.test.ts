@@ -8,19 +8,12 @@
  * previous `<parameter>`-per-key JSON Schema dump dropped entirely.
  */
 import { describe, expect, it } from "bun:test";
-import type { Model, Usage } from "@veyyon/ai";
+
+import type { Model } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { formatSessionDumpText } from "@veyyon/coding-agent/session/session-dump-format";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
-
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 const HARMONY_MODEL = { provider: "openai", id: "gpt-5", name: "GPT-5" } as Model;
 
@@ -149,7 +142,7 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: 2,
 				},
@@ -191,7 +184,7 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: 1,
 				},
@@ -215,7 +208,7 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 					api: "mock",
 					provider: "mock",
 					model: "mock",
-					usage: ZERO_USAGE,
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: 1,
 				},

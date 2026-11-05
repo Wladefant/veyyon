@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage, ToolCall, Usage } from "@veyyon/ai";
+import type { AssistantMessage, ToolCall } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
@@ -17,17 +18,6 @@ const MIDDLE_MARKER = "MIDDLE TEXT BETWEEN TOOL CALLS";
 const TOOL_RESULT_B_MARKER = "TOOL RESULT FROM SECOND TOOL";
 const FINAL_MARKER = "FINAL ANSWER AFTER SECOND TOOL";
 
-function zeroUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function assistantMessage(content: AssistantMessage["content"]): AssistantMessage {
 	return {
 		role: "assistant",
@@ -36,7 +26,7 @@ function assistantMessage(content: AssistantMessage["content"]): AssistantMessag
 		provider: "cursor",
 		model: "cursor-model",
 		stopReason: "stop",
-		usage: zeroUsage(),
+		usage: emptyUsage(),
 		timestamp: 1,
 	};
 }
@@ -93,7 +83,7 @@ function createFixture() {
 		showWarning: vi.fn(),
 		showPinnedError: vi.fn(),
 		clearTransientSessionUi: vi.fn(),
-		lastAssistantUsage: zeroUsage(),
+		lastAssistantUsage: emptyUsage(),
 		// Required members of the context. Omitting them used to be tolerated by
 		// `?.()` calls in the controller, which meant production silently skipped
 		// the composer refresh and the welcome dismissal whenever either was

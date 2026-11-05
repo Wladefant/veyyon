@@ -180,7 +180,7 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 		const safeLimit = normalizeLimit(limit);
 		if (safeLimit === 0) return [];
 
-		const tokens = tokenize(query);
+		const tokens = historyQueryTokens(query);
 		if (tokens.length === 0) return [];
 
 		// 1. FTS5 prefix match (token AND, prefix-wildcard per token).
@@ -314,9 +314,10 @@ function normalizeLimit(limit: number): number {
 /**
  * Split on non-alphanumeric runs, mirroring FTS5's `unicode61` tokenizer so
  * query tokens align with how stored prompts were indexed. Lowercases for
- * stable substring matching.
+ * stable substring matching. The history search overlay highlights these same
+ * tokens, so a highlight marks exactly what the query matched.
  */
-function tokenize(query: string): string[] {
+export function historyQueryTokens(query: string): string[] {
 	return query
 		.toLowerCase()
 		.split(NON_ALNUM_RUN_RE)

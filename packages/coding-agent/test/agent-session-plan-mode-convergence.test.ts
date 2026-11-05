@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { PROMPTS } from "@veyyon/coding-agent/prompts/registry";
@@ -23,7 +22,8 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
-import { type } from "arktype";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { createOkTool } from "./helpers/ok-tool";
 
 /** A stable, literal (non-templated) line of the reminder prompt, so the test
  *  pins the reminder by its real content rather than a hardcoded copy. */
@@ -36,18 +36,6 @@ function deriveReminderFragment(template: string): string {
 	return line;
 }
 const REMINDER_FRAGMENT = deriveReminderFragment(PROMPTS["plan-mode/tool-decision-reminder"].text);
-
-function makeTool(name: string): AgentTool {
-	return {
-		name,
-		label: name,
-		description: `Fake ${name}`,
-		parameters: type({}),
-		async execute() {
-			return { content: [{ type: "text" as const, text: "ok" }] };
-		},
-	};
-}
 
 /** Concatenate the text blocks of a message (string or content-array). */
 function messageText(message: AgentMessage): string {
@@ -101,12 +89,11 @@ describe("AgentSession plan-mode convergence", () => {
 		responses: MockResponse[],
 		options?: { advisorResponses?: MockResponse[]; sideResponses?: MockResponse[] },
 	): Promise<PlanHarness> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected bundled anthropic model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
-		const askTool = makeTool("ask");
-		const resolveTool = makeTool("resolve");
-		const readTool = makeTool("read");
+		const askTool = createOkTool("ask");
+		const resolveTool = createOkTool("resolve");
+		const readTool = createOkTool("read");
 
 		const mock = createMockModel({ responses });
 		const agent = new Agent({

@@ -36,7 +36,6 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import {
 	expandDelimitedPathEntries,
 	expandDelimitedPathEntriesSync,
@@ -47,6 +46,7 @@ import { shortenPath } from "@veyyon/coding-agent/tools/core/render-utils";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireTheme } from "../helpers/require-theme";
 
 describe("a delimited path escaping cwd requires approval", () => {
 	let tempDir: string;
@@ -397,8 +397,7 @@ describe("a delimited path escaping cwd requires approval", () => {
 	});
 
 	it("sanitizes resolvedPath in the read card using shortenPath", async () => {
-		const uiTheme = await getThemeByName("dark");
-		expect(uiTheme).toBeDefined();
+		const uiTheme = await requireTheme("dark");
 		const homeDir = os.homedir();
 		const secretSubpath = path.join(homeDir, "workspace", "project");
 		const rendered = drawToolView(
@@ -413,7 +412,7 @@ describe("a delimited path escaping cwd requires approval", () => {
 				{ expanded: false, partial: false },
 				{ path: "." },
 			),
-			uiTheme!,
+			uiTheme,
 		);
 
 		const renderedLines = rendered.render(120);

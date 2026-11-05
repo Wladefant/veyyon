@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type { ModelChangeEntry, SessionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 
@@ -30,14 +31,7 @@ describe("issue #849: explicit default model survives later assistant-message in
 			api: "openai-codex-responses",
 			provider: provider as AssistantMessage["provider"],
 			model,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.parse(`2026-04-30T00:00:0${id.slice(-1)}Z`),
 		};

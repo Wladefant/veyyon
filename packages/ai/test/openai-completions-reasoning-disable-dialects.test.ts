@@ -12,12 +12,6 @@ import { buildModel } from "@veyyon/catalog/build";
 // same `disableChatCompletionsReasoningForDialect` helper, so the forced-tool
 // path below exercises that helper for every dialect.
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 function createMockFetch(): FetchImpl {
 	async function mockFetch(_input: string | URL | Request, _init?: RequestInit): Promise<Response> {
 		return new Response("data: [DONE]\n\n", {
@@ -77,7 +71,7 @@ async function captureForcedToolPayload(model: Model<"openai-completions">): Pro
 	streamOpenAICompletions(model, forcedToolContext(), {
 		apiKey: "test-key",
 		fetch: createMockFetch(),
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		reasoning: "high",
 		toolChoice: { type: "tool", name: "read" },
 		onPayload: payload => resolve(payload),
@@ -132,7 +126,7 @@ describe("Chat Completions reasoning-disable conflict policy (per dialect)", () 
 		streamOpenAICompletions(model, forcedToolContext(), {
 			apiKey: "test-key",
 			fetch: createMockFetch(),
-			signal: createAbortedSignal(),
+			signal: AbortSignal.abort(),
 			reasoning: "high",
 			toolChoice: "auto",
 			onPayload: payload => resolve(payload),

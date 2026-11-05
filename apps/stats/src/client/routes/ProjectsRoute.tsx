@@ -1,10 +1,11 @@
+import { StatusPill } from "@veyyon/tool-render";
 import { useMemo } from "react";
 import { getFolderStats } from "../api";
 import { formatCost, formatDurationMs, formatInteger, formatPercent } from "../data/formatters";
 import { useResource } from "../data/useResource";
 import { buildFolderRows, type FolderRowView } from "../data/view-models";
 import type { TimeRange } from "../types";
-import { AsyncBoundary, DataTable, Panel, StatusPill } from "../ui";
+import { AsyncBoundary, DataTable, Panel } from "../ui";
 
 export interface ProjectsRouteProps {
 	active: boolean;

@@ -12,7 +12,10 @@
  * Each figure is read from a macrotask of its own. The collector scans the native stack
  * conservatively, so a register or a stack slot the builds left behind keeps their garbage alive;
  * from the event loop no frame of the builds is on the stack, and the instances under measurement
- * are reachable through `held` alone.
+ * are reachable through `held` alone. A run can still read a figure several copies of the text above
+ * the others of the same tree: one CI run read a sealed excess of 1.43 copies where every other run
+ * reads 0. A retention the code makes shows in every run, so each arm is measured {@link TRIALS}
+ * times and the smallest excess is the one printed.
  *
  * It runs in a process of its own because the figure is the process's string bytes: in a test
  * process shared with other files, their leftover allocations land in the same figure.
@@ -24,6 +27,8 @@ const TEXT_CHARS = 32_000;
 const CHUNK = 64;
 const WIDTH = 80;
 const COPIES = 6;
+/** Measurements per shape and arm; the smallest excess is printed. */
+const TRIALS = 3;
 
 /**
  * One unit of every block shape the streaming lexer freezes on, and of one fence the stream keeps
@@ -146,8 +151,12 @@ if (import.meta.main) {
 	for (const [name, unit, close] of SHAPES) {
 		const full = textOf(unit, close);
 		const excess = async (arm: "streaming" | "sealed"): Promise<number> => {
-			const once = await heldPerChar(full, "rendered once");
-			return (await heldPerChar(full, arm)) - once;
+			let least = Number.POSITIVE_INFINITY;
+			for (let trial = 0; trial < TRIALS; trial++) {
+				const once = await heldPerChar(full, "rendered once");
+				least = Math.min(least, (await heldPerChar(full, arm)) - once);
+			}
+			return least;
 		};
 		report[name] = { streaming: await excess("streaming"), sealed: await excess("sealed") };
 	}

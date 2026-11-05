@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
 import { OmfgController } from "@veyyon/coding-agent/modes/terminal/controllers/omfg-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
@@ -14,14 +15,7 @@ import { removeWithRetries } from "@veyyon/utils";
 const PROFILE_OPTION = "This profile — every project";
 const AMEND_OPTION = "Amend with feedback…";
 
-const usage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: Usage = emptyUsage();
 
 interface RunEphemeralTurnArgs {
 	promptText: string;

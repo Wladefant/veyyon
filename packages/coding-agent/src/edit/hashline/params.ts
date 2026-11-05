@@ -5,9 +5,9 @@
  */
 
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy } from "@veyyon/utils/abortable";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 
-export const hashlineEditParamsSchema = lazy(() =>
+export const hashlineEditParamsSchema = toolSchema("edit:hashline", () =>
 	type({
 		input: "string",
 	}),

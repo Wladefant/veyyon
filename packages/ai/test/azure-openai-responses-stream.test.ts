@@ -5,6 +5,7 @@ import {
 } from "@veyyon/ai/providers/azure-openai-responses";
 import type { Context, FetchImpl, Model, ModelSpec, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const azureModel: Model<"azure-openai-responses"> = buildModel({
 	id: "gpt-5-mini",
@@ -18,12 +19,6 @@ const azureModel: Model<"azure-openai-responses"> = buildModel({
 	contextWindow: 400000,
 	maxTokens: 128000,
 });
-
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
 
 function createSseResponse(events: unknown[]): Response {
 	const sse = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
@@ -47,14 +42,7 @@ function createAssistantMessage(text: string, textSignature?: string) {
 		api: "azure-openai-responses" as const,
 		provider: "azure" as const,
 		model: "gpt-5-mini",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
@@ -71,7 +59,7 @@ async function captureAzurePayload(
 		azureBaseUrl: model.baseUrl,
 		azureApiVersion: "v1",
 		...options,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => resolve(payload as Record<string, unknown>),
 	});
 	return promise;
@@ -216,7 +204,7 @@ describe("azure openai responses streaming", () => {
 			{
 				apiKey: "test-key",
 				fetch: fetchMock as FetchImpl,
-				signal: createAbortedSignal(),
+				signal: AbortSignal.abort(),
 				onPayload,
 			},
 		).result();

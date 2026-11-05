@@ -13,6 +13,7 @@
 import { heapStats } from "bun:jsc";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -30,14 +31,7 @@ const COLLECTIONS = ["Map", "Set", "WeakMap", "WeakSet"] as const;
 export const PIXEL_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 function assistant(turn: number, content: AssistantMessage["content"]): AssistantMessage {
 	return {

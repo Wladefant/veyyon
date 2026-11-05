@@ -8,6 +8,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { TUI } from "@veyyon/tui";
 import type {
 	BlockId,
@@ -469,13 +470,6 @@ function assistantFixture(
 		model: "test-model",
 		stopReason,
 		timestamp,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 	};
 }

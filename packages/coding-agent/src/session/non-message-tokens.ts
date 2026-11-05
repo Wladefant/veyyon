@@ -24,38 +24,30 @@ import type { Skill } from "../extensibility/skills";
 import type { Tool } from "../tools";
 import type { AgentSession } from "./agent-session";
 
+type SchemaTool = Pick<Tool, "name" | "description" | "parameters" | "wireParameters">;
+
 const EMPTY_STRING_PARTS: readonly string[] = [];
-const EMPTY_TOOLS: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">> = [];
+const EMPTY_TOOLS: ReadonlyArray<SchemaTool> = [];
 const EMPTY_SKILLS: readonly Skill[] = [];
 
-/** Memoize wire-schema JSON per stable `parameters` object — tool defs are
- *  replaced wholesale via setTools, never mutated in place. */
-const toolWireJsonByParameters = new WeakMap<object, string>();
-/** Same memo for the pruned form. Keyed separately: one `parameters` object now
- *  has two wire encodings and they must not evict each other. */
-const prunedToolWireJsonByParameters = new WeakMap<object, string>();
+/** Memoize the JSON text per wire schema — `toolWireSchema` returns one stable
+ *  object per schema, and tool defs are replaced wholesale via setTools, never
+ *  mutated in place. */
+const toolWireJsonByWire = new WeakMap<object, string>();
+/** Same memo for the pruned form. Keyed separately: one wire schema has two
+ *  encodings and they must not evict each other. */
+const prunedToolWireJsonByWire = new WeakMap<object, string>();
 
-function wireSchemaJsonFragment(
-	tool: Pick<Tool, "name" | "description" | "parameters">,
-	pruneDescriptions = false,
-): string {
-	const parameters = tool.parameters;
-	const cache = pruneDescriptions ? prunedToolWireJsonByParameters : toolWireJsonByParameters;
-	if (parameters !== null && typeof parameters === "object") {
-		const cached = cache.get(parameters);
-		if (cached !== undefined) return cached;
-	}
+function wireSchemaJsonFragment(tool: SchemaTool, pruneDescriptions = false): string {
 	try {
-		const wireTool: AiTool = {
-			name: tool.name,
-			description: tool.description,
-			parameters: tool.parameters as AiTool["parameters"],
-		};
-		const wire = toolWireSchema(wireTool) ?? {};
+		// The tool itself, not a copy: a copy would read `parameters` and build the schema whose wire form
+		// the tool supplies.
+		const wire = toolWireSchema(tool as AiTool) ?? {};
+		const cache = pruneDescriptions ? prunedToolWireJsonByWire : toolWireJsonByWire;
+		const cached = cache.get(wire);
+		if (cached !== undefined) return cached;
 		const json = JSON.stringify(pruneDescriptions ? stripSchemaDescriptions(wire as Record<string, unknown>) : wire);
-		if (parameters !== null && typeof parameters === "object") {
-			cache.set(parameters, json);
-		}
+		cache.set(wire, json);
 		return json;
 	} catch (error) {
 		// Estimation must not crash the usage panel, but counting this tool
@@ -82,10 +74,7 @@ export function estimateSkillsTokens(skills: readonly Skill[]): number {
 	return countTokens(fragments);
 }
 
-export function estimateToolSchemaTokens(
-	tools: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">>,
-	pruneDescriptions = false,
-): number {
+export function estimateToolSchemaTokens(tools: ReadonlyArray<SchemaTool>, pruneDescriptions = false): number {
 	const fragments: string[] = [];
 	for (const tool of tools) {
 		fragments.push(tool.name);
@@ -115,10 +104,10 @@ function prunesToolDescriptions(session: AgentSession): boolean {
 
 /**
  * Build the wire-schema fragment of one active tool per step, in the form the tool half of
- * `session`'s reading counts. Each tool's first `parameters` read constructs its ArkType schema, so
- * a caller that runs each step in its own event-loop turn spreads the build of every schema across
- * turns instead of holding one turn for all of them, and the reading taken after the last step
- * finds each fragment memoized.
+ * `session`'s reading counts. A tool's first wire read constructs its ArkType schema unless the
+ * build's wire-schema cache holds that schema's wire form, so a caller that runs each step in its own
+ * event-loop turn spreads the build of every schema across turns instead of holding one turn for all
+ * of them, and the reading taken after the last step finds each fragment memoized.
  */
 export function* toolSchemaWarmSteps(session: AgentSession): Generator<void, void, undefined> {
 	const prune = prunesToolDescriptions(session);
@@ -151,7 +140,7 @@ export function* toolSchemaWarmSteps(session: AgentSession): Generator<void, voi
 // (setSystemPrompt/setTools replace the array reference rather than mutating it).
 interface NonMessageTokenCache {
 	systemPromptRef: readonly string[];
-	toolsRef: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">>;
+	toolsRef: ReadonlyArray<SchemaTool>;
 	skillsRef: readonly Skill[];
 	prune: boolean;
 	tokens: number | undefined;

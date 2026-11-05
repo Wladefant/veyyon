@@ -34,6 +34,7 @@
 import { getEnvApiKeyName } from "@veyyon/ai/env-api-key";
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@veyyon/catalog/provider-models";
+import { getActiveAuthDbPath } from "@veyyon/utils";
 import { ModelsConfigFile } from "./models-config";
 
 /**
@@ -132,4 +133,47 @@ export function missingCredentialsMessage(provider: string, modelId?: string, wh
 	const subject = what ? `No API key for ${boundIdentifier(what)} (${target})` : `No API key for ${target}`;
 	const message = `${subject}. Fix: ${joinRemedies(remedies(provider))}.`;
 	return message.length <= MAX_MESSAGE_LENGTH ? message : `${message.slice(0, MAX_MESSAGE_LENGTH - 1)}…`;
+}
+
+/** What the credential store reports for a provider whose credential produced no token. */
+export interface UnusableCredentialState {
+	/** A credential is stored for the provider, read without refreshing it. */
+	readonly signedIn: boolean;
+	/** Why a failed refresh disabled the provider's credential, when one did. */
+	readonly disabledCause?: string;
+}
+
+/**
+ * The message a turn raises when the provider's credential produced no token.
+ *
+ * Three states look alike to a token lookup. A stored credential whose refresh failed, or that the
+ * provider rejected (a lapsed subscription, an unpaid balance), is still stored: calling it missing
+ * sends the reader into a sign-in loop for an account problem on the provider's side. A credential
+ * a failed refresh disabled is filtered out of the credential list and reads as never signed in, so
+ * the message states the refresh failure and the provider's reason. Only a provider with neither has
+ * no key.
+ */
+export function unusableCredentialMessage(provider: string, state: UnusableCredentialState): string {
+	const remedy = credentialRemedySentence(provider);
+	const authDb = getActiveAuthDbPath();
+	if (state.signedIn) {
+		return (
+			`Signed in to ${provider}, but could not get a usable token right now.\n\n` +
+			`The stored token may have expired and its refresh failed, or ${provider} rejected it ` +
+			`(for example a lapsed subscription or unpaid balance). ` +
+			`${remedy} ` +
+			`If signing in again succeeds and the next call still fails the same way, the problem is on the ${provider} side: check that account's billing and plan status. ` +
+			`Your credentials are still stored in ${authDb}.`
+		);
+	}
+	if (state.disabledCause) {
+		return (
+			`Your ${provider} login was disabled after a token refresh failed, so there is no usable credential right now.\n\n` +
+			`The provider rejected the refresh with: ${state.disabledCause}\n\n` +
+			`This usually means the refresh token was already spent or revoked, which a crash mid-refresh can cause. ` +
+			`${remedy} ` +
+			`The disabled credential is still recorded in ${authDb} and signing in replaces it.`
+		);
+	}
+	return `No API key found for ${provider}.\n\n${remedy} Stored credentials live in ${authDb}.`;
 }

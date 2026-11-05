@@ -1,8 +1,10 @@
 {
 	"extends": "../../packages/tsconfig.workspace.json",
 	"include": [
+		"build.ts",
+		"scripts",
 		"src",
-		"scripts"
+		"test"
 	],
 	"exclude": [
 		"src/client",

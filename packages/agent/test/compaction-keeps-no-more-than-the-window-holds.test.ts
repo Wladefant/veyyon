@@ -7,7 +7,9 @@ import {
 	type SessionEntry,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { logger } from "@veyyon/utils";
+import { createUserMessage } from "./helpers";
 
 /**
  * THE REPORTED SYMPTOM: "Nothing to compact (session too small)" against a
@@ -35,18 +37,7 @@ const NON_MESSAGE_TOKENS = 30_000;
 const PROMPT_TOKENS = 48_000;
 
 function usage(promptTokens: number): Usage {
-	return {
-		input: promptTokens,
-		output: 400,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: promptTokens + 400,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
-function userMessage(text: string): AgentMessage {
-	return { role: "user", content: text, timestamp: Date.now() };
+	return { ...emptyUsage(), input: promptTokens, output: 400, totalTokens: promptTokens + 400 };
 }
 
 function assistantMessage(text: string, promptTokens: number): AssistantMessage {
@@ -77,7 +68,7 @@ function branch(turns: number, promptTokens: number): SessionEntry[] {
 	let parent: string | undefined;
 	for (let i = 0; i < turns; i++) {
 		const body = `turn ${i} ${"conversation text ".repeat(400)}`;
-		entries.push(entry(`user-${i}`, parent, userMessage(body)));
+		entries.push(entry(`user-${i}`, parent, createUserMessage(body)));
 		parent = `user-${i}`;
 		entries.push(entry(`assistant-${i}`, parent, assistantMessage(`reply ${i}`, promptTokens)));
 		parent = `assistant-${i}`;

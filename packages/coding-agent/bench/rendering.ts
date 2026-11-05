@@ -16,7 +16,7 @@ import {
 	STREAMING_REVEAL_FRAME_MS,
 	visibleUnits,
 } from "../src/modes/terminal/controllers/streaming-reveal";
-import { getEditorTheme, initTheme } from "../src/theme/theme";
+import { getEditorTheme, setTheme } from "../src/theme/theme";
 import type { ToolSession } from "../src/tools";
 import { ReadTool } from "../src/tools/fs/read";
 
@@ -30,7 +30,7 @@ const longText = Array.from({ length: 200 })
 const bench = makeBench(ITERATIONS);
 
 await Settings.init({ inMemory: true });
-await initTheme("dark");
+await setTheme("dark");
 
 console.log(`Rendering benchmark (${ITERATIONS} iterations)\n`);
 

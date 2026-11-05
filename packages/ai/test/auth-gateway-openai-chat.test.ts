@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { encodeResponse, encodeStream, parseRequest } from "@veyyon/ai/providers/openai-chat-server";
 import type { AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function makeEventStream(events: AssistantMessageEvent[], final: AssistantMessage): AssistantMessageEventStream {
 	async function* iter() {
@@ -30,15 +31,6 @@ function parseSseLine(line: string): unknown {
 	return JSON.parse(stripped);
 }
 
-const baseUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 function emptyAssistant(): AssistantMessage {
 	return {
 		role: "assistant",
@@ -46,7 +38,7 @@ function emptyAssistant(): AssistantMessage {
 		api: "openai-completions",
 		provider: "openai",
 		model: "gpt-test",
-		usage: baseUsage,
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};
@@ -242,7 +234,7 @@ describe("auth-gateway openai-chat: encodeResponse", () => {
 				{ type: "thinking", thinking: "private reasoning" }, // dropped
 				{ type: "toolCall", id: "call_42", name: "compute", arguments: { x: 1 } },
 			],
-			usage: { ...baseUsage, input: 10, output: 20, cacheRead: 4, cacheWrite: 6, totalTokens: 40 },
+			usage: { ...emptyUsage(), input: 10, output: 20, cacheRead: 4, cacheWrite: 6, totalTokens: 40 },
 			stopReason: "toolUse",
 		};
 
@@ -390,7 +382,7 @@ describe("auth-gateway openai-chat: encodeStream", () => {
 		const partial = emptyAssistant();
 		const final: AssistantMessage = {
 			...partial,
-			usage: { ...baseUsage, input: 10, output: 4, cacheRead: 6, cacheWrite: 2, reasoningTokens: 3 },
+			usage: { ...emptyUsage(), input: 10, output: 4, cacheRead: 6, cacheWrite: 2, reasoningTokens: 3 },
 		};
 		const events: AssistantMessageEvent[] = [
 			{ type: "thinking_delta", contentIndex: 0, delta: "hm", partial },
@@ -439,7 +431,7 @@ describe("auth-gateway openai-chat: encodeStream", () => {
 
 	it("without include_usage, no chunk carries a usage field and no usage chunk is sent", async () => {
 		const partial = emptyAssistant();
-		const final: AssistantMessage = { ...partial, usage: { ...baseUsage, input: 10, output: 4 } };
+		const final: AssistantMessage = { ...partial, usage: { ...emptyUsage(), input: 10, output: 4 } };
 		const events: AssistantMessageEvent[] = [
 			{ type: "text_delta", contentIndex: 0, delta: "ok", partial },
 			{ type: "done", reason: "stop", message: final },

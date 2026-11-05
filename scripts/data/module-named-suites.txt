@@ -223,7 +223,6 @@ packages/coding-agent/test/export/markit/xml-text.test.ts
 packages/coding-agent/test/mcp/server-response-delivery.test.ts
 packages/coding-agent/test/mcp/tool-cache.test.ts
 packages/coding-agent/test/mcp/tool-list-validation.test.ts
-packages/coding-agent/test/mcp/unattributable-error.test.ts
 packages/coding-agent/test/modal-shell.test.ts
 packages/coding-agent/test/model-browser.test.ts
 packages/coding-agent/test/model-discovery.test.ts
@@ -427,7 +426,6 @@ packages/coding-agent/test/worker-args.test.ts
 packages/coding-agent/test/workspace-tree.test.ts
 clients/web/test/client.test.ts
 clients/web/test/codec.test.ts
-clients/web/test/link.test.ts
 apps/stats/test/user-metrics.test.ts
 packages/tool-render/test/registry.test.ts
 packages/utils/test/abortable.test.ts

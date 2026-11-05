@@ -33,6 +33,19 @@ export function formatExitCodeNotice(exitCode: number, signal?: number): string 
 }
 
 /**
+ * `output` with `notice` after it, one blank line between them; the notice alone when there is no
+ * output.
+ *
+ * A command's output usually ends in a newline. That newline ends its last line, it is not a blank
+ * line, so it does not count toward the separator: `boom\n` and `boom` both become
+ * `boom\n\n<notice>`. A blank line the program printed last stays.
+ */
+export function appendNotice(output: string, notice: string): string {
+	if (!output) return notice;
+	return `${output.endsWith("\n") ? output.slice(0, -1) : output}\n\n${notice}`;
+}
+
+/**
  * Matches either wording {@link formatExitCodeNotice} produces, anchored to a
  * whole line.
  *

@@ -23,41 +23,11 @@
  */
 import type { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import type { StatusDataSource } from "@veyyon/wire/presentation";
+import type { StatusDataSource, StatusUsageStats } from "@veyyon/wire/presentation";
 import { StatusPresentationProducer } from "../../src/presentation/status-producer";
+import { RESTING_USAGE_STATS } from "./segment-context";
 
 const CONTEXT_WINDOW = 128_000;
-
-/** The spend counters the row reads, named so a partial override keeps each type. */
-export interface SessionUsage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	totalTokens: number;
-	orchestrationInput: number;
-	orchestrationOutput: number;
-	orchestrationCacheRead: number;
-	premiumRequests: number;
-	cost: number;
-	/** Null until a turn has streamed long enough to measure one. */
-	tokensPerSecond: number | null;
-}
-
-/** A session that has spent nothing: every counter zero, no rate yet. */
-const RESTING_USAGE: SessionUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	orchestrationInput: 0,
-	orchestrationOutput: 0,
-	orchestrationCacheRead: 0,
-	premiumRequests: 0,
-	cost: 0,
-	tokensPerSecond: null,
-};
 
 export interface ContextUsage {
 	tokens: number;
@@ -82,7 +52,7 @@ export interface StubSessionOptions {
 	 */
 	contextUsage?: ContextUsage | undefined;
 	/** Spend counters, for the suites that assert cost, premium requests or rate. */
-	usage?: Partial<SessionUsage>;
+	usage?: Partial<StatusUsageStats>;
 	/** Explicit `undefined` means an unnamed session, which the chip must hide rather than clamp. */
 	sessionName?: string | undefined;
 	/** Transcript the row fingerprints and counts. */
@@ -131,7 +101,7 @@ export function statusLineSessionParts(options: StubSessionOptions = {}): Record
 		...(options.modelThinking ? { thinking: { defaultLevel: options.thinkingLevel } } : {}),
 	};
 	const messages = options.messages ?? [];
-	const usage = options.usage ? { ...RESTING_USAGE, ...options.usage } : RESTING_USAGE;
+	const usage = { ...RESTING_USAGE_STATS, ...options.usage };
 	// `contextUsage` distinguishes "absent" from "not passed": a suite proving the
 	// unknown-count path passes `undefined` explicitly, so the key's presence, not
 	// its value, decides.

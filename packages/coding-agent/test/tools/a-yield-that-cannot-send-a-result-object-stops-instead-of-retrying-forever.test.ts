@@ -1,6 +1,6 @@
 /**
- * A `yield` whose `result` is not an object is recovered when it can be, and
- * bounded when it cannot.
+ * A `yield` whose `result` is not an object is refused with the shapes it
+ * accepts, and the refusals are bounded.
  *
  * WHY THIS SUITE EXISTS. A recorded child audit sent its whole result as a JSON
  * *string* — `result: "{\"data\": {\"plugin\": …}}"` — and the tool answered
@@ -10,28 +10,27 @@
  * were never the problem, and its parent got nothing. 38 recorded sessions hit
  * that refusal.
  *
- * Two defects, one branch. The string was recoverable: the argument repair pass
- * already parses a stringified argument object, but `yield` sets
- * `lenientArgValidation`, so it is the one tool that never reaches that pass.
+ * Two defects, one branch. The string was recoverable, and the `yield` entry of
+ * the argument repair registry now parses it before validation; that recovery is
+ * proved through the agent loop in
+ * `a-tool-specific-argument-repair-reaches-approval-and-the-tool-as-one-set-of-arguments.test.ts`.
  * And the refusal was unbounded: only the *empty*-result branch counted against
  * `MAX_EMPTY_RESULT_RETRIES`, so a caller that kept sending a string could
  * retry forever while the parent waited.
  *
- * WHAT CLASS THIS CLOSES. Every non-object `result` — a string, a JSON string, a
- * malformed JSON string, an array, `null`, a number, nothing at all — either
- * resolves to the object the caller meant or is refused with a message naming
- * both accepted shapes, and the refusal terminates: the fourth consecutive one
- * aborts the child instead of throwing again. The shapes are swept from a table
- * rather than asserted one at a time, and the bound is asserted as a bound (the
- * abort arrives, and it arrives on the attempt the constant says) rather than as
- * a value.
+ * WHAT CLASS THIS CLOSES. Every non-object `result` that reaches the tool — a
+ * string, a malformed JSON string, an array, `null`, a number, nothing at all —
+ * is refused with a message naming both accepted shapes, and the refusal
+ * terminates: the fourth consecutive one aborts the child instead of throwing
+ * again. The shapes are swept from a table rather than asserted one at a time,
+ * and the bound is asserted as a bound (the abort arrives, and it arrives on the
+ * attempt the constant says) rather than as a value.
  *
  * WHAT IT DOES NOT CATCH. A `result` object whose *contents* are wrong is the
  * business of the schema-validation branch above it, which has its own retry
  * budget and its own tests in `yield.test.ts`. A stringified payload that parses
  * to an object with neither `data` nor `error` lands in the empty-result branch,
- * which is a different bound; the sweep here asserts only that it is no longer
- * refused for being a string. And nothing here proves the parent's behaviour on
+ * which is a different bound. And nothing here proves the parent's behaviour on
  * abort — that is the executor's contract, not the tool's.
  */
 
@@ -65,41 +64,6 @@ async function submit(tool: YieldTool, result: unknown, extra: Record<string, un
 const MAX_EMPTY_RESULT_RETRIES = 3;
 
 describe("a yield whose result is not an object", () => {
-	it("parses the stringified wrapper the recorded child kept re-sending", async () => {
-		const tool = new YieldTool(session());
-		const payload = { plugin: "woocommerce-pdf-invoices", verdict: "KILL", findings: [] };
-
-		const result = await tool.execute("call-1", {
-			result: JSON.stringify({ data: payload }),
-		} as never);
-
-		expect(result.details).toEqual({ data: payload, status: "success", error: undefined });
-	});
-
-	it("parses a stringified failure wrapper the same way", async () => {
-		const tool = new YieldTool(session());
-
-		const result = await tool.execute("call-1", {
-			result: '{"error": "no vulnerabilities reachable"}',
-		} as never);
-
-		expect(result.details).toEqual({
-			data: undefined,
-			status: "aborted",
-			error: "no vulnerabilities reachable",
-		});
-	});
-
-	it("recovers a stringified wrapper with trailing commas, as the repair pass would", async () => {
-		const tool = new YieldTool(session());
-
-		const result = await tool.execute("call-1", {
-			result: '{"data": {"ok": true,},}',
-		} as never);
-
-		expect(result.details).toEqual({ data: { ok: true }, status: "success", error: undefined });
-	});
-
 	it("names both accepted shapes for every non-object result, and says what arrived", async () => {
 		// Swept rather than written one case at a time: a shape that starts being
 		// refused silently, or refused without naming a fix, shows up here.

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -39,13 +40,6 @@ function bashSession(cwd: string) {
 		},
 		getClientBridge: () => undefined,
 	});
-}
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("");
 }
 
 describe("BashTool heredoc and redirect adversarial", () => {
@@ -84,13 +78,13 @@ describe("BashTool heredoc and redirect adversarial", () => {
 		// File has content; tool text should not necessarily include secret-body.
 		expect(await Bun.file(path.join(tmpDir, "quiet.txt")).text()).toBe("secret-body\n");
 		// Allow either silent success or a short status line.
-		expect(typeof textOf(result)).toBe("string");
+		expect(typeof toolResultText(result, "")).toBe("string");
 	});
 
 	it("cat of a written file returns the file body in tool text", async () => {
 		const tool = new BashTool(bashSession(tmpDir) as never);
 		await Bun.write(path.join(tmpDir, "seen.txt"), "visible\n");
 		const result = await tool.execute("c1", { command: "cat seen.txt", timeout: 15 });
-		expect(textOf(result)).toContain("visible");
+		expect(toolResultText(result, "")).toContain("visible");
 	});
 });

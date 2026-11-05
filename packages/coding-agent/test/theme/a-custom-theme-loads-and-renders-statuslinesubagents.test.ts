@@ -32,7 +32,6 @@ import {
 } from "@veyyon/coding-agent/theme/color";
 import {
 	FALLBACK_THEME_NAME,
-	getThemeByName,
 	setTheme,
 	setThemeInstance,
 	stopThemeWatcher,
@@ -47,6 +46,7 @@ import {
 	restoreDirOverrides,
 	setAgentDir,
 } from "@veyyon/utils/dirs";
+import { requireTheme } from "../helpers/require-theme";
 
 const CUSTOM_SUBAGENTS_COLOR = "#FF5500";
 
@@ -134,8 +134,7 @@ describe("custom theme loading and rendering with historical statusLineSubagents
 	let priorThemeInstance: Theme;
 
 	beforeAll(async () => {
-		const fallback = await getThemeByName(FALLBACK_THEME_NAME);
-		if (!fallback) throw new Error(`Expected fallback theme ${FALLBACK_THEME_NAME} to exist`);
+		const fallback = await requireTheme(FALLBACK_THEME_NAME);
 		priorThemeInstance = fallback;
 	});
 
@@ -193,12 +192,11 @@ describe("custom theme loading and rendering with historical statusLineSubagents
 		const themeFile = path.join(themesDir, `${PINNED_HISTORICAL_THEME.name}.json`);
 		fs.writeFileSync(themeFile, JSON.stringify(PINNED_HISTORICAL_THEME, null, 2), "utf-8");
 
-		const loadedTheme = await getThemeByName(PINNED_HISTORICAL_THEME.name);
-		expect(loadedTheme).toBeDefined();
-		expect(loadedTheme!.getColorHex("statusLineSubagents").toUpperCase()).toBe(CUSTOM_SUBAGENTS_COLOR);
+		const loadedTheme = await requireTheme(PINNED_HISTORICAL_THEME.name);
+		expect(loadedTheme.getColorHex("statusLineSubagents").toUpperCase()).toBe(CUSTOM_SUBAGENTS_COLOR);
 
 		const expectedAnsi = fgAnsi(CUSTOM_SUBAGENTS_COLOR, detectColorMode());
-		expect(loadedTheme!.getFgAnsi("statusLineSubagents")).toBe(expectedAnsi);
+		expect(loadedTheme.getFgAnsi("statusLineSubagents")).toBe(expectedAnsi);
 	});
 
 	it("rejects a theme carrying statusLineAgents instead of statusLineSubagents as missing required token", async () => {

@@ -36,7 +36,12 @@ import {
 	recordInMemorySeenLines,
 } from "./read-lines";
 import type { ReadToolDetails } from "./read-types";
-import { expandRangeWithContext, formatContextPaddingNotice, formatOutOfBoundsMessage } from "./read-window";
+import {
+	contextHidRequestedLine,
+	expandRangeWithContext,
+	formatContextPaddingNotice,
+	formatOutOfBoundsMessage,
+} from "./read-window";
 
 /** Returns true when the selector requested multiple line ranges. */
 export function isMultiRange(parsed: ParsedSelector): boolean {
@@ -86,11 +91,6 @@ export async function buildInMemoryTextResult(
 	const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 	const ignoreResultLimits = options.ignoreResultLimits ?? false;
 	const requestedEnd = limit !== undefined ? Math.min(requestedStart + limit, allLines.length) : allLines.length;
-	// Expand only on sides the user actually constrained: leading context
-	// when offset>1, trailing context when a finite limit was set. Raw mode
-	// never expands — without line numbers the padding is indistinguishable
-	// from requested content, so `raw:31-31` must return line 31 and nothing
-	// else (verbatim-extraction contract).
 	const rawDisplay = options.raw === true;
 	const hasTrailingNewline = text.endsWith("\n");
 	const contentLines = hasTrailingNewline && allLines.length > 1 ? allLines.length - 1 : allLines.length;
@@ -120,15 +120,39 @@ export async function buildInMemoryTextResult(
 	if (requestedStart >= allLines.length) {
 		return resultBuilder.text(formatOutOfBoundsMessage(requestedStart, allLines.length, options.entityLabel)).done();
 	}
-	const endLine = endLineExpanded;
-	const selectedContent = allLines.slice(startLine, endLine).join("\n");
-	const userLimitedLines = limit !== undefined ? endLine - startLine : undefined;
 	// A notebook, document, archive entry, URL body or internal resource is
 	// bounded by the same budget as a file window: the setting that states how
 	// many bytes a tool result carries, not a constant it cannot reach.
-	const truncation = ignoreResultLimits
-		? noTruncResult(selectedContent)
-		: truncateHead(selectedContent, { maxBytes: inlineBudgetFor(session), maxLines: DEFAULT_MAX_LINES });
+	const budget = inlineBudgetFor(session);
+	// Expand only on sides the caller constrained: leading context when offset>1, trailing context
+	// when a finite limit was set. Raw mode never expands — without line numbers the padding is
+	// indistinguishable from requested content, so `raw:31-31` must return line 31 and nothing else
+	// (verbatim-extraction contract).
+	const selectWindow = (padStart: boolean) => {
+		const expanded = expandRangeWithContext(
+			requestedStart,
+			requestedEnd,
+			allLines.length,
+			padStart && !rawDisplay && offset !== undefined && offset > 1,
+			!rawDisplay && limit !== undefined,
+		);
+		const selectedContent = allLines.slice(expanded.startLine, expanded.endLine).join("\n");
+		return {
+			requestedStart,
+			...expanded,
+			selectedContent,
+			truncation: ignoreResultLimits
+				? noTruncResult(selectedContent)
+				: truncateHead(selectedContent, { maxBytes: budget, maxLines: DEFAULT_MAX_LINES }),
+		};
+	};
+	let window = selectWindow(true);
+	if (contextHidRequestedLine(window, window.truncation.outputLines ?? 0, window.truncation.truncatedBy === "bytes")) {
+		window = selectWindow(false);
+	}
+	const { startLine, endLine, selectedContent, truncation } = window;
+	const startLineDisplay = startLine + 1;
+	const userLimitedLines = limit !== undefined ? endLine - startLine : undefined;
 
 	const shouldAddHashLines = displayMode.hashLines;
 	const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
@@ -163,7 +187,6 @@ export async function buildInMemoryTextResult(
 	if (truncation.firstLineExceedsLimit) {
 		const firstLine = allLines[startLine] ?? "";
 		const firstLineBytes = Buffer.byteLength(firstLine, "utf-8");
-		const budget = inlineBudgetFor(session);
 		const snippet = truncateHeadBytes(firstLine, budget);
 
 		outputText = oversizedFirstLineText(
@@ -173,12 +196,13 @@ export async function buildInMemoryTextResult(
 			snippet.text,
 			shouldAddHashLines,
 			formatText,
+			false,
 		);
 
 		details.truncation = truncationSummary(truncation);
 		truncationInfo = {
 			result: truncation,
-			options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines },
+			options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines, maxBytes: budget },
 		};
 	} else if (truncation.truncated) {
 		const outputLines = truncation.outputLines ?? countTextLines(truncation.content);
@@ -192,7 +216,7 @@ export async function buildInMemoryTextResult(
 		details.truncation = truncationSummary(truncation);
 		truncationInfo = {
 			result: truncation,
-			options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines },
+			options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines, maxBytes: budget },
 		};
 	} else if (userLimitedLines !== undefined && startLine + userLimitedLines < allLines.length) {
 		const remaining = allLines.length - (startLine + userLimitedLines);

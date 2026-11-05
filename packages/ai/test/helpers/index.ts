@@ -1,38 +1,11 @@
+import { onTestFinished } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Model } from "@veyyon/ai/types";
+import type { Context, Model, ProviderSessionState, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import type { ModelSpec } from "@veyyon/catalog/types";
 import { isEnoent } from "@veyyon/utils";
-
-export async function withEnv(
-	overrides: Record<string, string | undefined>,
-	fn: () => void | Promise<void>,
-): Promise<void> {
-	const previous = new Map<string, string | undefined>();
-	for (const key of Object.keys(overrides)) {
-		previous.set(key, Bun.env[key]);
-	}
-	try {
-		for (const [key, value] of Object.entries(overrides)) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-		await fn();
-	} finally {
-		for (const [key, value] of previous.entries()) {
-			if (value === undefined) {
-				delete Bun.env[key];
-			} else {
-				Bun.env[key] = value;
-			}
-		}
-	}
-}
 
 export async function waitForDelayOrAbort(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
 	if (signal?.aborted) {
@@ -95,6 +68,50 @@ export function createCodexModel(
 		...(efforts ? { reasoningOptions: { efforts } } : {}),
 		...spec,
 	});
+}
+
+/** A user turn with plain-text content, stamped 0 so nothing a suite builds from it reads the clock. */
+export function userMessage(text: string): UserMessage {
+	return { role: "user", content: text, timestamp: 0 };
+}
+
+/**
+ * A provider session-state map closed when the current test finishes. A Codex websocket the
+ * suite opens is pooled in this map with its heartbeat interval armed; closing the map ends the
+ * socket and clears the interval with the test that opened it, as `ProviderSessions` does when a
+ * session ends.
+ */
+export function providerSessionStateForTest(): Map<string, ProviderSessionState> {
+	const states = new Map<string, ProviderSessionState>();
+	onTestFinished(() => {
+		for (const state of states.values()) state.close();
+		states.clear();
+	});
+	return states;
+}
+
+/** One user turn saying hello, the smallest context a provider stream accepts. */
+export function sayHelloContext(): Context {
+	return {
+		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+	};
+}
+
+/** {@link sayHelloContext} with the system prompt a Codex request carries. */
+export function createCodexTestContext(): Context {
+	return {
+		systemPrompt: ["You are a helpful assistant."],
+		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+	};
+}
+
+/** A JWT-shaped Codex access token whose payload names `accountId` as the ChatGPT account. */
+export function createCodexTestToken(accountId = "acc_test"): string {
+	const payload = Buffer.from(
+		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+		"utf8",
+	).toBase64();
+	return `aaa.${payload}.bbb`;
 }
 
 export interface AuthGatewayE2EStatus {

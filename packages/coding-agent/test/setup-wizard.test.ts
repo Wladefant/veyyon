@@ -395,7 +395,7 @@ describe("setup wizard mouse routing", () => {
 			expect(row).toBeGreaterThan(0);
 			// Measure the indent on VISIBLE cells: frame rows carry styling escapes,
 			// which a raw leading-space regex would read as zero indent.
-			const indent = /^ */.exec(frame[row].replace(/\x1b\[[0-9;]*m/g, ""))?.[0].length ?? 0;
+			const indent = /^ */.exec(stripVTControlCharacters(frame[row]))?.[0].length ?? 0;
 			expect(indent).toBeGreaterThan(0);
 			// SGR reports are 1-based; two columns into the marker text.
 			component.handleInput(`\x1b[<35;${indent + 3};${row + 1}M`);

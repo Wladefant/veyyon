@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import YAML from "yaml";
-import { readGlobalAuthBrokerSafe, writeGlobalAuthBrokerToken, writeGlobalAuthBrokerUrl } from "../src/dirs";
+import { readGlobalAuthBrokerSafe } from "../src/global-config";
+import { writeGlobalAuthBrokerToken, writeGlobalAuthBrokerUrl } from "../src/global-config-write";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "./helpers/isolated-config-root";
 
 let isolated: IsolatedConfigRoot | undefined;

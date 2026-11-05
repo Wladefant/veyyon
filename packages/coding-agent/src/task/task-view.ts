@@ -509,8 +509,8 @@ function callItemRows(tasks: TaskItem[] | undefined): TaskRow[] {
 
 /** The brief and the shared background, as the documents they were written as. */
 function markdownSection(text: string | undefined, separator: boolean): ViewSection | undefined {
-	// A result carries the raw arguments, so per-field double encoding is undone here as well as on
-	// the call path. The repair is idempotent on text that is already clean.
+	// A result carries the raw arguments, so per-field double encoding is undone here for display, the
+	// same way the `task` repair undid it for execution. The decode is idempotent on clean text.
 	const source = sanitizeText(repairDoubleEncodedJsonString(typeof text === "string" ? text : "")).trim();
 	if (!source) return undefined;
 	return {
@@ -1173,9 +1173,10 @@ function header(state: ViewStatus, ...meta: (string | undefined)[]): StatusRowVi
  * The dispatch mark from the first frame: spawning does not block the turn, so a pending glyph would
  * read as something the turn is waiting on.
  *
- * The arguments are repaired first. A model that JSON-escaped a prose field twice sends a brief that
- * survived the provider's own decode with every newline and quote still backslashed, and the preview
- * is where a reader would first see the blob; the repair is idempotent on text that is already clean.
+ * The arguments are decoded first, for display only. A model that JSON-escaped a prose field twice
+ * streams a brief with every newline and quote still backslashed, and the preview is where a reader
+ * would first see the blob; execution receives the decoded brief from the `task` entry of the repair
+ * registry, which runs the same decode once. It is idempotent on text that is already clean.
  */
 function renderCall(rawArgs: unknown, context: ToolViewContext): FramedBlockView {
 	const args = repairTaskParams((rawArgs ?? {}) as TaskParams);

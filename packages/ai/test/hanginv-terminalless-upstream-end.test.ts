@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { wrapInbandToolStream } from "../src/dialect/owned-stream";
 import type { AssistantMessage, Usage } from "../src/types";
 import { AssistantMessageEventStream } from "../src/utils/event-stream";
@@ -29,14 +30,7 @@ const TOOLS = [
 ];
 
 function makeAssistant(content: AssistantMessage["content"]): AssistantMessage {
-	const usage: Usage = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage: Usage = emptyUsage();
 	return {
 		role: "assistant",
 		content,

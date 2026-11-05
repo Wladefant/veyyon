@@ -95,7 +95,8 @@ it sits and whether a glob or a literal path declares it:
 `scripts/package-map-coverage.test.ts` fails when a resolved member is missing from
 the table or when `ARCHITECTURE.md` grows a second copy of it,
 `scripts/workspace-test-coverage.test.ts` fails when a member ships tests no bucket runs, and
-`scripts/workspace-typecheck-coverage.test.ts` fails when a member declares no `check:types`.
+`scripts/workspace-typecheck-coverage.test.ts` fails when a member declares no `check:types` or
+holds a tracked TypeScript file no project its `check:types` runs includes.
 
 Import catalog values — bundled models, model-thinking helpers, identity, descriptors, model
 manager and cache — from `@veyyon/catalog/<module>`, never through `@veyyon/ai`. Type-only imports
@@ -660,13 +661,12 @@ Two workflows in `.github/workflows/` gate changes and releases. Their job layou
 behind it are in [`docs/internal/repo-gates.md`](docs/internal/repo-gates.md).
 
 `checks.yml` runs on every push to `main` and every PR: workspace type check and lint, Rust format
-and clippy, secret scanning of the added commits, changelog coherence, global-state isolation on
-changed suites, and the repo script gates. The Rust gate lives here and nowhere else; never add a
+and clippy, secret scanning of the added commits, changelog coherence, and the repo script gates. The Rust gate lives here and nowhere else; never add a
 second copy to a native job.
 
 `ci.yml` runs on `main`, PRs and release dispatches, entirely on GitHub-hosted runners. It compiles
-the product and native addons, runs the full test matrix, and exercises the installers and CLI
-runtime. At a `v*` release tag it also builds the per-platform binaries, verifies their SHA-256
+the product and native addons, runs the full test matrix and the global-state isolation check of
+changed suites, and exercises the installers and CLI runtime. At a `v*` release tag it also builds the per-platform binaries, verifies their SHA-256
 sidecars and runtime smoke tests, publishes the GitHub release, and redeploys
 `veyyon.dev/changelog`.
 

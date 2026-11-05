@@ -5,13 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
-
-function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text" && typeof c.text === "string")
-		.map(c => c.text as string)
-		.join("\n");
-}
+import { toolResultText } from "../helpers/tool-result-text";
 
 function makeSession(cwd: string): ToolSession {
 	return {
@@ -47,14 +41,14 @@ describe("read tool raw range exactness", () => {
 		// requested content, so verbatim-extraction callers pasted 5 lines
 		// where they asked for 1.
 		const result = await tool.execute("call-raw-single", { path: `${filePath}:raw:31-31` });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output.trimEnd()).toBe("L31");
 	});
 
 	it("returns exactly the requested raw range at the start of the file", async () => {
 		const result = await tool.execute("call-raw-head", { path: `${filePath}:raw:1-2` });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output.trimEnd()).toBe("L01\nL02");
 	});
@@ -63,7 +57,7 @@ describe("read tool raw range exactness", () => {
 		// Numbered mode intentionally pads (leading anchor buffer + trailing
 		// disambiguation lines) — line numbers make the padding self-describing.
 		const result = await tool.execute("call-numbered", { path: `${filePath}:31-31` });
-		const output = getTextOutput(result);
+		const output = toolResultText(result);
 
 		expect(output).toContain("L31");
 		expect(output).toContain("L30");

@@ -57,6 +57,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { Context } from "@veyyon/ai";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
+import { mulberry32 } from "../../../../packages/utils/test/helpers/mulberry32";
 import { createSimulation, type Simulation, simTool, whenSessionEvent } from "./harness";
 import { describeViolations, pairingViolations, turnViolations } from "./invariants";
 
@@ -66,18 +67,6 @@ afterEach(async () => {
 	await sim?.dispose();
 	sim = undefined;
 });
-
-/** mulberry32, so a red run replays from its seed. */
-function seededRandom(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 /** What the round's first provider call does. */
 type Shape =
@@ -153,7 +142,7 @@ interface Plan {
  */
 function planFor(seed: number, rounds: number): Plan[] {
 	const pairs: Plan[] = SHAPES.flatMap(shape => DISTURBANCES.map(disturbance => ({ shape, disturbance })));
-	const random = seededRandom(seed);
+	const random = mulberry32(seed);
 	for (let index = pairs.length - 1; index > 0; index--) {
 		const swap = Math.floor(random() * (index + 1));
 		const held = pairs[index];

@@ -6,11 +6,11 @@
  * The warm-up selector names another provider than the measured one, so the measured resolution
  * pays for its own provider and for nothing the first call compiled or cached.
  */
-import { heapStats } from "bun:jsc";
 import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resolveCliModel } from "@veyyon/coding-agent/config/model-resolver";
+import { liveHeapBytes } from "../../../utils/test/helpers/live-heap-bytes";
 
 export interface SelectorRetention {
 	/** `provider/id` of the model the measured selector resolved to. */
@@ -21,12 +21,6 @@ export interface SelectorRetention {
 	listed: number;
 }
 
-function live(): number {
-	Bun.gc(true);
-	const stats = heapStats();
-	return stats.heapSize + stats.extraMemorySize;
-}
-
 const [dir, warmSelector, selector] = process.argv.slice(2);
 const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));
 const registry = new ModelRegistry(authStorage, path.join(dir, "models.yml"), { snapshotIo: false });
@@ -34,11 +28,11 @@ const registry = new ModelRegistry(authStorage, path.join(dir, "models.yml"), { 
 const warm = resolveCliModel({ cliModel: warmSelector, modelRegistry: registry });
 if (!warm.model) throw new Error(`warm-up selector ${warmSelector} resolved nothing: ${warm.error}`);
 
-const beforeNamed = live();
+const beforeNamed = liveHeapBytes();
 const measured = resolveCliModel({ cliModel: selector, modelRegistry: registry });
-const afterNamed = live();
+const afterNamed = liveHeapBytes();
 const catalog = registry.getAll();
-const afterListed = live();
+const afterListed = liveHeapBytes();
 
 const result: SelectorRetention = {
 	resolved: measured.model && `${measured.model.provider}/${measured.model.id}`,

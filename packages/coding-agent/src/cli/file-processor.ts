@@ -2,9 +2,10 @@
  * Process @file CLI arguments into text, document content, and image attachments
  */
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { ImageContent } from "@veyyon/ai";
-import { errorMessage, getProjectDir, isEnoent, readImageMetadata } from "@veyyon/utils";
+import { errorMessage, getProjectDir, isEnoent, nonRegularKind, readImageMetadata } from "@veyyon/utils";
 import { formatBytes } from "@veyyon/utils/format";
 import chalk from "chalk";
 import { CONVERTIBLE_EXTENSIONS } from "../export/markit/convertible-extensions";
@@ -37,9 +38,25 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		// Expand and resolve path (handles ~ expansion and macOS screenshot Unicode spaces)
 		const absolutePath = path.resolve(resolveReadPath(fileArg, getProjectDir()));
 
-		const stat = fs.statSync(absolutePath, { throwIfNoEntry: false });
-		if (!stat) {
+		let stat: fs.Stats;
+		try {
+			stat = await fsp.stat(absolutePath);
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
 			console.error(chalk.red(`Error: File not found: ${absolutePath}`));
+			process.exit(1);
+		}
+		// Opening a named pipe with no writer blocks forever, and a directory or socket fails with a bare
+		// EISDIR or ENXIO naming no path, so anything but a regular file stops here, before any open.
+		if (!stat.isFile()) {
+			const fix = stat.isDirectory()
+				? "name a file inside it"
+				: `to send a command's output, pipe it on stdin: <command> | veyyon -p "<prompt>"`;
+			console.error(
+				chalk.red(
+					`Error: Cannot attach ${absolutePath}: it is ${nonRegularKind(stat)}. @ attaches a regular file; ${fix}.`,
+				),
+			);
 			process.exit(1);
 		}
 

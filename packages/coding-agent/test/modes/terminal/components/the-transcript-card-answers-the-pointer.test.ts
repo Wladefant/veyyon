@@ -24,6 +24,8 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
@@ -32,6 +34,7 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
 import type { TUI } from "@veyyon/tui";
 import { removeSyncWithRetries } from "@veyyon/utils";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 100;
 const ROWS = 40;
@@ -39,14 +42,7 @@ const TS = new Date().toISOString();
 
 /** A transcript long enough that the viewport scrolls. */
 function buildJsonl(): string {
-	const usage = {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 	const lines = [
 		JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: "/tmp" }),
 	];
@@ -80,6 +76,7 @@ interface Harness {
 }
 
 let dirs: string[] = [];
+let viewers: AgentTranscriptViewer[] = [];
 
 function makeViewer(): Harness {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tv-pointer-"));
@@ -109,6 +106,7 @@ function makeViewer(): Harness {
 		onClose,
 		onHubClose: () => {},
 	});
+	viewers.push(viewer);
 	return { viewer, onClose, rows: () => [...viewer.render(WIDTH)] };
 }
 
@@ -122,14 +120,10 @@ function wheelUp(viewer: AgentTranscriptViewer, row: number, col: number): void 
 	viewer.handleInput(`\x1b[<64;${col + 1};${row + 1}M`);
 }
 
-function strip(line: string): string {
-	return line.replace(/\x1b\[[0-9;]*m/g, "");
-}
-
 /** Screen position of the `[x]` close glyph. */
 function closeGlyphAt(rows: string[]): { row: number; col: number } {
 	for (let row = 0; row < rows.length; row++) {
-		const col = strip(rows[row]!).indexOf("[x]");
+		const col = stripVTControlCharacters(rows[row]!).indexOf("[x]");
 		if (col !== -1) return { row, col: col + 1 };
 	}
 	throw new Error("the card drew no close glyph");
@@ -138,7 +132,7 @@ function closeGlyphAt(rows: string[]): { row: number; col: number } {
 /** Screen position of a footer chip's label. */
 function chipAt(rows: string[], label: string): { row: number; col: number } {
 	for (let row = 0; row < rows.length; row++) {
-		const col = strip(rows[row]!).indexOf(label);
+		const col = stripVTControlCharacters(rows[row]!).indexOf(label);
 		if (col !== -1) return { row, col };
 	}
 	throw new Error(`the card drew no "${label}" chip`);
@@ -146,26 +140,23 @@ function chipAt(rows: string[], label: string): { row: number; col: number } {
 
 /** First transcript row of the painted card, as text. */
 function bodyText(rows: string[]): string {
-	return rows.map(strip).join("\n");
+	return rows.map(stripVTControlCharacters).join("\n");
 }
 
 describe("the transcript card answers the pointer", () => {
-	let rowsDesc: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		initTheme();
-		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => ROWS, set: () => {} });
+		geometry = stubStdoutGeometry({ rows: ROWS });
 	});
 
 	afterEach(() => {
-		if (rowsDesc) {
-			Object.defineProperty(process.stdout, "rows", rowsDesc);
-		} else {
-			Object.defineProperty(process.stdout, "rows", { configurable: true, value: undefined, writable: true });
-		}
+		for (const viewer of viewers) viewer.dispose();
+		viewers = [];
+		geometry?.restore();
 		vi.restoreAllMocks();
 		for (const dir of dirs) removeSyncWithRetries(dir);
 		dirs = [];

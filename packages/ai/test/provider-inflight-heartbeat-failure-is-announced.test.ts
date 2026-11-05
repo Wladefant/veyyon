@@ -30,6 +30,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { __providerInFlightForTesting } from "@veyyon/ai/stream";
 import { logger } from "@veyyon/utils";
+import { canRestrictAccess } from "../../utils/test/helpers/mode-bits";
 
 const STALE_RISK_MESSAGE =
 	"Provider in-flight lease heartbeat keeps failing; another process may treat this request as dead and exceed the in-flight limit";
@@ -42,11 +43,6 @@ let limiterRoot: string;
 /** Directories this test made read-only, restored in `afterEach` so cleanup can remove them. */
 const restoreModeOn: string[] = [];
 let warnings: Array<{ message: string; fields: Record<string, unknown> }>;
-
-/** Mode bits do not restrict root, and Windows does not honour them at all. */
-function canRestrictAccess(): boolean {
-	return process.platform !== "win32" && process.getuid?.() !== 0;
-}
 
 async function denyWrites(dir: string): Promise<void> {
 	await fs.chmod(dir, 0o500);

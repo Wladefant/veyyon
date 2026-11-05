@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { AssistantMessage, Model } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { AsyncJobRegisterOptions } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { TanCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/tan-command-controller";
@@ -28,14 +29,7 @@ function assistantText(text: string): AssistantMessage {
 		api: "anthropic-messages",
 		provider: model.provider,
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

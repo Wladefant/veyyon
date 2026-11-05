@@ -168,9 +168,16 @@ interface LineIndex {
 
 /** One file object cold entries read back from, and how many entries still read from it. */
 interface ColdFile {
-	readonly reader: PinnedSessionReader;
+	/** The handle on the object; {@link ColdEntryPayloads.rebase} points it at a republished one. */
+	reader: PinnedSessionReader;
 	/** Parses and restores a line of this object, against the blob store of the session it belongs to. */
 	readonly restore: ColdLineRestore;
+	/**
+	 * Bytes every line has moved since the reader was opened, across each republish `rebase` moved
+	 * it onto. An entry's offset is recorded less this amount, so a rebase moves every entry reading
+	 * the file by changing it once.
+	 */
+	moved: number;
 	cold: number;
 	/** The object's lines by id, once a read-back missed its line. */
 	lines?: LineIndex;
@@ -270,7 +277,13 @@ class ColdEntrySlot extends ReturnsTarget {
 		const slot = entry as ColdEntrySlot;
 		const file = slot.#file;
 		if (file === undefined || slot.#layout === undefined) return undefined;
-		return { file, offset: slot.#offset, length: slot.#length, layout: slot.#layout, standIn: slot.#standIn };
+		return {
+			file,
+			offset: slot.#offset + file.moved,
+			length: slot.#length,
+			layout: slot.#layout,
+			standIn: slot.#standIn,
+		};
 	}
 
 	static cool(
@@ -283,7 +296,7 @@ class ColdEntrySlot extends ReturnsTarget {
 	): void {
 		const slot = #file in entry ? (entry as ColdEntrySlot) : new ColdEntrySlot(entry);
 		slot.#file = file;
-		slot.#offset = offset;
+		slot.#offset = offset - file.moved;
 		slot.#length = length;
 		slot.#layout = layout;
 		slot.#standIn = standIn;
@@ -301,16 +314,10 @@ class ColdEntrySlot extends ReturnsTarget {
 	/** Point the cold `entry` at `length` bytes at `offset` of the object it reads. */
 	static relocate(entry: object, offset: number, length: number): void {
 		if (!(#file in entry)) return;
-		(entry as ColdEntrySlot).#offset = offset;
-		(entry as ColdEntrySlot).#length = length;
-	}
-
-	/** Point `entry` at `to`, its line `shift` bytes on, when it reads through `from`; false when it does not. */
-	static moveFile(entry: object, from: ColdFile, to: ColdFile, shift: number): boolean {
-		if (!(#file in entry) || (entry as ColdEntrySlot).#file !== from) return false;
-		(entry as ColdEntrySlot).#file = to;
-		(entry as ColdEntrySlot).#offset += shift;
-		return true;
+		const slot = entry as ColdEntrySlot;
+		if (slot.#file === undefined) return;
+		slot.#offset = offset - slot.#file.moved;
+		slot.#length = length;
 	}
 }
 
@@ -516,6 +523,7 @@ export class ColdEntryPayloads {
 	readonly #keyLists: KeyListNode = { keys: NO_FIELDS, next: undefined, layouts: undefined };
 	/** The file object new cold entries are recorded against. */
 	#current: ColdFile | undefined;
+	#warmed = 0;
 	/** Key lists of each stand-in rule's moved fields, apart from every other rule's, so a layout states one path. */
 	readonly #standInKeyLists = new Map<StandInRule, KeyListNode>();
 	/** One accessor pair per field name for the first field of a stand-in path. */
@@ -526,6 +534,14 @@ export class ColdEntryPayloads {
 	/** Identity of the file object new cold entries are recorded against, if one is open. */
 	get pinnedIdentity(): string | undefined {
 		return this.#current?.reader.identity;
+	}
+
+	/**
+	 * How many cold entries have been read back into memory, so a walk that moves history out can
+	 * tell that none has since it last ran.
+	 */
+	get warmed(): number {
+		return this.#warmed;
 	}
 
 	/**
@@ -542,38 +558,31 @@ export class ColdEntryPayloads {
 			reader.close();
 			return false;
 		}
-		this.#replaceCurrent({ reader, restore, cold: 0 });
+		this.#replaceCurrent({ reader, restore, moved: 0, cold: 0 });
 		return true;
 	}
 
 	/**
-	 * Move every cold entry in `entries` read through the current handle onto a handle on the
-	 * object with `identity`, each line `shift` bytes further on. The caller guarantees that object
-	 * holds the same bytes at every cold entry's moved offset: it is a republish that kept the
-	 * file's lines and wrote a head `shift` bytes longer. Entries outside `entries` keep the old
-	 * handle. Returns false, and moves nothing, when no handle on that object can be opened.
+	 * Move every cold entry read through the current handle onto a handle on the object with
+	 * `identity`, each line `shift` bytes further on. The caller guarantees that object holds the
+	 * same bytes at every cold entry's moved offset: it is a republish that kept the file's lines and
+	 * wrote a head `shift` bytes longer. A line it did not keep is found again by id on read-back.
+	 * Returns false, and moves nothing, when no handle on that object can be opened.
 	 */
-	rebase(
-		entries: readonly SessionEntry[],
-		identity: string,
-		open: () => PinnedSessionReader | undefined,
-		shift: number,
-	): boolean {
-		const previous = this.#current;
-		if (previous === undefined || previous.reader.identity === identity) return true;
+	rebase(identity: string, open: () => PinnedSessionReader | undefined, shift: number): boolean {
+		const file = this.#current;
+		if (file === undefined || file.reader.identity === identity) return true;
 		const reader = open();
 		if (reader === undefined) return false;
 		if (reader.identity !== identity) {
 			reader.close();
 			return false;
 		}
-		const next: ColdFile = { reader, restore: previous.restore, cold: 0 };
-		for (const entry of entries) {
-			if (!ColdEntrySlot.moveFile(entry, previous, next, shift)) continue;
-			previous.cold -= 1;
-			next.cold += 1;
-		}
-		this.#replaceCurrent(next);
+		const replaced = file.reader;
+		file.reader = reader;
+		file.moved += shift;
+		file.lines = undefined;
+		replaced.close();
 		return true;
 	}
 
@@ -749,6 +758,7 @@ export class ColdEntryPayloads {
 		const restored = readBack(entry, state);
 		// Cleared first, so a throw above leaves the entry cold and readable again.
 		ColdEntrySlot.warm(entry);
+		this.#warmed += 1;
 		const record = entry as unknown as Record<string, unknown>;
 		for (const key of layout.keys) defineValue(record, key, restored[key]);
 		if (standIn !== undefined) {

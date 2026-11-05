@@ -10,17 +10,21 @@
  * eval/idle-timeout, none of which render a tool block at all.
  *
  * Cleanup that depends on remembering does not hold across 23 files and everything added after them, so
- * the requirement is structural: construction goes through `helpers/tool-execution`, whose `afterEach`
- * stops every component it handed out. This test is what makes "forgot to use the helper" a failure in
- * the file that forgot, rather than a mystery in a suite that did nothing wrong.
+ * the requirement is structural: construction goes through `helpers/tool-execution`, which stops every
+ * component it hands out when the test that built it ends. This suite is what makes "forgot to use the
+ * helper" a failure in the file that forgot, rather than a mystery in a suite that did nothing wrong.
  *
- * Read as source text rather than through behaviour, because there is nothing to observe at runtime: a
- * leaked interval is silent until it collides with something else.
+ * The ban is read as source text, because a leaked interval is silent until it collides with something
+ * else. The helper's half of the contract is observed: a block built in one test repaints while that
+ * test runs and never after it.
  */
 
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { createToolExecution, withToolExecutions } from "./helpers/tool-execution";
 
 const TEST_ROOT = path.resolve(import.meta.dir);
 const HELPER = path.join(TEST_ROOT, "helpers", "tool-execution.ts");
@@ -74,16 +78,55 @@ describe("tool block construction in tests", () => {
 	}, 30_000);
 
 	/**
-	 * And the helper still does the thing the ban exists for. Without this, someone could satisfy the rule
-	 * above by having the helper merely forward the constructor, which would make every suite look
-	 * compliant while leaking exactly as before.
+	 * And the helper still does the thing the ban exists for. Without these two, someone could satisfy the
+	 * rule above by having the helper merely forward the constructor, which would make every suite look
+	 * compliant while leaking exactly as before. Real timers on purpose: a fake clock is dropped when its
+	 * test ends, which would hide the very interval these cases look for.
 	 */
-	it("has a helper that stops what it hands out", () => {
-		const source = readFileSync(HELPER, "utf8");
+	describe("a block the helper hands out", () => {
+		let repaints = 0;
+		const countingUi = { requestRender: () => {}, requestComponentRender: () => repaints++ } as never;
 
-		expect(source).toContain("afterEach(");
-		expect(source).toContain("stopAnimation()");
-		expect(source).toContain(DIRECT_CONSTRUCTION);
+		beforeAll(async () => {
+			await initTheme();
+		});
+
+		it("repaints while the test that built it runs", async () => {
+			createToolExecution(
+				"eval",
+				{ language: "py", code: "import time\ntime.sleep(10)" },
+				{},
+				undefined,
+				countingUi,
+			);
+
+			await sleep(250);
+
+			expect(repaints).toBeGreaterThan(0);
+		});
+
+		it("stops repainting once the test that built it has ended", async () => {
+			const before = repaints;
+
+			await sleep(250);
+
+			expect(repaints).toBe(before);
+		});
+
+		it("stops a scoped builder's blocks once its body settles", async () => {
+			let scoped = 0;
+			const ui = { requestRender: () => {}, requestComponentRender: () => scoped++ } as never;
+
+			await withToolExecutions(async create => {
+				create("eval", { language: "py", code: "import time\ntime.sleep(10)" }, {}, undefined, ui);
+				await sleep(250);
+			});
+			const settled = scoped;
+			await sleep(250);
+
+			expect(settled).toBeGreaterThan(0);
+			expect(scoped).toBe(settled);
+		});
 	});
 
 	/**

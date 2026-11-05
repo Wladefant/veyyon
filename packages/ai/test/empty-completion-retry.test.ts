@@ -4,10 +4,11 @@
  * completion, and cancellation during backoff rejects instead of resolving it.
  */
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, AssistantMessageEvent, Context, Model, Usage } from "@veyyon/ai/types";
+import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "@veyyon/ai/types";
 import { MAX_EMPTY_COMPLETION_RETRIES, withEmptyCompletionRetry } from "@veyyon/ai/utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const CTX = {} as Context;
 
@@ -25,17 +26,6 @@ const MODEL: Model<"openai-completions"> = buildModel({
 	maxTokens: 8_192,
 });
 
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function assistant(texts: string[] = []): AssistantMessage {
 	return {
 		role: "assistant",
@@ -45,7 +35,7 @@ function assistant(texts: string[] = []): AssistantMessage {
 		model: "test-model",
 		timestamp: 1,
 		stopReason: "stop",
-		usage: usage(),
+		usage: emptyUsage(),
 	};
 }
 

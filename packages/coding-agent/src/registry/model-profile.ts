@@ -7,8 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Model } from "@veyyon/ai/types";
-import { errorMessage, getAgentDir, isMissingPath, isRecord, lazy, logger } from "@veyyon/utils";
-import { YAML } from "bun";
+import { errorMessage, getAgentDir, isMissingPath, isRecord, lazy, logger, parseYaml } from "@veyyon/utils";
 import type { Settings } from "../config/settings";
 import { type PromptSectionName, promptSectionNames } from "../system-prompt-builder/prompt-sections";
 import { applyHarnessToolAllowlist } from "../tools/core/loading";
@@ -135,7 +134,7 @@ function loadHarnessProfilesFile(agentDir: string): HarnessProfilesRecord {
 	const filePath = path.join(agentDir, "harness-profiles.yml");
 	try {
 		const text = fs.readFileSync(filePath, "utf8");
-		const parsed = YAML.parse(text) as unknown;
+		const parsed = parseYaml(text);
 		if (isRecord(parsed) && isRecord(parsed.profiles)) {
 			return normalizeProfilesRecord(parsed.profiles);
 		}

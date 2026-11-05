@@ -37,6 +37,7 @@ import * as AIError from "@veyyon/ai/error";
 import { type CursorOptions, streamCursor } from "@veyyon/ai/providers/cursor";
 import { startCursorLiveness } from "@veyyon/ai/providers/cursor-liveness";
 import type { AssistantMessage, AssistantMessageEvent, Context, CursorExecHandlers, Model } from "@veyyon/ai/types";
+import { frameConnectMessage } from "@veyyon/ai/utils/connect-frames";
 import { buildModel } from "@veyyon/catalog/build";
 import {
 	AgentServerMessageSchema,
@@ -44,8 +45,8 @@ import {
 	GrepArgsSchema,
 	HeartbeatUpdateSchema,
 	InteractionUpdateSchema,
-	TurnEndedUpdateSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+import { turnEndedFrame } from "./helpers/cursor-h2-server";
 
 /** Advance the fake clock in small steps, draining the microtasks each probe schedules. */
 async function advance(totalMs: number, stepMs = 10): Promise<void> {
@@ -53,25 +54,6 @@ async function advance(totalMs: number, stepMs = 10): Promise<void> {
 		vi.advanceTimersByTime(stepMs);
 		for (let drain = 0; drain < 20; drain++) await Promise.resolve();
 	}
-}
-
-function frame(payload: Uint8Array): Buffer {
-	const header = Buffer.alloc(5);
-	header.writeUInt8(0, 0);
-	header.writeUInt32BE(payload.length, 1);
-	return Buffer.concat([header, Buffer.from(payload)]);
-}
-
-function turnEndedFrame(): Buffer {
-	const message = create(AgentServerMessageSchema, {
-		message: {
-			case: "interactionUpdate",
-			value: create(InteractionUpdateSchema, {
-				message: { case: "turnEnded", value: create(TurnEndedUpdateSchema, {}) },
-			}),
-		},
-	});
-	return frame(toBinary(AgentServerMessageSchema, message));
 }
 
 function heartbeatFrame(): Buffer {
@@ -83,7 +65,7 @@ function heartbeatFrame(): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 /** The server asking this process to run a local grep, which is how a local tool holds the turn. */
@@ -98,7 +80,7 @@ function grepExecFrame(): Buffer {
 			}),
 		},
 	});
-	return frame(toBinary(AgentServerMessageSchema, message));
+	return frameConnectMessage(toBinary(AgentServerMessageSchema, message));
 }
 
 /** Write a heartbeat every `everyMs` until the stream closes, as Cursor's server does. */

@@ -3,6 +3,7 @@ import { renderDemotedThinking } from "@veyyon/ai/dialect";
 import { streamGoogle } from "@veyyon/ai/providers/google";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const model: Model<"google-generative-ai"> = buildModel({
 	id: "gemini-3-pro-preview",
@@ -59,14 +60,7 @@ describe("Google provider system prompts", () => {
 					provider: "google",
 					model: model.id,
 					content: [{ type: "thinking", thinking: "prior thought", thinkingSignature: "QUJDRA==" }],
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: 1,
 				},
@@ -89,14 +83,7 @@ describe("Google provider system prompts", () => {
 					provider: "google",
 					model: model.id,
 					content: [{ type: "thinking", thinking: "unsigned prior thought" }],
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "stop",
 					timestamp: 1,
 				},

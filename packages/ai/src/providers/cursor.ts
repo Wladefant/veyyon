@@ -97,7 +97,7 @@ import { $env } from "@veyyon/utils/env";
 import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import { redactDiagnosticLine } from "@veyyon/utils/logger";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
-import { errorMessage } from "@veyyon/utils/type-guards";
+import { errorMessage, toError } from "@veyyon/utils/type-guards";
 import * as AIError from "../error";
 import type {
 	Api,
@@ -141,6 +141,7 @@ import {
 } from "../utils/connect-frames";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { messageContentText } from "../utils/message-text";
 import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import {
 	createRequestDebugSession,
@@ -172,7 +173,6 @@ import {
 	buildWriteRejectedResult,
 	buildWriteResultFromToolResult,
 	emptyGrepPatternRejection,
-	toolResultToText,
 } from "./cursor-exec-results";
 import { type CursorLiveness, startCursorLiveness } from "./cursor-liveness";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
@@ -774,7 +774,7 @@ class CursorRunStream {
 					messageCase: serverMessage.message.case,
 					error: errorMessage(error),
 				});
-				this.fail(error instanceof Error ? error : new Error(String(error)));
+				this.fail(toError(error));
 			})
 			.finally(() => {
 				this.#pendingMessages.delete(handled);
@@ -1600,6 +1600,25 @@ async function handleShellStreamArgs(
 	return reply;
 }
 
+function sendBufferedShellOutput(
+	h2Request: http2.ClientHttp2Stream,
+	execMsg: ExecServerMessage,
+	output: { readonly stdout: string; readonly stderr: string },
+): void {
+	if (output.stdout) {
+		sendShellStreamEvent(h2Request, execMsg, {
+			case: "stdout",
+			value: create(ShellStreamStdoutSchema, { data: sanitizeText(output.stdout) }),
+		});
+	}
+	if (output.stderr) {
+		sendShellStreamEvent(h2Request, execMsg, {
+			case: "stderr",
+			value: create(ShellStreamStderrSchema, { data: sanitizeText(output.stderr) }),
+		});
+	}
+}
+
 function sendShellStreamExitFromResult(
 	h2Request: http2.ClientHttp2Stream,
 	execMsg: ExecServerMessage,
@@ -1610,20 +1629,7 @@ function sendShellStreamExitFromResult(
 	switch (result.case) {
 		case "success": {
 			const value = result.value;
-			if (sendBufferedOutput) {
-				if (value.stdout) {
-					sendShellStreamEvent(h2Request, execMsg, {
-						case: "stdout",
-						value: create(ShellStreamStdoutSchema, { data: sanitizeText(value.stdout) }),
-					});
-				}
-				if (value.stderr) {
-					sendShellStreamEvent(h2Request, execMsg, {
-						case: "stderr",
-						value: create(ShellStreamStderrSchema, { data: sanitizeText(value.stderr) }),
-					});
-				}
-			}
+			if (sendBufferedOutput) sendBufferedShellOutput(h2Request, execMsg, value);
 			sendShellStreamEvent(h2Request, execMsg, {
 				case: "exit",
 				value: create(ShellStreamExitSchema, {
@@ -1636,20 +1642,7 @@ function sendShellStreamExitFromResult(
 		}
 		case "failure": {
 			const value = result.value;
-			if (sendBufferedOutput) {
-				if (value.stdout) {
-					sendShellStreamEvent(h2Request, execMsg, {
-						case: "stdout",
-						value: create(ShellStreamStdoutSchema, { data: sanitizeText(value.stdout) }),
-					});
-				}
-				if (value.stderr) {
-					sendShellStreamEvent(h2Request, execMsg, {
-						case: "stderr",
-						value: create(ShellStreamStderrSchema, { data: sanitizeText(value.stderr) }),
-					});
-				}
-			}
+			if (sendBufferedOutput) sendBufferedShellOutput(h2Request, execMsg, value);
 			sendShellStreamEvent(h2Request, execMsg, {
 				case: "exit",
 				value: create(ShellStreamExitSchema, {
@@ -2385,7 +2378,7 @@ function buildTodoArgs(toolCall: CursorToolCallView): {
 
 function buildMcpResultFromToolResult(_mcpCall: CursorMcpCall, toolResult: ToolResultMessage) {
 	if (toolResult.isError) {
-		return buildMcpErrorResult(toolResultToText(toolResult) || "MCP tool failed");
+		return buildMcpErrorResult(messageContentText(toolResult.content) || "MCP tool failed");
 	}
 	const content = toolResult.content.map(item => {
 		if (item.type === "image") {
@@ -3050,17 +3043,6 @@ function findLastUserMessageIndex(messages: Message[]): number {
 }
 
 /**
- * Build `ConversationStateStructure.rootPromptMessagesJson` blob IDs for the
- * system prompt plus prior conversation history, as JSON blobs matching
- * Cursor's internal Vercel-AI-SDK-shaped message format.
- *
- * Cursor's server uses `rootPromptMessagesJson` (not `turns[]`) to build the
- * actual model prompt. `turns[]` is UI/display metadata. Without populating
- * this field, multi-turn conversations lose prior context — the model sees
- * only an empty placeholder where historical user turns should be.
- * The active user message is excluded because it is sent in the action.
- */
-/**
  * Build the `rootPromptMessagesJson` head: one placeholder system message, and nothing else.
  *
  * The caller's prompt is NOT put here. This server fetches these blobs and then rebuilds the
@@ -3076,6 +3058,17 @@ export function buildCursorSystemPromptJsons(): string[] {
 	return [JSON.stringify({ role: "system", content: "You are a helpful assistant." })];
 }
 
+/**
+ * Build `ConversationStateStructure.rootPromptMessagesJson` blob IDs for the
+ * system prompt plus prior conversation history, as JSON blobs matching
+ * Cursor's internal Vercel-AI-SDK-shaped message format.
+ *
+ * Cursor's server uses `rootPromptMessagesJson` (not `turns[]`) to build the
+ * actual model prompt. `turns[]` is UI/display metadata. Without populating
+ * this field, multi-turn conversations lose prior context — the model sees
+ * only an empty placeholder where historical user turns should be.
+ * The active user message is excluded because it is sent in the action.
+ */
 function buildRootPromptMessagesJson(
 	messages: Message[],
 	systemPromptIds: Uint8Array[],
@@ -3100,7 +3093,7 @@ function buildRootPromptMessagesJson(
 			if (!text) continue;
 			pushJson({ role: "assistant", content: [{ type: "text", text }] });
 		} else if (msg.role === "toolResult") {
-			const text = toolResultToText(msg);
+			const text = messageContentText(msg.content);
 			if (!text) continue;
 			const prefix = msg.isError ? "[Tool Error]" : "[Tool Result]";
 			pushJson({
@@ -3181,7 +3174,7 @@ function buildConversationTurns(
 				}
 			} else if (stepMsg.role === "toolResult") {
 				// Include tool results as assistant text for context
-				const text = toolResultToText(stepMsg);
+				const text = messageContentText(stepMsg.content);
 				if (text) {
 					const prefix = stepMsg.isError ? "[Tool Error]" : "[Tool Result]";
 					const step = create(ConversationStepSchema, {

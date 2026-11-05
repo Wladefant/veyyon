@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
@@ -13,6 +13,7 @@ import { SecretObfuscator } from "@veyyon/coding-agent/secrets";
 import { loadOrCreateVaultKey } from "@veyyon/coding-agent/secrets/vault-crypto";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getSessionsDir, removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function createTtsrRule(name: string): Rule {
 	return {
@@ -210,8 +211,7 @@ describe("createAgentSession session storage isolation", () => {
 				"- type: plain\n  content: sdk-secret-token-123456\n",
 			);
 
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Expected anthropic model");
+			const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 			const placeholderKey = await loadOrCreateVaultKey(globalConfigRoot);
 			const obfuscator = new SecretObfuscator(
@@ -228,14 +228,7 @@ describe("createAgentSession session storage isolation", () => {
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: Date.now(),
 			});

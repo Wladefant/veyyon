@@ -32,6 +32,7 @@ import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/compone
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { Component } from "@veyyon/tui";
 import type { AssistantMessageView } from "@veyyon/wire/presentation";
+import { mulberry32 } from "../../../../../utils/test/helpers/mulberry32";
 
 const WIDTH = 60;
 
@@ -88,18 +89,6 @@ class EditableBlock implements Component {
 	}
 }
 
-/** Deterministic PRNG (mulberry32): one seed, one walk, on every run. */
-function prng(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
-
 function commonPrefix(a: readonly string[], b: readonly string[]): number {
 	const limit = Math.min(a.length, b.length);
 	let i = 0;
@@ -142,7 +131,7 @@ const EDITS: readonly Edit[] = ["grow", "edit", "shrink", "empty", "blank-edges"
 
 describe("a re-rendered block keeps its unchanged rows stable", () => {
 	it("returns the assembled rows and reports their common prefix with the last read rows on every frame", () => {
-		const random = prng(0x5eed);
+		const random = mulberry32(0x5eed);
 		const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!;
 		const row = () => pick(ALPHABET);
 		const rows = (count: number) => Array.from({ length: count }, row);

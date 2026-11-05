@@ -36,16 +36,12 @@ import { createLogExperimentTool } from "@veyyon/coding-agent/autoresearch/tools
 import { createRunExperimentTool } from "@veyyon/coding-agent/autoresearch/tools/run-experiment";
 import { createStartArmTool } from "@veyyon/coding-agent/autoresearch/tools/start-arm";
 import { createUpdateNotesTool } from "@veyyon/coding-agent/autoresearch/tools/update-notes";
-import type {
-	AutoresearchToolFactoryOptions,
-	DashboardController,
-	LogDetails,
-	RunDetails,
-} from "@veyyon/coding-agent/autoresearch/types";
+import type { AutoresearchToolFactoryOptions, LogDetails, RunDetails } from "@veyyon/coding-agent/autoresearch/types";
 import type { ExtensionAPI, ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
 import * as git from "@veyyon/coding-agent/utils/git";
 import type { ToolResult } from "@veyyon/tool";
 import { TempDir } from "@veyyon/utils";
+import { dashboardStub } from "../helpers/autoresearch-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 
 useIsolatedAgentDir();
@@ -62,16 +58,6 @@ const MISSING_SESSION_ERROR_TEXT =
 const OPTED_OUT_TOOLS = ["init_experiment"];
 const SESSION_REQUIRING_TOOLS = EXPERIMENT_TOOL_NAMES.filter(name => !OPTED_OUT_TOOLS.includes(name));
 
-function dummyDashboard(): DashboardController {
-	return {
-		clear(): void {},
-		requestRender(): void {},
-		showScreen: async (): Promise<void> => {},
-		showLauncher: async (): Promise<void> => {},
-		update(): void {},
-	};
-}
-
 function createTestCtx(cwd: string): ExtensionContext {
 	return {
 		cwd,
@@ -84,7 +70,7 @@ function createTestCtx(cwd: string): ExtensionContext {
 function createFactoryOptions(): AutoresearchToolFactoryOptions {
 	const runtime = createSessionRuntime();
 	return {
-		dashboard: dummyDashboard(),
+		dashboard: dashboardStub(),
 		getRuntime: () => runtime,
 		pi: {
 			appendEntry: () => {},

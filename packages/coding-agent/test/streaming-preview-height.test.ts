@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentTool } from "@veyyon/agent-core";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { EDIT_MODE_STRATEGIES } from "@veyyon/coding-agent/edit";
@@ -13,6 +14,7 @@ import { TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
 import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "./helpers/stdout-geometry";
 import { createToolExecution } from "./helpers/tool-execution";
 
 // The streaming edit preview is a fixed-height tail window ("cursor"): the last
@@ -46,17 +48,12 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 	// Pin a tall, stable viewport so the "full window of real diff" height
 	// assertions don't shrink (and flake) under a short ambient terminal when the
 	// file runs inside the full suite. Restored in afterAll.
-	let originalRowsDescriptor: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 	beforeAll(() => {
-		originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+		geometry = stubStdoutGeometry({ rows: 50 });
 	});
 	afterAll(() => {
-		if (originalRowsDescriptor) {
-			Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
-		} else {
-			delete (process.stdout as { rows?: number }).rows;
-		}
+		geometry?.restore();
 	});
 
 	beforeEach(async () => {
@@ -219,7 +216,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		const trailingBlankRows = (rows: readonly string[]): number => {
 			let n = 0;
 			for (let i = rows.length - 1; i >= 0; i--) {
-				if (rows[i].replace(/\x1b\[[0-9;]*m/gu, "").trimEnd() === "") n++;
+				if (stripVTControlCharacters(rows[i]).trimEnd() === "") n++;
 				else break;
 			}
 			return n;

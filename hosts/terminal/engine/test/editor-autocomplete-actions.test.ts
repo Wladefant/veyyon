@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Editor } from "@veyyon/tui/components/editor";
 import {
+	type AppliedCompletion,
 	type AutocompleteItem,
 	type AutocompleteProvider,
 	type AutocompleteSuggestions,
@@ -46,7 +47,7 @@ class HashActionProvider implements AutocompleteProvider {
 		cursorCol: number,
 		_item: AutocompleteItem,
 		prefix: string,
-	): { lines: string[]; cursorLine: number; cursorCol: number; onApplied?: () => void } {
+	): AppliedCompletion {
 		const line = lines[cursorLine] || "";
 		return {
 			lines: [line.slice(0, cursorCol - prefix.length) + line.slice(cursorCol)],
@@ -214,7 +215,7 @@ class SyncSlashProvider implements AutocompleteProvider {
 		cursorCol: number,
 		_item: AutocompleteItem,
 		prefix: string,
-	): { lines: string[]; cursorLine: number; cursorCol: number; onApplied?: () => void } {
+	): AppliedCompletion {
 		const line = lines[cursorLine] || "";
 		const slashStart = findLeadingSlashCommandStart(prefix);
 		// Anchor the replacement at the slash so leading whitespace survives,
@@ -308,7 +309,7 @@ describe("Editor Enter handler sync slash completion", () => {
 		await openMidPromptSkillAutocomplete(editor, "we should ");
 		// "sign" is a fuzzy subsequence of the skill description but neither a
 		// name prefix nor a `skill:` query, and no /sign* path exists — the
-		// popup must dismiss itself after the debounced refresh, without Esc.
+		// popup must dismiss itself after the refresh, without Esc.
 		editor.handleInput("sign");
 		const refreshed = Promise.withResolvers<void>();
 		editor.onAutocompleteUpdate = () => refreshed.resolve();
@@ -322,7 +323,7 @@ describe("Editor Enter handler sync slash completion", () => {
 		const editor = createSkillEditor();
 
 		await openMidPromptSkillAutocomplete(editor, "see ");
-		// Race the 100 ms debounce: type a non-skill token before the popup refreshes.
+		// Race the refresh: type a non-skill token before the provider answers.
 		editor.handleInput("tmp");
 		editor.handleInput("\t");
 
@@ -344,7 +345,7 @@ describe("Editor Enter handler sync slash completion", () => {
 		);
 
 		await openMidPromptSkillAutocomplete(editor, "run a ");
-		// Race the 100 ms debounce: type a query that matches only the skill
+		// Race the refresh: type a query that matches only the skill
 		// description. The refreshed popup would no longer surface the skill
 		// (mid-prompt matching is gated to namespace/name prefixes), so Tab
 		// must not rewrite the token to `/skill:…`.
@@ -368,7 +369,7 @@ describe("Editor Enter handler sync slash completion", () => {
 		);
 
 		await openMidPromptSkillAutocomplete(editor, "run a ");
-		// Race the 100 ms debounce: a bare-name prefix would still surface the
+		// Race the refresh: a bare-name prefix would still surface the
 		// skill after refresh, so accepting the stale popup is safe.
 		editor.handleInput("hard");
 		editor.handleInput("\t");
@@ -619,7 +620,7 @@ class TodoSubcommandProvider implements AutocompleteProvider {
 		cursorCol: number,
 		item: AutocompleteItem,
 		prefix: string,
-	): { lines: string[]; cursorLine: number; cursorCol: number } {
+	): AppliedCompletion {
 		const line = lines[cursorLine] || "";
 		// Anchor replacement at the end of the "/todo " literal, so only the query tail
 		// gets rewritten with the selected subcommand value.

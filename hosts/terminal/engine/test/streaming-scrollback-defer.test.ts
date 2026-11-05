@@ -99,12 +99,6 @@ class CommittedRowsWireProbe extends CommittedRowsProbe {
 	}
 }
 
-async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// The engine's own "a frame is owed" signal instead of a fixed sleep; see
-	// `hosts/terminal/engine/test/helpers/settle-frames.ts` for the flakes the sleep caused.
-	await settleFrames(term, tui);
-}
-
 // The non-multiplexer resize fast path paints the viewport at once and defers
 // the authoritative full replay (the ED3 scrollback rebuild) until the drag has
 // been quiet for the resize settle window (120 ms). This is an integration test
@@ -113,7 +107,7 @@ async function settleResize(term: VirtualTerminal, tui: TUI): Promise<void> {
 	// The window is a real wall-clock wait before the deferred replay is even
 	// scheduled, so it is slept through; only the frame after it settles.
 	await Bun.sleep(160);
-	await settle(term, tui);
+	await settleFrames(term, tui);
 }
 
 function capture(term: VirtualTerminal): string[] {
@@ -208,13 +202,13 @@ describe("streaming scrollback — visual record", () => {
 			tui.addChild(sealed);
 			tui.addChild(live);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			live.setLines(rows("think-", 6));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// The live block's head scrolls above the 4-row viewport and is
 			// recorded as a frozen snapshot — nothing that was painted vanishes.
@@ -225,14 +219,14 @@ describe("streaming scrollback — visual record", () => {
 			// re-anchors; the new tail just extends.
 			live.setLines(rows("think-", 8));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual([...rows("prior-", 12), ...rows("think-", 8)]);
 
 			// Finalize: the recorded snapshots match the final render, so the
 			// one-time strict verification passes and NOTHING recommits.
 			live.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(eraseScrollbackCount(writes)).toBe(0);
@@ -252,13 +246,13 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(live);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			live.setLines(rows("tool-", 10));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// tool-0..tool-5 scrolled above the 4-row viewport and are recorded;
 			// tool-6..tool-9 stay in the viewport. Nothing is lost.
@@ -267,7 +261,7 @@ describe("streaming scrollback — visual record", () => {
 
 			live.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(rows("tool-", 10));
 		} finally {
 			tui.stop();
@@ -288,20 +282,20 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(live);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			live.setLines(rows("text-", 10));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
 			expect(tape(term)).toEqual(rows("text-", 10));
 
 			live.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(rows("text-", 10));
 		} finally {
 			tui.stop();
@@ -320,13 +314,13 @@ describe("streaming scrollback — visual record", () => {
 			tui.addChild(sealed);
 			tui.addChild(live);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			live.setLines(rows("pending-stale-", 10));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Head recorded as frozen snapshots.
 			expect(tape(term)).toEqual([...rows("prior-", 12), ...rows("pending-stale-", 10)]);
@@ -336,7 +330,7 @@ describe("streaming scrollback — visual record", () => {
 			// the window shows the fresh tail.
 			live.setLines(rows("running-fresh-", 10));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual([
 				...rows("prior-", 12),
 				...rows("pending-stale-", 6),
@@ -348,7 +342,7 @@ describe("streaming scrollback — visual record", () => {
 			// once — the stale frozen fragment is gone, nothing recommits below it.
 			live.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(eraseScrollbackCount(writes)).toBe(1);
@@ -376,17 +370,17 @@ describe("streaming scrollback — visual record", () => {
 			tui.addChild(live);
 			tui.addChild(loader);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			live.setLines(rows("pending-stale-", 10));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			live.setLines(rows("running-fresh-", 10));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Mid-run: frozen snapshots are exempt — a wholesale replace while
 			// live must not trigger a rebuild. A lower sibling's seam winning
@@ -395,7 +389,7 @@ describe("streaming scrollback — visual record", () => {
 
 			live.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			// Finalize rebuild: full fresh content exactly once, the stale
@@ -419,14 +413,14 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(component);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			const frame1 = [...rows("init-", 10), ...rows("stream-", 30), "prompt"];
 			component.setLines(frame1);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
 			let buffer = term.getScrollBuffer().map(line => line.trimEnd());
@@ -441,7 +435,7 @@ describe("streaming scrollback — visual record", () => {
 			const frame2 = [...rows("init-", 10), ...rows("stream-", 50), "prompt"];
 			component.setLines(frame2);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
 			buffer = term.getScrollBuffer().map(line => line.trimEnd());
@@ -462,18 +456,18 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(component);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			component.setLines([...rows("grow-", 30), "prompt"]);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
 
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
 			expect(
@@ -499,13 +493,13 @@ describe("streaming scrollback — visual record", () => {
 			tui.addChild(sealed);
 			tui.addChild(live);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			live.setLines(rows("think-", 30));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
 
 			// Live block collapses to its compact result: the frame shrank into
@@ -513,7 +507,7 @@ describe("streaming scrollback — visual record", () => {
 			// exactly once, never appended a second time below their old copy.
 			live.setLines(["done"]);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(1);
 			expect(term.getScrollBuffer().filter(line => line.startsWith("prior-"))).toEqual(rows("prior-", 12));
@@ -532,13 +526,13 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(sealed);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			sealed.setLines([...rows("base-", 12), ...rows("transient-", 30)]);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(0);
 
@@ -550,7 +544,7 @@ describe("streaming scrollback — visual record", () => {
 			sealed.setLines(rows("base-", 12));
 			tui.addChild(live);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(eraseScrollbackCount(writes)).toBe(1);
 			expect(term.getScrollBuffer().filter(line => line.startsWith("base-"))).toEqual(rows("base-", 12));
@@ -569,13 +563,13 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(component);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
 			component.setLines([...rows("stream-", 30), "prompt"]);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(eraseScrollbackCount(writes)).toBe(0);
 			const streamed = term.getScrollBuffer().map(line => line.trimEnd());
 			expect(streamed).toEqual([...rows("stream-", 30), "prompt"].slice(0, streamed.length));
@@ -610,17 +604,17 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(probe);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			probe.setLines(rows("out-", 12));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// The next compose must surface the engine's committed claim to the
 			// child before render(). A severed wire here silently disables the
 			// transcript's committed-block bypass (rows stay 0 forever).
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			expect(probe.committedRowsAtRender.at(-1)!).toBeGreaterThan(0);
 		} finally {
@@ -638,7 +632,7 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(probe);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Nothing has scrolled: the between-frames claim is 0 — no phantom rows.
 			expect(probe.received.at(-1)).toBe(0);
@@ -648,7 +642,7 @@ describe("streaming scrollback — visual record", () => {
 			// probe last received IS the claim a between-frames guard consults.
 			probe.setLines(rows("hist-", 20));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Compose ran before the emit advanced the boundary, so this frame's
 			// render() saw the pre-emit count. The emit must then push the fresh
@@ -667,7 +661,7 @@ describe("streaming scrollback — visual record", () => {
 			// no phantom advance.
 			const wireLength = probe.received.length;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(probe.received.length).toBeGreaterThan(wireLength);
 			for (const value of probe.received.slice(wireLength)) {
 				expect(value).toBe(betweenFrames);
@@ -690,7 +684,7 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(probe);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Compose fed the pre-emit count (0); the replay committed 12 rows.
 			// The full-paint return must publish the fresh count too — leaving
@@ -721,11 +715,11 @@ describe("streaming scrollback — visual record", () => {
 			tui.addChild(header);
 			tui.addChild(body);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			body.setLines(rows("body-", 20));
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// 22-row frame in an 8-row window: 14 rows committed, the boundary
 			// 12 rows past the header. Post-emit publish: the header's claim
@@ -743,7 +737,7 @@ describe("streaming scrollback — visual record", () => {
 			// The compose-time feed clamps identically: an idle frame restates
 			// each child's saturated claim on every push — never more.
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(header.received.at(-1)).toBe(2);
 			expect(Math.max(...header.received)).toBe(2);
 			expect(body.received.at(-1)).toBe(12);
@@ -766,7 +760,7 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(live);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 
@@ -775,7 +769,7 @@ describe("streaming scrollback — visual record", () => {
 				lines[1] = `tbl-1 [w${n}]`; // interior row re-lays-out every frame
 				live.setLines(lines);
 				tui.requestRender();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			// Mid-run: exactly the scrolled snapshots + the grid — one copy each,
@@ -787,7 +781,7 @@ describe("streaming scrollback — visual record", () => {
 
 			live.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Finalize: one erase-and-replay puts the final layout on the tape
 			// exactly once — the drifted row's final form is the only copy.
@@ -800,7 +794,7 @@ describe("streaming scrollback — visual record", () => {
 			// Stability: identical follow-up frames must not grow the tape or
 			// erase again.
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(buffer);
 			expect(eraseScrollbackCount(writes)).toBe(1);
 		} finally {
@@ -823,7 +817,7 @@ describe("streaming scrollback — visual record", () => {
 		try {
 			tui.addChild(live);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const writes = capture(term);
 			const violated = rows("row-", 12);
@@ -831,7 +825,7 @@ describe("streaming scrollback — visual record", () => {
 			violated[6] = "row-6 [edited]";
 			live.setLines(violated);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const afterViolation = tape(term);
 			expect(eraseScrollbackCount(writes)).toBe(1);
@@ -839,7 +833,7 @@ describe("streaming scrollback — visual record", () => {
 
 			for (let i = 0; i < 5; i++) {
 				tui.requestRender();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 			}
 			expect(tape(term)).toEqual(afterViolation);
 			expect(eraseScrollbackCount(writes)).toBe(1);
@@ -869,7 +863,7 @@ describe("scrollback commit gap — live barriers", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			// Small pending barrier above a long finalized tail, overflowing the
@@ -877,7 +871,7 @@ describe("scrollback commit gap — live barriers", () => {
 			root.setLines(["[tool pending]", ...rows("ans-", 8)]);
 			root.seam = 0;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(["[tool pending]", ...rows("ans-", 8)]);
 
 			// Barrier removed: the tail shifts up. The one-time strict scan
@@ -886,7 +880,7 @@ describe("scrollback commit gap — live barriers", () => {
 			root.setLines(rows("ans-", 8));
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(buffer).toEqual(rows("ans-", 8));
@@ -907,21 +901,21 @@ describe("scrollback commit gap — live barriers", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			const preview = rows("preview-", 10);
 			root.setLines(preview);
 			root.seam = 0;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(preview);
 
 			const result = rows("result-", 9);
 			root.setLines(result);
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			// History rebuilt: the full result exactly once; the provisional
@@ -944,14 +938,14 @@ describe("scrollback commit gap — live barriers", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			const f1 = [...rows("bar-", 3), ...rows("tail-", 8)];
 			root.setLines(f1);
 			root.seam = 0;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(f1);
 
 			// Barrier collapses to 1 row but the frame stays longer than the
@@ -961,7 +955,7 @@ describe("scrollback commit gap — live barriers", () => {
 			root.setLines(f2);
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(buffer).toEqual(f2);
@@ -984,13 +978,13 @@ describe("scrollback commit gap — live barriers", () => {
 			tui.addChild(barrier);
 			tui.addChild(tail);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			// Force overflow: 11 rows over a 5-row viewport. Scrolled rows are
 			// recorded (frozen — the topmost seam is at the barrier).
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(["[tool pending]", ...rows("out-", 10)]);
 
 			// Remove the barrier. The tail shifts up by one row; the strict scan
@@ -998,7 +992,7 @@ describe("scrollback commit gap — live barriers", () => {
 			// barrier row is erased.
 			tui.removeChild(barrier);
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(buffer).toEqual(rows("out-", 10));
@@ -1019,14 +1013,14 @@ describe("scrollback commit gap — live barriers", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			for (let n = 1; n <= 20; n++) {
 				const frame = ["[pending]", ...rows("row-", n)];
 				root.setLines(frame);
 				root.seam = 0;
 				tui.requestRender();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 				// Visual record mid-run: everything that scrolled is on the tape.
 				expect(tape(term)).toEqual(frame);
 			}
@@ -1035,7 +1029,7 @@ describe("scrollback commit gap — live barriers", () => {
 			root.setLines(final);
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(buffer).toEqual(final);
@@ -1059,7 +1053,7 @@ describe("scrollback commit gap — live barriers", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			for (let n = 0; n < 12; n++) {
@@ -1068,7 +1062,7 @@ describe("scrollback commit gap — live barriers", () => {
 				root.setLines([...prose, "card-0", "card-1"]);
 				root.seam = 7; // declared-final through prose-6
 				tui.requestRender();
-				await settle(term, tui);
+				await settleFrames(term, tui);
 			}
 
 			const streaming = tape(term);
@@ -1076,7 +1070,7 @@ describe("scrollback commit gap — live barriers", () => {
 
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Zero repair: the tape is byte-identical to the streaming state.
 			const buffer = tape(term);
@@ -1098,14 +1092,14 @@ describe("scrollback commit gap — live barriers", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			const f1 = ["preview", ...rows("tail-", 8)];
 			root.setLines(f1);
 			root.seam = 0;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(f1);
 
 			// Finalize: ONLY row 0 changes (preview → result); the whole tail is
@@ -1116,7 +1110,7 @@ describe("scrollback commit gap — live barriers", () => {
 			root.setLines(f2);
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(buffer).toEqual(f2);
@@ -1138,7 +1132,7 @@ describe("scrollback commit gap — live barriers", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			// The changed row sits ~30 rows above the commit boundary with an
@@ -1147,12 +1141,12 @@ describe("scrollback commit gap — live barriers", () => {
 			root.setLines(["preview", ...rows("tail-", 30)]);
 			root.seam = 0;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			root.setLines(["result", ...rows("tail-", 30)]);
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(buffer).toEqual(["result", ...rows("tail-", 30)]);
@@ -1189,14 +1183,14 @@ describe("scrollback divergence — multiplexer fallback", () => {
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const writes = capture(term);
 
 			const preview = rows("preview-", 10);
 			root.setLines(preview);
 			root.seam = 0;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tape(term)).toEqual(preview);
 
 			// Finalize divergence inside a tmux pane: ED3 would corrupt the
@@ -1207,7 +1201,7 @@ describe("scrollback divergence — multiplexer fallback", () => {
 			root.setLines(result);
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			expect(buffer.slice(-9)).toEqual(result);
@@ -1262,7 +1256,7 @@ describe("scrollback divergence — the default repairs a duplicated block", () 
 		try {
 			tui.addChild(root);
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// The live block streams in and overflows the 4-row window, so its head
 			// scrolls off and commits as a frozen snapshot.
@@ -1277,7 +1271,7 @@ describe("scrollback divergence — the default repairs a duplicated block", () 
 			root.setLines(preview);
 			root.seam = 0;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Then it finalizes with the block reflowed: same opening lines, more
 			// text under them. This is the divergence that used to recommit the
@@ -1294,7 +1288,7 @@ describe("scrollback divergence — the default repairs a duplicated block", () 
 			root.setLines(finalBlock);
 			root.seam = undefined;
 			tui.requestRender();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			const buffer = tape(term);
 			// The assertion that matches the screenshot: the opening line appears

@@ -20,11 +20,12 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import { META_VALUE_MAX_BYTES } from "@veyyon/coding-agent/tools/search/structure-search";
 import { astGrep } from "@veyyon/natives";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 const FIXTURE = `export function alpha(one: string, two: number): string {
 	const joined = one + two;
@@ -44,16 +45,6 @@ const PATTERNS = ["export function $NAME($$$ARGS): $_ { $$$BODY }", "return $X;"
 const NOTE = /^(#|\[|\s*meta:|\.\.\.|-\s|Match limit reached|Parse issues:|No matches)/;
 const NUMBERED = /^\s*\*?\d+[:|│]/;
 
-function createTestSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-	};
-}
-
 async function withWorkspace<T>(body: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-structure-meta-"));
 	try {
@@ -65,14 +56,11 @@ async function withWorkspace<T>(body: (dir: string) => Promise<T>): Promise<T> {
 }
 
 async function structureText(cwd: string, input: string): Promise<string> {
-	const tools = await createTools(createTestSession(cwd));
+	const tools = await createTools(makeToolSessionAt(cwd));
 	const tool = tools.find(entry => entry.name === "search");
 	if (!tool) throw new Error("search tool missing");
 	const result = await tool.execute(`structure-meta-${input}`, { type: "structure", input, path: "fixture.ts" });
-	return result.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
-		.join("\n");
+	return toolResultText(result);
 }
 
 describe("a structure match never prints its source twice", () => {

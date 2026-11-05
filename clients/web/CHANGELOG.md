@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The guest holds sends back while its socket has 64 KiB or more queued and drains them below 32 KiB, as the CLI does, by binding `RelayClient` from `@veyyon/wire/relay-client` instead of its own copy of the relay client.
+
 ## [1.5.0] - 2026-09-18
 
 ### Changed

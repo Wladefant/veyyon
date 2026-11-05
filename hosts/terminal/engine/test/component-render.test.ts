@@ -9,6 +9,7 @@ import {
 	type NativeScrollbackReplay,
 	TUI,
 } from "@veyyon/tui";
+import { plainRows } from "./helpers/terminal-output";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -61,12 +62,8 @@ class AnchoredStatusContainer extends Container implements NativeScrollbackLiveR
 	}
 }
 
-function strip(rows: string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
-}
-
 function visible(term: VirtualTerminal): string[] {
-	return strip(term.getViewport()).filter(row => row.length > 0);
+	return plainRows(term.getViewport()).filter(row => row.length > 0);
 }
 
 class RenderCountingTUI extends TUI {
@@ -159,7 +156,7 @@ describe("TUI native scrollback replay", () => {
 			await scheduler.drain(term);
 
 			expect(transcript.replayPreparations).toBe(1);
-			const buffer = strip(term.getScrollBuffer());
+			const buffer = plainRows(term.getScrollBuffer());
 			expect(buffer).toContain("history-0");
 			expect(buffer).toContain("tail-3");
 		} finally {
@@ -194,7 +191,7 @@ describe("TUI native scrollback replay", () => {
 			await scheduler.drain(term);
 
 			expect(transcript.replayPreparations).toBeGreaterThanOrEqual(1);
-			const buffer = strip(term.getScrollBuffer());
+			const buffer = plainRows(term.getScrollBuffer());
 			expect(buffer).toContain("history-0");
 			expect(buffer).toContain("tail-3");
 		} finally {
@@ -386,7 +383,7 @@ describe("TUI.requestComponentRender", () => {
 			tui.requestRender();
 			await scheduler.drain(term);
 
-			const buffer = strip(term.getScrollBuffer()).join("\n");
+			const buffer = plainRows(term.getScrollBuffer()).join("\n");
 			const missing = markers.filter(mark => buffer.split(mark).length - 1 === 0);
 			const duplicated = markers.filter(mark => buffer.split(mark).length - 1 > 1);
 			expect(missing).toEqual([]);

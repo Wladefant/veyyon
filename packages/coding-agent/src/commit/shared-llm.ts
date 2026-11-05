@@ -4,8 +4,8 @@ import { completeSimple } from "@veyyon/ai/stream";
 // naming arktype is naming the same module; `validateToolCall` is one function
 // over a tool list. Together they were costing the whole streaming stack.
 import { type as t } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { validateToolCall } from "@veyyon/ai/utils/validation";
-import { lazy } from "@veyyon/utils/abortable";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { ChangelogCategory, ConventionalAnalysis } from "./types";
 import { extractTextContent, extractToolCall, normalizeAnalysis, parseJsonPayload } from "./utils";
@@ -61,7 +61,7 @@ export async function completeCommitSimple(
  * commit analysis: ArkType registers every node it builds for the life of the
  * process, and a session that never generates a commit message reads none.
  */
-const conventionalAnalysisParameters = lazy(() => {
+const conventionalAnalysisParameters = toolSchema("commit:conventional-analysis", () => {
 	const changelogCategoryLiteral = t(
 		"'Added' | 'Changed' | 'Fixed' | 'Deprecated' | 'Removed' | 'Security' | 'Breaking Changes'",
 	);
@@ -82,6 +82,7 @@ export interface ConventionalAnalysisTool {
 	readonly name: "create_conventional_analysis";
 	readonly description: string;
 	readonly parameters: typeof conventionalAnalysisParameters.value;
+	readonly wireParameters: Record<string, unknown>;
 }
 
 /**
@@ -94,6 +95,9 @@ export function createConventionalAnalysisTool(description: string): Conventiona
 		description,
 		get parameters() {
 			return conventionalAnalysisParameters.value;
+		},
+		get wireParameters(): Record<string, unknown> {
+			return conventionalAnalysisParameters.wire;
 		},
 	};
 }

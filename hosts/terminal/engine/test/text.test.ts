@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Text } from "@veyyon/tui/components/text";
 import { visibleWidth } from "@veyyon/utils/width";
 
@@ -55,8 +56,7 @@ describe("Text component", () => {
 		streaming.setText(`${red}first line\nstill red tail`);
 		const rows = streaming.render(20);
 		const freshRows = new Text(`${red}first line\nstill red tail`, 0, 0).render(20);
-		const strip = (line: string) => line.replace(/\x1b\[[0-9;:]*m/g, "");
-		expect(rows.map(strip)).toEqual(freshRows.map(strip));
+		expect(rows.map(stripVTControlCharacters)).toEqual(freshRows.map(stripVTControlCharacters));
 		const tailRow = rows.find(line => line.includes("still red tail"));
 		expect(tailRow).toBeDefined();
 		expect(tailRow?.startsWith(red)).toBe(true);
@@ -66,6 +66,22 @@ describe("Text component", () => {
 		streaming.setText(`${red}first line${reset}\nplain tail`);
 		const plainTail = streaming.render(20).find(line => line.includes("plain tail"));
 		expect(plainTail?.includes("\x1b[31m")).toBe(false);
+	});
+
+	it("draws the last of many styled lines as that line alone draws, streamed or not", () => {
+		// Each line closes its own color with `ESC [ 39 m`. A carry that replayed every closed span made the
+		// last row grow with the line count, and streaming the block cost O(lines^3).
+		const muted = (line: string) => `\x1b[38;2;139;144;153m${line}\x1b[39m`;
+		const streaming = new Text("", 2, 0);
+		let accumulated = "";
+		for (let line = 0; line < 400; line++) {
+			const styled = muted(`output line ${line}`);
+			accumulated += line === 0 ? styled : `\n${styled}`;
+			streaming.setText(accumulated);
+			const alone = new Text(styled, 2, 0).render(60);
+			expect(streaming.render(60).at(-1)).toBe(alone[0]);
+			expect(new Text(accumulated, 2, 0).render(60).at(-1)).toBe(alone[0]);
+		}
 	});
 
 	it("renders CRLF and bare-CR content without leaving a stray carriage return", () => {

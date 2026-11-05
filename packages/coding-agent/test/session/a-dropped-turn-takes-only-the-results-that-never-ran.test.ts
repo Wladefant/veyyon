@@ -21,6 +21,7 @@
 import { describe, expect, it } from "bun:test";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { removeAssistantMessageFromActiveContext } from "@veyyon/coding-agent/session/runtime/turn-context-check";
 
 const PROMPT: AgentMessage = { role: "user", content: "write the report", timestamp: 1 };
@@ -32,14 +33,7 @@ function failedTurn(timestamp: number, callIds: readonly string[]): AssistantMes
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "error",
 		errorMessage: "The operation timed out.",
 		timestamp,

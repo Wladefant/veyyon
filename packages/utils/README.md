@@ -9,6 +9,7 @@ Shared utilities for [veyyon](https://github.com/santhreal/veyyon) packages.
 | `logger` | Centralized logger writing to `~/.veyyon/profiles/<name>/logs/` with rotation (TUI-safe; does not write to stdout) |
 | `prompt` | Handlebars-based prompt templating and formatting helpers |
 | `dirs` | Path helpers for veyyon config directories (`~/.veyyon`, XDG-aware on Linux) |
+| `config-root` / `global-config` | The config home (`~/.veyyon` or `VEYYON_CONFIG_DIR`) and the machine-wide `config.yml` at its root; `global-config-write` writes it |
 | `stream` | `readLines` / `readJsonl` / `readSseEvents` helpers over `ReadableStream` |
 | `ptree` / `procmgr` | Process trees, child process supervisor, and process lifecycle management |
 | `postmortem` | Cleanup callbacks on exit, signals, and fatal exceptions |

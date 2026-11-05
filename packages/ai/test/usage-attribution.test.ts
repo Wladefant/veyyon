@@ -2,8 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { applyAnthropicUsageExtras } from "@veyyon/ai/providers/anthropic";
 import { parseChunkUsage } from "@veyyon/ai/providers/openai-completions";
 import { calculateOpenAIUsageAccounting, populateResponsesUsageFromResponse } from "@veyyon/ai/providers/openai-shared";
-import type { AssistantMessage, Model, Usage } from "@veyyon/ai/types";
+import type { AssistantMessage, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const OPENAI_MODEL: Model<"openai-completions"> = buildModel({
 	id: "gpt-5",
@@ -17,17 +18,6 @@ const OPENAI_MODEL: Model<"openai-completions"> = buildModel({
 	contextWindow: 200_000,
 	maxTokens: 8_192,
 });
-
-function blankUsage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 describe("openai-completions parseChunkUsage", () => {
 	it("does not double-count reasoning_tokens (subset of completion_tokens)", () => {
@@ -265,7 +255,7 @@ describe("openai-responses usage attribution", () => {
 			api: "openai-responses",
 			provider: "sakana",
 			model: "fugu-ultra",
-			usage: blankUsage(),
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 0,
 		};
@@ -298,7 +288,7 @@ describe("openai-responses usage attribution", () => {
 			api: "openai-codex-responses",
 			provider: "openai-codex",
 			model: "gpt-5.5",
-			usage: blankUsage(),
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 0,
 		};
@@ -324,7 +314,7 @@ describe("openai-responses usage attribution", () => {
 
 describe("anthropic applyAnthropicUsageExtras", () => {
 	it("captures cache TTL breakdown when both buckets are non-zero", () => {
-		const usage = blankUsage();
+		const usage = emptyUsage();
 		applyAnthropicUsageExtras(usage, {
 			cache_creation: {
 				ephemeral_5m_input_tokens: 1_200,
@@ -336,7 +326,7 @@ describe("anthropic applyAnthropicUsageExtras", () => {
 	});
 
 	it("only sets the bucket the provider populated", () => {
-		const usage = blankUsage();
+		const usage = emptyUsage();
 		applyAnthropicUsageExtras(usage, {
 			cache_creation: { ephemeral_5m_input_tokens: 50, ephemeral_1h_input_tokens: 0 },
 		});
@@ -346,7 +336,7 @@ describe("anthropic applyAnthropicUsageExtras", () => {
 	});
 
 	it("captures server tool requests", () => {
-		const usage = blankUsage();
+		const usage = emptyUsage();
 		applyAnthropicUsageExtras(usage, {
 			server_tool_use: { web_search_requests: 3, web_fetch_requests: 1 },
 		});
@@ -355,7 +345,7 @@ describe("anthropic applyAnthropicUsageExtras", () => {
 	});
 
 	it("leaves serverToolUse undefined when both counters are zero", () => {
-		const usage = blankUsage();
+		const usage = emptyUsage();
 		applyAnthropicUsageExtras(usage, {
 			server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
 		});
@@ -367,7 +357,7 @@ describe("anthropic applyAnthropicUsageExtras", () => {
 		// message_start populated the 5m/1h split; message_delta lacks cache_creation
 		// but reports cumulative server_tool_use. The helper must not erase the breakdown
 		// already on the usage object.
-		const usage = blankUsage();
+		const usage = emptyUsage();
 		usage.cttl = { ephemeral5m: 100, ephemeral1h: 200 };
 
 		applyAnthropicUsageExtras(usage, {
@@ -379,7 +369,7 @@ describe("anthropic applyAnthropicUsageExtras", () => {
 	});
 
 	it("treats null SDK fields as absent (cache_creation: null skips breakdown)", () => {
-		const usage = blankUsage();
+		const usage = emptyUsage();
 		applyAnthropicUsageExtras(usage, {
 			cache_creation: null,
 			server_tool_use: null,

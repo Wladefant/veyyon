@@ -1,34 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
+import { sayHelloContext } from "./helpers";
+import { sseResponse } from "./helpers/fetch-mock";
 
 function createMockFetch(events: unknown[]): FetchImpl {
 	return (async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
-		return createSseResponse(events);
+		return sseResponse(events);
 	}) as typeof fetch;
-}
-
-function baseContext(): Context {
-	return {
-		messages: [
-			{
-				role: "user",
-				content: "hello",
-				timestamp: Date.now(),
-			},
-		],
-	};
 }
 
 // Repro for https://github.com/can1357/oh-my-pi/issues/911
@@ -79,7 +59,7 @@ describe("issue #911 - Mistral Medium 3.5 array content parts", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -128,7 +108,7 @@ describe("issue #911 - Mistral Medium 3.5 array content parts", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(model, baseContext(), {
+		const result = await streamOpenAICompletions(model, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();

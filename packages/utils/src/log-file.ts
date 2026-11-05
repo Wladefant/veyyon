@@ -21,6 +21,7 @@ import { APP_DIRECTORY_SLUG } from "./app-identity";
 import { atomicWriteFileWith } from "./atomic-write";
 import { isEexist, isEnoent } from "./fs-error";
 import { localCalendarDate } from "./local-time";
+import { toError } from "./type-guards";
 
 /**
  * Name of the log file for the local calendar day of `date` (`veyyon.YYYY-MM-DD.log`). The logger,
@@ -88,10 +89,6 @@ export interface LogFileOptions {
 	keep?: number;
 	/** Receives every failure to open, rotate or write; the line that failed is dropped. */
 	onError: (error: Error) => void;
-}
-
-function asError(value: unknown): Error {
-	return value instanceof Error ? value : new Error(String(value));
 }
 
 /** A log file in the directory, live or rotated, with the facts pruning and compression read. */
@@ -256,7 +253,7 @@ export class RotatingLogFile {
 			// Reopened on the next check rather than on the next line, so a full disk costs one
 			// failed write per interval instead of one per line.
 			this.#closeFd();
-			this.#onError(asError(error));
+			this.#onError(toError(error));
 		}
 	}
 
@@ -288,7 +285,7 @@ export class RotatingLogFile {
 			this.#open(target, ms);
 		} catch (error) {
 			this.#closeFd();
-			this.#onError(asError(error));
+			this.#onError(toError(error));
 		}
 	}
 
@@ -304,7 +301,7 @@ export class RotatingLogFile {
 			this.#maintain(ms);
 		} catch (error) {
 			// A directory that cannot be pruned still takes lines.
-			this.#onError(asError(error));
+			this.#onError(toError(error));
 		}
 	}
 
@@ -370,7 +367,7 @@ export class RotatingLogFile {
 			.then(() => fs.promises.rm(file, { force: true }))
 			.catch(error => {
 				// A generation another writer compressed or pruned first is not a failure.
-				if (!isEnoent(error)) this.#onError(asError(error));
+				if (!isEnoent(error)) this.#onError(toError(error));
 			})
 			.finally(() => compressing.delete(file));
 	}

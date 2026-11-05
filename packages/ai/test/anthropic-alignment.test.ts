@@ -26,6 +26,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import type { AnthropicMessagesClientLike } from "../src/providers/anthropic-client";
@@ -63,12 +64,6 @@ const UMANS_ANTHROPIC_MODEL: Model<"anthropic-messages"> = buildModel({
 	maxTokens: 32_768,
 });
 
-function createAbortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 type CaptureAnthropicOptions = {
 	isOAuth?: boolean;
 	metadata?: { user_id?: string; account_uuid?: string; accountId?: string; account_id?: string };
@@ -98,7 +93,7 @@ function captureAnthropicPayload(
 	const stream = streamAnthropic(model, context, {
 		apiKey: "sk-ant-oat-test",
 		isOAuth: options?.isOAuth ?? true,
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		metadata: options?.metadata,
 		thinkingEnabled: options?.thinkingEnabled,
 		reasoning: options?.reasoning,
@@ -127,7 +122,7 @@ function captureSimpleAnthropicPayload(
 	const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 	const stream = streamSimple(model, context, {
 		apiKey: "sk-ant-oat-test",
-		signal: createAbortedSignal(),
+		signal: AbortSignal.abort(),
 		reasoning,
 		onPayload: payload => resolve(payload),
 	});
@@ -465,14 +460,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					api: "anthropic-messages",
 					provider: "anthropic",
 					model: ANTHROPIC_MODEL.id,
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
+					usage: emptyUsage(),
 					stopReason: "toolUse",
 					timestamp: Date.now(),
 				},
@@ -536,14 +524,7 @@ describe("Anthropic request fingerprint alignment", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: ANTHROPIC_MODEL.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};

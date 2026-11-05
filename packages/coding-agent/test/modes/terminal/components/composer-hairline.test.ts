@@ -20,6 +20,7 @@
  * left margin is part of the same agreed geometry.
  */
 import { afterEach, beforeAll, describe, expect, it, setSystemTime } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Settings, settings } from "@veyyon/coding-agent/config/settings";
 import {
 	CardPadRow,
@@ -29,10 +30,6 @@ import {
 import { setShimmerActivity } from "@veyyon/coding-agent/theme/shimmer";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { visibleWidth } from "@veyyon/utils/width";
-
-function strip(s: string): string {
-	return s.replace(/\x1b\[[0-9;]*m/g, "");
-}
 
 describe("ComposerHairline", () => {
 	beforeAll(async () => {
@@ -59,7 +56,7 @@ describe("ComposerHairline", () => {
 			for (const width of [1, 2, 7, 39, 80, 213]) {
 				const [line] = new ComposerHairline().render(width);
 				expect(visibleWidth(line ?? "")).toBe(width);
-				expect(strip(line ?? "")).toBe(theme.boxSharp.horizontal.repeat(width));
+				expect(stripVTControlCharacters(line ?? "")).toBe(theme.boxSharp.horizontal.repeat(width));
 			}
 		});
 
@@ -67,7 +64,7 @@ describe("ComposerHairline", () => {
 		it("clamps width 0 and negatives to a single cell", () => {
 			for (const width of [0, -5]) {
 				const [line] = new ComposerHairline().render(width);
-				expect(strip(line ?? "")).toBe(theme.boxSharp.horizontal);
+				expect(stripVTControlCharacters(line ?? "")).toBe(theme.boxSharp.horizontal);
 			}
 		});
 	});

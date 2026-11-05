@@ -14,6 +14,7 @@ import {
 } from "@veyyon/ai/providers/openai-shared";
 import type { AssistantMessage, Model, ModelSpec, Tool, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { type } from "arktype";
 
 const GRAMMAR = [
@@ -266,14 +267,7 @@ describe("custom_tool_call stream receive", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const emitted: unknown[] = [];
@@ -317,14 +311,7 @@ describe("custom_tool_call stream receive", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const stream = { push: () => {}, end: () => {} } as never;
@@ -374,14 +361,7 @@ describe("custom_tool_call stream receive", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const emitted: unknown[] = [];
@@ -462,14 +442,7 @@ describe("custom_tool_call stream receive", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const emitted: unknown[] = [];
@@ -611,14 +584,7 @@ describe("history replay: custom_tool_call round-trip", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const knownCallIds = new Set<string>();
@@ -655,14 +621,7 @@ describe("history replay: custom_tool_call round-trip", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const knownCallIds = new Set<string>();
@@ -690,14 +649,7 @@ describe("history replay: custom_tool_call round-trip", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const knownCallIds = new Set<string>();
@@ -729,14 +681,7 @@ describe("history replay: custom_tool_call round-trip", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const knownCallIds = new Set<string>();
@@ -762,14 +707,7 @@ describe("history replay: custom_tool_call round-trip", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const knownCallIds = new Set<string>();
@@ -799,14 +737,7 @@ describe("history replay: custom_tool_call round-trip", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const knownCallIds = new Set<string>();
@@ -833,14 +764,7 @@ describe("history replay: custom_tool_call round-trip", () => {
 			provider: "openai",
 			model: "gpt-5",
 			api: "openai-responses",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			stopReason: "stop",
 		};
 		const knownCallIds = new Set<string>();

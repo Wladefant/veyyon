@@ -4,6 +4,8 @@ import { buildResponsesInput } from "@veyyon/ai/providers/openai-shared";
 import type { AssistantMessage, Context, Message, Model, ModelSpec, ToolCall } from "@veyyon/ai/types";
 import { createOpenAIResponsesHistoryPayload } from "@veyyon/ai/utils";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 
 /**
  * WHY: `buildResponsesInput` decides how to emit each tool result from the call ids it has seen so far. Under
@@ -21,14 +23,7 @@ import { buildModel } from "@veyyon/catalog/build";
  * which the generator excludes because the endpoint never issues one, and the order of items beyond pairing.
  */
 
-const usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = emptyUsage();
 
 function responsesModel(freeform: boolean): Model<"openai-responses"> {
 	return buildModel({
@@ -44,18 +39,6 @@ function responsesModel(freeform: boolean): Model<"openai-responses"> {
 		maxTokens: 16000,
 		...(freeform ? { applyPatchToolType: "freeform" as const } : {}),
 	} satisfies ModelSpec<"openai-responses">);
-}
-
-/** Deterministic 32-bit generator, so a failing session reproduces from its seed. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
 }
 
 const CALL_POOL = 6;

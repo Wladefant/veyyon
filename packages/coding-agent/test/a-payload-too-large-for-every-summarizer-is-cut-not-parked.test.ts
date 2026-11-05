@@ -57,12 +57,13 @@ import * as path from "node:path";
 import { Agent, countTokens } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectAgentDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
 const RECOVERY_FRAGMENT = "Compaction dead-end recovery";
@@ -136,8 +137,7 @@ describe("a payload too large for every summarizer is cut, not parked", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: CONTEXT_WINDOW, maxTokens: 64_000 };
 
 		const agent = new Agent({
@@ -204,14 +204,7 @@ describe("a payload too large for every summarizer is cut, not parked", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: CONTEXT_WINDOW - 2_000,
-				output: 1_000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: CONTEXT_WINDOW - 1_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: CONTEXT_WINDOW - 2_000, output: 1_000, totalTokens: CONTEXT_WINDOW - 1_000 },
 			timestamp: Date.now(),
 		};
 	}
@@ -262,14 +255,7 @@ describe("a payload too large for every summarizer is cut, not parked", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 100,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 110,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 10, totalTokens: 110 },
 			timestamp: Date.now(),
 		});
 	}

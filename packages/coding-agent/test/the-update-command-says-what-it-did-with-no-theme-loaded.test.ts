@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { VERSION } from "@veyyon/utils";
+import { standInBinary } from "./helpers/stand-in-binary";
 
 /**
  * Every line `veyyon update` prints must print with no theme loaded.
@@ -40,24 +41,6 @@ import { VERSION } from "@veyyon/utils";
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..");
 const UPDATE_CLI = path.join(REPO_ROOT, "packages/coding-agent/src/cli/update-cli.ts");
 const THEME_BINDING = path.join(REPO_ROOT, "packages/coding-agent/src/theme/theme-binding.ts");
-
-/**
- * A stand-in release binary answering the three questions `verifyBinaryUsable`
- * asks of a freshly installed one: `--version` in the `veyyon/X.Y.Z` shape it
- * parses, `grep --help`, and a `grep` that really finds what it is pointed at.
- */
-function standInBinary(version: string): string {
-	return `#!/bin/sh
-set -u
-case "\${1:-}" in
-	--version) echo "veyyon/${version}"; exit 0 ;;
-	grep)
-		[ "\${2:-}" = "--help" ] && { echo "usage: veyyon grep <pattern> <path>"; exit 0; }
-		exec grep -rl -- "$2" "$3" ;;
-	*) echo "unknown command: \${1:-}" >&2; exit 2 ;;
-esac
-`;
-}
 
 interface ChildRun {
 	status: number | null;

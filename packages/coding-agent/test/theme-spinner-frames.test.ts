@@ -10,6 +10,7 @@ import { SPINNER_FRAMES } from "@veyyon/coding-agent/theme/symbols";
 import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { getCustomThemesDir, removeWithRetries, setAgentDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
+import { requireTheme } from "./helpers/require-theme";
 
 // Path of the built-in dark theme JSON, used as a known-valid base we can
 // extend with custom `symbols.spinnerFrames` shapes.
@@ -50,12 +51,11 @@ describe("theme symbols.spinnerFrames", () => {
 		const frames = ["◐", "◓", "◑", "◒"];
 		await writeCustomTheme("custom-flat", { spinnerFrames: frames });
 
-		const theme = await getThemeByName("custom-flat");
-		expect(theme).toBeDefined();
-		expect(theme!.getSpinnerFrames("status")).toEqual(frames);
-		expect(theme!.getSpinnerFrames("activity")).toEqual(frames);
+		const theme = await requireTheme("custom-flat");
+		expect(theme.getSpinnerFrames("status")).toEqual(frames);
+		expect(theme.getSpinnerFrames("activity")).toEqual(frames);
 		// Default getter is the status spinner.
-		expect(theme!.spinnerFrames).toEqual(frames);
+		expect(theme.spinnerFrames).toEqual(frames);
 	});
 
 	it("object override sets each spinner type independently and falls back to preset", async () => {
@@ -65,10 +65,9 @@ describe("theme symbols.spinnerFrames", () => {
 		const presetActivity = SPINNER_FRAMES.unicode.activity;
 		await writeCustomTheme("custom-status-only", { spinnerFrames: { status: statusFrames } });
 
-		const theme = await getThemeByName("custom-status-only");
-		expect(theme).toBeDefined();
-		expect(theme!.getSpinnerFrames("status")).toEqual(statusFrames);
-		expect(theme!.getSpinnerFrames("activity")).toEqual(presetActivity);
+		const theme = await requireTheme("custom-status-only");
+		expect(theme.getSpinnerFrames("status")).toEqual(statusFrames);
+		expect(theme.getSpinnerFrames("activity")).toEqual(presetActivity);
 	});
 
 	it("rejects empty arrays and empty objects at validation time", async () => {
@@ -84,9 +83,8 @@ describe("theme symbols.spinnerFrames", () => {
 		// default status frames match the preset table when no override is set.
 		await writeCustomTheme("custom-no-override", {});
 
-		const theme = await getThemeByName("custom-no-override");
-		expect(theme).toBeDefined();
-		const status = theme!.getSpinnerFrames("status");
+		const theme = await requireTheme("custom-no-override");
+		const status = theme.getSpinnerFrames("status");
 		expect(status.length).toBeGreaterThan(1);
 		expect(status).not.toContain("A");
 	});

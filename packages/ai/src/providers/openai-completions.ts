@@ -10,7 +10,6 @@ import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { renderDemotedThinking } from "../dialect/demotion";
 import { getEnvApiKey } from "../env-api-key";
 import * as AIError from "../error";
-import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import type {
 	Api,
 	AssistantMessage,
@@ -49,6 +48,7 @@ import {
 	iterateWithIdleTimeout,
 	iterateWithTerminalGrace,
 } from "../utils/idle-iterator";
+import { getKimiCommonHeaders } from "../utils/kimi-headers";
 import { OpenAIHttpError, type OpenAIStreamHandle, postOpenAIStream } from "../utils/openai-http";
 import { conversationIdForOpenCode } from "../utils/opencode-headers";
 import { notifyProviderResponse } from "../utils/provider-response";
@@ -63,7 +63,7 @@ import {
 	openAIToolCallForce,
 } from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
-import { parseAzureDeploymentNameMap } from "./azure-deployment-names";
+import { azureDeploymentName } from "./azure-deployment-names";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import type {
 	ChatCompletionAssistantMessageParam,
@@ -976,7 +976,7 @@ function createRequestSetup(
 	conversationId?: string,
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
-	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
+	const deploymentName = azureDeploymentName(model.id, $env);
 	const setup = resolveOpenAIRequestSetup(model, {
 		apiKey,
 		extraHeaders,

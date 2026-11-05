@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { Usage } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 import {
 	CacheInvalidationMarkerComponent,
 	detectCacheInvalidation,
@@ -13,12 +14,12 @@ function usage(parts: { input?: number; cacheRead?: number; cacheWrite?: number;
 	const cacheRead = parts.cacheRead ?? 0;
 	const cacheWrite = parts.cacheWrite ?? 0;
 	return {
+		...emptyUsage(),
 		input,
 		output,
 		cacheRead,
 		cacheWrite,
 		totalTokens: input + output + cacheRead + cacheWrite,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 }
 

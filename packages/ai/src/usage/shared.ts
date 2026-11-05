@@ -1,4 +1,5 @@
-import type { UsageStatus } from "../usage";
+import { clamp } from "@veyyon/utils/math";
+import type { UsageAmount, UsageStatus } from "../usage";
 
 /** Consumed fraction at or past which a limit flips from "ok" to "warning". */
 export const USAGE_WARNING_FRACTION = 0.9;
@@ -16,4 +17,21 @@ export function usageStatusFromUsedFraction(usedFraction: number | undefined): U
 	if (usedFraction >= 1) return "exhausted";
 	if (usedFraction >= USAGE_WARNING_FRACTION) return "warning";
 	return "ok";
+}
+
+/**
+ * The amount of a limit a provider reports as a percent used, clamped to 0..100, with the remaining
+ * percent and both fractions derived from it.
+ */
+export function usageAmountFromUsedPercent(usedPercent: number): UsageAmount {
+	const used = clamp(usedPercent, 0, 100);
+	const usedFraction = used / 100;
+	return {
+		used,
+		limit: 100,
+		remaining: Math.max(0, 100 - used),
+		usedFraction,
+		remainingFraction: Math.max(0, 1 - usedFraction),
+		unit: "percent",
+	};
 }

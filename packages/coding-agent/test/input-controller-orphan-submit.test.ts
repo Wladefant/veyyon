@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
@@ -11,6 +10,7 @@ import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 /**
  * Regression: a submission arriving while the main loop has no input waiter
@@ -154,8 +154,7 @@ describe("InputController orphaned submit", () => {
 		let session: AgentSession | undefined;
 		let authStorage: AuthStorage | undefined;
 		try {
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-			if (!model) throw new Error("Expected built-in anthropic model to exist");
+			const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 			authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 			authStorage.setRuntimeApiKey("anthropic", "test-key");
 			const agent = new Agent({

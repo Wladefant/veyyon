@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -41,13 +42,6 @@ function bashSession(cwd: string) {
 	});
 }
 
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("");
-}
-
 describe("BashTool yes|head and bounded generators", () => {
 	let tmpDir: string;
 
@@ -65,7 +59,7 @@ describe("BashTool yes|head and bounded generators", () => {
 			command: "yes | head -n 3",
 			timeout: 15,
 		});
-		const text = textOf(result);
+		const text = toolResultText(result, "");
 		const ys = text.split("\n").filter(l => l.trim() === "y");
 		expect(ys.length).toBeGreaterThanOrEqual(3);
 	});
@@ -76,7 +70,7 @@ describe("BashTool yes|head and bounded generators", () => {
 			command: "printf '%s' 'abcdefghijklmnopqrstuvwxyz' | head -c 5",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("abcde");
-		expect(textOf(result).includes("z")).toBe(false);
+		expect(toolResultText(result, "")).toContain("abcde");
+		expect(toolResultText(result, "").includes("z")).toBe(false);
 	});
 });

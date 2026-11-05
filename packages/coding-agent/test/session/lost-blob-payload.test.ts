@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { convertToLlm, replaceLostBlobPayloads } from "@veyyon/coding-agent/session/messages";
 import * as blobStoreModule from "@veyyon/kernel/session/blob-store";
 import {
@@ -63,14 +64,7 @@ function assistantEntry(id: string, parentId: string | null, content: unknown): 
 			provider: "anthropic",
 			model: "claude-test",
 			stopReason: "stop",
-			usage: {
-				input: 1,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 2,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		},
 	};
 }
@@ -250,14 +244,7 @@ describe("a payload the blob store no longer has", () => {
 				provider: "anthropic",
 				model: "claude-test",
 				stopReason: "stop",
-				usage: {
-					input: 1,
-					output: 1,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 2,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 			},
 		]);
 

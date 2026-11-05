@@ -26,36 +26,13 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	createModuleReachCache,
-	type ModuleReachResolution,
-	moduleReach,
-	moduleReachCount,
-	moduleSpecifiersIn,
-} from "@veyyon/utils/module-reach";
-import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
+import { packageModuleReach } from "@veyyon/utils/module-reach-workspace";
 
 const SRC = path.join(import.meta.dir, "..", "src");
 const REPO_ROOT = path.join(SRC, "..", "..", "..");
 
-const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
-const CACHE = createModuleReachCache();
-
-function reach(relative: string): number {
-	return moduleReachCount(path.join(SRC, relative), RESOLUTION, CACHE);
-}
-
-function reachedNames(relative: string): string[] {
-	return [...moduleReach(path.join(SRC, relative), RESOLUTION, CACHE)]
-		.map(file => path.relative(REPO_ROOT, file))
-		.sort();
-}
-
-function runtimeImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8"));
-}
+const { reach, reachedNames, runtimeImportsOf } = packageModuleReach(REPO_ROOT, SRC);
 
 /**
  * RE-MEASURED 2026-08-26 at 10, down from 92. `tokenizer.ts` took `estimateTokensFromText` from the
@@ -177,6 +154,43 @@ const PRUNING_CEILING = 197;
  * compaction request and memory pass sends its fixed effort through, which logs a moved effort once per
  * model. It imports `@veyyon/catalog/model-thinking` and `@veyyon/utils`, both already on the engine's
  * reach, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-24: engine 311. The one new module is `catalog/wire/opencode-go.ts`, the OpenCode
+ * Go endpoint rules and the envelope a Console login's key is carried in, which
+ * `catalog/provider-models/openai-compat.ts` reads to send no Console token to OpenCode Go discovery. It
+ * imports only `@veyyon/utils/url`, already on the engine's reach, so the growth is that one file and no
+ * subtree.
+ *
+ * RE-MEASURED 2026-10-25: engine 313. The two new modules are `ai/prompts/tool-choice/any.md` and
+ * `ai/prompts/tool-choice/named.md`, the request text that asks for a tool call a wire cannot force,
+ * which `ai/prompts/registry.ts`, already on the engine's reach, registers. They import nothing, so the
+ * growth is those two files and no subtree.
+ *
+ * RE-MEASURED 2026-10-28: engine 316, remote summarizer 103. The new modules are `utils/config-root.ts`,
+ * `utils/global-config.ts` and `utils/global-config-write.ts`, split out of `utils/dirs.ts` with no code
+ * added. The engine reaches all three through the `@veyyon/utils` barrel and the remote summarizer the
+ * first two through `@veyyon/utils/dirs`; every module they import was already on both reaches, so the
+ * growth is those files and no subtree.
+ *
+ * RE-MEASURED 2026-10-28: engine 317. The new module is `catalog/provider-models/ollama-native.ts`, the one
+ * reader of Ollama's `/api/tags` and `/api/show` answers that the local and cloud catalogs share, which
+ * `catalog/provider-models/ollama.ts`, already on the engine's reach, imports. Every module it imports was
+ * already reached, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-28: engine 318. The new module is `ai/providers/anthropic-tool-choice.ts`, the
+ * Anthropic `tool_choice` mapping moved out of `ai/stream.ts`, already on the engine's reach, so the
+ * providers that read it stop importing the stream dispatcher. Its only imports are types, so the
+ * growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-29: engine 319. The new module is `utils/build-store.ts`, the per-build JSON store
+ * that `catalog/identity/bundled.ts`, already on the engine's reach, reads each custom model id's bundled
+ * reference through. Its imports (`atomic-write.ts`, `logger.ts`, `type-guards.ts`) were already reached,
+ * so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-10-29 again: engine 315. The Kimi request headers moved out of the Kimi login,
+ * `ai/registry/oauth/kimi.ts`, into `ai/utils/kimi-headers.ts`, the one new module, so the chat client and
+ * the usage probe that send them no longer load the login. The login left the reach with the four modules
+ * only it brought: `ai/registry/oauth/{expiry,success-page,token-response}.ts` and `oauth.html`.
  */
 // RE-MEASURED 2026-10-01 after the santhreal sync: +1 for `utils/schema/zod-core.ts` (imported by the `@veyyon/ai` barrel) and `catalog/catalog-spans.ts` (imported by `catalog/models.ts`); each is a leaf, so no subtree arrives.
 // RE-MEASURED 2026-10-04 after the upstream port wave (#219): 327 -> 333 and 225 -> 227, provider definitions the `@veyyon/ai` barrel reaches.

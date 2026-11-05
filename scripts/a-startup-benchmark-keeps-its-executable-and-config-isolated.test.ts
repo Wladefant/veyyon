@@ -10,6 +10,11 @@
  * The directory-override sweep covers every spawn site the version and frame arms reach
  * (the natives probe, `timeRun`, `recordFrame`). It does not cover the settled and
  * responsive arms, which build their child environment from nothing.
+ *
+ * The seeded home wrote its update controls to the global `config.yml`, which holds only
+ * global keys and never reads `startup.*`, so a measured binary that found a newer release
+ * downloaded it and replaced itself mid-run. The settings check reads the seeded home through
+ * the real CLI, so a seed the loader ignores fails here rather than in a measurement.
  */
 import { afterEach, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
@@ -19,7 +24,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { DIR_OVERRIDE_ENV_KEYS } from "@veyyon/utils";
 import { parseDocument } from "yaml";
-import { disableBenchmarkUpdates } from "./bench-startup";
+import { disableBenchmarkUpdates, seedHome } from "./bench-startup";
 
 const exec = promisify(execFile);
 const root = path.resolve(import.meta.dirname, "..");
@@ -62,6 +67,22 @@ test("rejects malformed seed YAML without rewriting it", async () => {
 	await expect(disableBenchmarkUpdates(file)).rejects.toThrow("Invalid benchmark config");
 	expect(await readFile(file, "utf8")).toBe(source);
 });
+
+test.each(["startup.checkUpdate", "startup.autoUpdate"])(
+	"the seeded home turns %s off where the settings loader reads it",
+	async key => {
+		const home = await seedHome(await scratch(), undefined);
+		const env: Record<string, string | undefined> = { ...process.env, HOME: home, VEYYON_PROFILE: "" };
+		for (const override of DIR_OVERRIDE_ENV_KEYS) if (override !== "VEYYON_PROFILE") delete env[override];
+		const { stdout } = await exec(
+			process.execPath,
+			[path.join(root, "packages", "coding-agent", "src", "cli.ts"), "config", "get", key],
+			{ cwd: root, env, timeout: 25_000 },
+		);
+		expect(stdout.trim()).toBe("false");
+	},
+	30_000,
+);
 
 test.each(["unchanged", "append", "replace"] as const)(
 	"measures only unchanged executable bytes and preserves the supplied binary: %s",

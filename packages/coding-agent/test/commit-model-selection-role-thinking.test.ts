@@ -1,14 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import type { Api, Model } from "@veyyon/ai";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { resolveCommitHelperModel, resolvePrimaryModel } from "@veyyon/coding-agent/commit/model-selection";
-
-function getModelOrThrow(id: string) {
-	const model = getBundledModel("anthropic", id);
-	if (!model) throw new Error(`Expected model ${id}`);
-	return model;
-}
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function createSettings(helpers: Record<string, { model?: string; thinkingLevel?: string }>, defaultModel?: string) {
 	return {
@@ -36,7 +30,7 @@ describe("commit helper effort selection", () => {
 	// clamping. Sonnet 4.5's budget ladder stops at `xhigh`, which answers the
 	// separate question of what a level the model lacks resolves to.
 	it("lets a `:level` suffix on the commit helper's model outrank the row's effort", async () => {
-		const model = getModelOrThrow("claude-opus-4-5");
+		const model = requireBundledModel("anthropic", "claude-opus-4-5");
 		const settings = createSettings({
 			commit: { model: `${model.provider}/${model.id}:low`, thinkingLevel: "high" },
 		});
@@ -52,7 +46,7 @@ describe("commit helper effort selection", () => {
 	});
 
 	it("resolves a suffix the model cannot take against the model's own ladder", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const settings = createSettings({ commit: { model: `${model.provider}/${model.id}:max` } });
 
 		const primary = await resolvePrimaryModel(undefined, settings, registryOf(model));
@@ -62,8 +56,8 @@ describe("commit helper effort selection", () => {
 	});
 
 	it("fits an unset helper's effort to the default model, never to the default model's own suffix", async () => {
-		const defaultModel = getModelOrThrow("claude-opus-4-5");
-		const commitModel = getModelOrThrow("claude-sonnet-4-5");
+		const defaultModel = requireBundledModel("anthropic", "claude-opus-4-5");
+		const commitModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const settings = createSettings(
 			{ commit: { thinkingLevel: "minimal" } },
 			`${defaultModel.provider}/${defaultModel.id}:high`,
@@ -85,7 +79,7 @@ describe("commit helper effort selection", () => {
 
 describe("commit unavailable-default fallback (parity with the main session)", () => {
 	it("substitutes an available model with a loud warning when the configured default is unavailable", async () => {
-		const availableModel = getModelOrThrow("claude-sonnet-4-5");
+		const availableModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Configured default points at a provider/model that is not available.
 		const settings = createSettings({}, "gonezo/model-that-left");
 		const registry = {
@@ -106,7 +100,7 @@ describe("commit unavailable-default fallback (parity with the main session)", (
 	});
 
 	it("still fails hard for an explicit override that does not resolve", async () => {
-		const availableModel = getModelOrThrow("claude-sonnet-4-5");
+		const availableModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const settings = createSettings({});
 		const registry = {
 			getAvailable: () => [availableModel],
@@ -124,7 +118,7 @@ describe("commit unavailable-default fallback (parity with the main session)", (
 	});
 
 	it("substitutes silently when no default model is configured at all", async () => {
-		const availableModel = getModelOrThrow("claude-sonnet-4-5");
+		const availableModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const settings = createSettings({});
 		const registry = {
 			getAvailable: () => [availableModel],
@@ -144,8 +138,8 @@ describe("commit unavailable-default fallback (parity with the main session)", (
 	});
 
 	it("warns when a configured commit helper model is skipped for missing credentials", async () => {
-		const primaryModel = getModelOrThrow("claude-sonnet-4-5");
-		const helperModel = getModelOrThrow("claude-opus-4-5");
+		const primaryModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const helperModel = requireBundledModel("anthropic", "claude-opus-4-5");
 		const settings = createSettings({ commit: { model: `${helperModel.provider}/${helperModel.id}` } });
 		const registry = {
 			getAvailable: () => [primaryModel, helperModel],

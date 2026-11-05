@@ -47,12 +47,6 @@ function buildOAuthUtilityBetaHeader(model: Model<"anthropic-messages">): string
 	return options.defaultHeaders["anthropic-beta"] ?? "";
 }
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 async function captureToolParams(
 	model: Model<"anthropic-messages">,
 ): Promise<{ tools?: Array<{ name: string; strict?: unknown }> }> {
@@ -60,7 +54,7 @@ async function captureToolParams(
 	void streamAnthropic(model, toolContext, {
 		apiKey: "sk-ant-api-test",
 		isOAuth: false,
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		onPayload: payload => {
 			resolve(payload as { tools?: Array<{ name: string; strict?: unknown }> });
 			return undefined;

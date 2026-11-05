@@ -23,7 +23,8 @@
  * WHAT IT DOES NOT CATCH. A sealed block that keeps less than half a copy of its text passes. The
  * streamed-diff line cache is refilled only for a diff fence that is neither the last token nor
  * frozen, so in every shape here its last refill reads the final frame, whose buffer the sealed text
- * holds anyway: keeping it past the seal costs one string cell and passes.
+ * holds anyway: keeping it past the seal costs one string cell and passes. The fixture prints the
+ * smallest excess of three measurements, so a retention that shows in only some runs passes.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -33,8 +34,8 @@ import { type RetentionReport, SHAPE_NAMES } from "./fixtures/markdown-stream-re
 
 const FIXTURE = path.join(import.meta.dirname, "fixtures", "markdown-stream-retention.ts");
 
-/** Every shape is measured by one fixture run, which takes several seconds. */
-const MEASURE_TIMEOUT_MS = 120_000;
+/** Every shape is measured by one fixture run, three trials per arm, which takes tens of seconds. */
+const MEASURE_TIMEOUT_MS = 240_000;
 
 let report: RetentionReport | undefined;
 

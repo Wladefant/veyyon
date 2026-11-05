@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -41,13 +42,6 @@ function bashSession(cwd: string) {
 	});
 }
 
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("");
-}
-
 describe("BashTool printf and wc adversarial", () => {
 	let tmpDir: string;
 
@@ -62,20 +56,20 @@ describe("BashTool printf and wc adversarial", () => {
 	it("printf without newline still returns the body", async () => {
 		const tool = new BashTool(bashSession(tmpDir) as never);
 		const result = await tool.execute("p1", { command: "printf 'no-nl'", timeout: 15 });
-		expect(textOf(result)).toContain("no-nl");
+		expect(toolResultText(result, "")).toContain("no-nl");
 	});
 
 	it("wc -l reports exact line count for a written file", async () => {
 		const tool = new BashTool(bashSession(tmpDir) as never);
 		await Bun.write(path.join(tmpDir, "lines.txt"), "a\nb\nc\n");
 		const result = await tool.execute("w1", { command: "wc -l < lines.txt", timeout: 15 });
-		expect(textOf(result)).toMatch(/\b3\b/);
+		expect(toolResultText(result, "")).toMatch(/\b3\b/);
 	});
 
 	it("seq output includes first and last numbers", async () => {
 		const tool = new BashTool(bashSession(tmpDir) as never);
 		const result = await tool.execute("s1", { command: "seq 1 5", timeout: 15 });
-		const text = textOf(result);
+		const text = toolResultText(result, "");
 		expect(text).toContain("1");
 		expect(text).toContain("5");
 		expect(text).toContain("3");
@@ -88,6 +82,6 @@ describe("BashTool printf and wc adversarial", () => {
 			command: "test -f exists.txt && printf ok",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("ok");
+		expect(toolResultText(result, "")).toContain("ok");
 	});
 });

@@ -21,6 +21,7 @@
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { type PrintModeSession, runPrintMode } from "@veyyon/coding-agent/modes/print-mode";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 
@@ -37,14 +38,7 @@ function assistantAnswer(): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: 0,
 	};
 }
@@ -114,6 +108,7 @@ function sessionEmitting(events: readonly AgentSessionEvent[]): PrintModeSession
 			for (const event of events) listener?.(event);
 			return true;
 		},
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForAdvisorCatchup: async () => true,

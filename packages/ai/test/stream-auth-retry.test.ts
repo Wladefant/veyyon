@@ -4,22 +4,12 @@ import { registerCustomApi, unregisterCustomApis } from "@veyyon/ai";
 import { ProviderHttpError } from "@veyyon/ai/error";
 import { classify } from "@veyyon/ai/error/flags";
 import { streamSimple } from "@veyyon/ai/stream";
-import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@veyyon/ai/types";
+import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const SOURCE_ID = "stream-auth-retry-test";
 const API = "stream-auth-retry-test" as Api;
-
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
 
 function assistant(content: string[] = []): AssistantMessage {
 	return {
@@ -30,7 +20,7 @@ function assistant(content: string[] = []): AssistantMessage {
 		model: "test-model",
 		timestamp: 1,
 		stopReason: "stop",
-		usage: usage(),
+		usage: emptyUsage(),
 	};
 }
 

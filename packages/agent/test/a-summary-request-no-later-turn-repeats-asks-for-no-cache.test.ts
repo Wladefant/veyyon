@@ -36,29 +36,18 @@ import {
 	completeSimple,
 	type FetchImpl,
 	type Message,
-	type Model,
 	type ProviderSessionState,
 	type SimpleStreamOptions,
 	type Tool,
-	type ToolResultMessage,
-	type UserMessage,
 } from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import * as logger from "@veyyon/utils/logger";
+import { anthropicModel, requireBundledModel } from "./helpers";
+import { readResult, user } from "./support/compaction-session";
 
 const SESSION_KEY = "live-session";
 const SESSION_PROMPT = ["# Harness\nstable shared prefix", "# Project\nlocal rules"];
 const TOOLS: Tool[] = [{ name: "read", description: "read a file", parameters: { type: "object", properties: {} } }];
-
-function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("expected bundled anthropic/claude-sonnet-4-5");
-	return model;
-}
-
-function user(text: string, timestamp = 1): UserMessage {
-	return { role: "user", content: [{ type: "text", text }], timestamp };
-}
 
 function assistantText(text: string, timestamp = 2): AssistantMessage {
 	return {
@@ -68,14 +57,7 @@ function assistantText(text: string, timestamp = 2): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 10,
-			output: 10,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 20,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 		timestamp,
 	};
 }
@@ -88,26 +70,15 @@ function assistantToolCall(id: string, timestamp = 3): AssistantMessage {
 	};
 }
 
-function toolResult(toolCallId: string, text: string, timestamp = 4): ToolResultMessage {
-	return {
-		role: "toolResult",
-		toolCallId,
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
-		timestamp,
-	};
-}
-
 /** The live conversation a mid-run compaction runs inside: every tool call answered. */
 function liveConversation(): Message[] {
 	return [
 		user("first question"),
 		assistantToolCall("call-1"),
-		toolResult("call-1", "first file"),
+		readResult("call-1", "first file"),
 		user("second question"),
 		assistantToolCall("call-2"),
-		toolResult("call-2", "second file"),
+		readResult("call-2", "second file"),
 	];
 }
 
@@ -115,9 +86,9 @@ function liveConversation(): Message[] {
 function splitTurn(): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-entry",
-		messagesToSummarize: [user("first question"), assistantToolCall("call-1"), toolResult("call-1", "first file")],
+		messagesToSummarize: [user("first question"), assistantToolCall("call-1"), readResult("call-1", "first file")],
 		turnPrefixMessages: [user("second question"), assistantToolCall("call-2")],
-		recentMessages: [toolResult("call-2", "second file")],
+		recentMessages: [readResult("call-2", "second file")],
 		isSplitTurn: true,
 		tokensBefore: 100_000,
 		previousSummary: undefined,
@@ -325,8 +296,7 @@ describe("a summary request that no later turn repeats asks for no cache", () =>
 	});
 
 	it("summarizeRemoteCompactionWindow(): the window port asks for a cache only behind the session's prompt", async () => {
-		const model = getBundledModel("openai", "gpt-5.1");
-		if (!model) throw new Error("expected bundled openai/gpt-5.1");
+		const model = requireBundledModel("openai", "gpt-5.1");
 		const entry: CompactionEntry = {
 			type: "compaction",
 			id: "remote-compaction",

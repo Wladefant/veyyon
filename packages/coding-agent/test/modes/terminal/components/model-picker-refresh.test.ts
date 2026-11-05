@@ -22,8 +22,9 @@ import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { ModelPickerComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-picker";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "../../../helpers/require-theme";
 
 const CTRL_R = "\x12";
 
@@ -87,8 +88,7 @@ async function settle(): Promise<void> {
 }
 
 beforeAll(async () => {
-	const theme = await getThemeByName("dark");
-	if (!theme) throw new Error("Failed to load the dark theme for model picker tests");
+	const theme = await requireTheme("dark");
 	setThemeInstance(theme);
 });
 

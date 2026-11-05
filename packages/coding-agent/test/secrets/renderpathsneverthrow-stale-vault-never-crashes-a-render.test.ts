@@ -22,6 +22,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
@@ -167,14 +168,7 @@ async function mutateVaultAsAnotherProcess(fixture: RenderFixture): Promise<void
 	expect(fixture.vault.revision()).not.toBe(captured);
 }
 
-const usage: AssistantMessage["usage"] = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage: AssistantMessage["usage"] = emptyUsage();
 
 function assistantSaying(text: string, timestamp: number): AssistantMessage {
 	return {

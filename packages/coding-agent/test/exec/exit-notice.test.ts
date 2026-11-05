@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { EXIT_CODE_NOTICE_RE, formatExitCodeNotice } from "@veyyon/coding-agent/exec/exit-notice";
+import { appendNotice, EXIT_CODE_NOTICE_RE, formatExitCodeNotice } from "@veyyon/coding-agent/exec/exit-notice";
 
 /**
  * The "how this command ended" notice has exactly one wording and one matcher.
@@ -79,6 +79,32 @@ describe("formatExitCodeNotice", () => {
 	 */
 	it("renders a negative exit code", () => {
 		expect(formatExitCodeNotice(-1)).toBe("Command exited with code -1");
+	});
+});
+
+describe("appendNotice", () => {
+	/**
+	 * Every writer of the notice (bash, `eval`, `ssh`, the legacy shim) attaches it through this
+	 * function, so the separator is decided here once. A command's output almost always ends in a
+	 * newline; joining with a literal `\n\n` after it put two blank lines before the notice on nearly
+	 * every failed command and one on the rest.
+	 *
+	 * Not caught here: a writer that stops calling this function. The bash tool's payload is pinned end
+	 * to end in `bash-notices-are-emitted-or-gone.test.ts`; `eval`, `ssh` and the shim are not.
+	 */
+	const notice = formatExitCodeNotice(1);
+
+	it("puts one blank line before the notice whether or not the output ends its last line", () => {
+		expect(appendNotice("boom\n", notice)).toBe(`boom\n\n${notice}`);
+		expect(appendNotice("boom", notice)).toBe(`boom\n\n${notice}`);
+	});
+
+	it("keeps a blank line the program printed last", () => {
+		expect(appendNotice("boom\n\n", notice)).toBe(`boom\n\n\n${notice}`);
+	});
+
+	it("is the notice alone when there is no output", () => {
+		expect(appendNotice("", notice)).toBe(notice);
 	});
 });
 

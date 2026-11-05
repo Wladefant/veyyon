@@ -36,6 +36,7 @@
  * already carries; it is bounded by the same envelope and converges to the
  * static bytes rather than to a half-drawn state.
  */
+import { ansi256ToHex } from "@veyyon/utils/color";
 import { clamp01 } from "@veyyon/utils/math";
 import { blendHex } from "@veyyon/utils/motion";
 import type { Theme } from "../../../theme/theme";
@@ -186,49 +187,12 @@ interface RailCell {
 	hex: string;
 }
 
-/**
- * The `#rrggbb` an xterm 256 index stands for: the 6×6×6 cube, the 24 greys, and
- * the 16 base colours the cube's own corners already describe.
- */
-function ansi256Hex(index: number): string | undefined {
-	if (index < 0 || index > 255) return undefined;
-	if (index >= 232) {
-		const level = 8 + (index - 232) * 10;
-		return hexOf(level, level, level);
-	}
-	if (index >= 16) {
-		const CUBE = [0, 95, 135, 175, 215, 255];
-		const n = index - 16;
-		return hexOf(CUBE[Math.floor(n / 36)]!, CUBE[Math.floor(n / 6) % 6]!, CUBE[n % 6]!);
-	}
-	const BASE = [
-		"#000000",
-		"#800000",
-		"#008000",
-		"#808000",
-		"#000080",
-		"#800080",
-		"#008080",
-		"#c0c0c0",
-		"#808080",
-		"#ff0000",
-		"#00ff00",
-		"#ffff00",
-		"#0000ff",
-		"#ff00ff",
-		"#00ffff",
-		"#ffffff",
-	];
-	return BASE[index];
-}
-
 /** The `#rrggbb` an SGR parameter list sets as a foreground, if it sets one. */
 function fgHexOf(params: string): string | undefined {
 	const parts = params.split(";");
 	if (parts[0] !== "38") return undefined;
 	if (parts[1] === "5" && parts.length === 3) {
-		const index = Number(parts[2]);
-		return Number.isInteger(index) ? ansi256Hex(index) : undefined;
+		return ansi256ToHex(Number(parts[2]));
 	}
 	if (parts[1] !== "2" || parts.length !== 5) return undefined;
 	const r = Number(parts[2]);

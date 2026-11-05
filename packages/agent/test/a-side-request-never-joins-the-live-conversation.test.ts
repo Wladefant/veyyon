@@ -31,30 +31,14 @@ import {
 	generateHandoffFromContext,
 	generateSummary,
 } from "@veyyon/agent-core/compaction";
-import type {
-	AssistantMessage,
-	Message,
-	Model,
-	SimpleStreamOptions,
-	Tool,
-	ToolResultMessage,
-	UserMessage,
-} from "@veyyon/ai";
-import { getBundledModel } from "@veyyon/catalog/models";
+import type { AssistantMessage, Message, SimpleStreamOptions, Tool } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { anthropicModel } from "./helpers";
+import { readResult, user } from "./support/compaction-session";
 
 const SESSION_ID = "live-session-id";
 const SESSION_PROMPT = ["# Harness\nstable shared prefix"];
 const TOOLS: Tool[] = [{ name: "read", description: "read a file", parameters: { type: "object", properties: {} } }];
-
-function anthropicModel(): Model {
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("expected bundled anthropic/claude-sonnet-4-5");
-	return model;
-}
-
-function user(text: string, timestamp = 1): UserMessage {
-	return { role: "user", content: [{ type: "text", text }], timestamp };
-}
 
 function assistantText(text: string, timestamp = 2): AssistantMessage {
 	return {
@@ -64,14 +48,7 @@ function assistantText(text: string, timestamp = 2): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 10,
-			output: 10,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 20,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 		timestamp,
 	};
 }
@@ -84,25 +61,7 @@ function assistantToolCall(id: string, timestamp = 3): AssistantMessage {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "toolUse",
-		usage: {
-			input: 10,
-			output: 10,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 20,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		timestamp,
-	};
-}
-
-function toolResult(toolCallId: string, text: string, timestamp = 4): ToolResultMessage {
-	return {
-		role: "toolResult",
-		toolCallId,
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
+		usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 		timestamp,
 	};
 }
@@ -325,14 +284,7 @@ describe("real compaction and summarization callsites derive their side identity
 							errorMessage: "tool_choice only auto is supported by this model",
 							stopReason: "error",
 							errorStatus: 400,
-							usage: {
-								input: 0,
-								output: 0,
-								cacheRead: 0,
-								cacheWrite: 0,
-								totalTokens: 0,
-								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-							},
+							usage: emptyUsage(),
 							timestamp: Date.now(),
 						};
 					}
@@ -440,7 +392,7 @@ describe("compact() gives each summarization arm its own conversation", () => {
 			messagesToSummarize: [
 				user("first question"),
 				assistantToolCall("call-1"),
-				toolResult("call-1", "T".repeat(200)),
+				readResult("call-1", "T".repeat(200)),
 			],
 			turnPrefixMessages: [],
 			recentMessages: [assistantText("here is the answer")],

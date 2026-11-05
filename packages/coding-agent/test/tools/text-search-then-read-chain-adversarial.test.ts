@@ -8,14 +8,8 @@ import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("write→search(text)→read chain adversarial", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -63,9 +57,9 @@ describe("write→search(text)→read chain adversarial", () => {
 		const token = "UNIQUE_TOKEN_ZX9Q";
 		const body = `const x = '${token}';\n`;
 		await new WriteTool(s).execute("w", { path: file, content: body });
-		const grepText = textOf(await new SearchTool(s).execute("g", { type: "text", input: token, path: file }));
+		const grepText = toolResultText(await new SearchTool(s).execute("g", { type: "text", input: token, path: file }));
 		expect(grepText).toContain(token);
-		const readText = textOf(await new ReadTool(s).execute("r", { path: file }));
+		const readText = toolResultText(await new ReadTool(s).execute("r", { path: file }));
 		expect(readText).toContain(token);
 		expect(await Bun.file(file).text()).toBe(body);
 	});

@@ -112,8 +112,17 @@ const reachable = moduleReach(BARREL);
  * barrel and `log-file.ts` is on its graph, and both read through it, so a subpath cannot move it off
  * the graph. Its one import is `bun:ffi`, which `process-liveness.ts` and `stderr-guard.ts` already
  * import: `moduleReach("local-time.ts")` is 1, so the barrel pays one module and no edge.
+ *
+ * RE-MEASURED 2026-10-28 at 94. The new modules are `config-root.ts`, `global-config.ts` and
+ * `global-config-write.ts`, split out of `dirs.ts` with no code added: the config root, the reader of
+ * the global `config.yml`, and its writer. `dirs.ts` is exported from the barrel and imports the
+ * first two, and the barrel re-exports the writer that `dirs.ts` used to contain, so a subpath cannot
+ * move any of them off the graph without dropping a root export main published. Every module they
+ * import was already on this graph, so the barrel pays three modules and no edge. A caller that
+ * needs only the config root now loads `moduleReach("config-root.ts")`, 6 modules, where `dirs.ts`
+ * reaches 17.
  */
-const BARREL_CEILING = 91;
+const BARREL_CEILING = 94;
 
 describe("the @veyyon/utils barrel", () => {
 	/** The number that multiplies by six hundred realms. */

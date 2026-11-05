@@ -20,12 +20,12 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools } from "@veyyon/coding-agent/tools";
 import { PROSE_GRAMMARS } from "@veyyon/coding-agent/tools/search/structure-search";
 import { getLanguageFromPath } from "@veyyon/coding-agent/utils/lang-from-path";
 import { astGrep } from "@veyyon/natives";
 import { removeWithRetries } from "@veyyon/utils";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 const PATTERN = "logger.warn($$$ARGS)";
 
@@ -59,22 +59,12 @@ const FIXTURE_EXTENSION: Record<string, string> = {
 	tsv: "tsv",
 };
 
-function createTestSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
-	};
-}
-
 async function runStructureSearch(
 	cwd: string,
 	input: string,
 	searchPath: string,
 ): Promise<{ text: string; matchCount: number | undefined }> {
-	const tools = await createTools(createTestSession(cwd));
+	const tools = await createTools(makeToolSessionAt(cwd));
 	const tool = tools.find(entry => entry.name === "search");
 	expect(tool).toBeDefined();
 	const result = await tool!.execute("prose-grammar", { type: "structure", input, path: searchPath });

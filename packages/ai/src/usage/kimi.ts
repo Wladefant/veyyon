@@ -10,7 +10,6 @@ import { $env } from "@veyyon/utils/env";
 import { clamp01 } from "@veyyon/utils/math";
 import { DAY_MS, HOUR_MS, MINUTE_MS, SECOND_MS } from "@veyyon/utils/time";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
-import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import type {
 	UsageAmount,
 	UsageFetchContext,
@@ -21,6 +20,7 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
+import { getKimiCommonHeaders } from "../utils/kimi-headers";
 import { usageStatusFromUsedFraction } from "./shared";
 
 const USAGE_PATH = "usages";

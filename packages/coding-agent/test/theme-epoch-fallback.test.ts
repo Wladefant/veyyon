@@ -1,11 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
-import {
-	getThemeByName,
-	getThemeEpoch,
-	setTheme,
-	setThemeInstance,
-	type Theme,
-} from "@veyyon/coding-agent/theme/theme";
+import { getThemeEpoch, setTheme, setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "./helpers/require-theme";
 
 /**
  * Contract: every change to the *active* theme bumps the theme epoch — including
@@ -18,8 +13,7 @@ describe("theme epoch — setTheme fallback", () => {
 	let dark: Theme;
 
 	beforeAll(async () => {
-		const t = await getThemeByName("dark");
-		if (!t) throw new Error("Expected dark theme to exist");
+		const t = await requireTheme("dark");
 		dark = t;
 	});
 

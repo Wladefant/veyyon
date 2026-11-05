@@ -4,21 +4,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "./helpers/tool-result-text";
 
 let artifactCounter = 0;
-
-function textOutput(result: AgentToolResult<ReadToolDetails>): string {
-	return result.content
-		.filter(content => content.type === "text")
-		.map(content => content.text)
-		.join("\n");
-}
 
 /**
  * Defaults that pin tests to the legacy outermost-only collector so small
@@ -73,7 +65,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-ts", { path: fixture });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 		const firstLine = text.split("\n")[0];
 		expect(firstLine).toMatch(/^\[fixture\.ts#[0-9A-F]{4}\]$/);
 
@@ -92,12 +84,12 @@ describe("read summary", () => {
 
 		const defaultTool = new ReadTool(createSession(tmpDir));
 		const defaultResult = await defaultTool.execute("read-summary-md-default", { path: fixture });
-		expect(textOutput(defaultResult)).toContain("const clean = 'alpha';");
+		expect(toolResultText(defaultResult)).toContain("const clean = 'alpha';");
 		expect(defaultResult.details?.summary).toBeUndefined();
 
 		const proseTool = new ReadTool(createSession(tmpDir, { "read.summarize.prose": true }));
 		const proseResult = await proseTool.execute("read-summary-md-prose", { path: fixture });
-		expect(textOutput(proseResult)).not.toContain("const clean = 'alpha';");
+		expect(toolResultText(proseResult)).not.toContain("const clean = 'alpha';");
 		expect(proseResult.details?.summary?.elidedSpans).toBe(1);
 	});
 
@@ -112,7 +104,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-no-truncate", { path: fixture });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("export function fn19(): number {");
 		expect(text).not.toContain("[Showing lines");
@@ -126,7 +118,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-range", { path: `${fixture}:1-9999` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("const clean = 'alpha';");
 		expect(text).not.toContain("…");
@@ -139,7 +131,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-raw", { path: `${fixture}:raw` });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toBe("export const value = 1;\n");
 		expect(text).not.toMatch(/^1[a-z]{2}\|/);
@@ -151,7 +143,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const linesFirst = await tool.execute("read-summary-compound-lines-raw", { path: `${fixture}:2-4:raw` });
-		const linesFirstText = textOutput(linesFirst);
+		const linesFirstText = toolResultText(linesFirst);
 		// Verbatim: no hashline anchors and no line-number prefix.
 		expect(linesFirstText).toContain("beta");
 		expect(linesFirstText).toContain("gamma");
@@ -163,7 +155,7 @@ describe("read summary", () => {
 		// verbatim with no anchor or line-number prefixes.
 
 		const rawFirst = await tool.execute("read-summary-compound-raw-lines", { path: `${fixture}:raw:2-4` });
-		const rawFirstText = textOutput(rawFirst);
+		const rawFirstText = toolResultText(rawFirst);
 		expect(rawFirstText).toBe(linesFirstText);
 	});
 
@@ -175,12 +167,12 @@ describe("read summary", () => {
 
 		const disabledTool = new ReadTool(createSession(tmpDir, { "read.summarize.enabled": false }));
 		const disabled = await disabledTool.execute("read-summary-disabled", { path: valid });
-		expect(textOutput(disabled)).toContain("const clean = 'alpha';");
+		expect(toolResultText(disabled)).toContain("const clean = 'alpha';");
 		expect(disabled.details?.summary).toBeUndefined();
 
 		const enabledTool = new ReadTool(createSession(tmpDir));
 		const parseFailure = await enabledTool.execute("read-summary-parse-failure", { path: broken });
-		expect(textOutput(parseFailure)).toContain("export function broken( {");
+		expect(toolResultText(parseFailure)).toContain("export function broken( {");
 		expect(parseFailure.details?.summary).toBeUndefined();
 	});
 
@@ -196,7 +188,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const row = await tool.execute("read-summary-sqlite-row", { path: `${dbPath}:users:42` });
-		const text = textOutput(row);
+		const text = toolResultText(row);
 
 		expect(text).toContain("id: 42");
 		expect(text).toContain("name: Ada");
@@ -214,7 +206,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-merge", { path: fixture });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("export function stripNewLinePrefixes(lines: string[]): string[] { … }");
 		// The plain `…` ellipsis line must NOT appear once the merge fires.
@@ -232,7 +224,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-merge-trailing", { path: fixture });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("export const config = { … };");
 		expect(text).not.toContain("\n…\n");
@@ -250,7 +242,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-no-merge", { path: fixture });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).toContain("def greet(name: str) -> str:");
 		// Python's body elision keeps first/last body lines, so plain `…`
@@ -271,7 +263,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-footer", { path: fixture });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(result.details?.summary?.elidedSpans).toBe(2);
 		expect(result.details?.summary?.elidedLines).toBeGreaterThan(0);
@@ -290,7 +282,7 @@ describe("read summary", () => {
 
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-no-footer", { path: fixture });
-		const text = textOutput(result);
+		const text = toolResultText(result);
 
 		expect(text).not.toContain("elided regions");
 		expect(text).not.toContain(":raw");

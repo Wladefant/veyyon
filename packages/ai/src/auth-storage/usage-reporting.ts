@@ -83,6 +83,29 @@ const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 10_000;
 /** The in-flight key the caller override and the store hook coalesce under. */
 const OVERRIDE_KEY = "__override__";
 
+/**
+ * Attribute a freshly fetched report to the credential's organization, in place.
+ *
+ * The orgId and orgName fallbacks apply independently: Claude's usage endpoint stamps orgId from
+ * the `anthropic-organization-id` response header but never carries a display name, so the stored
+ * name must still be attached. The stored name is never attached over a DIFFERENT org's report.
+ * Every fetch path applies this, so a report the health probe fetched matches the account it was
+ * fetched for under the same org gate as one the cached fan-out fetched.
+ */
+function attributeReportToOrg(report: UsageReport, credential: UsageCredential): void {
+	if (credential.orgId === undefined) return;
+	const metadata = report.metadata ?? {};
+	const sameOrg = metadata.orgId === undefined || metadata.orgId === credential.orgId;
+	const needsOrgId = metadata.orgId === undefined;
+	const needsOrgName = sameOrg && credential.orgName !== undefined && metadata.orgName === undefined;
+	if (!needsOrgId && !needsOrgName) return;
+	report.metadata = {
+		...metadata,
+		...(needsOrgId ? { orgId: credential.orgId } : {}),
+		...(needsOrgName ? { orgName: credential.orgName } : {}),
+	};
+}
+
 /** The credential state usage reporting reads and the row operations it requests. */
 export interface UsageReportingHost {
 	/** The in-memory rows for `provider`, in rotation order. */
@@ -278,24 +301,7 @@ export class UsageReporting {
 
 		try {
 			const report = await providerImpl.fetchUsage(params, this.fetchContext());
-			// Attribute the report to the credential's organization. The orgId and
-			// orgName fallbacks apply independently: Claude's usage endpoint stamps
-			// orgId from the `anthropic-organization-id` response header but never
-			// carries a display name, so the stored name must still be attached.
-			// Never attach the stored name over a DIFFERENT org's report.
-			if (report && params.credential.orgId !== undefined) {
-				const metadata = report.metadata ?? {};
-				const sameOrg = metadata.orgId === undefined || metadata.orgId === params.credential.orgId;
-				const needsOrgId = metadata.orgId === undefined;
-				const needsOrgName = sameOrg && params.credential.orgName !== undefined && metadata.orgName === undefined;
-				if (needsOrgId || needsOrgName) {
-					report.metadata = {
-						...metadata,
-						...(needsOrgId ? { orgId: params.credential.orgId } : {}),
-						...(needsOrgName ? { orgName: params.credential.orgName } : {}),
-					};
-				}
-			}
+			if (report) attributeReportToOrg(report, params.credential);
 			return report;
 		} catch (error) {
 			logger.debug("AuthStorage usage fetch failed", {
@@ -859,6 +865,7 @@ export class UsageReporting {
 			} else {
 				try {
 					const report = await providerImpl.fetchUsage(params, ctx);
+					if (report) attributeReportToOrg(report, params.credential);
 					if (report === null) {
 						base.reason = "usage probe returned no data for this credential";
 					} else {

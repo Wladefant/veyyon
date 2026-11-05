@@ -1,19 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
-import { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import * as unexpectedStopClassifier from "@veyyon/coding-agent/session/unexpected-stop-classifier";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { getProjectAgentDir, TempDir, withTimeout } from "@veyyon/utils";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { type TempDir, withTimeout } from "@veyyon/utils";
 import * as logger from "@veyyon/utils/logger";
+import { createCompactionSession, SHORT_CIRCUIT_COMPACTION_RETURN } from "./helpers/compaction-session";
 
 const runtimeSignalStoreKey = "__veyyonRuntimeSignals";
 
@@ -39,35 +33,19 @@ describe("AgentSession auto-compaction queue resume", () => {
 	let session: AgentSession;
 	let sessionManager: SessionManager;
 	let authStorage: AuthStorage;
-	let modelRegistry: ModelRegistry;
 
 	beforeEach(async () => {
-		tempDir = TempDir.createSync("@pi-auto-compaction-queue-");
 		vi.useFakeTimers();
-
-		// Provide an extension that short-circuits compaction so the test doesn't
-		// make any LLM calls.
-		const extensionsDir = path.join(getProjectAgentDir(tempDir.path()), "extensions");
-		fs.mkdirSync(extensionsDir, { recursive: true });
-		const extensionPath = path.join(extensionsDir, "compaction-short-circuit.ts");
-		fs.writeFileSync(
-			extensionPath,
-			[
+		getRuntimeSignals().length = 0;
+		({ tempDir, session, sessionManager, authStorage } = await createCompactionSession("@pi-auto-compaction-queue-", {
+			extensionSource: [
 				"export default function(pi) {",
 				'\tpi.on("session_before_compact", async (event) => {',
 				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
 				'\t\tsignals.push("before_compact:enter");',
 				"\t\tconst gate = globalThis.__veyyonManualCompactGate;",
 				"\t\tif (gate) await gate;",
-				"\t\treturn {",
-				"\t\t\tcompaction: {",
-				'\t\t\t\tsummary: "compacted",',
-				"\t\t\t\tshortSummary: undefined,",
-				"\t\t\t\tfirstKeptEntryId: event.preparation.firstKeptEntryId,",
-				"\t\t\t\ttokensBefore: event.preparation.tokensBefore,",
-				"\t\t\t\tdetails: {},",
-				"\t\t\t},",
-				"\t\t};",
+				SHORT_CIRCUIT_COMPACTION_RETURN,
 				"\t});",
 				'\tpi.on("auto_compaction_start", async (event) => {',
 				`\t\tconst signals = globalThis.${runtimeSignalStoreKey} ?? (globalThis.${runtimeSignalStoreKey} = []);`,
@@ -83,61 +61,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 				"\t});",
 				"}",
 			].join("\n"),
-		);
-
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage);
-		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
-		getRuntimeSignals().length = 0;
-
-		const extensionsResult = await loadExtensions([extensionPath], tempDir.path(), undefined, undefined, {
-			configuredPaths: [extensionPath],
-		});
-		const extensionRunner = new ExtensionRunner(
-			extensionsResult.extensions,
-			extensionsResult.runtime,
-			tempDir.path(),
-			sessionManager,
-			modelRegistry,
-		);
-
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) {
-			throw new Error("Expected built-in anthropic model to exist");
-		}
-		// Pin the window and output reservation: the threshold/usage math below is
-		// tuned to a 200k/64k context-full budget and must stay stable across
-		// catalog regenerations.
-		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
-
-		const agent = new Agent({
-			initialState: {
-				model,
-				systemPrompt: ["Test"],
-				tools: [],
-				messages: [],
-			},
-		});
-
-		// Seed a minimal session branch so prepareCompaction() returns a preparation.
-		sessionManager.appendMessage({
-			role: "user",
-			content: "hello",
-			timestamp: Date.now(),
-		});
-
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings: Settings.isolated({
-				"compaction.autoContinue": false,
-				"todo.reminders": true,
-				"todo.reminderLimit": 3,
-			}),
-			modelRegistry,
-			extensionRunner,
-		});
+			settings: { "compaction.autoContinue": false, "todo.reminders": true, "todo.reminderLimit": 3 },
+		}));
 	});
 
 	afterEach(async () => {
@@ -196,20 +121,13 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: Date.now(),
 		};
 
 		// Drive auto-compaction through the event flow:
-		// message_end → stores #lastAssistantMessage
-		// agent_end   → TurnContextCheck.check → shouldCompact → #runAutoCompaction
+		// message_end → agent-core appends the reply to agent state
+		// agent_end   → StopSettlement reads it → TurnContextCheck.check → shouldCompact → #runAutoCompaction
 		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
 
@@ -241,14 +159,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 1_000,
-				output: 100,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_100,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1_000, output: 100, totalTokens: 1_100 },
 			timestamp: Date.now(),
 		});
 		sessionManager.appendMessage({
@@ -285,14 +196,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 1_000,
-				output: 100,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1_100,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 1_000, output: 100, totalTokens: 1_100 },
 			timestamp: Date.now(),
 		});
 		sessionManager.appendMessage({ role: "user", content: "second turn", timestamp: Date.now() });
@@ -365,14 +269,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: now,
 		};
 
@@ -428,14 +325,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: now,
 		};
 		const trailingEmptyStop = {
@@ -445,14 +335,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 191000,
-				output: 1,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191001,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 191000, output: 1, totalTokens: 191001 },
 			timestamp: now + 1,
 		};
 
@@ -520,14 +403,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: emptyUsage(),
 			timestamp: now - 180,
 		});
 		sessionManager.appendMessage({
@@ -551,14 +427,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "toolUse",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				timestamp: ts,
 			});
 			sessionManager.appendMessage({
@@ -610,14 +479,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 
@@ -665,14 +527,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 
@@ -740,14 +595,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			model: "claude-sonnet-4-5",
 			stopReason: "error" as const,
 			errorMessage: "503 service unavailable: overloaded_error retry-after-ms=50",
-			usage: {
-				input: 100,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 100,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, totalTokens: 100 },
 			timestamp: now - 1,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: retryableError });
@@ -763,14 +611,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: recoveredOverThreshold });
@@ -828,14 +669,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse" as const,
-			usage: {
-				input: 5000,
-				output: 1000,
-				cacheRead: 85000,
-				cacheWrite: 0,
-				totalTokens: 91000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 5000, output: 1000, cacheRead: 85000, totalTokens: 91000 },
 			timestamp: now,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: orphanToolUse });
@@ -895,14 +729,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 190000,
-				output: 1000,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 191000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 190000, output: 1000, totalTokens: 191000 },
 			timestamp: Date.now(),
 		};
 
@@ -937,14 +764,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: {
-				input: 100,
-				output: 20,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 120,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 100, output: 20, totalTokens: 120 },
 			timestamp: Date.now(),
 		};
 

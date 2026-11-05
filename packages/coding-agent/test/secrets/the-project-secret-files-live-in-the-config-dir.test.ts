@@ -2,7 +2,7 @@
  * One owner for "which directory holds a project's veyyon files", proven from the secrets side.
  *
  * WHY THIS SUITE EXISTS. The project-local config directory has exactly one definition,
- * `CONFIG_DIR_NAME` in `@veyyon/utils/dirs`, and every other subsystem joins against it
+ * `CONFIG_DIR_NAME` in `@veyyon/utils/config-root`, and every other subsystem joins against it
  * (`getProjectAgentDir`, `getProjectPersonalitiesDir`, the discovery roots, the omfg rule writer).
  * The secrets subsystem spelled the same directory as the bare literal `".veyyon"` in three
  * separate loaders instead: the declaration loader, the environment-keyword loader, and the vault

@@ -14,12 +14,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("issue #3569 fresh launch default model from extension provider", () => {
 	let tempDir: string;
@@ -60,10 +60,8 @@ describe("issue #3569 fresh launch default model from extension provider", () =>
 	};
 
 	test("honors defaultModel pointing at an extension model when a bundled provider key is present", async () => {
-		const bundledOpenAiDefault = getBundledModel("openai", "gpt-5.5");
-		if (!bundledOpenAiDefault) {
-			throw new Error("Expected bundled OpenAI GPT-5.5 default");
-		}
+		// The bundled OpenAI default this test expects the extension model to beat must exist.
+		requireBundledModel("openai", "gpt-5.5");
 
 		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		authStoragesToClose.push(authStorage);

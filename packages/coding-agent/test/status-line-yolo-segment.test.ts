@@ -5,13 +5,14 @@ import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { normalizeApprovalMode } from "@veyyon/coding-agent/tools/core/approval";
 import { AUTONOMY_LABEL, DEFAULT_APPROVAL_MODE } from "@veyyon/coding-agent/tools/core/approval-modes";
 import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
+import { segmentContext } from "./helpers/segment-context";
 
 beforeAll(async () => {
 	await initTheme();
 });
 
 /**
- * Minimal SegmentContext for the mode segment. `bypassed` drives the `/yolo`
+ * The context for the mode segment. `bypassed` drives the `/yolo`
  * fact; `goalMode` optionally exercises the compose path where YOLO prefixes an
  * active mode instead of replacing it.
  */
@@ -19,7 +20,7 @@ function createModeContext(opts: {
 	bypassed: boolean;
 	goalMode?: { enabled: boolean; paused: boolean };
 }): SegmentContext {
-	return {
+	return segmentContext({
 		facts: {
 			...NO_SESSION_FACTS,
 			approvalBypassed: opts.bypassed,
@@ -31,42 +32,8 @@ function createModeContext(opts: {
 					}
 				: null,
 		},
-		width: 120,
-		compactThinkingLevel: false,
-		options: {},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
 		goalMode: opts.goalMode ?? null,
-		vibeMode: null,
-		collab: null,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-		},
-		contextPercent: 0,
-		contextWindow: 0,
-		contextLimit: 0,
-		contextLimitKind: "window" as const,
-		autoCompactEnabled: false,
-		agentCount: 0,
-		backgroundSessionCount: 0,
-		activeMs: 0,
-		activeRepo: null,
-		worktree: null,
-		git: { branch: null, status: null, pr: null },
-		account: null,
-		usage: null,
-	};
+	});
 }
 
 describe("status line mode segment YOLO bypass marker", () => {

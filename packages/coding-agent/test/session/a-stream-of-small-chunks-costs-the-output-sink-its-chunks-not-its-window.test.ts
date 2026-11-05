@@ -4,8 +4,8 @@
  * those cuts, twice over, because eval output passes through two sinks.
  *
  * The class closed: however a stream is chunked, the sink encodes its window at most once per window of input, and
- * what `dump()` returns is still exactly the last window of bytes, never splitting a character. `replace()` text is
- * kept whole until a later push overflows it.
+ * what `dump()` returns is still the whole lines of the last window of bytes: never a split character, and never the
+ * fragment of a line the window cut through. `replace()` text is kept whole until a later push overflows it.
  *
  * Not caught: the artifact file. Its own head and tail caps are pinned by the artifact suites.
  */
@@ -15,12 +15,18 @@ import * as byteTruncate from "@veyyon/utils/byte-truncate";
 
 const WINDOW = 1000;
 
-/** The longest suffix of `text` that encodes to at most `maxBytes` UTF-8 bytes. */
-function lastBytes(text: string, maxBytes: number): string {
+/**
+ * The whole lines of the longest suffix of `text` that encodes to at most `maxBytes` UTF-8 bytes. A suffix that starts
+ * inside a line loses that fragment, unless no whole line follows it.
+ */
+function lastWindowLines(text: string, maxBytes: number): string {
 	const encoded = Buffer.from(text, "utf-8");
 	let start = Math.max(0, encoded.length - maxBytes);
 	while (start < encoded.length && (encoded.readUInt8(start) & 0xc0) === 0x80) start++;
-	return encoded.subarray(start).toString("utf-8");
+	const window = encoded.subarray(start).toString("utf-8");
+	if (start === 0 || encoded.readUInt8(start - 1) === 0x0a) return window;
+	const lineStart = window.indexOf("\n") + 1;
+	return lineStart > 0 && lineStart < window.length ? window.slice(lineStart) : window;
 }
 
 function lines(label: string, count: number): string[] {
@@ -36,7 +42,7 @@ describe("an output sink fed a long stream of small chunks", () => {
 		["ASCII", "line"],
 		["multibyte", "行の日本語 é"],
 	] as const) {
-		it(`returns exactly the last window of a ${name} stream and encodes it once per window of input`, async () => {
+		it(`returns the whole lines of the last window of a ${name} stream and encodes it once per window of input`, async () => {
 			const cuts = vi.spyOn(byteTruncate, "truncateTailBytes");
 			const chunks = lines(label, 20_000);
 			const sink = new OutputSink({ spillThreshold: WINDOW });
@@ -44,7 +50,7 @@ describe("an output sink fed a long stream of small chunks", () => {
 			const summary = await sink.dump();
 
 			const stream = chunks.join("");
-			expect(summary.output).toBe(lastBytes(stream, WINDOW));
+			expect(summary.output).toBe(lastWindowLines(stream, WINDOW));
 			expect(summary.outputBytes).toBe(Buffer.byteLength(summary.output, "utf-8"));
 			expect(summary.truncated).toBe(true);
 			expect(cuts.mock.calls.length).toBeLessThanOrEqual(Math.ceil(Buffer.byteLength(stream, "utf-8") / WINDOW));
@@ -66,6 +72,6 @@ describe("an output sink fed a long stream of small chunks", () => {
 		sink.replace(replacement);
 		sink.push("[raw output: artifact://7]\n");
 
-		expect((await sink.dump()).output).toBe(lastBytes(`${replacement}[raw output: artifact://7]\n`, WINDOW));
+		expect((await sink.dump()).output).toBe(lastWindowLines(`${replacement}[raw output: artifact://7]\n`, WINDOW));
 	});
 });

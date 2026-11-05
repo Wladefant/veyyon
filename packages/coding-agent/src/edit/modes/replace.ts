@@ -7,6 +7,7 @@
 
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { lazy } from "@veyyon/utils/abortable";
 import type { FileDiagnosticsResult } from "../../lsp/diagnostics";
 import type { WritethroughCallback, WritethroughDeferredHandle } from "../../lsp/writethrough";
@@ -31,7 +32,7 @@ export const replaceEditEntrySchema = lazy(() =>
 	}),
 );
 
-export const replaceEditSchema = lazy(() =>
+export const replaceEditSchema = toolSchema("edit:replace", () =>
 	type({
 		path: "string",
 		old_string: "string",

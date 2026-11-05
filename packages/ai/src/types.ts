@@ -501,6 +501,13 @@ export type { ToolCallExample, ToolCompareExample, ToolExample, ToolNoteExample,
 
 export interface Tool<TParameters extends TSchema = TSchema> extends ToolSpec {
 	parameters: TParameters;
+	/**
+	 * The JSON Schema `toolWireSchema` would compute from `parameters`, supplied so a request can carry the
+	 * schema without building `parameters`. Read only while `parameters` is an accessor (a class getter or
+	 * a wrapper forwarding one): an object that holds `parameters` as its own data property was given that
+	 * value directly, and a `wireParameters` copied beside it describes the schema it replaced.
+	 */
+	readonly wireParameters?: Record<string, unknown>;
 }
 
 export interface Context {

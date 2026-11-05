@@ -6,6 +6,7 @@ import type { FileEntry, SessionMessageEntry } from "@veyyon/kernel/session/sess
 import { resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
 import { prepareEntryForPersistence } from "@veyyon/kernel/session/session-persistence";
 import { TempDir } from "@veyyon/utils";
+import { mulberry32 } from "../../utils/test/helpers/mulberry32";
 
 /**
  * Regression suite for DATALOSS-2: large text must be externalized to the blob
@@ -244,18 +245,6 @@ describe("session large-text persistence (DATALOSS-2)", () => {
  * externalize decision exactly at the 500,000-char boundary.
  */
 describe("session large-text persistence — property/boundary fuzzer (DATALOSS-2)", () => {
-	/** Deterministic PRNG (mulberry32) so any fuzz failure reproduces from its seed. */
-	function makeRng(seed: number): () => number {
-		let a = seed >>> 0;
-		return () => {
-			a |= 0;
-			a = (a + 0x6d2b79f5) | 0;
-			let t = Math.imul(a ^ (a >>> 15), 1 | a);
-			t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-		};
-	}
-
 	// A mix of single-unit and astral characters, plus the JSON-hostile bytes that
 	// most stress a persist→reopen cycle: quote, backslash, newline, tab, control.
 	const CHAR_POOL = [
@@ -321,7 +310,7 @@ describe("session large-text persistence — property/boundary fuzzer (DATALOSS-
 		// oversize must restore identically from a fresh store — not merely from the
 		// same in-memory instance. A single lost or transformed byte fails the run.
 		using tempDir = TempDir.createSync("@session-large-text-fuzz-");
-		const rng = makeRng(0x51ed5eed);
+		const rng = mulberry32(0x51ed5eed);
 		for (let iter = 0; iter < 250; iter++) {
 			const over = 1 + Math.floor(rng() * 60_000);
 			const content = randomContent(rng, MAX_PERSIST_CHARS + over);

@@ -1,5 +1,6 @@
 import { SGR_BG_RESET } from "@veyyon/utils/ansi";
 import {
+	type AppliedCompletion,
 	type AutocompleteProvider,
 	applyAutocompleteCompletion,
 	findLeadingSlashCommandStart,
@@ -546,9 +547,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	#undoStack: EditorState[] = [];
 	#suspendUndo = false;
 
-	// Debounce timer for autocomplete updates
-	#autocompleteTimeout?: NodeJS.Timeout;
-
 	onSubmit?: (text: string) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
@@ -918,14 +916,15 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		return Math.max(1, visibleHeight - 1);
 	}
 
-	#updateScrollOffset(layoutWidth: number, layoutLines: LayoutLine[], visibleHeight: number): void {
+	#updateScrollOffset(layoutLines: LayoutLine[], visibleHeight: number): void {
 		if (layoutLines.length <= visibleHeight) {
 			this.#scrollOffset = 0;
 			return;
 		}
 
-		const visualLines = this.#buildVisualLineMap(layoutWidth);
-		const cursorLine = this.#findCurrentVisualLine(visualLines);
+		// The row the frame paints the cursor on is the row scrolled into view.
+		const cursorRow = layoutLines.findIndex(line => line.hasCursor);
+		const cursorLine = cursorRow === -1 ? layoutLines.length - 1 : cursorRow;
 		if (cursorLine < this.#scrollOffset) {
 			this.#scrollOffset = cursorLine;
 		} else if (cursorLine >= this.#scrollOffset + visibleHeight) {
@@ -946,7 +945,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 		const layoutLines = this.#layoutText(layoutWidth);
 		const visibleContentHeight = this.#getVisibleContentHeight(layoutLines.length);
-		this.#updateScrollOffset(layoutWidth, layoutLines, visibleContentHeight);
+		this.#updateScrollOffset(layoutLines, visibleContentHeight);
 		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
 
 		const result: string[] = [];
@@ -1937,7 +1936,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		if (char.length === 1 && this.#applyInlineReplacement()) return;
 
 		if (this.#autocompleteState) {
-			this.#debouncedUpdateAutocomplete();
+			void this.#updateAutocomplete();
 		} else if (this.#typedCharTriggersAutocomplete(char)) {
 			this.#tryTriggerAutocomplete();
 		}
@@ -2055,7 +2054,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	/** Re-evaluate autocomplete triggers for the text ending at the cursor (used after bulk edits). */
 	#retriggerAutocompleteAtCursor(): void {
 		if (this.#autocompleteState) {
-			this.#debouncedUpdateAutocomplete();
+			void this.#updateAutocomplete();
 			return;
 		}
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
@@ -2353,7 +2352,11 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 	#recordUndoState(): void {
 		if (this.#suspendUndo) return;
-		this.#undoStack.push(structuredClone(this.#state));
+		// Lines are immutable strings, so a fresh array of the same strings is a full snapshot: an
+		// edit replaces or splices `#state.lines`, never a string inside it. A deep clone copied every
+		// line's characters on each undo step, which made a keystroke cost the size of the draft.
+		const { lines, cursorLine, cursorCol } = this.#state;
+		this.#undoStack.push({ lines: lines.slice(), cursorLine, cursorCol });
 		if (this.#undoStack.length > MAX_UNDO_STACK) {
 			this.#undoStack.shift();
 		}
@@ -2857,13 +2860,13 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 		if (item?.value.startsWith("skill:") && findTrailingSlashCommandStart(this.#autocompletePrefix) !== null) {
 			const token = cleanSlashToken(currentTextBeforeCursor, findTrailingSlashCommandStart(currentTextBeforeCursor));
-			// Guard the timing window where the popup was built for an earlier
-			// query (e.g. bare `/`) and the user typed further characters before
-			// the 100 ms debounced refresh fired: accept the stale skill only
-			// when the refreshed popup would still surface it (same gate as
-			// buildMidPromptSkillCompletions). `tmp` after a bare slash
-			// therefore falls through to file completion instead of rewriting
-			// the user's `/tmp` to `/skill:…`.
+			// Guard the window where the popup was built for an earlier query
+			// (e.g. bare `/`) and the user typed further characters before the
+			// provider answered the refresh: accept the stale skill only when the
+			// refreshed popup would still surface it (same gate as
+			// buildMidPromptSkillCompletions). `tmp` after a bare slash therefore
+			// falls through to file completion instead of rewriting the user's
+			// `/tmp` to `/skill:…`.
 			return (
 				token !== null && midPromptSkillTokenMatches(token.slice(1).toLowerCase(), item.value, item.description)
 			);
@@ -2997,7 +3000,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	 * Apply one suggestion to the buffer — the shared body of Tab-accept and
 	 * click-accept, so the pointer can never drift from the key.
 	 *
-	 * A destructive edit or a paste can outrun the debounced refresh, leaving the
+	 * A destructive edit or a paste can outrun the provider's refresh, leaving the
 	 * popup describing text that is no longer under the cursor. Accepting that
 	 * would rewrite the wrong span, so a stale popup is cancelled and nothing is
 	 * applied.
@@ -3005,7 +3008,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	#applyAutocompleteSelection(
 		selected: SelectItem | null,
 		notifyUpdate: boolean = true,
-	): { onApplied?: () => void } | undefined {
+	): AppliedCompletion | undefined {
 		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 		const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
 		if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
@@ -3113,7 +3116,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 	#cancelAutocomplete(notifyCancel: boolean = false): void {
 		const wasAutocompleting = this.#autocompleteState !== null;
-		this.#clearAutocompleteTimeout();
 		this.#autocompleteRequestId += 1;
 		this.#autocompleteState = null;
 		this.#autocompleteList = undefined;
@@ -3144,7 +3146,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 			| null
 			| undefined,
 	): void {
-		this.#clearAutocompleteTimeout();
 		this.#autocompleteRequestId += 1;
 		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
 			const formattedItems = suggestions.items.map(item => ({
@@ -3196,16 +3197,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		this.#applyAutocompleteSuggestions(suggestions, "regular");
 	}
 
-	#debouncedUpdateAutocomplete(): void {
-		if (this.#autocompleteTimeout) {
-			clearTimeout(this.#autocompleteTimeout);
-		}
-		this.#autocompleteTimeout = setTimeout(() => {
-			this.#updateAutocomplete();
-			this.#autocompleteTimeout = undefined;
-		}, 100);
-	}
-
 	#applyAutocompleteSuggestions(
 		suggestions:
 			| { prefix: string; items: Array<{ value: string; label: string; description?: string; group?: string }> }
@@ -3222,13 +3213,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		} else {
 			this.#cancelAutocomplete();
 			this.onAutocompleteUpdate?.();
-		}
-	}
-
-	#clearAutocompleteTimeout(): void {
-		if (this.#autocompleteTimeout) {
-			clearTimeout(this.#autocompleteTimeout);
-			this.#autocompleteTimeout = undefined;
 		}
 	}
 

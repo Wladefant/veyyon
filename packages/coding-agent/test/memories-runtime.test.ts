@@ -25,13 +25,6 @@ interface SessionFixture {
 
 let sharedRoot: TempDir | undefined;
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-	let resolve!: () => void;
-	const promise = new Promise<void>(res => {
-		resolve = res;
-	});
-	return { promise, resolve };
-}
 async function makeTempDir(prefix: string): Promise<string> {
 	const base = sharedRoot?.path() ?? os.tmpdir();
 	const dir = path.join(base, `${prefix}-${Snowflake.next()}`);
@@ -74,7 +67,7 @@ async function createFixture(overrides?: Partial<Record<string, unknown>>): Prom
 	});
 	const model = createModel();
 	const modelRegistry = createModelRegistry(model);
-	const settled = deferred();
+	const settled = Promise.withResolvers<void>();
 	const refreshBaseSystemPrompt = vi.fn(async () => {
 		settled.resolve();
 	});

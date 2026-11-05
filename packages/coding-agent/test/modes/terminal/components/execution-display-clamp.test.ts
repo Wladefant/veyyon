@@ -30,9 +30,10 @@ import {
 	EXECUTION_PREVIEW_LINES,
 	EXECUTION_STREAMING_LINE_CAP,
 } from "@veyyon/coding-agent/modes/terminal/components/transcript/execution-shared";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { resetKeybindingsForTests, setKeybindings } from "@veyyon/utils/keybindings";
 import { visibleWidth } from "@veyyon/utils/width";
+import { requireTheme } from "../../../helpers/require-theme";
 
 describe("the execution display budgets", () => {
 	/**
@@ -138,9 +139,8 @@ describe("clamping one output line", () => {
 describe("bounding the retained output", () => {
 	// Footer cases render themed text and read the live expand binding.
 	beforeEach(async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		setThemeInstance(theme!);
+		const theme = await requireTheme("dark");
+		setThemeInstance(theme);
 		setKeybindings(KeybindingsManager.inMemory());
 	});
 

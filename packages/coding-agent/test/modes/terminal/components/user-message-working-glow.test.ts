@@ -14,9 +14,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { UserMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/user-message";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { TERMINAL } from "@veyyon/tui";
 import { stripAnsi } from "@veyyon/utils";
+import { requireTheme } from "../../../helpers/require-theme";
 import { useFullColor } from "../../../helpers/theme-assertions";
 
 // The color assertions below pin exact 24-bit bytes (`38;2;r;g;b`). The theme
@@ -42,7 +43,7 @@ describe("UserMessageComponent working indicator", () => {
 		Bun.env.COLORTERM = "truecolor";
 		trueColorHandle.trueColor = true;
 		await Settings.init({ inMemory: true });
-		setThemeInstance((await getThemeByName("titanium"))!);
+		setThemeInstance(await requireTheme("titanium"));
 	});
 
 	afterAll(() => {

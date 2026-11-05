@@ -7,6 +7,7 @@ import { streamAzureOpenAIResponses } from "@veyyon/ai/providers/azure-openai-re
 import { streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
 import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const CONTEXT: Context = {
 	messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
@@ -39,13 +40,8 @@ const CODEX_MODEL: Model<"openai-codex-responses"> = buildModel({
 	maxTokens: 128000,
 });
 
-function createSseResponse(events: unknown[]): Response {
-	const body = `${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
-
 function emptyCompletion(): Response {
-	return createSseResponse([
+	return sseResponse([
 		{
 			type: "response.completed",
 			response: {
@@ -63,7 +59,7 @@ function emptyCompletion(): Response {
 }
 
 function contentCompletion(text: string): Response {
-	return createSseResponse([
+	return sseResponse([
 		{ type: "response.created", response: { id: "resp_success" } },
 		{
 			type: "response.output_item.added",

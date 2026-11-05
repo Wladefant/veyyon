@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { buildNoImageResult } from "@veyyon/coding-agent/tools/web/image-gen";
+import { toolResultText } from "./helpers/tool-result-text";
 
 /**
  * Sibling of `set-cwd-confirmation.test.ts`, guarding the same class of defect
@@ -28,7 +29,7 @@ describe("image generation reports an empty response as a failure", () => {
 	});
 
 	it("says generation failed, not merely that no data came back", () => {
-		const text = textOf(buildNoImageResult(base));
+		const text = toolResultText(buildNoImageResult(base));
 
 		expect(text).toContain("Image generation failed");
 	});
@@ -37,7 +38,7 @@ describe("image generation reports an empty response as a failure", () => {
 		// With six providers and an `auto` preference, the caller often does not know
 		// which one ran. Retrying blind against the same broken provider is the
 		// failure mode this prevents.
-		const text = textOf(buildNoImageResult(base));
+		const text = toolResultText(buildNoImageResult(base));
 
 		expect(text).toContain("gemini");
 		expect(text).toContain("gemini-3-pro-image-preview");
@@ -46,7 +47,7 @@ describe("image generation reports an empty response as a failure", () => {
 	it("tells the caller a retry may work when the cause is unknown", () => {
 		// An empty response with no stated reason is usually transient, so one retry
 		// is the correct move and the result says so explicitly.
-		const text = textOf(buildNoImageResult(base));
+		const text = toolResultText(buildNoImageResult(base));
 
 		expect(text).toContain("Retry once");
 	});
@@ -54,7 +55,7 @@ describe("image generation reports an empty response as a failure", () => {
 	it("tells the caller NOT to retry when the provider gave a reason", () => {
 		// A blocked prompt fails identically every time. This is the case where a
 		// retry loop is guaranteed, so the guidance inverts.
-		const text = textOf(buildNoImageResult({ ...base, reason: "the prompt was blocked (SAFETY)" }));
+		const text = toolResultText(buildNoImageResult({ ...base, reason: "the prompt was blocked (SAFETY)" }));
 
 		expect(text).toContain("Retrying the same prompt will fail the same way");
 		expect(text).not.toContain("Retry once");
@@ -63,7 +64,7 @@ describe("image generation reports an empty response as a failure", () => {
 	it("surfaces the provider's stated reason in the text", () => {
 		// Gemini's `promptFeedback.blockReason` is the single most actionable thing
 		// the API returns here and it used to be the only branch that showed it.
-		const text = textOf(buildNoImageResult({ ...base, reason: "the prompt was blocked (SAFETY)" }));
+		const text = toolResultText(buildNoImageResult({ ...base, reason: "the prompt was blocked (SAFETY)" }));
 
 		expect(text).toContain("the prompt was blocked (SAFETY)");
 	});
@@ -71,7 +72,7 @@ describe("image generation reports an empty response as a failure", () => {
 	it("includes any prose the provider returned alongside the empty result", () => {
 		// Providers frequently explain the refusal in the message body instead of a
 		// structured field. Dropping it discards the only explanation there is.
-		const text = textOf(buildNoImageResult({ ...base, responseText: "I can't create that image." }));
+		const text = toolResultText(buildNoImageResult({ ...base, responseText: "I can't create that image." }));
 
 		expect(text).toContain("I can't create that image.");
 	});
@@ -121,14 +122,7 @@ describe("image generation reports an empty response as a failure", () => {
 			{ ...base, reason: "the prompt was blocked (SAFETY)" },
 			{ ...base, responseText: "here you go" },
 		]) {
-			expect(textOf(buildNoImageResult(args))).not.toContain("Generated");
+			expect(toolResultText(buildNoImageResult(args))).not.toContain("Generated");
 		}
 	});
 });
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(block => block.type === "text")
-		.map(block => block.text ?? "")
-		.join("\n");
-}

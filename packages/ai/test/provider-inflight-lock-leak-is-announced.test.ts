@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { __providerInFlightForTesting } from "@veyyon/ai/stream";
 import { logger } from "@veyyon/utils";
+import { canRestrictAccess } from "../../utils/test/helpers/mode-bits";
 
 const LEAK_MESSAGE = "Provider in-flight lock could not be released; the next request for this provider will wait";
 
@@ -42,11 +43,6 @@ let warnings: Array<{ message: string; fields: Record<string, unknown> }>;
 
 function leaks(): Array<Record<string, unknown>> {
 	return warnings.filter(entry => entry.message === LEAK_MESSAGE).map(entry => entry.fields);
-}
-
-/** Mode bits do not restrict root, and Windows does not honour them at all. */
-function canRestrictAccess(): boolean {
-	return process.platform !== "win32" && process.getuid?.() !== 0;
 }
 
 /** Make a directory unwritable, remembering it so `afterEach` can put it back. */

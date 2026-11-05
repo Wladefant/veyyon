@@ -20,6 +20,7 @@
  * never a 16-color approximation of the ramp).
  */
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import {
 	FOLLOW_TUNING,
 	paintHotTail,
@@ -75,7 +76,7 @@ describe("paintHotTail — the liquid accent glow", () => {
 
 	it("adds only zero-width color: the visible text is unchanged", () => {
 		const out = paintHotTail(row, theme, true, "thinkingText", 0.3);
-		expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe(row);
+		expect(stripVTControlCharacters(out)).toBe(row);
 	});
 
 	it("opens exactly one color per trailing cell", () => {
@@ -85,7 +86,7 @@ describe("paintHotTail — the liquid accent glow", () => {
 
 	it("caps the trail at the row width for short rows", () => {
 		const out = paintHotTail("abc", theme, true, "thinkingText", 0.3);
-		expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe("abc");
+		expect(stripVTControlCharacters(out)).toBe("abc");
 		expect(opensOf(out).length).toBe(3);
 	});
 
@@ -155,13 +156,13 @@ describe("paintHotTail padding anchor", () => {
 		const padded = `short${" ".repeat(12)}`;
 		const out = paintHotTail(padded, theme, true, "thinkingText", 0);
 		expect(out.endsWith(`\x1b[39m${" ".repeat(12)}`)).toBe(true);
-		expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe(padded);
+		expect(stripVTControlCharacters(out)).toBe(padded);
 	});
 
 	it("still paints an unpadded row edge-to-edge", () => {
 		const row = "no padding at all";
 		const out = paintHotTail(row, theme, true, "thinkingText", 0);
-		expect(out.replace(/\x1b\[[0-9;]*m/g, "")).toBe(row);
+		expect(stripVTControlCharacters(out)).toBe(row);
 		expect(opensOf(out).length).toBeGreaterThan(0);
 	});
 

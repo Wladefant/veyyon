@@ -16,6 +16,7 @@ import {
 } from "@veyyon/ai/providers/cursor";
 import type { AssistantMessage, AssistantMessageEvent, Model, ToolCall } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /** Cursor's own id shape: the interaction call id and the model's function-call id, joined. */
 export function callId(index: number): string {
@@ -29,14 +30,7 @@ export function cursorAssistantMessage(): AssistantMessage {
 		api: "cursor-agent",
 		provider: "cursor",
 		model: "cursor-grok-4.6-medium",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};

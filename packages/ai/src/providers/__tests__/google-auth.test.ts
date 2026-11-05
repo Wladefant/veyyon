@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { requestUrl } from "../../../test/helpers/fetch-mock";
 import type { FetchImpl } from "../../types";
 import { __resetVertexTokenCache, getVertexAccessToken } from "../google-auth";
 
@@ -34,12 +35,6 @@ async function generateServiceAccountPem(): Promise<string> {
 			.match(/.{1,64}/g) ?? []
 	).join("\n");
 	return `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----\n`;
-}
-
-function urlOf(input: string | URL | Request): string {
-	if (typeof input === "string") return input;
-	if (input instanceof URL) return input.toString();
-	return input.url;
 }
 
 describe("getVertexAccessToken impersonated_service_account ADC", () => {
@@ -80,7 +75,7 @@ describe("getVertexAccessToken impersonated_service_account ADC", () => {
 
 		const calls: string[] = [];
 		const fetchImpl: FetchImpl = async input => {
-			calls.push(urlOf(input));
+			calls.push(requestUrl(input));
 			return new Response("{}");
 		};
 
@@ -113,7 +108,7 @@ describe("getVertexAccessToken impersonated_service_account ADC", () => {
 
 		const calls: { url: string; init?: RequestInit }[] = [];
 		const fetchImpl: FetchImpl = async (input, init) => {
-			const url = urlOf(input);
+			const url = requestUrl(input);
 			calls.push({ url, init });
 			if (url === "https://oauth2.googleapis.com/token") {
 				return new Response(JSON.stringify({ access_token: "sa-source-token", expires_in: 3600 }));

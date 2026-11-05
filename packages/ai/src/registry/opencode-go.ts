@@ -1,13 +1,16 @@
 import type { OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
 
+/**
+ * OpenCode Go uses the OpenCode API-key login under its provider ID.
+ */
 export const opencodeGoProvider = {
 	id: "opencode-go",
 	name: "OpenCode Go",
 	login: async (cb: OAuthLoginCallbacks) => {
-		// Lazy import: keep heavy OAuth flow modules out of the eager registry graph.
-		const { loginOpenCode } = await import("./oauth/opencode");
-		return loginOpenCode(cb);
+		// This is the registry's lazy boundary for provider login flows.
+		const { loginOpenCodeGo } = await import("./oauth/opencode-go");
+		return loginOpenCodeGo(cb);
 	},
 	credential: "api-key",
 } as const satisfies ProviderDefinition;

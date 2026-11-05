@@ -8,6 +8,7 @@ import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
 import type { Context, FetchImpl, Model, RawSseEvent } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const context: Context = {
 	messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
@@ -105,19 +106,9 @@ const anthropicEvents: RawMessageStreamEvent[] = [
 	{ type: "message_stop" },
 ];
 
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events
-		.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`)
-		.join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
-
 function createFetchResponse(events: unknown[]): FetchImpl {
 	return Object.assign(
-		vi.fn(async () => createSseResponse(events)),
+		vi.fn(async () => sseResponse(events)),
 		{ preconnect: fetch.preconnect },
 	) as typeof fetch;
 }

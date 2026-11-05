@@ -14,19 +14,9 @@ import {
 } from "@veyyon/mnemopi/core/runtime-options";
 import { logger } from "@veyyon/utils";
 import { enterIsolatedConfigRoot } from "../../../packages/utils/test/helpers/isolated-config-root";
+import { restoreEnvSnapshot } from "./helpers/restore-env";
 
 const OLD_ENV = { ...process.env };
-
-function restoreEnv(): void {
-	for (const key in process.env) {
-		if (!(key in OLD_ENV)) delete process.env[key];
-	}
-	for (const key in OLD_ENV) {
-		const value = OLD_ENV[key];
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
-	}
-}
 
 function localRows(value: number) {
 	return async function* (texts: string[]) {
@@ -35,7 +25,7 @@ function localRows(value: number) {
 }
 
 afterEach(() => {
-	restoreEnv();
+	restoreEnvSnapshot(OLD_ENV);
 	resetEmbeddingProviderForTests();
 });
 

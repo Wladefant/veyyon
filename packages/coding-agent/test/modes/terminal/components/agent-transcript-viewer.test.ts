@@ -11,10 +11,11 @@
  * remote path has to survive every way a host transcript can misbehave (a
  * header-only first fetch, an oversized entry, rotation under the byte cursor).
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	type AgentTranscriptRemote,
@@ -26,18 +27,12 @@ import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries"
 import { ImageBudget, ImageProtocol, setTerminalImageProtocol, TERMINAL, type TUI } from "@veyyon/tui";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { getKittyGraphics, setKittyGraphics } from "@veyyon/utils/kitty-graphics";
+import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const TS = new Date().toISOString();
 
 function buildJsonl(): string {
-	const usage = {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 	const lines = [
 		JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: "/tmp" }),
 	];
@@ -74,14 +69,7 @@ function buildJsonl(): string {
 }
 
 function buildImageJsonl(): string {
-	const usage = {
-		input: 1,
-		output: 1,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 2,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 	const entries = [
 		JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: "/tmp" }),
 		JSON.stringify({
@@ -148,7 +136,7 @@ function makeViewer(file: string, remote?: AgentTranscriptRemote, ui?: TUI) {
 		sessionFile: remote ? undefined : file,
 		status: "parked",
 	});
-	return new AgentTranscriptViewer({
+	const viewer = new AgentTranscriptViewer({
 		agentId: "Main/advisor",
 		registry: agents,
 		ui: ui ?? ({ requestRender: () => {}, requestComponentRender: () => {} } as never),
@@ -160,6 +148,8 @@ function makeViewer(file: string, remote?: AgentTranscriptRemote, ui?: TUI) {
 		onClose: () => {},
 		onHubClose: () => {},
 	});
+	onTestFinished(() => viewer.dispose());
+	return viewer;
 }
 
 /** Leading-space count of a stripped line (its content gutter). */
@@ -180,22 +170,17 @@ function withViewer(fn: (viewer: AgentTranscriptViewer) => void): void {
 }
 
 describe("AgentTranscriptViewer", () => {
-	let rowsDesc: PropertyDescriptor | undefined;
+	let geometry: StubbedStdoutGeometry | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		initTheme();
-		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 24, set: () => {} });
+		geometry = stubStdoutGeometry({ rows: 24 });
 	});
 
 	afterEach(() => {
-		if (rowsDesc) {
-			Object.defineProperty(process.stdout, "rows", rowsDesc);
-		} else {
-			Object.defineProperty(process.stdout, "rows", { configurable: true, value: undefined, writable: true });
-		}
+		geometry?.restore();
 	});
 
 	it("aligns the title and body content on the same gutter", () => {

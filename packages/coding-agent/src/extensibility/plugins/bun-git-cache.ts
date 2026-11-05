@@ -5,13 +5,19 @@ import type { GitSource } from "@veyyon/kernel/loader/plugins/git-url";
 import { isEnoent, readPipeText, trimTrailingSlashes } from "@veyyon/utils";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
 
-interface CommandResult {
+/** Exit code and drained output of one command. */
+export interface CommandResult {
 	readonly exitCode: number;
 	readonly stdout: string;
 	readonly stderr: string;
 }
 
-async function runCommand(command: string[], cwd: string): Promise<CommandResult> {
+/**
+ * Run `command` in `cwd` and drain both pipes concurrently with `exited`. Awaiting `exited` before
+ * reading either pipe risks a >64 KiB OS-pipe-buffer deadlock once the command prints enough, and
+ * even where Bun buffers eagerly that leaks unbounded memory. The caller interprets the exit code.
+ */
+export async function runCommand(command: string[], cwd: string): Promise<CommandResult> {
 	const proc = Bun.spawn(command, {
 		cwd,
 		stdin: "ignore",

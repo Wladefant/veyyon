@@ -5,6 +5,7 @@ import type { AssistantMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { InstrumentationLevel } from "@veyyon/ai/instrumentation";
 import { createMockModel } from "@veyyon/ai/providers/mock";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -12,14 +13,7 @@ import { buildContextSnapshot, estimateContextSnapshotAttribution } from "@veyyo
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
-const usage = {
-	input: 500,
-	output: 20,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 520,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 500, output: 20, totalTokens: 520 };
 
 describe("context snapshot session telemetry", () => {
 	let sharedDir: TempDir;

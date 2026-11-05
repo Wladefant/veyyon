@@ -15,6 +15,7 @@ import { transformProviderPayload } from "../provider-boundary";
 import { SECRET_SPEND_NOTICE_SOURCE } from "../secrets/notices";
 import type { AgentSession } from "../session/agent-session";
 import { type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session-types";
+import { findLastAssistantMessage } from "../session/agent-session-message-shapes";
 import { isSilentAbort } from "../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../slash-commands/types";
@@ -42,9 +43,11 @@ export interface PrintModeOptions {
 	printThoughts?: boolean;
 	/**
 	 * Headless slash-command runtime supplied by the CLI entrypoint. Optional
-	 * only for narrow unit-test sessions that cannot execute builtins.
+	 * only for narrow unit-test sessions that cannot execute builtins. The cwd
+	 * is read from the session manager at each dispatch, so a command after a
+	 * `/move` or `/cwd` resolves against the directory the session is in.
 	 */
-	commandRuntime?: Omit<SlashCommandRuntime, "output">;
+	commandRuntime?: Omit<SlashCommandRuntime, "output" | "cwd">;
 }
 
 /** Drop the provider-opaque replay payload (e.g. encrypted reasoning items) before printing. */
@@ -121,6 +124,7 @@ export type PrintModeSession =
 			AgentSession,
 			| "subscribe"
 			| "prompt"
+			| "waitForQuiescence"
 			| "dispose"
 			| "displayAssistantContent"
 			| "obfuscateProviderText"
@@ -220,6 +224,10 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 		});
 	}
 
+	// The last assistant turn of the latest model run, as the run produced it. The session drops a
+	// classifier refusal from its context once the turn settles, so the context's tail cannot tell
+	// that the run failed.
+	let runEndAssistant: AssistantMessage | undefined;
 	// Always subscribe to enable session persistence via _handleAgentEvent
 	// InteractiveMode applies the same startup default during TUI initialization.
 	// Print mode has no TUI bootstrap, so arm the shared session directly before
@@ -264,6 +272,7 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 	}
 
 	session.subscribe(event => {
+		if (event.type === "agent_end") runEndAssistant = findLastAssistantMessage(event.messages);
 		// In JSON mode, output all events
 		if (mode === "json") {
 			writeJsonLine(printableEvent(event));
@@ -299,6 +308,7 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 		if (commandRuntime) {
 			const result = await executeAcpBuiltinSlashCommand(message, {
 				...commandRuntime,
+				cwd: commandRuntime.sessionManager.getCwd(),
 				output: emitCommandOutput,
 			});
 			if (result !== false) {
@@ -319,6 +329,11 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 	for (const message of messages) {
 		await logger.time("print:prompt:next", () => dispatchPromptOrCommand(message));
 	}
+	// A spawned agent or a backgrounded command reports by waking the loop when it finishes. Exiting
+	// here kills it and drops that report, so the run ends once nothing it started is still due to
+	// finish. A job that runs until stopped is not waited for: a launched process, or a command given
+	// no timeout.
+	await logger.time("print:settle", () => session.waitForQuiescence(undefined, { endingJobsOnly: true }));
 
 	// From this point onward a late blocker must be recorded without starting a
 	// primary turn whose response print mode would never emit.
@@ -329,6 +344,7 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 	// script cannot read a failure as success (exit-codes.md).
 	const finalAssistant = ((): AssistantMessage | undefined => {
 		if (!promptedModel) return undefined;
+		if (runEndAssistant?.stopReason === "error") return runEndAssistant;
 		const state = session.state;
 		const lastMessage = state.messages[state.messages.length - 1];
 		return lastMessage?.role === "assistant" ? (lastMessage as AssistantMessage) : undefined;

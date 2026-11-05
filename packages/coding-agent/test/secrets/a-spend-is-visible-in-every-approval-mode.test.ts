@@ -42,6 +42,7 @@ import type { AssistantMessage } from "@veyyon/ai";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse, registerMockApi } from "@veyyon/ai/providers/mock";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
@@ -709,14 +710,7 @@ function printSessionEmitting(notices: readonly AgentSessionEvent[]): PrintModeS
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: 0,
 	};
 	return {
@@ -735,6 +729,7 @@ function printSessionEmitting(notices: readonly AgentSessionEvent[]): PrintModeS
 			for (const notice of notices) listener?.(notice);
 			return true;
 		},
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForAdvisorCatchup: async () => true,

@@ -28,9 +28,9 @@ import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy, TERMINAL } from "@veyyon
 import { motionClock } from "@veyyon/utils/motion";
 import { visibleWidth } from "@veyyon/utils/width";
 import { MODAL_SIZING_SETTINGS } from "../../../../src/modes/terminal/components/chrome/modal-geometry";
-import { renderModalShell } from "../../../../src/modes/terminal/components/chrome/modal-shell";
 import { resetGroundTintsForTest, setDetectedTerminalGround } from "../../../../src/theme/ground-tints";
 import { initTheme } from "../../../../src/theme/theme";
+import { paintCard } from "../../../helpers/modal-card";
 import { OVERLAY_SPECS, type OverlayCard } from "../../../helpers/overlay-specs";
 
 beforeAll(async () => {
@@ -85,11 +85,11 @@ describe("a card's first rendered frame is byte-identical to its settled frame",
 		};
 
 		const now = performance.now();
-		const frame0 = renderModalShell(input);
+		const frame0 = paintCard(input);
 		motionClock.tick(now + 300);
-		const frame300 = renderModalShell(input);
+		const frame300 = paintCard(input);
 		motionClock.tick(now + 1000);
-		const frame1000 = renderModalShell(input);
+		const frame1000 = paintCard(input);
 
 		expect([...frame0.lines]).toEqual([...frame300.lines]);
 		expect([...frame0.lines]).toEqual([...frame1000.lines]);
@@ -183,7 +183,7 @@ describe("a card's first rendered frame is byte-identical to its settled frame",
 		setDetectedTerminalGround("#1e2127");
 		try {
 			const band = `\x1b[48;2;120;60;20m${"selected row".padEnd(40)}\x1b[49m`;
-			const result = renderModalShell({
+			const result = paintCard({
 				title: "Settings",
 				sizing: MODAL_SIZING_SETTINGS,
 				areaWidth: 100,

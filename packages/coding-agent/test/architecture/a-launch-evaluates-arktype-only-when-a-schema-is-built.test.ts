@@ -31,11 +31,9 @@
  * RPC launch's packages by `a-launch-evaluates-only-the-packages-it-uses.test.ts`.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { spawn } from "node:child_process";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
-import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+import { runModuleCensus } from "../helpers/module-census";
 import { lazyToolModules, PACKAGES, SRC } from "../helpers/module-reach-gate";
 
 const DEFERRED_ARKTYPE = path.join(PACKAGES, "ai", "src", "utils", "schema", "arktype.ts");
@@ -81,7 +79,7 @@ const { config } = loadArktype().ark;
 const jitlessAtFirstSchema = config.jitless;
 const onUndeclaredKeyAtFirstSchema = config.onUndeclaredKey;
 configureArktype({ exactOptionalPropertyTypes: false });
-process.stdout.write(JSON.stringify({
+report({
 	evaluated: Object.keys(require.cache).length,
 	atRest,
 	afterConfigure,
@@ -91,8 +89,7 @@ process.stdout.write(JSON.stringify({
 	jitlessAtFirstSchema,
 	onUndeclaredKeyAtFirstSchema,
 	exactOptionalAfterLoad: globalThis.$ark.config.exactOptionalPropertyTypes,
-}));
-process.exit(0);
+});
 `;
 }
 
@@ -104,31 +101,7 @@ describe("a launch evaluates arktype only when a schema is built", () => {
 
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@arktype-census-");
-		const entry = path.join(tempDir.path(), "census.ts");
-		fs.writeFileSync(entry, censusEntry(modules));
-		const { env, cleanup } = hermeticSpawnEnv();
-		try {
-			const child = spawn(process.execPath, [entry], {
-				cwd: tempDir.path(),
-				env,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let stdout = "";
-			let stderr = "";
-			child.stdout.on("data", chunk => {
-				stdout += String(chunk);
-			});
-			child.stderr.on("data", chunk => {
-				stderr += String(chunk);
-			});
-			const exited = Promise.withResolvers<number | null>();
-			child.on("exit", code => exited.resolve(code));
-			const code = await exited.promise;
-			if (code !== 0) throw new Error(`census process exited ${code}:\n${stderr}`);
-			census = JSON.parse(stdout) as Census;
-		} finally {
-			cleanup();
-		}
+		census = await runModuleCensus<Census>(tempDir.path(), censusEntry(modules));
 	}, 120_000);
 
 	afterAll(() => {

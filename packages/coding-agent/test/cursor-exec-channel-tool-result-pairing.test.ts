@@ -18,8 +18,11 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from "bun:test";
+
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { AssistantMessage, Usage } from "@veyyon/ai";
+
+import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
@@ -30,15 +33,6 @@ import { Container } from "@veyyon/tui";
 beforeAll(() => {
 	initTheme();
 });
-
-const emptyUsage: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 function transcriptWith(messages: AgentMessage[]): SessionContext {
 	return {
@@ -128,7 +122,7 @@ function cursorTurn(): AgentMessage[] {
 		api: "cursor-agent",
 		provider: "cursor",
 		model: "cursor-composer-2.5",
-		usage: emptyUsage,
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 1,
 	};
@@ -192,7 +186,7 @@ describe("issue #4348: cursor exec-channel tool results pair with synthesized to
 			api: "cursor-agent",
 			provider: "cursor",
 			model: "cursor-composer-2.5",
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "toolUse",
 			timestamp: 1,
 		};

@@ -11,6 +11,7 @@ import {
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
 import type { AssistantMessage, Context, Message, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * WHY: a tool result whose originating call is gone from the request used to be
@@ -334,14 +335,7 @@ describe("a stale tool result never speaks as the assistant", () => {
 				api: "openai-responses",
 				provider: "openai",
 				model: "test-responses",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: 2,
 			},
@@ -382,14 +376,7 @@ describe("a stale tool result never speaks as the assistant", () => {
 	 * those items in preference to `content` once the session is warm.
 	 */
 	function poisonedSessionWithNativeItems(noteText: string): Message[] {
-		const usage = {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
+		const usage = emptyUsage();
 		const identity = { api: "openai-responses", provider: "openai", model: "test-responses" } as const;
 		return [
 			{ role: "user", content: "list the flags", timestamp: 1 },

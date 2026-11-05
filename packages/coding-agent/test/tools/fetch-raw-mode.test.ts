@@ -7,6 +7,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import * as scrapers from "@veyyon/web/scrapers/types";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const ATOM = `<?xml version="1.0"?>\n<feed xmlns="http://www.w3.org/2005/Atom"><title>Sample</title><entry><title>One</title><id>1</id><updated>2024-01-01T00:00:00Z</updated><content>body</content></entry></feed>`;
 const JSON_BODY = `{"alpha":1,"beta":[2,3]}`;
@@ -109,11 +110,7 @@ describe("read URL with :raw selector (regression: JSON/feed parsers ignored raw
 		// prefixed with a 6-line header (URL/Content-Type/Method/blank/---/blank), so
 		// body line N appears at output line N+6.
 		const result = await tool.execute("call", { path: "https://example.com/api.json:raw:9-11" });
-		const text =
-			result.content
-				.filter(c => c.type === "text")
-				.map(c => c.text)
-				.join("\n") ?? "";
+		const text = toolResultText(result) ?? "";
 
 		expect(result.details?.method).toBe("raw");
 		expect(text).toContain("raw line 3");
@@ -140,10 +137,7 @@ describe("read URL with multi-range selector (regression: was stuck on URL → 4
 		const loadSpy = stubLoadPage(body, "text/plain");
 
 		const result = await tool.execute("call", { path: "https://example.com/file.txt:11-13,26-28" });
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 
 		// Body line N is at output line N+6 (URL header prefix). 11-13 = content 5-7,
 		// 26-28 = content 20-22.

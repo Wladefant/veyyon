@@ -39,19 +39,13 @@ import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { isInternalUrlPath, splitInternalUrlSel } from "@veyyon/coding-agent/tools/core/path-utils";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** Schemes whose resource URIs are server-defined, so a selector-shaped tail is theirs. */
 const OPAQUE = ["mcp"];
 
 const schemes = InternalUrlRouter.instance().schemes();
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 afterEach(() => {
 	AgentRegistry.resetGlobalForTests();
@@ -110,7 +104,7 @@ describe("internal URL schemes are classified", () => {
 		const tool = new ReadTool(makeToolSession());
 		const result = await tool.execute("r1", { path: "history://Scout:1-5" });
 
-		const text = textOf(result);
+		const text = toolResultText(result);
 		expect(text).not.toContain("Unknown agent");
 		expect(text).toContain("Scout");
 	});

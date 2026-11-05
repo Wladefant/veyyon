@@ -1,14 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { AgentPauseGate, agentLoop } from "@veyyon/agent-core";
-import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
-import type { Message } from "@veyyon/ai";
+import type { AgentContext, AgentLoopConfig, AgentTool } from "@veyyon/agent-core/types";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
+import { createUserMessage, identityConverter } from "./helpers";
 
 function makeEchoTool(executed: string[]): AgentTool {
 	const toolSchema = type({ msg: "string" });

@@ -72,12 +72,6 @@ class RawLinesComponent implements Component {
 	}
 }
 
-/** `await Bun.sleep(0)` was enough only because the first paint is immediate;
- *  the engine is asked directly now, so a throttled follow-up cannot be missed. */
-async function settle(term: CaptureTerminal, tui: TUI): Promise<void> {
-	await settleFrames(term, tui);
-}
-
 describe("issue #2045: renderer bounds oversized rows", () => {
 	it("preserves visible text after pathological zero-width ANSI prefixes", async () => {
 		const term = new CaptureTerminal(80, 4);
@@ -87,7 +81,7 @@ describe("issue #2045: renderer bounds oversized rows", () => {
 		tui.addChild(new RawLinesComponent([line]));
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 		} finally {
 			tui.stop();
 		}
@@ -105,7 +99,7 @@ describe("issue #2045: renderer bounds oversized rows", () => {
 		tui.addChild(new RawLinesComponent([line]));
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 		} finally {
 			tui.stop();
 		}
@@ -122,7 +116,7 @@ describe("issue #2045: renderer bounds oversized rows", () => {
 		tui.addChild(new RawLinesComponent([line]));
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 		} finally {
 			tui.stop();
 		}
@@ -141,7 +135,7 @@ describe("issue #2045: renderer bounds oversized rows", () => {
 		tui.addChild(new RawLinesComponent([line]));
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 		} finally {
 			tui.stop();
 		}

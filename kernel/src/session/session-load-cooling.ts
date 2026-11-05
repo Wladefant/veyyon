@@ -24,8 +24,14 @@ import { KEEP_NOTHING_ENTRY_ID } from "@veyyon/agent-core/compaction/entries";
 import { hasLegacyProviderNativeCompaction } from "@veyyon/agent-core/compaction/legacy-provider-native";
 import { ColdEntryPayloads, type ColdLineRestore, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
 import { RESIDENT_SETTINGS_ENTRY_TYPES } from "./session-context";
-import { CURRENT_SESSION_VERSION, type FileEntry, type SessionEntry, type UsageStatistics } from "./session-entries";
-import { addEntryUsage, addTaskResultUsage, emptyUsageStatistics } from "./session-entry-index";
+import {
+	CURRENT_SESSION_VERSION,
+	emptyUsageStatistics,
+	type FileEntry,
+	type SessionEntry,
+	type UsageStatistics,
+} from "./session-entries";
+import { addEntryUsage, addTaskResultUsage } from "./session-entry-index";
 import type { PinnedSessionReader } from "./session-storage";
 
 /**

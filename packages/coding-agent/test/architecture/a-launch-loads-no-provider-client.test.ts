@@ -36,12 +36,11 @@
  * each lazily loaded client is the provider suites' contract.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TempDir } from "@veyyon/utils";
 import { dynamicImportSpecifiersIn, moduleReach, resolveModuleSpecifier } from "@veyyon/utils/module-reach";
-import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+import { runModuleCensus } from "../helpers/module-census";
 import { CACHE, PACKAGES, RESOLUTION, SRC } from "../helpers/module-reach-gate";
 
 const AI_SRC = path.join(PACKAGES, "ai", "src");
@@ -54,6 +53,8 @@ const PROVIDERS = path.join(AI_SRC, "providers");
 const LAUNCH_PROVIDER_MODULES = [
 	// The session clears the Anthropic fast-mode fallback when the model changes.
 	"providers/anthropic-session-state.ts",
+	// `stream.ts` maps a request's tool choice onto the Anthropic wire; the module imports only types.
+	"providers/anthropic-tool-choice.ts",
 	// The remote summarizer maps an Azure model id to its deployment name.
 	"providers/azure-deployment-names.ts",
 	// The provider request derives the Claude Code device id header.
@@ -124,12 +125,8 @@ describe("a launch loads no provider client", () => {
 	});
 
 	for (const entry of ["main.ts", "sdk.ts"]) {
-		it(`${entry} statically reaches only the lazy ai modules recorded here`, () => {
-			expect(reachedLazy(entry)).toEqual([
-				// `getKimiCommonHeaders`, which the Kimi stream and the Kimi usage reader send on every request,
-				// is declared beside the device-code login that `registry/kimi-code.ts` loads on first use.
-				"registry/oauth/kimi.ts",
-			]);
+		it(`${entry} statically reaches no module the ai package loads lazily`, () => {
+			expect(reachedLazy(entry)).toEqual([]);
 		});
 
 		it(`${entry} statically reaches only the provider modules recorded here`, () => {
@@ -174,13 +171,12 @@ const transport = resolveServerCompactionTransport({
 	id: "census",
 	compat: { supportsServerCompaction: true },
 });
-process.stdout.write(JSON.stringify({
+report({
 	evaluated: Object.keys(require.cache).length,
 	atLaunch,
 	afterGate: deferred(),
 	transportResolved: transport !== undefined,
-}));
-process.exit(0);
+});
 `;
 }
 
@@ -190,31 +186,10 @@ describe("a launch evaluates the server-side compaction transport only when a co
 
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@compaction-census-");
-		const entry = path.join(tempDir.path(), "census.ts");
-		fs.writeFileSync(entry, compactionCensusEntry(COMPACTION_GATE_IMPORTERS.map(file => path.join(SRC, file))));
-		const { env, cleanup } = hermeticSpawnEnv();
-		try {
-			const child = spawn(process.execPath, [entry], {
-				cwd: tempDir.path(),
-				env,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let stdout = "";
-			let stderr = "";
-			child.stdout.on("data", chunk => {
-				stdout += String(chunk);
-			});
-			child.stderr.on("data", chunk => {
-				stderr += String(chunk);
-			});
-			const exited = Promise.withResolvers<number | null>();
-			child.on("exit", code => exited.resolve(code));
-			const code = await exited.promise;
-			if (code !== 0) throw new Error(`census process exited ${code}:\n${stderr}`);
-			census = JSON.parse(stdout) as CompactionCensus;
-		} finally {
-			cleanup();
-		}
+		census = await runModuleCensus<CompactionCensus>(
+			tempDir.path(),
+			compactionCensusEntry(COMPACTION_GATE_IMPORTERS.map(file => path.join(SRC, file))),
+		);
 	}, 120_000);
 
 	afterAll(() => {

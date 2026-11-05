@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
+
 import { generateBranchSummary, type SessionEntry } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, Context, Model, Usage } from "@veyyon/ai";
+
+import type { AssistantMessage, Context, Model } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
+
 import { buildModel } from "@veyyon/catalog/build";
+
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const RAW_MARKER = "BOUNDARY_SECRET_7429";
 const RAW_MARKER_FRAGMENT = RAW_MARKER.slice(0, 3);
@@ -21,15 +26,6 @@ const MODEL: Model = buildModel({
 	maxTokens: 32_768,
 });
 
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 function assistant(text = "summary"): AssistantMessage {
 	return {
 		role: "assistant",
@@ -37,7 +33,7 @@ function assistant(text = "summary"): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: ZERO_USAGE,
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 0,
 	};
@@ -70,7 +66,7 @@ function branchEntries(): SessionEntry[] {
 				api: "mock",
 				provider: "mock",
 				model: "mock-model",
-				usage: ZERO_USAGE,
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: 1,
 			},

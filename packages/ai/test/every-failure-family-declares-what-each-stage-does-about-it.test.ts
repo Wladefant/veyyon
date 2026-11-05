@@ -114,6 +114,7 @@ describe("the retry decision is derived from the registry", () => {
 			"EmptyResponse",
 			"MalformedFunctionCall",
 			"ModelNotInPlan",
+			"PeerUnreachable",
 			"ProviderFinishError",
 			"StaleResponsesItem",
 			"ThinkingLoop",

@@ -4,7 +4,7 @@
  * Uses Tavily's agent-focused search API to return structured results with an
  * optional synthesized answer.
  */
-import type { ApiKey, AuthStorage, FetchImpl } from "@veyyon/ai";
+import type { ApiKey, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { resolveProviderTextTransform, transformProviderPayload } from "../../../../provider-boundary";
@@ -41,15 +41,6 @@ interface TavilySearchResponse {
 	answer?: string | null;
 	results?: TavilySearchResult[];
 	request_id?: string | null;
-}
-
-/** Find Tavily API key through AuthStorage's unified refresh pipeline. */
-export async function findApiKey(
-	authStorage: AuthStorage,
-	sessionId: string | undefined,
-	signal: AbortSignal | undefined,
-): Promise<string | null> {
-	return (await authStorage.getApiKey("tavily", sessionId, { signal })) ?? null;
 }
 
 /** Exported for testing. Builds the Tavily request body from unified params. */

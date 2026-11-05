@@ -14,10 +14,12 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SEGMENTS } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
 import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
-import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { AUTONOMY_LABEL } from "@veyyon/coding-agent/tools/core/approval-modes";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { NO_SESSION_FACTS } from "../../../../../src/modes/terminal/components/status-line/session-facts";
+import { requireTheme } from "../../../../helpers/require-theme";
+import { segmentContext } from "../../../../helpers/segment-context";
 
 interface ModeOverrides {
 	/** Configured `tools.approvalMode`; omit to leave it unset. */
@@ -37,7 +39,7 @@ interface ModeOverrides {
 
 function makeContext(over: ModeOverrides): SegmentContext {
 	const configured = over.unsetApprovalMode ? undefined : over.approvalMode;
-	return {
+	return segmentContext({
 		// The segment reads the rung the session is ENFORCING, not the stored
 		// setting, because `--yolo` and plan mode both outrank the stored value
 		// and neither is visible in it. `AgentSession.effectiveApprovalMode`
@@ -47,17 +49,10 @@ function makeContext(over: ModeOverrides): SegmentContext {
 			approvalMode: over.enforcedMode ?? configured,
 			approvalBypassed: over.bypassed === true,
 		},
-		activeRepo: null,
-		width: 120,
-		options: {},
-		compactThinkingLevel: false,
 		planMode: over.planMode ?? null,
-		prewalk: null,
 		loopMode: over.loopMode ?? null,
-		goalMode: null,
 		vibeMode: over.vibeMode ?? null,
-		collab: null,
-	} as unknown as SegmentContext;
+	});
 }
 
 /** Render the `mode` segment and return `{ visible, text }` with SGR removed. */
@@ -68,8 +63,7 @@ function renderMode(over: ModeOverrides): { visible: boolean; text: string } {
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true });
-	const loaded = await getThemeByName("dark");
-	if (!loaded) throw new Error("theme unavailable");
+	const loaded = await requireTheme("dark");
 	setThemeInstance(loaded);
 });
 

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { createTurndown, normalizeTablesHtml } from "@veyyon/utils/turndown";
 import mammoth from "mammoth";
 import type { ConversionResult, Converter, StreamInfo } from "../types";
+import { acceptsStream } from "./accepts-stream";
 
 const EXTENSIONS = [".docx"];
 const MIMETYPES = ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
@@ -11,13 +12,7 @@ export class DocxConverter implements Converter {
 	name = "docx";
 
 	accepts(streamInfo: StreamInfo): boolean {
-		if (streamInfo.extension && EXTENSIONS.includes(streamInfo.extension)) {
-			return true;
-		}
-		if (streamInfo.mimetype && MIMETYPES.some(m => streamInfo.mimetype?.startsWith(m))) {
-			return true;
-		}
-		return false;
+		return acceptsStream(streamInfo, EXTENSIONS, MIMETYPES);
 	}
 
 	async convert(input: Buffer, streamInfo: StreamInfo): Promise<ConversionResult> {

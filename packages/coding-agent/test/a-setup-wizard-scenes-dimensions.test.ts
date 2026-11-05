@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { Settings } from "../src/config/settings";
 import { AgentsSceneController } from "../src/modes/terminal/setup-wizard/scenes/agents";
 import { approvalsSetupScene } from "../src/modes/terminal/setup-wizard/scenes/approvals";
@@ -85,7 +86,7 @@ describe("Setup wizard scenes at multiple dimensions and inputs", () => {
 					expect(lines.length).toBe(h);
 					for (const line of lines) {
 						// Strip ANSI and verify width
-						const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
+						const stripped = stripVTControlCharacters(line);
 						expect(stripped.length).toBe(w);
 						expect(line).not.toContain("undefined");
 						expect(line).not.toContain("NaN");
@@ -102,7 +103,7 @@ describe("Setup wizard scenes at multiple dimensions and inputs", () => {
 					const lines = renderSetupOutro(w, h, 800);
 					expect(lines.length).toBe(h);
 					for (const line of lines) {
-						const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
+						const stripped = stripVTControlCharacters(line);
 						expect(stripped.length).toBe(w);
 						expect(line).not.toContain("undefined");
 						expect(line).not.toContain("NaN");

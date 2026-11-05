@@ -18,7 +18,7 @@ import type { FileMentionMessage } from "../session/messages";
 import { formatHeadTruncationNotice, truncateHead, truncateHeadBytes } from "../session/streaming-output";
 import { type InlinePricingSource, inlineBudgetFor } from "../tools/core/output-artifact";
 import { resolveReadPath } from "../tools/core/path-utils";
-import { formatDimensionNote, resizeImage } from "./image-resize";
+import { encodeImageForModel } from "./image-loading";
 
 /** Regex to match @filepath patterns in text */
 const FILE_MENTION_REGEX = /@(?:"([^"]+)"|'([^']+)'|([^\s@]+))/g;
@@ -45,14 +45,6 @@ function sanitizeMentionPath(rawPath: string): string | null {
 	return cleaned.length > 0 ? cleaned : null;
 }
 
-/**
- * Whether an `@mention` names a file that is really there.
- *
- * The throw is how "absent" arrives, and absent is the ordinary answer: this runs against every candidate
- * a half-typed mention could mean, so most calls are misses by design. False also covers a path this
- * process cannot stat, which reaches the same place -- a file the session cannot read is not a file it can
- * attach to the prompt.
- */
 /**
  * Why this probe is silent about a fault.
  *
@@ -204,7 +196,13 @@ export async function generateFileMentionMessages(
 	filePaths: string[],
 	cwd: string,
 	pricing: InlinePricingSource,
-	options?: { autoResizeImages?: boolean; useHashLines?: boolean; snapshotStore?: SnapshotStore },
+	options?: {
+		autoResizeImages?: boolean;
+		/** Encode mentioned images out of WebP, for a model that cannot decode it. */
+		excludeWebP?: boolean;
+		useHashLines?: boolean;
+		snapshotStore?: SnapshotStore;
+	},
 ): Promise<AgentMessage[]> {
 	if (filePaths.length === 0) return [];
 
@@ -219,12 +217,15 @@ export async function generateFileMentionMessages(
 		}
 		const absolutePath = resolveReadPath(resolvedPath, cwd);
 		try {
-			const stat = await Bun.file(absolutePath).stat();
+			const stat = await fs.stat(absolutePath);
 			if (stat.isDirectory()) {
 				const { output, lineCount } = await buildDirectoryListing(absolutePath, maxBytes);
 				files.push({ path: resolvedPath, content: output, lineCount });
 				continue;
 			}
+			// A pipe, socket or device is not a file to attach, and opening one can hold the prompt until a
+			// writer appears. It is skipped like a path this session cannot read.
+			if (!stat.isFile()) continue;
 
 			const imageMetadata = await readImageMetadata(absolutePath);
 			const mimeType = imageMetadata?.mimeType;
@@ -246,19 +247,15 @@ export async function generateFileMentionMessages(
 				const base64Content = buffer.toBase64();
 				let image: ImageContent = { type: "image", mimeType, data: base64Content };
 				let dimensionNote: string | undefined;
-
-				if (autoResizeImages) {
-					try {
-						const resized = await resizeImage({ type: "image", data: base64Content, mimeType });
-						dimensionNote = formatDimensionNote(resized);
-						image = {
-							type: "image",
-							mimeType: resized.mimeType,
-							data: resized.data,
-						};
-					} catch {
-						image = { type: "image", mimeType, data: base64Content };
-					}
+				try {
+					const encoded = await encodeImageForModel(base64Content, {
+						autoResize: autoResizeImages,
+						excludeWebP: options?.excludeWebP,
+					});
+					image = { type: "image", mimeType: encoded.mimeType, data: encoded.data };
+					dimensionNote = encoded.dimensionNote;
+				} catch {
+					// Bytes the encoder cannot decode go to the model as they were read.
 				}
 
 				files.push({ path: resolvedPath, content: dimensionNote ?? "", image });

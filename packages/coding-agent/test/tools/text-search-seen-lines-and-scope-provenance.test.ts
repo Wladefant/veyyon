@@ -7,6 +7,7 @@ import { canonicalSnapshotKey, getFileSnapshotStore } from "@veyyon/coding-agent
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -37,13 +38,6 @@ import { makeToolSession } from "../helpers/tool-session";
  * What this suite does NOT catch:
  *    Does not exercise out-of-process distributed worker transports or binary file encodings.
  */
-
-function extractText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(c => c.type === "text")
-		.map(c => c.text ?? "")
-		.join("\n");
-}
 
 function parseSnapshotTag(text: string, fileName: string): string | undefined {
 	const escaped = fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -98,7 +92,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "cjk.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("target-needle-cjk");
 			const tag = parseSnapshotTag(text, "cjk.txt");
 			expect(tag).toBeDefined();
@@ -131,7 +125,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "ascii.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("target-needle-ascii");
 			const tag = parseSnapshotTag(text, "ascii.txt");
 			expect(tag).toBeDefined();
@@ -164,7 +158,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "short-dots.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("target-needle-short-dots");
 			const tag = parseSnapshotTag(text, "short-dots.txt");
 			expect(tag).toBeDefined();
@@ -198,7 +192,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "exact-508.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("target-needle-508");
 			const tag = parseSnapshotTag(text, "exact-508.txt");
 			expect(tag).toBeDefined();
@@ -230,7 +224,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "exact-509.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("target-needle-509");
 			const tag = parseSnapshotTag(text, "exact-509.txt");
 			expect(tag).toBeDefined();
@@ -272,7 +266,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "file.txt:90-100",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*100:target-needle line 100");
 			expect(text).not.toContain("*1:target-needle line 1");
 			expect(text).not.toContain("*50:target-needle line 50");
@@ -288,7 +282,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "file.txt:90-100;.",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*1:target-needle line 1");
 			expect(text).toContain("*100:target-needle line 100");
 		});
@@ -303,7 +297,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: ".;file.txt:90-100",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*1:target-needle line 1");
 			expect(text).toContain("*100:target-needle line 100");
 		});
@@ -318,7 +312,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "file.txt:90-100;file.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*1:target-needle line 1");
 			expect(text).toContain("*100:target-needle line 100");
 		});
@@ -333,7 +327,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "file.txt:1-10;file.txt:90-100",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*1:target-needle line 1");
 			expect(text).toContain("*100:target-needle line 100");
 			expect(text).not.toContain("*50:target-needle line 50");
@@ -358,7 +352,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "dir1/file.txt:3;dir2",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*3:target-needle dir1 line 100");
 			expect(text).not.toContain("*1:target-needle dir1 line 1");
 
@@ -377,7 +371,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "file.txt:90-100;*.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*1:target-needle line 1");
 			expect(text).toContain("*100:target-needle line 100");
 		});
@@ -392,7 +386,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "*.txt;file.txt:90-100",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*1:target-needle line 1");
 			expect(text).toContain("*100:target-needle line 100");
 		});
@@ -411,7 +405,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "sub/file.txt:3;sub/**/*.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			expect(text).toContain("*1:target-needle sub line 1");
 			expect(text).toContain("*3:target-needle sub line 100");
 		});
@@ -430,7 +424,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "file.txt:90-100;sub/**/*.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			// file.txt is outside sub, so remains constrained to lines 90-100
 			expect(text).toContain("*100:target-needle line 100");
 			expect(text).not.toContain("*1:target-needle line 1");
@@ -452,7 +446,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "file.txt:90-100;*.md",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			// file.txt is NOT matched by *.md, so its range constraint [90-100] is not lifted
 			expect(text).toContain("*100:target-needle line 100");
 			expect(text).not.toContain("*1:target-needle line 1");
@@ -478,7 +472,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "dir1/file.txt:3;dir2/*.txt",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			// dir1/file.txt is outside dir2/*.txt scope, so only line 3 is kept
 			expect(text).toContain("*3:target-needle d1 line 100");
 			expect(text).not.toContain("*1:target-needle d1 line 1");
@@ -502,7 +496,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "routes/[id]/page.tsx:3;routes/[id]/page.tsx",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			// Unrestricted bracket file path supersedes the range constraint
 			expect(text).toContain("*1:target-needle bracket line 1");
 			expect(text).toContain("*3:target-needle bracket line 100");
@@ -522,7 +516,7 @@ describe("SearchTool (text) seenLines truncation & scope provenance contracts", 
 				path: "subpkg/..dotprefix.txt:3;subpkg",
 			});
 
-			const text = extractText(result);
+			const text = toolResultText(result);
 			// subpkg is unrestricted, so subpkg/..dotprefix.txt should have both lines 1 and 3 retained
 			expect(text).toContain("*1:target-needle dot line 1");
 			expect(text).toContain("*3:target-needle dot line 100");

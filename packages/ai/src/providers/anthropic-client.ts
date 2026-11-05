@@ -15,8 +15,9 @@
  * - Pre-response timeouts throw {@link AnthropicConnectionTimeoutError}
  *   ("Request timed out.").
  * - Caller aborts throw an `Error` with message "Request was aborted.".
- * - Retries: connection errors and 408/409/429/5xx (or `x-should-retry: true`)
- *   are retried up to `maxRetries` times, honoring the server-directed wait
+ * - Retries: connection errors the registry retries at the transport stage (a reset, a timeout;
+ *   never a refused dial or a host that does not resolve) and 408/409/429/5xx (or
+ *   `x-should-retry: true`) are retried up to `maxRetries` times, honoring the server-directed wait
  *   {@link getRetryAfterMsFromHeaders} reads (`retry-after-ms`, `retry-after`,
  *   `x-ratelimit-reset[-ms]`, then Anthropic's per-bucket reset clocks) up to
  *   `maxRetryDelayMs` (a longer hint surfaces the refusal instead of sleeping on
@@ -239,7 +240,10 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 				response = await this.#fetchOnce(fetchFn, url, headers, body, timeoutMs, callerSignal);
 			} catch (error) {
 				if (callerSignal?.aborted) throw createAbortError();
-				if (attempt < maxRetries) {
+				// The registry decides whether a thrown failure is redialed, as it does for every other
+				// transport ladder: a refused dial or a host that does not resolve fails the same way a
+				// second later, and the turn above owns the visible wait for the first of them.
+				if (attempt < maxRetries && AIError.isProviderRetryableError(error)) {
 					await backoff(attempt, undefined, callerSignal);
 					continue;
 				}

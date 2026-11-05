@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { CommandController } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
 import { MoveOverlay } from "@veyyon/coding-agent/modes/terminal/components/selectors/move-overlay";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "../../../helpers/require-theme";
 
 function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void>, isStreaming = false) {
 	const state = {
@@ -33,7 +34,11 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 			moveTo: vi.fn(async (cwd: string) => {
 				state.cwd = cwd;
 				state.movedTo = cwd;
-			}),
+				return cwd;
+			},
+		},
+		sessionManager: {
+			getCwd: () => state.cwd,
 			dropSession: vi.fn(async () => {}),
 			captureState,
 			restoreState,
@@ -69,15 +74,14 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 
 describe("CommandController /move", () => {
 	beforeAll(async () => {
-		const theme = await getThemeByName("dark");
-		if (!theme) throw new Error("Expected dark theme");
+		const theme = await requireTheme("dark");
 		setThemeInstance(theme);
 	});
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
-	it("relocates the active session before re-scoping cwd-derived state", async () => {
+	it("moves the session through its transaction, then refreshes the terminal chrome", async () => {
 		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-source-"));
 		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-move-target-"));
 		try {
@@ -89,7 +93,6 @@ describe("CommandController /move", () => {
 			expect(state.movedTo).toBe(targetDir);
 			expect(state.completedBtwVisible).toBe(false);
 			expect(ctx.sessionManager.dropSession).not.toHaveBeenCalled();
-			expect(ctx.applyCwdChange).toHaveBeenCalledWith(targetDir);
 			expect(ctx.updateEditorBorderColor).toHaveBeenCalled();
 			expect(ctx.reloadTodos).toHaveBeenCalled();
 			expect(ctx.ui.requestRender).toHaveBeenCalledWith();

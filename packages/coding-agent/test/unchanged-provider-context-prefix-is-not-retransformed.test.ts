@@ -9,6 +9,7 @@ import {
 import { renderToolBatchLedger, TOOL_BATCH_LEDGER_HEADLINE_PREFIX } from "@veyyon/agent-core/tool-batch-ledger";
 import type { AgentMessage } from "@veyyon/agent-core/types";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage, UserMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { recordImageDisplay, setImageDisplayProbe } from "@veyyon/coding-agent/session/image-visibility";
 import {
 	convertToLlm,
@@ -69,14 +70,7 @@ function assistantCall(id: string, path: string, timestamp = 2): AssistantMessag
 		api: "openai-responses",
 		provider: "openai",
 		model: "gpt-test",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp,
 	};
@@ -584,14 +578,7 @@ describe("unchanged provider context prefix is not retransformed across turns", 
 				api: "openai-responses",
 				provider: "openai",
 				model: "gpt-test",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "stop",
 				timestamp: 100,
 			};

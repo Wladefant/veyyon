@@ -15,14 +15,13 @@
  * on the card and `anthropic/sonnet-4-6:high` in the transcript.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { SessionObserverRegistry } from "@veyyon/coding-agent/modes/terminal/session-observer-registry";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentProgress } from "@veyyon/coding-agent/task/types";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 let geometry: StubbedStdoutGeometry;
 
@@ -38,7 +37,7 @@ afterEach(() => {
 });
 
 function frameOf(dashboard: AgentDashboard): string {
-	return dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+	return stripVTControlCharacters(dashboard.render(120).join("\n"));
 }
 
 /** An observer registry that reports one agent's executor-resolved model. */

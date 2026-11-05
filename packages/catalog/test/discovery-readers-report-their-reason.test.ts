@@ -460,6 +460,29 @@ describe("GitLab Duo Workflow discovery", () => {
 	});
 
 	/**
+	 * A HOST THAT ANSWERS NOTHING ends the handshake at the first request, naming the dial. Every step asks
+	 * the same host, and swallowing the throw walked each remaining candidate into the same refusal and then
+	 * concluded "set GITLAB_DUO_NAMESPACE_ID": a configuration remedy for a server that was not running.
+	 */
+	it("names the dial, not a namespace setting, when no request reaches GitLab", async () => {
+		const { failures, onFailure } = collector();
+
+		const result = await fetchGitLabDuoWorkflowModels({
+			apiKey: "token",
+			baseUrl: "https://gitlab.example",
+			namespaceId: "42",
+			fetch: refuseConnection(),
+			onFailure,
+		});
+
+		expect(result).toBeNull();
+		expect(failures.filter(failure => failure.stage === "request")).toHaveLength(1);
+		const conclusion = failures.find(failure => failure.stage === "payload");
+		expect(conclusion?.detail).toContain("ECONNREFUSED");
+		expect(conclusion?.detail).not.toContain("GITLAB_DUO_NAMESPACE_ID");
+	});
+
+	/**
 	 * A group listing that answers a JSON object where an array belongs is a `payload` failure naming what
 	 * arrived. GitLab returns an object for an error envelope, and reading it as "no groups" is how the walk
 	 * used to end without a word.

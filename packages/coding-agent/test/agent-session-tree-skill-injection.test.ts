@@ -8,7 +8,8 @@
  */
 import { describe, expect, it } from "bun:test";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "@veyyon/coding-agent/session/messages";
-import { assistantMsg, createTestSession, userMsg } from "./helpers/e2e-session";
+import { createTestSession } from "./helpers/e2e-session";
+import { assistantMsg, userMsg } from "./helpers/session-messages";
 
 describe("AgentSession tree navigation onto skill injection", () => {
 	it("lands the leaf on the skill injection node and keeps it on the active branch", async () => {

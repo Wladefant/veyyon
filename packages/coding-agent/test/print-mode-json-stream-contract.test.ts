@@ -80,6 +80,7 @@ function createReplaySession(events: AgentSessionEvent[], header?: unknown): Pri
 			messages.push(makeAssistantMessage("done"));
 			return true;
 		},
+		waitForQuiescence: async () => {},
 		sessionManager: { getHeader: () => header },
 		state: { messages },
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {

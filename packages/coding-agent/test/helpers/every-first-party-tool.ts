@@ -26,9 +26,13 @@ const EVERY_TOOL_ENABLED: Partial<Record<SettingPath, unknown>> = {
  * Calls every built-in and hidden factory and hands each tool it returns to `visit`; returns the
  * names that returned none. `dir` is the sweep's profile and working directory: `ssh` registers only
  * with a host in the profile's `ssh.json`, and `debug` only with an adapter in the working
- * directory's `dap.json`.
+ * directory's `dap.json`. A setting in `overrides` takes precedence over the one that enables every tool.
  */
-export async function visitEveryFirstPartyTool(dir: string, visit: (tool: Tool) => void): Promise<string[]> {
+export async function visitEveryFirstPartyTool(
+	dir: string,
+	visit: (tool: Tool) => void,
+	overrides: Partial<Record<SettingPath, unknown>> = {},
+): Promise<string[]> {
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(path.join(dir, "ssh.json"), JSON.stringify({ hosts: { probe: { host: "127.0.0.1" } } }));
 	fs.writeFileSync(
@@ -40,7 +44,12 @@ export async function visitEveryFirstPartyTool(dir: string, visit: (tool: Tool) 
 		hasUI: true,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: await Settings.loadIsolated({ cwd: dir, agentDir: dir, inMemory: true, overrides: EVERY_TOOL_ENABLED }),
+		settings: await Settings.loadIsolated({
+			cwd: dir,
+			agentDir: dir,
+			inMemory: true,
+			overrides: { ...EVERY_TOOL_ENABLED, ...overrides },
+		}),
 		isToolDiscoveryEnabled: () => true,
 		getSelectedDiscoveredToolNames: () => [],
 		activateDiscoveredTools: async names => names,

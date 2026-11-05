@@ -6,6 +6,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { Context, FetchImpl, ModelSpec } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { responsesCompletedSse, sseResponse } from "./helpers/fetch-mock";
 
 const ctx: Context = {
 	systemPrompt: ["hi"],
@@ -26,22 +27,7 @@ function completionsSse(): Response {
 		},
 		"[DONE]",
 	];
-	const payload = `${events.map(e => `data: ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n\n")}\n\n`;
-	return new Response(payload, { status: 200, headers: { "content-type": "text/event-stream" } });
-}
-
-function responsesSse(): Response {
-	const event = {
-		type: "response.completed",
-		response: {
-			status: "completed",
-			usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 } },
-		},
-	};
-	return new Response(`data: ${JSON.stringify(event)}\n\n`, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
+	return sseResponse(events);
 }
 
 interface CapturedGoogleRequestBody {
@@ -211,7 +197,7 @@ describe("null maxTokens fallback wire tests", () => {
 		let capturedPayload: Record<string, unknown> | null = null;
 		const mockFetch: FetchImpl = async (_url, init) => {
 			capturedPayload = JSON.parse(init?.body as string) as Record<string, unknown>;
-			return responsesSse();
+			return responsesCompletedSse();
 		};
 
 		await streamOpenAIResponses(model, ctx, {

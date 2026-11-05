@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, type RenderStablePrefix, TUI } from "@veyyon/tui";
+import { plainRows } from "./helpers/terminal-output";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -62,10 +63,6 @@ class PromptLine implements Component {
 	}
 }
 
-function strip(rows: string[]): string[] {
-	return rows.map(row => Bun.stripANSI(row).trimEnd());
-}
-
 describe("RenderStablePrefix engine contract", () => {
 	it("emits appended rows exactly once and in order while the stable prefix is honored", async () => {
 		const term = new VirtualTerminal(80, 8, 10_000);
@@ -92,7 +89,7 @@ describe("RenderStablePrefix engine contract", () => {
 
 			// History + active grid together must contain every appended row
 			// exactly once: committed rows are not re-emitted, no row is lost.
-			const buffer = strip(term.getScrollBuffer()).join("\n");
+			const buffer = plainRows(term.getScrollBuffer()).join("\n");
 			const missing = markers.filter(mark => buffer.split(mark).length - 1 === 0);
 			const duplicated = markers.filter(mark => buffer.split(mark).length - 1 > 1);
 			expect(missing).toEqual([]);
@@ -123,7 +120,7 @@ describe("RenderStablePrefix engine contract", () => {
 			tui.requestRender();
 			await scheduler.drain(term);
 
-			let viewport = strip(term.getViewport()).filter(row => row.length > 0);
+			let viewport = plainRows(term.getViewport()).filter(row => row.length > 0);
 			expect(viewport).toEqual(["alpha", "beta", "gamma", "delta"]);
 
 			// Rewrite row 1 in place: same array reference, lowered floor.
@@ -131,7 +128,7 @@ describe("RenderStablePrefix engine contract", () => {
 			tui.requestRender();
 			await scheduler.drain(term);
 
-			viewport = strip(term.getViewport()).filter(row => row.length > 0);
+			viewport = plainRows(term.getViewport()).filter(row => row.length > 0);
 			expect(viewport).toEqual(["alpha", "beta-edited", "gamma", "delta"]);
 		} finally {
 			tui.stop();
@@ -161,7 +158,7 @@ describe("RenderStablePrefix engine contract", () => {
 			tui.requestRender();
 			await scheduler.drain(term);
 
-			expect(strip(term.getViewport()).filter(row => row.length > 0)).toEqual([
+			expect(plainRows(term.getViewport()).filter(row => row.length > 0)).toEqual([
 				"head-0",
 				"head-1",
 				"head-2",

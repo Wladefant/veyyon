@@ -18,6 +18,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
@@ -29,14 +30,7 @@ import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-sessi
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 /** Assistant turn persisted mid-execution: toolCall present, no toolResult. */
 const danglingAssistant = {

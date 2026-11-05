@@ -173,7 +173,7 @@ async function registerUnenforceableBudget(sessionId: string): Promise<void> {
 describe("a spawn that cannot join the session budget", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
-		resetSessionCpuLimitsForTests();
+		await resetSessionCpuLimitsForTests();
 		await removeCgroupRoots();
 	});
 

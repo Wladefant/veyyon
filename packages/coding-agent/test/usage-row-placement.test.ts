@@ -8,6 +8,7 @@
  */
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ReadToolGroupComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/read-tool-group";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
@@ -28,14 +29,7 @@ function readTurn(): AgentMessage[] {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "stop",
-		usage: {
-			input: USAGE_INPUT,
-			output: 7,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: USAGE_INPUT + 7,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: USAGE_INPUT, output: 7, totalTokens: USAGE_INPUT + 7 },
 		timestamp: Date.now(),
 	} as unknown as AgentMessage;
 	const toolResult = {

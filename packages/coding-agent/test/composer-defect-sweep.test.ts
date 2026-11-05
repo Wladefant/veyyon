@@ -23,9 +23,11 @@
 
 import { beforeAll, describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
+import { Semaphore } from "../src/task/parallel";
 import { initTheme } from "../src/theme/theme";
 import {
 	type RunnerOptions,
+	type RunnerResult,
 	runComposerOracleScenario,
 	runnerOptionsToCorpusState,
 } from "./helpers/composer-oracle-runner";
@@ -129,13 +131,22 @@ describe("renderer composer defect oracle sweep", () => {
 		expect(unconstructableStates).toEqual([]);
 	});
 
-	// Run sweep across the cross-product
+	// Run sweep across the cross-product. Each case builds its own TUI and terminal and spends most of
+	// its time waiting on frame timers in settleFrames, so cases run concurrently. Each case's terminal
+	// holds a Ghostty WASM instance, and JSC keeps only `maxNumWasmFastMemories` WebAssembly memories
+	// (8 by default) before each new instance forces a full collection to reclaim one. Cases past
+	// three quarters of that budget add collection work instead of overlap: with 8 slots the 4,203
+	// cases took 164 s one after another, 63 s at 20 at once and 38 s at 6. `scripts/ci-test-ts.ts`
+	// raises the budget to 256, where 24 at once takes 8.5 s and more at once gains nothing.
+	const fastMemorySlots = Number(process.env.BUN_JSC_maxNumWasmFastMemories) || 8;
+	const CASES_AT_ONCE = Math.min(24, Math.max(1, Math.floor((fastMemorySlots * 3) / 4)));
+	const caseSlots = new Semaphore(CASES_AT_ONCE);
 	for (const mode of modeVariants) {
 		for (const width of WIDTHS) {
 			for (const height of HEIGHTS) {
 				for (const transcriptCount of TRANSCRIPTS) {
 					for (const textVariant of TEXT_VARIANTS) {
-						it(`evaluates oracles across (${mode.name}, w=${width}, h=${height}, trans=${transcriptCount}, text=${textVariant.name})`, async () => {
+						it.concurrent(`evaluates oracles across (${mode.name}, w=${width}, h=${height}, trans=${transcriptCount}, text=${textVariant.name})`, async () => {
 							const options: RunnerOptions = {
 								width,
 								height,
@@ -147,8 +158,10 @@ describe("renderer composer defect oracle sweep", () => {
 								focused: true,
 							};
 
-							const result = await runComposerOracleScenario(options);
+							await caseSlots.acquire();
+							let result: RunnerResult | undefined;
 							try {
+								result = await runComposerOracleScenario(options);
 								if (!result.evaluation.passed) {
 									// Auto-promote failure to committed corpus
 									const state = runnerOptionsToCorpusState(options);
@@ -161,7 +174,8 @@ describe("renderer composer defect oracle sweep", () => {
 									`Composer oracle failed on (${mode.name}, ${width}x${height}, trans=${transcriptCount}, ${textVariant.name}):\n${result.evaluation.failures.map(f => `[${f.oracle}] ${f.message}`).join("\n")}`,
 								).toEqual([]);
 							} finally {
-								result.cleanUp();
+								result?.cleanUp();
+								caseSlots.release();
 							}
 						});
 					}

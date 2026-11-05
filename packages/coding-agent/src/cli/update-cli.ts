@@ -4,6 +4,7 @@
  * Handles `veyyon update` to check for and install updates.
  * Uses the installer that owns the active veyyon executable when it can be detected.
  */
+import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,6 +24,7 @@ import {
 	isEnoent,
 	isValidSemver,
 	logger,
+	postmortem,
 	readPipeText,
 	RELEASE_REPOSITORY,
 	removeTempPath,
@@ -244,14 +246,6 @@ export type UpdateMethod = "binary" | "source";
 type UpdateTarget = { method: "binary"; path: string } | { method: "source"; path: string };
 
 /**
- * Classify an on-PATH veyyon path as a binary or source install.
- *
- * A source install links PATH's veyyon to `<checkout>/<SOURCE_LAUNCHER_TAIL>`,
- * so following the symlink (realpath) and matching that suffix is what tells the
- * two apart. Everything else is a standalone binary the updater can swap.
- * Exported for direct unit testing without a real install on disk.
- */
-/**
  * Does this path end at the in-checkout launcher, on either platform?
  *
  * Separators are normalized because the Windows shim stores a `\`-separated
@@ -333,6 +327,14 @@ function looksLikeShim(resolvedPath: string, body: string): boolean {
 	return body.startsWith("#!");
 }
 
+/**
+ * Classify an on-PATH veyyon path as a binary or source install.
+ *
+ * A source install links PATH's veyyon to `<checkout>/<SOURCE_LAUNCHER_TAIL>`,
+ * so following the symlink (realpath) and matching that suffix is what tells the
+ * two apart. Everything else is a standalone binary the updater can swap.
+ * Exported for direct unit testing without a real install on disk.
+ */
 export function resolveUpdateMethod(
 	veyyonPath: string,
 	readShim: (p: string) => string = defaultReadShim,
@@ -1100,8 +1102,10 @@ async function removeFileBestEffort(filePath: string): Promise<boolean> {
  *
  * Only `.bak`. The staged `<binary>.<attempt UUID>.new` names are NOT swept
  * here: downloads run outside the replacement lock, so a `.new` beside the
- * binary may belong to an update that is still writing it. `--uninstall` sweeps
- * those, because by then the binary itself is going too.
+ * binary may belong to an update that is still writing it. An attempt removes
+ * its own `.new` when its process ends (see {@link updateViaBinaryAt}); one left
+ * by a hard kill is swept by `--uninstall`, because by then the binary itself is
+ * going too.
  */
 export async function sweepStaleBackups(targetPath: string): Promise<void> {
 	const dir = path.dirname(targetPath);
@@ -1365,9 +1369,6 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 }
 
 /**
- * Download a release binary to a target path, replacing an existing file.
- */
-/**
  * Download release `expectedVersion` and swap it in at `targetPath`.
  *
  * Exported for the integrity tests rather than for callers: production code
@@ -1395,114 +1396,141 @@ export async function updateViaBinaryAt(
 	const attemptId = crypto.randomUUID();
 	const tempPath = `${targetPath}.${attemptId}.new`;
 	const backupPath = `${targetPath}.${attemptId}.bak`;
-	report(chalk.dim(`Downloading ${binaryName}…`));
+	// A process that ends while this attempt is staged never reaches the removals
+	// below: closing the terminal, Ctrl+C and quitting the session all exit
+	// mid-download. Nothing else reclaims the file, because the sweep leaves every
+	// `.new` alone in case it is a live download, so each interrupted update left a
+	// partial copy of the binary beside it until uninstall. Until the replacement
+	// lock takes ownership of the staged file, removing it on exit is this attempt's
+	// job. A hard kill still leaves one; `--uninstall` reclaims that.
+	const releaseStagedDownload = postmortem.register(`binary-update:${attemptId}`, () => {
+		try {
+			fs.unlinkSync(tempPath);
+		} catch {
+			// Best effort, like removeFileBestEffort: the process is ending either way.
+		}
+	});
+	try {
+		report(chalk.dim(`Downloading ${binaryName}…`));
 
-	await withScopedTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS, async signal => {
-		let response: Response;
-		try {
-			response = await fetch(url, { redirect: "follow", signal });
-		} catch (err) {
-			if (isTimeoutError(err)) {
-				throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+		await withScopedTimeoutSignal(BINARY_DOWNLOAD_TIMEOUT_MS, async signal => {
+			let response: Response;
+			try {
+				response = await fetch(url, { redirect: "follow", signal });
+			} catch (err) {
+				if (isTimeoutError(err)) {
+					throw new Error("Timed out downloading release binary after 15 minutes", { cause: err });
+				}
+				throw err;
 			}
-			throw err;
-		}
-		if (!response.ok) {
-			throw new Error(
-				formatBinaryDownloadFailure(response.status, response.statusText, url, expectedVersion, binaryName),
-			);
-		}
-		if (!response.body) {
-			throw new Error(`Release binary download from ${url} returned HTTP ${response.status} with an empty body`);
-		}
-		const fileStream = fs.createWriteStream(tempPath, { mode: 0o755 });
+			if (!response.ok) {
+				throw new Error(
+					formatBinaryDownloadFailure(response.status, response.statusText, url, expectedVersion, binaryName),
+				);
+			}
+			if (!response.body) {
+				throw new Error(`Release binary download from ${url} returned HTTP ${response.status} with an empty body`);
+			}
+			const fileStream = fs.createWriteStream(tempPath, { mode: 0o755 });
+			try {
+				// A write stream opens its path asynchronously. A body that fails before that
+				// open lands would run the removal below first, and the open would then create
+				// the partial file after the removal: litter beside the real binary. Waiting
+				// for the open orders every removal after it.
+				await once(fileStream, "open");
+				await pipeline(response.body, fileStream);
+			} catch (err) {
+				// A mid-download failure (network drop) leaves a partial attempt file
+				// behind before reaching replaceBinaryForUpdate, whose catch
+				// would otherwise clean it up. Remove it so a failed update never litters
+				// the install dir, matching install.sh's EXIT/INT/TERM trap on its tmpbin.
+				// Best-effort: a directory this process cannot write is the likeliest reason
+				// the download failed in the first place, and it would fail the cleanup too.
+				// The download error is the one worth reporting.
+				await removeFileBestEffort(tempPath);
+				throw err;
+			}
+		});
+
+		// Fail-closed integrity gate, matching install.sh / install.ps1: verify the
+		// download against its published .sha256 sidecar BEFORE swapping it in. A
+		// corrupted or tampered same-version binary would otherwise pass the
+		// post-install --version check unnoticed. No silent fallback (Law 10) — a
+		// missing, unparseable, or mismatched checksum aborts and removes the partial
+		// download rather than installing something unverified.
+		report(chalk.dim("Verifying checksum…"));
 		try {
-			await pipeline(response.body, fileStream);
+			await verifyDownloadChecksum(tempPath, `${url}.sha256`);
 		} catch (err) {
-			// A mid-download failure (network drop) leaves a partial attempt file
-			// behind before reaching replaceBinaryForUpdate, whose catch
-			// would otherwise clean it up. Remove it so a failed update never litters
-			// the install dir, matching install.sh's EXIT/INT/TERM trap on its tmpbin.
-			// Best-effort: a directory this process cannot write is the likeliest reason
-			// the download failed in the first place, and it would fail the cleanup too.
-			// The download error is the one worth reporting.
+			// Best-effort, for the same reason as above: a checksum mismatch is a
+			// security finding and must reach the terminal verbatim, never be displaced
+			// by a failure to delete the file it is about.
 			await removeFileBestEffort(tempPath);
 			throw err;
 		}
-	});
+		// Confirm the integrity check passed, matching install.sh's "verified sha256".
+		// A security control that only speaks up on failure leaves the user unsure it
+		// ran at all; say so on success too. Silent under the auto-update reporter.
+		report(chalk.dim("Checksum verified"));
 
-	// Fail-closed integrity gate, matching install.sh / install.ps1: verify the
-	// download against its published .sha256 sidecar BEFORE swapping it in. A
-	// corrupted or tampered same-version binary would otherwise pass the
-	// post-install --version check unnoticed. No silent fallback (Law 10) — a
-	// missing, unparseable, or mismatched checksum aborts and removes the partial
-	// download rather than installing something unverified.
-	report(chalk.dim("Verifying checksum…"));
-	try {
-		await verifyDownloadChecksum(tempPath, `${url}.sha256`);
-	} catch (err) {
-		// Best-effort, for the same reason as above: a checksum mismatch is a
-		// security finding and must reach the terminal verbatim, never be displaced
-		// by a failure to delete the file it is about.
-		await removeFileBestEffort(tempPath);
-		throw err;
-	}
-	// Confirm the integrity check passed, matching install.sh's "verified sha256".
-	// A security control that only speaks up on failure leaves the user unsure it
-	// ran at all; say so on success too. Silent under the auto-update reporter.
-	report(chalk.dim("Checksum verified"));
-
-	// Only the mutation phase needs serialization: downloads remain concurrent
-	// and isolated at their unique paths, while backup, atomic replacement,
-	// rollback, stale-backup sweeping, and completion refresh observe one
-	// installed version at a time. The lock path is derived from targetPath, so
-	// independent installs do not block one another.
-	try {
-		return await withFileLock(
-			targetPath,
-			async () => {
-				// Reclaim backups from earlier updates whose owning process has since
-				// exited. Holding the replacement lock means this can never sweep
-				// another live attempt's rollback copy.
-				//
-				// BEFORE the attempt, not after it. Sweeping only on the success path
-				// meant a machine whose updates keep failing — the exact machine most
-				// likely to be holding orphaned backups — never reclaimed any of them,
-				// and each one is a full copy of a ~150MB executable. This runs on
-				// every attempt, so the next one cleans up after the last regardless
-				// of how the last ended. The current attempt's own backup does not
-				// exist yet, so it cannot sweep itself.
-				await sweepStaleBackups(targetPath);
-				report(chalk.dim("Installing update..."));
-				await replaceBinaryForUpdate({
-					targetPath,
-					tempPath,
-					backupPath,
-					expectedVersion,
-					// Verify the file this update just wrote, not whatever PATH resolves now.
-					verifyInstalledVersion: version => verifyBinaryUsable(targetPath, version),
-					force,
-				});
-				// The completion scripts on disk describe the version we just replaced, so
-				// every subcommand and flag this release adds would be missing from tab
-				// completion until the user re-ran the installer. Regenerate from the binary
-				// that was just installed.
-				const completionResult = await refreshCompletionsForInstalledBinary(targetPath, report);
-				printVerifiedVersion(expectedVersion, report);
-				report(chalk.dim(`Restart ${APP_NAME} to use the new version`));
-				return { warnings: completionResult.failed.map(formatCompletionRefreshWarning) };
-			},
-			{
-				staleMs: AUTO_UPDATE_LOCK_STALE_MS,
-				retries: Math.ceil(BINARY_DOWNLOAD_TIMEOUT_MS / BINARY_UPDATE_LOCK_RETRY_MS),
-				retryDelayMs: BINARY_UPDATE_LOCK_RETRY_MS,
-			},
-		);
-	} catch (err) {
-		// Lock acquisition can fail before replaceBinaryForUpdate owns cleanup.
-		// Removing only this attempt's unique staging cannot disturb a contender.
-		await removeFileBestEffort(tempPath);
-		throw err;
+		// Only the mutation phase needs serialization: downloads remain concurrent
+		// and isolated at their unique paths, while backup, atomic replacement,
+		// rollback, stale-backup sweeping, and completion refresh observe one
+		// installed version at a time. The lock path is derived from targetPath, so
+		// independent installs do not block one another.
+		try {
+			return await withFileLock(
+				targetPath,
+				async () => {
+					// From here replaceBinaryForUpdate owns the staged file and its
+					// rollback. Deleting it from an exit handler mid-swap could leave no
+					// binary at all where a rename had not yet landed.
+					releaseStagedDownload();
+					// Reclaim backups from earlier updates whose owning process has since
+					// exited. Holding the replacement lock means this can never sweep
+					// another live attempt's rollback copy.
+					//
+					// BEFORE the attempt, not after it. Sweeping only on the success path
+					// meant a machine whose updates keep failing — the exact machine most
+					// likely to be holding orphaned backups — never reclaimed any of them,
+					// and each one is a full copy of a ~150MB executable. This runs on
+					// every attempt, so the next one cleans up after the last regardless
+					// of how the last ended. The current attempt's own backup does not
+					// exist yet, so it cannot sweep itself.
+					await sweepStaleBackups(targetPath);
+					report(chalk.dim("Installing update..."));
+					await replaceBinaryForUpdate({
+						targetPath,
+						tempPath,
+						backupPath,
+						expectedVersion,
+						// Verify the file this update just wrote, not whatever PATH resolves now.
+						verifyInstalledVersion: version => verifyBinaryUsable(targetPath, version),
+						force,
+					});
+					// The completion scripts on disk describe the version we just replaced, so
+					// every subcommand and flag this release adds would be missing from tab
+					// completion until the user re-ran the installer. Regenerate from the binary
+					// that was just installed.
+					const completionResult = await refreshCompletionsForInstalledBinary(targetPath, report);
+					printVerifiedVersion(expectedVersion, report);
+					report(chalk.dim(`Restart ${APP_NAME} to use the new version`));
+					return { warnings: completionResult.failed.map(formatCompletionRefreshWarning) };
+				},
+				{
+					staleMs: AUTO_UPDATE_LOCK_STALE_MS,
+					retries: Math.ceil(BINARY_DOWNLOAD_TIMEOUT_MS / BINARY_UPDATE_LOCK_RETRY_MS),
+					retryDelayMs: BINARY_UPDATE_LOCK_RETRY_MS,
+				},
+			);
+		} catch (err) {
+			// Lock acquisition can fail before replaceBinaryForUpdate owns cleanup.
+			// Removing only this attempt's unique staging cannot disturb a contender.
+			await removeFileBestEffort(tempPath);
+			throw err;
+		}
+	} finally {
+		releaseStagedDownload();
 	}
 }
 

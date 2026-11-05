@@ -60,6 +60,7 @@ function createRealEditorControllerContext() {
 			borderRefreshes.push({ bash: ctx.isBashMode, python: ctx.isPythonMode });
 		},
 		refreshComposerShortcuts: () => {},
+		noteComposerChanged: () => {},
 		dismissWelcome: () => {
 			welcomeDismissals += 1;
 		},

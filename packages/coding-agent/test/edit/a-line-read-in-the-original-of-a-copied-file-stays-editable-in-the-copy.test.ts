@@ -18,51 +18,17 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@veyyon/coding-agent/edit";
+import { executeHashlineSingle } from "@veyyon/coding-agent/edit";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { hashlineExecOptions } from "../helpers/hashline-exec";
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeWorkspaceToolSession } from "../helpers/tool-session";
 
 const LINES = Array.from({ length: 40 }, (_, i) => (i === 19 ? "NEEDLE line 20" : `line ${i + 1}`));
 const CONTENT = `${LINES.join("\n")}\n`;
-
-function createSession(cwd: string): ToolSession {
-	return {
-		cwd,
-		hasUI: false,
-		hasEditTool: true,
-		getSessionFile: () => path.join(cwd, "session.jsonl"),
-		getSessionSpawns: () => "*",
-		getArtifactsDir: () => path.join(cwd, "artifacts"),
-		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
-		settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
-		enableLsp: false,
-	} as ToolSession;
-}
-
-function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
-	return {
-		session,
-		input,
-		writethrough: async (targetPath, content) => {
-			await fs.writeFile(targetPath, content);
-			return undefined;
-		},
-		beginDeferredDiagnosticsForPath: () => ({
-			onDeferredDiagnostics: () => {},
-			signal: new AbortController().signal,
-			finalize: () => {},
-		}),
-	};
-}
-
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 function tagFromOutput(text: string, file: string): string {
 	const match = new RegExp(`${path.basename(file).replace(".", "\\.")}#([0-9A-F]{4})\\]`).exec(text);
@@ -86,7 +52,7 @@ describe("a line read in the original of a copied file stays editable in the cop
 		original = path.join(tmpDir, "v1", "probe.py");
 		copy = path.join(tmpDir, "v2", "probe.py");
 		await fs.writeFile(original, CONTENT);
-		session = createSession(tmpDir);
+		session = makeWorkspaceToolSession(tmpDir);
 	});
 	afterEach(async () => {
 		await removeWithRetries(tmpDir);
@@ -96,35 +62,35 @@ describe("a line read in the original of a copied file stays editable in the cop
 	async function copyAndReadTail(tag: string): Promise<void> {
 		await fs.copyFile(original, copy);
 		const read = await new ReadTool(session).execute("r2", { path: `${copy}:34-36` });
-		expect(tagFromOutput(resultText(read), copy)).toBe(tag);
+		expect(tagFromOutput(toolResultText(read), copy)).toBe(tag);
 	}
 
 	it("applies an edit of the copy on a line a read of the original displayed", async () => {
 		const read = await new ReadTool(session).execute("r1", { path: `${original}:1-3` });
-		const tag = tagFromOutput(resultText(read), original);
+		const tag = tagFromOutput(toolResultText(read), original);
 		await copyAndReadTail(tag);
 
-		await executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT.replace("line 2\n", "EDITED\n"));
 		expect(await fs.readFile(original, "utf8")).toBe(CONTENT);
 	});
 
 	it("applies an edit of the copy on a line a search of the original displayed", async () => {
 		const hit = await new SearchTool(session).execute("s1", { type: "text", input: "NEEDLE", path: original });
-		const tag = tagFromOutput(resultText(hit), original);
+		const tag = tagFromOutput(toolResultText(hit), original);
 		await copyAndReadTail(tag);
 
-		await executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
+		await executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 20.=20:\n+EDITED`, session));
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT.replace("NEEDLE line 20\n", "EDITED\n"));
 	});
 
 	it("still rejects an edit of the copy on a line neither file displayed", async () => {
 		const read = await new ReadTool(session).execute("r1", { path: `${original}:1-3` });
-		const tag = tagFromOutput(resultText(read), original);
+		const tag = tagFromOutput(toolResultText(read), original);
 		await copyAndReadTail(tag);
 
 		await expect(
-			executeHashlineSingle(execOptions(`[v2/probe.py#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
+			executeHashlineSingle(hashlineExecOptions(`[v2/probe.py#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
 		).rejects.toThrow(/never displayed \(it showed/);
 		expect(await fs.readFile(copy, "utf8")).toBe(CONTENT);
 	});

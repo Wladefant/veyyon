@@ -16,11 +16,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
-import { type Api, type Model, z } from "@veyyon/ai";
+import { z } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls/local-protocol";
@@ -29,6 +28,7 @@ import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { ToolError } from "@veyyon/coding-agent/tools/core/tool-errors";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 const emptySchema = z.object({});
 
@@ -43,12 +43,6 @@ function tool(name: string): AgentTool {
 		},
 	};
 	return defined as AgentTool;
-}
-
-function modelOrThrow(id: string): Model<Api> {
-	const model = getBundledModel("anthropic", id);
-	if (!model) throw new Error(`Expected bundled model ${id}`);
-	return model;
 }
 
 function contextText(messages: ReadonlyArray<unknown>): string {
@@ -73,8 +67,8 @@ describe("a plan-yolo run", () => {
 		tempDir.removeSync();
 	});
 
-	const primary = modelOrThrow("claude-sonnet-4-5");
-	const target = modelOrThrow("claude-sonnet-4-6");
+	const primary = requireBundledModel("anthropic", "claude-sonnet-4-5");
+	const target = requireBundledModel("anthropic", "claude-sonnet-4-6");
 
 	function start(responses: string[]) {
 		const mock = createMockModel({ responses: responses.map(text => ({ content: [text] })) });

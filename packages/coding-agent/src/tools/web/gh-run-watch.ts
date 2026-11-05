@@ -418,15 +418,8 @@ function renderRunSection(run: GhRunSnapshot): string[] {
 	return lines;
 }
 
-export function formatRunWatchSnapshot(
-	repo: string,
-	run: GhRunSnapshot,
-	pollCount: number,
-	note?: string,
-	includeOutcome: boolean = false,
-): string {
-	const failedJobs = run.jobs.filter(isFailedJob);
-	const lines: string[] = [`# Watching GitHub Actions Run #${run.id}`, ""];
+/** The repository, run identity and state lines both run reports open with. */
+function pushRunHeader(lines: string[], repo: string, run: GhRunSnapshot): void {
 	pushLine(lines, "Repository", repo);
 	pushLine(lines, "Workflow", run.workflowName ?? undefined);
 	pushLine(lines, "Title", run.displayTitle ?? undefined);
@@ -436,6 +429,18 @@ export function formatRunWatchSnapshot(
 	pushLine(lines, "Created", run.createdAt);
 	pushLine(lines, "Updated", run.updatedAt);
 	pushLine(lines, "URL", run.url);
+}
+
+export function formatRunWatchSnapshot(
+	repo: string,
+	run: GhRunSnapshot,
+	pollCount: number,
+	note?: string,
+	includeOutcome: boolean = false,
+): string {
+	const failedJobs = run.jobs.filter(isFailedJob);
+	const lines: string[] = [`# Watching GitHub Actions Run #${run.id}`, ""];
+	pushRunHeader(lines, repo, run);
 	pushLine(lines, "Poll", pollCount);
 	pushLine(lines, "Failed jobs", failedJobs.length || undefined);
 
@@ -465,15 +470,7 @@ export function formatRunWatchResult(
 ): string {
 	const failedJobs = run.jobs.filter(isFailedJob);
 	const lines: string[] = [`# GitHub Actions Run #${run.id}`, ""];
-	pushLine(lines, "Repository", repo);
-	pushLine(lines, "Workflow", run.workflowName ?? undefined);
-	pushLine(lines, "Title", run.displayTitle ?? undefined);
-	pushLine(lines, "Branch", run.branch ?? undefined);
-	pushLine(lines, "Status", run.status);
-	pushLine(lines, "Conclusion", run.conclusion ?? undefined);
-	pushLine(lines, "Created", run.createdAt);
-	pushLine(lines, "Updated", run.updatedAt);
-	pushLine(lines, "URL", run.url);
+	pushRunHeader(lines, repo, run);
 	lines.push("");
 	const js = renderJobsSection(run.jobs);
 	for (let li = 0; li < js.length; li++) lines.push(js[li]!);

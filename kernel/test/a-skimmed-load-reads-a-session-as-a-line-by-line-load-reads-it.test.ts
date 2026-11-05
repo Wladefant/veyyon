@@ -11,6 +11,7 @@ import * as natives from "@veyyon/natives";
 import { TempDir } from "@veyyon/utils";
 import * as logger from "@veyyon/utils/logger";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { mulberry32 } from "../../packages/utils/test/helpers/mulberry32";
 
 /**
  * WHY: a streamed load that moves compacted history to disk parses the skim of each line
@@ -61,18 +62,6 @@ const SKIM_FALLBACKS = [
 afterEach(() => {
 	vi.restoreAllMocks();
 });
-
-/** A deterministic generator, so a failing seed reproduces. */
-function mulberry32(seed: number): () => number {
-	let state = seed >>> 0;
-	return () => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
 
 /** Characters of every UTF-8 width and UTF-16 length, and each a JSON writer escapes. */
 const CHARACTERS = ["x", "y", "é", "€", "😀", "\n", '"', "\\", "\u0001", "\u2028", "\ud800", "/", " "];

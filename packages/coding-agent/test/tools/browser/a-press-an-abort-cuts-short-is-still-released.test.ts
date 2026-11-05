@@ -27,6 +27,7 @@ import type { AddressInfo } from "node:net";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
+import { toolResultText } from "../../helpers/tool-result-text";
 import { CHROMIUM_AVAILABLE } from "./chromium";
 
 /** The tool timeout of the run an op is cut short in, in seconds: it leaves each op 2 s. */
@@ -89,10 +90,6 @@ const CASES: ReadonlyArray<{ name: string; hold: string; action: string; natural
 	},
 ];
 
-function text(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
-	return result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
-}
-
 let server: http.Server;
 let url = "";
 
@@ -136,7 +133,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("a press an abort cuts short", () => {
 try { await ${action}; return "completed"; } catch (error) { return error.message; }`,
 					});
 					// The op's own deadline cut it short; the run went on, so the tab kept its worker and its input state.
-					expect(text(cut)).toContain(`timed out after ${(CUT_TIMEOUT_S - 1) * 1000}ms`);
+					expect(toolResultText(cut, "")).toContain(`timed out after ${(CUT_TIMEOUT_S - 1) * 1000}ms`);
 					const after = await tool.execute("run", {
 						action: "run",
 						name: tab,
@@ -145,7 +142,7 @@ try { await ${action}; return "completed"; } catch (error) { return error.messag
 await tab.click("#a");
 return JSON.stringify(await tab.evaluate(() => log));`,
 					});
-					const log = JSON.parse(text(after)) as Pressed[];
+					const log = JSON.parse(toolResultText(after, "")) as Pressed[];
 					expect(log.filter(event => event.type === "click")).toEqual([
 						{ type: "click", target: "a", buttons: 0, ctrl: false, meta: false },
 					]);

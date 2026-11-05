@@ -39,6 +39,7 @@ import {
 	TUI,
 } from "../src/index";
 import { settleFrames } from "./helpers/settle-frames";
+import { viewportRows } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 const WIDTH = 40;
@@ -133,10 +134,6 @@ function expectedViewport(history: VirtualizedHistory, hud: MotionBlock): string
 	return window;
 }
 
-function actualViewport(term: VirtualTerminal): string[] {
-	return term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-}
-
 describe("a dropped history row slides the tracked cursor", () => {
 	test("every frame after a compaction paints the window the frame composes to", async () => {
 		const term = new VirtualTerminal(WIDTH, HEIGHT);
@@ -155,7 +152,7 @@ describe("a dropped history row slides the tracked cursor", () => {
 				motion.frame = step + 1;
 				tui.requestRender();
 				await settleFrames(term, tui);
-				expect(actualViewport(term)).toEqual(expectedViewport(history, motion));
+				expect(viewportRows(term)).toEqual(expectedViewport(history, motion));
 			}
 		} finally {
 			tui.stop();

@@ -20,12 +20,13 @@ import * as path from "node:path";
 import { Agent, ThinkingLevel } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
-import { getBundledModel } from "@veyyon/catalog/models";
+import type { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 describe("AgentSession constructor thinking-level clamp", () => {
 	let tempDir: TempDir;
@@ -48,8 +49,7 @@ describe("AgentSession constructor thinking-level clamp", () => {
 	});
 
 	async function createSession(provider: string, modelId: string, thinkingLevel: ThinkingLevel) {
-		const model = getBundledModel(provider as Parameters<typeof getBundledModel>[0], modelId);
-		if (!model) throw new Error(`Expected bundled model ${provider}/${modelId}`);
+		const model = requireBundledModel(provider as Parameters<typeof getBundledModel>[0], modelId);
 		const agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 		});

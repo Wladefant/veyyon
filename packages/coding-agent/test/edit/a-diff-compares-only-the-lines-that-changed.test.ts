@@ -33,6 +33,9 @@ type DiffGenerator = (
 
 const GENERATORS: Record<string, DiffGenerator> = { generateDiffString, generateUnifiedDiffString };
 
+/** Warm runs the event-loop hold contract measures before it judges the least of them. */
+const HOLD_RUNS = 6;
+
 const NUMBERED_ROW = /^([ +-])(\d+)\|(.*)$/s;
 const HUNK_HEADER = /^@@ -(\d+),(\d+) \+(\d+),(\d+) @@$/;
 
@@ -327,8 +330,13 @@ describe("a diff compares only the lines that changed", () => {
 			let hold = Number.POSITIVE_INFINITY;
 			let lineCount = 0;
 			let result: diffModule.DiffResult | undefined;
-			// The first run parses the source cold, off the event loop; the rest edit the cached tree.
-			for (let run = 0; run < 4; run++) {
+			// The first run parses the source cold, off the event loop; the rest edit the cached tree. Each
+			// run starts from a collected heap, so the previous run's garbage is not collected inside the
+			// measured one. One CI run held 5.8 ms against a 4.4 ms split in each of three runs, against a
+			// hold under half a split everywhere else, so the bound is judged on the least of up to
+			// HOLD_RUNS runs: a generator that splits a whole file holds the loop for a split in every run.
+			for (let run = 0; run <= HOLD_RUNS && !(hold < split); run++) {
+				Bun.gc(true);
 				const start = performance.now();
 				lineCount = oldContent.split("\n").length;
 				split = Math.min(split, performance.now() - start);

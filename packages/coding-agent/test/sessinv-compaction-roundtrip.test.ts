@@ -1,6 +1,8 @@
 /**
  * WHY: a manual compaction must change exactly what the continued turn sees —
- * the generated summary plus the declared kept tail — and nothing else. The
+ * the generated summary, the declared kept tail and the restated session-state
+ * block (the date and working directory the summarized span carried) — and
+ * nothing else. The
  * regression class this defends is the replay disagreeing with the persisted
  * cut: the summary silently dropped, the discarded span still replayed
  * (context bloat the operator paid to remove), the kept tail reordered or
@@ -40,15 +42,17 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type StreamFn } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, Model, Usage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
+import { SESSION_STATE_MESSAGE_TYPE } from "@veyyon/coding-agent/session/nudges";
 import type { CompactionEntry, SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { completedStream } from "./helpers/mock-turns";
 
 // ~25-30 tokens each: the cut math in the WHY comment depends on every turn
 // message sitting in this band, so the markers ride long sentences.
@@ -112,14 +116,7 @@ function stateText(message: AgentMessage): string {
 }
 
 function makeUsage(input: number, output: number): Usage {
-	return {
-		input,
-		output,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: input + output,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
+	return { ...emptyUsage(), input, output, totalTokens: input + output };
 }
 
 function assistantMessage(model: Model, text: string, input: number, output: number): AssistantMessage {
@@ -135,16 +132,13 @@ function assistantMessage(model: Model, text: string, input: number, output: num
 	};
 }
 
-function completedStream(message: AssistantMessage): AssistantMessageEventStream {
-	const stream = new AssistantMessageEventStream();
-	queueMicrotask(() => {
-		stream.push({ type: "done", reason: "stop", message });
-	});
-	return stream;
-}
-
 function compactionEntries(sessionManager: SessionManager): CompactionEntry[] {
 	return sessionManager.getBranch().filter((entry): entry is CompactionEntry => entry.type === "compaction");
+}
+
+/** The role of an agent-state message, or its custom type, so the restated session state shows by name. */
+function kindOf(message: AgentMessage): string {
+	return message.role === "custom" ? message.customType : message.role;
 }
 
 /** Index access that fails loudly instead of fabricating a cast. */
@@ -154,7 +148,7 @@ function at<T>(list: readonly T[], index: number): T {
 	return value;
 }
 
-describe("compaction round-trip: the continued turn sees the summary and the kept tail, nothing else", () => {
+describe("compaction round-trip: the continued turn sees the summary, the kept tail and the restated session state, nothing else", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession | undefined;
@@ -180,8 +174,7 @@ describe("compaction round-trip: the continued turn sees the summary and the kep
 		const modelRegistry = new ModelRegistry(authStorage);
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Pin the window so catalog regeneration cannot shift the compaction
 		// budget math under the test.
 		const model: Model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
@@ -287,9 +280,10 @@ describe("compaction round-trip: the continued turn sees the summary and the kep
 		expect(stateText(at(keptMessages, 1).message)).toBe(BRAVO_REPLY);
 
 		// The live agent state was swapped to the replayed context: summary at
-		// the top, then the kept turn, exact roles, exact order.
+		// the top, then the kept turn, then the restated session state, exact
+		// roles, exact order.
 		const stateMessages = harness.session.agent.state.messages;
-		expect(stateMessages.map(message => message.role)).toEqual(["compactionSummary", "user", "assistant"]);
+		expect(stateMessages.map(kindOf)).toEqual(["compactionSummary", "user", "assistant", SESSION_STATE_MESSAGE_TYPE]);
 		expect(stateText(at(stateMessages, 0))).toContain("LOCAL-SUMMARY-ONE");
 		expect(stateText(at(stateMessages, 1))).toContain("BRAVO-REQUEST");
 		expect(stateText(at(stateMessages, 2))).toBe(BRAVO_REPLY);
@@ -299,15 +293,16 @@ describe("compaction round-trip: the continued turn sees the summary and the kep
 		expect(stateJson).not.toContain("ALPHA-REPLY");
 
 		// The continued turn: the provider receives exactly [summary, kept turn,
-		// new prompt] — roles, order, and texts.
+		// restated session state, new prompt] — roles, order, and texts.
 		await harness.session.prompt(CHARLIE_REQUEST);
 		expect(harness.mainCalls).toHaveLength(3);
 		const continued = at(harness.mainCalls, 2);
-		expect(continued.roles).toEqual(["user", "user", "assistant", "user"]);
+		expect(continued.roles).toEqual(["user", "user", "assistant", "developer", "user"]);
 		expect(continued.texts[0]).toContain("LOCAL-SUMMARY-ONE");
 		expect(continued.texts[1]).toContain("BRAVO-REQUEST");
 		expect(continued.texts[2]).toBe(BRAVO_REPLY);
-		expect(continued.texts[3]).toContain("CHARLIE-REQUEST");
+		expect(continued.texts[3]).toContain("The current working directory is");
+		expect(continued.texts[4]).toContain("CHARLIE-REQUEST");
 		const continuedJson = JSON.stringify(continued.texts);
 		expect(continuedJson).not.toContain("ALPHA-REQUEST");
 		expect(continuedJson).not.toContain("ALPHA-REPLY");
@@ -342,7 +337,7 @@ describe("compaction round-trip: the continued turn sees the summary and the kep
 		// The replay trusts the LATEST compaction only: the first summary must
 		// not leak into the rebuilt state next to the second one.
 		const stateMessages = harness.session.agent.state.messages;
-		expect(stateMessages.map(message => message.role)).toEqual(["compactionSummary", "user", "assistant"]);
+		expect(stateMessages.map(kindOf)).toEqual(["compactionSummary", "user", "assistant", SESSION_STATE_MESSAGE_TYPE]);
 		expect(stateText(at(stateMessages, 0))).toContain("LOCAL-SUMMARY-TWO");
 		expect(stateText(at(stateMessages, 1))).toContain("DELTA-REQUEST");
 		expect(stateText(at(stateMessages, 2))).toBe(DELTA_REPLY);
@@ -352,11 +347,12 @@ describe("compaction round-trip: the continued turn sees the summary and the kep
 		await harness.session.prompt(ECHO_REQUEST);
 		expect(harness.mainCalls).toHaveLength(5);
 		const continued = at(harness.mainCalls, 4);
-		expect(continued.roles).toEqual(["user", "user", "assistant", "user"]);
+		expect(continued.roles).toEqual(["user", "user", "assistant", "developer", "user"]);
 		expect(continued.texts[0]).toContain("LOCAL-SUMMARY-TWO");
 		expect(continued.texts[1]).toContain("DELTA-REQUEST");
 		expect(continued.texts[2]).toBe(DELTA_REPLY);
-		expect(continued.texts[3]).toContain("ECHO-REQUEST");
+		expect(continued.texts[3]).toContain("The current working directory is");
+		expect(continued.texts[4]).toContain("ECHO-REQUEST");
 		const continuedJson = JSON.stringify(continued.texts);
 		expect(continuedJson).not.toContain("LOCAL-SUMMARY-ONE");
 		expect(continuedJson).not.toContain("CHARLIE-REQUEST");

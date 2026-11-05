@@ -5,14 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("SearchTool nested and extension adversarial", () => {
 	let tmpDir: string;
@@ -42,7 +36,7 @@ describe("SearchTool nested and extension adversarial", () => {
 
 	it("**/*.ts finds both deep and shallow ts files", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g1", { type: "files", input: "**/*.ts" }));
+		const text = toolResultText(await tool.execute("g1", { type: "files", input: "**/*.ts" }));
 		expect(text).toContain("deep.ts");
 		expect(text).toContain("top.ts");
 		expect(text.includes("note.md") && !/no files/i.test(text)).toBe(false);
@@ -50,21 +44,21 @@ describe("SearchTool nested and extension adversarial", () => {
 
 	it("a/b/**/*.ts finds only deep.ts", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g2", { type: "files", input: "a/b/**/*.ts" }));
+		const text = toolResultText(await tool.execute("g2", { type: "files", input: "a/b/**/*.ts" }));
 		expect(text).toContain("deep.ts");
 		expect(text.includes("top.ts") && !/no files|0 file/i.test(text)).toBe(false);
 	});
 
 	it("*.json at root finds root.json not nested", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g3", { type: "files", input: "*.json" }));
+		const text = toolResultText(await tool.execute("g3", { type: "files", input: "*.json" }));
 		// Bare *.json may recurse to **/*.json per product; assert root.json present.
 		expect(text).toContain("root.json");
 	});
 
 	it("extension filter *.md excludes .ts", async () => {
 		const tool = new SearchTool(session());
-		const text = textOf(await tool.execute("g4", { type: "files", input: "**/*.md" }));
+		const text = toolResultText(await tool.execute("g4", { type: "files", input: "**/*.md" }));
 		expect(text).toContain("note.md");
 		expect(text.includes("deep.ts") && !/no files/i.test(text)).toBe(false);
 	});

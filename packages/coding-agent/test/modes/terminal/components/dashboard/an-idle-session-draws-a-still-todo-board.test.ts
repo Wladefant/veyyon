@@ -25,20 +25,18 @@
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
-import { Agent } from "@veyyon/agent-core";
-import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { TODO_BOARD_FRAME_DIVISOR } from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
 import { RAIL_IDLE_STEP_MS } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme, stopThemeWatcher, theme } from "@veyyon/coding-agent/theme/theme";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { VirtualTerminal } from "../../../../../../../hosts/terminal/engine/test/virtual-terminal";
+import { createTestAgentSession } from "../../../../helpers/test-agent-session";
 
 /**
  * Whether the anchored board drew a phase row for `Phase One` carrying `tally`.
@@ -72,14 +70,7 @@ function assistant(content: unknown[]) {
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
 		stopReason: "toolUse",
-		usage: {
-			input: 1,
-			output: 1,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 2,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
 		timestamp: Date.now(),
 	};
 }
@@ -99,22 +90,15 @@ describe("an idle session draws a still todo board", () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-todo-idle-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path(), overrides: { "display.transitions": "on" } });
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-		session = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "startup.quiet": true, "display.transitions": "on" }),
-			modelRegistry,
-		});
+		({ authStorage, session } = await createTestAgentSession(tempDir.path(), {
+			settings: { "startup.quiet": true, "display.transitions": "on" },
+		}));
 		mode = new InteractiveMode(session, "test");
 		terminal = new VirtualTerminal(100, 24);
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -162,7 +146,7 @@ describe("an idle session draws a still todo board", () => {
 
 		// End the turn: the session enters idle state waiting for user input.
 		await controller.handleEvent({ type: "agent_end" } as never);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const first = terminal.getViewport().join("\n");
 		const stripped = Bun.stripANSI(first);
@@ -175,7 +159,7 @@ describe("an idle session draws a still todo board", () => {
 		// from frame 0 ("·") to frame 1 (":"), causing viewport byte divergence.
 		const waitMs = TODO_BOARD_FRAME_DIVISOR * RAIL_IDLE_STEP_MS + 40;
 		await Bun.sleep(waitMs);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const second = terminal.getViewport().join("\n");
 		expect(second).toBe(first);
@@ -215,7 +199,7 @@ describe("an idle session draws a still todo board", () => {
 		} as never);
 
 		// Turn is still RUNNING: no agent_end sent.
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		const screen = Bun.stripANSI(terminal.getViewport().join("\n"));
 		// Assert the board is REACHED and drawn (phase row and task rows are on screen),
@@ -261,7 +245,7 @@ describe("an idle session draws a still todo board", () => {
 
 		// End the turn: mode should disarm anchored motion timer and settle.
 		await controller.handleEvent({ type: "agent_end" } as never);
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 
 		// Snapshot the render count once the turn is settled and idle.
 		renderSpy.mockClear();

@@ -17,14 +17,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	getAgentDir,
-	getProfileSessionsDir,
-	listProfiles,
-	normalizePathForComparison,
-	type ProfileInfo,
-	pathIsWithin,
-} from "@veyyon/utils/dirs";
+import { getAgentDir, getProfileSessionsDir, listProfiles, type ProfileInfo } from "@veyyon/utils/dirs";
+import { normalizePathForComparison, pathIsWithin } from "@veyyon/utils/path";
 import { isSessionFileName, sessionFileMatchesResumeArgument } from "@veyyon/utils/session-file";
 import { resolveCliArgv } from "../cli-commands";
 import { type Args, namesSessionFile, normalizeContinueSessionArgs, parseArgs } from "./args";

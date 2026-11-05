@@ -46,6 +46,7 @@ import { TempDir } from "@veyyon/utils";
 import { ENV_KEYWORDS_FILENAME } from "../../src/secrets/env-keywords";
 import { VAULT_KEY_FILENAME } from "../../src/secrets/vault-crypto";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+import { runModuleCensus } from "../helpers/module-census";
 import { lazyToolModules, PACKAGES, SRC } from "../helpers/module-reach-gate";
 
 /** Third-party packages an RPC launch evaluates before it reports ready, and why each one is needed then. */
@@ -138,7 +139,7 @@ const keywords = await step("keywords", () => loadEnvSecretKeywords({ cwd: ${dir
 const tracerResolved = await step("telemetry", () => resolveTelemetry({}, "census")?.tracer !== undefined);
 const statusError = SpanStatusCode.ERROR;
 const editDiff = await step("editDiff", async () => (await generateDiffString("one\\ntwo\\n", "one\\nthree\\n")).diff);
-process.stdout.write(JSON.stringify({
+report({
 	evaluated: Object.keys(require.cache).length,
 	atRest,
 	arrived,
@@ -146,32 +147,8 @@ process.stdout.write(JSON.stringify({
 	tracerResolved,
 	statusError,
 	editDiff,
-}));
-process.exit(0);
+});
 `;
-}
-
-/** Run `args` under a hermetic home in `cwd` and collect its output. */
-async function runToExit(args: string[], cwd: string, extraEnv: Record<string, string>): Promise<string> {
-	const { env, cleanup } = hermeticSpawnEnv(extraEnv);
-	try {
-		const child = spawn(process.execPath, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", chunk => {
-			stdout += String(chunk);
-		});
-		child.stderr.on("data", chunk => {
-			stderr += String(chunk);
-		});
-		const exited = Promise.withResolvers<number | null>();
-		child.on("exit", code => exited.resolve(code));
-		const code = await exited.promise;
-		if (code !== 0) throw new Error(`census process exited ${code}:\n${stderr}`);
-		return stdout;
-	} finally {
-		cleanup();
-	}
 }
 
 describe("a launch evaluates only the third-party packages it uses", () => {
@@ -186,12 +163,10 @@ describe("a launch evaluates only the third-party packages it uses", () => {
 
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@package-census-");
-		const entry = path.join(tempDir.path(), "census.ts");
 		const keywordDir = path.join(tempDir.path(), "keywords");
 		fs.mkdirSync(keywordDir);
 		fs.writeFileSync(path.join(keywordDir, ENV_KEYWORDS_FILENAME), "keywords:\n  - CENSUSWORD\n");
-		fs.writeFileSync(entry, censusEntry(modules, keywordDir));
-		census = JSON.parse(await runToExit([entry], tempDir.path(), {})) as ModuleCensus;
+		census = await runModuleCensus<ModuleCensus>(tempDir.path(), censusEntry(modules, keywordDir));
 
 		const rpcCensus = path.join(tempDir.path(), "rpc-census.txt");
 		// RPC resolves a model before it reports ready; a key of the right shape that reaches nothing is enough.

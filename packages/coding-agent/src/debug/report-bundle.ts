@@ -22,7 +22,6 @@ const MAX_LOG_LINES = 5000;
 // in launch/broker.ts, which is an order of magnitude larger and means something
 // else entirely).
 const MAX_BUNDLED_LOG_TAIL_BYTES = 2 * 1024 * 1024;
-/** Read last N lines from a file, reading at most `maxBytes` from the tail. */
 /**
  * What the copied session transcript is called INSIDE a debug bundle.
  *
@@ -33,6 +32,7 @@ const MAX_BUNDLED_LOG_TAIL_BYTES = 2 * 1024 * 1024;
  */
 const SESSION_BUNDLE_ENTRY = "session.jsonl";
 
+/** Read last N lines from a file, reading at most `maxBytes` from the tail. */
 async function readLastLines(filePath: string, n: number, maxBytes = MAX_BUNDLED_LOG_TAIL_BYTES): Promise<string> {
 	try {
 		const file = Bun.file(filePath);

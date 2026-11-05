@@ -20,6 +20,7 @@ import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
 import { BashTool, SKILL_SCOPE_UNRESOLVED_NOTICE } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session stub alone
@@ -47,13 +48,6 @@ function bashSession(cwd: string, skills: Skill[] | undefined) {
 		},
 		getClientBridge: () => undefined,
 	});
-}
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(part => part.type === "text")
-		.map(part => part.text ?? "")
-		.join("");
 }
 
 describe("bash skill:// scope resolution", () => {
@@ -101,7 +95,7 @@ describe("bash skill:// scope resolution", () => {
 			command: "echo skill://active-skill/SKILL.md",
 			timeout: 30,
 		});
-		expect(textOf(expanded)).toContain(path.join(skillDir, "SKILL.md"));
+		expect(toolResultText(expanded, "")).toContain(path.join(skillDir, "SKILL.md"));
 
 		// The other half of the distinction: `[]` is a session ASSERTING it has no skills, so the
 		// URL must not resolve against the process-wide set. That is why `?? []` was a lie.
@@ -110,8 +104,8 @@ describe("bash skill:// scope resolution", () => {
 			command: "echo skill://active-skill/SKILL.md",
 			timeout: 30,
 		});
-		expect(textOf(literal)).toContain("skill://active-skill/SKILL.md");
-		expect(textOf(literal)).not.toContain(skillDir);
+		expect(toolResultText(literal, "")).toContain("skill://active-skill/SKILL.md");
+		expect(toolResultText(literal, "")).not.toContain(skillDir);
 	});
 
 	/**
@@ -128,7 +122,7 @@ describe("bash skill:// scope resolution", () => {
 			timeout: 30,
 		});
 
-		expect(textOf(result)).toContain(SKILL_SCOPE_UNRESOLVED_NOTICE);
+		expect(toolResultText(result, "")).toContain(SKILL_SCOPE_UNRESOLVED_NOTICE);
 	});
 
 	/**
@@ -141,11 +135,11 @@ describe("bash skill:// scope resolution", () => {
 			command: "echo skill://active-skill/SKILL.md",
 			timeout: 30,
 		});
-		expect(textOf(emptyResult)).not.toContain(SKILL_SCOPE_UNRESOLVED_NOTICE);
+		expect(toolResultText(emptyResult, "")).not.toContain(SKILL_SCOPE_UNRESOLVED_NOTICE);
 
 		const unresolved = new BashTool(bashSession(tmpDir, undefined) as never);
 		const plainResult = await unresolved.execute("b-plain", { command: "printf 'plain\\n'", timeout: 30 });
-		expect(textOf(plainResult)).toContain("plain");
-		expect(textOf(plainResult)).not.toContain(SKILL_SCOPE_UNRESOLVED_NOTICE);
+		expect(toolResultText(plainResult, "")).toContain("plain");
+		expect(toolResultText(plainResult, "")).not.toContain(SKILL_SCOPE_UNRESOLVED_NOTICE);
 	});
 });

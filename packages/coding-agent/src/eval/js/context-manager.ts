@@ -1,7 +1,7 @@
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
 // hidden argv mode, so compiled/standalone builds only need one JavaScript entry.
 import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
-import { errorMessage, isAbortError, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
+import { errorMessage, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 import { raceWithTimeout } from "@veyyon/utils/scoped-timeout";
 import {
 	createWorkerHandle,
@@ -16,10 +16,10 @@ import { safeSend as safeSendIpc } from "../../utils/ipc";
 import { JS_EVAL_PROCESS_ARG, JS_EVAL_WORKER_ARG } from "../../worker-args";
 import { attachSessionOwner } from "../executor-base";
 import { shouldDetachKernel } from "../py/spawn-options";
+import { errorFromPayload, toErrorPayload } from "./error-payload";
 import { callSessionTool, type JsStatusEvent } from "./tool-bridge";
 import { WorkerCore } from "./worker-core";
 import type {
-	EvalRunErrorPayload,
 	EvalWorkerInbound,
 	EvalWorkerOutbound,
 	EvalWorkerTransport,
@@ -614,32 +614,6 @@ function reasonToError(reason: unknown, fallback: string): Error {
 	return new ToolAbortError(fallback);
 }
 
-function errorFromPayload(payload: EvalRunErrorPayload): Error {
-	if (payload.isAbort) {
-		const err = new ToolAbortError(payload.message || "Execution aborted");
-		if (payload.stack) err.stack = payload.stack;
-		return err;
-	}
-	const ctor = payload.isToolError ? ToolError : Error;
-	const error = new ctor(payload.message);
-	if (payload.name) error.name = payload.name;
-	if (payload.stack) error.stack = payload.stack;
-	return error;
-}
-
-function toErrorPayload(error: unknown): EvalRunErrorPayload {
-	if (error instanceof Error) {
-		return {
-			name: error.name,
-			message: error.message,
-			stack: error.stack,
-			isAbort: isAbortError(error),
-			isToolError: error instanceof ToolError || error.name === "ToolError",
-		};
-	}
-	return { message: errorMessage(error) };
-}
-
 function spawnJsWorker(): WorkerHandle {
 	if (!useWorkerThreadForTests) {
 		try {
@@ -688,26 +662,15 @@ function spawnJsProcess(): WorkerHandle {
 		send: message => base.send(message),
 		onMessage: handler => base.onMessage(handler),
 		onError: handler => base.onError(handler),
-		async close() {
-			const { promise, resolve } = Promise.withResolvers<boolean>();
-			let settled = false;
-			let timeout: NodeJS.Timeout | undefined;
-			let unsubscribe = (): void => {};
-			const finish = (value: boolean): void => {
-				if (settled) return;
-				settled = true;
-				if (timeout) clearTimeout(timeout);
-				unsubscribe();
-				resolve(value);
-			};
-			unsubscribe = base.onMessage(message => {
-				if (message.type !== "closed") return;
-				void base.terminate().finally(() => finish(true));
-			});
-			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
-			base.send({ type: "close" });
-			return await promise;
-		},
+		close: () =>
+			awaitCloseAck(
+				ack =>
+					base.onMessage(message => {
+						if (message.type !== "closed") return;
+						void base.terminate().finally(ack);
+					}),
+				() => base.send({ type: "close" }),
+			),
 		terminate: () => base.terminate(),
 	};
 }
@@ -737,37 +700,32 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 				worker.removeEventListener("close", onClose);
 			};
 		},
-		async close() {
-			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
-			let settled = false;
-			let sawClosedAck = false;
-			let sawWorkerExit = false;
-			let timeout: NodeJS.Timeout | undefined;
-			let unsubscribe = (): void => {};
-			const finish = (value: boolean): void => {
-				if (settled) return;
-				settled = true;
-				if (timeout) clearTimeout(timeout);
-				unsubscribe();
-				worker.removeEventListener("close", onClose);
-				resolve(value);
-			};
-			const finishIfClosed = (): void => {
-				if (sawClosedAck && sawWorkerExit) finish(true);
-			};
-			const onClose = (): void => {
-				sawWorkerExit = true;
-				finishIfClosed();
-			};
-			unsubscribe = this.onMessage(msg => {
-				if (msg.type !== "closed") return;
-				sawClosedAck = true;
-				finishIfClosed();
-			});
-			worker.addEventListener("close", onClose);
-			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
-			worker.postMessage({ type: "close" } satisfies EvalWorkerInbound);
-			return await closed;
+		close() {
+			return awaitCloseAck(
+				ack => {
+					// Done only once the worker has acknowledged `close` AND its thread has exited.
+					let sawClosedAck = false;
+					let sawWorkerExit = false;
+					const finishIfClosed = (): void => {
+						if (sawClosedAck && sawWorkerExit) ack();
+					};
+					const onClose = (): void => {
+						sawWorkerExit = true;
+						finishIfClosed();
+					};
+					const unsubscribe = this.onMessage(msg => {
+						if (msg.type !== "closed") return;
+						sawClosedAck = true;
+						finishIfClosed();
+					});
+					worker.addEventListener("close", onClose);
+					return () => {
+						unsubscribe();
+						worker.removeEventListener("close", onClose);
+					};
+				},
+				() => worker.postMessage({ type: "close" } satisfies EvalWorkerInbound),
+			);
 		},
 		async terminate() {
 			worker.terminate();
@@ -815,26 +773,20 @@ function spawnInlineWorker(): WorkerHandle {
 			return () => hostListeners.delete(handler);
 		},
 		onError: () => () => {},
-		async close() {
-			const { promise: closed, resolve } = Promise.withResolvers<boolean>();
-			let settled = false;
-			let timeout: NodeJS.Timeout | undefined;
-			let unsubscribe = (): void => {};
-			const finish = (value: boolean): void => {
-				if (settled) return;
-				settled = true;
-				if (timeout) clearTimeout(timeout);
-				unsubscribe();
-				hostListeners.clear();
-				workerListeners.clear();
-				resolve(value);
-			};
-			unsubscribe = this.onMessage(msg => {
-				if (msg.type === "closed") finish(true);
-			});
-			this.send({ type: "close" });
-			timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
-			return await closed;
+		close() {
+			return awaitCloseAck(
+				ack => {
+					const unsubscribe = this.onMessage(msg => {
+						if (msg.type === "closed") ack();
+					});
+					return () => {
+						unsubscribe();
+						hostListeners.clear();
+						workerListeners.clear();
+					};
+				},
+				() => this.send({ type: "close" }),
+			);
 		},
 		async terminate() {
 			hostListeners.clear();

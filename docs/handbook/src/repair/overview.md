@@ -14,11 +14,12 @@ Repair runs in the agent loop **before** argument validation. Clear malformation
 | Refuse-if-ambiguous | Missing required strings with multiple plausible sources → unrepairable |
 | Alias / typo rename | Unknown keys that map unambiguously to a declared property are renamed; ambiguous renames are rejected |
 | Strict unknown keys | Schemas with `additionalProperties: false` reject leftover keys after alias resolution |
-| Size bound | Inputs over 1 MiB are not repaired |
-| Disable | `VEYYON_REPAIR_DISABLE=1`, or per-model `harness.profiles` with `repair: false` |
+| Tool-specific | `task` prose escaped twice is decoded; a `yield` `result` sent as a JSON string is parsed. Listed in `TOOL_ARGUMENT_REPAIRS` |
+| Size bound | Inputs over 1,048,576 UTF-16 code units are not repaired |
+| Disable | `VEYYON_REPAIR_DISABLE=1`, or per-model `harness.profiles` with `repair: false`; both turn off tool-specific repairs too |
 
-Implementation: `packages/coding-agent/src/tools/core/repair/schema-repair.ts`  
-Tests: `packages/coding-agent/test/edit/schema-repair.test.ts`
+Implementation: `packages/coding-agent/src/tools/core/repair/schema-repair.ts`, with tool-specific repairs in `packages/coding-agent/src/tools/core/repair/tool-repairs.ts`  
+Tests: `packages/coding-agent/test/edit/schema-repair.test.ts`, `packages/coding-agent/test/tools/a-tool-specific-argument-repair-reaches-approval-and-the-tool-as-one-set-of-arguments.test.ts`
 
 ## Related
 

@@ -53,6 +53,9 @@ const corpus: ObservedProviderError[] = [...OBSERVED_PROVIDER_ERRORS];
  * - `overflow`, `grammar`, `fast-mode`, `refusal` and `provider-http` classify request-shaped and
  *   peer-refusal failures that the sampled sessions did not produce. They have their own suites;
  *   what is missing is field evidence, and this list shrinks when a session records one.
+ * - `unreachable` classifies a dial nobody answered by its errno. The one sampled connection failure
+ *   (`Connection error.`) is Anthropic's fixed wording with the errno already dropped, so it lands in
+ *   transport; the unreachable-endpoint suite drives the runtime's own refused-dial error instead.
  *
  * A domain that JOINS this list is a domain nothing can demonstrate, which needs saying out loud.
  * A domain added to the registry and to neither side turns this red.
@@ -66,6 +69,7 @@ const DOMAINS_WITHOUT_FIELD_EVIDENCE: readonly string[] = [
 	"refusal",
 	"provider-http",
 	"stream",
+	"unreachable",
 ];
 
 function firstLine(message: string): string {

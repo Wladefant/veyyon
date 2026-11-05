@@ -1,19 +1,8 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
-import { makeToolSession } from "../helpers/tool-session";
-
-function makeSession(): ToolSession {
-	return makeToolSession({
-		cwd: process.cwd(),
-		hasUI: false,
-		getSessionFile: () => null,
-		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
-	});
-}
+import { toolResultText } from "../helpers/tool-result-text";
+import { makeToolSessionAt } from "../helpers/tool-session";
 
 /**
  * Defends the contract that a cell which does not delegate to an `agent()`/
@@ -28,7 +17,7 @@ describe("EvalTool timeout semantics", () => {
 	});
 
 	it("disables the cell timeout when timeout is zero", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-unlimited-timeout", {
 			language: "js",
 			// This integration test must cross the former 1s watchdog boundary;
@@ -42,7 +31,7 @@ describe("EvalTool timeout semantics", () => {
 	});
 
 	it("bounds a compute cell (no agent/completion) by a plain wall-clock timeout", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		// 1s budget; the cell idles for 5s and emits no status, so nothing extends
 		// the budget — it must be cut off at the wall-clock limit.
 		const result = await tool.execute("call-compute-timeout", {
@@ -51,10 +40,7 @@ describe("EvalTool timeout semantics", () => {
 			timeout: 1,
 		});
 
-		const text = result.content
-			.filter((block): block is { type: "text"; text: string } => block.type === "text")
-			.map(block => block.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toContain("timed out after 1 seconds");
 		// The new wording is a plain wall-clock timeout, not an inactivity stall.
 		expect(text).not.toContain("inactivity");
@@ -69,7 +55,7 @@ describe("EvalTool timeout semantics", () => {
 	// 3600s max AND the caller is told, while an in-range or disabled timeout
 	// says nothing about clamping.
 	it("surfaces a notice when the requested timeout exceeds eval's ceiling", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-clamp-notice", {
 			language: "js",
 			code: "print('ok');",
@@ -80,7 +66,7 @@ describe("EvalTool timeout semantics", () => {
 	});
 
 	it("emits no clamp notice for an in-range timeout", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-inrange-timeout", {
 			language: "js",
 			code: "print('ok');",
@@ -91,7 +77,7 @@ describe("EvalTool timeout semantics", () => {
 	});
 
 	it("emits no clamp notice when the timeout is disabled (0)", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-zero-timeout-notice", {
 			language: "js",
 			code: "print('ok');",
@@ -102,17 +88,14 @@ describe("EvalTool timeout semantics", () => {
 	});
 
 	it("reports a dead JS worker instead of waiting for the cell timeout", async () => {
-		const tool = new EvalTool(makeSession());
+		const tool = new EvalTool(makeToolSessionAt(process.cwd()));
 		const result = await tool.execute("call-worker-exit", {
 			language: "js",
 			code: "process.exit(0);",
 			timeout: 1,
 		});
 
-		const text = result.content
-			.filter((block): block is { type: "text"; text: string } => block.type === "text")
-			.map(block => block.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toContain("JS eval worker exited");
 		expect(text).not.toContain("timed out");
 

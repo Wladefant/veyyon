@@ -5,6 +5,7 @@
 import { describe, expect, it } from "bun:test";
 import { filterProviderReplayMessages, isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
 import type { AssistantMessage, Message } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function assistant(stopReason: AssistantMessage["stopReason"], stopType?: string): AssistantMessage {
 	return {
@@ -15,14 +16,7 @@ function assistant(stopReason: AssistantMessage["stopReason"], stopType?: string
 		api: "openai-completions",
 		provider: "openai",
 		model: "m",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		timestamp: 0,
 	} as AssistantMessage;
 }

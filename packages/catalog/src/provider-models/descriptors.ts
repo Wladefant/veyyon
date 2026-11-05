@@ -7,16 +7,9 @@
  */
 import { chatGptWebModelManagerOptions } from "./chatgpt-web";
 import { commandCodeModelManagerOptions } from "./command-code";
-import type {
-	ModelManagerConfig,
-	ProviderCatalogEntry,
-	ProviderDescriptor,
-} from "./descriptor-types";
-import {
-	googleModelManagerOptions,
-	googleVertexModelManagerOptions,
-} from "./google";
-import { ollamaCloudModelManagerOptions } from "./ollama";
+import type { ModelManagerConfig, ProviderCatalogEntry, ProviderDescriptor } from "./descriptor-types";
+import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
+import { ollamaCloudModelManagerOptions, ollamaModelManagerOptions } from "./ollama";
 import {
 	abliterationModelManagerOptions,
 	aimlApiModelManagerOptions,
@@ -46,7 +39,6 @@ import {
 	nousResearchModelManagerOptions,
 	novitaModelManagerOptions,
 	nvidiaModelManagerOptions,
-	ollamaModelManagerOptions,
 	openaiModelManagerOptions,
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,

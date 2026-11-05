@@ -14,6 +14,21 @@
 
 - Closed database connections and active sockets when stopping the stats dashboard server, and validated request identifier and limit parameters.
 - A dashboard built from a source checkout keeps the anti-flash theme script `build.ts` writes into `index.html` instead of overwriting the page with a copy that lacks it, so a stored theme that differs from the system theme applies before the first paint instead of after the dashboard script loads.
+### Changed
+
+- No user-visible change: the resource hook and the request drawer coerce a failed fetch with `toError` from `@veyyon/utils/type-guards` instead of inline copies.
+- No user-visible change: the Models and Tools charts take their legend and tooltip from `buildSharedPlugins`, and the Behavior and Costs charts build their line and bar configs with `timeChartData` and `timeChartOptions` instead of two copies.
+- No user-visible change: the dashboard imports `JsonBlock` and `StatusPill` from `@veyyon/tool-render` instead of two one-line re-export modules in `client/ui`.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- The overall, per-model and per-folder totals read from one aggregate query, and the user-message table schema is written once for creation and for the rebuild of a stale table; no user-facing change.
+- The request, model, model-performance, cost and tool-call time series read through one bucketed query; no user-facing change.
+
+### Fixed
+
+- `veyyon-stats --json` and `--sync` print the sync count on stderr, so `veyyon-stats --json | jq` parses; the summary and the sync progress line come from one module that `veyyon stats` also uses.
+- The embedded dashboard is extracted into `<tmpdir>/veyyon-<uid>/stats-client` (mode 700) instead of `<tmpdir>/veyyon-stats-client`, where another account could place its own files first.
+
+## [1.5.9] - 2026-10-22
 
 ### Removed
 

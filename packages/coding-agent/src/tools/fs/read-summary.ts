@@ -30,8 +30,9 @@ import {
 import type { ReadContext, ReadToolDetails } from "./read-types";
 
 // Per-session memo for tree-sitter summaries. `summarizeCode` is a pure function
-// of (code, path, fold settings) but costs ~12-18ms for a ~1500-line file, and a
-// repeat summary read of the same unchanged file re-parses from scratch. Key on
+// of (code, path, fold settings) but parses the whole source on a pool thread, about 4 ms
+// for a 1500-line file and 65 ms at 18,000 lines, and a repeat summary read of the same
+// unchanged file re-parses from scratch. Key on
 // the content hash of the freshly-read bytes (+ path + fold settings): the file
 // is still read fresh on every call, so a hit only reuses the deterministic
 // parse — there is no staleness window and no stat guard is needed. Bounded LRU,
@@ -179,7 +180,7 @@ async function trySummarize(
 		const cacheKey = `${absolutePath}\0${Bun.hash(code)}\0${minBodyLines},${minCommentLines},${unfoldUntilLines},${unfoldLimitLines}`;
 		const memoized = cache.get(cacheKey);
 		if (memoized !== undefined) return memoized || null;
-		const result = summarizeCode({
+		const result = await summarizeCode({
 			code,
 			path: absolutePath,
 			minBodyLines,

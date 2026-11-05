@@ -724,7 +724,7 @@ function contentColumn(line: string): string {
 	return columns.length >= 3 ? columns[2] : "";
 }
 
-/** Drive Settings → Agents → Agents → <agent> the way an operator reaches it. */
+/** Drive Settings → Agents → Roster → <agent> the way the settings card reaches it. */
 async function openAgentEditor(agentName: string): Promise<AgentEditor> {
 	const component = buildSelector();
 	component.openTab("agents");
@@ -805,11 +805,11 @@ describe("every row the lane page shows is a row the lane page changes", () => {
 	 * that changes that same value. A row showing an answer decided elsewhere is the old defect;
 	 * so is a row that writes a value nothing reads, and equality catches both.
 	 */
-	it("offers exactly Enabled, Model, Effort and Agents", async () => {
+	it("offers exactly Enabled, Model, Effort and Can spawn", async () => {
 		const editor = await openAgentEditor(AGENT);
 
 		const rows = editor.rows();
-		expect(rows.map(row => row.split(/\s{2,}/)[0]?.trim())).toEqual(["Enabled", "Model", "Effort", "Agents"]);
+		expect(rows.map(row => row.split(/\s{2,}/)[0]?.trim())).toEqual(["Enabled", "Model", "Effort", "Can spawn"]);
 	});
 
 	/**
@@ -841,10 +841,10 @@ describe("every row the lane page shows is a row the lane page changes", () => {
 	it("recurses into a nested lane with the same four rows", async () => {
 		const editor = await openAgentEditor(AGENT);
 
-		editor.enter("Agents");
+		editor.enter("Can spawn");
 		const nested = editor.rows();
 
-		expect(nested.map(row => row.split(/\s{2,}/)[0]?.trim())).toEqual(["Enabled", "Model", "Effort", "Agents"]);
+		expect(nested.map(row => row.split(/\s{2,}/)[0]?.trim())).toEqual(["Enabled", "Model", "Effort", "Can spawn"]);
 		const screen = editor.frame().join("\n");
 		expect(screen).toContain(`${AGENT} › agents`);
 		expect(screen).toContain("inherit · the level above");
@@ -860,14 +860,14 @@ describe("every row the lane page shows is a row the lane page changes", () => {
 			const editor = await openAgentEditor(AGENT);
 			return editor
 				.frame()
-				.map(line => contentColumn(line).trim())
+				.map(line => contentColumn(line).trim().replace(/\s+/g, " "))
 				.find(line => line.startsWith("Runs "));
 		};
 		expect(await runs()).toBe("Runs the session's model and effort");
 		settings.set("agent.agents", { [AGENT]: { thinkingLevel: "high" } });
-		expect(await runs()).toBe("Runs session model · high effort");
+		expect(await runs()).toBe("Runs the session's model · high effort");
 		settings.set("agent.agents", { [AGENT]: { model: "anthropic/claude-sonnet-4-5" } });
-		expect(await runs()).toMatch(/^Runs \S.* · session effort$/);
+		expect(await runs()).toMatch(/^Runs \S.* · the session's effort$/);
 	});
 });
 
@@ -1053,8 +1053,8 @@ describe("a config written before the lane tree", () => {
 		expect(resolveAgentMaxNestedSpawnDepth(settings, AGENT)).toBe(2);
 		expect(resolveAgentModel({ settings, agentName: AGENT }).patterns).toEqual([FALLBACK_MODEL]);
 
-		// Now use the control the report named: Agents → Enabled.
-		editor.enter("Agents");
+		// Now use the control the report named: Can spawn → Enabled.
+		editor.enter("Can spawn");
 		editor.enter("Enabled");
 
 		const row = settings.get("agent.agents")?.[AGENT];

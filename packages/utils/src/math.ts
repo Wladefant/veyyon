@@ -44,3 +44,14 @@ export function clampLow(value: number, low: number, high: number): number {
 	if (!Number.isFinite(value)) return low;
 	return Math.max(low, Math.min(value, high));
 }
+
+/**
+ * Map `index` onto a ring of `count` slots, so a step past either end lands on
+ * the other: `wrapIndex(-1, 5)` is `4` and `wrapIndex(5, 5)` is `0`. Use this to
+ * move a cursor, tab, or focus through a list that wraps, with a step of any
+ * size. `count` must be at least 1; check the list for entries first, since an
+ * empty ring has no slot to land on and returns `NaN`.
+ */
+export function wrapIndex(index: number, count: number): number {
+	return ((index % count) + count) % count;
+}

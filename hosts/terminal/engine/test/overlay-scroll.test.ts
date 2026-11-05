@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { type Component, CURSOR_MARKER, type Focusable, type OverlayFocusOwner, TUI } from "@veyyon/tui";
+import { withEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import { settleFrames } from "./helpers/settle-frames";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -145,19 +146,6 @@ function longestBlankRun(lines: string[]): number {
 		}
 	}
 	return longest;
-}
-async function withEnv(name: string, value: string, run: () => Promise<void>): Promise<void> {
-	const previous = Bun.env[name];
-	Bun.env[name] = value;
-	try {
-		await run();
-	} finally {
-		if (previous === undefined) {
-			delete Bun.env[name];
-		} else {
-			Bun.env[name] = previous;
-		}
-	}
 }
 
 /**
@@ -429,7 +417,7 @@ describe("TUI overlays", () => {
 		tui.stop();
 	});
 	it("preserves multiplexer scrollback when replacing terminal history", async () => {
-		await withEnv("TMUX", "1", async () => {
+		await withEnv({ TMUX: "1" }, async () => {
 			const term = new VirtualTerminal(40, 4);
 			const tui = new TUI(term);
 			const component = new MutableContentComponent(buildRows(120));
@@ -451,7 +439,7 @@ describe("TUI overlays", () => {
 		});
 	});
 	it("keeps hidden tmux overlays out of the viewport while preserving pane history", async () => {
-		await withEnv("TMUX", "1", async () => {
+		await withEnv({ TMUX: "1" }, async () => {
 			const term = new VirtualTerminal(16, 4);
 			const tui = new TUI(term);
 			tui.addChild(new MutableContentComponent(buildRows(80)));

@@ -17,12 +17,13 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as ai from "@veyyon/ai/stream";
 import type { SimpleStreamOptions } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createTestSession, e2eApiKey, type TestSessionContext } from "./helpers/e2e-session";
 
 describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession tree navigation e2e", () => {
@@ -343,8 +344,7 @@ describe("AgentSession tree navigation branch summary options", () => {
 		const modelRegistry = new ModelRegistry(authStorage);
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic/claude-sonnet-4-5 to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const agent = new Agent({
@@ -382,14 +382,7 @@ describe("AgentSession tree navigation branch summary options", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "stop",
-			usage: {
-				input: 10,
-				output: 10,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 20,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 			timestamp: 2,
 		});
 		sessionManager.appendMessage({
@@ -412,14 +405,7 @@ describe("AgentSession tree navigation branch summary options", () => {
 						provider: "anthropic",
 						model: "claude-sonnet-4-5",
 						stopReason: "stop",
-						usage: {
-							input: 10,
-							output: 10,
-							cacheRead: 0,
-							cacheWrite: 0,
-							totalTokens: 20,
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-						},
+						usage: { ...emptyUsage(), input: 10, output: 10, totalTokens: 20 },
 						timestamp: 4,
 					},
 				});

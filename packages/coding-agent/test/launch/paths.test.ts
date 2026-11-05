@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import {
 	daemonBrokerEndpoint,
@@ -15,6 +15,7 @@ import {
 	managedDaemonsRoot,
 } from "@veyyon/coding-agent/launch/paths";
 import { getAgentDir, getConfigRootDir } from "@veyyon/utils";
+import { withPlatform } from "../../../utils/test/helpers/platform-override";
 
 /**
  * These derive the per-project daemon runtime directory and broker endpoint. The key is a wyhash of
@@ -37,20 +38,6 @@ import { getAgentDir, getConfigRootDir } from "@veyyon/utils";
  * These pin the exact bytes of every name through the owner's own functions, so a rename is
  * a deliberate, visible change to a running broker's on-disk contract instead of a silent one.
  */
-
-const RESTORE: Array<() => void> = [];
-afterEach(() => {
-	while (RESTORE.length) RESTORE.pop()?.();
-});
-
-function withPlatform(value: NodeJS.Platform, run: () => void): void {
-	const original = Object.getOwnPropertyDescriptor(process, "platform");
-	Object.defineProperty(process, "platform", { value, configurable: true });
-	RESTORE.push(() => {
-		if (original) Object.defineProperty(process, "platform", original);
-	});
-	run();
-}
 
 const AGENT = "/cfg/profiles/default/agent";
 

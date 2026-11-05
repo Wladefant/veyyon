@@ -13,6 +13,7 @@
 import { heapStats } from "bun:jsc";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ChatTranscriptBuilder } from "@veyyon/coding-agent/modes/terminal/components/transcript/chat-transcript-builder";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
@@ -27,14 +28,7 @@ export const CELL_TYPES = ["Object", "Array", "Function", "JSLexicalEnvironment"
 export type CellType = (typeof CELL_TYPES)[number];
 export type TurnCells = Record<CellType, number>;
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 function assistant(index: number, content: AssistantMessage["content"], failure?: string): AssistantMessage {
 	return {

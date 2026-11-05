@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { handleHuggingFace } from "../../src/scrapers/huggingface";
 import * as scraperTypes from "../../src/scrapers/types";
+import { requireRender } from "../helpers/scrapers";
 
 /**
  * WHY: every Hub resource kind (model, dataset, space) is rendered from two fetches, the API
@@ -37,13 +38,6 @@ function json(record: unknown): Page {
 	return { content: JSON.stringify(record), ok: true, status: 200 };
 }
 
-function render(result: scraperTypes.RenderResult | scraperTypes.ScraperDegrade | null): scraperTypes.RenderResult {
-	if (result === null || scraperTypes.isScraperDegrade(result)) {
-		throw new Error(`expected a render, got ${JSON.stringify(result)}`);
-	}
-	return result;
-}
-
 describe("a Hugging Face resource renders its API record and README", () => {
 	let loadPageSpy: { mockRestore: () => void } | null = null;
 
@@ -67,7 +61,7 @@ describe("a Hugging Face resource renders its API record and README", () => {
 			"https://huggingface.co/org/demo/raw/main/README.md": { content: "Card body\n", ok: true, status: 200 },
 		});
 
-		const result = render(await handleHuggingFace("https://huggingface.co/org/demo", 10));
+		const result = requireRender(await handleHuggingFace("https://huggingface.co/org/demo", 10));
 
 		expect(result.method).toBe("huggingface");
 		expect(result.finalUrl).toBe("https://huggingface.co/api/models/org/demo");
@@ -106,7 +100,7 @@ describe("a Hugging Face resource renders its API record and README", () => {
 			"https://huggingface.co/datasets/squad/raw/main/README.md": { content: "Dataset body", ok: true, status: 200 },
 		});
 
-		const result = render(await handleHuggingFace("https://huggingface.co/datasets/squad", 10));
+		const result = requireRender(await handleHuggingFace("https://huggingface.co/datasets/squad", 10));
 
 		expect(result.finalUrl).toBe("https://huggingface.co/api/datasets/squad");
 		expect(result.content).toBe(
@@ -146,7 +140,7 @@ describe("a Hugging Face resource renders its API record and README", () => {
 			},
 		});
 
-		const result = render(await handleHuggingFace("https://huggingface.co/spaces/gradio/hello_world", 10));
+		const result = requireRender(await handleHuggingFace("https://huggingface.co/spaces/gradio/hello_world", 10));
 
 		expect(result.finalUrl).toBe("https://huggingface.co/api/spaces/gradio/hello_world");
 		expect(result.content).toBe(
@@ -175,8 +169,8 @@ describe("a Hugging Face resource renders its API record and README", () => {
 			"https://huggingface.co/org/blank/raw/main/README.md": { content: "  \n\t\n", ok: true, status: 200 },
 		});
 
-		const bare = render(await handleHuggingFace("https://huggingface.co/org/bare", 10));
-		const blank = render(await handleHuggingFace("https://huggingface.co/org/blank", 10));
+		const bare = requireRender(await handleHuggingFace("https://huggingface.co/org/bare", 10));
+		const blank = requireRender(await handleHuggingFace("https://huggingface.co/org/blank", 10));
 
 		expect(bare.content).toBe("# org/bare\n\n**Likes:** 1");
 		expect(blank.content).toBe("# org/blank\n\n**Likes:** 1");
@@ -194,7 +188,7 @@ describe("a Hugging Face resource renders its API record and README", () => {
 			}),
 		});
 
-		const result = render(await handleHuggingFace("https://huggingface.co/org/sparse", 10));
+		const result = requireRender(await handleHuggingFace("https://huggingface.co/org/sparse", 10));
 
 		expect(result.content).toBe("# org/sparse\n\n**Downloads:** 0");
 	});
@@ -213,7 +207,7 @@ describe("a Hugging Face resource renders its API record and README", () => {
 			"https://huggingface.co/gpt2/raw/main/README.md": { content: "GPT-2 card", ok: true, status: 200 },
 		});
 
-		const result = render(await handleHuggingFace("https://huggingface.co/gpt2", 10));
+		const result = requireRender(await handleHuggingFace("https://huggingface.co/gpt2", 10));
 
 		expect(result.finalUrl).toBe("https://huggingface.co/api/models/gpt2");
 		expect(result.content).toBe(
@@ -246,7 +240,7 @@ describe("a Hugging Face resource renders its API record and README", () => {
 			}),
 		});
 
-		const result = render(await handleHuggingFace("https://huggingface.co/alice", 10));
+		const result = requireRender(await handleHuggingFace("https://huggingface.co/alice", 10));
 
 		expect(result.finalUrl).toBe("https://huggingface.co/api/users/alice");
 		expect(result.content).toBe(
@@ -264,7 +258,7 @@ describe("a Hugging Face resource renders its API record and README", () => {
 	it("titles a user profile with the path segment when the record has no user name", async () => {
 		loadPageSpy = servePages({ "https://huggingface.co/api/users/bob": json({ numModels: 1 }) });
 
-		const result = render(await handleHuggingFace("https://huggingface.co/bob", 10));
+		const result = requireRender(await handleHuggingFace("https://huggingface.co/bob", 10));
 
 		expect(result.content).toBe("# bob\n\n**Models:** 1");
 	});

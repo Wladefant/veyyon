@@ -205,7 +205,7 @@ describe("the machine tier in a status report", () => {
 	let configRoot = "";
 	let previousConfigDir: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		configRoot = path.join(os.tmpdir(), `pi-cpu-cmd-cfg-${Snowflake.next()}`);
 		fs.mkdirSync(configRoot, { recursive: true });
 		fs.writeFileSync(
@@ -214,7 +214,7 @@ describe("the machine tier in a status report", () => {
 		);
 		previousConfigDir = process.env.VEYYON_CONFIG_DIR;
 		process.env.VEYYON_CONFIG_DIR = configRoot;
-		resetSessionCpuLimitsForTests();
+		await resetSessionCpuLimitsForTests();
 	});
 
 	afterEach(async () => {
@@ -222,7 +222,7 @@ describe("the machine tier in a status report", () => {
 		if (previousConfigDir === undefined) delete process.env.VEYYON_CONFIG_DIR;
 		else process.env.VEYYON_CONFIG_DIR = previousConfigDir;
 		if (configRoot && fs.existsSync(configRoot)) removeSyncWithRetries(configRoot);
-		resetSessionCpuLimitsForTests();
+		await resetSessionCpuLimitsForTests();
 	});
 
 	it("says the limit is not applied yet when nothing has needed the budget group", async () => {

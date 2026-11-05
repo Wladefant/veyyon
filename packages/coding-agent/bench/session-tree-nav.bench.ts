@@ -7,6 +7,7 @@
  * Run: bun packages/coding-agent/bench/session-tree-nav.bench.ts
  */
 
+import { emptyUsage } from "@veyyon/catalog/models";
 // Both moved out of `session-manager.ts` (the context builder to `session-context.ts`, the entry union to
 // `session-entries.ts`), which this script had not followed, so it had stopped running at all -- the same
 // way the parse-key bench had. A bench that cannot start publishes nothing and says nothing about it.
@@ -18,6 +19,8 @@ import { makeBench } from "@veyyon/utils/bench-harness";
 
 const MSG_COUNT = 100;
 const CODE_BLOCKS_PER_MSG = 5;
+
+const USAGE = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 function makeId(i: number): string {
 	return `entry-${i.toString().padStart(6, "0")}`;
@@ -34,7 +37,8 @@ function buildEntries(): SessionEntry[] {
 	for (let i = 0; i < MSG_COUNT; i++) {
 		const id = makeId(i);
 		const parentId = i === 0 ? null : makeId(i - 1);
-		const timestamp = new Date(now.getTime() + i * 1000).toISOString();
+		const ms = now.getTime() + i * 1000;
+		const timestamp = new Date(ms).toISOString();
 
 		const codeBlocks = Array.from({ length: CODE_BLOCKS_PER_MSG }, (_, k) =>
 			makeCodeBlock(i * CODE_BLOCKS_PER_MSG + k),
@@ -50,6 +54,7 @@ function buildEntries(): SessionEntry[] {
 				message: {
 					role: "user",
 					content: `User message ${i}: please analyze this code.\n\n${codeBlocks}`,
+					timestamp: ms,
 				},
 			} satisfies SessionEntry);
 		} else {
@@ -62,6 +67,12 @@ function buildEntries(): SessionEntry[] {
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: `Assistant reply ${i}:\n\n${codeBlocks}` }],
+					api: "openai-completions",
+					provider: "bench",
+					model: "bench-model",
+					usage: USAGE,
+					stopReason: "stop",
+					timestamp: ms,
 				},
 			} satisfies SessionEntry);
 		}

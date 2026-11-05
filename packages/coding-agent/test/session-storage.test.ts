@@ -10,6 +10,7 @@ import {
 } from "@veyyon/kernel/session/indexed-session-storage";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
+import { drainMicrotasks } from "../../utils/test/helpers/drain-microtasks";
 
 class ControlledTitleUpdateBackend implements SessionStorageBackend {
 	readonly #sessionPath: string;
@@ -221,7 +222,7 @@ describe("IndexedSessionStorage.updateSessionTitle", () => {
 
 		const first = storage.updateSessionTitle(sessionPath, { title: "First", source: "auto", updatedAt: "t1" });
 		const second = storage.updateSessionTitle(sessionPath, { title: "Second", source: "user", updatedAt: "t2" });
-		for (let i = 0; i < 10; i++) await Promise.resolve();
+		await drainMicrotasks(10);
 
 		backend.rejectFirstUpdate(new Error("first title write failed"));
 		await expect(first).rejects.toThrow("first title write failed");

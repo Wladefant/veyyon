@@ -11,7 +11,8 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { errorMessage, lazy, prompt } from "@veyyon/utils";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
+import { errorMessage, prompt } from "@veyyon/utils";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
 import { resolveToCwd } from "../core/path-utils";
@@ -19,7 +20,7 @@ import { ToolError, toolFailure } from "../core/tool-errors";
 import { SET_CWD_TOOL_NAME } from "./reroot-hint";
 import { setCwdToolView } from "./set-cwd-view";
 
-const setCwdSchema = lazy(() =>
+const setCwdSchema = toolSchema("set_cwd", () =>
 	type({
 		path: type("string").describe("Absolute (preferred) or session-relative directory to become the new session cwd"),
 	}),
@@ -128,6 +129,9 @@ export class SetCwdTool implements AgentTool<typeof setCwdSchema.value, SetCwdTo
 	readonly description: string;
 	get parameters(): typeof setCwdSchema.value {
 		return setCwdSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return setCwdSchema.wire;
 	}
 	readonly strict = true;
 	readonly approval = "write" as const;

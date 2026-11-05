@@ -19,6 +19,7 @@
  * than as a divider between regions.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { ComposerHairline } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
 import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
@@ -43,7 +44,7 @@ function fullWidthRules(component: Component, width: number): string[] {
 	const rule = theme.boxSharp.horizontal;
 	return component
 		.render(width)
-		.map(line => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd())
+		.map(line => stripVTControlCharacters(line).trimEnd())
 		.filter(line => line.length >= width - 1 && line.split("").every(char => char === rule));
 }
 
@@ -100,7 +101,7 @@ describe("transcript blocks", () => {
 		const rail = theme.symbol("block.rail");
 		const lines = toolBlock(false)
 			.render(120)
-			.map(line => line.replace(/\x1b\[[0-9;]*m/g, ""));
+			.map(line => stripVTControlCharacters(line));
 
 		const railed = lines.filter(line => line.includes(rail));
 		expect(railed.length).toBeGreaterThan(0);

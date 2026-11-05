@@ -3,9 +3,10 @@ import * as path from "node:path";
 import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import { theme as activeTheme, getThemeByName, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { theme as activeTheme, initTheme } from "@veyyon/coding-agent/theme/theme";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import type { TUI } from "@veyyon/tui";
+import { requireTheme } from "../helpers/require-theme";
 import { createToolExecution } from "../helpers/tool-execution";
 
 function extractLinkUris(text: string): string[] {
@@ -35,8 +36,7 @@ afterAll(() => {
 describe("the read card's hyperlinks", () => {
 	it("links a local-style read row to the resolved filesystem path and the line it read at", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 
 		const handoffPath = path.resolve("/tmp/veyyon-local/handoff.md");
 		const component = drawToolView(
@@ -52,7 +52,7 @@ describe("the read card's hyperlinks", () => {
 				{ expanded: false, partial: false },
 				{ path: "local://handoff.md:2" },
 			),
-			theme!,
+			theme,
 		);
 
 		const rendered = component.render(200).join("\n");
@@ -68,13 +68,12 @@ describe("the read card's hyperlinks", () => {
 
 	it("links an absolute read call to a file URI at the selector's first line", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 
 		const examplePath = path.resolve("/tmp/veyyon-read/example.ts");
 		const component = drawToolView(
 			readToolView.renderCall({ path: `${examplePath}:10-12` }, { expanded: false, partial: false }),
-			theme!,
+			theme,
 		);
 
 		const rendered = component.render(200).join("\n");
@@ -87,8 +86,7 @@ describe("the read card's hyperlinks", () => {
 
 	it("links an HTTP read result to the final URL", async () => {
 		settings.override("tui.hyperlinks", "always");
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("dark");
 
 		const component = drawToolView(
 			readToolView.renderResult(
@@ -107,7 +105,7 @@ describe("the read card's hyperlinks", () => {
 				{ expanded: false, partial: false },
 				{ path: "http://example.com/start" },
 			),
-			theme!,
+			theme,
 		);
 
 		const rendered = component.render(200).join("\n");

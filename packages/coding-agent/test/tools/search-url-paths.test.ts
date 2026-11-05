@@ -7,6 +7,7 @@ import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
 import { SEARCH_TYPES } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 import * as scrapers from "@veyyon/web/scrapers/types";
+import { toolResultText } from "../helpers/tool-result-text";
 
 function createSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");
@@ -24,13 +25,6 @@ function createSession(testDir: string): ToolSession {
 		},
 		settings: Settings.isolated({ "fetch.enabled": true, "search.contextBefore": 0, "search.contextAfter": 0 }),
 	};
-}
-
-function resultText(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter(entry => entry.type === "text")
-		.map(entry => entry.text ?? "")
-		.join("\n");
 }
 
 function stubLoadPage(body: string, contentType: string) {
@@ -79,10 +73,10 @@ describe("search tools with external URL paths", () => {
 
 		const localPath = path.join(testDir, "local.ts");
 		await fs.writeFile(localPath, "export function localNeedle() { return 1; }\n");
-		expect(resultText(await read.execute("local-read", { path: localPath }))).toContain("localNeedle");
+		expect(toolResultText(await read.execute("local-read", { path: localPath }))).toContain("localNeedle");
 		for (const type of SEARCH_TYPES) {
 			const args = type === "files" ? { type, input: "local.ts" } : { type, input: "localNeedle", path: localPath };
-			expect(resultText(await search.execute("local-search", args))).toContain(
+			expect(toolResultText(await search.execute("local-search", args))).toContain(
 				type === "files" ? "local.ts" : "localNeedle",
 			);
 		}
@@ -99,7 +93,7 @@ describe("search tools with external URL paths", () => {
 			input: "remote needle",
 			path: "https://example.com/notes.txt",
 		});
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("remote needle");
 		expect(text).not.toContain("Cannot search external URL");
 	});
@@ -115,7 +109,7 @@ describe("search tools with external URL paths", () => {
 			input: "outside|remote needle",
 			path: "https://example.com/notes.txt:2-2",
 		});
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("remote needle");
 		expect(text).not.toContain("outside before");
 		expect(text).not.toContain("outside after");
@@ -146,7 +140,7 @@ describe("search tools with external URL paths", () => {
 			input: "remoteNeedle",
 			path: "https://example.com/snippet.ts",
 		});
-		const text = resultText(result);
+		const text = toolResultText(result);
 		expect(text).toContain("remoteNeedle");
 		expect(text).not.toContain("Parse issues");
 	});
@@ -162,7 +156,7 @@ describe("search tools with external URL paths", () => {
 			input: "remote needle",
 			path: "www.example.com/notes.txt",
 		});
-		expect(resultText(result)).toContain("remote needle");
+		expect(toolResultText(result)).toContain("remote needle");
 		expect(loadPage).toHaveBeenCalledWith("https://www.example.com/notes.txt", expect.anything());
 	});
 
@@ -177,7 +171,7 @@ describe("search tools with external URL paths", () => {
 			input: "remote needle",
 			path: "https:/example.com/notes.txt",
 		});
-		expect(resultText(result)).toContain("remote needle");
+		expect(toolResultText(result)).toContain("remote needle");
 		expect(loadPage).toHaveBeenCalledWith("https://example.com/notes.txt", expect.anything());
 	});
 
@@ -194,7 +188,7 @@ describe("search tools with external URL paths", () => {
 			input: "local needle",
 			path: "www.example.com",
 		});
-		expect(resultText(result)).toContain("local needle");
+		expect(toolResultText(result)).toContain("local needle");
 		expect(loadPage).not.toHaveBeenCalled();
 	});
 
@@ -211,7 +205,7 @@ describe("search tools with external URL paths", () => {
 			input: "local needle",
 			path: "src/notes.txt",
 		});
-		expect(resultText(result)).toContain("local needle");
+		expect(toolResultText(result)).toContain("local needle");
 		expect(loadPage).not.toHaveBeenCalled();
 	});
 

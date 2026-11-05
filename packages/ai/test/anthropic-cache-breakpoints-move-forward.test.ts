@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { streamAnthropic } from "@veyyon/ai/providers/anthropic";
 import type { AssistantMessage, Context, Message, Model, ModelSpec, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 /**
  * What a collapsed Anthropic turn costs, and why these are the assertions.
@@ -85,14 +86,7 @@ function assistantTurn(index: number): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: MODEL.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: index * 2,
 	};

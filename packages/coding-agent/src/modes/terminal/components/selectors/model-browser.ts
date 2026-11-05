@@ -17,7 +17,7 @@ import type { ModelPerfStats } from "@veyyon/kernel/session/agent-storage";
 import { Ellipsis } from "@veyyon/natives";
 import { type Component, Input, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
-import { clampLow, formatNumber } from "@veyyon/utils";
+import { clampLow, formatNumber, wrapIndex } from "@veyyon/utils";
 import { fuzzyRank } from "@veyyon/utils/fuzzy";
 import { matchesKey } from "@veyyon/utils/keys";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
@@ -67,9 +67,9 @@ export interface DefaultModelAssignment {
 }
 
 /**
- * Resolve the configured `defaultModel` chain against `allModels`: the first
- * entry that matches, with its effort. Shared by the /models hub and the alt+p
- * session picker.
+ * Resolve the configured `defaultModel` chain against `models`: the first
+ * entry that matches, with its effort. Shared by the /models hub, which passes
+ * the catalog, and the alt+p session picker, which passes the models it lists.
  *
  * An unset default, or one that matches nothing, gets no assignment: the hub
  * shows no default rather than advertise a model nobody picked. The effort is
@@ -78,9 +78,9 @@ export interface DefaultModelAssignment {
  */
 export function resolveDefaultModelAssignment(
 	settings: Settings,
-	allModels: ReadonlyArray<Model>,
+	models: ReadonlyArray<Model>,
 ): DefaultModelAssignment | undefined {
-	const resolved = resolveModelSelectorValue(settings.get("defaultModel"), allModels, {
+	const resolved = resolveModelSelectorValue(settings.get("defaultModel"), models, {
 		settings,
 		matchPreferences: getModelMatchPreferences(settings),
 	});
@@ -548,7 +548,7 @@ export class ModelBrowser implements Component {
 		if (options.wrap ?? true) {
 			let index = this.#selectedIndex;
 			for (let step = 0; step < count; step++) {
-				index = (index + delta + count) % count;
+				index = wrapIndex(index + delta, count);
 				const item = this.#visibleItems[index];
 				if (item && !this.#isDisabled(item)) {
 					this.#setSelectedIndex(index);

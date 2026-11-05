@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
@@ -15,6 +14,7 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import type { SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "@veyyon/coding-agent/thinking";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 
 function childResult(id: string): SingleResult {
 	return {
@@ -68,8 +68,7 @@ describe("SDK agent effort inheritance", () => {
 	});
 
 	async function createParent(thinkingLevel: ConfiguredThinkingLevel = ThinkingLevel.High): Promise<AgentSession> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir: sharedDir,

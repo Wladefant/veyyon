@@ -21,6 +21,7 @@ import { describe, expect, it } from "bun:test";
 import type { CompactionSummaryMessage } from "@veyyon/agent-core/compaction";
 import { estimateTokens } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 type AssistantBlock = AssistantMessage["content"][number];
 
@@ -34,14 +35,7 @@ function assistant(block: AssistantBlock): AssistantMessage {
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }

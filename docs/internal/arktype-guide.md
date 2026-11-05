@@ -39,6 +39,16 @@ Build schemas inside a `lazy()` thunk or at the point of use, never at module sc
 `packages/coding-agent/test/architecture/a-launch-evaluates-arktype-only-when-a-schema-is-built.test.ts`
 fails when loading every launch and tool module evaluates it.
 
+Declare a built-in tool's parameter schema with `toolSchema(id, build)` from
+`@veyyon/ai/utils/schema/tool-schema` instead of `lazy()`, and give the tool a `wireParameters`
+getter that returns the holder's `wire` beside the `parameters` getter that returns its `value`. A
+compiled build stores each wire form in the profile's `cache/tool-wire-schemas.json` under the build's
+id, and a later launch of that build sends the stored form without building the schema. `id` names
+one schema for the life of a build: a schema built from runtime inputs (a setting, the enabled eval
+languages, the enabled agent names) carries every input in its id, as `eval:${languages}` does.
+`packages/coding-agent/test/tools/every-builtin-tool-sends-the-wire-schema-its-parameters-produce.test.ts`
+fails when a built-in tool supplies no wire form, or one that differs from its `parameters`.
+
 ## Core translation table (Zod → ArkType)
 | Zod | ArkType |
 |---|---|
@@ -180,4 +190,4 @@ is a candidate to **stay on Zod** (external-boundary exception), note it in your
 - Report: files changed, any `.strict`→`"+"`, `.refine`→`.narrow`, `.catch`→morph, and any file you
   intentionally left on Zod (with the reason).
 
-*Verified against `eb21778f28` on 2026-10-03.*
+*Verified against `6320451a5` on 2026-10-29.*

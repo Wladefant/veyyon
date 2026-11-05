@@ -9,12 +9,6 @@ const testContext: Context = {
 	messages: [{ role: "user", content: "hi", timestamp: 0 }],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 describe("ollama effort ladder normalization reaches the Responses wire", () => {
 	it("normalizes a stale ollama spec and sends native max on the wire", async () => {
 		// A cached/custom spec from before the wire-exact ladder existed:
@@ -43,7 +37,7 @@ describe("ollama effort ladder normalization reaches the Responses wire", () => 
 		const { promise, resolve } = Promise.withResolvers<Record<string, unknown>>();
 		streamOpenAIResponses(model, testContext, {
 			apiKey: "test-key",
-			signal: abortedSignal(),
+			signal: AbortSignal.abort(),
 			reasoning: "max",
 			reasoningSummary: "auto",
 			onPayload: payload => resolve(payload as Record<string, unknown>),

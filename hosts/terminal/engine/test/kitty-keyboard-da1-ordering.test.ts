@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Component } from "@veyyon/tui";
 import { TERMINAL } from "@veyyon/tui/terminal-capabilities";
+import { restoreEnv } from "../../../../packages/utils/test/helpers/restore-global";
 import {
 	createProcessTerminalRenderHarness,
 	type ProcessTerminalRenderHarness,
@@ -24,14 +25,6 @@ const originalSshTty = Bun.env.SSH_TTY;
 const originalSshClient = Bun.env.SSH_CLIENT;
 const originalTmux = Bun.env.TMUX;
 const originalTerminalId = TERMINAL.id;
-
-function restoreEnv(name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT" | "TMUX", value: string | undefined): void {
-	if (value === undefined) {
-		delete Bun.env[name];
-		return;
-	}
-	Bun.env[name] = value;
-}
 
 describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () => {
 	let harness: ProcessTerminalRenderHarness | undefined;

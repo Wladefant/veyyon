@@ -55,12 +55,6 @@ const baseContext: Context = {
 	messages: [{ role: "user", content: "ping", timestamp: Date.now() }],
 };
 
-function abortedSignal(): AbortSignal {
-	const controller = new AbortController();
-	controller.abort();
-	return controller.signal;
-}
-
 interface ThinkingPayload {
 	additionalModelRequestFields?: {
 		thinking?: { type?: string; display?: string; budget_tokens?: number };
@@ -73,7 +67,7 @@ function captureBedrockPayload(
 ): Promise<ThinkingPayload> {
 	const { promise, resolve } = Promise.withResolvers<ThinkingPayload>();
 	void streamBedrock(model, baseContext, {
-		signal: abortedSignal(),
+		signal: AbortSignal.abort(),
 		...options,
 		onPayload: payload => {
 			resolve(payload as ThinkingPayload);

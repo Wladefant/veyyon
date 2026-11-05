@@ -14,8 +14,9 @@
  * parser regresses to a bare dynamic-key assignment.
  */
 import { describe, expect, it } from "bun:test";
-import type { AssistantMessage, AssistantMessageEvent, Context, ToolCall, Usage } from "@veyyon/ai";
+import type { AssistantMessage, AssistantMessageEvent, Context, ToolCall } from "@veyyon/ai";
 import { createInbandScanner, type Dialect, type InbandScanEvent } from "@veyyon/ai/dialect";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { wrapInbandToolStream } from "../src/dialect/owned-stream";
 import { AssistantMessageEventStream } from "../src/utils/event-stream";
 
@@ -121,17 +122,6 @@ describe("anthropic dialect: __proto__ parameter name", () => {
 	});
 });
 
-function usage(): Usage {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function makeAssistant(): AssistantMessage {
 	return {
 		role: "assistant",
@@ -139,7 +129,7 @@ function makeAssistant(): AssistantMessage {
 		api: "mock",
 		provider: "mock",
 		model: "mock-model",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason: "toolUse",
 		timestamp: 0,
 	};

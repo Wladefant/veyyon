@@ -27,6 +27,7 @@ import type {
 } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { openBoundedFirstEventBudget } from "../utils/first-event-budget";
+import { messageContentText } from "../utils/message-text";
 import { toolWireSchema } from "../utils/schema/wire";
 import { carryRequiredToolCall } from "../utils/tool-choice";
 import {
@@ -642,7 +643,7 @@ export function selectGitLabDuoWorkflowModelRef(
 }
 
 export function buildGitLabPlainTextFromToolResult(toolResult: ToolResultMessage): GitLabPlainTextResponse {
-	const text = gitLabToolResultToText(toolResult);
+	const text = messageContentText(toolResult.content);
 	return toolResult.isError ? { error: text } : { response: text };
 }
 function findGitLabDuoWorkflowToolResultById(
@@ -2496,7 +2497,6 @@ function gitLabToolResultToText(toolResult: ToolResultMessage): string {
 		)
 		.join("\n");
 }
-
 function buildGitLabMcpToolDefinition(tool: Tool): GitLabMcpToolDefinition {
 	const schema = toolWireSchema(tool);
 	// Register the tool under its BARE name (no `mcp__veyyon__` prefix). The server does
@@ -2922,7 +2922,7 @@ export async function resolveGitLabDuoWorkflowNamespaceSelection(
 	} catch (error) {
 		throw new AIError.ProviderResponseError(
 			`GitLab Duo Workflow runtime namespace resolution failed: ${gitLabDuoWorkflowErrorText(error)}`,
-			{ provider: "gitlab-duo-agent", kind: "runtime" },
+			{ provider: "gitlab-duo-agent", kind: "runtime", cause: error },
 		);
 	}
 }

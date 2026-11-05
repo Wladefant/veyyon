@@ -27,9 +27,12 @@ export class MemoryCommandController {
 		this.#loadHindsight = loadHindsight;
 	}
 
-	/** `/memory <action>`: view, stats, diagnose, clear, enqueue, and the `mm` mental-model verbs. */
-	async handle(text: string): Promise<void> {
-		const argumentText = text.slice(7).trim();
+	/**
+	 * `/memory <action>`: view, stats, diagnose, clear, enqueue, and the `mm` mental-model verbs. `args` is
+	 * what the dispatcher parsed after the command name, so `/memory stats` and `/memory:stats` read alike.
+	 */
+	async handle(args: string): Promise<void> {
+		const argumentText = args.trim();
 		const action = argumentText.split(/\s+/, 1)[0]?.toLowerCase() || "view";
 		const agentDir = this.#ctx.settings.getAgentDir();
 		const backend = await resolveMemoryBackend(this.#ctx.settings);

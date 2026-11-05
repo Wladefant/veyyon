@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { complete } from "@veyyon/ai/stream";
 import type { Api, Context, Model, OptionsForApi, ToolResultMessage } from "@veyyon/ai/types";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { type } from "arktype";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
@@ -52,14 +52,7 @@ async function testEmojiInToolResults<TApi extends Api>(llm: Model<TApi>, option
 				api: llm.api,
 				provider: llm.provider,
 				model: llm.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			},
@@ -137,14 +130,7 @@ async function testRealWorldLinkedInData<TApi extends Api>(llm: Model<TApi>, opt
 				api: llm.api,
 				provider: llm.provider,
 				model: llm.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			},
@@ -225,14 +211,7 @@ async function testUnpairedHighSurrogate<TApi extends Api>(llm: Model<TApi>, opt
 				api: llm.api,
 				provider: llm.provider,
 				model: llm.id,
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
+				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: Date.now(),
 			},

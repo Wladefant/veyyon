@@ -3,8 +3,9 @@ import type { AgentToolContext, AgentToolResult } from "@veyyon/agent-core";
 import type { TUI } from "@veyyon/tui";
 import type { ExtensionUIDialogOptions, ExtensionUISelectItem } from "../src/extensibility/extensions";
 import { HookSelectorComponent } from "../src/modes/terminal/components/selectors/hook-selector";
-import { getThemeByName, setThemeInstance } from "../src/theme/theme";
+import { setThemeInstance } from "../src/theme/theme";
 import { AskTool, type AskToolDetails } from "../src/tools/agent/ask";
+import { requireTheme } from "./helpers/require-theme";
 import { makeToolSession } from "./helpers/tool-session";
 
 type AskExecutionResult = AgentToolResult<AskToolDetails>;
@@ -40,8 +41,7 @@ function createAskTool(): AskTool {
 
 describe("AskTool timeout", () => {
 	beforeAll(async () => {
-		const loaded = await getThemeByName("dark");
-		if (!loaded) throw new Error("theme unavailable");
+		const loaded = await requireTheme("dark");
 		setThemeInstance(loaded);
 	});
 

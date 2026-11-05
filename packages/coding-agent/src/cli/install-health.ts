@@ -25,6 +25,12 @@ import { $which, APP_NAME, VERSION } from "@veyyon/utils";
 import { completionEnvFrom, completionTargets } from "./completion-refresh";
 import { probeSearchWorks, resolveUpdateMethod, verifyBinaryVersion, windowsCompletionTargets } from "./update-cli";
 
+/** One completion script the installer could have written, and the shell it is for. */
+export interface CompletionFile {
+	shell: string;
+	filePath: string;
+}
+
 /**
  * One answer about the install.
  *
@@ -33,12 +39,6 @@ import { probeSearchWorks, resolveUpdateMethod, verifyBinaryVersion, windowsComp
  * meaning here, and the two are consumed by different commands. Sharing the name
  * would tie an install question to a plugin lifecycle it has nothing to do with.
  */
-/** One completion script the installer could have written, and the shell it is for. */
-export interface CompletionFile {
-	shell: string;
-	filePath: string;
-}
-
 export interface InstallHealthCheck {
 	name: string;
 	status: "ok" | "warning" | "error";

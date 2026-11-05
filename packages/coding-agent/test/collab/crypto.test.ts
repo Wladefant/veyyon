@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { generateRoomKey, generateWriteToken, importRoomKey, open, seal } from "@veyyon/coding-agent/collab/crypto";
+import { generateRoomKey, generateWriteToken, importRoomKey } from "@veyyon/coding-agent/collab/crypto";
 import {
 	type CollabFrame,
 	DEFAULT_RELAY_URL,
@@ -11,26 +11,27 @@ import {
 	rewriteEnvelopePeer,
 	unpackEnvelope,
 } from "@veyyon/coding-agent/collab/protocol";
+import { openFrame, sealFrame } from "@veyyon/wire";
 
 describe("collab crypto", () => {
-	it("round-trips a frame through seal/open", async () => {
+	it("round-trips a frame through sealFrame/openFrame", async () => {
 		const key = await importRoomKey(generateRoomKey());
 		const frame: CollabFrame = { t: "prompt", text: "check bun.lock — and ünïcode 🚀" };
-		const sealed = await seal(key, frame);
-		expect(await open(key, sealed)).toEqual(frame);
+		const sealed = await sealFrame(key, frame);
+		expect(await openFrame<CollabFrame>(key, sealed)).toEqual(frame);
 	});
 
 	it("rejects tampered ciphertext", async () => {
 		const key = await importRoomKey(generateRoomKey());
-		const sealed = await seal(key, { t: "abort" });
+		const sealed = await sealFrame<CollabFrame>(key, { t: "abort" });
 		sealed[sealed.length - 1]! ^= 0xff;
-		expect(open(key, sealed)).rejects.toThrow();
+		await expect(openFrame(key, sealed)).rejects.toThrow();
 	});
 
 	it("rejects frames sealed with a different key", async () => {
-		const sealed = await seal(await importRoomKey(generateRoomKey()), { t: "abort" });
+		const sealed = await sealFrame<CollabFrame>(await importRoomKey(generateRoomKey()), { t: "abort" });
 		const otherKey = await importRoomKey(generateRoomKey());
-		expect(open(otherKey, sealed)).rejects.toThrow();
+		await expect(openFrame(otherKey, sealed)).rejects.toThrow();
 	});
 });
 

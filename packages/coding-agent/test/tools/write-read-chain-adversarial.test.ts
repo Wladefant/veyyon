@@ -7,19 +7,13 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
  * Cross-tool write→read chains: hashline header stability, multi-file
  * independence, and plan-mode mid-chain gate. Exact disk + body asserts.
  */
-
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("\n");
-}
 
 describe("write→read chain adversarial", () => {
 	let settingsState: SettingsTestState | undefined;
@@ -70,7 +64,7 @@ describe("write→read chain adversarial", () => {
 		const filePath = path.join(tmpDir, "chain.ts");
 		const content = "export const chain = 1;\n";
 		await new WriteTool(s).execute("w", { path: filePath, content });
-		const out = textOf(await new ReadTool(s).execute("r", { path: filePath }));
+		const out = toolResultText(await new ReadTool(s).execute("r", { path: filePath }));
 		expect(out).toMatch(/\[[^\]]+#[0-9A-Fa-f]{4}\]/);
 		expect(out).toContain("export const chain = 1;");
 	});
@@ -81,9 +75,9 @@ describe("write→read chain adversarial", () => {
 		const write = new WriteTool(s);
 		const read = new ReadTool(s);
 		await write.execute("w1", { path: filePath, content: "v1\n" });
-		expect(textOf(await read.execute("r1", { path: filePath }))).toContain("v1");
+		expect(toolResultText(await read.execute("r1", { path: filePath }))).toContain("v1");
 		await write.execute("w2", { path: filePath, content: "v2-final\n" });
-		const out = textOf(await read.execute("r2", { path: filePath }));
+		const out = toolResultText(await read.execute("r2", { path: filePath }));
 		expect(out).toContain("v2-final");
 		expect(out.includes("v1")).toBe(false);
 		expect(await Bun.file(filePath).text()).toBe("v2-final\n");
@@ -97,9 +91,9 @@ describe("write→read chain adversarial", () => {
 		const read = new ReadTool(s);
 		await write.execute("wa", { path: a, content: "AAA\n" });
 		await write.execute("wb", { path: b, content: "BBB\n" });
-		expect(textOf(await read.execute("ra", { path: a }))).toContain("AAA");
-		expect(textOf(await read.execute("rb", { path: b }))).toContain("BBB");
-		expect(textOf(await read.execute("ra2", { path: a })).includes("BBB")).toBe(false);
+		expect(toolResultText(await read.execute("ra", { path: a }))).toContain("AAA");
+		expect(toolResultText(await read.execute("rb", { path: b }))).toContain("BBB");
+		expect(toolResultText(await read.execute("ra2", { path: a })).includes("BBB")).toBe(false);
 	});
 
 	it("hashline tag from read after write is stable until another write", async () => {
@@ -108,11 +102,11 @@ describe("write→read chain adversarial", () => {
 		const write = new WriteTool(s);
 		const read = new ReadTool(s);
 		await write.execute("w1", { path: filePath, content: "stable\n" });
-		const h1 = textOf(await read.execute("r1", { path: filePath })).split("\n")[0]!;
-		const h2 = textOf(await read.execute("r2", { path: filePath })).split("\n")[0]!;
+		const h1 = toolResultText(await read.execute("r1", { path: filePath })).split("\n")[0]!;
+		const h2 = toolResultText(await read.execute("r2", { path: filePath })).split("\n")[0]!;
 		expect(h1).toBe(h2);
 		await write.execute("w2", { path: filePath, content: "changed\n" });
-		const h3 = textOf(await read.execute("r3", { path: filePath })).split("\n")[0]!;
+		const h3 = toolResultText(await read.execute("r3", { path: filePath })).split("\n")[0]!;
 		expect(h3).not.toBe(h1);
 	});
 
@@ -120,7 +114,7 @@ describe("write→read chain adversarial", () => {
 		const sOpen = session({ planEnabled: false });
 		const filePath = path.join(tmpDir, "gated.ts");
 		await new WriteTool(sOpen).execute("w1", { path: filePath, content: "ok\n" });
-		expect(textOf(await new ReadTool(sOpen).execute("r1", { path: filePath }))).toContain("ok");
+		expect(toolResultText(await new ReadTool(sOpen).execute("r1", { path: filePath }))).toContain("ok");
 
 		const sPlan = session({ planEnabled: true });
 		await expect(new WriteTool(sPlan).execute("w2", { path: filePath, content: "nope\n" })).rejects.toThrow(
@@ -128,7 +122,7 @@ describe("write→read chain adversarial", () => {
 		);
 		expect(await Bun.file(filePath).text()).toBe("ok\n");
 		// Read still works under plan mode (read is not a tree mutation).
-		expect(textOf(await new ReadTool(sPlan).execute("r2", { path: filePath }))).toContain("ok");
+		expect(toolResultText(await new ReadTool(sPlan).execute("r2", { path: filePath }))).toContain("ok");
 	});
 
 	it("unicode write→read preserves codepoints", async () => {
@@ -136,7 +130,7 @@ describe("write→read chain adversarial", () => {
 		const filePath = path.join(tmpDir, "jp.ts");
 		const content = "const 絵 = '🙂';\n";
 		await new WriteTool(s).execute("w", { path: filePath, content });
-		const out = textOf(await new ReadTool(s).execute("r", { path: filePath }));
+		const out = toolResultText(await new ReadTool(s).execute("r", { path: filePath }));
 		expect(out).toContain("絵");
 		expect(out).toContain("🙂");
 		expect(await Bun.file(filePath).text()).toBe(content);

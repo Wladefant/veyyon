@@ -30,6 +30,7 @@ import {
 	CommandController,
 	type CommandControllerContext,
 } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
+import { parseSlashCommand } from "@veyyon/coding-agent/slash-commands/helpers/parse";
 import type { Component } from "@veyyon/tui";
 import { useTruecolorTheme } from "../../../helpers/theme-assertions";
 
@@ -135,7 +136,7 @@ async function runMm(
 		showWarning: (message: string) => run.warnings.push(message),
 		showError: (message: string) => run.errors.push(message),
 	} as unknown as CommandControllerContext;
-	await new CommandController(ctx).handleMemoryCommand(command);
+	await new CommandController(ctx).handleMemoryCommand(parseSlashCommand(command)?.args ?? "");
 	return run;
 }
 

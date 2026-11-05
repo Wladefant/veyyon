@@ -13,10 +13,10 @@ import {
 	readPartRelationships,
 	relationshipOfKind,
 } from "@veyyon/coding-agent/export/markit/converters/opc-relationships";
+import { createMarkitXmlParser } from "@veyyon/coding-agent/export/markit/converters/xml-text";
 import { unzip, zip } from "@veyyon/coding-agent/utils/zip";
-import { XMLParser } from "fast-xml-parser";
 
-const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", textNodeName: "#text" });
+const parser = createMarkitXmlParser();
 
 function rels(...rows: string[]): Uint8Array {
 	return new TextEncoder().encode(`<?xml version="1.0"?><Relationships>${rows.join("")}</Relationships>`);

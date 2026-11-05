@@ -5,6 +5,7 @@ import { CopySelectorComponent } from "@veyyon/coding-agent/modes/terminal/compo
 import type { CopyTarget } from "@veyyon/coding-agent/modes/terminal/utils/copy-targets";
 import { getThemeByName, setThemeInstance, theme } from "@veyyon/coding-agent/theme/theme";
 import { setKeybindings } from "@veyyon/utils/keybindings";
+import { requireTheme } from "../../../helpers/require-theme";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -61,8 +62,7 @@ function render(component: CopySelectorComponent): string {
 
 describe("CopySelectorComponent", () => {
 	beforeAll(async () => {
-		darkTheme = await getThemeByName("dark");
-		if (!darkTheme) throw new Error("Failed to load dark theme");
+		darkTheme = await requireTheme("dark");
 	});
 
 	beforeEach(() => {

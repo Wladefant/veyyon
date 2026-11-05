@@ -481,6 +481,29 @@ describe("anthropic usage report dedupe partitions by org", () => {
 		expect(reports[0]?.metadata?.orgName).toBe("Team Workspace");
 	});
 
+	it("attributes the report a health check returns to the credential's org, as a fetch does", async () => {
+		// The account card shows the report a health check returns in place of the cached one and
+		// matches it to a row by org. A probe report without the org matched no row on a two-org email,
+		// so the card kept the old bars after a re-check.
+		storage = new AuthStorage(
+			makeStore([oauthRow(1, TEAM_ORG, "Team Workspace"), oauthRow(2, MAX_ORG, "Personal Max")]),
+			{
+				usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+			},
+		);
+		await storage.reload();
+
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => emailOnlyReport());
+
+		const results = (await storage.checkCredentials()).sort((a, b) => a.id - b.id);
+		expect(
+			results.map(result => [result.id, result.report?.metadata?.orgId, result.report?.metadata?.orgName]),
+		).toEqual([
+			[1, TEAM_ORG, "Team Workspace"],
+			[2, MAX_ORG, "Personal Max"],
+		]);
+	});
+
 	it("still merges org-less reports with the same email into one row", async () => {
 		storage = new AuthStorage(makeStore([oauthRow(1), oauthRow(2)]), {
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),

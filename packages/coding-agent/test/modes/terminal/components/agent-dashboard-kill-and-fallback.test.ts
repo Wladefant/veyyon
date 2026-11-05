@@ -22,6 +22,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import type { AgentTranscriptRemote } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
 import type { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -31,8 +32,6 @@ import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 let geometry: StubbedStdoutGeometry;
 
@@ -52,7 +51,7 @@ afterEach(() => {
 });
 
 function frameOf(dashboard: AgentDashboard): string {
-	return dashboard.render(120).join("\n").replace(ANSI_PATTERN, "");
+	return stripVTControlCharacters(dashboard.render(120).join("\n"));
 }
 
 interface InputTarget {
@@ -454,10 +453,7 @@ describe("What a failure says to the operator", () => {
 		confirmation.confirm();
 		await surfaced.promise;
 
-		const shown = dashboard
-			.render(120)
-			.join("\n")
-			.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+		const shown = stripVTControlCharacters(dashboard.render(120).join("\n"));
 		expect(shown).toContain("Could not terminate Kestrel");
 		expect(shown).toContain("the session is already gone");
 		dashboard.dispose();
@@ -483,10 +479,7 @@ describe("What a failure says to the operator", () => {
 		dashboard.handleInput("\r");
 		await Bun.sleep(10);
 
-		const shown = dashboard
-			.render(120)
-			.join("\n")
-			.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+		const shown = stripVTControlCharacters(dashboard.render(120).join("\n"));
 		expect(shown).toContain("Could not open Kestrel");
 		expect(shown).toContain("collab guests are read-only here");
 		dashboard.dispose();

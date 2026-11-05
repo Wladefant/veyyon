@@ -27,7 +27,7 @@ import { notifyProviderResponse } from "../utils/provider-response";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent, resolveOpenAiSseEventName } from "../utils/sse-debug";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { parseAzureDeploymentNameMap } from "./azure-deployment-names";
+import { azureDeploymentName } from "./azure-deployment-names";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import {
 	applyOpenAIReasoningEffortFallback,
@@ -52,11 +52,7 @@ const AZURE_OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"Azure OpenAI responses stream timed out while waiting for the first event";
 
 function resolveDeploymentName(model: Model<"azure-openai-responses">, options?: AzureOpenAIResponsesOptions): string {
-	if (options?.azureDeploymentName) {
-		return options.azureDeploymentName;
-	}
-	const mappedDeployment = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id);
-	return mappedDeployment ?? model.id;
+	return options?.azureDeploymentName || azureDeploymentName(model.id, $env);
 }
 
 // Azure OpenAI Responses-specific options

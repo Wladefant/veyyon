@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as pythonExecutor from "@veyyon/coding-agent/eval/py/executor";
@@ -11,6 +10,7 @@ import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensi
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -41,8 +41,7 @@ describe("AgentSession user shortcut hooks", () => {
 	});
 
 	function createSession(extensionRunner?: ExtensionRunner): AgentSession {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 		const agent = new Agent({
 			initialState: {

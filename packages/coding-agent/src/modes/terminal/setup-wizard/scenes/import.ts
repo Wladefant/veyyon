@@ -6,9 +6,14 @@ import { type ImportCandidate, importForeignItems, scanForeignConfig } from "../
 import { theme } from "../../../../theme/theme-binding";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import type { SetupKeyHint, SetupScene, SetupSceneController, SetupSceneHost, SetupWizardContext } from "./types";
-import { createWizardList, filterEscapeHint } from "./wizard-list";
+import {
+	CHECKLIST_CONTINUE,
+	CHECKLIST_KEY_HINTS,
+	createWizardList,
+	filterEscapeHint,
+	handleChecklistInput,
+} from "./wizard-list";
 
-const CONTINUE_VALUE = "__continue";
 const MAX_VISIBLE = 10;
 
 /**
@@ -56,7 +61,7 @@ export class ImportSceneController implements SetupSceneController {
 			description: `${candidate.providerName} · ${shortenPath(candidate.sourcePath)}`,
 		}));
 		items.push({
-			value: CONTINUE_VALUE,
+			value: CHECKLIST_CONTINUE,
 			label: `Import ${this.#selected.size} selected`,
 			// Short enough for the ~38-column description column: the full sentence
 			// ("Nothing selected — continues without importing") was cut after
@@ -73,7 +78,7 @@ export class ImportSceneController implements SetupSceneController {
 
 	#activate(value: string): void {
 		if (this.#importing) return;
-		if (value === CONTINUE_VALUE) {
+		if (value === CHECKLIST_CONTINUE) {
 			void this.#commit();
 			return;
 		}
@@ -88,7 +93,7 @@ export class ImportSceneController implements SetupSceneController {
 			0,
 			this.#candidates.findIndex(candidate => candidate.sourcePath === selectedValue),
 		);
-		this.#list = this.#buildList(selectedValue === CONTINUE_VALUE ? this.#candidates.length : index);
+		this.#list = this.#buildList(selectedValue === CHECKLIST_CONTINUE ? this.#candidates.length : index);
 		this.host.requestRender();
 	}
 
@@ -134,23 +139,12 @@ export class ImportSceneController implements SetupSceneController {
 
 	/** Space is this scene's real verb: rows are toggled, not picked once. */
 	keyHints(): readonly SetupKeyHint[] {
-		return [
-			{ keys: "↑↓", label: "select" },
-			{ keys: "space", label: "toggle" },
-			{ keys: "enter", label: "confirm" },
-		];
+		return CHECKLIST_KEY_HINTS;
 	}
 
 	handleInput(data: string): void {
 		if (this.#importing) return;
-		if (data === " ") {
-			const item = this.#list.getSelectedItem();
-			if (item && item.value !== CONTINUE_VALUE) {
-				this.#activate(item.value);
-				return;
-			}
-		}
-		this.#list.handleInput(data);
+		handleChecklistInput(this.#list, data, value => this.#activate(value));
 	}
 
 	/** Wheel moves the highlight; click toggles the row (or confirms Continue). */

@@ -36,11 +36,11 @@ function settleMutationTurn(enabled: boolean): string | undefined {
 			result: { content: [], details: mutationDetails(toolName, index) },
 		});
 	}
-	return enabled ? ledger.takeCodeReviewReminder() : undefined;
+	return enabled ? ledger.takeCodeReviewReminder(() => true) : undefined;
 }
 
 if (settleMutationTurn(false) !== undefined) throw new Error("disabled arm produced a reminder");
-if (!settleMutationTurn(true)?.includes("… 8 more code files")) {
+if (!settleMutationTurn(true)?.includes("… and 8 more code files beyond these.")) {
 	throw new Error("enabled arm did not produce the bounded review reminder");
 }
 

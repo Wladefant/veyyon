@@ -17,7 +17,7 @@ import {
 	truncateToWidth as nativeTruncateToWidth,
 	type SliceResult,
 } from "@veyyon/natives";
-import { ESC, OSC, OSC66 } from "./ansi";
+import { ESC, OSC, OSC66, sgrEnd } from "./ansi";
 import { DEFAULT_TAB_WIDTH } from "./tab-width";
 
 export type HangulCompatibilityJamoWidth = "platform" | "unicode" | 1 | 2;
@@ -544,17 +544,6 @@ function scannedWidth(str: string): number {
 		}
 	}
 	return str.length - sgrLength + tabCount * (DEFAULT_TAB_WIDTH - 1);
-}
-
-/** Index of the `m` that ends the SGR sequence at `start`, or -1 when no SGR sequence starts there. */
-function sgrEnd(str: string, start: number): number {
-	if (str.charCodeAt(start + 1) !== 0x5b) return -1;
-	let end = start + 2;
-	for (; end < str.length; end++) {
-		const param = str.charCodeAt(end);
-		if (param < 0x30 || param > 0x3b) break;
-	}
-	return str.charCodeAt(end) === 0x6d ? end : -1;
 }
 
 /**

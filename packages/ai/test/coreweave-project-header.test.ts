@@ -3,6 +3,7 @@ import { completeSimple } from "@veyyon/ai";
 import { resolveOpenAIRequestSetup } from "@veyyon/ai/providers/openai-shared";
 import type { Context, FetchImpl } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { chatCompletionsOkSse } from "./helpers/fetch-mock";
 
 const COREWEAVE_ENV_KEYS = ["COREWEAVE_PROJECT", "WANDB_INFERENCE_PROJECT", "WANDB_ENTITY", "WANDB_PROJECT"] as const;
 const ORIGINAL_ENV = new Map(COREWEAVE_ENV_KEYS.map(key => [key, Bun.env[key]]));
@@ -23,20 +24,6 @@ afterEach(() => {
 });
 
 const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
-
-function chatSse(): Response {
-	const chunk = (delta: unknown, finish: string | null) =>
-		JSON.stringify({
-			id: "x",
-			object: "chat.completion.chunk",
-			created: 0,
-			choices: [{ index: 0, delta, finish_reason: finish }],
-		});
-	return new Response(`data: ${chunk({ content: "ok" }, null)}\n\ndata: ${chunk({}, "stop")}\n\ndata: [DONE]\n\n`, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
 
 describe("CoreWeave Serverless Inference project header", () => {
 	const coreWeaveModel = {
@@ -104,7 +91,7 @@ describe("CoreWeave Serverless Inference project header", () => {
 		const requestHeaders: Headers[] = [];
 		const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
 			requestHeaders.push(new Headers(init?.headers));
-			return chatSse();
+			return chatCompletionsOkSse();
 		});
 
 		await completeSimple(getBundledModel("coreweave", "zai-org/GLM-5.2"), context, {

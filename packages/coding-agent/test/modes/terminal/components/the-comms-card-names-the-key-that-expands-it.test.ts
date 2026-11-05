@@ -19,13 +19,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 /** Lines long enough that the stream folds them, so the fold hint is on screen. */
 const LONG_BODY = Array.from({ length: 12 }, (_, index) => `line ${index} of a message the stream will fold`).join(
@@ -63,7 +62,7 @@ async function commsView(expandKeys: readonly string[]): Promise<string> {
 	dashboard.handleInput("\x1b[C");
 	const text = dashboard
 		.render(120)
-		.map(line => line.replace(ANSI_PATTERN, ""))
+		.map(line => stripVTControlCharacters(line))
 		.join("\n");
 	dashboard.dispose();
 	return text;

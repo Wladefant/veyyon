@@ -16,14 +16,13 @@
  * the burst produced, not a stale snapshot.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, setSystemTime, test, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { AgentDashboard } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { visibleWidth } from "@veyyon/utils/width";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
-
-const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 let geometry: StubbedStdoutGeometry;
 
@@ -67,7 +66,7 @@ function registerSub(id: string, type: string): void {
 function cardRows(dashboard: AgentDashboard): string[] {
 	const rows: string[] = [];
 	for (const raw of dashboard.render(120)) {
-		const inner = /│(.*)│/.exec(raw.replace(ANSI_PATTERN, ""))?.[1];
+		const inner = /│(.*)│/.exec(stripVTControlCharacters(raw))?.[1];
 		if (inner !== undefined) rows.push(inner.replaceAll(theme.nav.cursor, " ".repeat(theme.nav.cursor.length)));
 	}
 	return rows;
@@ -216,7 +215,7 @@ describe("Row rendering safety", () => {
 		const dashboard = new AgentDashboard({ terminalHeight: 40 });
 
 		for (const line of dashboard.render(80)) {
-			const plain = line.replace(ANSI_PATTERN, "");
+			const plain = stripVTControlCharacters(line);
 			expect(plain.includes("\n")).toBe(false);
 			expect(plain.includes("\r")).toBe(false);
 			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
@@ -244,7 +243,7 @@ describe("Row rendering safety", () => {
 		const rowFor = (type: string) =>
 			dashboard
 				.render(120)
-				.map(line => line.replace(ANSI_PATTERN, ""))
+				.map(line => stripVTControlCharacters(line))
 				.find(line => line.includes(type));
 
 		expect(rowFor("alpha")).toContain(theme.nav.cursor);

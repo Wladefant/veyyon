@@ -3,7 +3,12 @@ import type { AssistantMessage, ImageContent, Message } from "@veyyon/ai";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import { type Component, Spacer, Text, TruncatedText } from "@veyyon/tui";
 import { APP_NAME, errorMessage } from "@veyyon/utils";
-import { type SettingsSaveFailure, settings } from "../../../config/settings";
+import {
+	type QuarantinedSettingsFile,
+	type SettingsSaveFailure,
+	settings,
+	unparseableSettingsNotice,
+} from "../../../config/settings";
 import { getFileSnapshotStore } from "../../../edit/file-snapshot-store";
 import { userMessageText } from "../../../presentation/transcript-builder";
 import { theme } from "../../../theme/theme-binding";
@@ -338,16 +343,11 @@ export class UiHelpers {
 		);
 	}
 
-	showUnparseableSettingsNotification(files: readonly { path: string; quarantinePath: string }[]): void {
+	showUnparseableSettingsNotification(files: readonly QuarantinedSettingsFile[]): void {
 		// The session is running without these files' settings. Saying nothing
 		// would let a user spend a session wondering why their configuration
-		// stopped applying (Law 10). The rescued copy is named so the fix is
-		// obvious: correct the syntax, or copy the old file back over.
-		const lines = files.map(file => `  ${file.path}\n    original kept at ${file.quarantinePath}`).join("\n");
-		this.ctx.showError(
-			`Could not read your settings, so this session is using defaults for them:\n${lines}\n` +
-				"Fix the syntax in the file above, or copy the preserved file back over it.",
-		);
+		// stopped applying (Law 10).
+		this.ctx.showError(unparseableSettingsNotice(files));
 	}
 
 	showSettingsSaveFailureNotification(failure: SettingsSaveFailure): void {

@@ -1,7 +1,9 @@
 import "./warm-natives"; // load the native addon under the real platform before any process.platform mock
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type RenderScheduler, type RenderTimer, TUI } from "@veyyon/tui";
+import { restorePlatform, setPlatform } from "../../../../packages/utils/test/helpers/platform-override";
 import { settleFrames } from "./helpers/settle-frames";
+import { captureWrites } from "./helpers/terminal-output";
 import { VirtualTerminal } from "./virtual-terminal";
 
 // Regression test for https://github.com/can1357/oh-my-pi/issues/2095
@@ -21,16 +23,6 @@ import { VirtualTerminal } from "./virtual-terminal";
 // big paint before any new bytes touch the buffer. The gate is keyed on
 // `isConPTYHosted()` so non-Windows terminals stay on the immediate path.
 
-const PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, "platform");
-
-function setPlatform(value: NodeJS.Platform): void {
-	Object.defineProperty(process, "platform", { value, configurable: true });
-}
-
-function restorePlatform(): void {
-	if (PLATFORM_DESCRIPTOR) Object.defineProperty(process, "platform", PLATFORM_DESCRIPTOR);
-}
-
 class TallContent implements Component {
 	#lines: string[];
 
@@ -43,24 +35,6 @@ class TallContent implements Component {
 	render(width: number): string[] {
 		return this.#lines.map(line => line.slice(0, width));
 	}
-}
-
-async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// Was `nextTick` + a fixed `Bun.sleep` + flush, i.e. a bet on how long the
-	// throttled frame takes. That bet loses under a loaded sweep (see
-	// `hosts/terminal/engine/test/helpers/settle-frames.ts`), so the engine is asked
-	// instead, through its `renderPending` signal.
-	await settleFrames(term, tui);
-}
-
-function captureWrites(term: VirtualTerminal): string[] {
-	const writes: string[] = [];
-	const realWrite = term.write.bind(term);
-	vi.spyOn(term, "write").mockImplementation((data: string) => {
-		writes.push(data);
-		realWrite(data);
-	});
-	return writes;
 }
 
 interface ScheduledRender {
@@ -135,7 +109,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const fullPaintsAfterStart = tui.fullRedraws;
 			expect(fullPaintsAfterStart).toBeGreaterThanOrEqual(1);
 
@@ -160,7 +134,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 			// baseline — what matters is that the storm was coalesced into
 			// one cycle.
 			await Bun.sleep(180);
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tui.fullRedraws).toBe(fullPaintsAfterStart);
 		} finally {
 			tui.stop();
@@ -175,7 +149,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const fullPaintsAfterStart = tui.fullRedraws;
 
 			// Same storm pattern as the win32 test, but no settle gate is
@@ -186,7 +160,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 			// confirm the renderer is responsive.
 			tui.requestRender();
 			await Bun.sleep(50);
-			await settle(term, tui);
+			await settleFrames(term, tui);
 
 			// Renderer must remain responsive; fullRedraws stays put because
 			// content didn't change, but the test would hang if requestRender
@@ -205,7 +179,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			const fullPaintsAfterStart = tui.fullRedraws;
 
 			// Land inside the settle window with a forced render — it must
@@ -213,7 +187,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 			// trailing render. `resetDisplay()` is one such caller (Ctrl+L);
 			// `requestRender(true)` is the underlying primitive.
 			tui.requestRender(true);
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(tui.fullRedraws).toBeGreaterThan(fullPaintsAfterStart);
 		} finally {
 			tui.stop();
@@ -227,7 +201,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 		tui.addChild(new TallContent(200));
 
 		tui.start();
-		await settle(term, tui);
+		await settleFrames(term, tui);
 
 		// Arm the trailing render by firing a non-forced request inside the
 		// settle window, then stop immediately. The trailing render must NOT
@@ -287,12 +261,12 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			// Promote the next paint to `sessionReplace` so the settle arms.
 			midPaintFired = false; // re-arm for the sessionReplace paint
 			scheduled.length = 0; // discard timers from setup
 			tui.requestRender(true, { clearScrollback: true });
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(midPaintFired).toBe(true);
 
 			// The mid-paint requestRender(false) would, without the fix, queue a
@@ -300,7 +274,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 			// it's absorbed: every `scheduleRender` call recorded after the
 			// sessionReplace must be at the full settle window length (≈150 ms)
 			// or longer (e.g. multiplexer-resize debounce on resize bursts) —
-			// never the 33 ms throttle that would defeat the settle. `settle()`
+			// never the 33 ms throttle that would defeat the settle. `settleFrames()`
 			// waits until the engine owes no frame at all, which on this path means
 			// waiting out the 150 ms settle window itself — so a leaked 33 ms timer
 			// would have been both scheduled and fired before these assertions.
@@ -312,7 +286,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 			// Let the settle expire so the trailing render fires and any
 			// pending timers drain before the test tears down the TUI.
 			await Bun.sleep(200);
-			await settle(term, tui);
+			await settleFrames(term, tui);
 		} finally {
 			tui.stop();
 		}
@@ -327,10 +301,10 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			// Promote the next paint to `sessionReplace` so the settle arms.
 			tui.requestRender(true, { clearScrollback: true });
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(term.getViewport().join("\n")).toContain("tail row initial");
 
 			// Change the content inside the window and ask for an ordinary render:
@@ -341,7 +315,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 			expect(term.getViewport().join("\n")).toContain("tail row initial");
 
 			await Bun.sleep(180);
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(term.getViewport().join("\n")).toContain("tail row changed");
 		} finally {
 			tui.stop();
@@ -357,10 +331,10 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 
 		try {
 			tui.start();
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			scheduled.length = 0;
 			tui.requestRender(true, { clearScrollback: true });
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			scheduled.length = 0;
 
 			// An ordinary request inside the window arms the trailing timer; a forced
@@ -369,7 +343,7 @@ describe("issue #2095: ConPTY post-full-paint settle prevents viewport drift", (
 			const trailing = scheduled.filter(s => s.delayMs > 0);
 			expect(trailing.length).toBe(1);
 			tui.requestRender(true);
-			await settle(term, tui);
+			await settleFrames(term, tui);
 			expect(trailing[0]).toMatchObject({ cancelled: true, fired: false });
 
 			await Bun.sleep(200);

@@ -4,7 +4,10 @@ import { getOAuthApiKey } from "@veyyon/ai/registry/oauth";
 import { loginGitHubCopilot } from "@veyyon/ai/registry/oauth/github-copilot";
 import { COPILOT_USER_AGENT } from "@veyyon/catalog/wire/github-copilot";
 
-const FAST_POLL_OPTIONS = { pollIntervalFloorMs: 0, pollIntervalScaleMs: 1 } as const;
+// Every wait between polls returns at once; the poll answers, not the pacing, are under test here.
+beforeEach(() => {
+	vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+});
 
 beforeEach(() => {
 	configureGitHubCopilotOAuthClientId("test-client-id");
@@ -65,7 +68,6 @@ describe("loginGitHubCopilot", () => {
 
 		const onAuth = vi.fn();
 		const credentials = await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth,
 			onPrompt: mockOnPrompt(""),
@@ -153,7 +155,6 @@ describe("loginGitHubCopilot", () => {
 		});
 
 		const credentials = await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),
@@ -203,7 +204,6 @@ describe("loginGitHubCopilot", () => {
 		});
 
 		const credentials = await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt("ghe.example.com"),
@@ -235,7 +235,6 @@ describe("loginGitHubCopilot", () => {
 		});
 
 		const credentials = await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt("   "),
@@ -302,7 +301,6 @@ describe("loginGitHubCopilot", () => {
 		});
 
 		const credentials = await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),
@@ -359,7 +357,6 @@ describe("loginGitHubCopilot", () => {
 
 		await expect(
 			loginGitHubCopilot({
-				...FAST_POLL_OPTIONS,
 				fetch: fetchMock as unknown as typeof fetch,
 				onAuth: vi.fn(),
 				onPrompt: mockOnPrompt(""),
@@ -389,7 +386,6 @@ describe("loginGitHubCopilot", () => {
 		});
 
 		const credentials = await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),

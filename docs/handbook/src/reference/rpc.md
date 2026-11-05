@@ -153,6 +153,9 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 - `{ id?, type: "set_session_name", name: string }`
 - `{ id?, type: "handoff", customInstructions?: string }`
 
+`export_html` resolves a relative `outputPath` against the session's working directory, as
+`/export` does, and responds with the absolute `path` it wrote.
+
 ### Background conversations
 
 - `{ id?, type: "get_background_sessions" }`

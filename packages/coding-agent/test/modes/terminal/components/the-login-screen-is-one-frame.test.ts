@@ -26,6 +26,7 @@ import { getLoginCredential } from "@veyyon/ai/oauth";
 import { LoginDialogComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/login-dialog";
 import { formatProviderName } from "@veyyon/coding-agent/session/account-format";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import * as clipboard from "@veyyon/coding-agent/utils/clipboard";
 import * as openModule from "@veyyon/coding-agent/utils/open";
 import type { TUI } from "@veyyon/tui";
 
@@ -44,11 +45,13 @@ function makeDialog(providerId = "groq"): {
 	completed: Mock<() => void>;
 	opened: string[];
 } {
-	// The dialog opens the authorize URL best-effort. A test must not spawn the operator's browser.
+	// The dialog opens and copies the authorize URL best-effort. A test must not spawn the
+	// operator's browser or write to the operator's clipboard.
 	const opened: string[] = [];
 	vi.spyOn(openModule, "openPath").mockImplementation((target: string) => {
 		opened.push(target);
 	});
+	vi.spyOn(clipboard, "copyToClipboard").mockImplementation(async () => {});
 	const tui = { requestRender: vi.fn() } as unknown as TUI;
 	const completed = vi.fn();
 	const dialog = new LoginDialogComponent(tui, formatProviderName(providerId), completed, {

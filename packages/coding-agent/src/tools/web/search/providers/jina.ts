@@ -7,7 +7,6 @@
 
 import type { ApiKey, AuthStorage, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
-import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { resolveProviderTextTransform } from "../../../../provider-boundary";
 import type { SearchResponse, SearchSource } from "../types";
@@ -34,11 +33,6 @@ interface JinaSearchResult {
 }
 
 type JinaSearchResponse = JinaSearchResult[];
-
-/** Find JINA_API_KEY from environment or .env files. */
-export function findApiKey(): string | null {
-	return getEnvApiKey("jina") ?? null;
-}
 
 /** Call Jina Reader search API. */
 async function callJinaSearch(apiKey: string, params: JinaSearchParams): Promise<JinaSearchResponse> {

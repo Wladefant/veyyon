@@ -35,8 +35,13 @@
 export interface ModelResolutionContext {
 	/** The `--model` patterns the operator asked for, in order. */
 	readonly requested: readonly string[];
-	/** Every model the registry knows, with or without credentials. */
-	readonly allModelIds: readonly string[];
+	/** Providers holding at least one model, with or without credentials, in catalog order. */
+	readonly providers: readonly string[];
+	/**
+	 * Every model the registry knows, with or without credentials. Listing it builds the whole
+	 * catalog, so it is read only when the request is matched against unauthenticated models.
+	 */
+	readonly allModelIds: () => readonly string[];
 	/** The subset that has configured auth. */
 	readonly availableModelIds: readonly string[];
 	/** A registry load/discovery error, when one was recorded. */
@@ -129,16 +134,17 @@ export function describeModelResolutionFailure(context: ModelResolutionContext):
 	const requested = describeRequested(context.requested);
 
 	if (context.registryError) {
+		// The registry error states the file and its remedy, so it follows the lead sentence whole
+		// instead of being spliced into it.
+		const idClause = context.requested.length > 0 ? "; the model id is not the problem" : "";
 		return {
 			kind: "registry-error",
-			message:
-				`The model registry could not be loaded, so ${requested} could not be resolved: ` +
-				`${context.registryError}. Fix the model configuration and retry; the model id is not the problem.`,
+			message: `The model configuration failed to load, so ${requested} could not be resolved${idClause}.\n${context.registryError}`,
 			nearMatches: [],
 		};
 	}
 
-	if (context.allModelIds.length === 0) {
+	if (context.providers.length === 0) {
 		return {
 			kind: "empty-registry",
 			message:
@@ -149,11 +155,11 @@ export function describeModelResolutionFailure(context: ModelResolutionContext):
 	}
 
 	if (context.availableModelIds.length === 0) {
-		const providers = providersOf(context.allModelIds).slice(0, 5);
+		const providers = context.providers.slice(0, 5);
 		return {
 			kind: "no-credentials",
 			message:
-				`No models are available: the registry knows ${context.allModelIds.length} model(s) but none has ` +
+				`No models are available: the registry knows models from ${context.providers.length} provider(s) but none has ` +
 				`usable credentials, so ${requested} could not be resolved. This is an authentication failure, not ` +
 				`an unknown model id. Fix: run \`veyyon auth-broker login <provider>\` for one of ` +
 				`${providers.join(", ")}, or set that provider's API key environment variable ` +
@@ -164,8 +170,9 @@ export function describeModelResolutionFailure(context: ModelResolutionContext):
 
 	// The id names real models, but every provider behind them is unauthenticated.
 	// Telling this operator the model does not exist would be plainly false.
+	const allModelIds = context.allModelIds();
 	const matchedUnauthenticated = context.requested.flatMap(pattern =>
-		findNearMatches(pattern, context.allModelIds, Number.MAX_SAFE_INTEGER).filter(
+		findNearMatches(pattern, allModelIds, Number.MAX_SAFE_INTEGER).filter(
 			id => !context.availableModelIds.includes(id),
 		),
 	);
@@ -210,6 +217,7 @@ export function describeModelResolutionFailure(context: ModelResolutionContext):
  * dragging the registry implementation, and testable without constructing one.
  */
 export interface ModelRegistryView {
+	getProviders(): readonly string[];
 	getAll(): readonly { readonly provider: string; readonly id: string }[];
 	getAvailable(): readonly { readonly provider: string; readonly id: string }[];
 	getError?(): { readonly message: string } | undefined;
@@ -229,8 +237,33 @@ export function modelResolutionFailureMessage(requested: readonly string[], regi
 	const qualify = (entry: { provider: string; id: string }) => `${entry.provider}/${entry.id}`;
 	return describeModelResolutionFailure({
 		requested,
-		allModelIds: registry.getAll().map(qualify),
+		providers: registry.getProviders(),
+		allModelIds: () => registry.getAll().map(qualify),
 		availableModelIds: registry.getAvailable().map(qualify),
 		registryError: registry.getError?.()?.message,
 	}).message;
+}
+
+/**
+ * The sentence for a prompt sent while no model is selected.
+ *
+ * A model configuration that failed to load is the cause to fix first: signing in cannot select
+ * a model the broken file declares, and its message states the file and the remedy.
+ *
+ * Otherwise every command named has to work in the channel the reader is in. `/login` carries no
+ * `textMode: true` in `slash-commands/builtin-declarations.ts`, so it is TUI-only, and
+ * `veyyon setup` exits with "requires an interactive TTY" when stdin or stdout is not a terminal
+ * (see `commands/setup.ts`). This error reaches `--print` runs and ACP clients too, so the
+ * terminal path is stated separately from the interactive one, and the environment variable is
+ * stated for the case where neither is available.
+ */
+export function noModelSelectedMessage(registryError: string | undefined): string {
+	const lead = "No model selected, so there is nothing to send the prompt to.";
+	if (registryError !== undefined) return `${lead} The model configuration failed to load:\n${registryError}`;
+	return (
+		`${lead}\n\n` +
+		"Fix: in an interactive veyyon session, run /login to sign in and then /model to choose a model. " +
+		"From a terminal, run `veyyon auth-broker login` to sign in and `veyyon models` to see what is available. " +
+		"With no terminal at all, set the provider's API key environment variable and pass `--model <provider>/<id>`."
+	);
 }

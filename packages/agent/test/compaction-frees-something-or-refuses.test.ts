@@ -17,10 +17,17 @@
  * Each shape below is a real session skeleton that produced one of those two
  * outcomes. They are deliberately tiny: a failure points at the cut-point search
  * and nothing else.
+ *
+ * A custom message the caller excludes (a block it restates after compacting)
+ * is never summarized, so a cut with only such blocks in front of it has the
+ * same dead end as a cut at the start of the range: excluding the block turned
+ * a summary request that read nothing but the block into a refusal against a
+ * full gauge.
  */
+
 import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
+import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	findCutPoint,
@@ -28,50 +35,36 @@ import {
 	prepareCompaction,
 	resolveCompactionBoundaryIndex,
 } from "@veyyon/agent-core/compaction";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
+import { assistant, messageEntries, readResult, user } from "./support/compaction-session";
 
-let idCounter = 0;
-
-const usage = (): Usage => ({
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
-
-function entry(message: AgentMessage): SessionMessageEntry {
-	return { type: "message", id: `e-${idCounter++}`, parentId: null, timestamp: "2026-08-06T00:00:00.000Z", message };
-}
-
-const user = (text: string): AgentMessage => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
-
-const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
-	role: "assistant",
-	content,
-	timestamp: 1,
-	provider: "mock",
-	model: "mock",
-	api: "mock",
-	usage: usage(),
-	stopReason: "stop",
-});
+const { entry, nextId } = messageEntries();
 
 const withCall = () => assistant([{ type: "toolCall", id: "c1", name: "read", arguments: { path: "big" } }]);
 
-const result = (text: string): ToolResultMessage =>
-	({
-		role: "toolResult",
-		toolCallId: "c1",
-		toolName: "read",
-		content: [{ type: "text", text }],
-		isError: false,
-		timestamp: 1,
-	}) as ToolResultMessage;
+const result = (text: string): ToolResultMessage => readResult("c1", text);
 
 const HUGE = "x".repeat(800_000);
 const settings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 30_000 };
+
+const RESTATED = "restated-block";
+const excluded = { excludedCustomMessageTypes: new Set([RESTATED]) };
+
+function custom(customType: string, content: string): CustomMessageEntry {
+	return {
+		type: "custom_message",
+		id: nextId(),
+		parentId: null,
+		timestamp: "2026-08-06T00:00:00.000Z",
+		customType,
+		content,
+		display: false,
+	};
+}
+
+/** The custom type of a custom message, else its role, so an excluded block shows by name. */
+const kind = (message: AgentMessage): string => (message.role === "custom" ? message.customType : message.role);
 
 /** Every shape here is over budget by two orders of magnitude. */
 const overBudgetShapes: Array<[string, SessionEntry[]]> = [
@@ -159,6 +152,51 @@ describe("a whole turn ending in an oversized result", () => {
 	});
 });
 
+describe("a block the summary never reads is not history", () => {
+	test("an over-budget cut behind only that block moves past the next message the summary reads", () => {
+		// The prelude carries the budget, so the cut lands on it and then backs up over the block in
+		// front: with the block excluded, nothing in front of the cut is summarizable.
+		const entries = [
+			custom(RESTATED, "date and working directory"),
+			custom("prelude", "p".repeat(4_000)),
+			entry(user("q")),
+			entry(assistant([{ type: "text", text: "a" }])),
+		];
+		const prepared = prepareCompaction(entries, { ...settings, keepRecentTokens: 50 }, excluded);
+
+		expect(prepared!.messagesToSummarize.map(kind)).toEqual(["prelude"]);
+		expect(prepared!.turnPrefixMessages).toEqual([]);
+		expect(prepared!.recentMessages.map(kind)).toEqual(["user", "assistant"]);
+	});
+
+	test("a whole turn ending in an oversized result still splits when the block opens the range", () => {
+		const entries = [
+			custom(RESTATED, "date and working directory"),
+			entry(user("q")),
+			entry(withCall()),
+			entry(result(HUGE)),
+		];
+
+		expect(
+			findCutPoint(entries, 0, entries.length, settings.keepRecentTokens, 0, excluded.excludedCustomMessageTypes),
+		).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: 1, isSplitTurn: true });
+		const prepared = prepareCompaction(entries, settings, excluded);
+		expect(prepared!.messagesToSummarize).toEqual([]);
+		expect(prepared!.turnPrefixMessages.map(kind)).toEqual(["user"]);
+		expect(prepared!.recentMessages.map(kind)).toEqual(["assistant", "toolResult"]);
+	});
+
+	test("a range that fits the budget is still refused", () => {
+		const entries = [
+			custom(RESTATED, "date and working directory"),
+			entry(user("hello")),
+			entry(assistant([{ type: "text", text: "hi" }])),
+		];
+
+		expect(prepareCompaction(entries, settings, excluded)).toBeUndefined();
+	});
+});
+
 describe("a keep-nothing boundary puts the whole pre-compaction range behind it", () => {
 	// Prune and shake skip entries BEFORE the boundary: those were summarized away
 	// and are never sent, so rewriting them churns persisted history for no prompt
@@ -167,7 +205,6 @@ describe("a keep-nothing boundary puts the whole pre-compaction range behind it"
 	// "nothing is behind the boundary" — the exact opposite, aiming every pass at
 	// the entries it must not touch.
 	function branch(): SessionEntry[] {
-		idCounter = 0;
 		return [
 			entry(user("old question")),
 			entry(assistant([{ type: "text", text: "old answer" }])),
@@ -220,7 +257,6 @@ describe("the recent-token budget is not scaled by the harness", () => {
 	// unrelated harness the multiplier: the same conversation kept less and less
 	// as the tool set grew, for no reason the user could see or change.
 	function conversation(): SessionEntry[] {
-		idCounter = 0;
 		const entries: SessionEntry[] = [];
 		for (let i = 0; i < 12; i++) {
 			entries.push(entry(user(`question ${i} `.repeat(400))));
@@ -232,7 +268,7 @@ describe("the recent-token budget is not scaled by the harness", () => {
 	function keptWith(nonMessageTokens: number | undefined, promptTokens: number): number {
 		const entries = conversation();
 		const last = entries[entries.length - 1] as SessionMessageEntry;
-		(last.message as AssistantMessage).usage = { ...usage(), input: promptTokens };
+		(last.message as AssistantMessage).usage = { ...emptyUsage(), input: promptTokens };
 		const prepared = prepareCompaction(entries, settings, { nonMessageTokens });
 		return prepared ? prepared.recentMessages.length : -1;
 	}

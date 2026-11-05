@@ -123,26 +123,20 @@ export function formatTitleUserMessage(message: string): string {
 	return `<user>\n${preprocessTinyMessage(message)}\n</user>`;
 }
 
-/** One recent conversation turn supplied to title refresh after replanning. */
+/** One recent conversation turn supplied to title refresh after replanning: the visible text only. */
 export interface TitleConversationTurn {
 	role: "user" | "assistant";
-	text?: string;
-	thinking?: string;
+	text: string;
 }
 
 /** Format preprocessed recent context for title generation after a todo replan. */
 export function formatTitleConversationContext(turns: readonly TitleConversationTurn[]): string {
 	const formattedTurns: string[] = [];
 	for (const turn of turns) {
-		const sections: string[] = [];
 		// Clean raw content before adding structural tags so paired-tag stripping
 		// cannot consume the `<user>`/`<assistant>` scaffolding added below.
-		const text = cleanTinyMessage(turn.text ?? "").trim();
-		if (text) sections.push(text);
-		const thinking = turn.role === "assistant" ? cleanTinyMessage(turn.thinking ?? "").trim() : "";
-		if (thinking) sections.push(`<think>\n${thinking}\n</think>`);
-		if (sections.length === 0) continue;
-		formattedTurns.push(`<${turn.role}>\n${sections.join("\n\n")}\n</${turn.role}>`);
+		const text = cleanTinyMessage(turn.text).trim();
+		if (text) formattedTurns.push(`<${turn.role}>\n${text}\n</${turn.role}>`);
 	}
 	if (formattedTurns.length === 0) return "";
 	return truncateTinyMessage(`<chat>\n${formattedTurns.join("\n\n")}\n</chat>`);

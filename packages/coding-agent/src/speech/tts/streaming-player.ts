@@ -17,9 +17,8 @@
  * dropping the chunk being played.
  */
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { $which, errorMessage, logger, removeTempPath, Snowflake } from "@veyyon/utils";
+import { $which, errorMessage, logger, privateTempDir, removeTempPath, Snowflake } from "@veyyon/utils";
 import type { FileSink, Subprocess } from "bun";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
 import { getToolPath } from "../../utils/tools-manager";
@@ -305,7 +304,7 @@ export class StreamingAudioPlayer {
 	}
 
 	async #playFile(pcm: Float32Array): Promise<void> {
-		const wavPath = path.join(os.tmpdir(), `veyyon-speech-${Snowflake.next()}.wav`);
+		const wavPath = path.join(privateTempDir(), `veyyon-speech-${Snowflake.next()}.wav`);
 		try {
 			await fs.writeFile(wavPath, encodeWav(this.#scaled(pcm), this.#sampleRate));
 			if (!this.#stopped) await playAudioFile(wavPath, { signal: this.#abortController.signal });

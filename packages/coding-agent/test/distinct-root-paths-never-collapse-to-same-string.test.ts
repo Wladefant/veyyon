@@ -33,13 +33,13 @@ import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, Message, Model, ToolResultMessage } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { normalizeRoots, relativizePathsUnderRoots } from "@veyyon/coding-agent/session/relativize-paths";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 function createToolCallTurn(
@@ -89,8 +89,7 @@ describe("distinct root paths never collapse to the same string", () => {
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		model = bundled;
 	});
 

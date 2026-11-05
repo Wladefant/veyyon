@@ -18,7 +18,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ImageContent, TextContent } from "@veyyon/ai";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
@@ -26,6 +25,7 @@ import * as scrapeServices from "@veyyon/coding-agent/tools/web/scrape-services"
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import * as scrapers from "@veyyon/web/scrapers/types";
 import * as scraperUtils from "@veyyon/web/scrapers/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 
 const GARBAGE = new Uint8Array([0x13, 0x37, 0x00, 0xff, 0x42, 0x42, 0x00, 0x01, 0x02, 0x03]);
 
@@ -47,13 +47,6 @@ function makeSession(testDir: string): ToolSession {
 		},
 		settings: Settings.isolated({ "fetch.enabled": true }),
 	};
-}
-
-function textOutput(result: { content: Array<TextContent | ImageContent> }): string {
-	return result.content
-		.filter((content): content is TextContent => content.type === "text")
-		.map(content => content.text)
-		.join("\n");
 }
 
 /**
@@ -130,7 +123,7 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 				"Fetched image binary",
 				`Fetched payload could not be decoded as ${image.mimeType}; returning text metadata only`,
 			]);
-			expect(textOutput(result)).toEndWith(
+			expect(toolResultText(result)).toEndWith(
 				`Fetched payload was labeled ${image.mimeType}, but bytes were not a valid image.`,
 			);
 			expect(result.content.some(block => block.type === "image")).toBe(false);
@@ -145,7 +138,7 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 		const result = await read(url);
 
 		expect(result.details?.method).toBe("image-invalid");
-		expect(textOutput(result)).toEndWith(gateway);
+		expect(toolResultText(result)).toEndWith(gateway);
 	});
 
 	const payloads: Array<{ label: string; contentType: string; format: string }> = [
@@ -165,7 +158,7 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 			expect(result.details?.method).toBe("binary");
 			expect(result.details?.notes).toHaveLength(1);
 			expect(result.details?.notes?.[0]).toStartWith(`${payload.format} rendering failed: `);
-			expect(textOutput(result)).toContain(`[Binary content: ${payload.contentType}, 10B] ${url}`);
+			expect(toolResultText(result)).toContain(`[Binary content: ${payload.contentType}, 10B] ${url}`);
 		});
 	}
 
@@ -185,7 +178,7 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 
 			expect(result.details?.method).toBe("native");
 			expect(result.details?.notes).toEqual([]);
-			expect(textOutput(result)).toContain("# Heading");
+			expect(toolResultText(result)).toContain("# Heading");
 		});
 	}
 
@@ -198,7 +191,7 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 
 		expect(result.details?.method).toBe("binary");
 		expect(result.details?.notes).toEqual(["markit conversion produced no usable output"]);
-		expect(textOutput(result)).toContain(`[Binary content: application/pdf, 10B] ${url}`);
+		expect(toolResultText(result)).toContain(`[Binary content: application/pdf, 10B] ${url}`);
 		expect(site.downloads).toBe(1);
 	});
 });

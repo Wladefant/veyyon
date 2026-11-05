@@ -28,7 +28,7 @@ import { Agent, type AgentTool } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
@@ -46,6 +46,7 @@ import type {
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireBundledModel } from "../../../agent/test/helpers";
 
 type FakeTool = AgentTool & { runs: number };
 
@@ -105,8 +106,7 @@ describe("an approval answer", () => {
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected built-in anthropic model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		model = bundled;
 	});
 
@@ -167,14 +167,7 @@ describe("an approval answer", () => {
 			provider: model.provider,
 			model: model.id,
 			stopReason: "stop",
-			usage: {
-				input: 16,
-				output: 8,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 24,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: { ...emptyUsage(), input: 16, output: 8, totalTokens: 24 },
 			timestamp: Date.now() - 1,
 		});
 		return manager;

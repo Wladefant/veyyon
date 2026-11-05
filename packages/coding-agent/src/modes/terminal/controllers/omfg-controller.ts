@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { errorMessage, prompt } from "@veyyon/utils";
+import { prompt } from "@veyyon/utils";
 import type { Rule } from "../../../discovery/capability/rule";
 import { sideChannelPrompts } from "../../../prompts/side-channel/rows";
 import { shortenPath } from "../../../tools/core/render-utils";
@@ -13,6 +13,7 @@ import {
 	parseGeneratedRule,
 	validateParsedRuleAgainstAssistantHistory,
 } from "./omfg-rule";
+import { SidePanelSlot } from "./side-panel-slot";
 
 /**
  * The slice of the interactive context this controller uses: 10 members of the
@@ -57,22 +58,23 @@ const PROFILE_OPTION = "This profile — every project";
 const AMEND_OPTION = "Amend with feedback…";
 
 export class OmfgController {
-	#activeRequest: OmfgRequest | undefined;
+	readonly #slot = new SidePanelSlot<OmfgRequest>({
+		container: () => this.ctx.omfgContainer,
+		requestRender: () => this.ctx.ui.requestRender(),
+	});
 
 	constructor(private readonly ctx: OmfgControllerContext) {}
 
 	hasActiveRequest(): boolean {
-		return this.#activeRequest !== undefined;
+		return this.#slot.open !== undefined;
 	}
 
 	handleEscape(): boolean {
-		if (!this.#activeRequest) return false;
-		this.#closeActiveRequest({ abort: this.#activeRequest.abortController.signal.aborted === false });
-		return true;
+		return this.#slot.escape();
 	}
 
 	dispose(): void {
-		this.#closeActiveRequest({ abort: true });
+		this.#slot.close({ abort: true });
 	}
 
 	async start(complaint: string): Promise<void> {
@@ -88,63 +90,47 @@ export class OmfgController {
 			return;
 		}
 
-		this.#closeActiveRequest({ abort: true });
-
 		const request: OmfgRequest = {
 			component: new OmfgPanelComponent({ complaint: trimmedComplaint, tui: this.ctx.ui }),
 			abortController: new AbortController(),
 			complaint: trimmedComplaint,
 		};
-		this.ctx.omfgContainer.clear();
-		this.ctx.omfgContainer.addChild(request.component);
-		this.ctx.ui.requestRender();
-		this.#activeRequest = request;
-		void this.#runRequest(request);
+		this.#slot.show(request);
+		void this.#slot.run(request, () => this.#forge(request));
 	}
 
-	async #runRequest(request: OmfgRequest): Promise<void> {
-		try {
-			let candidate = await this.#generateCandidate(request);
-			for (;;) {
-				if (!this.#isActiveRequest(request)) return;
-				if (!candidate) {
-					request.component.markError("The model did not return a valid TTSR rule.");
-					return;
-				}
-
-				if (!candidate.validated) {
-					request.component.setStatus("confirming", "Couldn't confirm a conversation match.");
-					const shouldSave = await this.ctx.showHookConfirm(
-						"Validation",
-						"Couldn't confirm this rule matches the conversation. Save anyway?",
-					);
-					if (!this.#isActiveRequest(request)) return;
-					if (!shouldSave) {
-						request.component.markRejected();
-						return;
-					}
-				}
-
-				const saveResult = await this.#saveCandidate(request, candidate);
-				if (!this.#isActiveRequest(request)) return;
-				if (saveResult.kind !== "amend") {
-					return;
-				}
-
-				candidate = await this.#generateCandidate(request, {
-					initialFeedback: `User requested this amendment before saving:\n${saveResult.feedback}`,
-					previousRule: candidate.fileContent,
-				});
-			}
-		} catch (error) {
-			if (!this.#isActiveRequest(request)) {
+	async #forge(request: OmfgRequest): Promise<void> {
+		let candidate = await this.#generateCandidate(request);
+		for (;;) {
+			if (!this.#slot.isOpen(request)) return;
+			if (!candidate) {
+				request.component.markError("The model did not return a valid TTSR rule.");
 				return;
 			}
-			if (request.abortController.signal.aborted) {
-				request.component.markAborted();
+
+			if (!candidate.validated) {
+				request.component.setStatus("confirming", "Couldn't confirm a conversation match.");
+				const shouldSave = await this.ctx.showHookConfirm(
+					"Validation",
+					"Couldn't confirm this rule matches the conversation. Save anyway?",
+				);
+				if (!this.#slot.isOpen(request)) return;
+				if (!shouldSave) {
+					request.component.markRejected();
+					return;
+				}
+			}
+
+			const saveResult = await this.#saveCandidate(request, candidate);
+			if (!this.#slot.isOpen(request)) return;
+			if (saveResult.kind !== "amend") {
 				return;
 			}
-			request.component.markError(errorMessage(error));
+
+			candidate = await this.#generateCandidate(request, {
+				initialFeedback: `User requested this amendment before saving:\n${saveResult.feedback}`,
+				previousRule: candidate.fileContent,
+			});
 		}
 	}
 
@@ -157,7 +143,7 @@ export class OmfgController {
 		let lastCandidate: ParsedGeneratedRule | undefined;
 
 		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-			if (this.#shouldStop(request)) return undefined;
+			if (this.#slot.isStopped(request)) return undefined;
 			request.component.setRule("");
 			request.component.setStatus("generating", `Attempt ${attempt}/${MAX_ATTEMPTS} · generating…`);
 			const promptText = prompt.render(sideChannelPrompts["side-channel/omfg-user"].text, {
@@ -169,13 +155,13 @@ export class OmfgController {
 				promptText,
 				dedupeReply: false,
 				onTextDelta: delta => {
-					if (this.#isActiveRequest(request)) {
+					if (this.#slot.isOpen(request)) {
 						request.component.appendDraft(delta);
 					}
 				},
 				signal: request.abortController.signal,
 			});
-			if (this.#shouldStop(request)) return undefined;
+			if (this.#slot.isStopped(request)) return undefined;
 
 			const parsed = parseGeneratedRule(replyText);
 			if ("error" in parsed) {
@@ -211,13 +197,13 @@ export class OmfgController {
 	}
 
 	async #saveCandidate(request: OmfgRequest, candidate: OmfgCandidate): Promise<SaveCandidateResult> {
-		if (this.#shouldStop(request)) return { kind: "aborted" };
+		if (this.#slot.isStopped(request)) return { kind: "aborted" };
 		request.component.setStatus("saving", "Choose where to save or amend the TTSR rule…");
 		const location = await this.ctx.showHookSelector("Save TTSR rule where?", [PROFILE_OPTION, AMEND_OPTION]);
-		if (!this.#isActiveRequest(request)) return { kind: "aborted" };
+		if (!this.#slot.isOpen(request)) return { kind: "aborted" };
 		if (!location) {
 			request.component.markAborted();
-			this.#closeActiveRequest({ abort: false });
+			this.#slot.close({ abort: false });
 			return { kind: "aborted" };
 		}
 
@@ -227,11 +213,11 @@ export class OmfgController {
 				"Amend TTSR rule",
 				"e.g. Make it specific to Ruby string eval in tool:write(*.rb)",
 			);
-			if (!this.#isActiveRequest(request)) return { kind: "aborted" };
+			if (!this.#slot.isOpen(request)) return { kind: "aborted" };
 			const feedback = amendment?.trim();
 			if (!feedback) {
 				request.component.markAborted();
-				this.#closeActiveRequest({ abort: false });
+				this.#slot.close({ abort: false });
 				return { kind: "aborted" };
 			}
 			return { kind: "amend", feedback };
@@ -243,7 +229,7 @@ export class OmfgController {
 				"Overwrite TTSR rule?",
 				`${shortenPath(target.filePath)} already exists. Overwrite it?`,
 			);
-			if (!this.#isActiveRequest(request)) return { kind: "aborted" };
+			if (!this.#slot.isOpen(request)) return { kind: "aborted" };
 			if (!shouldOverwrite) {
 				request.component.markRejected();
 				return { kind: "rejected" };
@@ -252,7 +238,7 @@ export class OmfgController {
 
 		request.component.setStatus("saving", `Saving ${candidate.rule.name}…`);
 		await Bun.write(target.filePath, candidate.fileContent);
-		if (!this.#isActiveRequest(request)) return { kind: "aborted" };
+		if (!this.#slot.isOpen(request)) return { kind: "aborted" };
 
 		const savedRule = buildOmfgRuleForPath(candidate.rule.name, candidate.fileContent, target.filePath, target.level);
 		this.#registerLive(savedRule);
@@ -281,25 +267,5 @@ export class OmfgController {
 
 	#registerLive(rule: Rule): void {
 		this.ctx.session.ttsrManager?.addRule(rule);
-	}
-
-	#closeActiveRequest(options: { abort: boolean }): void {
-		const request = this.#activeRequest;
-		if (!request) return;
-		this.#activeRequest = undefined;
-		if (options.abort) {
-			request.abortController.abort();
-		}
-		request.component.close();
-		this.ctx.omfgContainer.clear();
-		this.ctx.ui.requestRender();
-	}
-
-	#isActiveRequest(request: OmfgRequest): boolean {
-		return this.#activeRequest === request;
-	}
-
-	#shouldStop(request: OmfgRequest): boolean {
-		return !this.#isActiveRequest(request) || request.abortController.signal.aborted;
 	}
 }

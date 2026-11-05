@@ -1,28 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@veyyon/ai/providers/openai-responses";
-import type { Context, FetchImpl, Model } from "@veyyon/ai/types";
+import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { sayHelloContext } from "./helpers";
+import { sseResponse } from "./helpers/fetch-mock";
 
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 const openAICompletionsModel = {
 	...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
 	api: "openai-completions",
 } satisfies Model<"openai-completions">;
-
-function baseContext(): Context {
-	return {
-		messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-	};
-}
-
-function createSseResponse(events: unknown[]): Response {
-	const payload = `${events.map(event => `data: ${typeof event === "string" ? event : JSON.stringify(event)}`).join("\n\n")}\n\n`;
-	return new Response(payload, {
-		status: 200,
-		headers: { "content-type": "text/event-stream" },
-	});
-}
 
 describe("StreamOptions.fetch override", () => {
 	it("routes openai-completions requests through the override", async () => {
@@ -31,7 +19,7 @@ describe("StreamOptions.fetch override", () => {
 		const customFetch: FetchImpl = Object.assign(
 			async (input: string | URL | Request, _init?: RequestInit) => {
 				calls.push({ url: String(input instanceof Request ? input.url : input) });
-				return createSseResponse([
+				return sseResponse([
 					{
 						id: "chatcmpl-test",
 						object: "chat.completion.chunk",
@@ -53,7 +41,7 @@ describe("StreamOptions.fetch override", () => {
 			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAICompletions(openAICompletionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(openAICompletionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: customFetch,
 		}).result();
@@ -69,7 +57,7 @@ describe("StreamOptions.fetch override", () => {
 		const customFetch: FetchImpl = Object.assign(
 			async (input: string | URL | Request, _init?: RequestInit) => {
 				calls.push({ url: String(input instanceof Request ? input.url : input) });
-				return createSseResponse([
+				return sseResponse([
 					{ type: "response.created", response: { id: "resp_test" } },
 					{
 						type: "response.output_item.added",
@@ -105,7 +93,7 @@ describe("StreamOptions.fetch override", () => {
 			{ preconnect: fetch.preconnect },
 		);
 
-		const result = await streamOpenAIResponses(openAIResponsesModel, baseContext(), {
+		const result = await streamOpenAIResponses(openAIResponsesModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: customFetch,
 		}).result();

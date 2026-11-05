@@ -194,15 +194,6 @@ function readJsonRpcPayload(parsed: unknown): JsonRpcPayload {
 	return payload;
 }
 
-/** Resolve Z.AI API credentials through the unified auth storage pipeline. */
-export async function findApiKey(
-	authStorage: AuthStorage,
-	sessionId?: string,
-	signal?: AbortSignal,
-): Promise<string | null> {
-	return (await authStorage.getApiKey("zai", sessionId, { signal })) ?? null;
-}
-
 async function callZaiTool(
 	apiKey: string,
 	args: Record<string, unknown>,

@@ -1,11 +1,12 @@
 // Adapted from markit-ai (MIT). See ../NOTICE.
 import * as path from "node:path";
 import { renderMarkdownTable } from "@veyyon/utils/markdown-table";
-import { XMLParser } from "fast-xml-parser";
+import type { XMLParser } from "fast-xml-parser";
 import { type Unzipped, unzip, unzipText } from "../../../utils/zip";
 import type { ConversionResult, Converter, StreamInfo } from "../types";
+import { acceptsStream } from "./accepts-stream";
 import { type PartRelationship, readPartRelationships, relationshipOfKind } from "./opc-relationships";
-import { xmlNodeText } from "./xml-text";
+import { createMarkitXmlParser, xmlList, xmlNodeText } from "./xml-text";
 
 const EXTENSIONS = [".pptx"];
 const MIMETYPES = ["application/vnd.openxmlformats-officedocument.presentationml.presentation"];
@@ -104,19 +105,12 @@ export class PptxConverter implements Converter {
 	name = "pptx";
 
 	accepts(streamInfo: StreamInfo): boolean {
-		if (streamInfo.extension && EXTENSIONS.includes(streamInfo.extension)) return true;
-		if (streamInfo.mimetype && MIMETYPES.some(m => streamInfo.mimetype?.startsWith(m))) return true;
-		return false;
+		return acceptsStream(streamInfo, EXTENSIONS, MIMETYPES);
 	}
 
 	async convert(input: Buffer, streamInfo: StreamInfo): Promise<ConversionResult> {
 		const entries = unzip(input);
-		const parser = new XMLParser({
-			ignoreAttributes: false,
-			attributeNamePrefix: "@_",
-			textNodeName: "#text",
-			processEntities: { maxTotalExpansions: 1_000_000 },
-		});
+		const parser = createMarkitXmlParser();
 		const slidePaths = slidePartPaths(entries, parser);
 		const images: ImageSink = { dir: streamInfo.imageDir, count: 0 };
 		const sections: string[] = [];
@@ -138,7 +132,7 @@ function slidePartPaths(entries: Unzipped, parser: XMLParser): string[] {
 	const pres = parser.parse(presXml) as PresentationDoc;
 	const relationships = readPartRelationships(entries, parser, PRESENTATION_PART);
 	const paths: string[] = [];
-	for (const sld of toList(pres["p:presentation"]?.["p:sldIdLst"]?.["p:sldId"])) {
+	for (const sld of xmlList(pres["p:presentation"]?.["p:sldIdLst"]?.["p:sldId"])) {
 		const relationship = relationships.get(sld["@_r:id"]);
 		if (relationship) paths.push(relationship.member);
 	}
@@ -169,17 +163,17 @@ async function slideMarkdown(
 	const relationships = readPartRelationships(entries, parser, slidePath);
 	const lines = [`<!-- Slide ${slideNumber} -->`];
 	let heading = true;
-	for (const shape of toList(spTree["p:sp"])) {
+	for (const shape of xmlList(spTree["p:sp"])) {
 		const text = shapeText(shape);
 		if (!text) continue;
 		lines.push(heading ? `# ${text}` : text);
 		heading = false;
 	}
-	for (const pic of toList(spTree["p:pic"])) {
+	for (const pic of xmlList(spTree["p:pic"])) {
 		const line = await pictureLine(entries, pic, relationships, slideNumber, images);
 		if (line) lines.push(line);
 	}
-	for (const frame of toList(spTree["p:graphicFrame"])) {
+	for (const frame of xmlList(spTree["p:graphicFrame"])) {
 		const table = tableMarkdown(frame);
 		if (table) lines.push(table);
 	}
@@ -225,7 +219,7 @@ function notesText(entries: Unzipped, parser: XMLParser, slideRelationships: Map
 	if (!notesXml) return "";
 	const spTree = (parser.parse(notesXml) as NotesDoc)["p:notes"]?.["p:cSld"]?.["p:spTree"];
 	const texts: string[] = [];
-	for (const shape of toList(spTree?.["p:sp"])) {
+	for (const shape of xmlList(spTree?.["p:sp"])) {
 		if (shape["p:nvSpPr"]?.["p:nvPr"]?.["p:ph"]?.["@_type"] === "sldImg") continue;
 		const text = shapeText(shape);
 		if (text) texts.push(text);
@@ -239,17 +233,12 @@ function shapeText(shape: Shape): string {
 }
 
 function tableMarkdown(frame: GraphicFrame): string | undefined {
-	const rows = toList(frame?.["a:graphic"]?.["a:graphicData"]?.["a:tbl"]?.["a:tr"]);
+	const rows = xmlList(frame?.["a:graphic"]?.["a:graphicData"]?.["a:tbl"]?.["a:tr"]);
 	if (rows.length === 0) return undefined;
 	const cells = rows.map(row =>
-		toList(row["a:tc"]).map(cell => (cell["a:txBody"] ? textFromBody(cell["a:txBody"]) : "")),
+		xmlList(row["a:tc"]).map(cell => (cell["a:txBody"] ? textFromBody(cell["a:txBody"]) : "")),
 	);
 	return renderMarkdownTable(cells) || undefined;
-}
-
-function toList<T>(val: T | T[] | undefined): T[] {
-	if (!val) return [];
-	return Array.isArray(val) ? val : [val];
 }
 
 /**
@@ -265,9 +254,9 @@ function toList<T>(val: T | T[] | undefined): T[] {
  */
 function textFromBody(txBody: TextBody): string {
 	const lines: string[] = [];
-	for (const p of toList(txBody["a:p"])) {
+	for (const p of xmlList(txBody["a:p"])) {
 		const parts: string[] = [];
-		for (const r of toList(p["a:r"])) {
+		for (const r of xmlList(p["a:r"])) {
 			const t = r["a:t"];
 			if (t != null) parts.push(xmlNodeText(t));
 		}

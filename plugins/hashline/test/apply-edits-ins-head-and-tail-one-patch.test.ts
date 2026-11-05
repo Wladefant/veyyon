@@ -1,21 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { applyEdits, parsePatch } from "@veyyon/hashline";
+import { applyPatch, linesText } from "./support/apply-patch";
 
 /**
  * INS.HEAD and INS.TAIL in a single patch.
  */
 
-function text(lines: string[]): string {
-	return `${lines.join("\n")}\n`;
-}
-
-function apply(src: string, diff: string): string {
-	return applyEdits(src, parsePatch(diff).edits).text;
-}
-
 describe("INS.HEAD and INS.TAIL one patch", () => {
 	it("adds head and tail around body", () => {
-		const out = apply(text(["mid"]), "INS.HEAD:\n+H\nINS.TAIL:\n+T");
+		const out = applyPatch(linesText(["mid"]), "INS.HEAD:\n+H\nINS.TAIL:\n+T");
 		expect(out).toContain("H");
 		expect(out).toContain("mid");
 		expect(out).toContain("T");

@@ -35,7 +35,7 @@
 // nothing about wall-clock scheduling: every frame here is driven by hand,
 // because a test that waits on a real timer is a test that flakes.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import { type AnimationCurve, BlockReveal, HoverFade, MOTION, MotionClock, SettleValue } from "@veyyon/utils/motion";
 
 const FRAME = 1000 / 60;
@@ -352,6 +352,33 @@ describe("the settle deadline is the thing that stops the ones nothing else can"
 		expect(clock.liveCount).toBe(1);
 		expect(animation.done).toBe(false);
 	});
+});
+
+// An animation settled outside a tick (`cancel` on dismount, `finish` under reduced motion) used to
+// stay in the live set, its interval armed, until the clock's next frame dropped it. A screen torn
+// down while timers are faked never gets that frame, so the interval outlived the screen.
+describe("an animation settled outside a tick hands the clock back at once", () => {
+	for (const settle of ["cancel", "finish"] as const) {
+		test(`${settle}() drops it from the live set, and the last one stops the interval`, () => {
+			vi.useFakeTimers();
+			try {
+				const clock = new MotionClock({ now: () => 0, autoTick: true });
+				const kept = clock.animate(MOTION.hover, { from: 0, to: 10 });
+				const settled = clock.animate(MOTION.hover, { from: 0, to: 10 });
+				expect(vi.getTimerCount()).toBe(1);
+
+				settled[settle]();
+				expect(clock.liveCount).toBe(1);
+				expect(vi.getTimerCount()).toBe(1);
+
+				kept[settle]();
+				expect(clock.liveCount).toBe(0);
+				expect(vi.getTimerCount()).toBe(0);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	}
 });
 
 describe("the components that own a requestRender", () => {

@@ -9,21 +9,9 @@ import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { type } from "arktype";
 import { ModelRegistry } from "../src/config/model-registry";
 import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
-
-function makeTool(name: string): AgentTool {
-	return {
-		name,
-		label: name,
-		description: `Fake ${name}`,
-		parameters: type({}),
-		async execute() {
-			return { content: [{ type: "text" as const, text: "ok" }] };
-		},
-	};
-}
+import { createOkTool } from "./helpers/ok-tool";
 
 interface HarnessOptions {
 	extraRegistryTools?: readonly AgentTool[];
@@ -76,8 +64,8 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 	function createHarness(settings: Settings, options: HarnessOptions = {}): InteractiveMode {
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${Bun.nanoseconds()}.yml`));
 		const initialModel = modelOrThrow(registry, "claude-sonnet-4-5");
-		const readTool = makeTool("read");
-		const resolveTool = makeTool("resolve");
+		const readTool = createOkTool("read");
+		const resolveTool = createOkTool("resolve");
 		// AgentSession requires a Map-typed tool registry; the harness needs both
 		// `read` (the initial active tool) and `resolve` (added on plan-mode entry).
 		const toolRegistry = new Map<string, AgentTool>([
@@ -125,7 +113,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		// `write` is hidden behind `search_tool_bm25` so it's in the registry but
 		// not the initial active set. Plan-mode entry must force-activate it or
 		// the agent only has `edit`, which fails on a non-existent file.
-		const writeTool = makeTool("write");
+		const writeTool = createOkTool("write");
 		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
 			extraRegistryTools: [writeTool],
 			builtInToolNames: ["read", "resolve", "write"],
@@ -141,7 +129,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 	});
 
 	it("does not activate an extension-shadowed write tool in plan mode", async () => {
-		const shadowWriteTool = makeTool("write");
+		const shadowWriteTool = createOkTool("write");
 		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
 			extraRegistryTools: [shadowWriteTool],
 		});

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { parse } from "@babel/parser";
 import * as searchCardLimits from "@veyyon/coding-agent/tools/search/search-card-limits";
 import type { Component } from "@veyyon/tui";
-import { readGitFileBuffer, readGitTree } from "../../../../scripts/git-baseline";
+import { BASELINE_COMMITS, readGitFileBuffer, readGitTree } from "../../../../scripts/git-baseline";
 
 /**
  * Tool modules whose card limits moved to `tools/search/search-card-limits`. A pinned oracle that
@@ -41,7 +41,7 @@ export interface LegacyRenderer {
 
 // This commit contains the approved frozen renderers, including their import adaptations.
 // Their original production commits remain recorded in each historical file's header.
-export const ORACLE_SNAPSHOT_COMMIT = "81eee11283051f29967dbfc506b297d45fd375b1";
+export const ORACLE_SNAPSHOT_COMMIT = BASELINE_COMMITS.oracleSnapshot;
 export const ORACLE_SOURCE_DIRECTORY = "packages/coding-agent/test/oracles";
 export const ORACLE_CACHE_DIRECTORY = path.join(
 	import.meta.dirname,

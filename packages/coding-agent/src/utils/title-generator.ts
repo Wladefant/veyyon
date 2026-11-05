@@ -51,6 +51,18 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
 }
 
 /**
+ * Whether auto-titling is disabled for this process. The `--no-title` flag (and
+ * the rpc / rpc-ui / acp embedder modes) set `VEYYON_NO_TITLE=1`. Every
+ * auto-title path — first-input titling, the replan title refresh, and the
+ * plan-approved seed — routes its decision through this ONE predicate so the
+ * flag can never be bypassed by a path that forgot to read the env directly
+ * (the bug this consolidates: only the first-input path used to check it).
+ */
+export function autoTitleDisabled(): boolean {
+	return Boolean($env.VEYYON_NO_TITLE);
+}
+
+/**
  * Generate a title for a session based on the first user message.
  *
  * @param firstMessage The first user message
@@ -67,18 +79,6 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
  * @param completeImpl Transport for the request; defaults to a bare `completeSimple` that reads no
  *   operator settings (see {@link SideCompleteImpl})
  */
-/**
- * Whether auto-titling is disabled for this process. The `--no-title` flag (and
- * the rpc / rpc-ui / acp embedder modes) set `VEYYON_NO_TITLE=1`. Every
- * auto-title path — first-input titling, the replan title refresh, and the
- * plan-approved seed — routes its decision through this ONE predicate so the
- * flag can never be bypassed by a path that forgot to read the env directly
- * (the bug this consolidates: only the first-input path used to check it).
- */
-export function autoTitleDisabled(): boolean {
-	return Boolean($env.VEYYON_NO_TITLE);
-}
-
 export async function generateSessionTitle(
 	firstMessage: string,
 	registry: ModelRegistry,

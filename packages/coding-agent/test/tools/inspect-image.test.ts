@@ -8,13 +8,13 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { InspectImageTool } from "@veyyon/coding-agent/tools/fs/inspect-image";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, sanitizeText } from "@veyyon/utils";
 import { type } from "arktype";
+import { requireTheme } from "../helpers/require-theme";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -334,9 +334,7 @@ describe("InspectImageTool", () => {
 	});
 
 	it("registers custom renderer and shows question in terminal output", async () => {
-		const theme = await getThemeByName("dark");
-		expect(theme).toBeDefined();
-		const uiTheme = theme!;
+		const uiTheme = await requireTheme("dark");
 		const inspectImageRenderer = toolRenderers.inspect_image;
 		if (!inspectImageRenderer) throw new Error("inspect_image has no registry entry");
 
@@ -382,8 +380,7 @@ describe("InspectImageTool", () => {
 	 * helper that dropped the `s` entirely would pass the case above.
 	 */
 	it("counts more than one folded line in the plural", async () => {
-		const uiTheme = await getThemeByName("dark");
-		if (!uiTheme) throw new Error("dark theme missing");
+		const uiTheme = await requireTheme("dark");
 		const inspectImageRenderer = toolRenderers.inspect_image;
 		if (!inspectImageRenderer) throw new Error("inspect_image has no registry entry");
 

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // `executeBash` initializes the GLOBAL Settings singleton itself, so a session
@@ -41,13 +42,6 @@ function bashSession(cwd: string) {
 	});
 }
 
-function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-	return result.content
-		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
-		.map(b => b.text)
-		.join("");
-}
-
 describe("BashTool set -e and compound adversarial", () => {
 	let tmpDir: string;
 
@@ -75,7 +69,7 @@ describe("BashTool set -e and compound adversarial", () => {
 			command: "(false); printf 'after\\n'",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("after");
+		expect(toolResultText(result, "")).toContain("after");
 	});
 
 	it("brace group runs both printf calls", async () => {
@@ -84,7 +78,7 @@ describe("BashTool set -e and compound adversarial", () => {
 			command: "{ printf 'a'; printf 'b\\n'; }",
 			timeout: 15,
 		});
-		expect(textOf(result)).toContain("a");
-		expect(textOf(result)).toContain("b");
+		expect(toolResultText(result, "")).toContain("a");
+		expect(toolResultText(result, "")).toContain("b");
 	});
 });

@@ -33,6 +33,7 @@ import {
 import type { AssistantMessage, Context, FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 const model: Model<"gitlab-duo-agent"> = buildModel({
 	id: "claude_sonnet_4_6_vertex",
@@ -85,14 +86,7 @@ function emptyOutput(): AssistantMessage {
 		api: "gitlab-duo-agent",
 		provider: "gitlab-duo-agent",
 		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 		timestamp: 1,
 	};

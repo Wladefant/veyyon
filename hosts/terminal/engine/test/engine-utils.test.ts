@@ -40,6 +40,27 @@ describe("engine-utils", () => {
 			expect(controller.strength("item-1")).toBe(0);
 			controller.dispose();
 		});
+
+		it("reports a change only when the hovered row moves, and repaints nothing on a repeat", () => {
+			const controller = new HoverController<number>();
+			let repaints = 0;
+			controller.setMotion({ requestRender: () => repaints++, enabled: false });
+			const repaintsAfter = (key: number | null): { changed: boolean; repainted: boolean } => {
+				const before = repaints;
+				const changed = controller.set(key);
+				return { changed, repainted: repaints > before };
+			};
+
+			expect(repaintsAfter(null)).toEqual({ changed: false, repainted: false });
+			expect(repaintsAfter(3)).toEqual({ changed: true, repainted: true });
+			expect(repaintsAfter(3)).toEqual({ changed: false, repainted: false });
+			expect(repaintsAfter(4)).toEqual({ changed: true, repainted: true });
+			expect(controller.strength(4)).toBe(1);
+			expect(controller.strength(3)).toBe(0);
+			expect(repaintsAfter(null)).toEqual({ changed: true, repainted: true });
+			expect(repaintsAfter(null)).toEqual({ changed: false, repainted: false });
+			controller.dispose();
+		});
 	});
 
 	describe("scroll-layout", () => {

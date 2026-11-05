@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { syncAllSessions } from "@veyyon/stats/aggregator";
 import { closeDb, getOverallStats, getRecentRequests } from "@veyyon/stats/db";
 import { parseSessionFile } from "@veyyon/stats/parser";
@@ -44,12 +45,10 @@ function assistantEntry(opts: {
 			stopReason: "stop",
 			timestamp: Date.now(),
 			usage: {
+				...emptyUsage(),
 				input: 10,
 				output: 5,
-				cacheRead: 0,
-				cacheWrite: 0,
 				totalTokens: 15,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				...(opts.premiumRequests !== undefined ? { premiumRequests: opts.premiumRequests } : {}),
 			},
 		},

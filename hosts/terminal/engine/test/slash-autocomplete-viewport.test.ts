@@ -2,6 +2,7 @@ import "./warm-natives"; // load the native addon under the real platform before
 import { describe, expect, it } from "bun:test";
 import { Container, Editor, TUI } from "@veyyon/tui";
 import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@veyyon/utils/autocomplete";
+import { restorePlatform, setPlatform } from "../../../../packages/utils/test/helpers/platform-override";
 import { settleFrames } from "./helpers/settle-frames";
 import { defaultEditorTheme } from "./test-themes";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -31,21 +32,17 @@ class SlashProvider implements AutocompleteProvider {
 }
 
 async function settle(term: VirtualTerminal, tui: TUI): Promise<void> {
-	// Each keystroke arms Editor's autocomplete debounce (100ms) before the
-	// provider is re-queried. That debounce is NOT a pending frame — the engine
-	// owes nothing until it fires — so it is a real wall-clock wait and has to be
-	// slept through. Only the render it triggers is settled on, which removes the
-	// second half of the old fixed 250ms guess (debounce + throttle + jitter).
+	// A keystroke into the open popup re-queries the provider at once, and the
+	// answer lands on a microtask, so the render it requests is a pending frame
+	// the owner settles on.
 	await new Promise<void>(resolve => process.nextTick(resolve));
-	await Bun.sleep(120);
 	await settleFrames(term, tui);
 }
 
 describe("slash command autocomplete with unknown native viewport state", () => {
 	it("keeps repainting the editor while the autocomplete list changes height", async () => {
-		const originalPlatform = process.platform;
 		const originalWtSession = Bun.env.WT_SESSION;
-		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+		setPlatform("win32");
 		Bun.env.WT_SESSION = "wt-test";
 		const term = new VirtualTerminal(40, 8);
 		const tui = new TUI(term);
@@ -70,15 +67,14 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			expect(editor.getText()).toBe("/model");
 		} finally {
 			tui.stop();
-			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			restorePlatform();
 			if (originalWtSession === undefined) delete Bun.env.WT_SESSION;
 			else Bun.env.WT_SESSION = originalWtSession;
 		}
 	});
 
 	it("repaints direct autocomplete shrink on ED3-risk POSIX terminals", async () => {
-		const originalPlatform = process.platform;
-		Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+		setPlatform("darwin");
 		let tui: TUI | undefined;
 		try {
 			const term = new VirtualTerminal(40, 8);
@@ -160,14 +156,13 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			]);
 		} finally {
 			tui?.stop();
-			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			restorePlatform();
 		}
 	});
 
 	it("repaints autocomplete updates coalesced with offscreen background mutations", async () => {
-		const originalPlatform = process.platform;
 		const originalWtSession = Bun.env.WT_SESSION;
-		Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+		setPlatform("win32");
 		Bun.env.WT_SESSION = "wt-test";
 		const term = new VirtualTerminal(40, 6);
 		const tui = new TUI(term);
@@ -199,7 +194,7 @@ describe("slash command autocomplete with unknown native viewport state", () => 
 			expect(editor.getText()).toBe("/mo");
 		} finally {
 			tui.stop();
-			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+			restorePlatform();
 			if (originalWtSession === undefined) delete Bun.env.WT_SESSION;
 			else Bun.env.WT_SESSION = originalWtSession;
 		}

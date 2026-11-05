@@ -940,13 +940,6 @@ function colorizeBox(box: Box, scope: (text: string) => string): Box {
 }
 
 /**
- * Parse a math fragment into a layout box. 2-D constructs — fractions, binomials,
- * radicals over tall content, `\left…\right` and tall bare parens, environments,
- * big-operator limits, block scripts — become stacked boxes; everything between
- * them is gathered into inline runs rendered through `latexToUnicode` under the
- * active scope wrapper (`ctx`), with `\color` state re-applied per run.
- */
-/**
  * Recursion guard for the 2-D block layout. `parseExpr` recurses through
  * fractions/binoms/radicals/scripts/groups/environment cells, and the box layout
  * cost is super-linear in nesting depth — a depth-1000 `\frac` chain took ~6.6s
@@ -964,6 +957,13 @@ const MAX_BLOCK_DEPTH = 64;
 const MAX_BLOCK_DEGRADE_TAIL = 2048;
 let blockDepth = 0;
 
+/**
+ * Parse a math fragment into a layout box. 2-D constructs — fractions, binomials,
+ * radicals over tall content, `\left…\right` and tall bare parens, environments,
+ * big-operator limits, block scripts — become stacked boxes; everything between
+ * them is gathered into inline runs rendered through `latexToUnicode` under the
+ * active scope wrapper (`ctx`), with `\color` state re-applied per run.
+ */
 function parseExpr(src: string, ctx: Ctx = ROOT_CTX): Box {
 	if (blockDepth >= MAX_BLOCK_DEPTH) {
 		return textBox(

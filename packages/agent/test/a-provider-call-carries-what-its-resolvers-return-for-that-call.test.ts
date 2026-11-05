@@ -18,12 +18,12 @@
  */
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
-import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from "@veyyon/agent-core/types";
-import type { Message, Model, SimpleStreamOptions } from "@veyyon/ai";
+import type { AgentContext, AgentLoopConfig, AgentTool, StreamFn } from "@veyyon/agent-core/types";
+import type { Model, SimpleStreamOptions } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { Effort } from "@veyyon/catalog/effort";
 import { type } from "arktype";
-import { createUserMessage } from "./helpers";
+import { createUserMessage, identityConverter } from "./helpers";
 
 type ConfigResolver = Extract<keyof AgentLoopConfig, `get${string}` | `${string}Resolver`>;
 
@@ -127,10 +127,6 @@ const noopTool: AgentTool<typeof noopSchema> = {
 		return { content: [{ type: "text", text: "ok" }] };
 	},
 };
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 /** Run a turn that calls a tool, so the loop makes exactly two provider calls, and return what each call carried. */
 async function runTwoCalls(fields: ResolverCase["fields"]): Promise<ProviderCall[]> {

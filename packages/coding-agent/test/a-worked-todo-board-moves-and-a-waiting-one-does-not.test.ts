@@ -37,13 +37,10 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
 import { paintRailMotion, railIdleHeadAt } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
-import type { TodoItem, TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
+import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
 import { TODO_STATUSES } from "@veyyon/wire";
-
-function phase(name: string, tasks: Array<[string, TodoItem["status"]]>): TodoPhase {
-	return { name, tasks: tasks.map(([content, status]) => ({ content, status })) };
-}
+import { todoPhase } from "./helpers/todo-phase";
 
 function options(overrides: Partial<TodoBoardOptions> = {}): TodoBoardOptions {
 	return {
@@ -98,8 +95,8 @@ describe("the todo board's state", () => {
 	});
 
 	it("colours the rail live while work is in flight and flat while it waits", () => {
-		const plan = [phase("Auth", [["Refresh a stored token", "in_progress"]])];
-		const waiting = [phase("Auth", [["Refresh a stored token", "pending"]])];
+		const plan = [todoPhase("Auth", [["Refresh a stored token", "in_progress"]])];
+		const waiting = [todoPhase("Auth", [["Refresh a stored token", "pending"]])];
 		expect(todoBoardIsLive(plan, new Set())).toBe(true);
 		expect(todoBoardIsLive(waiting, new Set())).toBe(false);
 
@@ -120,7 +117,7 @@ describe("the todo board's state", () => {
 		const glyphs = new Map<string, string>();
 		for (const status of TODO_STATUSES) {
 			const plan = [
-				phase("Auth", [
+				todoPhase("Auth", [
 					[`task ${status}`, status],
 					["sentinel", "pending"],
 				]),
@@ -135,7 +132,7 @@ describe("the todo board's state", () => {
 
 		// Struck text and status colors separate completed and abandoned from pending.
 		const plan = [
-			phase("Auth", [
+			todoPhase("Auth", [
 				["task completed", "completed"],
 				["task abandoned", "abandoned"],
 				["task in_progress", "in_progress"],
@@ -166,7 +163,7 @@ describe("the todo board's state", () => {
 	 */
 	it("draws a closed task with no attribute bytes when the terminal has none", () => {
 		const plan = [
-			phase("Auth", [
+			todoPhase("Auth", [
 				["task completed", "completed"],
 				["task abandoned", "abandoned"],
 			]),
@@ -187,9 +184,9 @@ describe("the todo board's state", () => {
 
 	it("renders phase rows with tallies and no glyphs, drawing tasks only for the active phase when collapsed", () => {
 		const plan = [
-			phase("Auth", [["Refresh a stored token", "in_progress"]]),
-			phase("Ship", [["Cut the release", "pending"]]),
-			phase("Done", [["Wire the store", "completed"]]),
+			todoPhase("Auth", [["Refresh a stored token", "in_progress"]]),
+			todoPhase("Ship", [["Cut the release", "pending"]]),
+			todoPhase("Done", [["Wire the store", "completed"]]),
 		];
 
 		const collapsedRows = rowsOf(plan, { expanded: false });
@@ -221,7 +218,7 @@ describe("the todo board's state", () => {
 	});
 
 	it("alternates the in-flight mark between shadowed and done, and holds it on done when animate is false", () => {
-		const plan = [phase("Auth", [["Refresh a stored token", "in_progress"]])];
+		const plan = [todoPhase("Auth", [["Refresh a stored token", "in_progress"]])];
 		const frames = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 		const animated = new Set(frames.map(frame => glyphFor(plan, "Refresh", { frame, animate: true })));
 		expect(animated).toEqual(new Set([theme.symbol("status.shadowed"), theme.symbol("status.done")]));
@@ -233,7 +230,7 @@ describe("the todo board's state", () => {
 	it("holds a completed task's row still across frames and animation states", () => {
 		const closing = "Refresh a stored token before it expires";
 		const plan = [
-			phase("Auth", [
+			todoPhase("Auth", [
 				[closing, "completed"],
 				["sentinel", "pending"],
 			]),
@@ -253,7 +250,7 @@ describe("the todo board's state", () => {
 	});
 
 	it("draws an owned pending task like in_progress and an unowned one in dim", () => {
-		const plan = [phase("Auth", [["Audit the secrets subsystem", "pending"]])];
+		const plan = [todoPhase("Auth", [["Audit the secrets subsystem", "pending"]])];
 		const owned = new Set(["Audit the secrets subsystem"]);
 
 		expect(todoBoardIsLive(plan, owned)).toBe(true);
@@ -276,11 +273,11 @@ describe("the todo board's state", () => {
 	it("omits finished phases and bounds following phases when collapsed on an in-flight phase", () => {
 		const phases: TodoPhase[] = [];
 		for (let i = 0; i < 8; i++) {
-			phases.push(phase(`Done ${i}`, [[`closed ${i}`, "completed"]]));
+			phases.push(todoPhase(`Done ${i}`, [[`closed ${i}`, "completed"]]));
 		}
-		phases.push(phase("Live", [["the work in flight", "in_progress"]]));
+		phases.push(todoPhase("Live", [["the work in flight", "in_progress"]]));
 		for (let i = 0; i < 6; i++) {
-			phases.push(phase(`Next ${i}`, [[`future ${i}`, "pending"]]));
+			phases.push(todoPhase(`Next ${i}`, [[`future ${i}`, "pending"]]));
 		}
 		expect(activeTodoPhaseIndex(phases)).toBe(8);
 
@@ -308,13 +305,13 @@ describe("the todo board's state", () => {
 
 	it("trims the tail of the block when rows exceed the row budget and reports overflow", () => {
 		const phases: TodoPhase[] = [
-			phase("Live", [
+			todoPhase("Live", [
 				["task 1", "in_progress"],
 				["task 2", "pending"],
 				["task 3", "pending"],
 			]),
-			phase("Next 1", [["next 1", "pending"]]),
-			phase("Next 2", [["next 2", "pending"]]),
+			todoPhase("Next 1", [["next 1", "pending"]]),
+			todoPhase("Next 2", [["next 2", "pending"]]),
 		];
 		const rows = rowsOf(phases, { maxRows: 4, live: true });
 		expect(rows.length).toBeLessThanOrEqual(4);
@@ -326,7 +323,7 @@ describe("the todo board's state", () => {
 	it("fits every terminal width, at every state it can draw", () => {
 		const long = "x".repeat(300);
 		const phases = [
-			phase(`Stage ${long}`, [
+			todoPhase(`Stage ${long}`, [
 				[`start ${long} end`, "in_progress"],
 				[`closed ${long}`, "completed"],
 				[`owned ${long}`, "pending"],
@@ -348,6 +345,6 @@ describe("the todo board's state", () => {
 
 	it("draws nothing for an empty plan", () => {
 		expect(renderTodoBoardLines([], options())).toEqual([]);
-		expect(renderTodoBoardLines([phase("Empty", [])], options())).toEqual([]);
+		expect(renderTodoBoardLines([todoPhase("Empty", [])], options())).toEqual([]);
 	});
 });

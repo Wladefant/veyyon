@@ -13,6 +13,7 @@ import { ModelHubComponent } from "@veyyon/coding-agent/modes/terminal/component
 import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { requireTheme } from "./helpers/require-theme";
 
 function normalizeRenderedText(text: string): string {
 	return stripVTControlCharacters(text).replace(/\s+/g, " ").trim();
@@ -59,10 +60,7 @@ describe("issue #970 custom provider discovery", () => {
 	let authStorage: AuthStorage;
 
 	beforeAll(async () => {
-		testTheme = await getThemeByName("dark");
-		if (!testTheme) {
-			throw new Error("Failed to load dark theme for issue-970 selector test");
-		}
+		testTheme = await requireTheme("dark");
 	});
 
 	beforeEach(async () => {

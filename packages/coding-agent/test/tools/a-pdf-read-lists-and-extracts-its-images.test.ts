@@ -16,6 +16,7 @@ import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import * as markit from "@veyyon/coding-agent/utils/markit";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSession } from "../helpers/tool-session";
 
 // 1x1 transparent PNG — small enough to pass through image loading untouched.
@@ -78,10 +79,7 @@ describe("read PDF image extraction", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("call", { path: pdfPath });
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 
 		expect(text).not.toContain("<!-- image:");
 		expect(text).toContain(`read \`${pdfPath}:p11-img0.png\``);
@@ -97,10 +95,7 @@ describe("read PDF image extraction", () => {
 
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("call", { path: `${pdfPath}:8-12` });
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 
 		expect(text).not.toContain("<!-- image:");
 		expect(text).toContain(`read \`${pdfPath}:p3-img0.png\``);
@@ -114,10 +109,7 @@ describe("read PDF image extraction", () => {
 		const image = result.content.find(c => c.type === "image");
 		expect(image).toBeDefined();
 		expect(image && "mimeType" in image ? image.mimeType : undefined).toBe("image/png");
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toContain("Read image file");
 		// Extraction was driven through markit with an imageDir target.
 		expect(spy).toHaveBeenCalledTimes(1);
@@ -153,10 +145,7 @@ describe("read PDF image extraction", () => {
 		mockExtraction({ "p1-img0.png": TINY_PNG, "p2-img0.png": TINY_PNG });
 		const tool = new ReadTool(makeSession(testDir));
 		const result = await tool.execute("call", { path: `${pdfPath}:` });
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => c.text)
-			.join("\n");
+		const text = toolResultText(result);
 		expect(text).toContain(`read \`${pdfPath}:p1-img0.png\``);
 		expect(text).toContain(`read \`${pdfPath}:p2-img0.png\``);
 	});

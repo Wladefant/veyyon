@@ -12,6 +12,17 @@
 - Boundary repair, block lowering, batch preparation, anchor remapping, header parsing and line streaming run as separate per-step functions; patch output, warnings and errors are unchanged.
 
 ## [1.5.6] - 2026-10-10
+### Changed
+
+- `check:types` covers `bench/` and `scripts/`, and the recovery session-chain bench writes `SWAP` hunks, so it runs again; no user-facing change.
+
+## [1.5.10] - 2026-10-25
+
+### Fixed
+
+- `InMemorySnapshotStore.record` drops a leading BOM before hashing, so an edit made with the tag a whole-file read printed for a file that opens with a BOM applies instead of being rejected as a file changed between read and edit.
+
+## [1.5.9] - 2026-10-22
 
 ### Added
 

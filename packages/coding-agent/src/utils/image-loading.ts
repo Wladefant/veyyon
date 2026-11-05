@@ -117,40 +117,48 @@ export async function normalizeModelContextImages(
 	return normalized;
 }
 
-/**
- * The output of one image input after the shared size and encoder policy:
- * resized when `autoResize` is set, canonicalized otherwise, and never larger
- * than `maxBytes`. `null` when the bytes do not decode as an image.
- */
-interface EncodedImageInput {
+/** One image after the shared size and encoder policy. */
+export interface EncodedImageInput {
 	data: string;
 	mimeType: string;
 	bytes: number;
 	dimensionNote?: string;
 }
 
+/**
+ * Encode base64 image bytes through the shared size and encoder policy: resized when `autoResize` is
+ * set, canonicalized otherwise, and never WebP when `excludeWebP` is set. Throws when the bytes do
+ * not decode as an image.
+ */
+export async function encodeImageForModel(
+	data: string,
+	options: { autoResize: boolean; excludeWebP?: boolean },
+): Promise<EncodedImageInput> {
+	// The source MIME is never inherited from an earlier probe: it is
+	// established from the decoded bytes by the resizer or the canonicalizer.
+	const sourceImage: ImageContent = { type: "image", data, mimeType: "application/octet-stream" };
+	if (options.autoResize) {
+		const resized = await resizeImage(sourceImage, { excludeWebP: options.excludeWebP });
+		return {
+			data: resized.data,
+			mimeType: resized.mimeType,
+			bytes: resized.buffer.byteLength,
+			dimensionNote: formatDimensionNote(resized),
+		};
+	}
+	const canonical = await canonicalizeImageContent(sourceImage, { excludeWebP: options.excludeWebP });
+	return { data: canonical.data, mimeType: canonical.mimeType, bytes: canonical.buffer.byteLength };
+}
+
+/** {@link encodeImageForModel}, `null` when the bytes do not decode, and never larger than `maxBytes`. */
 async function encodeImageInput(
 	data: string,
 	options: { autoResize: boolean; excludeWebP?: boolean },
 	maxBytes: number,
 ): Promise<EncodedImageInput | null> {
-	// The source MIME is never inherited from an earlier probe: it is
-	// established from the decoded bytes by the resizer or the canonicalizer.
-	const sourceImage: ImageContent = { type: "image", data, mimeType: "application/octet-stream" };
 	let encoded: EncodedImageInput;
 	try {
-		if (options.autoResize) {
-			const resized = await resizeImage(sourceImage, { excludeWebP: options.excludeWebP });
-			encoded = {
-				data: resized.data,
-				mimeType: resized.mimeType,
-				bytes: resized.buffer.byteLength,
-				dimensionNote: formatDimensionNote(resized),
-			};
-		} else {
-			const canonical = await canonicalizeImageContent(sourceImage, { excludeWebP: options.excludeWebP });
-			encoded = { data: canonical.data, mimeType: canonical.mimeType, bytes: canonical.buffer.byteLength };
-		}
+		encoded = await encodeImageForModel(data, options);
 	} catch {
 		return null;
 	}

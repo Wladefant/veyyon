@@ -8,7 +8,7 @@ import type {
 } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
-import { lazy } from "@veyyon/utils/abortable";
+import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { clampLow } from "@veyyon/utils/math";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import * as prompt from "@veyyon/utils/prompt";
@@ -68,7 +68,7 @@ import type { ReadContext, ReadToolDetails } from "./read-types";
 export { summarizeFailureReport } from "./read-summary";
 export type { ReadToolDetails } from "./read-types";
 
-const readSchema = lazy(() =>
+const readSchema = toolSchema("read", () =>
 	type({
 		path: type("string").describe(
 			"Local path, internal URI (e.g. memory://, skill://), or URL. Inline selectors are supported.",
@@ -128,6 +128,9 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 	readonly loadMode = "essential";
 	get parameters(): typeof readSchema.value {
 		return readSchema.value;
+	}
+	get wireParameters(): Record<string, unknown> {
+		return readSchema.wire;
 	}
 	readonly strict = true;
 

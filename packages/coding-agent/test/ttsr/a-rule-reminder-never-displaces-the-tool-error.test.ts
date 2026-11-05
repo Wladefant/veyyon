@@ -48,7 +48,7 @@ import { Agent, type AgentMessage, type AgentTool, type AgentToolResult } from "
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings, type TtsrSettings } from "@veyyon/coding-agent/config/settings";
@@ -118,17 +118,6 @@ const interruptModeSetting = SETTINGS_SCHEMA["ttsr.interruptMode"];
 /** Every mode the schema declares, typed as the union the manager accepts. */
 const INTERRUPT_MODES: readonly TtsrInterruptMode[] = interruptModeSetting.values;
 
-function usage(): AssistantMessage["usage"] {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
-}
-
 function assistantMessage(
 	content: AssistantMessage["content"],
 	stopReason: AssistantMessage["stopReason"],
@@ -139,7 +128,7 @@ function assistantMessage(
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "mock",
-		usage: usage(),
+		usage: emptyUsage(),
 		stopReason,
 		timestamp: Date.now(),
 	};

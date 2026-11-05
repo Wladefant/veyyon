@@ -932,7 +932,7 @@ async function main(): Promise<void> {
   triggeredRequests.length = 0;
   await page.type(".rmp-trigger-bar input", "octo/widget#5");
   await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll(".rmp-trigger-bar button"));
+    const btns = Array.from(document.querySelectorAll<HTMLButtonElement>(".rmp-trigger-bar button"));
     const triageBtn = btns.find(b => b.textContent?.trim() === "triage");
     triageBtn?.click();
   });
@@ -950,7 +950,7 @@ async function main(): Promise<void> {
   //    {mode:"retry", issue} carrying the replay token.
   triggeredRequests.length = 0;
   await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll(".rmp-trigger-bar button"));
+    const btns = Array.from(document.querySelectorAll<HTMLButtonElement>(".rmp-trigger-bar button"));
     const retryBtn = btns.find(b => b.textContent?.trim() === "retry latest");
     retryBtn?.click();
   });

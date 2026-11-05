@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Api, AuthStorage, CyberAccessProgram, FetchImpl, Model } from "@veyyon/ai";
 import { resetCodexAccessProgramListings } from "@veyyon/ai/providers/openai-codex/access-programs";
+import { resolveCodexResponsesLite } from "@veyyon/ai/providers/openai-codex/request-transformer";
 import * as catalogModels from "@veyyon/catalog/models";
+import { getBundledModels } from "@veyyon/catalog/models"
 import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import { searchCodex } from "@veyyon/coding-agent/tools/web/search/providers/codex";
 import { SearchProviderError } from "@veyyon/coding-agent/tools/web/search/types";
@@ -443,6 +445,35 @@ describe("searchCodex model selection", () => {
 			});
 			expect(capturedRequest?.body?.client_metadata).toBeUndefined();
 			expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
+	// WHY: a search on a model the catalog marks for Responses-Lite was sent in the Lite shape, with
+	// the hosted `web_search` tool moved into an `additional_tools` input item and `tool_choice` still
+	// naming it. The endpoint answers that request 400 `Tool choice 'web_search_preview' not found in
+	// 'tools' parameter.`, and the Lite shape with `tool_choice: auto` answers from the model's own
+	// knowledge without searching, so every default search on a ChatGPT account failed. The sweep sends
+	// a search on every bundled Codex model and requires the plain Responses shape. Not caught: a model
+	// the endpoint later refuses in the plain shape, which only a live request shows.
+	it("sends every bundled Codex model's search in the plain Responses shape, Responses-Lite models included", async () => {
+		const bundled = getBundledModels("openai-codex").filter(model => model.api === "openai-codex-responses");
+		expect(bundled.some(model => resolveCodexResponsesLite(model, undefined))).toBe(true);
+
+		for (const model of bundled) {
+			process.env.VEYYON_CODEX_WEB_SEARCH_MODEL = model.id;
+			const result = await searchCodex(makeSearchParams(`${model.id} web search`, mockCodexFetch(model.id)));
+
+			const headers = new Headers(capturedRequest?.headers);
+			expect(headers.get("x-openai-internal-codex-responses-lite")).toBeNull();
+			expect(capturedRequest?.body).toEqual({
+				model: model.id,
+				stream: true,
+				store: false,
+				input: [
+					{ type: "message", role: "user", content: [{ type: "input_text", text: `${model.id} web search` }] },
+				],
+				tools: [{ type: "web_search", search_context_size: "high" }],
+				tool_choice: { type: "web_search" },
+				instructions: "Codex test system prompt",
+			});
+			expect(result.model).toBe(model.id);
 		}
 	});
 

@@ -39,6 +39,7 @@ import {
 } from "@veyyon/coding-agent/modes/terminal/components/dialogs/mcp-add-wizard";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { type AnsiPolicy, getAnsiPolicy, setAnsiPolicy } from "@veyyon/tui";
+import { clickAt, motionAt, wheelAt } from "../../../helpers/sgr-pointer";
 import { type StubbedStdoutGeometry, stubStdoutGeometry } from "../../../helpers/stdout-geometry";
 
 const WIDTH = 110;
@@ -59,17 +60,6 @@ afterEach(() => {
 	setAnsiPolicy(policy);
 	geometry.restore();
 });
-
-/** SGR motion (button 32+3=35), left press, and wheel at 1-based screen coords. */
-function motionAt(row1: number, col1 = 40): string {
-	return `\x1b[<35;${col1};${row1}M`;
-}
-function clickAt(row1: number, col1 = 40): string {
-	return `\x1b[<0;${col1};${row1}M`;
-}
-function wheelAt(direction: "up" | "down", row1: number, col1 = 40): string {
-	return `\x1b[<${direction === "down" ? 65 : 64};${col1};${row1}M`;
-}
 
 interface Harness {
 	wizard: MCPAddWizard;

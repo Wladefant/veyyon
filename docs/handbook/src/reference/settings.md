@@ -57,7 +57,8 @@ These rules cover the corners:
 - A value whose type does not match the setting's declaration is named in a startup
   warning with the file to edit. An enum value outside its list reads as the setting's
   default, except `tools.approvalMode`, which reads as `ask`; the warning states the
-  value in force.
+  value in force. The TUI shows the warning above the first prompt; `veyyon -p` and
+  RPC mode write it to stderr as `warning: settings: <setting>: …`.
 
 ## Reading and writing settings
 
@@ -658,19 +659,20 @@ page inside **Roster**.
 
 #### Which model an agent runs
 
-The first row of **Roster** is **Same Model for All Agents**, and it selects which of two
-chains applies. It is off by default.
+The **Same Model for All Agents** row of the Agents tab selects which of two chains
+applies. It is off by default.
 
 Off, each agent answers for itself. The first layer that specifies a model wins:
 
-1. the agent's own lane, `agent.agents.<name>.model`, edited on that agent's page.
-2. `agent.modelByDepth.<n>`, for a spawn at that depth.
-3. the agent definition's own `model:` frontmatter, for an agent you wrote.
-4. otherwise the agent inherits the model you are working with.
+1. the agent's own lane at the spawn's depth, edited on that agent's page: `agent.agents.<name>.model`
+   for a direct spawn, and the level under **Can spawn** (`agent.agents.<name>.agents`) for a
+   deeper one. A level that sets no model takes the level above.
+2. the agent definition's own `model:` frontmatter, for an agent you wrote.
+3. otherwise the agent inherits the model you are working with.
 
 On, one model answers for every agent: `agent.model`, else the model you are working
-with. Nothing per-agent is read, so the lanes, the depth rows and an agent file's own
-`model:` all stop applying. The agent rows stay listed and go grey, because they still set
+with. Nothing per-agent is read, so the lanes and an agent file's own `model:` stop
+applying. The agent rows stay listed and go grey, because they still set
 which agents are enabled.
 
 The shared model and its effort appear on screen only while the switch is on. Off, they
@@ -695,7 +697,7 @@ levels, then ignored. It is never rounded to a neighbouring effort: running at a
 you did not choose costs money and would not show up anywhere.
 
 Every surface that shows an agent's model also shows the setting that selected it
-(`agent.agents.deep.agents`, `agent.modelByDepth.2`, `agent.model`), so an unexpected
+(`agent.agents.deep.model`, `agent.agents.deep.agents`, `agent.model`), so an unexpected
 model traces to the setting that selected it.
 
 #### The two views in `/agents`
@@ -711,7 +713,7 @@ configures nothing. Move between its two views with the left and right arrows, w
 
 Live only ever lists agents that exist in this session, so a disabled specialist
 cannot appear there: it was never spawned. Which agents the model may choose, and
-what each one runs on, is configured in the Agents row of this tab.
+what each one runs on, is configured in the Roster row of the Agents tab.
 
 `/cockpit` and `/hub` are aliases of `/agents`, as are the `app.agents.hub` and
 `app.session.observe` keys and a double-tap of the left arrow on an empty composer.
@@ -722,10 +724,10 @@ what each one runs on, is configured in the Agents row of this tab.
 | `agent.delegation` | enum | `preferred` | `allowed`, `preferred`, `required`. How hard the prompt pushes; it never removes the ability to delegate. See above. |
 | `agent.agents` | record | `{}` | One row per agent: `enabled`, `model`, `thinkingLevel`, `maxNestedSpawnDepth`, and a nested `agents` row per level below. Edit in the Roster row of the Agents tab. Ignored while `agent.sharedModel` is on. |
 | `agent.helpers` | record | `{}` | One row per helper id (`advisor`, `plan`, `vision`, `commit`, `title`, `memory`, `autoThinking`, `unexpectedStop`, `speech`, `completion`): `model` (a chain) and `thinkingLevel`. Unset runs the session's model and effort. A chain that matches no available model leaves the feature without a model. Edit in the Helpers section of the Roster page. See [Models, helpers, and profiles](../using/roles-and-profiles.md#helpers). |
-| `agent.sharedModel` | boolean | `false` | Whether one model and effort apply to every agent. On, `agent.model` and `agent.thinkingLevel` apply and nothing per-agent is read. Off, each agent runs what its own Roster page sets. The first row of Roster; it has no row of its own on the tab. |
-| `agent.model` | modelChain | unset | The shared model chain, live only while `agent.sharedModel` is on. Tried in order, written as a comma-separated string or as a YAML list: the later entries are used when a run errors on the one in use. Unset means inherit: agents follow the model you are working with. May include a `:effort` suffix, and an explicit suffix wins over the agent's own default. A pattern that matches no model rejects the spawn rather than falling through to the next entry. Edit inside Roster. |
-| `agent.modelByDepth` | record | `{}` | One row per spawn depth (`"1"` is a direct child, `"2"` a grandchild), each a chain in the same shape as `agent.model`. Applies only while `agent.sharedModel` is off, and outranks the agent's own frontmatter for a spawn at that depth; other depths are unaffected. A row whose chain matches no model rejects the spawn and states the row. Edit in the Models by Depth row of the Agents tab. |
-| `agent.thinkingLevel` | string | unset | The shared effort, live only while `agent.sharedModel` is on, picked from the levels the model in scope exposes. Unset or **Inherit** passes the current session's effective effort into the child. It does not request `auto` from the provider. Edit inside Roster. |
+| `agent.sharedModel` | boolean | `false` | Whether one model and effort apply to every agent. On, `agent.model` and `agent.thinkingLevel` apply and nothing per-agent is read. Off, each agent runs what its own Roster page sets. Edit in the Same Model for All Agents row of the Agents tab. |
+| `agent.model` | modelChain | unset | The shared model chain, live only while `agent.sharedModel` is on. Tried in order, written as a comma-separated string or as a YAML list: the later entries are used when a run errors on the one in use. Unset means inherit: agents follow the model you are working with. May include a `:effort` suffix, and an explicit suffix wins over the agent's own default. A pattern that matches no model rejects the spawn rather than falling through to the next entry. Edit in the Shared Model row of the Agents tab. |
+| `agent.modelByDepth` | record | `{}` | Retired and ignored. The per-agent level below an agent replaces it: set the model a spawn of that agent runs at the next depth in Agents → Roster → that agent → Can spawn → Model, which writes `agent.agents.<name>.agents`. |
+| `agent.thinkingLevel` | string | unset | The shared effort, live only while `agent.sharedModel` is on, picked from the levels the model in scope exposes. Unset or **Inherit** passes the current session's effective effort into the child. It does not request `auto` from the provider. Edit in the Shared Effort row of the Agents tab. |
 | `agent.batch` | boolean | `true` | Batch shape for the `task` tool: one call, many items. |
 | `agent.maxConcurrency` | number | `32` | Agents running at once. |
 | `agent.maxNestedSpawnDepth` | number | `0` | Nested levels that agents may spawn. Direct children receive no `task` tool at `0`; an agent-specific override may raise the limit. |

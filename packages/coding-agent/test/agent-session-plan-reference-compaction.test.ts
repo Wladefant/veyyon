@@ -16,19 +16,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@veyyon/agent-core";
+import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
-import type { TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
-import { getBundledModel } from "@veyyon/catalog/models";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { resolveLocalUrlToPath } from "../src/internal-urls";
 import { AgentSession } from "../src/session/agent-session";
 import { convertToLlm } from "../src/session/messages";
+import { messageText } from "./helpers/tool-result-text";
 
 const CONTINUE_MARKER = "Resume work on the user's most recent intent";
 
@@ -41,21 +42,6 @@ type Harness = {
 	waitForCall: (predicate: (call: ObservedPromptCall) => boolean) => Promise<ObservedPromptCall>;
 };
 
-function isTextContentBlock(value: unknown): value is TextContent {
-	if (!value || typeof value !== "object") return false;
-	return (value as TextContent).type === "text" && typeof (value as TextContent).text === "string";
-}
-
-function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) return "";
-	if (typeof message.content === "string") return message.content;
-	if (!Array.isArray(message.content)) return "";
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
-}
-
 function createAssistantResponse(text: string) {
 	return {
 		role: "assistant" as const,
@@ -63,14 +49,7 @@ function createAssistantResponse(text: string) {
 		api: "anthropic-messages" as const,
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop" as const,
 		timestamp: Date.now(),
 	};
@@ -96,14 +75,7 @@ function emitHighUsageTurn(session: AgentSession): void {
 		provider: "anthropic" as const,
 		model: "claude-sonnet-4-5",
 		stopReason: "stop" as const,
-		usage: {
-			input: 190_000,
-			output: 1_000,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 191_000,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: { ...emptyUsage(), input: 190_000, output: 1_000, totalTokens: 191_000 },
 		timestamp: Date.now(),
 	};
 	session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
@@ -133,8 +105,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 			resolve: (call: ObservedPromptCall) => void;
 		}> = [];
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const bundled = requireBundledModel("anthropic", "claude-sonnet-4-5");
 		// Pin the context window so the fixed 191k high-usage turn stays above the
 		// compaction threshold across catalog regenerations: claude-sonnet-4-5's
 		// bundled window grew to 1M, which a 191k turn no longer trips. Mirrors
@@ -165,7 +136,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 			convertToLlm,
 			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context) => {
-				observedCalls.push({ messageTexts: context.messages.map(message => getMessageText(message)) });
+				observedCalls.push({ messageTexts: context.messages.map(messageText) });
 				const call = observedCalls[observedCalls.length - 1];
 				for (let i = waiters.length - 1; i >= 0; i--) {
 					const waiter = waiters[i];

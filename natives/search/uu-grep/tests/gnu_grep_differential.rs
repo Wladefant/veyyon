@@ -1413,4 +1413,64 @@ static CASES: &[Case] = &[
 		stderr:     b"grep: sub: Is a directory\n",
 		divergence: None,
 	},
+	// A BRE group that does not pair is an error in GNU's words. Both engines compile a
+	// pattern inside `(?:…)`, so before the translator counted groups `\)\(` became
+	// `(?:)()` and printed every line.
+	Case {
+		flags:      "stdin -G an unopened group",
+		args:       &["-G", r"\)\("],
+		stdin:      b"()\n)(\nnone\na)\n(b\nab\n",
+		code:       2,
+		stdout:     b"",
+		stderr:     b"grep: Unmatched ) or \\)\n",
+		divergence: None,
+	},
+	Case {
+		flags:      "stdin -G an unclosed group",
+		args:       &["-G", r"\("],
+		stdin:      b"()\n)(\nnone\na)\n(b\nab\n",
+		code:       2,
+		stdout:     b"",
+		stderr:     b"grep: Unmatched ( or \\(\n",
+		divergence: None,
+	},
+	Case {
+		flags:      "stdin -G one close too many",
+		args:       &["-G", r"\(a\)\)"],
+		stdin:      b"()\n)(\nnone\na)\n(b\nab\n",
+		code:       2,
+		stdout:     b"",
+		stderr:     b"grep: Unmatched ) or \\)\n",
+		divergence: None,
+	},
+	// A plain `)` after a closed group is a character in a BRE.
+	Case {
+		flags:      "stdin -G a closed group then a parenthesis",
+		args:       &["-G", r"\(a\))"],
+		stdin:      b"()\n)(\nnone\na)\n(b\nab\n",
+		code:       0,
+		stdout:     b"a)\n",
+		stderr:     b"",
+		divergence: None,
+	},
+	// The default mode searches a pattern it cannot compile as its text, which here is
+	// what GNU's basic reading finds too; neither matches every line.
+	Case {
+		flags:      "stdin -e with a pattern that closes nothing",
+		args:       &["-e", "x", "-e", ")("],
+		stdin:      b"()\n)(\nnone\na)\n(b\nab\n",
+		code:       0,
+		stdout:     b")(\n",
+		stderr:     b"",
+		divergence: None,
+	},
+	Case {
+		flags:      "stdin an alternation split by a stray parenthesis",
+		args:       &["a)|(b"],
+		stdin:      b"()\n)(\nnone\na)\n(b\nab\n",
+		code:       1,
+		stdout:     b"",
+		stderr:     b"",
+		divergence: None,
+	},
 ];

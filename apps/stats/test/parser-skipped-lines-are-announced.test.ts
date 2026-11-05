@@ -22,6 +22,7 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { parseSessionFile } from "@veyyon/stats/parser";
 import { getSessionsDir, logger } from "@veyyon/utils";
 import { installStatsTestIsolation } from "./helpers/temp-agent";
@@ -30,14 +31,7 @@ installStatsTestIsolation("@pi-stats-skipped-lines-");
 
 const SKIP_MESSAGE = "Session file has unparseable lines; their messages are missing from every statistic";
 
-const USAGE = {
-	input: 10,
-	output: 20,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 30,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = { ...emptyUsage(), input: 10, output: 20, totalTokens: 30 };
 
 /** A well-formed assistant entry, so a test's only defect is the one it introduces. */
 function assistantEntry(id: string): string {

@@ -127,7 +127,7 @@ async function listFor(profile: Profile, agentDir: string): Promise<string> {
 			getLastError: () => undefined,
 		},
 	};
-	await new MCPCommandController(ctx as unknown as McpCommandControllerContext).handle("/mcp list");
+	await new MCPCommandController(ctx as unknown as McpCommandControllerContext).handle("list");
 	expect(errors).toEqual([]);
 	return presented.map(component => stripVTControlCharacters(component.render(400).join("\n"))).join("\n");
 }

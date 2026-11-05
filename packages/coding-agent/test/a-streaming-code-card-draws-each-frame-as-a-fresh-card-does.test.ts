@@ -19,9 +19,10 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import { CachedOutputBlock, type OutputBlockOptions } from "@veyyon/coding-agent/modes/terminal/draw/output-block";
-import { getThemeByName, type Theme } from "@veyyon/coding-agent/theme/theme";
+import type { Theme } from "@veyyon/coding-agent/theme/theme";
 import * as wrapModule from "@veyyon/utils/wrap";
 import type { ToolView, ViewCodeLines, ViewLine, ViewTailWindow } from "@veyyon/view";
+import { requireTheme } from "./helpers/require-theme";
 
 /** A source long enough to cross the gutter's widening at line 1000, with lines that wrap at 40 columns. */
 const SOURCE = Array.from({ length: 1012 }, (_, index) =>
@@ -119,12 +120,6 @@ function shellCard(output: string): ToolView {
 	};
 }
 
-async function loadTheme(name: string): Promise<Theme> {
-	const theme = await getThemeByName(name);
-	if (theme === undefined) throw new Error(`theme ${name} is not bundled`);
-	return theme;
-}
-
 /**
  * Stream `cardAt` frame by frame, switching width a third of the way in and theme two thirds of the
  * way in, and require each frame to draw as a card drawn with nothing to reuse draws it.
@@ -134,8 +129,8 @@ async function assertStreamsLikeFreshDraws(
 	cardAt: (source: string) => ToolView,
 	all: readonly string[] = frames(SOURCE),
 ): Promise<void> {
-	const dark = await loadTheme("dark");
-	const light = await loadTheme("light");
+	const dark = await requireTheme("dark");
+	const light = await requireTheme("light");
 	for (const [index, frame] of all.entries()) {
 		const width = index < all.length / 3 ? 100 : 40;
 		const theme = index < (2 * all.length) / 3 ? dark : light;
@@ -175,7 +170,7 @@ describe("a streaming code card", () => {
 	});
 
 	it("wraps no line of a streamed shell card that the frame before drew", async () => {
-		const theme = await loadTheme("dark");
+		const theme = await requireTheme("dark");
 		const wrapped: string[] = [];
 		// The block breaks each row it is handed once more, and those rows are the window's own output,
 		// so a wrap made while the block draws is the block's and only the window's wraps are counted.
@@ -239,7 +234,7 @@ describe("a streaming code card", () => {
 	it("draws its own line numbers after a card with the same text numbered elsewhere", async () => {
 		// Two windows onto repeated text, such as the same block read at two places in one file: every
 		// highlighted row matches the card drawn before, and only the numbers differ.
-		const theme = await loadTheme("dark");
+		const theme = await requireTheme("dark");
 		const source = SOURCE.split("\n").slice(0, 40).join("\n");
 		const numbered = (first: number) =>
 			codeCard(

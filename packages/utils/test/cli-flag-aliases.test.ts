@@ -125,7 +125,7 @@ describe("an alias parses into its canonical flag", () => {
 			(err: unknown) => err,
 		);
 		expect(error).toBeInstanceOf(CliUsageError);
-		expect((error as Error).message).toStartWith("Unknown option '--not-a-flag'.");
+		expect((error as Error).message).toStartWith("Unknown flag: --not-a-flag");
 	});
 
 	/**

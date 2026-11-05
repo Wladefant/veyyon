@@ -9,10 +9,10 @@ import {
 	resolveThresholdTokens,
 } from "@veyyon/agent-core/compaction";
 import type { Api, Model } from "@veyyon/ai";
-import { getBundledModel, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
+import { requireBundledModel } from "./helpers";
 
-const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-if (!model) throw new Error("Expected bundled anthropic/claude-sonnet-4-5 model");
+const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 function user(text: string): AgentMessage {
 	return { role: "user", content: text, timestamp: 1 };

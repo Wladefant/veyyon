@@ -13,7 +13,7 @@
  *  - A section's label is drawn in the tool-title colour as one run, where main coloured the id dim
  *    and appended its meta as a second dim run.
  *  - The card with no details indents its fallback line two columns under the header, where main drew
- *    one `Text` whose second row began at column zero behind the header's reopened colour runs.
+ *    one `Text` whose second row began at column zero.
  *
  * WHAT THIS SUITE DOES NOT CATCH. It never calls `execute()`, so nothing here proves what an ask
  * REPORTS or which dialog it opened: `test/tools/ask.test.ts` owns that, and a `details` shape whose
@@ -424,11 +424,8 @@ describe("ask tool differential", () => {
 		expect(stripVTControlCharacters(oracleRows(result, 200)[1] ?? "")).toBe("no dialog was opened");
 		// The words, the tone and the header row above them are the same either way.
 		expect(viewRows(result, 200)[0]).toBe(oracleRows(result, 200)[0]);
-		// A 256-colour terminal and a truecolor one open the same empty runs with different bytes, so
-		// the normalizer keys off a colour opened and closed with nothing between it, not off a depth.
-		expect(viewRows(result, 200)[1]?.trimStart()).toBe(
-			(oracleRows(result, 200)[1] ?? "").replace(/^(?:\x1b\[[0-9;]*m\x1b\[39m)+/, ""),
-		);
+		// Main's second row opens no colour run it closes empty, so the indent is the whole difference.
+		expect(viewRows(result, 200)[1]?.trimStart()).toBe(oracleRows(result, 200)[1]);
 	});
 
 	it("proves the normalizers undo an indent and a colour, and nothing else", () => {

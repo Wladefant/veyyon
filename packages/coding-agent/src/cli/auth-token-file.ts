@@ -4,6 +4,18 @@ import * as path from "node:path";
 import { getConfigRootDir, isEnoent, logger } from "@veyyon/utils";
 
 /**
+ * How long a caller that lost the create race waits for the winner to write the token.
+ *
+ * The window is one `writeFile` wide, so this is generous by orders of magnitude on purpose: the cost of
+ * waiting slightly too long is a few milliseconds at service startup, and the cost of giving up too early
+ * is two live tokens and a client that gets rejected by the service that issued its token.
+ */
+const TOKEN_RACE_TIMEOUT_MS = 2_000;
+
+/** Poll interval while waiting out the create-then-write window. */
+const TOKEN_RACE_POLL_MS = 2;
+
+/**
  * The bearer-token file a local auth service authenticates its clients with.
  *
  * The auth gateway and the auth broker each ship one of these, and each had its own private copy of the
@@ -21,18 +33,6 @@ import { getConfigRootDir, isEnoent, logger } from "@veyyon/utils";
  * This module is the one owner, and it takes the gateway's behaviour in both cases: create exclusively,
  * at `0600`, and treat losing the create race as success by reading the winner's token.
  */
-/**
- * How long a caller that lost the create race waits for the winner to write the token.
- *
- * The window is one `writeFile` wide, so this is generous by orders of magnitude on purpose: the cost of
- * waiting slightly too long is a few milliseconds at service startup, and the cost of giving up too early
- * is two live tokens and a client that gets rejected by the service that issued its token.
- */
-const TOKEN_RACE_TIMEOUT_MS = 2_000;
-
-/** Poll interval while waiting out the create-then-write window. */
-const TOKEN_RACE_POLL_MS = 2;
-
 export class AuthTokenFile {
 	readonly #fileName: string;
 

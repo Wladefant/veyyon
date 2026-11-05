@@ -19,6 +19,7 @@
 import { vi } from "bun:test";
 import type { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 import type { LoadExtensionsResult } from "@veyyon/coding-agent/extensibility/extensions/types";
 import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -164,15 +165,7 @@ export function createAssistantStopMessage(
 		model: "mock",
 		// Zero by default, overridable because the executor sums a run's tokens from these and reports
 		// them on the result: a suite asserting "150 tok" or a context-token figure has to set them.
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			...usage,
-		},
+		usage: { ...emptyUsage(), ...usage },
 		stopReason,
 		timestamp: Date.now(),
 	};

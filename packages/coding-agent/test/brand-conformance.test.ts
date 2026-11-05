@@ -23,7 +23,7 @@ import {
 	GLYPH as SUN_GLYPH,
 } from "@veyyon/coding-agent/modes/terminal/components/chrome/sun";
 import { SILVER_STOPS } from "@veyyon/coding-agent/modes/terminal/components/dialogs/welcome";
-import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
+import { requireTheme } from "./helpers/require-theme";
 
 const BRAND_SILVER = "#C6CBD4";
 const EMBER = "#F0862E";
@@ -105,9 +105,8 @@ const TRANSPARENT_BACKGROUND_KEYS = [
 ] as const;
 
 async function titanium() {
-	const theme = await getThemeByName("titanium");
-	expect(theme).toBeDefined();
-	return theme!;
+	const theme = await requireTheme("titanium");
+	return theme;
 }
 
 describe("brand conformance (titanium, the default dark theme)", () => {
@@ -167,32 +166,30 @@ describe("brand conformance (titanium, the default dark theme)", () => {
 	// ember accent family, semantic trio re-tuned for contrast on white — and
 	// still no blue anywhere.
 	it("keeps the light theme on-brand: white ground, silver structure, ember accent", async () => {
-		const theme = await getThemeByName("light");
-		expect(theme).toBeDefined();
+		const theme = await requireTheme("light");
 		// Unlike titanium (transparent, inherits the terminal ground), the light
 		// theme paints its white world explicitly: choosing a light theme on a
 		// dark terminal must produce readable light surfaces, not dark ones.
 		for (const key of TRANSPARENT_BACKGROUND_KEYS) {
-			expect(theme!.getBgColorHex(key)).toBe("#FFFFFF");
+			expect(theme.getBgColorHex(key)).toBe("#FFFFFF");
 		}
 		// Selection carries a dim ember wash, nothing saturated.
-		expect(theme!.getBgColorHex("selectedBg").toUpperCase()).toBe("#FBE9D9");
+		expect(theme.getBgColorHex("selectedBg").toUpperCase()).toBe("#FBE9D9");
 		// Structure is a dark silver (equal-ish RGB channels), never a hue.
-		const accent = theme!.getColorHex("accent");
+		const accent = theme.getColorHex("accent");
 		const [r, g, b] = [accent.slice(1, 3), accent.slice(3, 5), accent.slice(5, 7)].map(c => parseInt(c, 16));
 		expect(Math.max(r!, g!, b!) - Math.min(r!, g!, b!)).toBeLessThan(24);
 		// Links carry the ember family; the accent border keeps the true ember.
-		expect(theme!.getColorHex("mdLink").toUpperCase()).toBe("#B65E14");
-		expect(theme!.getColorHex("borderAccent").toUpperCase()).toBe(EMBER);
-		expect(theme!.isLight).toBe(true);
+		expect(theme.getColorHex("mdLink").toUpperCase()).toBe("#B65E14");
+		expect(theme.getColorHex("borderAccent").toUpperCase()).toBe(EMBER);
+		expect(theme.isLight).toBe(true);
 	});
 
 	// `link` is optional in theme JSON; a theme without it must inherit mdLink
 	// (light.json and ~46 bundled themes omit it), never throw or paint blank.
 	it("falls back to mdLink for themes that do not define the link color", async () => {
-		const theme = await getThemeByName("light");
-		expect(theme).toBeDefined();
-		expect(theme!.getColorHex("link")).toBe(theme!.getColorHex("mdLink"));
+		const theme = await requireTheme("light");
+		expect(theme.getColorHex("link")).toBe(theme.getColorHex("mdLink"));
 	});
 
 	// The website is the brand's reference implementation (brand.md contract:

@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
-import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadCapability } from "@veyyon/coding-agent/discovery";
 import { reset as resetCapabilities } from "@veyyon/coding-agent/discovery/capability";
@@ -23,21 +21,7 @@ import {
 	setAgentDir,
 	TempDir,
 } from "@veyyon/utils";
-
-function createModel(): Model<"openai-responses"> {
-	return buildModel({
-		id: "mock",
-		name: "mock",
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://example.invalid",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 8192,
-		maxTokens: 2048,
-	});
-}
+import { createMockModel } from "./helpers/mock-model";
 
 /**
  * SSH hosts are read from the loading PROFILE's `ssh.json` and nowhere else.
@@ -92,7 +76,7 @@ describe("AgentSession SSH tool refresh", () => {
 		const toolRegistry = new Map(registryTools.map(tool => [tool.name, tool]));
 		const agent = new Agent({
 			initialState: {
-				model: createModel(),
+				model: createMockModel(),
 				systemPrompt: ["initial"],
 				tools: initialTools,
 				messages: [],

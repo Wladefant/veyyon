@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type Focusable, TUI } from "@veyyon/tui";
+import { captureWrites } from "./helpers/terminal-output";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -44,16 +45,6 @@ async function settle(term: VirtualTerminal, scheduler: StressRenderScheduler): 
 	process.nextTick(nextTick.resolve);
 	await nextTick.promise;
 	await scheduler.drain(term);
-}
-
-function captureWrites(term: VirtualTerminal): string[] {
-	const writes: string[] = [];
-	const realWrite = term.write.bind(term);
-	vi.spyOn(term, "write").mockImplementation((data: string) => {
-		writes.push(data);
-		realWrite(data);
-	});
-	return writes;
 }
 
 describe("issue #1962: arrow navigation after dirty scrollback", () => {

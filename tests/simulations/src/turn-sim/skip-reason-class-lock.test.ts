@@ -30,9 +30,10 @@ import type {
 	SteeringInterruptSource,
 	SteeringQueueState,
 } from "@veyyon/agent-core/types";
-import type { Message, ToolResultMessage } from "@veyyon/ai";
+import type { ToolResultMessage } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { type } from "arktype";
+import { identityConverter } from "../../../../packages/agent/test/helpers";
 
 const AGENT_SRC = path.resolve(import.meta.dirname, "../../../../packages/agent/src");
 
@@ -105,10 +106,6 @@ const DECISIONS: Record<string, { drive: "defensive" | "live"; reason: RegExp; w
 };
 
 const ANY_OBJECT = type("object");
-
-function identityConverter(messages: AgentMessage[]): Message[] {
-	return messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult") as Message[];
-}
 
 interface InterruptWiring {
 	/** Loop config fields that make this source the one the loop observes. */

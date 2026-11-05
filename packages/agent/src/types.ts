@@ -849,3 +849,22 @@ export type AgentEvent =
 			result: AgentToolResult<unknown>;
 			isError?: boolean;
 	  };
+
+/** One `true` per {@link AgentEvent} type; the annotation fails to compile when the union gains a type this lacks. */
+const AGENT_EVENT_TYPE_FLAGS: Record<AgentEvent["type"], true> = {
+	agent_start: true,
+	agent_end: true,
+	turn_start: true,
+	turn_end: true,
+	message_start: true,
+	message_update: true,
+	message_end: true,
+	tool_execution_start: true,
+	tool_execution_update: true,
+	tool_execution_end: true,
+};
+
+/** Every {@link AgentEvent} type, so a filter on agent events receives a type added to the union. */
+export const AGENT_EVENT_TYPES: ReadonlySet<AgentEvent["type"]> = new Set(
+	Object.keys(AGENT_EVENT_TYPE_FLAGS) as AgentEvent["type"][],
+);

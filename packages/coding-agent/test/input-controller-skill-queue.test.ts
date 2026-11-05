@@ -12,7 +12,6 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
@@ -23,10 +22,12 @@ import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers"
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "@veyyon/coding-agent/session/messages";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Container } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
+import { requireBundledModel } from "../../agent/test/helpers";
+import { requireTheme } from "./helpers/require-theme";
 
 type StubEditor = {
 	setText: (text: string) => void;
@@ -411,8 +412,7 @@ async function createRealSession(): Promise<SessionFixture> {
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
+	const model = requireBundledModel("anthropic", "claude-sonnet-4-5");
 
 	const agent = new Agent({
 		initialState: {
@@ -476,12 +476,22 @@ function queueMagicCompanion(session: AgentSession, customType = "ultrathink-not
 	});
 }
 
-/** Mirror a steered user prompt (`AgentSession.#queueUserMessage(..., "steer")`). */
+/** Mirror a steered user prompt (`QueuedMessages.queueUser(..., "steer")`). */
 function queueUserSteer(session: AgentSession, text: string): void {
 	session.agent.steer({
 		role: "user",
 		content: [{ type: "text", text }],
 		steering: true,
+		attribution: "user",
+		timestamp: Date.now(),
+	});
+}
+
+/** Mirror a queued user follow-up (`QueuedMessages.queueUser(..., "followUp")`). */
+function queueUserFollowUp(session: AgentSession, text: string): void {
+	session.agent.followUp({
+		role: "user",
+		content: [{ type: "text", text }],
 		attribution: "user",
 		timestamp: Date.now(),
 	});
@@ -650,6 +660,19 @@ describe("AgentSession derived queued custom display", () => {
 		const remaining = session.agent.peekSteeringQueue();
 		expect(remaining.map(m => (m.role === "custom" ? m.customType : m.role))).toEqual(["ultrathink-notice", "user"]);
 	});
+
+	it("popLastQueuedMessage takes the newest steer before any follow-up", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		queueUserFollowUp(session, "older follow-up");
+		queueUserSteer(session, "steer");
+		queueUserFollowUp(session, "newer follow-up");
+
+		expect(session.popLastQueuedMessage()?.text).toBe("steer");
+		expect(session.popLastQueuedMessage()?.text).toBe("newer follow-up");
+		expect(session.popLastQueuedMessage()?.text).toBe("older follow-up");
+		expect(session.popLastQueuedMessage()).toBeUndefined();
+	});
 });
 
 function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
@@ -706,9 +729,8 @@ describe("UiHelpers / InputController against derived queued custom display", ()
 	let fixture: SessionFixture | undefined;
 
 	beforeEach(async () => {
-		const themeInstance = await getThemeByName("dark");
-		expect(themeInstance).toBeDefined();
-		setThemeInstance(themeInstance!);
+		const themeInstance = await requireTheme("dark");
+		setThemeInstance(themeInstance);
 	});
 
 	afterEach(async () => {

@@ -13,6 +13,7 @@ import {
 } from "@veyyon/agent-core/compaction";
 import type { ProtectedToolContext } from "@veyyon/agent-core/compaction/tool-protection";
 import type { AssistantMessage, TextContent, ToolResultMessage } from "@veyyon/ai";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 let idCounter = 0;
 function nextId(): string {
@@ -31,14 +32,7 @@ function assistantMessage(content: AssistantMessage["content"], timestamp: numbe
 		provider: "mock",
 		model: "mock",
 		api: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }

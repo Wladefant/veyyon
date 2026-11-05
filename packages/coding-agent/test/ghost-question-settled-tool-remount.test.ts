@@ -47,8 +47,9 @@
  * wrong while its count is right — except for `ask`, whose exact answered bytes
  * are pinned below.
  */
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { ReadToolGroupComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/read-tool-group";
 import { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
@@ -64,14 +65,7 @@ import { stripAnsi } from "@veyyon/utils";
 
 const CALL_ID = "call-ghost";
 
-const usage = {
-	input: 1,
-	output: 1,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 2,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const usage = { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 };
 
 /**
  * `path` routes `read` into its group component; every other renderer ignores
@@ -337,7 +331,14 @@ function createFixture(opts: { isStreaming?: boolean; messages?: AgentMessage[] 
 		optimisticUserMessageSignature: undefined,
 	} as unknown as InteractiveModeContext;
 	helpers = new UiHelpers(ctx);
-	return { ctx, helpers, chatContainer, session, controller: new EventController(ctx) };
+	const controller = new EventController(ctx);
+	// A card the test leaves live (a running background task, a call with no end event) keeps its
+	// rail ticking until it is disposed.
+	onTestFinished(() => {
+		controller.dispose();
+		chatContainer.disposeChildren();
+	});
+	return { ctx, helpers, chatContainer, session, controller };
 }
 
 function toolCards(chatContainer: TranscriptContainer) {
@@ -506,27 +507,22 @@ describe("a settled tool call can never re-mount as a live card", () => {
 		] as const) {
 			it(`allows a fresh '${toolName}' call after ${transition}`, async () => {
 				const { chatContainer, controller, helpers } = createFixture();
-				try {
-					await runToCompletion(controller, toolName);
-					if (transition === "replacing session history") {
-						helpers.renderSessionContext({ messages: [] } as unknown as SessionContext);
-					} else if (transition === "clearing presentation") {
-						helpers.transcript.clearTranscript();
-					} else {
-						helpers.transcript.setTranscriptBlocks([]);
-					}
-					expect(toolCardBytes(chatContainer)).toEqual([]);
-					await controller.handleEvent({
-						type: "tool_execution_start",
-						toolCallId: transition === "replacing session history" ? CALL_ID : `${CALL_ID}-next`,
-						toolName,
-						args: TOOL_ARGS,
-					} as unknown as AgentSessionEvent);
-					expect(toolCards(chatContainer)).toHaveLength(1);
-				} finally {
-					controller.dispose();
-					chatContainer.disposeChildren();
+				await runToCompletion(controller, toolName);
+				if (transition === "replacing session history") {
+					helpers.renderSessionContext({ messages: [] } as unknown as SessionContext);
+				} else if (transition === "clearing presentation") {
+					helpers.transcript.clearTranscript();
+				} else {
+					helpers.transcript.setTranscriptBlocks([]);
 				}
+				expect(toolCardBytes(chatContainer)).toEqual([]);
+				await controller.handleEvent({
+					type: "tool_execution_start",
+					toolCallId: transition === "replacing session history" ? CALL_ID : `${CALL_ID}-next`,
+					toolName,
+					args: TOOL_ARGS,
+				} as unknown as AgentSessionEvent);
+				expect(toolCards(chatContainer)).toHaveLength(1);
 			});
 		}
 		it(`ignores a late call event for '${toolName}' after its result already painted`, async () => {

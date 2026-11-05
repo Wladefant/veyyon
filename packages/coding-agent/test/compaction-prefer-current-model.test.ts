@@ -11,7 +11,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
-import { assistantMsg, userMsg } from "./helpers/e2e-session";
+import { assistantMsg, userMsg } from "./helpers/session-messages";
 
 /**
  * Regression: when `defaultModel` names a model on a different

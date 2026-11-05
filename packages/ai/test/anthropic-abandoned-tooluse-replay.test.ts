@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
 import type { AssistantMessage, Message, Model, ModelSpec, ToolResultMessage, UserMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 // These tests pin the wire-validity contract that was verified end-to-end against the
 // live Anthropic Messages API (claude-opus-4-8):
@@ -39,15 +40,6 @@ const model: Model<"anthropic-messages"> = buildModel({
 	reasoning: true,
 });
 
-const emptyUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 function buildHistory(stopReason: AssistantMessage["stopReason"], signature: string | undefined): Message[] {
 	const user: UserMessage = { role: "user", content: "reason, then call the tool", timestamp: 1 };
 	const assistant: AssistantMessage = {
@@ -60,7 +52,7 @@ function buildHistory(stopReason: AssistantMessage["stopReason"], signature: str
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: model.id,
-		usage: emptyUsage,
+		usage: emptyUsage(),
 		stopReason,
 		timestamp: 2,
 	};
@@ -145,7 +137,7 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "aborted",
 			timestamp: 2,
 		};
@@ -181,7 +173,7 @@ describe("Anthropic abandoned/aborted tool-use replay", () => {
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "aborted",
 			timestamp: 2,
 		};
@@ -208,7 +200,7 @@ function buildHistoryWithLaterAssistant(
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "stop",
 			timestamp: 5,
 		} satisfies AssistantMessage,
@@ -229,7 +221,7 @@ function buildHistoryWithTrailingTruncatedThinking(
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: model.id,
-			usage: emptyUsage,
+			usage: emptyUsage(),
 			stopReason: "length",
 			timestamp: 4,
 		} satisfies AssistantMessage,

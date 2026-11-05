@@ -12,6 +12,7 @@ import { processResponsesStream } from "@veyyon/ai/providers/openai-responses-st
 import type { ResponseStreamEvent } from "@veyyon/ai/providers/openai-responses-wire";
 import type { AssistantMessage, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { emptyUsage } from "@veyyon/catalog/models";
 
 function makeModel(): Model<"openai-responses"> {
 	return buildModel({
@@ -36,14 +37,7 @@ function makeOutput(): AssistantMessage {
 		provider: "openai",
 		model: "gpt-test",
 		api: "openai-responses",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		usage: emptyUsage(),
 		stopReason: "stop",
 	};
 }

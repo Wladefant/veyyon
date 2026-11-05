@@ -9,12 +9,7 @@ import {
 	type EffectiveToolDiscoveryMode,
 	resolveEffectiveToolDiscoveryMode,
 } from "../discovery/mode";
-import {
-	collectDiscoverableTools,
-	filterBySource,
-	isMCPToolName,
-	selectDiscoverableToolNamesByServer,
-} from "../discovery/tool-index";
+import { collectMCPTools, isMCPToolName, selectDiscoverableToolNamesByServer } from "../discovery/tool-index";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { type ExtensionRunner, ExtensionToolWrapper } from "../extensibility/extensions";
 import type { Tool, ToolSession } from "../tools";
@@ -93,10 +88,7 @@ export class SessionToolDiscovery {
 	/** The MCP tools of `servers` a session selects by default. Empty while discovery is off. */
 	defaultServerToolNames(servers: ReadonlySet<string>): string[] {
 		if (!this.enabled) return [];
-		return selectDiscoverableToolNamesByServer(
-			filterBySource(collectDiscoverableTools(this.#input.tools.values()), "mcp"),
-			servers,
-		);
+		return selectDiscoverableToolNamesByServer(collectMCPTools(this.#input.tools.values()), servers);
 	}
 
 	/** Register `search_tool_bm25` unless the registry holds it. Returns whether it was added. */
