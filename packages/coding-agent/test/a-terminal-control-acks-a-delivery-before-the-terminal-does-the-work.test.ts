@@ -7,6 +7,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as utils from "@veyyon/utils";
+import { ColdEntryPayloads, coldFieldsOf } from "@veyyon/kernel/session/session-cold-payloads";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { serveTerminalControl, TerminalNotReadyError, type TerminalOwner } from "../src/launch/terminal-control";
 import { startTerminalControl } from "../src/modes/terminal/terminal-control";
 
@@ -273,6 +275,62 @@ test("history converts only new entries on a leaf change, and the frame stays bo
 			.at(-1).entryId,
 	).toBe(`e${BASE + 50}`);
 	expect(conversions).toBe(BASE + 50 + journal.length);
+});
+
+test("history reads a cold assistant payload transiently and preserves its text", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-cold-history-"));
+	cleanup.push(async () => fs.rm(root, { recursive: true, force: true }));
+	const line = JSON.stringify({
+		type: "message",
+		id: "cold-assistant",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "Visible historical answer" },
+				{ type: "toolCall", id: "tool-1", name: "inspect", arguments: { detail: "x".repeat(16_384) } },
+				{ type: "thinking", thinking: "y".repeat(16_384) },
+			],
+		},
+	});
+	const payloads = new ColdEntryPayloads();
+	const reader = {
+		identity: "terminal-history-test",
+		read: (offset: number, length: number) => (offset === 0 ? line.slice(0, length) : ""),
+		scanLines: (_from: number, _headBytes: number, _visit: (head: string, offset: number, length: number) => void) => 1,
+		close: () => {},
+	};
+	expect(payloads.pin(reader.identity, () => reader, text => JSON.parse(text) as SessionEntry)).toBe(true);
+	const entry = JSON.parse(line) as SessionEntry;
+	expect(payloads.cool(entry, 0, Buffer.byteLength(line))).toBe(true);
+	const coldMessage = entry.message as unknown as object;
+	expect(coldFieldsOf(entry.message as unknown as object)).toEqual(["content"]);
+
+	const journal = [entry];
+	const mockMode = {
+		sessionManager: {
+			getSessionId: () => "cold",
+			getLeafId: () => entry.id,
+			getCwd: () => root,
+			getSessionFile: () => path.join(root, "cold.jsonl"),
+			getEntries: () => journal,
+		},
+		session: {
+			isStreaming: false,
+			displayAssistantContent: (content: unknown[]) => content,
+		},
+		isShuttingDown: false,
+		isInitialized: true,
+	};
+	spyOn(utils, "getConfigRootDir").mockReturnValue(root);
+	cleanup.push(await startTerminalControl(mockMode as never));
+	const owner = await readOwner(root);
+	const response = await rpc(owner, "subscribe");
+	expect(response.events.filter(event => event.kind === "history").flatMap(event => event.entries)).toEqual([
+		{ entryId: entry.id, text: "Visible historical answer", turn: expect.anything() },
+	]);
+	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
 });
 
 const settle = async () => {
