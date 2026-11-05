@@ -16,6 +16,7 @@ import {
 import { parseSecretSubmission } from "../../secrets/intake-wire";
 import { OperatorAnswerInbox, operatorAnswerQuestionId } from "../../session/operator-answer-inbox";
 import { isTerminalYieldToolResult } from "../../session/runtime/yield-tracker";
+import { TOOL } from "../../tools/core/builtin-names";
 import type { InteractiveMode } from "./interactive-mode";
 
 export interface TerminalTurnProvenance {
@@ -50,10 +51,12 @@ export function createTerminalTranscriptProjector() {
 			}
 			if (message.role === "toolResult") {
 				if (
+					message.toolName === TOOL.yield &&
+					!message.isError &&
 					isTerminalYieldToolResult({
 						toolName: message.toolName,
 						isError: message.isError,
-						result: { details: message.details },
+						result: message,
 					})
 				)
 					this.reset();
@@ -93,7 +96,9 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 	const projector = createTerminalTranscriptProjector();
 	const convert = (entry: SessionEntry): TerminalTranscriptText[] => {
 		const readable =
-			entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "toolResult")
+			entry.type === "message" &&
+			(entry.message.role === "assistant" ||
+				(entry.message.role === "toolResult" && entry.message.toolName === TOOL.yield && !entry.message.isError))
 				? readColdEntry(entry) ?? entry
 				: entry;
 		const turn = projector.observe(readable);
