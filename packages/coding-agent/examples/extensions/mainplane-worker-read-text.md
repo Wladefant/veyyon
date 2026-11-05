@@ -15,7 +15,14 @@ contract even though U+0000 is technically valid UTF-8; refuse it with the
 existing binary-aware-artifact guidance rather than projecting a NUL-containing
 string to the model. This matches the existing completed-run output-recovery
 boundary. Legitimate UTF-8, including Unicode and line breaks, remains readable
-and retains the existing text truncation metadata. A NUL past the displayed
+and retains the existing text truncation metadata.
+The leading UTF-8 byte-order mark (`EF BB BF`) is retained as U+FEFF
+in that verified text, including for a BOM-only file. Default `TextDecoder`
+BOM stripping would otherwise omit three authenticated bytes from the text
+view while still reporting their original byte count and digest. This matches
+the existing exact prior-output recovery behavior. The tool remains a
+bounded text preview, not an on-host edit, binary export or promise that a
+later write has compare-and-swap ownership. A NUL past the displayed
 50,000-character slice is still disqualifying: validate the whole verified read.
 
 The request is initiated only when the opt-in tool is explicitly invoked.

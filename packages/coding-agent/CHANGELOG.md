@@ -45,6 +45,9 @@
 ### Fixed
 
 - Native Mainplane receipts require string operation and state values and exact UTF-8 output bodies ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
+### Fixed
+
+- Native Mainplane text reads preserve the verified UTF-8 byte order mark ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
