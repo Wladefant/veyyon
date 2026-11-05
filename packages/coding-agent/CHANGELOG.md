@@ -47,6 +47,7 @@
 
 - ACP rejects stored session IDs that identify different histories before cross-cwd loads or unloaded forks change session state ([Refs #901](https://github.com/Wladefant/veyyon/issues/901)).
 
+- Basic Memory exposes the configured local MCP project through the runtime recall tool; automatic mental-model injection remains unsupported ([Refs #976](https://github.com/Wladefant/veyyon/issues/976)).
 ## [1.7.9] - 2026-11-04
 
 - Config hot reload now includes `github.enabled` in the reloaded whitelist, so disk changes take effect without restart and propagate to child forks, and an explicit tool allowlist cannot bypass a disabled setting (Refs Wladefant/superboard#2203).
