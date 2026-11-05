@@ -35,8 +35,8 @@ on:
         default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.target_sha || github.ref }}
-  cancel-in-progress: false
+  group: ${{ format('{0}-{1}', github.workflow, (github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'tmp/') && github.event.pull_request.head.ref) || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/tmp/') && github.ref_name) || inputs.target_sha || github.ref) }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'tmp/')) || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/tmp/')) }}
 
 defaults:
   run:
