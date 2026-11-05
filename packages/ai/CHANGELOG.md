@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Pace unchanged conditional auth-broker snapshot replies to the full monotonic canonical-verification deadline, including fractional timer delays, so repeated stale HTTP 200s cannot trigger another conditional poll just before the broker truth check ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
 ## [1.8.3] - 2026-11-05
 
 ### Fixed
