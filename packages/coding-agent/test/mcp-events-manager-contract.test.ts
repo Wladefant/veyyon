@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import { createHmac } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { MCPManager } from "../src/mcp/manager";
 import type { MCPEventOccurrence, MCPServerConfig, MCPServerEventSubscriptionConfig } from "../src/mcp/types";
 
@@ -20,12 +21,25 @@ type FakeServerOptions = {
 	eventsList?: (params: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown>;
 	poll?: (params: Record<string, unknown>) => Record<string, unknown>;
 	webhookSubscribe?: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	webhookUnsubscribe?: (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
 	onStream?: (
 		controller: ReadableStreamDefaultController<Uint8Array>,
 		streamId: string | number,
 		ordinal: number,
 	) => void;
 };
+
+// A dead callback must not leave a previously active MCP feed consuming
+// events. Observe real fake-server requests with a bounded wait.
+async function withinHandlerChange<T>(work: Promise<T>, phase: string): Promise<T> {
+	const deadline = Promise.withResolvers<never>();
+	const timer = setTimeout(() => deadline.reject(new Error(`Timed out waiting for ${phase}`)), 5_000);
+	try {
+		return await Promise.race([work, deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
 
 async function advanceTimers(ms: number): Promise<void> {
 	for (let i = 0; i < 20; i++) await Promise.resolve();
@@ -102,7 +116,7 @@ function fakeMcpServer(options: FakeServerOptions): FakeServer {
 						: { id: `webhook-${nextSubscription++}`, cursor: "webhook-cursor", refreshBefore: null };
 					break;
 				case "events/unsubscribe":
-					result = { ok: true };
+					result = options.webhookUnsubscribe ? await options.webhookUnsubscribe(params) : { ok: true };
 					break;
 				default:
 					result = {};
@@ -170,6 +184,156 @@ async function connect(manager: MCPManager, name: string, config: MCPServerConfi
 }
 
 describe("MCPManager event subscription contracts", () => {
+
+	it("preserves the successor's pending webhook verifier when a retired same-path subscribe finishes", async () => {
+		for (const formerOutcome of ["success", "error"] as const) {
+			const retiringStarted = Promise.withResolvers<void>();
+			const releaseRetiring = Promise.withResolvers<Record<string, unknown>>();
+			const successorStarted = Promise.withResolvers<void>();
+			const releaseSuccessor = Promise.withResolvers<Record<string, unknown>>();
+			const successorCursor = Promise.withResolvers<void>();
+			const serverA = fakeMcpServer({ delivery: "webhook" });
+			const serverB = fakeMcpServer({
+				delivery: "webhook",
+				webhookSubscribe: async () => {
+					successorStarted.resolve();
+					return releaseSuccessor.promise;
+				},
+			});
+			const probeA = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+			const portA = probeA.port ?? 0;
+			// Allocate both listeners while they are live so the OS cannot
+			// recycle one ephemeral port for the other.
+			const probeB = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+			const portB = probeB.port ?? 0;
+			await probeA.stop(true);
+			await probeB.stop(true);
+			expect(portA).toBeGreaterThan(0);
+			expect(portB).toBeGreaterThan(0);
+			expect(portA).not.toBe(portB);
+			const retiredEnvName = "MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET";
+			const successorEnvName = "MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET";
+			const oldRetiredEnv = process.env[retiredEnvName];
+			const oldSuccessorEnv = process.env[successorEnvName];
+			const retiredSecret = `whsec_${Buffer.alloc(32, 43).toString("base64")}`;
+			const successorSecret = `whsec_${Buffer.alloc(32, 61).toString("base64")}`;
+			process.env[retiredEnvName] = retiredSecret;
+			process.env[successorEnvName] = successorSecret;
+			const manager = new MCPManager(process.cwd());
+			const sharedPath = "/events/reused-pending-challenge";
+			const makeEvents = (port: number, secretRef: string) => ({
+				enabled: true,
+				subscriptions: [{
+					name: EVENT_NAME,
+					mode: "webhook" as const,
+					webhook: {
+						callbackUrl: `https://callback.example.test${sharedPath}`,
+						secretRef,
+						listenPort: port,
+					},
+				}],
+			});
+			let stoppingA: Promise<void> | undefined;
+			try {
+				// Start A without an event listener so its transport can be given a
+				// deterministic delayed RPC; the real manager and receiver still run.
+				await withinHandlerChange(connect(manager, "retiring-webhook", managerConfig(serverA, makeEvents(
+					portA, "$MCP_EVENTS_RETIRED_VERIFY_TEST_SECRET",
+				))), "connect retiring server");
+				const retiringConnection = manager.getConnection("retiring-webhook");
+				if (!retiringConnection) throw new Error("Retiring MCP server did not connect");
+				const actualRequest = retiringConnection.transport.request.bind(retiringConnection.transport);
+				retiringConnection.transport.request = ((method, params, options) => {
+					if (method === "events/subscribe") {
+						retiringStarted.resolve();
+						// This synthetic transport intentionally ignores cancellation
+						// so the old RPC can settle after a successor has enrolled.
+						return releaseRetiring.promise;
+					}
+					return actualRequest(method, params, options);
+				}) as typeof retiringConnection.transport.request;
+				manager.setOnEvent(() => {});
+				manager.setOnEventCursor((_name, _key, cursor) => {
+					if (cursor === "successor-cursor") successorCursor.resolve();
+				});
+				await withinHandlerChange(retiringStarted.promise, "retiring pending webhook subscribe");
+				stoppingA = manager.disconnectServer("retiring-webhook");
+				for (let attempt = 0; attempt < 50 && manager.getActiveEventSubscriptionCount("retiring-webhook") !== 0; attempt++) {
+					await delay(1);
+				}
+				expect(manager.getActiveEventSubscriptionCount("retiring-webhook")).toBe(0);
+				// Different owner key, deliberately reusing the retired callback path.
+				await withinHandlerChange(connect(manager, "successor-webhook", managerConfig(serverB, makeEvents(
+					portB, "$MCP_EVENTS_SUCCESSOR_VERIFY_TEST_SECRET",
+				))), "connect successor server");
+				await withinHandlerChange(successorStarted.promise, "successor pending webhook subscribe");
+				// The old operation settles only AFTER B has reserved its HMAC key.
+				if (formerOutcome === "success") {
+					releaseRetiring.resolve({ id: "old-id", cursor: "old-cursor", refreshBefore: null });
+				} else {
+					releaseRetiring.reject(new Error("synthetic canceled subscribe failure"));
+				}
+				await withinHandlerChange(stoppingA, "retiring webhook cleanup after successor starts");
+				const messageId = `successor-verify-${formerOutcome}`;
+				const timestamp = String(Math.floor(Date.now() / 1_000));
+				const challenge = `challenge-${formerOutcome}`;
+				const body = JSON.stringify({ type: "verification", challenge });
+				const signature = createHmac("sha256", Buffer.alloc(32, 61))
+					.update(`${messageId}.${timestamp}.${body}`)
+					.digest("base64");
+				const response = await withinHandlerChange(fetch(`http://127.0.0.1:${portB}${sharedPath}`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": "successor-pending-id",
+						"webhook-id": messageId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": `v1,${signature}`,
+					},
+					body,
+				}), "successor HMAC challenge");
+				expect(response.status).toBe(200);
+				expect(await response.json()).toEqual({ challenge });
+				// A rotated/retired signer must not verify the new owner.
+				const oldSignature = createHmac("sha256", Buffer.alloc(32, 43))
+					.update(`${messageId}.${timestamp}.${body}`)
+					.digest("base64");
+				const oldSigned = await fetch(`http://127.0.0.1:${portB}${sharedPath}`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": "successor-pending-id",
+						"webhook-id": messageId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": `v1,${oldSignature}`,
+					},
+					body,
+				});
+				expect(oldSigned.status).toBe(401);
+				releaseSuccessor.resolve({ id: "successor-id", cursor: "successor-cursor", refreshBefore: null });
+				await withinHandlerChange(successorCursor.promise, "successor webhook cursor");
+				expect(manager.getActiveEventSubscriptionCount("successor-webhook")).toBe(1);
+			} finally {
+				releaseRetiring.resolve({ id: "cleanup-id", cursor: "cleanup", refreshBefore: null });
+				releaseSuccessor.resolve({ id: "cleanup-id", cursor: "cleanup", refreshBefore: null });
+				try {
+					if (stoppingA) await withinHandlerChange(stoppingA, "retiring pending stop cleanup");
+				} finally {
+					try {
+						await withinHandlerChange(manager.disconnectAll(), "same-path ownership cleanup");
+					} finally {
+						serverA.stop();
+						serverB.stop();
+						if (oldRetiredEnv === undefined) delete process.env[retiredEnvName];
+						else process.env[retiredEnvName] = oldRetiredEnv;
+						if (oldSuccessorEnv === undefined) delete process.env[successorEnvName];
+						else process.env[successorEnvName] = oldSuccessorEnv;
+					}
+				}
+			}
+		}
+	}, 35_000);
+
 	it("uses hasMore for immediate polling, resumes with cursors, and enforces the one-second poll floor", async () => {
 		const pollRequests: Array<Record<string, unknown>> = [];
 		const firstDelivered = Promise.withResolvers<void>();
@@ -1097,4 +1261,2410 @@ describe("MCPManager event subscription contracts", () => {
 			server.stop();
 		}
 	});
+	// WHY: the old setter aborted only future discovery, leaving an existing
+	// event stream active without a consumer. Re-enrollment must create a new
+	// stream rather than keeping a zombie subscription.
+	it("clearing a live event handler cancels poll and push feeds and allows re-enrollment", async () => {
+		for (const mode of ["poll", "push"] as const) {
+			const firstStarted = Promise.withResolvers<void>();
+			const secondStarted = Promise.withResolvers<void>();
+			let starts = 0;
+			const started = () => {
+				starts++;
+				if (starts === 1) firstStarted.resolve();
+				if (starts === 2) secondStarted.resolve();
+			};
+			const server = fakeMcpServer({
+				delivery: mode,
+				poll: () => {
+					started();
+					return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+				},
+				onStream: () => started(),
+			});
+			const manager = new MCPManager(process.cwd());
+			const serverName = `clear-handler-${mode}`;
+			manager.setOnEvent(() => {});
+			manager.setOnEventCursor(() => {});
+			try {
+				await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+					enabled: true, subscriptions: [{ name: EVENT_NAME, mode }],
+				})), `${mode} connection`);
+				await withinHandlerChange(firstStarted.promise, `${mode} first subscription`);
+				expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+
+				manager.setOnEvent(undefined);
+				expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+				if (mode === "push") {
+					const cancelled = server.streamCancellations[0];
+					if (!cancelled) throw new Error("Missing original push stream cancellation");
+					await withinHandlerChange(cancelled, "old push stream cancellation");
+				}
+
+				manager.setOnEvent(() => {});
+				await withinHandlerChange(secondStarted.promise, `${mode} renewed subscription`);
+				expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+				expect(starts).toBe(2);
+			} finally {
+				await withinHandlerChange(manager.disconnectAll(), `${mode} manager cleanup`);
+				server.stop();
+			}
+		}
+	}, 30_000);
+
+	// WHY: events/unsubscribe deletes by the canonical webhook tuple, not by
+	// the old response ID. If re-enable sends a new subscribe while an older
+	// unsubscribe is pending, the late removal deletes the fresh registration.
+	it("waits for old webhook unsubscribe before re-enrolling the same callback", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const unsubscribeEntered = Promise.withResolvers<void>();
+		const releaseUnsubscribe = Promise.withResolvers<void>();
+		const secondSubscription = Promise.withResolvers<void>();
+		const firstCursor = Promise.withResolvers<void>();
+		let unsubscribed = false;
+		let subscribeCount = 0;
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			webhookSubscribe: async () => {
+				subscribeCount++;
+				if (subscribeCount === 2) {
+					if (!unsubscribed) throw new Error("New webhook subscribed before prior key-based unsubscribe");
+					secondSubscription.resolve();
+				}
+				return { id: `handler-clear-${subscribeCount}`, cursor: `cursor-${subscribeCount}`, refreshBefore: null };
+			},
+			webhookUnsubscribe: async () => {
+				unsubscribeEntered.resolve();
+				await releaseUnsubscribe.promise;
+				unsubscribed = true;
+				return {};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_server, _key, cursor) => {
+			if (cursor === "cursor-1") firstCursor.resolve();
+		});
+		const previousSecret = process.env.MCP_EVENTS_CONTRACT_SECRET;
+		process.env.MCP_EVENTS_CONTRACT_SECRET = CALLBACK_SECRET;
+		try {
+			await withinHandlerChange(connect(manager, "reenroll-webhook", managerConfig(server, {
+				enabled: true,
+				subscriptions: [{
+					name: EVENT_NAME, mode: "webhook",
+					webhook: {
+						callbackUrl: "https://callback.example.test/events/orders",
+						secretRef: "$MCP_EVENTS_CONTRACT_SECRET",
+						listenPort,
+					},
+				}],
+			})), "initial webhook connection");
+			await withinHandlerChange(firstCursor.promise, "initial webhook cursor");
+			expect(manager.getActiveEventSubscriptionCount("reenroll-webhook")).toBe(1);
+			manager.setOnEvent(undefined);
+			await withinHandlerChange(unsubscribeEntered.promise, "outgoing webhook unsubscribe");
+			manager.setOnEvent(() => {});
+			// Confirm that the original key-based delete has not yet completed.
+			// A second subscribe must only run once that delete is acknowledged.
+			await delay(30);
+			expect(server.requests.filter(request => request.method === "events/subscribe")).toHaveLength(1);
+			releaseUnsubscribe.resolve();
+			await withinHandlerChange(secondSubscription.promise, "webhook enrollment after unsubscribe");
+			expect(subscribeCount).toBe(2);
+			expect(unsubscribed).toBe(true);
+			expect(manager.getActiveEventSubscriptionCount("reenroll-webhook")).toBe(1);
+		} finally {
+			releaseUnsubscribe.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "webhook re-enrollment cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_CONTRACT_SECRET;
+				else process.env.MCP_EVENTS_CONTRACT_SECRET = previousSecret;
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: a single global handler-clear teardown barrier can block unrelated
+	// event feeds behind a slow webhook unsubscribe. Distinct canonical keys
+	// must re-enroll independently while the affected key waits for its old
+	// unsubscribe. Synthetic loopback servers do not prove hosted MCP delivery.
+	it("re-enrolls independent poll and webhook keys while a different unsubscribe is held", async () => {
+		const slowName = EVENT_NAME;
+		const independentName = "inventory/changed";
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const initialSlow = Promise.withResolvers<void>();
+		const initialIndependent = Promise.withResolvers<void>();
+		const renewedSlow = Promise.withResolvers<void>();
+		const renewedIndependent = Promise.withResolvers<void>();
+		const initialPoll = Promise.withResolvers<void>();
+		const renewedPoll = Promise.withResolvers<void>();
+		const unsubscribeEntered = Promise.withResolvers<void>();
+		const releaseUnsubscribe = Promise.withResolvers<void>();
+		const subscriptions = new Map<string, number>();
+		let polls = 0;
+		const webhookServer = fakeMcpServer({
+			delivery: "webhook",
+			eventsList: async () => ({
+				events: [slowName, independentName].map(name => ({
+					name, description: "fake event", inputSchema: { type: "object" }, delivery: ["webhook"],
+				})),
+			}),
+			webhookSubscribe: async params => {
+				const name = String(params.name);
+				const count = (subscriptions.get(name) ?? 0) + 1;
+				subscriptions.set(name, count);
+				return { id: "keyed-" + name + "-" + count, cursor: name + ":" + count, refreshBefore: null };
+			},
+			webhookUnsubscribe: async params => {
+				if (params.name === slowName) {
+					unsubscribeEntered.resolve();
+					await releaseUnsubscribe.promise;
+				}
+				return {};
+			},
+		});
+		const pollServer = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) initialPoll.resolve();
+				if (polls === 2) renewedPoll.resolve();
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const previousSecret = process.env.MCP_EVENTS_KEYED_SECRET;
+		process.env.MCP_EVENTS_KEYED_SECRET = CALLBACK_SECRET;
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_server, _key, cursor) => {
+			if (cursor === slowName + ":1") initialSlow.resolve();
+			if (cursor === slowName + ":2") renewedSlow.resolve();
+			if (cursor === independentName + ":1") initialIndependent.resolve();
+			if (cursor === independentName + ":2") renewedIndependent.resolve();
+		});
+		try {
+			await withinHandlerChange(manager.connectServers({
+				"slow-webhooks": managerConfig(webhookServer, {
+					enabled: true,
+					subscriptions: [
+						{ name: slowName, mode: "webhook", webhook: {
+							callbackUrl: "https://callback.example.test/events/slow",
+							secretRef: "$MCP_EVENTS_KEYED_SECRET",
+							listenPort,
+						} },
+						{ name: independentName, mode: "webhook", webhook: {
+							callbackUrl: "https://callback.example.test/events/independent",
+							secretRef: "$MCP_EVENTS_KEYED_SECRET",
+							listenPort,
+						} },
+					],
+				}),
+				"unrelated-poll": managerConfig(pollServer, {
+					enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+				}),
+			}, {}), "initial independent event connections");
+			await withinHandlerChange(Promise.all([
+				initialSlow.promise, initialIndependent.promise, initialPoll.promise,
+			]), "initial three event subscriptions");
+			expect(manager.getActiveEventSubscriptionCount()).toBe(3);
+
+			manager.setOnEvent(undefined);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+			await withinHandlerChange(unsubscribeEntered.promise, "old slow-key unsubscribe");
+			manager.setOnEvent(() => {});
+			// Neither the unrelated poll server nor the second webhook key
+			// depends on the still-unacknowledged old slow-key unsubscribe.
+			await withinHandlerChange(Promise.all([
+				renewedIndependent.promise, renewedPoll.promise,
+			]), "independent re-enrollment while old unsubscribe is unresolved");
+			expect(subscriptions.get(slowName)).toBe(1);
+			expect(subscriptions.get(independentName)).toBe(2);
+			expect(polls).toBe(2);
+			releaseUnsubscribe.resolve();
+			await withinHandlerChange(renewedSlow.promise, "affected webhook after unsubscribe");
+			expect(subscriptions.get(slowName)).toBe(2);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(3);
+		} finally {
+			releaseUnsubscribe.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "keyed event cleanup");
+			} finally {
+				webhookServer.stop();
+				pollServer.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_KEYED_SECRET;
+				else process.env.MCP_EVENTS_KEYED_SECRET = previousSecret;
+			}
+		}
+	}, 30_000);
+
+
+
+	// WHY: setOnEvent(undefined) called by an in-flight callback previously
+	// retained that callback's poll lifecycle in the same-key enrollment barrier.
+	// A replacement handler awaited from that callback could never start. This
+	// is a synthetic MCPManager/loopback repro, not Cloudflare or disk proof.
+	it("allows a poll callback to clear and re-enable its own consumer without self-deadlock", async () => {
+		const serverName = "reentrant-consumer-poll";
+		const callbackCompleted = Promise.withResolvers<void>();
+		const renewedPoll = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) {
+					return {
+						events: [event("reentrant-original", "stopped-event-cursor")],
+						cursor: "stopped-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
+				}
+				renewedPoll.resolve();
+				return { events: [], cursor: "renewed-only", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const recordedCursors: Array<string | null> = [];
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			recordedCursors.push(cursor);
+		});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "reentrant-original") return;
+			manager.setOnEvent(undefined);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			manager.setOnEvent(() => {});
+			const nextStartup = manager.getEventStartupPromise(serverName);
+			if (!nextStartup) throw new Error("Replacement MCP event startup was not registered");
+			await withinHandlerChange(nextStartup, "reentrant poll replacement startup");
+			callbackCompleted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "reentrant poll initial connection");
+			await withinHandlerChange(callbackCompleted.promise, "reentrant poll callback completion");
+			await withinHandlerChange(renewedPoll.promise, "reentrant poll replacement request");
+			expect(polls).toBe(2);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(recordedCursors).not.toContain("stopped-event-cursor");
+			expect(recordedCursors).not.toContain("stopped-page-cursor");
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "reentrant poll cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: bypassing every handler-clear processing barrier would fix the
+	// callback deadlock but let an externally replaced handler start ahead of
+	// the old pending acceptance. Preserve external draining as the control.
+	it("externally replacing a poll consumer waits for its old in-flight acceptance", async () => {
+		const serverName = "external-consumer-poll";
+		const firstAcceptanceEntered = Promise.withResolvers<void>();
+		const releaseFirstAcceptance = Promise.withResolvers<void>();
+		const secondList = Promise.withResolvers<void>();
+		const renewedPoll = Promise.withResolvers<void>();
+		let polls = 0;
+		let lists = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			eventsList: () => {
+				lists++;
+				if (lists === 2) secondList.resolve();
+				return {
+					events: [{ name: EVENT_NAME, description: "synthetic poll", inputSchema: { type: "object" }, delivery: ["poll"] }],
+				};
+			},
+			poll: () => {
+				polls++;
+				if (polls === 1) {
+					return {
+						events: [event("external-original", "old-event-cursor")],
+						cursor: "old-page-cursor",
+						hasMore: false,
+						nextPollMs: 30_000,
+					};
+				}
+				renewedPoll.resolve();
+				return { events: [], cursor: "renewed-only", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const cursors: Array<string | null> = [];
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			cursors.push(cursor);
+		});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId === "external-original") {
+				firstAcceptanceEntered.resolve();
+				await releaseFirstAcceptance.promise;
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "external poll initial connection");
+			await withinHandlerChange(firstAcceptanceEntered.promise, "old consumer acceptance");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(secondList.promise, "external replacement discovery");
+			await delay(75); // Let the loopback server observe any wrongly premature poll request.
+			expect(polls).toBe(1);
+			releaseFirstAcceptance.resolve();
+			await withinHandlerChange(renewedPoll.promise, "external poll after accepted callback drains");
+			expect(polls).toBe(2);
+			expect(cursors).not.toContain("old-event-cursor");
+			expect(cursors).not.toContain("old-page-cursor");
+		} finally {
+			releaseFirstAcceptance.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "external replacement cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: externally clearing the handler while a former callback is blocked
+	// invalidates that callback's right to revive the old feed. Its subsequent
+	// setter call must settle without making startup wait on the old lifecycle.
+	it("does not let an obsolete callback re-enable after an external clear", async () => {
+		const serverName = "external-clear-while-callback-pending";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldCompleted = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("obsolete-handler-event", "obsolete-event-cursor")],
+					cursor: "obsolete-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const persistedCursors: Array<string | null> = [];
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			persistedCursors.push(cursor);
+		});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "obsolete-handler-event") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// The external owner has already cleared this callback's epoch.
+			// Do not create a fresh subscription or self-dependent startup.
+			manager.setOnEvent(() => {});
+			const startup = manager.getEventStartupPromise(serverName);
+			if (startup) await withinHandlerChange(startup, "obsolete callback attempted re-enrollment");
+			oldCompleted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "initial external-clear poll server");
+			await withinHandlerChange(oldEntered.promise, "in-flight obsolete callback");
+			manager.setOnEvent(undefined);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			releaseOld.resolve();
+			await withinHandlerChange(oldCompleted.promise, "obsolete callback completion");
+			await delay(75);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			expect(polls).toBe(1);
+			expect(persistedCursors).not.toContain("obsolete-event-cursor");
+			expect(persistedCursors).not.toContain("obsolete-page-cursor");
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "obsolete callback cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: a callback belongs to the handler generation that started it. If
+	// an external owner replaces the handler while this callback is waiting,
+	// its late attempt to clear the consumer must not cancel the newer handler.
+	it("does not let an obsolete callback clear an externally replaced consumer", async () => {
+		const serverName = "external-replace-while-callback-pending";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldCompleted = Promise.withResolvers<void>();
+		const freshDelivered = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("old-handler-event", "old-cursor")],
+					cursor: "old-page-cursor", hasMore: true, nextPollMs: 0,
+				};
+				return {
+					events: [event("new-handler-event", "fresh-cursor")],
+					cursor: "fresh-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "old-handler-event") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEvent(undefined);
+			oldCompleted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "initial external-replace poll server");
+			await withinHandlerChange(oldEntered.promise, "old callback in flight");
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "new-handler-event") freshDelivered.resolve();
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(oldCompleted.promise, "obsolete clear attempt");
+			await withinHandlerChange(freshDelivered.promise, "new handler delivery");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "external-replace cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: the generation fence prevents a stale callback from setting a
+	// new handler, but an obsolete callback must not be able to stop the
+	// externally installed successor through the async stopEvents entrypoint.
+	// This synthetic poll test exercises the real manager, not a copied setter.
+	it("does not let an obsolete callback stop a newer event consumer", async () => {
+		const serverName = "stale-stop-while-new-consumer-active";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const staleStopSettled = Promise.withResolvers<void>();
+		const successorDelivered = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("stale-stop-original", "original-cursor")],
+					cursor: "original-page-cursor", hasMore: true, nextPollMs: 0,
+				};
+				if (polls === 2) return {
+					events: [event("stale-stop-successor", "successor-cursor")],
+					cursor: "successor-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "stale-stop-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// This callback's handler revision was superseded externally.
+			await manager.stopEvents();
+			staleStopSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale stop initial poll connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete callback entered");
+			// Deliberately install the successor without clearing the feed. The
+			// manager may continue the current subscription with the new callback.
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "stale-stop-successor") successorDelivered.resolve();
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(staleStopSettled.promise, "obsolete stop settled");
+			await withinHandlerChange(successorDelivered.promise, "successor event delivered");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale stop manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: replacing an event consumer must also fence its cursor writer.
+	// A paused obsolete callback can otherwise rebind persistence after the
+	// current owner sets the authoritative successor callback. This drives
+	// the real MCPManager with a disposable loopback poll server.
+	it("does not let an obsolete callback replace a newer consumer's cursor writer", async () => {
+		const serverName = "stale-cursor-after-event-replacement";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const staleSetterSettled = Promise.withResolvers<void>();
+		const successorDelivered = Promise.withResolvers<void>();
+		const successorCursorPersisted = Promise.withResolvers<void>();
+		let polls = 0;
+		let staleCursorWrites = 0;
+		const successorCursors: Array<string | null> = [];
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("cursor-original", "original-occurrence-cursor")],
+					cursor: "original-page-cursor", hasMore: true, nextPollMs: 0,
+				};
+				if (polls === 2) return {
+					events: [event("cursor-successor", "successor-occurrence-cursor")],
+					cursor: "successor-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "cursor-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEventCursor(() => { staleCursorWrites++; });
+			staleSetterSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale cursor initial connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete cursor callback entered");
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "cursor-successor") successorDelivered.resolve();
+			});
+			manager.setOnEventCursor((_name, _key, cursor) => {
+				successorCursors.push(cursor);
+				if (cursor === "successor-page-cursor") successorCursorPersisted.resolve();
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(staleSetterSettled.promise, "obsolete cursor setter completed");
+			await withinHandlerChange(successorDelivered.promise, "successor event delivery");
+			await withinHandlerChange(successorCursorPersisted.promise, "successor durable cursor callback");
+			expect(staleCursorWrites).toBe(0);
+			expect(successorCursors).toContain("successor-page-cursor");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale cursor manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: an obsolete event callback can still run after a newer consumer is
+	// installed. It must not overwrite the newer handler for durable gap and
+	// termination controls. A poll with truncated=true exercises that real path.
+	it("does not let an obsolete event callback replace the current gap-control handler", async () => {
+		const serverName = "stale-control-writer";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const obsoleteSetterReturned = Promise.withResolvers<void>();
+		const successorControlReceived = Promise.withResolvers<void>();
+		let staleControls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("control-original", "control-original-cursor")],
+				cursor: "control-page-cursor",
+				truncated: true,
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEventControl(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "control-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEventControl(() => { staleControls++; });
+			obsoleteSetterReturned.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale control loopback connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete event callback entered");
+			manager.setOnEvent(() => {});
+			manager.setOnEventControl((_name, _key, control) => {
+				if (control.type === "gap" && control.cursor === "control-page-cursor") {
+					successorControlReceived.resolve();
+				}
+			});
+			releaseOld.resolve();
+			await withinHandlerChange(obsoleteSetterReturned.promise, "obsolete control setter returned");
+			await withinHandlerChange(successorControlReceived.promise, "new consumer gap control");
+			expect(staleControls).toBe(0);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale control manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: a stale callback must not replace a newer consumer's resume cursor
+	// provider. A later re-enrollment must use the cursor that the new owner
+	// supplied, not restart from the obsolete callback's saved position.
+	it("does not let an obsolete event callback replace the current resume cursor provider", async () => {
+		const serverName = "stale-resume-cursor-provider";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const obsoleteSetterReturned = Promise.withResolvers<void>();
+		const successorPollStarted = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("provider-original", "provider-original-event")],
+					cursor: "provider-original-page", hasMore: false, nextPollMs: 30_000,
+				};
+				successorPollStarted.resolve();
+				return { events: [], cursor: "provider-new-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setEventCursorProvider(() => "initial-resume-cursor");
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "provider-original") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setEventCursorProvider(() => "obsolete-resume-cursor");
+			obsoleteSetterReturned.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "stale resume provider initial connection");
+			await withinHandlerChange(oldEntered.promise, "obsolete resume provider callback entered");
+			manager.setOnEvent(() => {});
+			manager.setEventCursorProvider(() => "successor-resume-cursor");
+			releaseOld.resolve();
+			await withinHandlerChange(obsoleteSetterReturned.promise, "obsolete resume setter returned");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(successorPollStarted.promise, "new consumer poll after restart");
+			expect(requestedCursors).toEqual(["initial-resume-cursor", "successor-resume-cursor"]);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "stale resume cursor manager cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: replacing only the durable cursor/control/provider callbacks does not
+	// change the event consumer generation. A paused event handler must not later
+	// overwrite those more recent external choices. This exercises the real
+	// manager and HTTP protocol, not just setter return values; live delivery
+	// and disk durability remain outside this synthetic contract.
+	it("keeps auxiliary cursor, control and resume provider owned by their latest external writer", async () => {
+		const serverName = "auxiliary-setter-external-custody";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldFinished = Promise.withResolvers<void>();
+		const currentGap = Promise.withResolvers<void>();
+		const currentCursor = Promise.withResolvers<void>();
+		const secondPoll = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const committedCursors: Array<string | null> = [];
+		let staleCursorCalls = 0;
+		let staleControlCalls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("held-auxiliary-callback", "first-occurrence")],
+					cursor: "first-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				secondPoll.resolve();
+				return { events: [], cursor: "second-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEventControl(() => {});
+		manager.setEventCursorProvider(() => "initial-resume");
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "held-auxiliary-callback") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// These setters run inside the still-active old callback scope;
+			// only the auxiliary writers, not the event handler, were replaced.
+			manager.setOnEventCursor(() => { staleCursorCalls++; });
+			manager.setOnEventControl(() => { staleControlCalls++; });
+			manager.setEventCursorProvider(() => "stale-resume");
+			oldFinished.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "auxiliary-writer initial connection");
+			await withinHandlerChange(oldEntered.promise, "held auxiliary callback");
+			// Deliberately do NOT call setOnEvent: its unrelated global
+			// revision already fences stale callbacks in other tests.
+			manager.setOnEventCursor((_name, _key, cursor) => {
+				committedCursors.push(cursor);
+				if (cursor === "first-page") currentCursor.resolve();
+			});
+			manager.setOnEventControl((_name, _key, control) => {
+				if (control.type === "gap" && control.cursor === "first-page") currentGap.resolve();
+			});
+			manager.setEventCursorProvider(() => "successor-resume");
+			releaseOld.resolve();
+			await withinHandlerChange(oldFinished.promise, "late auxiliary setter attempts");
+			await withinHandlerChange(Promise.all([currentGap.promise, currentCursor.promise]), "current auxiliary callbacks");
+			expect(staleCursorCalls).toBe(0);
+			expect(staleControlCalls).toBe(0);
+			expect(committedCursors).toContain("first-page");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(secondPoll.promise, "reenrollment using successor resume cursor");
+			expect(requestedCursors).toEqual(["initial-resume", "successor-resume"]);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "auxiliary-writer cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: an active callback can legitimately choose a newer cursor,
+	// control, and resume handler twice in one turn. A generation guard that
+	// does not update the current callback's own scope rejects the second
+	// change while wrongly treating the first callback as authoritative.
+	it("lets a current event callback replace its auxiliary writers twice", async () => {
+		const serverName = "auxiliary-setter-current-custody";
+		const gapObserved = Promise.withResolvers<void>();
+		const cursorObserved = Promise.withResolvers<void>();
+		const secondPoll = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const currentCursors: Array<string | null> = [];
+		let obsoleteCursorInvocations = 0;
+		let obsoleteControlInvocations = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("current-auxiliary-writer", "self-event-cursor")],
+					cursor: "self-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				secondPoll.resolve();
+				return { events: [], cursor: "restarted-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEventControl(() => {});
+		manager.setEventCursorProvider(() => "initial-resume");
+		manager.setOnEvent((_name, occurrence) => {
+			if (occurrence.eventId !== "current-auxiliary-writer") return;
+			manager.setOnEventCursor(() => { obsoleteCursorInvocations++; });
+			manager.setOnEventCursor((_name, _key, cursor) => {
+				currentCursors.push(cursor);
+				if (cursor === "self-page") cursorObserved.resolve();
+			});
+			manager.setOnEventControl(() => { obsoleteControlInvocations++; });
+			manager.setOnEventControl((_name, _key, control) => {
+				if (control.type === "gap" && control.cursor === "self-page") gapObserved.resolve();
+			});
+			manager.setEventCursorProvider(() => "discarded-resume");
+			manager.setEventCursorProvider(() => "latest-resume");
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "current auxiliary writer connection");
+			await withinHandlerChange(Promise.all([gapObserved.promise, cursorObserved.promise]), "current auxiliary callbacks");
+			expect(obsoleteCursorInvocations).toBe(0);
+			expect(obsoleteControlInvocations).toBe(0);
+			expect(currentCursors).toContain("self-page");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(secondPoll.promise, "current auxiliary provider reenrollment");
+			expect(requestedCursors).toEqual(["initial-resume", "latest-resume"]);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "current auxiliary writer cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: a bad callback URI was logged but the manager left an active event
+	// subscription with no registration, retry or usable cursor. The consumer
+	// must see an explicit failed state rather than a phantom live feed.
+	it("refuses invalid webhook callbacks without leaving phantom active event subscriptions", async () => {
+		const cases = [
+			"not-a-webhook-url",
+			"http://callback.example.test/events/unsafe",
+			"https://user:password@callback.example.test/events/unsafe",
+			"https://callback.example.test/events/unsafe#fragment",
+		];
+		const previousSecret = process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET;
+		process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET = CALLBACK_SECRET;
+		try {
+			for (const [index, callbackUrl] of cases.entries()) {
+				const server = fakeMcpServer({ delivery: "webhook" });
+				const manager = new MCPManager(process.cwd());
+				const serverName = `invalid-webhook-${index}`;
+				const subscription = {
+					name: EVENT_NAME,
+					mode: "webhook" as const,
+					webhook: {
+						callbackUrl,
+						secretRef: "$MCP_EVENTS_INVALID_CALLBACK_SECRET",
+						listenPort: 0,
+					},
+				};
+				manager.setOnEvent(() => {});
+				manager.setOnEventCursor(() => {});
+				try {
+					await withinHandlerChange(
+						connect(manager, serverName, managerConfig(server, {
+							enabled: true, subscriptions: [subscription],
+						})),
+						`invalid callback ${index} server connection`,
+					);
+					const startup = manager.getEventStartupPromise(serverName);
+					if (startup) await withinHandlerChange(startup, `invalid callback ${index} discovery`);
+					expect(server.requests.some(request => request.method === "events/list")).toBe(true);
+					expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+					expect(manager.getEventSubscriptionStatus(serverName, subscription)).toEqual({
+						status: "failed",
+						reason: expect.stringContaining("callback"),
+					});
+					expect(server.requests.some(request => request.method === "events/subscribe")).toBe(false);
+				} finally {
+					await withinHandlerChange(manager.disconnectAll(), `invalid callback ${index} cleanup`);
+					server.stop();
+				}
+			}
+		} finally {
+			if (previousSecret === undefined) delete process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET;
+			else process.env.MCP_EVENTS_INVALID_CALLBACK_SECRET = previousSecret;
+		}
+	}, 30_000);
+
+
+	// WHY: two distinct event configurations may supply one HTTPS callback
+	// path. The second registration must be refused instead of remaining a
+	// phantom active subscription or replacing the first verified route.
+	it("keeps exactly one active webhook when different events claim the same callback path", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const names = [EVENT_NAME, "inventory/changed"];
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			eventsList: () => ({
+				events: names.map(name => ({
+					name,
+					description: "fake callback event",
+					inputSchema: { type: "object" },
+					delivery: ["webhook"],
+				})),
+			}),
+			webhookSubscribe: async params => ({
+				id: `same-path-${String(params.name)}`,
+				cursor: "accepted-one",
+				refreshBefore: null,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		const callbackUrl = "https://callback.example.test/events/unique";
+		const previousSecret = process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET;
+		process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET = CALLBACK_SECRET;
+		const accepted = Promise.withResolvers<void>();
+		const subscriptions = names.map(name => ({
+			name,
+			mode: "webhook" as const,
+			webhook: {
+				callbackUrl,
+				secretRef: "$MCP_EVENTS_COLLIDING_CALLBACK_SECRET",
+				listenPort,
+			},
+		}));
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor(() => accepted.resolve());
+		try {
+			await withinHandlerChange(
+				connect(manager, "colliding-callbacks", managerConfig(server, {
+					enabled: true,
+					subscriptions,
+				})),
+				"same-callback server connection",
+			);
+			await withinHandlerChange(accepted.promise, "first valid callback registration");
+			let failures = subscriptions.map(subscription =>
+				manager.getEventSubscriptionStatus("colliding-callbacks", subscription),
+			);
+			for (let i = 0; i < 50 && !failures.some(Boolean); i++) {
+				await delay(20);
+				failures = subscriptions.map(subscription =>
+					manager.getEventSubscriptionStatus("colliding-callbacks", subscription),
+				);
+			}
+			expect(failures.filter(Boolean)).toHaveLength(1);
+			expect(failures.find(Boolean)?.reason).toContain("callback path");
+			expect(manager.getActiveEventSubscriptionCount("colliding-callbacks")).toBe(1);
+			expect(server.requests.filter(request => request.method === "events/subscribe")).toHaveLength(1);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "same-callback cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET;
+				else process.env.MCP_EVENTS_COLLIDING_CALLBACK_SECRET = previousSecret;
+			}
+		}
+	}, 20_000);
+
+	// WHY: stopEvents() is an external shutdown boundary, not just a local
+	// subscription cancellation. A callback already in flight must not
+	// repopulate the feed while an external stop awaits that callback's drain.
+	// Gap: this synthetic poll contract does not exercise a live remote provider.
+	it("does not let a callback resurrect event subscriptions during external stopEvents", async () => {
+		const serverName = "external-stop-stale-consumer-restart";
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldSettled = Promise.withResolvers<void>();
+		let polls = 0;
+		let replacementDeliveries = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("stop-before-reenable", "old-occurrence-cursor")],
+					cursor: "old-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return {
+					events: [event("should-not-restart", "new-occurrence-cursor")],
+					cursor: "new-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "stop-before-reenable") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			manager.setOnEvent((_name, replacement) => {
+				if (replacement.eventId === "should-not-restart") replacementDeliveries++;
+			});
+			const startup = manager.getEventStartupPromise(serverName);
+			if (startup) await withinHandlerChange(startup, "obsolete restart after external stop");
+			oldSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "external-stop initial connection");
+			await withinHandlerChange(oldEntered.promise, "external-stop original callback entered");
+			const externalStop = manager.stopEvents();
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			releaseOld.resolve();
+			await withinHandlerChange(oldSettled.promise, "old callback returned after external stop");
+			await withinHandlerChange(externalStop, "external stop drained old callback");
+			await delay(75);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			expect(replacementDeliveries).toBe(0);
+			expect(polls).toBe(1);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "external-stop test cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: the external stop fence cannot inadvertently prohibit a callback
+	// deliberately stopping its own feed and starting a successor within
+	// that same active callback scope. This keeps the existing self-stop path.
+	it("lets the current callback deliberately restart after its own stopEvents", async () => {
+		const serverName = "self-stop-then-restart";
+		const restarted = Promise.withResolvers<void>();
+		const secondDelivered = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				if (polls === 1) return {
+					events: [event("self-stop-original", "first-cursor")],
+					cursor: "first-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				if (polls === 2) return {
+					events: [event("self-stop-successor", "second-cursor")],
+					cursor: "second-page-cursor", hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (_name, occurrence) => {
+			if (occurrence.eventId !== "self-stop-original") return;
+			await withinHandlerChange(manager.stopEvents(), "callback-owned stopEvents");
+			manager.setOnEvent((_name, replacement) => {
+				if (replacement.eventId === "self-stop-successor") secondDelivered.resolve();
+			});
+			const startup = manager.getEventStartupPromise(serverName);
+			if (startup) await withinHandlerChange(startup, "callback-owned restarted event subscription");
+			restarted.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "self-stop initial connection");
+			await withinHandlerChange(restarted.promise, "callback-owned stop and restart");
+			await withinHandlerChange(secondDelivered.promise, "self-stop successor delivery");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+			expect(polls).toBe(2);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "self-stop test cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: a per-server disconnect waits for the old poll callback before it
+	// removes the connection. That callback must not start a replacement feed on
+	// the same server during the drain, while an unrelated server may still connect.
+	// This synthetic loopback test cannot prove host-side socket recovery.
+	it("does not re-enroll a disconnecting server while an unrelated event server continues", async () => {
+		const oldEntered = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldSettled = Promise.withResolvers<void>();
+		const independentDelivered = Promise.withResolvers<void>();
+		const independentSecondDelivered = Promise.withResolvers<void>();
+		const serverAName = "draining-event-server-A";
+		const serverBName = "independent-event-server-B";
+		let aPolls = 0;
+		let bPolls = 0;
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				aPolls++;
+				return aPolls === 1
+					? { events: [event("A-in-flight", "A-original-cursor")], cursor: "A-original-page", hasMore: false, nextPollMs: 30_000 }
+					: { events: [event("A-should-not-restart", "A-next-cursor")], cursor: "A-next-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				bPolls++;
+				return bPolls === 1
+					? { events: [event("B-unrelated", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 1_000 }
+					: bPolls === 2
+						? { events: [event("B-after-A-closed", "B-cursor-2")], cursor: "B-page-2", hasMore: false, nextPollMs: 30_000 }
+						: { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === serverBName && occurrence.eventId === "B-unrelated") independentDelivered.resolve();
+			if (name === serverBName && occurrence.eventId === "B-after-A-closed") independentSecondDelivered.resolve();
+			if (name !== serverAName || occurrence.eventId !== "A-in-flight") return;
+			oldEntered.resolve();
+			await releaseOld.promise;
+			// The old connection is still in the manager while disconnect
+			// waits for this very callback. Its attempted new subscription
+			// must not reach events/poll after explicit disconnect began.
+			manager.setOnEvent(() => {});
+			const startup = manager.getEventStartupPromise(serverAName);
+			if (startup) await withinHandlerChange(startup, "stale A restart during disconnect");
+			oldSettled.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverAName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "A initial event connection");
+			await withinHandlerChange(oldEntered.promise, "A original event callback");
+			const disconnectA = manager.disconnectServer(serverAName);
+			expect(manager.getActiveEventSubscriptionCount(serverAName)).toBe(0);
+			await withinHandlerChange(connect(manager, serverBName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "B concurrent event connection");
+			await withinHandlerChange(independentDelivered.promise, "independent B event delivery");
+			releaseOld.resolve();
+			await withinHandlerChange(oldSettled.promise, "A old callback released");
+			await withinHandlerChange(disconnectA, "A disconnect completion");
+			// The stale A callback must not steal B's global handler after A disconnects.
+			await withinHandlerChange(independentSecondDelivered.promise, "second B event after A disconnect");
+			expect(aPolls).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(serverAName)).toBe(0);
+			expect(manager.getActiveEventSubscriptionCount(serverBName)).toBe(1);
+			expect(bPolls).toBe(2);
+		} finally {
+			releaseOld.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "two-server disconnect race cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
+
+	// WHY: an external disconnect drains the callback that may itself await
+	// a nested same-server disconnect. Joining that pending external Promise
+	// from the callback is a circular wait, not successful teardown.
+	it("does not deadlock on nested same-server disconnect during external drain", async () => {
+		const serverName = "nested-disconnect-A";
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const nestedFinished = Promise.withResolvers<void>();
+		let polls = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				polls++;
+				return { events: [event("A-held", "A-cursor")], cursor: "A-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name !== serverName || occurrence.eventId !== "A-held") return;
+			entered.resolve();
+			await release.promise;
+			await withinHandlerChange(manager.disconnectServer(serverName), "nested same-server disconnect");
+			nestedFinished.resolve();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "A initial event connection");
+			await withinHandlerChange(entered.promise, "held A callback");
+			const outerDisconnect = manager.disconnectServer(serverName);
+			release.resolve();
+			await withinHandlerChange(nestedFinished.promise, "nested disconnect completion");
+			await withinHandlerChange(outerDisconnect, "external A disconnect completion");
+			expect(manager.getConnectedServers()).not.toContain(serverName);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(0);
+			expect(polls).toBe(1);
+		} finally {
+			release.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "nested disconnect cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: B is a separate callback. Its request to disconnect A must wait
+	// for A's real drain and cannot reuse the self-disconnect early return.
+	it("waits for A's drain when an independent B event callback disconnects A", async () => {
+		const aEntered = Promise.withResolvers<void>();
+		const releaseA = Promise.withResolvers<void>();
+		const bEntered = Promise.withResolvers<void>();
+		const bFinished = Promise.withResolvers<void>();
+		const aName = "cross-server-drain-A";
+		const bName = "cross-server-drain-B";
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({ events: [event("A-held", "A-cursor")], cursor: "A-page", hasMore: false, nextPollMs: 30_000 }),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({ events: [event("B-disconnects-A", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 }),
+		});
+		const manager = new MCPManager(process.cwd());
+		let aReleased = false;
+		let earlyCompletion = false;
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === aName && occurrence.eventId === "A-held") {
+				aEntered.resolve();
+				await releaseA.promise;
+				return;
+			}
+			if (name === bName && occurrence.eventId === "B-disconnects-A") {
+				bEntered.resolve();
+				await withinHandlerChange(manager.disconnectServer(aName), "B awaits A teardown");
+				earlyCompletion = !aReleased;
+				bFinished.resolve();
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "held A connection");
+			await withinHandlerChange(aEntered.promise, "held A callback");
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "independent B connection");
+			await withinHandlerChange(bEntered.promise, "B disconnect request");
+			await delay(50);
+			expect(earlyCompletion).toBe(false);
+			aReleased = true;
+			releaseA.resolve();
+			await withinHandlerChange(bFinished.promise, "B observes A drain");
+			expect(earlyCompletion).toBe(false);
+			expect(manager.getConnectedServers()).not.toContain(aName);
+		} finally {
+			aReleased = true;
+			releaseA.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "cross-server cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 20_000);
+
+	// WHY: explicit /mcp reconnect replaces a server transport but must also
+	// retire that server's old event key. Otherwise the replacement sees an
+	// existing key, never subscribes, and an old callback can steal the handler.
+	// Synthetic HTTP cannot prove live provider/host reconnect behavior.
+	it("manual reconnect drains the old poll feed and fences obsolete callback setters", async () => {
+		const firstEntered = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const secondDelivered = Promise.withResolvers<void>();
+		const independentDelivered = Promise.withResolvers<void>();
+		const aName = "manual-event-reconnect-A";
+		const bName = "manual-event-reconnect-B";
+		let aPolls = 0;
+		let bPolls = 0;
+		let originalA = 0;
+		let originalB = 0;
+		let stolen = 0;
+		const spuriousReconnects: string[] = [];
+		const aServer = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				aPolls++;
+				return aPolls === 1
+					? { events: [event("before-manual-reconnect", "A-cursor-1")], cursor: "A-page-1", hasMore: false, nextPollMs: 30_000 }
+					: { events: [event("after-manual-reconnect", "A-cursor-2")], cursor: "A-page-2", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const bServer = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				bPolls++;
+				return { events: [event("independent-B", "B-cursor")], cursor: "B-page", hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.addConnectionStatusListener(status => {
+			if (status.type === "reconnecting" && status.serverName === aName) {
+				spuriousReconnects.push(status.type);
+			}
+		});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === bName && occurrence.eventId === "independent-B") {
+				originalB++;
+				independentDelivered.resolve();
+				return;
+			}
+			if (name !== aName) return;
+			if (occurrence.eventId === "before-manual-reconnect") {
+				originalA++;
+				firstEntered.resolve();
+				await releaseFirst.promise;
+				// A callback may not join an external reconnect that is waiting for
+				// this very callback to finish its old-stream drain.
+				await expect(
+					withinHandlerChange(manager.reconnectServer(aName), "same-server reentrant reconnect refusal"),
+				).rejects.toThrow("An MCP event callback cannot await its server's in-flight reconnect");
+				// This callback belongs to the transport being replaced. It must
+				// not replace the handler shared by the new A and unrelated B.
+				manager.setOnEvent(() => { stolen++; });
+				return;
+			}
+			if (occurrence.eventId === "after-manual-reconnect") {
+				originalA++;
+				secondDelivered.resolve();
+			}
+		});
+		try {
+			await withinHandlerChange(manager.connectServers({
+				[aName]: managerConfig(aServer, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
+				[bName]: managerConfig(bServer, { enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }] }),
+			}, {}), "two manual-reconnect test servers");
+			await withinHandlerChange(Promise.all([firstEntered.promise, independentDelivered.promise]), "initial A and B event delivery");
+			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(bName)).toBe(1);
+
+			const oldTransport = manager.getConnection(aName)?.transport;
+			const reconnect = manager.reconnectServer(aName, { manual: true });
+			// Old A is fenced synchronously, before its held callback finishes.
+			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(0);
+			// A late close notification from the retired transport must not
+			// re-enter the automatic reconnect path or report a fake outage.
+			oldTransport?.onClose?.();
+			expect(spuriousReconnects).toEqual([]);
+			releaseFirst.resolve();
+			expect(await withinHandlerChange(reconnect, "manual A transport replacement")).not.toBeNull();
+			await withinHandlerChange(secondDelivered.promise, "A delivery after manual reconnect");
+			expect(originalA).toBe(2);
+			expect(originalB).toBe(1);
+			expect(stolen).toBe(0);
+			expect(aPolls).toBe(2);
+			expect(bPolls).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(aName)).toBe(1);
+			expect(manager.getActiveEventSubscriptionCount(bName)).toBe(1);
+		} finally {
+			releaseFirst.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "manual reconnect test cleanup");
+			} finally {
+				aServer.stop();
+				bServer.stop();
+			}
+		}
+	}, 25_000);
+
+
+	// WHY: after the crash-burst breaker detaches a server transport, its
+	// retired poll key must not prevent an operator's later manual reconnect
+	// from enrolling a new feed. This exercises actual MCPManager transitions
+	// and a disposable HTTP JSON-RPC server, not just a call count stub.
+	// It does not establish installed T3/provider or disk cursor durability.
+	it("retires event feeds at reconnect suspension so manual recovery can re-enroll", async () => {
+		const name = "breaker-event-recovery";
+		let polls = 0;
+		let nextDelivery = Promise.withResolvers<void>();
+		const received: string[] = [];
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				const ordinal = ++polls;
+				return {
+					events: [event(`breaker-event-${ordinal}`, `cursor-${ordinal}`)],
+					cursor: `page-${ordinal}`,
+					hasMore: false,
+					nextPollMs: 30_000,
+				};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const suspensions: string[] = [];
+		manager.addConnectionStatusListener(status => {
+			if (status.type === "failed" && status.serverName === name && status.error.includes("suspended after")) {
+				suspensions.push(status.error);
+			}
+		});
+		manager.setOnEvent((serverName, occurrence) => {
+			if (serverName !== name) return;
+			received.push(occurrence.eventId);
+			nextDelivery.resolve();
+		});
+		manager.setOnEventCursor(() => {});
+		try {
+			await withinHandlerChange(
+				connect(manager, name, managerConfig(server, {
+					enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+				})),
+				"initial breaker server connection",
+			);
+			await withinHandlerChange(nextDelivery.promise, "initial breaker event delivery");
+			let tripped = false;
+			// The breaker is deliberately reached through normal reconnect calls;
+			// this bounded fixture is not coupled to its private threshold.
+			for (let attempt = 0; attempt < 12; attempt++) {
+				nextDelivery = Promise.withResolvers<void>();
+				const connection = await withinHandlerChange(manager.reconnectServer(name), "breaker reconnect attempt");
+				if (!connection) {
+					tripped = true;
+					break;
+				}
+				await withinHandlerChange(nextDelivery.promise, "event from active reconnect");
+			}
+			expect(tripped).toBe(true);
+			expect(suspensions).toHaveLength(1);
+			expect(manager.getConnectedServers()).not.toContain(name);
+			// Previously the breaker only closed the transport. It left this
+			// subscription key active, so the later manual start saw a duplicate.
+			expect(manager.getActiveEventSubscriptionCount(name)).toBe(0);
+			const pollsBeforeRecovery = polls;
+			nextDelivery = Promise.withResolvers<void>();
+			expect(
+				await withinHandlerChange(manager.reconnectServer(name, { manual: true }), "manual recovery after breaker"),
+			).not.toBeNull();
+			await withinHandlerChange(nextDelivery.promise, "new event after manual breaker recovery");
+			expect(polls).toBe(pollsBeforeRecovery + 1);
+			expect(received.at(-1)).toBe(`breaker-event-${polls}`);
+			expect(manager.getActiveEventSubscriptionCount(name)).toBe(1);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "breaker recovery test cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 60_000);
+
+
+	// WHY: an asynchronous descendant inherits AsyncLocalStorage even after its
+	// source event callback has returned. It is not a new external owner and
+	// must not overwrite successor cursor, control or resume-provider handlers.
+	// This remains separate from shutdown's need to treat detached work as
+	// non-reentrant. Does not prove installed host/disk durability.
+	it("rejects detached event descendants replacing newer auxiliary writers", async () => {
+		const serverName = "inactive-descendant-auxiliary-writers";
+		const releaseDetached = Promise.withResolvers<void>();
+		const detachedSettled = Promise.withResolvers<void>();
+		const firstCommitted = Promise.withResolvers<void>();
+		const secondCursorReached = Promise.withResolvers<void>();
+		const secondGapReached = Promise.withResolvers<void>();
+		const requestedCursors: unknown[] = [];
+		const successorCursors: Array<string | null> = [];
+		let successorGapCount = 0;
+		let staleCursorCount = 0;
+		let staleGapCount = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: params => {
+				requestedCursors.push(params.cursor);
+				if (requestedCursors.length === 1) return {
+					events: [event("detached-original", "original-occurrence")],
+					cursor: "original-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				if (requestedCursors.length === 2) return {
+					events: [event("detached-successor", "successor-occurrence")],
+					cursor: "successor-page", truncated: true, hasMore: false, nextPollMs: 30_000,
+				};
+				return { events: [], cursor: null, hasMore: false, nextPollMs: 30_000 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventControl(() => {});
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			if (cursor === "original-page") firstCommitted.resolve();
+		});
+		manager.setEventCursorProvider(() => "original-resume");
+		manager.setOnEvent((_name, occurrence) => {
+			if (occurrence.eventId !== "detached-original") return;
+			// Promise continuation is registered inside the active callback,
+			// but intentionally runs only AFTER the callback's page committed.
+			void releaseDetached.promise.then(() => {
+				manager.setOnEventCursor((_source, _key, cursor) => {
+					if (cursor === "successor-page") {
+						staleCursorCount++;
+						secondCursorReached.resolve();
+					}
+				});
+				manager.setOnEventControl((_source, _key, control) => {
+					if (control.type === "gap" && control.cursor === "successor-page") {
+						staleGapCount++;
+						secondGapReached.resolve();
+					}
+				});
+				manager.setEventCursorProvider(() => "detached-stale-resume");
+				detachedSettled.resolve();
+			});
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "detached-writer initial connection");
+			// The page-level cursor follows the event callback's completed
+			// #withEventCallback scope; detached work remains deferred here.
+			await withinHandlerChange(firstCommitted.promise, "original page accepted");
+			manager.setOnEventCursor((_source, _key, cursor) => {
+				if (cursor === "successor-page") {
+					successorCursors.push(cursor);
+					secondCursorReached.resolve();
+				}
+			});
+			manager.setOnEventControl((_source, _key, control) => {
+				if (control.type === "gap" && control.cursor === "successor-page") {
+					successorGapCount++;
+					secondGapReached.resolve();
+				}
+			});
+			manager.setEventCursorProvider(() => "successor-resume");
+			releaseDetached.resolve();
+			await withinHandlerChange(detachedSettled.promise, "inactive descendant attempted all auxiliary writers");
+			manager.setOnEvent(undefined);
+			manager.setOnEvent(() => {});
+			await withinHandlerChange(
+				Promise.all([secondCursorReached.promise, secondGapReached.promise]),
+				"new page cursor and gap handlers",
+			);
+			// Both stale and successor callbacks resolve the same observation
+			// gate; the assertions identify which owner actually handled it.
+			expect(staleCursorCount).toBe(0);
+			expect(staleGapCount).toBe(0);
+			expect(successorCursors).toEqual(["successor-page"]);
+			expect(successorGapCount).toBe(1);
+			expect(requestedCursors).toEqual(["original-resume", "successor-resume"]);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+		} finally {
+			releaseDetached.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "detached-writer cleanup");
+			} finally {
+				server.stop();
+			}
+		}
+	}, 20_000);
+
+
+	// WHY: a detached async child retains A's callback scope after A returns.
+	// A later explicit B consumer must not be revoked by A's stale stop, while
+	// the existing same-consumer detached-stop/drain contract stays intact.
+	it("does not let a detached stale stop revoke a replacement event consumer", async () => {
+		const serverName = "detached-stale-stop-after-replace";
+		const firstCursor = Promise.withResolvers<void>();
+		const successorCursor = Promise.withResolvers<void>();
+		const laterCursor = Promise.withResolvers<void>();
+		const releaseDetached = Promise.withResolvers<void>();
+		const detachedStopDone = Promise.withResolvers<void>();
+		let detachedScheduled = false;
+		let allowLaterOccurrence = false;
+		let pollCount = 0;
+		const server = fakeMcpServer({
+			delivery: "poll",
+			poll: () => {
+				pollCount++;
+				if (pollCount === 1) {
+					return { events: [event("from-A", "A-occurrence")], cursor: "A-page", hasMore: false, nextPollMs: 30_000 };
+				}
+				if (pollCount === 2) {
+					return { events: [event("from-B", "B-occurrence")], cursor: "B-page", hasMore: false, nextPollMs: 50 };
+				}
+				if (allowLaterOccurrence) {
+					return { events: [event("B-still-alive", "B-later")], cursor: "B-later-page", hasMore: false, nextPollMs: 30_000 };
+				}
+				return { events: [], cursor: "B-idle", hasMore: false, nextPollMs: 50 };
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const deliveredToB: string[] = [];
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			if (cursor === "A-page") firstCursor.resolve();
+			if (cursor === "B-page") successorCursor.resolve();
+			if (cursor === "B-later-page") laterCursor.resolve();
+		});
+		manager.setOnEvent((_name, occurrence) => {
+			if (occurrence.eventId !== "from-A") return;
+			detachedScheduled = true;
+			// This async child is deliberately NOT awaited by the event callback:
+			// its inherited ALS scope is inactive by the time B takes ownership.
+			void (async () => {
+				try {
+					await releaseDetached.promise;
+					await manager.stopEvents();
+					detachedStopDone.resolve();
+				} catch (error) {
+					detachedStopDone.reject(error);
+				}
+			})();
+		});
+		try {
+			await withinHandlerChange(connect(manager, serverName, managerConfig(server, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "A poll subscription");
+			await withinHandlerChange(firstCursor.promise, "A first accepted occurrence");
+			expect(detachedScheduled).toBe(true);
+
+			// B is an independent external replacement, not a callback-owned
+			// restart and not merely another event on A's original subscription.
+			manager.setOnEvent(undefined);
+			manager.setOnEvent((_name, occurrence) => { deliveredToB.push(occurrence.eventId); });
+			await withinHandlerChange(successorCursor.promise, "B replacement occurrence and cursor");
+			expect(deliveredToB).toEqual(["from-B"]);
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+
+			releaseDetached.resolve();
+			await withinHandlerChange(detachedStopDone.promise, "A late detached stop");
+			expect(manager.getActiveEventSubscriptionCount(serverName)).toBe(1);
+
+			// A stale stop must not only leave B's registry entry but also
+			// preserve its ability to consume and commit a later event cursor.
+			allowLaterOccurrence = true;
+			await withinHandlerChange(laterCursor.promise, "B subsequent event after stale stop");
+			expect(deliveredToB).toEqual(["from-B", "B-still-alive"]);
+		} finally {
+			releaseDetached.resolve();
+			try {
+				if (detachedScheduled) await withinHandlerChange(detachedStopDone.promise, "detached stop cleanup");
+			} finally {
+				try {
+					await withinHandlerChange(manager.disconnectAll(), "detached stale-stop manager cleanup");
+				} finally {
+					server.stop();
+				}
+			}
+		}
+	}, 20_000);
+
+
+	// A previous stopEvents must not destroy a webhook host or unsubscribe a
+	// successor that starts while the old consumer is still draining. Unlike
+	// handler-clear, the global stop historically omitted the key barrier.
+	it("does not close a new webhook host during an earlier stopEvents", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		expect(listenPort).toBeGreaterThan(0);
+		await probe.stop(true);
+		const oldUnsubscribeEntered = Promise.withResolvers<void>();
+		const releaseOldUnsubscribe = Promise.withResolvers<void>();
+		const initialCursor = Promise.withResolvers<void>();
+		const replacementCursor = Promise.withResolvers<void>();
+		const replacementEventsListed = Promise.withResolvers<void>();
+		let eventListCalls = 0;
+		const deliveredAfterStop = Promise.withResolvers<void>();
+		const postStopCursor = Promise.withResolvers<void>();
+		let oldUnsubscribed = false;
+		let subscribeCount = 0;
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			eventsList: () => {
+				eventListCalls++;
+				if (eventListCalls === 2) replacementEventsListed.resolve();
+				return { events: [{
+					name: EVENT_NAME,
+					description: "private webhook test",
+					inputSchema: { type: "object" },
+					delivery: ["webhook"],
+				}] };
+			},
+			webhookSubscribe: async () => {
+				subscribeCount++;
+				if (subscribeCount > 1 && !oldUnsubscribed) {
+					throw new Error("replacement subscribed before old webhook tuple was released");
+				}
+				return {
+					id: `stop-race-${subscribeCount}`,
+					cursor: `stop-cursor-${subscribeCount}`,
+					refreshBefore: null,
+				};
+			},
+			webhookUnsubscribe: async () => {
+				oldUnsubscribeEntered.resolve();
+				await releaseOldUnsubscribe.promise;
+				oldUnsubscribed = true;
+				return {};
+			},
+		});
+		const name = "stop-webhook-host-race";
+		const manager = new MCPManager(process.cwd());
+		const previousSecret = process.env.MCP_EVENTS_STOP_HOST_SECRET;
+		process.env.MCP_EVENTS_STOP_HOST_SECRET = CALLBACK_SECRET;
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_serverName, _key, cursor) => {
+			if (cursor === "stop-cursor-1") initialCursor.resolve();
+			if (cursor === "stop-cursor-2") replacementCursor.resolve();
+			if (cursor === "new-webhook-cursor") postStopCursor.resolve();
+		});
+		let stop: Promise<void> | undefined;
+		try {
+			await withinHandlerChange(connect(manager, name, managerConfig(server, {
+				enabled: true,
+				subscriptions: [{
+					name: EVENT_NAME,
+					mode: "webhook",
+					webhook: {
+						callbackUrl: "https://callback.example.test/events/stopped-owner",
+						secretRef: "$MCP_EVENTS_STOP_HOST_SECRET",
+						listenPort,
+					},
+				}],
+			})), "initial webhook to stop");
+			await withinHandlerChange(initialCursor.promise, "initial stopped webhook cursor");
+			stop = manager.stopEvents();
+			await withinHandlerChange(oldUnsubscribeEntered.promise, "old webhook unsubscribe started");
+			// This new explicit external owner must wait for the old tuple
+			// unsubscribe, then retain its live callback host after stop returns.
+			manager.setOnEvent((_serverName, occurrence) => {
+				if (occurrence.eventId === "webhook-survived-stop") deliveredAfterStop.resolve();
+			});
+			const newStartup = manager.getEventStartupPromise(name);
+			if (!newStartup) throw new Error("Replacement webhook startup not registered");
+			await withinHandlerChange(replacementEventsListed.promise, "replacement webhook descriptor read");
+			// The new owner has reached its list boundary; old tuple teardown
+			// must fence its subscribe even while the old unsubscribe is held.
+			await delay(30);
+			expect(subscribeCount).toBe(1);
+			releaseOldUnsubscribe.resolve();
+			await withinHandlerChange(
+				Promise.all([stop, newStartup, replacementCursor.promise]),
+				"old stop and replacement webhook registration",
+			);
+			expect(oldUnsubscribed).toBe(true);
+			expect(subscribeCount).toBe(2);
+			expect(manager.getActiveEventSubscriptionCount(name)).toBe(1);
+			// A signed event through the real loopback webhook receiver must still
+			// reach the new owner after the old stop has completely settled.
+			const messageId = "webhook-survived-stop";
+			const timestamp = String(Math.floor(Date.now() / 1_000));
+			const body = JSON.stringify(event(messageId, "new-webhook-cursor"));
+			const signature = createHmac("sha256", Buffer.from(CALLBACK_SECRET.slice("whsec_".length), "base64"))
+				.update(`${messageId}.${timestamp}.${body}`)
+				.digest("base64");
+			const response = await withinHandlerChange(
+				fetch(`http://127.0.0.1:${listenPort}/events/stopped-owner`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"X-MCP-Subscription-Id": "stop-race-2",
+						"webhook-id": messageId,
+						"webhook-timestamp": timestamp,
+						"webhook-signature": `v1,${signature}`,
+					},
+					body,
+				}),
+				"replacement webhook listener accepts a signed event",
+			);
+			expect(response.status).toBe(202);
+			await withinHandlerChange(deliveredAfterStop.promise, "replacement owner receives signed event");
+			await withinHandlerChange(postStopCursor.promise, "replacement owner persists event cursor");
+		} finally {
+			releaseOldUnsubscribe.resolve();
+			try {
+				if (stop) await withinHandlerChange(stop, "pending stop cleanup");
+				await withinHandlerChange(manager.disconnectAll(), "replacement host cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_STOP_HOST_SECRET;
+				else process.env.MCP_EVENTS_STOP_HOST_SECRET = previousSecret;
+			}
+		}
+	}, 30_000);
+
+
+	// The old global stop used to close *every* loopback host after awaiting a
+	// slow unsubscribe, including a separate newly enrolled webhook owner.
+	// This is independent of the same-key re-enrollment barrier.
+	it("preserves an independently renewed webhook host through another key's slow stop", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		expect(listenPort).toBeGreaterThan(0);
+		await probe.stop(true);
+		const slowName = EVENT_NAME;
+		const independentName = "inventory/changed";
+		const slowUnsubscribeEntered = Promise.withResolvers<void>();
+		const releaseSlowUnsubscribe = Promise.withResolvers<void>();
+		const firstSlow = Promise.withResolvers<void>();
+		const firstIndependent = Promise.withResolvers<void>();
+		const renewedIndependent = Promise.withResolvers<void>();
+		const deliveredIndependent = Promise.withResolvers<void>();
+		let listCalls = 0;
+		let slowReleased = false;
+		const counts = new Map<string, number>();
+		const server = fakeMcpServer({
+			delivery: "webhook",
+			eventsList: () => {
+				listCalls++;
+				// The replacement consumer requests only the independent key.
+				// No delayed A re-enrollment may mask an accidentally closed host.
+				const names = listCalls === 1 ? [slowName, independentName] : [independentName];
+				return {
+					events: names.map(name => ({
+						name,
+						description: "private callback fixture",
+						inputSchema: { type: "object" },
+						delivery: ["webhook"],
+					})),
+				};
+			},
+			webhookSubscribe: async params => {
+				const name = String(params.name);
+				const count = (counts.get(name) ?? 0) + 1;
+				counts.set(name, count);
+				return {
+					id: name === independentName ? "independent-" + count : "slow-" + count,
+					cursor: name + ":" + count,
+					refreshBefore: null,
+				};
+			},
+			webhookUnsubscribe: async params => {
+				if (params.name === slowName && !slowReleased) {
+					slowUnsubscribeEntered.resolve();
+					await releaseSlowUnsubscribe.promise;
+					slowReleased = true;
+				}
+				return {};
+			},
+		});
+		const manager = new MCPManager(process.cwd());
+		const previousSecret = process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET;
+		process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET = CALLBACK_SECRET;
+		manager.setOnEvent(() => {});
+		manager.setOnEventCursor((_name, _key, cursor) => {
+			if (cursor === slowName + ":1") firstSlow.resolve();
+			if (cursor === independentName + ":1") firstIndependent.resolve();
+			if (cursor === independentName + ":2") renewedIndependent.resolve();
+		});
+		const subs = [
+			{ name: slowName, path: "/events/slow-stop" },
+			{ name: independentName, path: "/events/independent-stop" },
+		].map(({ name, path }) => ({
+			name,
+			mode: "webhook" as const,
+			webhook: {
+				callbackUrl: "https://callback.example.test" + path,
+				secretRef: "$MCP_EVENTS_INDEPENDENT_STOP_SECRET",
+				listenPort,
+			},
+		}));
+		let stopping: Promise<void> | undefined;
+		try {
+			await withinHandlerChange(connect(manager, "independent-stop-webhooks", managerConfig(server, {
+				enabled: true, subscriptions: subs,
+			})), "initial two webhook registrations");
+			await withinHandlerChange(
+				Promise.all([firstSlow.promise, firstIndependent.promise]),
+				"both initial webhook cursors",
+			);
+			expect(manager.getActiveEventSubscriptionCount("independent-stop-webhooks")).toBe(2);
+			stopping = manager.stopEvents();
+			await withinHandlerChange(slowUnsubscribeEntered.promise, "slow old webhook unsubscribe");
+			manager.setOnEvent((_name, occurrence) => {
+				if (occurrence.eventId === "independent-after-stop") deliveredIndependent.resolve();
+			});
+			// Only the unrelated key is permitted to re-enroll while A's
+			// different remote key is still waiting to unsubscribe.
+			await withinHandlerChange(renewedIndependent.promise, "independent key registered while A is held");
+			expect(slowReleased).toBe(false);
+			expect(counts.get(independentName)).toBe(2);
+			releaseSlowUnsubscribe.resolve();
+			await withinHandlerChange(stopping, "old global stop settles");
+			expect(slowReleased).toBe(true);
+			expect(manager.getActiveEventSubscriptionCount("independent-stop-webhooks")).toBe(1);
+			const messageId = "independent-after-stop";
+			const timestamp = String(Math.floor(Date.now() / 1_000));
+			const body = JSON.stringify({
+				...event(messageId, "independent-after-stop-cursor"),
+				name: independentName,
+			});
+			const signature = createHmac("sha256", Buffer.from(CALLBACK_SECRET.slice("whsec_".length), "base64"))
+				.update(messageId + "." + timestamp + "." + body)
+				.digest("base64");
+			const response = await withinHandlerChange(fetch("http://127.0.0.1:" + listenPort + "/events/independent-stop", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"X-MCP-Subscription-Id": "independent-2",
+					"webhook-id": messageId,
+					"webhook-timestamp": timestamp,
+					"webhook-signature": "v1," + signature,
+				},
+				body,
+			}), "independent callback after earlier global stop");
+			expect(response.status).toBe(202);
+			await withinHandlerChange(deliveredIndependent.promise, "surviving independent webhook owner receives event");
+		} finally {
+			releaseSlowUnsubscribe.resolve();
+			try {
+				if (stopping) await withinHandlerChange(stopping, "old independent stop cleanup");
+				await withinHandlerChange(manager.disconnectAll(), "independent webhook cleanup");
+			} finally {
+				server.stop();
+				if (previousSecret === undefined) delete process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET;
+				else process.env.MCP_EVENTS_INDEPENDENT_STOP_SECRET = previousSecret;
+			}
+		}
+	}, 30_000);
+
+
+	// A callback cannot await B's stream drain while B's callback awaits A's:
+	// the two awaited handler promises form a genuine cycle. Reject one edge
+	// explicitly; never pretend the rejected disconnect already completed.
+	// A later external owner can finish closing the remaining live server.
+	it("rejects reciprocal cross-server callback disconnects without breaking independent drains", async () => {
+		const aName = "reciprocal-disconnect-A";
+		const bName = "reciprocal-disconnect-B";
+		const aEntered = Promise.withResolvers<void>();
+		const bEntered = Promise.withResolvers<void>();
+		const releaseBoth = Promise.withResolvers<void>();
+		const aFinished = Promise.withResolvers<void>();
+		const bFinished = Promise.withResolvers<void>();
+		const results: Array<{ server: string; outcome: "done" | "cycle"; error?: string }> = [];
+		let settled = false;
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("A-recursive", "A-cursor")],
+				cursor: "A-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("B-recursive", "B-cursor")],
+				cursor: "B-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			const fromA = name === aName && occurrence.eventId === "A-recursive";
+			const fromB = name === bName && occurrence.eventId === "B-recursive";
+			if (!fromA && !fromB) return;
+			(fromA ? aEntered : bEntered).resolve();
+			await releaseBoth.promise;
+			try {
+				await manager.disconnectServer(fromA ? bName : aName);
+				results.push({ server: name, outcome: "done" });
+			} catch (error) {
+				results.push({
+					server: name,
+					outcome: "cycle",
+					error: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				(fromA ? aFinished : bFinished).resolve();
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true,
+				subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "reciprocal A connection");
+			await withinHandlerChange(aEntered.promise, "reciprocal A callback entered");
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true,
+				subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "reciprocal B connection");
+			await withinHandlerChange(bEntered.promise, "reciprocal B callback entered");
+			releaseBoth.resolve();
+			await withinHandlerChange(Promise.all([aFinished.promise, bFinished.promise]), "reciprocal callbacks settle");
+			settled = true;
+			expect(results.filter(x => x.outcome === "done")).toHaveLength(1);
+			const rejected = results.filter(x => x.outcome === "cycle");
+			expect(rejected).toHaveLength(1);
+			expect(rejected[0]?.error).toContain("cyclic MCP event disconnect");
+			const remaining = manager.getConnectedServers();
+			expect(remaining).toHaveLength(1);
+			if (!remaining[0]) throw new Error("Expected one explicitly recoverable live MCP server");
+			await withinHandlerChange(manager.disconnectServer(remaining[0]), "external remaining server disconnect");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+			expect(serverA.requests.filter(x => x.method === "events/poll")).toHaveLength(1);
+			expect(serverB.requests.filter(x => x.method === "events/poll")).toHaveLength(1);
+		} finally {
+			releaseBoth.resolve();
+			try {
+				// On the old code the two JavaScript handler promises deadlock;
+				// avoid making teardown itself await that same cycle in the RED fixture.
+				if (settled) await withinHandlerChange(manager.disconnectAll(), "reciprocal cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
+
+	// A->B->C->A must use reachability, not merely a two-server inverse-edge
+	// check. All initial handler calls arrive before any cross-server teardown.
+	it("breaks a three-server callback disconnect cycle and leaves external recovery possible", async () => {
+		const names = ["three-cycle-A", "three-cycle-B", "three-cycle-C"] as const;
+		const entered = names.map(() => Promise.withResolvers<void>());
+		const finished = names.map(() => Promise.withResolvers<void>());
+		const release = Promise.withResolvers<void>();
+		const outcomes: Array<"done" | "cycle"> = [];
+		let settled = false;
+		const servers = names.map((_, index) => fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("three-cycle-" + index, "event-" + index)],
+				cursor: "page-" + index,
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		}));
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (serverName, occurrence) => {
+			const index = names.indexOf(serverName as (typeof names)[number]);
+			if (index < 0 || occurrence.eventId !== "three-cycle-" + index) return;
+			entered[index]?.resolve();
+			await release.promise;
+			try {
+				const next = names[(index + 1) % names.length];
+				if (!next) throw new Error("Missing three-server successor");
+				await manager.disconnectServer(next);
+				outcomes.push("done");
+			} catch (error) {
+				if (!(error instanceof Error) || !error.message.includes("cyclic MCP event disconnect")) {
+					throw error;
+				}
+				outcomes.push("cycle");
+			} finally {
+				finished[index]?.resolve();
+			}
+		});
+		try {
+			for (let i = 0; i < names.length; i++) {
+				const name = names[i];
+				const server = servers[i];
+				if (!name || !server) throw new Error("Missing three-server fixture");
+				await withinHandlerChange(connect(manager, name, managerConfig(server, {
+					enabled: true,
+					subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+				})), "three-server startup");
+				if (!entered[i]) throw new Error("Missing three-server entry");
+				await withinHandlerChange(entered[i].promise, "three-server callback entry");
+			}
+			release.resolve();
+			await withinHandlerChange(
+				Promise.all(finished.map(x => x.promise)),
+				"three-server callback disconnects settle",
+			);
+			settled = true;
+			expect(outcomes.filter(x => x === "cycle")).toHaveLength(1);
+			expect(outcomes.filter(x => x === "done")).toHaveLength(2);
+			const stillConnected = manager.getConnectedServers();
+			expect(stillConnected).toHaveLength(1);
+			if (!stillConnected[0]) throw new Error("Expected recoverable owner after cycle refusal");
+			await withinHandlerChange(manager.disconnectServer(stillConnected[0]), "external remaining owner cleanup");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+			for (const server of servers) {
+				expect(server.requests.filter(request => request.method === "events/poll")).toHaveLength(1);
+			}
+		} finally {
+			release.resolve();
+			try {
+				if (settled) await withinHandlerChange(manager.disconnectAll(), "three-server manager cleanup");
+			} finally {
+				for (const server of servers) server.stop();
+			}
+		}
+	}, 25_000);
+
+
+	// A reconnect also drains the retired B event handler before creating a
+	// replacement transport. A->reconnect(B) / B->disconnect(A) is the same
+	// cyclic callback wait graph as two disconnects; no background retry.
+	it("rejects a mixed reconnect/disconnect event callback cycle", async () => {
+		const aName = "mixed-reconnect-A";
+		const bName = "mixed-reconnect-B";
+		const aEntered = Promise.withResolvers<void>();
+		const bEntered = Promise.withResolvers<void>();
+		const releaseBoth = Promise.withResolvers<void>();
+		const aFinished = Promise.withResolvers<void>();
+		const bFinished = Promise.withResolvers<void>();
+		const outcomes: string[] = [];
+		let settled = false;
+		let bPolls = 0;
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("mixed-A", "A-cursor")],
+				cursor: "A-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: ++bPolls === 1 ? [event("mixed-B", "B-cursor")] : [],
+				cursor: "B-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor(() => {});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === aName && occurrence.eventId === "mixed-A") {
+				aEntered.resolve();
+				await releaseBoth.promise;
+				try {
+					const replacement = await manager.reconnectServer(bName);
+					if (!replacement) throw new Error("Expected live replacement B after cycle refusal");
+					outcomes.push("A-reconnected-B");
+				} finally {
+					aFinished.resolve();
+				}
+			}
+			if (name === bName && occurrence.eventId === "mixed-B") {
+				bEntered.resolve();
+				await releaseBoth.promise;
+				try {
+					await manager.disconnectServer(aName);
+					outcomes.push("B-falsely-disconnected-A");
+				} catch (error) {
+					if (!(error instanceof Error) || !error.message.includes("cyclic MCP event disconnect")) {
+						throw error;
+					}
+					outcomes.push("B-cycle-rejected");
+				} finally {
+					bFinished.resolve();
+				}
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "mixed A initial connection");
+			await withinHandlerChange(aEntered.promise, "mixed A entered");
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "mixed B initial connection");
+			await withinHandlerChange(bEntered.promise, "mixed B entered");
+			releaseBoth.resolve();
+			await withinHandlerChange(Promise.all([aFinished.promise, bFinished.promise]), "mixed cycle settles");
+			settled = true;
+			expect(outcomes.sort()).toEqual(["A-reconnected-B", "B-cycle-rejected"]);
+			expect(manager.getConnectedServers().sort()).toEqual([aName, bName].sort());
+			expect(serverB.requests.filter(x => x.method === "initialize").length).toBeGreaterThanOrEqual(2);
+			await withinHandlerChange(manager.disconnectAll(), "external mixed-cycle owner cleanup");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+		} finally {
+			releaseBoth.resolve();
+			try {
+				if (settled) await withinHandlerChange(manager.disconnectAll(), "mixed callback cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
+
+	// A detached A child can keep a disconnect(B) pending after A's handler
+	// returns. Its inherited ALS scope is INACTIVE, so it must not invent a
+	// reciprocal cycle when an actual B callback later disconnects idle A.
+	it("does not treat a completed detached callback as a live wait edge", async () => {
+		const aName = "detached-edge-A";
+		const bName = "detached-edge-B";
+		const bEntered = Promise.withResolvers<void>();
+		const releaseB = Promise.withResolvers<void>();
+		const aPageCommitted = Promise.withResolvers<void>();
+		const detachedDone = Promise.withResolvers<void>();
+		const bDone = Promise.withResolvers<void>();
+		let result = "";
+		const serverA = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("A-detaches", "A-cursor")],
+				cursor: "A-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "poll",
+			poll: () => ({
+				events: [event("B-closes-A", "B-cursor")],
+				cursor: "B-page",
+				hasMore: false,
+				nextPollMs: 30_000,
+			}),
+		});
+		const manager = new MCPManager(process.cwd());
+		manager.setOnEventCursor((name, _key, cursor) => {
+			if (name === aName && cursor === "A-page") aPageCommitted.resolve();
+		});
+		manager.setOnEvent(async (name, occurrence) => {
+			if (name === aName && occurrence.eventId === "A-detaches") {
+				// Do not await this operation in A's handler. A's callback
+				// scope must become inactive before B's own teardown starts.
+				void manager.disconnectServer(bName).then(detachedDone.resolve, detachedDone.reject);
+				return;
+			}
+			if (name === bName && occurrence.eventId === "B-closes-A") {
+				bEntered.resolve();
+				await releaseB.promise;
+				try {
+					await manager.disconnectServer(aName);
+					result = "B-closed-idle-A";
+				} catch (error) {
+					result = error instanceof Error ? error.message : String(error);
+				} finally {
+					bDone.resolve();
+				}
+			}
+		});
+		try {
+			await withinHandlerChange(connect(manager, bName, managerConfig(serverB, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "detached-edge B connection");
+			await withinHandlerChange(bEntered.promise, "held B callback");
+			await withinHandlerChange(connect(manager, aName, managerConfig(serverA, {
+				enabled: true, subscriptions: [{ name: EVENT_NAME, mode: "poll" }],
+			})), "detached-edge A connection");
+			await withinHandlerChange(aPageCommitted.promise, "A callback has finished");
+			releaseB.resolve();
+			await withinHandlerChange(Promise.all([bDone.promise, detachedDone.promise]), "both noncyclic disconnects");
+			expect(result).toBe("B-closed-idle-A");
+			expect(manager.getConnectedServers()).toEqual([]);
+			expect(manager.getActiveEventSubscriptionCount()).toBe(0);
+		} finally {
+			releaseB.resolve();
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "detached-edge cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+			}
+		}
+	}, 25_000);
+
+
+	// WHY: events/subscribe ids are issued by independent MCP servers and are
+	// not globally namespaced. Sharing an opaque id must never overwrite another
+	// server's signed callback route or let one stop revoke its peer.
+	// Real manager + two private HTTP MCP fixtures; no installed relay/device.
+	it("does not conflate identical opaque webhook ids from separate MCP servers", async () => {
+		const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+		const listenPort = probe.port ?? 0;
+		probe.stop(true);
+		const remoteId = "same-opaque-id";
+		const secretA = CALLBACK_SECRET;
+		const secretB = `whsec_${Buffer.from("independent-manager-test-webhook-secret").toString("base64")}`;
+		const oldA = process.env.MCP_EVENTS_ID_COLLISION_A;
+		const oldB = process.env.MCP_EVENTS_ID_COLLISION_B;
+		process.env.MCP_EVENTS_ID_COLLISION_A = secretA;
+		process.env.MCP_EVENTS_ID_COLLISION_B = secretB;
+		const serverA = fakeMcpServer({
+			delivery: "webhook",
+			webhookSubscribe: async () => ({ id: remoteId, cursor: "cursor-A", refreshBefore: null }),
+		});
+		const serverB = fakeMcpServer({
+			delivery: "webhook",
+			webhookSubscribe: async () => ({ id: remoteId, cursor: "cursor-B", refreshBefore: null }),
+		});
+		const manager = new MCPManager(process.cwd());
+		const readyA = Promise.withResolvers<void>();
+		const readyB = Promise.withResolvers<void>();
+		const received: string[] = [];
+		manager.setOnEvent((serverName, occurrence) => { received.push(`${serverName}:${occurrence.eventId}`); });
+		manager.setOnEventCursor((serverName, _key, cursor) => {
+			if (serverName === "collision-server-A" && cursor === "cursor-A") readyA.resolve();
+			if (serverName === "collision-server-B" && cursor === "cursor-B") readyB.resolve();
+		});
+		const subscription = (callbackPath: string, secretRef: string): MCPServerEventSubscriptionConfig => ({
+			name: EVENT_NAME,
+			mode: "webhook",
+			webhook: {
+				callbackUrl: `https://callback.example.test${callbackPath}`,
+				secretRef,
+				listenPort,
+			},
+		});
+		const send = async (callbackPath: string, secret: string, eventId: string): Promise<number> => {
+			const timestamp = String(Math.floor(Date.now() / 1_000));
+			const body = JSON.stringify(event(eventId));
+			const signature = createHmac("sha256", Buffer.from(secret.slice("whsec_".length), "base64"))
+				.update(`${eventId}.${timestamp}.${body}`)
+				.digest("base64");
+			const response = await withinHandlerChange(fetch(`http://127.0.0.1:${listenPort}${callbackPath}`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"X-MCP-Subscription-Id": remoteId,
+					"webhook-id": eventId,
+					"webhook-timestamp": timestamp,
+					"webhook-signature": `v1,${signature}`,
+				},
+				body,
+			}), `signed webhook ${eventId}`);
+			return response.status;
+		};
+		try {
+			await withinHandlerChange(manager.connectServers({
+				"collision-server-A": managerConfig(serverA, {
+					enabled: true,
+					subscriptions: [subscription("/events/opaque-A", "$MCP_EVENTS_ID_COLLISION_A")],
+				}),
+				"collision-server-B": managerConfig(serverB, {
+					enabled: true,
+					subscriptions: [subscription("/events/opaque-B", "$MCP_EVENTS_ID_COLLISION_B")],
+				}),
+			}, {}), "two independent webhook servers with same remote id");
+			await withinHandlerChange(Promise.all([readyA.promise, readyB.promise]), "both independent callback registrations");
+			expect(manager.getActiveEventSubscriptionCount()).toBe(2);
+			expect(await send("/events/opaque-A", secretA, "collision-A-1")).toBe(202);
+			expect(await send("/events/opaque-B", secretB, "collision-B-1")).toBe(202);
+			expect(received).toEqual(["collision-server-A:collision-A-1", "collision-server-B:collision-B-1"]);
+			await withinHandlerChange(manager.disconnectServer("collision-server-A"), "A disconnect without revoking B");
+			expect(manager.getActiveEventSubscriptionCount("collision-server-B")).toBe(1);
+			expect(await send("/events/opaque-B", secretB, "collision-B-2")).toBe(202);
+			expect(await send("/events/opaque-A", secretA, "collision-A-after-stop")).toBe(503);
+			expect(received).toEqual([
+				"collision-server-A:collision-A-1",
+				"collision-server-B:collision-B-1",
+				"collision-server-B:collision-B-2",
+			]);
+		} finally {
+			try {
+				await withinHandlerChange(manager.disconnectAll(), "subscription-id collision cleanup");
+			} finally {
+				serverA.stop();
+				serverB.stop();
+				if (oldA === undefined) delete process.env.MCP_EVENTS_ID_COLLISION_A;
+				else process.env.MCP_EVENTS_ID_COLLISION_A = oldA;
+				if (oldB === undefined) delete process.env.MCP_EVENTS_ID_COLLISION_B;
+				else process.env.MCP_EVENTS_ID_COLLISION_B = oldB;
+			}
+		}
+	}, 25_000);
+
 });

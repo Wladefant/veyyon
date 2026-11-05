@@ -13,6 +13,8 @@ export interface MCPWebhookReceiverOptions {
 	registrations: ReadonlyMap<string, MCPWebhookRegistration>;
 	verificationRoutes: ReadonlyMap<string, { secret: string }>;
 	accept: (subscriptionId: string, event: MCPWebhookMessage) => Promise<"queued" | "duplicate">;
+	/** Resolve a route-scoped internal id when a manager multiplexes independent servers. */
+	registrationKey?: (callbackPath: string, remoteId: string) => string;
 	now?: () => number;
 }
 
@@ -34,6 +36,14 @@ export interface MCPWebhookReceiver {
 	handle(request: Request): Promise<Response>;
 }
 
+/** Scope a remote subscription id by its configured callback route.
+ * Different MCP servers may issue the same opaque id. The manager owns
+ * unique callback paths and must not let one server replace another's map key.
+ */
+export function webhookRegistrationKey(callbackPath: string, remoteId: string): string {
+	return JSON.stringify([callbackPath, remoteId]);
+}
+
 /** Build a verifier for registered subscriptions; the caller owns secret resolution and lifecycle. */
 export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWebhookReceiver {
 	const now = options.now ?? Date.now;
@@ -43,8 +53,16 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			const path = new URL(request.url).pathname;
 			const subscriptionId = request.headers.get("X-MCP-Subscription-Id");
 			if (!subscriptionId) return new Response(null, { status: 400 });
-			const registration = options.registrations.get(subscriptionId);
+			// Standalone receivers keep their existing raw-id contract. Shared
+			// MCPManager routing explicitly requires a path-scoped internal key;
+			// never fall back to an arbitrary raw id after a scoped miss.
+			const routeKey = options.registrationKey?.(path, subscriptionId) ?? subscriptionId;
+			const registration = options.registrations.get(routeKey);
 			const verification = options.verificationRoutes.get(path);
+			// Keep the exact authority that admitted this request. Reading an
+			// HTTP body can yield while a subscription is replaced or retired.
+			const registrationSecret = registration?.secret;
+			const verificationSecret = verification?.secret;
 			const pendingVerification = verification !== undefined && registration === undefined;
 			if (registration && registration.callbackPath !== path) return new Response(null, { status: 503 });
 			if (!registration && !pendingVerification) return new Response(null, { status: 503 });
@@ -83,29 +101,53 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 				body.set(chunk, offset);
 				offset += chunk.byteLength;
 			}
-			const secretValue = registration?.secret ?? verification?.secret;
-			const secret = secretValue ? decodeSecret(secretValue) : undefined;
-			if (!secret || secret.length < 24 || secret.length > 64) return new Response(null, { status: 401 });
 			const signed = Buffer.concat([Buffer.from(messageId), Buffer.from("."), Buffer.from(timestamp), Buffer.from("."), Buffer.from(body)]);
-			const expected = createHmac("sha256", secret).update(signed).digest();
-			const valid = signatures.split(/\s+/).some((entry) => {
-				const match = /^v1,([A-Za-z0-9+/]+={0,2})$/.exec(entry);
-				if (!match) return false;
-				const supplied = Buffer.from(match[1], "base64");
-				return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-			});
-			if (!valid) return new Response(null, { status: 401 });
+			// A subscription refresh can verify a NEW signing key while the live
+			// registration must continue accepting ordinary events under its OLD key.
+			// Never promote the candidate key to event-delivery authority early.
+			const signatureMatches = (encoded: string | undefined): boolean => {
+				const secret = encoded ? decodeSecret(encoded) : undefined;
+				if (!secret || secret.length < 24 || secret.length > 64) return false;
+				const expected = createHmac("sha256", secret).update(signed).digest();
+				return signatures.split(/\s+/).some(entry => {
+					const match = /^v1,([A-Za-z0-9+/]+={0,2})$/.exec(entry);
+					if (!match) return false;
+					const supplied = Buffer.from(match[1], "base64");
+					return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+				});
+			};
+			const signedByRegistration = signatureMatches(registrationSecret);
+			const signedByVerification = verification !== undefined && signatureMatches(verificationSecret);
+			if (!signedByRegistration && !signedByVerification) return new Response(null, { status: 401 });
 			let event: unknown;
 			try {
 				event = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
 			} catch {
 				return new Response(null, { status: 400 });
 			}
+			// A body stream can finish after stop/refresh replaced the original
+			// registration. Never enqueue under a retired registration's HMAC key.
+			// Checking only after body parsing preserves ordinary OLD-key events
+			// while their registration is still active during a pending renewal.
+			const currentRegistration = options.registrations.get(routeKey);
+			const registrationIsCurrent =
+				currentRegistration === registration && currentRegistration?.secret === registrationSecret;
 			if (isVerificationChallenge(event)) {
+				const currentVerification = options.verificationRoutes.get(path);
+				if (
+					!registrationIsCurrent ||
+					currentVerification !== verification ||
+					currentVerification?.secret !== verificationSecret
+				) return new Response(null, { status: 503 });
+				// When renewal is pending, only the newly resolved key proves
+				// possession; the old active key cannot approve its replacement.
+				if (verification !== undefined && !signedByVerification) return new Response(null, { status: 401 });
 				return new Response(JSON.stringify({ challenge: event.challenge }), { status: 200, headers: { "content-type": "application/json" } });
 			}
 			if (pendingVerification) return new Response(null, { status: 503 });
 			if (!registration) return new Response(null, { status: 503 });
+			if (!registrationIsCurrent) return new Response(null, { status: 503 });
+			if (!signedByRegistration) return new Response(null, { status: 401 });
 			let message: MCPWebhookMessage | undefined;
 			if (isWebhookControl(event)) {
 				message = { ...event, messageId };
@@ -114,7 +156,7 @@ export function createWebhookReceiver(options: MCPWebhookReceiverOptions): MCPWe
 			}
 			if (!message) return new Response(null, { status: 400 });
 			try {
-				const outcome = await options.accept(subscriptionId, message);
+				const outcome = await options.accept(routeKey, message);
 				return new Response(null, { status: outcome === "duplicate" ? 204 : 202 });
 			} catch {
 				return new Response(null, { status: 503 });

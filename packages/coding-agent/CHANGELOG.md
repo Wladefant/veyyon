@@ -51,6 +51,9 @@
 ### Fixed
 
 - Fence concurrent checkpoint admission during shutdown and refuse native handoff journals with unreadable headers rather than admitting them as ordinary local sessions ([#603](https://github.com/Wladefant/veyyon/issues/603)).
+### Fixed
+
+- MCP event delivery preserves replayable cursors when poll or push subscriptions stop during in-flight acceptance ([Refs #614](https://github.com/Wladefant/veyyon/issues/614)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
