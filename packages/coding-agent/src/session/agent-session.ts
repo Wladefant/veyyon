@@ -274,7 +274,7 @@ import { ExitRecord } from "./runtime/exit-record";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
 import { type ImageAttachment, ImageAttachments } from "./runtime/image-attachments";
-import { IrcContinuationOutbox, IrcInbox } from "./runtime/irc-inbox";
+import { IrcContinuationOutbox } from "./runtime/irc-inbox";
 import { IrcDelivery } from "./runtime/irc-delivery";
 import { LoopGuards } from "./runtime/loop-guards";
 import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
@@ -772,9 +772,6 @@ export class AgentSession {
 	 */
 	readonly #asyncJobManager: AsyncJobManager | undefined;
 
-	// Incoming IRC records received while a turn was streaming. Parent IRCs enter the steering
-	// queue; peer IRCs wait here as interrupts and drain as asides at the next boundary.
-	readonly #ircInbox = new IrcInbox();
 	#lastNoticeScanAt = 0;
 	/** Notice ids waiting in the inbox for their turn, and ids already in a turn; repeats of a re-offered claim are dropped by these. */
 	readonly #noticesInInbox = new Set<string>();
@@ -988,9 +985,9 @@ export class AgentSession {
 	 *  resume turn whose aside poll already consumes these (no double-wake). */
 	#resumeStrandedIrcAsides(): void {
 		if (this.#isDisposed || this.isStreaming) return;
-		if (this.#ircInbox.isEmpty) return;
+		if (this.#irc.inbox.isEmpty) return;
 		if (this.#queue.canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
-		const completionWake = this.#ircInbox.completionWake;
+		const completionWake = this.#irc.inbox.completionWake;
 		const records = this.#takeIrcRecords();
 		if (completionWake) records.push(completionWake);
 		if (this.#planMode.enabled) {
@@ -1696,7 +1693,7 @@ export class AgentSession {
 		// `job poll` / `irc wait` can return early before the boundary drains them.
 		this.agent.hasIrcInterrupts = () => this.#irc.inbox.hasInterrupts;
 		this.agent.setAsideMessageProvider(() => {
-const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
+			const pendingIrc = this.#takeIrcRecords();
 			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
 			thunks.push(...this.yieldQueue.drainLazy());
 			// Mid-run todo reconciliation — evaluated at injection time so a turn
@@ -5983,7 +5980,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			await this.sessionManager.sync();
 			void this.#events.send({ type: "irc_message", message: record });
 			if (this.isStreaming) {
-				this.#ircInbox.queueCompletionWake(record);
+				this.#irc.inbox.queueCompletionWake(record);
 				return "injected";
 			}
 			if (this.#planMode.enabled) return "injected";
@@ -6020,7 +6017,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 					steering: true,
 				});
 			} else {
-				this.#ircInbox.queueInterrupt(record);
+				this.#irc.inbox.queueInterrupt(record);
 			}
 			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
@@ -6154,7 +6151,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			void this.#events.send({ type: "irc_message", message: record });
 			// Asides drain at the next step boundary; anything left over is
 			// flushed at the start of the next prompt (#flushPendingIrcAsides).
-			this.#ircInbox.queueAside(record);
+			this.#irc.inbox.queueAside(record);
 			// `from` must be the id the sender addressed (msg.to) so their
 			// from-filtered waiter matches.
 			const receipt = await IrcBus.global().send({ from: msg.to, to: msg.from, body, replyTo: msg.id });
@@ -6250,7 +6247,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	 * the turn. A crash before this point leaves the claim in `claimed/`, and it is offered again.
 	 */
 	#takeIrcRecords(): CustomMessage[] {
-		const records = this.#ircInbox.takeAll();
+		const records = this.#irc.inbox.takeAll();
 		const noticeIds: string[] = [];
 		for (const record of records) {
 			const id = record.customType === "session:notice" ? Reflect.get(record.details ?? {}, "id") : undefined;
@@ -6324,7 +6321,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				timestamp: notice.ts,
 			};
 			void this.#events.send({ type: "irc_message", message: record });
-			this.#ircInbox.queueAside(record);
+			this.#irc.inbox.queueAside(record);
 			this.#noticesInInbox.add(notice.id);
 		}
 	}
