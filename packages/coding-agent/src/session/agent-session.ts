@@ -156,7 +156,9 @@ import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionStat
 import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import type { PlanModeState } from "../plan-mode/state";
 import { sideChannelPrompts } from "../prompts/side-channel/rows";
+import { steeringPrompts } from "../prompts/steering/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
+import { AgentRegistry } from "../registry/agent-registry";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
 import {
@@ -167,6 +169,7 @@ import {
 	resolveHelperModel,
 } from "../task/helper-settings";
 import {
+	IrcBus,
 	type IrcMessage,
 	type IrcPersistedDeliveryFacts,
 	type IrcPersistedDeliveryTelemetry,
