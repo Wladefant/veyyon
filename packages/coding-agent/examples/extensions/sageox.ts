@@ -98,7 +98,7 @@ export default function sageox(
 			if (!note || Buffer.byteLength(note) > 500) throw new Error("Provide 1–500 UTF-8 bytes of handoff text.");
 			const decision = await confirmedAccess(ctx, note, "repository");
 			if (!decision) return;
-			const draft = createDraft({ kind: "note", scope: decision.access.scope, source: { uri: `veyyon://session/${decision.id}/leaf/${decision.leaf}/handoff`, revision: createHash("sha256").update(note).digest("hex"), client: "veyyon", session: decision.id, leaf: decision.leaf }, revision: createHash("sha256").update(note).digest("hex"), body: note, privacy: "repository", author: decision.access.actor });
+			const draft = createDraft({ kind: "note", scope: decision.access.scope, source: { uri: `veyyon://session/${decision.id}/leaf/${decision.leaf}/handoff`, revision: createHash("sha256").update(note).digest("hex"), client: "veyyon", session: decision.id, leaf: decision.leaf ?? undefined }, revision: createHash("sha256").update(note).digest("hex"), body: note, privacy: "repository", author: decision.access.actor });
 			const record = approveRecord(draft, decision.access, true);
 			const receipt = await provider.publishHandoff(ctx.cwd, decision.access, record);
 			ctx.ui.notify(receipt.message, "info");
@@ -124,7 +124,7 @@ export default function sageox(
 			if (!decision) return;
 			assertSameAccess(access, decision.access);
 			const revision = digest;
-			const draft = createDraft({ kind: "conversation", scope: access.scope, source: { uri: `veyyon://session/${id}/leaf/${leaf}/capture`, revision, client: "veyyon", session: id, leaf }, revision, body, privacy: "team", author: decision.access.actor });
+			const draft = createDraft({ kind: "conversation", scope: access.scope, source: { uri: `veyyon://session/${id}/leaf/${leaf}/capture`, revision, client: "veyyon", session: id, leaf: leaf ?? undefined }, revision, body, privacy: "team", author: decision.access.actor });
 			const record = approveRecord(draft, decision.access, true);
 			const receipt = await provider.publish(ctx.cwd, decision.access, record);
 			ctx.ui.notify(receipt.message, "info");
