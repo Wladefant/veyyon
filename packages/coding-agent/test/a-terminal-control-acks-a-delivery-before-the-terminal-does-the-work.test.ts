@@ -287,6 +287,13 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		timestamp: "2026-01-01T00:00:00.000Z",
 		message: { role: "user", content: [{ type: "text", text: "u".repeat(16_384) }] },
 	});
+	const toolResultLine = JSON.stringify({
+		type: "message",
+		id: "cold-tool-result",
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message: { role: "toolResult", toolCallId: "tool-1", toolName: "inspect", details: { output: "z".repeat(16_384) } },
+	});
 	const line = JSON.stringify({
 		type: "message",
 		id: "cold-assistant",
@@ -302,8 +309,9 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		},
 	});
 	const userOffset = 0;
-	const assistantOffset = Buffer.byteLength(userLine) + 1;
-	const lines = new Map([[userOffset, userLine], [assistantOffset, line]]);
+	const toolResultOffset = Buffer.byteLength(userLine) + 1;
+	const assistantOffset = toolResultOffset + Buffer.byteLength(toolResultLine) + 1;
+	const lines = new Map([[userOffset, userLine], [toolResultOffset, toolResultLine], [assistantOffset, line]]);
 	const payloads = new ColdEntryPayloads();
 	const reader = {
 		identity: "terminal-history-test",
@@ -316,12 +324,16 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	};
 	expect(payloads.pin(reader.identity, () => reader, text => JSON.parse(text) as SessionEntry)).toBe(true);
 	const userEntry = JSON.parse(userLine) as SessionEntry;
+	const toolResultEntry = JSON.parse(toolResultLine) as SessionEntry;
 	const entry = JSON.parse(line) as SessionEntry;
 	expect(payloads.cool(userEntry, userOffset, Buffer.byteLength(userLine))).toBe(true);
+	expect(payloads.cool(toolResultEntry, toolResultOffset, Buffer.byteLength(toolResultLine))).toBe(true);
 	expect(payloads.cool(entry, assistantOffset, Buffer.byteLength(line))).toBe(true);
 	const coldUserMessage = userEntry.message as unknown as object;
+	const coldToolResultMessage = toolResultEntry.message as unknown as object;
 	const coldMessage = entry.message as unknown as object;
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
 	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
 	const warmEntry = {
 		type: "message",
@@ -331,7 +343,7 @@ test("history reads a cold assistant payload transiently and preserves its text"
 		message: { role: "assistant", content: [{ type: "text", text: "Warm historical answer" }] },
 	} as unknown as SessionEntry;
 
-	const journal = [warmEntry, userEntry, entry];
+	const journal = [warmEntry, userEntry, toolResultEntry, entry];
 	const mockMode = {
 		sessionManager: {
 			getSessionId: () => "cold",
@@ -352,11 +364,12 @@ test("history reads a cold assistant payload transiently and preserves its text"
 	const owner = await readOwner(root);
 	const response = await rpc(owner, "subscribe");
 	expect(response.events.filter(event => event.kind === "history").flatMap(event => event.entries)
-		.map(({ entryId, text }) => ({ entryId, text }))).toEqual([
-		{ entryId: warmEntry.id, text: "Warm historical answer" },
-		{ entryId: entry.id, text: "Visible historical answer" },
+		.map(({ entryId, text, turn }) => ({ entryId, text, turn }))).toEqual([
+		{ entryId: warmEntry.id, text: "Warm historical answer", turn: { hasOperatorMessage: false, hasSubstantiveToolCall: false, toolNames: [], isMain: true } },
+		{ entryId: entry.id, text: "Visible historical answer", turn: { hasOperatorMessage: true, hasSubstantiveToolCall: true, toolNames: ["inspect"], isMain: true } },
 	]);
 	expect(coldFieldsOf(coldUserMessage)).toEqual(["content"]);
+	expect(coldFieldsOf(coldToolResultMessage)).toEqual(["details"]);
 	expect(coldFieldsOf(coldMessage)).toEqual(["content"]);
 	expect(coldFieldsOf(warmEntry.message as unknown as object)).toBeUndefined();
 
