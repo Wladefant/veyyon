@@ -33,6 +33,9 @@
 ### Fixed
 
 - Bound native checkpoint source reads before cloud export to avoid unbounded allocations from oversized files ([#603](https://github.com/Wladefant/veyyon/issues/603)).
+### Fixed
+
+- ACP BashTool terminal creation honors cancellation and the original command deadline, and cleans up handles returned after cancellation ([Refs #867](https://github.com/Wladefant/veyyon/issues/867)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
