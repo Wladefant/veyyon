@@ -48,6 +48,9 @@
 ### Fixed
 
 - Native Mainplane text reads preserve the verified UTF-8 byte order mark ([Refs #788](https://github.com/Wladefant/veyyon/issues/788)).
+### Fixed
+
+- Fence concurrent checkpoint admission during shutdown and refuse native handoff journals with unreadable headers rather than admitting them as ordinary local sessions ([#603](https://github.com/Wladefant/veyyon/issues/603)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
