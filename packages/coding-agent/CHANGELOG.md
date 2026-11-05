@@ -36,6 +36,9 @@
 ### Fixed
 
 - ACP BashTool terminal creation honors cancellation and the original command deadline, and cleans up handles returned after cancellation ([Refs #867](https://github.com/Wladefant/veyyon/issues/867)).
+### Fixed
+
+- MCP Streamable HTTP rejects malformed or mismatched JSON-RPC replies before accepting results or initialization session identifiers ([Refs #862](https://github.com/Wladefant/veyyon/issues/862)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
