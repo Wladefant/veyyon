@@ -15,13 +15,13 @@ import {
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { sessionCpuLimit } from "../session/cpu-limit";
-import { LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
+import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output"
 import { ProducerOutputGuard } from "../secrets/producer-output";
 import {
 	type OutputArtifactError,
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
-	resolveOutputSinkHeadBytes,
+	resolveOutputSinkWindow,
 } from "../tools/core/output-meta";
 import { TOOL_TIMEOUTS } from "../tools/core/tool-timeouts";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
@@ -613,17 +613,12 @@ async function runBash(
 	const plan = await planCommand(settings, command, options);
 	// Output sink for truncation and artifact handling. sink.push() is synchronous: buffer management,
 	// counters and onChunk all run inline, and artifact file writes run asynchronously inside the sink.
-	const sink = new OutputSink({
-		outputGuard: new ProducerOutputGuard(options?.redactOutput),
+	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard(options?.redactOutput),
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
-		artifactMaxBytes: options?.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings),
-		...(options?.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
-		headBytes: resolveOutputSinkHeadBytes(settings),
-		maxColumns: resolveOutputMaxColumns(settings),
-		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0,
-	});
+		artifactMaxBytes: options?.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings), ...resolveOutputSinkWindow(settings, options?.spillThreshold ?? DEFAULT_MAX_BYTES), maxColumns: resolveOutputMaxColumns(settings),
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0, });
 	if (options?.signal?.aborted) return cancelledResult(sink, "Command cancelled");
 
 	const cpuBudgetId = await joinCpuBudget(options);

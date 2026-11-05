@@ -16,7 +16,7 @@ import { describe, expect, it } from "bun:test";
 import { KernelExecutionCancelledError } from "@veyyon/coding-agent/eval/executor-base";
 import { executePythonWithKernel } from "@veyyon/coding-agent/eval/py/executor";
 import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
-import { resolveOutputSinkHeadBytes } from "@veyyon/coding-agent/tools/core/output-meta";
+import { resolveOutputSinkWindow } from "@veyyon/coding-agent/tools/core/output-meta";
 // The code under test opens `AgentStorage`, which resolves `agent.db` under the ACTIVE
 // PROFILE's agent dir, so without this the suite writes into the developer's real
 // `~/.veyyon/profiles/<profile>/agent` and the real-data tripwire fails every test.
@@ -184,7 +184,7 @@ describe("executePythonWithKernel output handling", () => {
 		expect(result.totalBytes).toBe(largeOutput.length);
 		const keptInputBytes = result.output.split("\n").filter(line => line === "a").length * "a\n".length;
 		expect(keptInputBytes).toBeGreaterThan(0);
-		expect(keptInputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + resolveOutputSinkHeadBytes(undefined));
+		expect(keptInputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + resolveOutputSinkWindow(undefined, DEFAULT_MAX_BYTES).headBytes);
 		expect(result.output.length).toBeLessThan(largeOutput.length);
 	});
 

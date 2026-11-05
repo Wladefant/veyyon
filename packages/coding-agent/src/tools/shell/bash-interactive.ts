@@ -15,7 +15,7 @@ import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import {
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
-	resolveOutputSinkHeadBytes,
+	resolveOutputSinkWindow,
 } from "../core/output-meta";
 import { replaceTabs } from "../core/render-utils";
 import { formatStatusIcon } from "../core/tool-ui-status";
@@ -332,14 +332,9 @@ export async function runInteractiveBashPty(
 	// Load the xterm Terminal ctor here (async boundary) — the custom() factory below is sync.
 	const XtermTerminal = await loadXtermTerminal();
 	const { shell: resolvedShell } = settings.getShellConfig();
-	const sink = new OutputSink({
-		artifactPath: options.artifactPath,
+	const sink = new OutputSink({ artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
-		artifactMaxBytes: options.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings),
-		...(options.spillThreshold !== undefined ? { spillThreshold: options.spillThreshold } : {}),
-		headBytes: resolveOutputSinkHeadBytes(settings),
-		maxColumns: resolveOutputMaxColumns(settings),
-	});
+		artifactMaxBytes: options.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings), ...resolveOutputSinkWindow(settings, options.spillThreshold ?? DEFAULT_MAX_BYTES), maxColumns: resolveOutputMaxColumns(settings), });
 	const result = await terminal.custom<BashInteractiveResult>(
 		(tui, uiTheme, _keybindings, done) => {
 			const session = new PtySession();

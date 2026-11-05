@@ -9,7 +9,7 @@ import {
 	type OutputArtifactError,
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
-	resolveOutputSinkHeadBytes,
+	resolveOutputSinkWindow,
 } from "../../tools/core/output-meta";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
 import { sanitizeJsonValue } from "../json-sanitizer";
@@ -118,16 +118,11 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			.some(line => /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line))
 			? BLOCKED_OUTPUT_RECORD
 			: outputGuard.sanitize(text);
-	const outputSink = new OutputSink({
-		outputGuard,
+	const outputSink = new OutputSink({ outputGuard,
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
-		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings),
-		spillThreshold: inlineBudgetFor(options.session),
-		headBytes: resolveOutputSinkHeadBytes(options.session.settings),
-		maxColumns: resolveOutputMaxColumns(options.session.settings),
-		onChunk: chunk => options.onChunk?.(chunk),
-	});
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings), ...resolveOutputSinkWindow(options.session.settings, inlineBudgetFor(options.session)), maxColumns: resolveOutputMaxColumns(options.session.settings),
+		onChunk: chunk => options.onChunk?.(chunk), });
 	const legacyTimeoutMs = getExecutionTimeoutMs(options);
 	const scopedTimeout =
 		typeof legacyTimeoutMs === "number" && Number.isFinite(legacyTimeoutMs) && legacyTimeoutMs > 0
