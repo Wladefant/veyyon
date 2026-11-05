@@ -27,6 +27,9 @@
 ### Fixed
 
 - MCP tool calls report unknown outcomes after lost responses without automatically repeating possible side effects ([Refs #890](https://github.com/Wladefant/veyyon/issues/890)).
+### Fixed
+
+- MCP stdio rejects malformed matching-ID JSON-RPC responses before completing tool calls or stream subscriptions ([Refs #876](https://github.com/Wladefant/veyyon/issues/876)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
