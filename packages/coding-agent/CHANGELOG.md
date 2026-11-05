@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Eval and SSH output windows resolve their configured byte budgets, so live Python cells and remote commands no longer fail on missing runtime bindings.
+
 ## [1.8.3] - 2026-11-05
 
 ### Fixed
