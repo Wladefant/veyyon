@@ -20,6 +20,9 @@
  */
 
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
+import type { AgentRef } from "../registry/agent-registry";
+import { AgentRegistry } from "../registry/agent-registry";
+import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 import {
 	parseExactHistoryRequest,
 	parseHistorySearchRequest,
@@ -28,10 +31,7 @@ import {
 	searchLiveHistoryEntries,
 	searchStoredHistoryEntries,
 } from "./history-exact";
-import type { AgentRef } from "../registry/agent-registry";
-import { AgentRegistry } from "../registry/agent-registry";
-import { formatSessionHistoryMarkdown } from "../session/session-history-format";
-import { ambiguousSessionFileIds, liveConversationScopes, sessionFilesFromDisk } from "./registry-helpers";
+import { ambiguousSessionFileIds, sessionFilesFromDisk } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /** Humanize a last-activity timestamp as `Ns/Nm/Nh/Nd ago`. */
@@ -56,6 +56,23 @@ interface IndexEntry {
 }
 
 /**
+ * A parked root retains its conversation scope and may still expose its own
+ * archived agents through the global registry. Do not drop that scope from
+ * the history read boundary just because the root session was detached.
+ *
+ * This guards distinct KNOWN registered scopes only. Legacy unscoped refs
+ * and disk-only transcript provenance remain separate #885 policy work; this
+ * is not caller-authenticated multi-conversation routing.
+ */
+function registeredConversationScopes(): string[] {
+	const scopes = new Set<string>();
+	for (const ref of AgentRegistry.global().list()) {
+		if (ref.scope !== undefined) scopes.add(ref.scope);
+	}
+	return Array.from(scopes);
+}
+
+/**
  * Handler for history:// URLs.
  *
  * Resolves agent ids against the global AgentRegistry, then falls back to
@@ -75,29 +92,31 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		// belonging to another conversation was served directly, and the bare index
 		// listed every conversation's agents in one table. Neither can be filtered
 		// here: `ProtocolHandler.resolve` is handed no agent id and no scope, so
-		// this handler genuinely does not know who is asking. Refuse while the
-		// process drives more than one conversation, and say why: a transcript is
-		// the fullest record an agent leaves, and handing over the wrong one
-		// silently is the failure this whole boundary exists to prevent. Single-
-		// conversation hosts, which is every interactive run, are unaffected.
-		const conversations = liveConversationScopes();
+		// this handler genuinely does not know who is asking. A parked root
+		// retains its scope and may expose archived agents, so refusing only
+		// while TWO ROOT SESSIONS ARE LIVE is insufficient. Refuse when more
+		// than one known registered conversation scope remains, live or parked.
+		// Single-scope archived access remains available as before.
+		const conversations = registeredConversationScopes();
 		if (conversations.length > 1) {
 			throw new Error(
-				`history:// is unavailable while this process drives ${conversations.length} conversations at once.\n` +
+				`history:// is unavailable while this process retains ${conversations.length} conversations at once (live or parked).\n` +
 					`Agent ids are per-conversation names and this URL carries no conversation, so serving one would ` +
 					`be a guess between them.\n` +
 					`Read the transcript from the session that spawned the agent, or open its session file directly.`,
 			);
 		}
-		// Advisor transcripts are observability-only — surfaced in the agent dashboard, never
-		// in the agent-facing roster. Hide them from the index, lookup, and completions.
-		const visible = registry.list().filter(ref => ref.kind !== "advisor");
+		// Advisors are observability-only and must remain hidden from all
+		// agent-facing history paths, even if their JSONL is discoverable on disk.
+		const registered = registry.list();
+		const visible = registered.filter(ref => ref.kind !== "advisor");
+		const advisorFolded = new Set(registered.filter(ref => ref.kind === "advisor").map(ref => ref.id.toLowerCase()));
 
 		if (!agentId) {
 			if (url.searchParams.has("entry") || url.searchParams.has("q")) {
 				throw new Error("history:// search and exact reads require an agent ID");
 			}
-			const content = await renderIndex(visible);
+			const content = await renderIndex(visible, new Set(registered.map(ref => ref.id.toLowerCase())));
 			return {
 				url: url.href,
 				content,
@@ -106,13 +125,36 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			};
 		}
 
-		let ref = registry.get(agentId);
-		if (ref?.kind === "advisor") ref = undefined;
-		if (!ref) {
-			// Case-insensitive fallback: agent ids are human-typed (e.g. AuthLoader).
-			const lower = agentId.toLowerCase();
-			ref = visible.find(candidate => candidate.id.toLowerCase() === lower);
+		const exactRegistered = registry.get(agentId);
+		// An advisor's registered ID must not turn into a disk fallback when we
+		// hide the ref. Refuse its case aliases too. An exact visible ref remains
+		// usable when another registered advisor differs only in letter case.
+		if (advisorFolded.has(agentId.toLowerCase()) && (!exactRegistered || exactRegistered.kind === "advisor")) {
+			throw new Error(`Unknown agent: ${agentId}`);
 		}
+		let ref = exactRegistered;
+		if (!ref) {
+			// Case-insensitive convenience is safe only for a UNIQUE registered
+			// identity. Two distinct names may differ solely by case; picking
+			// whichever was registered first can expose the wrong transcript.
+			const lower = agentId.toLowerCase();
+			const matches = visible.filter(candidate => candidate.id.toLowerCase() === lower);
+			if (matches.length > 1) {
+				throw new Error(
+					`Ambiguous registered agent: ${agentId}\n` +
+						"Multiple registered IDs match this spelling. Use the exact agent ID shown in history://.",
+				);
+			}
+			ref = matches[0];
+		}
+		// A known registered ref with no live/retained session must never borrow
+		// a different registered identity's disk transcript through case-folded
+		// fallback. Keep unique-ID archival recovery and direct ref reads.
+		const diskFallbackSafe =
+			!advisorFolded.has(agentId.toLowerCase()) &&
+			!registered.some(
+				candidate => candidate.id !== ref?.id && candidate.id.toLowerCase() === agentId.toLowerCase(),
+			);
 
 		// Exact reads are opt-in; the ordinary concise overview remains unchanged.
 		// Resolve only registry-owned or uniquely discovered session files, never a
@@ -128,7 +170,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				if (searchRequest && searchRequest.leafId === undefined) searchRequest.leafId = selectedLeaf;
 			}
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
-			if (!sessionFile && !ref?.session) {
+			if (!sessionFile && !ref?.session && diskFallbackSafe) {
 				const disk = await sessionFilesFromDisk();
 				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
 				sessionFile = found?.[1];
@@ -141,8 +183,13 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					? await readStoredHistoryEntry(sessionFile, exactRequest)
 					: await searchStoredHistoryEntries(sessionFile, searchRequest!);
 				const content = JSON.stringify(result, null, 2);
-				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
-					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"] };
+				return {
+					url: url.href,
+					content,
+					contentType: "application/json",
+					size: Buffer.byteLength(content, "utf8"),
+					notes: ["Read-only stored session records; externalized blobs are not expanded or searched"],
+				};
 			}
 			if (ref?.session) {
 				const requestedLeaf = exactRequest ? exactRequest.leafId : searchRequest!.leafId;
@@ -151,8 +198,13 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					? readLiveHistoryEntry(branch, exactRequest, ref.session.sessionManager.getSessionId())
 					: searchLiveHistoryEntries(branch, searchRequest!, ref.session.sessionManager.getSessionId());
 				const content = JSON.stringify(result, null, 2);
-				return { url: url.href, content, contentType: "application/json", size: Buffer.byteLength(content, "utf8"),
-					notes: ["Active in-memory branch; no persistent session file"] };
+				return {
+					url: url.href,
+					content,
+					contentType: "application/json",
+					size: Buffer.byteLength(content, "utf8"),
+					notes: ["Active in-memory branch; no persistent session file"],
+				};
 			}
 			// Preserve the existing ambiguous/unknown-agent diagnostic below.
 		}
@@ -196,8 +248,10 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		} else {
 			// No live session and no retained sessionFile — try the disk scan before
 			// giving up, in case the transcript lingers under an artifacts dir.
-			const disk = await resolveFromDisk(ref.id);
-			if (disk) return { ...disk, url: url.href };
+			if (diskFallbackSafe) {
+				const disk = await resolveFromDisk(ref.id);
+				if (disk) return { ...disk, url: url.href };
+			}
 			throw new Error(`Agent ${ref.id} has no transcript: session is gone and no session file was retained`);
 		}
 
@@ -213,7 +267,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	}
 
 	/**
-	 * Completions are silent-empty while the process drives several conversations,
+	 * Completions are silent-empty while multiple registered scopes survive,
 	 * for the reason `resolve` refuses: every id here is a name from SOME
 	 * conversation and the completer cannot say which is the caller's. Offering
 	 * them all would put another conversation's agent names in an operator's
@@ -221,12 +275,15 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	 * one of those completions resolves to a refusal anyway.
 	 */
 	async complete(): Promise<UrlCompletion[]> {
-		if (liveConversationScopes().length > 1) return [];
+		if (registeredConversationScopes().length > 1) return [];
 		const completions: UrlCompletion[] = [];
-		const seen = new Set<string>();
-		for (const ref of AgentRegistry.global().list()) {
+		// A disk-only case alias resolves to the registered agent, not its own file.
+		const registered = AgentRegistry.global().list();
+		// Also reserve hidden advisor names: a disk-only alias must not
+		// resurrect one of their transcripts as a selectable completion.
+		const registeredFolded = new Set(registered.map(ref => ref.id.toLowerCase()));
+		for (const ref of registered) {
 			if (ref.kind === "advisor") continue;
-			seen.add(ref.id);
 			completions.push({
 				value: ref.id,
 				description: `${ref.status} · ${ref.kind}${ref.parentId ? ` · parent ${ref.parentId}` : ""}`,
@@ -234,8 +291,10 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		}
 		const disk = await sessionFilesFromDisk();
 		for (const id of disk.keys()) {
-			if (seen.has(id)) continue;
-			seen.add(id);
+			const foldedId = id.toLowerCase();
+			// Only a registry-owned name shadows a disk row. Preserve disk-only
+			// names according to the disk scanner (including its ambiguity policy).
+			if (registeredFolded.has(foldedId)) continue;
 			completions.push({ value: id, description: "on disk" });
 		}
 		return completions;
@@ -271,7 +330,7 @@ async function resolveFromDisk(agentId: string): Promise<InternalResource | unde
 	};
 }
 
-async function renderIndex(refs: AgentRef[]): Promise<string> {
+async function renderIndex(refs: AgentRef[], registeredFolded: ReadonlySet<string>): Promise<string> {
 	const entries: IndexEntry[] = refs.map(ref => ({
 		id: ref.id,
 		status: ref.status,
@@ -280,10 +339,12 @@ async function renderIndex(refs: AgentRef[]): Promise<string> {
 		lastActivity: formatAgo(ref.lastActivity),
 	}));
 	// Merge on-disk transcripts for agents absent from the registry.
-	const registered = new Set(refs.map(ref => ref.id));
+	// Resolve and completions compare agent IDs case-insensitively, so an
+	// on-disk alias shadowed by any registered ID must not appear selectable.
+	// The caller includes hidden registered advisor IDs in the reserved set.
 	const disk = await sessionFilesFromDisk();
 	for (const id of disk.keys()) {
-		if (registered.has(id)) continue;
+		if (registeredFolded.has(id.toLowerCase())) continue;
 		entries.push({ id, status: "on disk", kind: "—", parent: "—", lastActivity: "—" });
 	}
 
@@ -296,7 +357,9 @@ async function renderIndex(refs: AgentRef[]): Promise<string> {
 	for (const entry of entries) {
 		lines.push(`| ${entry.id} | ${entry.status} | ${entry.kind} | ${entry.parent} | ${entry.lastActivity} |`);
 	}
-	lines.push("", "Read a transcript with `read history://<id>`. Search stored records with `read history://<id>?q=term`, then retrieve exact pages with `read history://<id>?entry=<entryId>&limit=8000`.");
+	lines.push(
+		"",
+		"Read a transcript with `read history://<id>`. Search stored records with `read history://<id>?q=term`, then retrieve exact pages with `read history://<id>?entry=<entryId>&limit=8000`.",
+	);
 	return `${lines.join("\n")}\n`;
 }
-

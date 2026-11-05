@@ -94,6 +94,10 @@
 
 - MCP tool consumers remove disconnected server tools by exact server ownership and ignore stale tool refreshes ([Refs #887](https://github.com/Wladefant/veyyon/issues/887)).
 
+### Fixed
+
+- History indexes and completions hide on-disk aliases shadowed by registered agent IDs ([Refs #881](https://github.com/Wladefant/veyyon/issues/881)).
+
 ## [1.7.8] - 2026-11-03
 
 ### Fixed
