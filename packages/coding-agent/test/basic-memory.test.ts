@@ -9,6 +9,8 @@ import { createMemoryRuntimeContext } from "../src/memory/runtime";
 import { MemoryRecallTool } from "../src/tools/agent/memory-recall";
 import { MemoryRetainTool } from "../src/tools/agent/memory-retain";
 
+const MCP_FIXTURE = join(import.meta.dirname, "fixtures", "basic-memory-mcp.ts");
+
 const command = process.env.BASIC_MEMORY_TEST_COMMAND;
 const directories: string[] = [];
 const integration = it.skipIf(!command);
@@ -121,6 +123,25 @@ describe("Basic Memory backend integration", () => {
 		const result = recalledByTool.content[0];
 		expect(result && "text" in result ? result.text : "").toContain("Tool runtime orchid assertion.");
 	});
+});
+describe("Basic Memory stdio MCP query propagation", () => {
+	it("passes the exact query to a stdio MCP server and returns the matching note", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "veyyon-basic-memory-mcp-"));
+		directories.push(directory);
+		await writeFile(join(directory, "mcp"), await readFile(MCP_FIXTURE, "utf8"), "utf8");
+		const settings = settingsFor(directory, { "memory.basicMemory.command": process.execPath });
+		const tool = MemoryRecallTool.createIf({ settings, cwd: directory } as never);
+		expect(tool).not.toBeNull();
+
+		const found = await tool!.execute("call-basic-memory-query", { query: "specific orchid lookup" });
+		const foundText = found.content[0];
+		expect(foundText && "text" in foundText ? foundText.text : "").toContain(
+			"The account stores orchid seeds in the north shed.",
+		);
+
+		const missing = await tool!.execute("call-basic-memory-no-match", { query: "no matching note" });
+		expect(missing.content[0]).toEqual({ type: "text", text: "No relevant memories found." });
+	}, 15_000);
 });
 
 describe("Basic Memory backend validation", () => {
