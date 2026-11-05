@@ -2404,8 +2404,13 @@ export class SessionManager {
 			}
 			try {
 				this.restoreState({ ...beforeSwitch, needsRewrite: true });
+				// Close can fail after the old file accepted session_switched.
+				// Repair that journal before exposing the failed fork to the caller:
+				// a process restart without a later caller flush must not see a
+				// spurious terminal marker. The rewrite retains genuine foreign tails.
+				await this.flush();
 			} catch (restoreError) {
-				throw new AggregateError([error, restoreError], "Fork failed and could not restore the active source");
+				throw new AggregateError([error, restoreError], "Fork failed and could not durably restore the active source");
 			}
 			throw error;
 		}
