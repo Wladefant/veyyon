@@ -1809,14 +1809,19 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
     const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
     let session: AgentSession | undefined;
     try {
+      // A failed fork must not mutate the original artifact/archive sidecar.
+      expect(await manager.saveArtifact("synthetic retained archive evidence", "bash")).toBe("0");
       manager.appendMessage({
-        role: "user", content: "Original recoverable conversation", timestamp: Date.now(),
+        role: "user", content: "Original recoverable conversation artifact://0", timestamp: Date.now(),
       });
       await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected durable source session");
       const sourceId = manager.getSessionId();
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected source artifact");
+      const originalArtifactBytes = await fs.readFile(sourceArtifact);
 
       const agent = new Agent({
         initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
@@ -1846,6 +1851,7 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
         entry.reason === "session_switched"
       )).toBe(false);
       expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
 
       // A foreign writer can append after durable rollback; later appends
       const foreignEntry: JsonlMessageEntry = {
@@ -1876,6 +1882,7 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       expect(recoveredSource).toContain("Original recoverable conversation");
       expect(recoveredSource).toContain("Entry after rejected fork");
       expect(recoveredSource).not.toBe(sourceBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
 
       // Positive twin: a genuinely published fork still switches both identities
       // and leaves the source's original recovery bytes intact.
@@ -1893,6 +1900,11 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       )).toBe(instrumentation === "basic");
       expect(await fs.readFile(sourceFile, "utf8")).toContain("Entry after rejected fork");
       expect(await fs.readFile(sourceFile, "utf8")).toContain("Foreign publication recovery tail");
+      const copiedArtifact = await manager.getArtifactPath("0");
+      if (!copiedArtifact) throw new Error("expected copied archived artifact");
+      expect(copiedArtifact).not.toBe(sourceArtifact);
+      expect(await fs.readFile(copiedArtifact)).toEqual(originalArtifactBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
     } finally {
       storage.rejectNewSession = false;
       try { await session?.dispose(); } finally {
