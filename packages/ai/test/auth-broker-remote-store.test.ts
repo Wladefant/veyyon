@@ -433,35 +433,50 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				await Bun.sleep(5);
 			}
 		});
+		// Keep the canonical idle GET pending until the test actually revokes the
+		// peer. Otherwise a slow CI runner can observe a legitimate verifier GET
+		// before the pre-revocation no-progress assertions finish.
+		const permitCanonicalRead = Promise.withResolvers<void>();
+		const realFetchSnapshot = client.fetchSnapshot.bind(client);
+		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
+			await permitCanonicalRead.promise;
+			return realFetchSnapshot(options);
+		});
 		remote = new RemoteAuthCredentialStore({
 			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
 			onSnapshot: () => {
 				fullSnapshotsObserved += 1;
 			},
 		});
-		await connected.promise;
-		await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === additional.id));
-		expect(remote.snapshot.credentials.map(entry => entry.id)).toContain(additional.id);
-		// Initial and replayed full frames are unchanged. Entry events do not
-		// invoke onSnapshot: the first authoritative callback must follow revocation.
-		expect(fullSnapshotsObserved).toBe(0);
-		await waitUntil(() => replayedFrames >= 5);
-		expect(storage!.disableCredentialById(original.id, "synthetic peer revocation behind replay")).toBe(true);
-		// Only the production idle verifier can discover the canonical broker
-		// state; no explicit refreshSnapshot() or fresh SSE event is allowed.
-		await waitUntil(() => remote!.snapshot.credentials.length === 0);
-		expect(remote.listAuthCredentials()).toEqual([]);
-		const canonical = await peer.fetchSnapshot();
-		if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
-		expect(canonical.snapshot.credentials).toEqual([]);
-		// Only the idle verifier can apply a fresh full snapshot; the fake relay
-		// never sends a revocation or a replacement full-snapshot SSE frame.
-		expect(fullSnapshotsObserved).toBeGreaterThanOrEqual(1);
-		// Stale entry replays must not resurrect the revoked credential.
-		const framesAfterReconciliation = replayedFrames;
-		await waitUntil(() => replayedFrames >= framesAfterReconciliation + 5);
-		expect(remote.snapshot.credentials).toEqual([]);
-		expect(remote.listAuthCredentials()).toEqual([]);
+		try {
+			await connected.promise;
+			await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === additional.id));
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toContain(additional.id);
+			// Initial and replayed full frames are unchanged. Entry events do not
+			// invoke onSnapshot: the first authoritative callback must follow revocation.
+			expect(fullSnapshotsObserved).toBe(0);
+			await waitUntil(() => replayedFrames >= 5);
+			expect(storage!.disableCredentialById(original.id, "synthetic peer revocation behind replay")).toBe(true);
+			permitCanonicalRead.resolve();
+			// Only the production idle verifier can discover the canonical broker
+			// state; no explicit refreshSnapshot() or fresh SSE event is allowed.
+			await waitUntil(() => remote!.snapshot.credentials.length === 0);
+			expect(remote.listAuthCredentials()).toEqual([]);
+			const canonical = await peer.fetchSnapshot();
+			if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
+			expect(canonical.snapshot.credentials).toEqual([]);
+			// Only the idle verifier can apply a fresh full snapshot; the fake relay
+			// never sends a revocation or a replacement full-snapshot SSE frame.
+			expect(fullSnapshotsObserved).toBeGreaterThanOrEqual(1);
+			// Stale entry replays must not resurrect the revoked credential.
+			const framesAfterReconciliation = replayedFrames;
+			await waitUntil(() => replayedFrames >= framesAfterReconciliation + 5);
+			expect(remote.snapshot.credentials).toEqual([]);
+			expect(remote.listAuthCredentials()).toEqual([]);
+		} finally {
+			// Also release a pending verifier when an earlier assertion throws.
+			permitCanonicalRead.resolve();
+		}
 	});
 
 
