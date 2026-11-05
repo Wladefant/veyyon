@@ -95,21 +95,55 @@ async function listen(endpoint: string): Promise<void> {
 }
 
 describe("terminal ownership claims", () => {
-	it("ignores a claim whose recycled pid is alive but whose endpoint answers nothing", async () => {
+	it("ignores a live pid in a malformed record when its derived endpoint is absent", async () => {
 		const root = await tempRoot();
-		const sessionFile = path.join(root, "recycled.jsonl");
-		// This process is definitely alive, and it does not serve the pipe: exactly the recycled-pid claim.
-		await writeClaim(root, sessionFile, endpointFor(root, "gone"), process.pid);
-		await expect(assertNotTerminalOwned(sessionFile, root)).resolves.toBeUndefined();
+		const unrelatedSession = path.join(root, "malformed-live.jsonl");
+		const nonce = crypto.randomUUID();
+		const malformed = path.join(root, "run", "terminals", `${process.pid}-${nonce}.json`);
+		await fsp.mkdir(path.dirname(malformed), { recursive: true });
+		await fsp.writeFile(malformed, "{ malformed");
+		await expect(assertNotTerminalOwned(unrelatedSession, root)).resolves.toBeUndefined();
+	});
+
+	it("rejects a malformed live-pid publisher when its derived endpoint is serving", async () => {
+		const root = await tempRoot();
+		const unrelatedSession = path.join(root, "malformed-serving.jsonl");
+		const nonce = crypto.randomUUID();
+		const malformed = path.join(root, "run", "terminals", `${process.pid}-${nonce}.json`);
+		await fsp.mkdir(path.dirname(malformed), { recursive: true });
+		await fsp.writeFile(malformed, "{ malformed");
+		await listen(endpointFor(root, nonce));
+		await expect(assertNotTerminalOwned(unrelatedSession, root)).rejects.toThrow(
+			"Cannot establish terminal writer ownership",
+		);
+	});
+
+	it("rejects malformed JSON with an unknown publisher name", async () => {
+		const root = await tempRoot();
+		const unrelatedSession = path.join(root, "unknown-malformed.jsonl");
+		const malformed = path.join(root, "run", "terminals", `unknown-${crypto.randomUUID()}.json`);
+		await fsp.mkdir(path.dirname(malformed), { recursive: true });
+		await fsp.writeFile(malformed, "{ malformed");
+		await expect(assertNotTerminalOwned(unrelatedSession, root)).rejects.toThrow(
+			"Cannot establish terminal writer ownership",
+		);
 	});
 
 	it("refuses a claim whose endpoint is really serving", async () => {
 		const root = await tempRoot();
 		const sessionFile = path.join(root, "served.jsonl");
-		// Same shape serveTerminalControl uses: the socket lives beside the claim file it writes.
 		await fsp.mkdir(path.join(root, "run", "terminals"), { recursive: true });
-		const endpoint = endpointFor(root, crypto.randomUUID());
-		await writeClaim(root, sessionFile, endpoint, process.pid);
+		const nonce = crypto.randomUUID();
+		const endpoint = endpointFor(root, nonce);
+		await writeRecord(path.join(root, "run", "terminals", `${process.pid}-${nonce}.json`), {
+			version: 1,
+			sessionId: "stale",
+			pid: process.pid,
+			cwd: root,
+			sessionFile,
+			endpoint,
+			token: "t",
+		});
 		await listen(endpoint);
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("Session is owned by a live terminal");
 	});
@@ -122,24 +156,47 @@ describe("terminal ownership claims", () => {
 		const withoutEndpoint = path.join(root, "dead-no-endpoint.jsonl");
 		const directory = path.join(root, "run", "terminals");
 		const pid = deadPid();
-		await writeRecord(
-			path.join(directory, `${pid}-${crypto.randomUUID()}.json`),
-			{ version: 1, sessionId: "x", pid, cwd: root, sessionFile: withoutEndpoint },
-		);
+		await writeRecord(path.join(directory, `${pid}-${crypto.randomUUID()}.json`), {
+			version: 1,
+			sessionId: "x",
+			pid,
+			cwd: root,
+			sessionFile: withoutEndpoint,
+		});
 		await expect(assertNotTerminalOwned(withoutEndpoint, root)).resolves.toBeUndefined();
 	});
 
-	/**
-	 * The same dead claim that is ignored when owner-only is refused when another user can read it: an
-	 * unverifiable claim may be a live owner, so it blocks instead of being skipped.
-	 */
-	it("refuses a claim another user can read instead of skipping it", async () => {
+	it("ignores malformed publisher-shaped records for dead pids without matching unrelated sessions", async () => {
 		const root = await tempRoot();
-		const sessionFile = path.join(root, "broad.jsonl");
-		await writeClaim(root, sessionFile, endpointFor(root, "broad-gone"), deadPid(), true);
+		const unrelatedSession = path.join(root, "other.jsonl");
+		const pid = deadPid();
+		const malformed = path.join(root, "run", "terminals", `${pid}-${crypto.randomUUID()}.json`);
+		await fsp.mkdir(path.dirname(malformed), { recursive: true });
+		await fsp.writeFile(malformed, "{ malformed");
+		await expect(assertNotTerminalOwned(unrelatedSession, root)).resolves.toBeUndefined();
+	});
+
+	it("refuses a broadly readable claim for a live pid with record diagnostics", async () => {
+		const root = await tempRoot();
+		const sessionFile = path.join(root, "broad-live.jsonl");
+		const nonce = crypto.randomUUID();
+		const endpoint = endpointFor(root, nonce);
+		await writeRecord(
+			path.join(root, "run", "terminals", `${process.pid}-${nonce}.json`),
+			{ version: 1, sessionId: "stale", pid: process.pid, cwd: root, sessionFile, endpoint, token: "t" },
+			true,
+		);
+		await listen(endpoint);
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow(
 			"Cannot establish terminal writer ownership",
 		);
+	});
+
+	it("ignores a broadly readable dead-pid claim", async () => {
+		const root = await tempRoot();
+		const sessionFile = path.join(root, "broad-dead.jsonl");
+		await writeClaim(root, sessionFile, endpointFor(root, "broad-dead"), deadPid(), true);
+		await expect(assertNotTerminalOwned(sessionFile, root)).resolves.toBeUndefined();
 	});
 
 	it("fails closed for a claim with no usable endpoint", async () => {
@@ -147,10 +204,13 @@ describe("terminal ownership claims", () => {
 		const sessionFile = path.join(root, "no-endpoint.jsonl");
 		const directory = path.join(root, "run", "terminals");
 		await fsp.mkdir(directory, { recursive: true });
-		await writeRecord(
-			path.join(directory, `${process.pid}-${crypto.randomUUID()}.json`),
-			{ version: 1, sessionId: "x", pid: process.pid, cwd: root, sessionFile },
-		);
+		await writeRecord(path.join(directory, `${process.pid}-${crypto.randomUUID()}.json`), {
+			version: 1,
+			sessionId: "x",
+			pid: process.pid,
+			cwd: root,
+			sessionFile,
+		});
 		await expect(assertNotTerminalOwned(sessionFile, root)).rejects.toThrow("Session is owned by a live terminal");
 	});
 });
