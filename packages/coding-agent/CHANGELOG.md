@@ -57,6 +57,9 @@
 ### Fixed
 
 - Sanitize loaded session-notice version diagnostics and reject malformed build hashes and capability metadata rather than displaying forged lines or accepting unsupported notice delivery ([#551](https://github.com/Wladefant/veyyon/issues/551)).
+### Fixed
+
+- ACP-sourced MCP tool calls wait for completion without a default transport deadline while retaining caller cancellation and explicit deadlines ([Refs #829](https://github.com/Wladefant/veyyon/pull/829)).
 ## [1.7.10] - 2026-11-04
 
 ### Fixed
