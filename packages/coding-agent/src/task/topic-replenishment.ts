@@ -227,6 +227,10 @@ export interface LedgerRequestHistoryItem {
 	reason: string;
 }
 
+export type NativeClaim =
+	| { version: 1; state: "active"; worker_id: string; run_id: string; task_handle: string | null }
+	| { version: 1; state: "retryable"; worker_id: null; run_id: null; task_handle: null };
+
 export interface LedgerRequestItem {
 	id?: string;
 	prompt?: string;
@@ -234,6 +238,7 @@ export interface LedgerRequestItem {
 	project?: string;
 	criteria?: string[];
 	owner?: string;
+	native_claim?: NativeClaim;
 	dependencies?: string[];
 	head?: string;
 	evidence?: unknown[];
@@ -922,7 +927,7 @@ export async function recordNativeDispatch(
 	runId: string,
 	taskHandle: string,
 	ledgerPath: string,
-	ticketId?: string,
+	ticketId: string,
 ): Promise<void> {
 	const args = [
 		"record-dispatch",
@@ -933,8 +938,7 @@ export async function recordNativeDispatch(
 		"--task-handle",
 		taskHandle,
 	];
-	if (ledgerPath) args.push("--ledger", ledgerPath);
-	if (ticketId) args.push("--ticket-id", ticketId);
+	args.push("--ledger", ledgerPath, "--ticket-id", ticketId);
 	await runLedgerBridge(args);
 }
 
@@ -1210,7 +1214,12 @@ export class TopicReplenishmentEngine {
 				memoryProvider: options?.memoryProvider ?? this.memoryProvider,
 			});
 			if (this.#verificationBlocked()) {
-				return this.#verificationBlockedOutcome(reconciliation, memoryAdmission, dispatchedTickets, allBlockedTopics);
+				return this.#verificationBlockedOutcome(
+					reconciliation,
+					memoryAdmission,
+					dispatchedTickets,
+					allBlockedTopics,
+				);
 			}
 			if (!stepMem.admitted) break;
 
@@ -1240,7 +1249,12 @@ export class TopicReplenishmentEngine {
 						};
 					}
 				}
-				return this.#verificationBlockedOutcome(reconciliation, memoryAdmission, dispatchedTickets, allBlockedTopics);
+				return this.#verificationBlockedOutcome(
+					reconciliation,
+					memoryAdmission,
+					dispatchedTickets,
+					allBlockedTopics,
+				);
 			}
 			if (claimResult.blockedTopics) {
 				for (const bt of claimResult.blockedTopics) {
@@ -1261,7 +1275,12 @@ export class TopicReplenishmentEngine {
 				await activeExecutor(ticket);
 				reservations.add(ticket.id);
 			} catch (err) {
-				const rollback = await this.rollbackClaimedTicket(ticket.id, String(err), ticket.runId, ticket.previousState);
+				const rollback = await this.rollbackClaimedTicket(
+					ticket.id,
+					String(err),
+					ticket.runId,
+					ticket.previousState,
+				);
 				return {
 					reconciliation,
 					memoryAdmission,
