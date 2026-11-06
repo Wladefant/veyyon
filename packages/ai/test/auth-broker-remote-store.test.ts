@@ -481,6 +481,61 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
+	test("a post-first-frame stale SSE entry cannot restore a same-generation canonical revocation", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const revoked = initial.snapshot.credentials[0]!;
+		const generation = initial.snapshot.generation;
+		const ready = Promise.withResolvers<void>();
+		const releaseOldFrame = Promise.withResolvers<void>();
+		let oldFrameProcessed = false;
+		let canonicalReads = 0;
+		const brokerRead = peer.fetchSnapshot.bind(peer);
+		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
+			canonicalReads += 1;
+			const canonical = await brokerRead(options);
+			if (canonical.status !== 200) throw new Error("expected unconditional broker truth");
+			// The restarted broker may reuse the previous stream's number.
+			// Its changed CONTENT, not this numeric generation, is authoritative.
+			return {
+				status: 200 as const, generation,
+				snapshot: { ...canonical.snapshot, generation },
+			};
+		});
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (options) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			// The first frame was consumed; unlike the delayed-initial test,
+			// this pending entry belongs to an ALREADY active old stream.
+			ready.resolve();
+			await releaseOldFrame.promise;
+			yield {
+				kind: "entry" as const, entry: revoked, generation,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			oldFrameProcessed = true; // consumer has processed the yielded frame
+			await untilAborted(options.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 75,
+		});
+		try {
+			await ready.promise;
+			expect(storage!.disableCredentialById(revoked.id, "synthetic same-generation restart revoke")).toBe(true);
+			// Drive the production idle verifier, not a manual refreshSnapshot().
+			await waitUntil(() => canonicalReads > 0 && remote!.snapshot.credentials.length === 0, 4_000);
+			expect(remote.snapshot.generation).toBe(generation);
+			releaseOldFrame.resolve();
+			await waitUntil(() => oldFrameProcessed, 2_000);
+			// An old equal-G entry cannot supersede later canonical broker truth.
+			expect(remote.snapshot.credentials.some(entry => entry.id === revoked.id)).toBe(false);
+			expect(remote.listAuthCredentials()).toEqual([]);
+		} finally {
+			releaseOldFrame.resolve();
+		}
+	});
+
 	test("pending local safety blocks do not make unchanged SSE replays fresh", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		storage!.upsertCredential("anthropic", mintOAuthCredential("pending-replay", Date.now() + 120_000));
