@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- A synchronous session rewrite retains the original journal if Windows-style EPERM replacement fails, rather than truncating history in place ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork refuses a different in-place title-slot update while removing an aborted fork marker, keeping an independently written title intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork refuses an independently appended JSONL entry that repeats an existing ID rather than dropping its different history during recovery ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 

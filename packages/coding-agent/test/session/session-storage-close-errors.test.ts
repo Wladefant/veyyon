@@ -184,3 +184,78 @@ function failNextClose(): void {
 		throw Object.assign(new Error("EIO: i/o error, close"), { code: "EIO" });
 	});
 }
+
+
+describe("FileSessionStorage synchronous EPERM publication integrity", () => {
+	it("restores the original journal if the staged replacement fails after EPERM", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-refusal-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		const artifact = path.join(dir, "synthetic-artifact.log");
+		const original = 'ORIGINAL SYNTHETIC JOURNAL\\n';
+		const artifactBytes = "SYNTHETIC ARCHIVE BYTES";
+		fs.writeFileSync(journal, original);
+		fs.writeFileSync(artifact, artifactBytes);
+		const rename = fs.renameSync;
+		let stagedPublications = 0;
+		const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+			const staged = path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
+				String(source).endsWith(".tmp") && String(destination) === journal;
+			if (staged) {
+				stagedPublications += 1;
+				if (stagedPublications === 1) {
+					throw Object.assign(new Error("synthetic Windows-style EPERM"), { code: "EPERM" });
+				}
+				if (stagedPublications === 2) {
+					throw Object.assign(new Error("synthetic staged replacement EIO"), { code: "EIO" });
+				}
+			}
+			return rename(source, destination);
+		});
+		try {
+			const storage = new FileSessionStorage();
+			expect(() => storage.writeTextSync(journal, () => [
+				'REPLACEMENT SYNTHETIC JOURNAL\\n', 'COMPLETE TAIL\\n',
+			])).toThrow(/synthetic staged replacement EIO/);
+			expect(stagedPublications).toBe(2);
+			// The old EPERM fallback wrote directly to journal with "w" and
+			// would report success (or leave a truncated source on later EIO).
+			expect(fs.readFileSync(journal, "utf8")).toBe(original);
+			expect(fs.readFileSync(artifact, "utf8")).toBe(artifactBytes);
+		} finally {
+			renameSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("publishes the complete staged replacement when the EPERM retry succeeds", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-retry-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC HISTORY\\n");
+		const rename = fs.renameSync;
+		let stagedPublications = 0;
+		const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+			const staged = path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
+				String(source).endsWith(".tmp") && String(destination) === journal;
+			if (staged) {
+				stagedPublications += 1;
+				if (stagedPublications === 1) {
+					throw Object.assign(new Error("synthetic Windows-style EPERM"), { code: "EPERM" });
+				}
+			}
+			return rename(source, destination);
+		});
+		try {
+			const storage = new FileSessionStorage();
+			expect(() => storage.writeTextSync(journal, () => [
+				'REPLACEMENT SYNTHETIC JOURNAL\\n', 'COMPLETE TAIL\\n',
+			])).not.toThrow();
+			expect(stagedPublications).toBe(2);
+			expect(fs.readFileSync(journal, "utf8")).toBe(
+				'REPLACEMENT SYNTHETIC JOURNAL\\nCOMPLETE TAIL\\n',
+			);
+		} finally {
+			renameSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

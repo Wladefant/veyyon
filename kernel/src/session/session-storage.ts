@@ -589,7 +589,14 @@ export class FileSessionStorage implements SessionStorage {
 		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
 		try {
 			writeChunksSync(tempPath, body);
-			fs.renameSync(tempPath, fpath);
+			try {
+				fs.renameSync(tempPath, fpath);
+			} catch (renameError) {
+				if (!hasFsCode(renameError, "EPERM")) throw renameError;
+				// Never truncate the previous journal when replacement is refused.
+				// The existing staged-file fallback preserves or restores its backup.
+				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError);
+			}
 		} catch (err) {
 			try {
 				if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
@@ -601,10 +608,6 @@ export class FileSessionStorage implements SessionStorage {
 						error: toError(cleanupErr).message,
 					});
 				}
-			}
-			if (hasFsCode(err, "EPERM")) {
-				writeChunksSync(fpath, body);
-				return;
 			}
 			throw toError(err);
 		}
