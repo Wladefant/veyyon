@@ -2914,6 +2914,55 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
   });
 
+  it("refuses to recreate a title slot removed by an independent failed-fork writer", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-removed-title-slot-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic removed-slot archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Preserve original journal artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const identity = manager.getSessionId();
+      const archive = await manager.getArtifactPath("0");
+      if (!source || !archive) throw new Error("expected disposable source and artifact");
+      const original = await fs.readFile(source, "utf8");
+      const archiveBefore = await fs.readFile(archive);
+      const afterSlot = original.indexOf("\n") + 1;
+      expect(afterSlot).toBeGreaterThan(1);
+      const withoutSlot = original.slice(afterSlot);
+      expect(JSON.parse(withoutSlot.split("\n")[0]!).type).toBe("session");
+
+      // A separate writer removes the first fixed-width title record, leaving
+      // otherwise parseable legacy-shaped JSONL. Recovery must not reconstruct
+      // an old title and erase this independently modified source history.
+      await fs.writeFile(source, withoutSlot);
+      storage.protectedSourceFile = source;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected missing-slot integrity refusal");
+      const reasons = failure.errors.map((error: unknown) => String(error));
+      expect(reasons.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some((reason: string) => reason.includes("missing session title slot"))).toBe(true);
+      expect(manager.getSessionId()).toBe(identity);
+      expect(manager.getSessionFile()).toBe(source);
+      const preserved = await fs.readFile(source, "utf8");
+      expect(preserved.startsWith(withoutSlot)).toBe(true);
+      expect(await fs.readFile(archive)).toEqual(archiveBefore);
+      expect(() => manager.flushSync()).toThrow(/missing session title slot/);
+      expect(await fs.readFile(source, "utf8")).toBe(preserved);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
   it("refuses a second title slot appended by an independent failed-fork writer", async () => {
     using temp = TempDir.createSync("@veyyon-fork-foreign-title-slot-");
     const storage = new SyntheticForkSourceCloseRefusalStorage();
