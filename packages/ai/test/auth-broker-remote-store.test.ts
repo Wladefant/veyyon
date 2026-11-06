@@ -487,6 +487,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const initial = await peer.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
 		const revoked = initial.snapshot.credentials[0]!;
+		if (revoked.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
 		const unrelated = {
 			...revoked, id: revoked.id + 1_000_000,
 			credential: { ...revoked.credential, access: "access-synthetic-distinct-same-generation" },
@@ -566,6 +567,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const initial = await peer.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected synthetic initial broker state");
 		const revoked = initial.snapshot.credentials[0]!;
+		if (revoked.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
 		const generation = initial.snapshot.generation;
 		const distinct = {
 			...revoked, id: revoked.id + 1_000_001,
