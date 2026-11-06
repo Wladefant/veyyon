@@ -269,6 +269,15 @@ export interface SessionStorage {
 	exists(path: string): Promise<boolean>;
 	readText(path: string): Promise<string>;
 	/**
+	 * Optional byte-strict UTF-8 read for fail-closed history repair: unlike
+	 * ordinary text reads, malformed source bytes must never be republished as U+FFFD.
+	 */
+	readTextStrict?(path: string): Promise<string>;
+	/**
+	 * Optional synchronous byte-strict twin for failed-fork exit/flush repair.
+	 */
+	readTextSyncStrict?(path: string): string | undefined;
+	/**
 	 * Read a whole file without yielding, for a caller that cannot await.
 	 *
 	 * OPTIONAL, and the reason is the point: a backend that reaches a socket or a
@@ -710,6 +719,21 @@ export class FileSessionStorage implements SessionStorage {
 
 	readText(path: string): Promise<string> {
 		return Bun.file(path).text();
+	}
+
+	async readTextStrict(path: string): Promise<string> {
+		// Default UTF-8 text decoding replaces malformed bytes with U+FFFD, which
+		// would silently change an independently written journal during a repair.
+		return new TextDecoder("utf-8", { fatal: true }).decode(await fs.promises.readFile(path));
+	}
+
+	readTextSyncStrict(path: string): string | undefined {
+		try {
+			return new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(path));
+		} catch (err) {
+			if (isEnoent(err)) return undefined;
+			throw toError(err);
+		}
 	}
 
 	readTextSync(path: string): string | undefined {
