@@ -1246,6 +1246,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#removeCredentialById(id: number): void {
 		const next = this.#snapshot.credentials.filter(entry => entry.id !== id);
 		if (next.length === this.#snapshot.credentials.length) return;
+		// Every caller already received a broker-confirmed disable. An old SSE
+		// frame at the current generation is no more authoritative than this
+		// acknowledgement, even before a later canonical GET arrives.
+		this.#canonicalRemovedCredentialGeneration.set(id, this.#generation);
 		this.#snapshot = { ...this.#snapshot, credentials: next };
 		this.#appliedSnapshotRevision += 1;
 	}
