@@ -1681,6 +1681,10 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   // inside the actual rename hook. This deliberately exposes the residual CAS gap.
   appendForeignLineAtRename: string | undefined;
   forceNextSourceAtomicEperm = false;
+  // The other writer publishes a fresh journal at the vacated original path
+  // while Windows-style EPERM fallback holds the old inode at a backup path.
+  recreateJournalAfterMoveAside: string | undefined;
+  movedAsideJournalPath: string | undefined;
   // Synthetic-only seam; arm the read refusal after a failed writer close.
   refuseSourceReadOnClose = false;
   refuseNextSourceRead = false;
@@ -1698,6 +1702,12 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
       throw error;
     }
     super.renameSync(source, target);
+    if (source === this.protectedSourceFile && this.recreateJournalAfterMoveAside !== undefined) {
+      const replacement = this.recreateJournalAfterMoveAside;
+      this.recreateJournalAfterMoveAside = undefined;
+      this.movedAsideJournalPath = target;
+      nodeFs.writeFileSync(source, replacement);
+    }
   }
 
   override readText(target: string): Promise<string> {
@@ -2225,6 +2235,79 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       storage.rejectNextSourceClose = false;
       storage.forceNextSourceAtomicEperm = false;
       storage.appendForeignLineOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses Windows EPERM rollback that would overwrite a re-created foreign journal", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-eperm-foreign-recreate-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("original synthetic archive preserved", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original source with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !artifact) throw new Error("expected disposable source and artifact");
+      const preservedArtifact = await fs.readFile(artifact);
+      const foreignJournal = [
+        JSON.stringify({
+          type: "session", version: CURRENT_SESSION_VERSION, id: "independent-published-session",
+          timestamp: new Date().toISOString(), cwd: temp.path(),
+        }),
+        JSON.stringify({
+          type: "message", id: "independent-published-message", parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "user", content: "Fresh independent journal must not be overwritten",
+            timestamp: Date.now(),
+          },
+        }),
+        "",
+      ].join("\n");
+
+      storage.protectedSourceFile = sourceFile;
+      storage.recreateJournalAfterMoveAside = foreignJournal;
+      storage.rejectNextSourceClose = true;
+      storage.forceNextSourceAtomicEperm = true;
+
+      let failure: unknown;
+      try {
+        await manager.fork();
+      } catch (error) {
+        failure = error;
+      }
+      // Returning only the injected writer-close failure would misreport a
+      // destructive or unverified recovery as complete.
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed fork repair");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((error: string) => error.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((error: string) => /foreign|changed|reappeared|conflict|replace/i.test(error))).toBe(true);
+
+      expect(storage.recreateJournalAfterMoveAside).toBeUndefined();
+      expect(storage.forceNextSourceAtomicEperm).toBe(false);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      // A foreign writer published a different valid JSONL inode while the old
+      // source was moved aside. Neither the new journal nor the old source's
+      // archive/history may be silently discarded on failed recovery.
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(foreignJournal);
+      const backupPath = storage.movedAsideJournalPath;
+      if (!backupPath) throw new Error("expected captured EPERM move-aside path");
+      const backupText = await fs.readFile(backupPath, "utf8");
+      expect(backupText).toContain("Original source with artifact://0");
+      expect(await fs.readFile(artifact)).toEqual(preservedArtifact);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.forceNextSourceAtomicEperm = false;
+      storage.recreateJournalAfterMoveAside = undefined;
       await manager.close().catch(() => undefined);
     }
   });
