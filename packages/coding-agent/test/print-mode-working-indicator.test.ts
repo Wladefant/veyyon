@@ -9,6 +9,7 @@ import {
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { emptyUsage } from "@veyyon/catalog/models";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+
 function makeAssistantMessage(text: string): AssistantMessage {
 	const timestamp = Date.now();
 	const usage = emptyUsage();
