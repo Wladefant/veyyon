@@ -191,7 +191,7 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-refusal-"));
 		const journal = path.join(dir, "synthetic.jsonl");
 		const artifact = path.join(dir, "synthetic-artifact.log");
-		const original = 'ORIGINAL SYNTHETIC JOURNAL\\n';
+		const original = 'ORIGINAL SYNTHETIC JOURNAL\n';
 		const artifactBytes = "SYNTHETIC ARCHIVE BYTES";
 		fs.writeFileSync(journal, original);
 		fs.writeFileSync(artifact, artifactBytes);
@@ -214,7 +214,7 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		try {
 			const storage = new FileSessionStorage();
 			expect(() => storage.writeTextSync(journal, () => [
-				'REPLACEMENT SYNTHETIC JOURNAL\\n', 'COMPLETE TAIL\\n',
+				'REPLACEMENT SYNTHETIC JOURNAL\n', 'COMPLETE TAIL\n',
 			])).toThrow(/synthetic staged replacement EIO/);
 			expect(stagedPublications).toBe(2);
 			// The old EPERM fallback wrote directly to journal with "w" and
@@ -230,7 +230,7 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 	it("publishes the complete staged replacement when the EPERM retry succeeds", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-retry-"));
 		const journal = path.join(dir, "synthetic.jsonl");
-		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC HISTORY\\n");
+		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC HISTORY\n");
 		const rename = fs.renameSync;
 		let stagedPublications = 0;
 		const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
@@ -247,11 +247,11 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		try {
 			const storage = new FileSessionStorage();
 			expect(() => storage.writeTextSync(journal, () => [
-				'REPLACEMENT SYNTHETIC JOURNAL\\n', 'COMPLETE TAIL\\n',
+				'REPLACEMENT SYNTHETIC JOURNAL\n', 'COMPLETE TAIL\n',
 			])).not.toThrow();
 			expect(stagedPublications).toBe(2);
 			expect(fs.readFileSync(journal, "utf8")).toBe(
-				'REPLACEMENT SYNTHETIC JOURNAL\\nCOMPLETE TAIL\\n',
+				'REPLACEMENT SYNTHETIC JOURNAL\nCOMPLETE TAIL\n',
 			);
 		} finally {
 			renameSpy.mockRestore();
