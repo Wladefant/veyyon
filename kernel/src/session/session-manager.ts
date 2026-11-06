@@ -1000,7 +1000,9 @@ export class SessionManager {
 	 */
 	async #refreshForeignLines(requireReadable = false): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
-		if (this.#fileIsExactlyAsPublished()) return;
+		// A fixed-width title update writes in place: inode and byte count stay the
+		// same. Strict failed-fork recovery must inspect its actual contents.
+		if (!requireReadable && this.#fileIsExactlyAsPublished()) return;
 		if (requireReadable) {
 			const state = this.#storage.existsStateSync(this.#sessionFile);
 			if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
@@ -1029,8 +1031,8 @@ export class SessionManager {
 	 */
 	#refreshForeignLinesSync(): void {
 		if (!this.#persist || !this.#sessionFile) return;
-		if (this.#fileIsExactlyAsPublished()) return;
 		const repairingFailedFork = this.#abortedForkLifecycleIdsByFile.has(this.#sessionFile);
+		if (!repairingFailedFork && this.#fileIsExactlyAsPublished()) return;
 		if (repairingFailedFork && this.#storage.existsStateSync(this.#sessionFile) !== "present") {
 			throw new Error("Cannot verify current session journal");
 		}
@@ -1118,6 +1120,11 @@ export class SessionManager {
 				if (requireCompleteHistory) {
 					if (seenTitleSlot || seenSourceHeader) {
 						throw new Error("Cannot preserve unexpected session title slot during failed-fork repair");
+					}
+					// The title slot is mutable in place. A peer can change its
+					// fixed-width bytes while inode and length still look unchanged.
+					if (`${raw}\n` !== this.#titleSlotLine()) {
+						throw new Error("Cannot preserve independently modified session title slot during failed-fork repair");
 					}
 					seenTitleSlot = true;
 				}

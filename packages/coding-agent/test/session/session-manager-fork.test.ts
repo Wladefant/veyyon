@@ -2675,6 +2675,66 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
   });
 
+  it("refuses a same-size in-place title update by an independent writer during failed-fork recovery", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-title-in-place-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic in-place title archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original journal with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const sessionId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!source || !artifact) throw new Error("expected disposable original journal and archive");
+      const savedArtifact = await fs.readFile(artifact);
+      const originalBytes = await fs.readFile(source, "utf8");
+      const originalStat = nodeFs.statSync(source);
+      // The independent writer modifies the fixed-size first slot, with no
+      // append, inode replacement or total-length change.
+      const foreignSlot = serializeTitleSlot({
+        title: "independent synthetic updated title", source: "user", updatedAt: new Date().toISOString(),
+      });
+      const fd = nodeFs.openSync(source, "r+");
+      try {
+        const encoded = Buffer.from(foreignSlot, "utf8");
+        expect(nodeFs.writeSync(fd, encoded, 0, encoded.length, 0)).toBe(encoded.length);
+      } finally {
+        nodeFs.closeSync(fd);
+      }
+      expect(nodeFs.statSync(source).ino).toBe(originalStat.ino);
+      expect(nodeFs.statSync(source).size).toBe(originalStat.size);
+      const foreignBefore = await fs.readFile(source, "utf8");
+      expect(foreignBefore.startsWith(foreignSlot)).toBe(true);
+      expect(foreignBefore.slice(foreignSlot.length)).toBe(originalBytes.slice(foreignSlot.length));
+
+      storage.protectedSourceFile = source;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed title update refusal");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((cause: string) => cause.includes("independently modified session title slot"))).toBe(true);
+      expect(manager.getSessionFile()).toBe(source);
+      expect(manager.getSessionId()).toBe(sessionId);
+      const after = await fs.readFile(source, "utf8");
+      expect(after.startsWith(foreignSlot)).toBe(true);
+      expect(after.slice(foreignSlot.length).startsWith(originalBytes.slice(foreignSlot.length))).toBe(true);
+      expect(await fs.readFile(artifact)).toEqual(savedArtifact);
+      expect(() => manager.flushSync()).toThrow(/independently modified session title slot/);
+      expect(await fs.readFile(source, "utf8")).toBe(after);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
   it("refuses a second title slot appended by an independent failed-fork writer", async () => {
     using temp = TempDir.createSync("@veyyon-fork-foreign-title-slot-");
     const storage = new SyntheticForkSourceCloseRefusalStorage();
