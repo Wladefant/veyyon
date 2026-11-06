@@ -1176,7 +1176,10 @@ export class SessionManager {
 				// Read the file back first: a second manager holding the same path
 				// appends lines this manager has never seen, and a full-file body
 				// that omits them deletes them (see #refreshForeignLines).
-				await this.#refreshForeignLines();
+				// Failed-fork rollback must not overwrite an original journal that
+				// could contain unseen foreign lines when the source read fails.
+				// Preserve the existing best-effort policy for ordinary rewrites.
+				await this.#refreshForeignLines(this.#abortedForkLifecycleIdsByFile.has(sessionFile));
 				if (this.#diskEpoch !== epoch) return false;
 				const updatedFrom = this.#firstUpdatedEntry;
 				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;

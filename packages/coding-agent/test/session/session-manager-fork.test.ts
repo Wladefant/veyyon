@@ -1676,6 +1676,17 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNextSourceClose = false;
   appendForeignLineOnRefusal: string | undefined;
+  // Synthetic-only seam; arm the read refusal after a failed writer close.
+  refuseSourceReadOnClose = false;
+  refuseNextSourceRead = false;
+
+  override readText(target: string): Promise<string> {
+    if (target === this.protectedSourceFile && this.refuseNextSourceRead) {
+      this.refuseNextSourceRead = false;
+      return Promise.reject(new Error("synthetic source journal read refusal"));
+    }
+    return super.readText(target);
+  }
 
   override openWriter(
     target: string,
@@ -1696,6 +1707,10 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
           const foreignLine = this.appendForeignLineOnRefusal;
           this.appendForeignLineOnRefusal = undefined;
           if (foreignLine) await fs.appendFile(target, foreignLine);
+          if (this.refuseSourceReadOnClose) {
+            this.refuseSourceReadOnClose = false;
+            this.refuseNextSourceRead = true;
+          }
           throw new Error("synthetic source writer-close refusal");
         }
       },
@@ -2117,6 +2132,68 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         authStorage.close();
         if (!session) await manager.close();
       }
+    }
+  });
+
+  it("refuses to overwrite unreadable foreign history during failed-fork rollback", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-unreadable-foreign-tail-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic retained archive evidence", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original source with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected synthetic persisted source");
+      const sourceId = manager.getSessionId();
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected synthetic source artifact");
+      const originalArtifact = await fs.readFile(sourceArtifact);
+
+      const foreign: JsonlMessageEntry = {
+        type: "message",
+        id: "synthetic-unreadable-foreign-tail",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user", content: "Foreign history must survive read refusal", timestamp: Date.now(),
+        },
+      };
+      storage.protectedSourceFile = sourceFile;
+      storage.appendForeignLineOnRefusal = `${JSON.stringify(foreign)}\n`;
+      storage.rejectNextSourceClose = true;
+      storage.refuseSourceReadOnClose = true;
+
+      let failure: unknown;
+      try {
+        await manager.fork();
+      } catch (error) {
+        failure = error;
+      }
+      // The fault was consumed by the genuine rollback read, not preflight.
+      expect(storage.refuseNextSourceRead).toBe(false);
+      expect(failure).toBeInstanceOf(AggregateError);
+      const causes = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(causes.some(cause => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some(cause => cause.includes("Cannot verify current session journal"))).toBe(true);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+
+      // No extra caller flush: the failed repair must not report success or
+      // silently overwrite the independent writer's original journal bytes.
+      const disk = await fs.readFile(sourceFile, "utf8");
+      expect(disk).toContain("Original source with artifact://0");
+      expect(disk).toContain("Foreign history must survive read refusal");
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifact);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.refuseSourceReadOnClose = false;
+      storage.refuseNextSourceRead = false;
+      await manager.close().catch(() => undefined);
     }
   });
 });
