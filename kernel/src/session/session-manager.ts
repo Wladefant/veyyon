@@ -1107,11 +1107,13 @@ export class SessionManager {
 		// independently removed record, but a persisted entry that vanished
 		// must never be resurrected from stale memory.
 		const publishedLines = requireCompleteHistory ? this.#publishedFileState?.lines : undefined;
-		const missingPublishedIds = publishedLines
-			? new Set<string>()
-			: this.#publishedFileState?.ownedIds
-				? new Set(this.#publishedFileState.ownedIds)
-				: undefined;
+		const missingPublishedIds = !requireCompleteHistory
+			? undefined
+			: publishedLines
+				? new Set<string>()
+				: this.#publishedFileState?.ownedIds
+					? new Set(this.#publishedFileState.ownedIds)
+					: undefined;
 		if (publishedLines && missingPublishedIds) {
 			for (let i = 0; i < publishedLines.baseLength; i++) {
 				const id = publishedLines.base[i]?.id;
