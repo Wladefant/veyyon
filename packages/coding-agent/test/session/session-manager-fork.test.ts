@@ -1679,6 +1679,8 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   appendForeignLineOnRefusal: string | undefined;
   // Disposable raw bytes test strict failure handling before lossy UTF-8 decoding.
   appendForeignBytesOnRefusal: Buffer | undefined;
+  // Deliberately prepend a real UTF-8 BOM to a disposable already-written journal.
+  prependBomOnRefusal = false;
   // Test-only independent writer revises a previously owned line before the
   // strict source reread; the id and all other journal lines remain valid.
   rewriteOwnedRecordOnRefusal: "header" | "message" | undefined;
@@ -1818,6 +1820,11 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
           const rawPeer = this.appendForeignBytesOnRefusal;
           this.appendForeignBytesOnRefusal = undefined;
           if (rawPeer) await fs.appendFile(target, rawPeer);
+          if (this.prependBomOnRefusal) {
+            this.prependBomOnRefusal = false;
+            const original = await fs.readFile(target);
+            await fs.writeFile(target, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), original]));
+          }
           const revision = this.rewriteOwnedRecordOnRefusal;
           this.rewriteOwnedRecordOnRefusal = undefined;
           if (revision) {
@@ -2741,6 +2748,57 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     } finally {
       storage.rejectNextSourceClose = false;
       storage.appendForeignBytesOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+
+  it("refuses a new UTF-8 BOM at the beginning of the original failed-fork journal", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-strict-bom-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic BOM preservation evidence", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Keep synthetic artifact://0 intact", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const originalFile = manager.getSessionFile();
+      const originalId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!originalFile || !artifact) throw new Error("expected disposable original and sidecar");
+      const archiveBefore = await fs.readFile(artifact);
+      const prefixBefore = await fs.readFile(originalFile);
+      storage.protectedSourceFile = originalFile;
+      storage.prependBomOnRefusal = true;
+      storage.rejectNextSourceClose = true;
+
+      // TextDecoder's default ignoreBOM=false strips the BOM: even a fatal
+      // decoder then sees clean JSON and may erase these three peer bytes.
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected failed-fork rollback refusal");
+      const reasons = failure.errors.map((error: unknown) => String(error));
+      expect(reasons.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some((reason: string) =>
+        reason.includes("Cannot preserve malformed session journal") ||
+        reason.includes("Cannot verify current session journal")
+      )).toBe(true);
+
+      const bytes = await fs.readFile(originalFile);
+      expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
+      expect(bytes.subarray(3, 3 + prefixBefore.length)).toEqual(prefixBefore);
+      expect(await fs.readFile(artifact)).toEqual(archiveBefore);
+      expect(manager.getSessionId()).toBe(originalId);
+      expect(manager.getSessionFile()).toBe(originalFile);
+      expect(() => manager.flushSync()).toThrow(/Cannot preserve malformed session journal|Cannot verify current session journal/);
+      expect(await fs.readFile(originalFile)).toEqual(bytes);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.prependBomOnRefusal = false;
       await manager.close().catch(() => undefined);
     }
   });
