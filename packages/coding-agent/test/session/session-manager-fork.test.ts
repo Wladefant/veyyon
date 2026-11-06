@@ -2531,8 +2531,10 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         const archive = await fs.readFile(artifact);
         const peerId = "independent-unpublished-history";
         const idMembers = variant === "escaped-id"
-          ? `"\\\\u0069d":"${peerId}","id":${JSON.stringify(ownerId)}`
-          : `"id":"${peerId}","id":${JSON.stringify(ownerId)}`;
+          ? `"\\u0069d":"${peerId}","id":${JSON.stringify(ownerId)}`
+          : variant === "nested-content"
+            ? `"id":"${peerId}"`
+            : `"id":"${peerId}","id":${JSON.stringify(ownerId)}`;
         const contentMembers = variant === "nested-content"
           ? '"content":"independent original","content":"masked content"'
           : '"content":"independent original"';
