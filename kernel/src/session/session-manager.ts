@@ -120,6 +120,48 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 const CHUNK_TARGET_CHARS = 1 << 20;
 
 /**
+ * JSON.parse silently takes the last duplicate object member. In a strict
+ * failed-fork repair this could make a foreign line appear to have our ID.
+ * Check raw member names after JSON syntax validation, including escaped-
+ * equivalent names; nested objects retain independent name namespaces.
+ */
+function hasDuplicateJsonMemberNames(raw: string): boolean {
+	const containers: Array<Set<string> | null> = [];
+	let index = 0;
+	while (index < raw.length) {
+		const char = raw[index];
+		if (char === '"') {
+			const start = index++;
+			while (index < raw.length) {
+				if (raw[index] === "\\") index += 2;
+				else if (raw[index] === '"') { index++; break; }
+				else index++;
+			}
+			const names = containers[containers.length - 1];
+			if (names) {
+				let following = index;
+				while (
+					raw[following] === " " || raw[following] === "\t" ||
+					raw[following] === "\r" || raw[following] === "\n"
+				) following++;
+				if (raw[following] === ":") {
+					const name = JSON.parse(raw.slice(start, index)) as string;
+					if (names.has(name)) return true;
+					names.add(name);
+				}
+			}
+			continue;
+		}
+		if (char === "{") containers.push(new Set<string>());
+		else if (char === "[") containers.push(null);
+		else if (char === "}" || char === "]") containers.pop();
+		index++;
+	}
+	return false;
+}
+
+
+/**
  * Where this manager's entry lines sit in the file it last published. Valid while that file is
  * exactly what it published plus the entries it appended since, and holds no line from another
  * writer, so the bytes before any entry are known without serializing anything.
@@ -1047,7 +1089,10 @@ export class SessionManager {
 				}
 				continue;
 			}
-			if (requireCompleteHistory && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
+			if (requireCompleteHistory && hasDuplicateJsonMemberNames(raw)) {
+			throw new Error("Cannot preserve ambiguous session journal during failed-fork repair");
+		}
+		if (requireCompleteHistory && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
 				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
 			}
 			// The title slot is a fixed-width line this manager rewrites every time,

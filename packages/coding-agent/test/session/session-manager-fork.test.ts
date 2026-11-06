@@ -2506,6 +2506,63 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     },
   );
 
+  it("refuses duplicate JSON members that could hide independent failed-fork history", async () => {
+    // JSON.parse keeps the last duplicate property, including escaped-equivalent
+    // names. A peer's earlier entry ID must not be masked by our own ID.
+    const variants = ["literal-id", "escaped-id", "nested-content"] as const;
+    for (const variant of variants) {
+      using temp = TempDir.createSync(`@veyyon-fork-duplicate-id-${variant}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic artifact survives ambiguous rollback", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original owner history with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const ownerId = manager.getEntries().find(entry => entry.type === "message")?.id;
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !ownerId || !artifact) throw new Error("expected disposable original journal");
+        const before = await fs.readFile(sourceFile, "utf8");
+        const archive = await fs.readFile(artifact);
+        const peerId = "independent-unpublished-history";
+        const idMembers = variant === "escaped-id"
+          ? `"\\\\u0069d":"${peerId}","id":${JSON.stringify(ownerId)}`
+          : `"id":"${peerId}","id":${JSON.stringify(ownerId)}`;
+        const contentMembers = variant === "nested-content"
+          ? '"content":"independent original","content":"masked content"'
+          : '"content":"independent original"';
+        const foreignLine = `{"type":"message",${idMembers},"parentId":null,"timestamp":"2026-11-06T00:00:00.000Z","message":{"role":"user",${contentMembers},"timestamp":1}}` + String.fromCharCode(10);
+        storage.protectedSourceFile = sourceFile;
+        storage.appendForeignLineOnRefusal = foreignLine;
+        storage.rejectNextSourceClose = true;
+
+        let failed: unknown;
+        try { await manager.fork(); } catch (error) { failed = error; }
+        expect(failed).toBeInstanceOf(AggregateError);
+        if (!(failed instanceof AggregateError)) throw new Error("expected failed-fork integrity refusal");
+        const causes = failed.errors.map((error: unknown) => String(error));
+        expect(causes.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+        expect(causes.some((reason: string) => reason.includes("Cannot preserve ambiguous session journal"))).toBe(true);
+        const preserved = await fs.readFile(sourceFile, "utf8");
+        expect(preserved).toBe(before + foreignLine);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(() => manager.flushSync()).toThrow(/Cannot preserve ambiguous session journal/);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(preserved);
+        expect(await fs.readFile(artifact)).toEqual(archive);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.appendForeignLineOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
   it("fails closed on incomplete or malformed independent JSONL during failed-fork repair", async () => {
     // Two byte-distinct hazards: a writer interrupted mid-line, and a fully
     // terminated line whose JSON parser cannot reconstruct any foreign ID.
