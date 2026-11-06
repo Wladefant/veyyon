@@ -2225,7 +2225,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       )).toBe(false);
       expect(repaired.filter(entry =>
         entry.type === "message" && entry.message.role === "user" &&
-        entry.message.content.startsWith("Foreign ")
+        typeof entry.message.content === "string" && entry.message.content.startsWith("Foreign ")
       )).toHaveLength(2);
       expect(await fs.readFile(artifactFile)).toEqual(artifactBytes);
     } finally {
