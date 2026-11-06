@@ -1677,12 +1677,20 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   rejectNextSourceClose = false;
   appendForeignLineOnRefusal: string | undefined;
   appendForeignLineBeforeRepairPublish: string | undefined;
+  // Independent append after the storage's final synchronous publication guard,
+  // inside the actual rename hook. This deliberately exposes the residual CAS gap.
+  appendForeignLineAtRename: string | undefined;
   forceNextSourceAtomicEperm = false;
   // Synthetic-only seam; arm the read refusal after a failed writer close.
   refuseSourceReadOnClose = false;
   refuseNextSourceRead = false;
 
   override renameSync(source: string, target: string): void {
+    if (target === this.protectedSourceFile && this.appendForeignLineAtRename) {
+      const foreignLine = this.appendForeignLineAtRename;
+      this.appendForeignLineAtRename = undefined;
+      nodeFs.appendFileSync(target, foreignLine);
+    }
     if (this.forceNextSourceAtomicEperm && target === this.protectedSourceFile) {
       this.forceNextSourceAtomicEperm = false;
       const error = new Error("synthetic Windows-style EPERM replacement refusal") as NodeJS.ErrnoException;
@@ -2293,6 +2301,60 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       storage.rejectNextSourceClose = false;
       storage.appendForeignLineOnRefusal = undefined;
       storage.appendForeignLineBeforeRepairPublish = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("preserves a separate append landing after the final guard, immediately before rename", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-final-guard-race-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic retained sidecar", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original journal keeps artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const originalFile = manager.getSessionFile();
+      const originalId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!originalFile || !artifact) throw new Error("expected synthetic journal and sidecar");
+      const archiveBefore = await fs.readFile(artifact);
+      const entry = (id: string, content: string) => `${JSON.stringify({
+        type: "message", id, parentId: null, timestamp: new Date().toISOString(),
+        message: { role: "user", content, timestamp: Date.now() },
+      })}\n`;
+
+      storage.protectedSourceFile = originalFile;
+      // The first independent append forces a successful source reread. The
+      // second is written synchronously in renameSync, AFTER commitGuard().
+      storage.appendForeignLineOnRefusal = entry(
+        "synthetic-before-reread", "Independent entry before rollback reread",
+      );
+      storage.appendForeignLineAtRename = entry(
+        "synthetic-last-window", "Independent entry after final guard",
+      );
+      storage.rejectNextSourceClose = true;
+      await expect(manager.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
+      expect(storage.appendForeignLineAtRename).toBeUndefined();
+      expect(manager.getSessionFile()).toBe(originalFile);
+      expect(manager.getSessionId()).toBe(originalId);
+
+      // In the current implementation the final guard checks the OLD inode,
+      // then rename replaces it. An uncoordinated append in that gap is lost.
+      // This is an acceptance regression, not a known-green test.
+      const disk = await fs.readFile(originalFile, "utf8");
+      expect(disk).toContain("Original journal keeps artifact://0");
+      expect(disk).toContain("Independent entry before rollback reread");
+      expect(disk).toContain("Independent entry after final guard");
+      expect(disk).not.toContain('"reason":"session_switched"');
+      expect(await fs.readFile(artifact)).toEqual(archiveBefore);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      storage.appendForeignLineAtRename = undefined;
       await manager.close().catch(() => undefined);
     }
   });
