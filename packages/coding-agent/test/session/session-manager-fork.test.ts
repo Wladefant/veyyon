@@ -1680,6 +1680,7 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   // Test-only independent writer revises a previously owned line before the
   // strict source reread; the id and all other journal lines remain valid.
   rewriteOwnedRecordOnRefusal: "header" | "message" | undefined;
+  reviseAbortedMarkerOnRefusal: "message" | "reason" | undefined;
   appendForeignLineBeforeRepairPublish: string | undefined;
   // Independent append after the storage's final synchronous publication guard,
   // inside the actual rename hook. This deliberately exposes the residual CAS gap.
@@ -1825,6 +1826,30 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
               };
             }
             rows[rowIndex] = JSON.stringify(record);
+            await fs.writeFile(target, rows.join("\n"));
+          }
+          const alteredMarker = this.reviseAbortedMarkerOnRefusal;
+          this.reviseAbortedMarkerOnRefusal = undefined;
+          if (alteredMarker) {
+            const rows = (await fs.readFile(target, "utf8")).split("\n");
+            const markerIndex = rows.findIndex(row => {
+              if (!row) return false;
+              try {
+                const entry = JSON.parse(row) as { type?: string; state?: string; reason?: string };
+                return entry.type === "session_lifecycle" &&
+                  entry.state === "ended" && entry.reason === "session_switched";
+              } catch { return false; }
+            });
+            if (markerIndex < 0) throw new Error("expected synthetic aborted fork marker on disk");
+            const originalMarker = JSON.parse(rows[markerIndex]!) as Record<string, unknown>;
+            // Keep the marker's ID while independently changing a valid record.
+            rows[markerIndex] = JSON.stringify(alteredMarker === "message"
+              ? {
+                type: "message", id: originalMarker.id, parentId: null,
+                timestamp: originalMarker.timestamp,
+                message: { role: "user", content: "Synthetic peer with reused aborted marker ID", timestamp: Date.now() },
+              }
+              : { ...originalMarker, reason: "closed" });
             await fs.writeFile(target, rows.join("\n"));
           }
           if (this.refuseSourceReadOnClose) {
@@ -2905,6 +2930,58 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       } finally {
         storage.rejectNextSourceClose = false;
         storage.rewriteOwnedRecordOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("refuses a peer rewrite that reuses an aborted fork marker ID", async () => {
+    for (const variant of ["message", "reason"] as const) {
+      using temp = TempDir.createSync(`@veyyon-fork-aborted-marker-collision-${variant}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic marker-collision archive", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Retain artifact://0 through refused recovery", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const source = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!source || !artifact) throw new Error("expected disposable session and archive");
+        const before = await fs.readFile(source, "utf8");
+        const artifactBefore = await fs.readFile(artifact);
+        storage.protectedSourceFile = source;
+        storage.reviseAbortedMarkerOnRefusal = variant;
+        storage.rejectNextSourceClose = true;
+
+        let failure: unknown;
+        try { await manager.fork(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected collision refusal");
+        const errors = failure.errors.map((error: unknown) => String(error));
+        expect(errors.some((error: string) => error.includes("synthetic source writer-close refusal"))).toBe(true);
+        expect(errors.some((error: string) =>
+          error.includes("Cannot preserve independently modified aborted fork lifecycle marker")
+        )).toBe(true);
+
+        const observed = await fs.readFile(source, "utf8");
+        expect(observed).not.toBe(before);
+        expect(observed).toContain(variant === "message"
+          ? "Synthetic peer with reused aborted marker ID"
+          : '"reason":"closed"');
+        expect(manager.getSessionFile()).toBe(source);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(await fs.readFile(artifact)).toEqual(artifactBefore);
+        expect(() => manager.flushSync()).toThrow(/independently modified aborted fork lifecycle marker/);
+        expect(await fs.readFile(source, "utf8")).toBe(observed);
+        expect(await fs.readFile(artifact)).toEqual(artifactBefore);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.reviseAbortedMarkerOnRefusal = undefined;
         await manager.close().catch(() => undefined);
       }
     }
