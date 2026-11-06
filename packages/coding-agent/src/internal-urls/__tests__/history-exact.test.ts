@@ -8,8 +8,8 @@ import {
 	parseHistorySearchRequest,
 	readLiveHistoryEntry,
 	readStoredHistoryEntry,
-	searchStoredHistoryEntries,
 	searchLiveHistoryEntries,
+	searchStoredHistoryEntries,
 } from "../history-exact";
 
 describe("history exact record lookup", () => {
@@ -211,7 +211,10 @@ describe("history exact record lookup", () => {
 			const file = path.join(dir.path(), "session.jsonl");
 			const records = [
 				{ type: "session", id: "s-preview" },
-				{ type: "message", id: "unicode", parentId: null, message: "İ".repeat(100) + " NeedLe archived" },
+				{
+					type: "message", id: "unicode", parentId: null,
+					message: "İ".repeat(100) + " NeedLe archived",
+				},
 				{ type: "message", id: "plain", parentId: "unicode", message: "Plain ASCII NeedLe" },
 			];
 			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
@@ -225,7 +228,9 @@ describe("history exact record lookup", () => {
 				expect(match.revision).toMatch(/^[0-9a-f]{64}$/);
 			}
 			// Search previews are not evidence substitutions; exact reads remain byte-preserving.
-			const exact = await readStoredHistoryEntry(file, { entryId: "unicode", leafId: "plain", offset: 0, limit: 1000 });
+			const exact = await readStoredHistoryEntry(file, {
+				entryId: "unicode", leafId: "plain", offset: 0, limit: 1000,
+			});
 			expect(exact.status).toBe("ok");
 			expect(exact.fragment).toBe(JSON.stringify(records[1]));
 		} finally {
@@ -235,8 +240,14 @@ describe("history exact record lookup", () => {
 
 	it("keeps Unicode and ordinary mixed-case matches visible in live branch previews", () => {
 		const branch = [
-			{ type: "message", id: "unicode", parentId: null, message: { role: "user", content: "İ".repeat(100) + " NeedLe live" } },
-			{ type: "message", id: "plain", parentId: "unicode", message: { role: "assistant", content: "ASCII NeedLe live" } },
+			{
+				type: "message", id: "unicode", parentId: null,
+				message: { role: "user", content: "İ".repeat(100) + " NeedLe live" },
+			},
+			{
+				type: "message", id: "plain", parentId: "unicode",
+				message: { role: "assistant", content: "ASCII NeedLe live" },
+			},
 		] as unknown as SessionEntry[];
 		const found = searchLiveHistoryEntries(branch, { query: "needle", limit: 2 });
 		expect(found.status).toBe("ok");
