@@ -492,11 +492,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const releaseOldFrame = Promise.withResolvers<void>();
 		let oldFrameProcessed = false;
 		let canonicalReads = 0;
+		let revokedCanonicalSeen = false;
+		const allowLaterCanonicalRead = Promise.withResolvers<void>();
 		const brokerRead = peer.fetchSnapshot.bind(peer);
 		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
 			canonicalReads += 1;
+			// A second GET must not mask a stale SSE restoration before assertion.
+			if (revokedCanonicalSeen) await allowLaterCanonicalRead.promise;
 			const canonical = await brokerRead(options);
 			if (canonical.status !== 200) throw new Error("expected unconditional broker truth");
+			if (canonical.snapshot.credentials.length === 0) revokedCanonicalSeen = true;
 			// The restarted broker may reuse the previous stream's number.
 			// Its changed CONTENT, not this numeric generation, is authoritative.
 			return {
@@ -524,7 +529,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await ready.promise;
 			expect(storage!.disableCredentialById(revoked.id, "synthetic same-generation restart revoke")).toBe(true);
 			// Drive the production idle verifier, not a manual refreshSnapshot().
-			await waitUntil(() => canonicalReads > 0 && remote!.snapshot.credentials.length === 0, 4_000);
+			await waitUntil(() => revokedCanonicalSeen && canonicalReads > 0 && remote!.snapshot.credentials.length === 0, 4_000);
 			expect(remote.snapshot.generation).toBe(generation);
 			releaseOldFrame.resolve();
 			await waitUntil(() => oldFrameProcessed, 2_000);
@@ -532,6 +537,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			expect(remote.snapshot.credentials.some(entry => entry.id === revoked.id)).toBe(false);
 			expect(remote.listAuthCredentials()).toEqual([]);
 		} finally {
+			allowLaterCanonicalRead.resolve();
 			releaseOldFrame.resolve();
 		}
 	});
