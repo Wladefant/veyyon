@@ -308,6 +308,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * broker incarnation. Only a later canonical GET may reauthorize the ID.
 	 */
 	#canonicallyRemovedCredentialIds = new Set<number>();
+	/** A broker-confirmed same-ID reauthorization must retire its older SSE connection. */
+	#activeSnapshotStreamAbort?: AbortController;
 	#usageOverlays: Map<string, UsageReport> = new Map();
 	#backgroundAbort = new AbortController();
 	#cache: Map<string, CacheEntry> = new Map();
@@ -428,8 +430,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 		// A fresh canonical broker response, unlike an old SSE replay, can
 		// legitimately reintroduce the same ID after a broker restart.
+		const reauthorized = [...incomingIds].some(id => this.#canonicallyRemovedCredentialIds.has(id));
 		for (const id of incomingIds) this.#canonicallyRemovedCredentialIds.delete(id);
 		this.#applySnapshot(snapshot, generation);
+		// The old stream has no broker-incarnation identity: even a delayed
+		// higher-generation `removed` frame could invalidate the fresh grant.
+		// Retire this transport and reconnect before accepting further SSE.
+		if (reauthorized) this.#activeSnapshotStreamAbort?.abort();
 		return true;
 	}
 
@@ -603,16 +610,19 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	async #consumeSnapshotStream(): Promise<void> {
 		const revisionAtConnect = this.#appliedSnapshotRevision;
 		let firstFrame = true;
-		const iterator = this.#client.openSnapshotStream({ signal: this.#backgroundAbort.signal });
+		const streamAbort = new AbortController();
+		const streamSignal = AbortSignal.any([this.#backgroundAbort.signal, streamAbort.signal]);
+		this.#activeSnapshotStreamAbort = streamAbort;
+		const iterator = this.#client.openSnapshotStream({ signal: streamSignal });
 		const watchdogAbort = new AbortController();
-		const watchdogSignal = AbortSignal.any([this.#backgroundAbort.signal, watchdogAbort.signal]);
+		const watchdogSignal = AbortSignal.any([streamSignal, watchdogAbort.signal]);
 		// Verify broker truth even when the SSE connection never yields its first
 		// frame (for example a proxy holding the initial response body open).
 		// The existing revision fence rejects a late superseded initial frame.
 		const watchdog = this.#verifyIdleSnapshotStream(watchdogSignal);
 		try {
 			for await (const event of iterator) {
-				if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+				if (this.#closed || streamSignal.aborted) break;
 				if (firstFrame && event.kind === "snapshot") {
 					// A reconnect starts with an authoritative full snapshot, even after
 					// the broker resets its generation. A newer local GET during connect
@@ -643,6 +653,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			}
 		} finally {
 			this.#streamingActive = false;
+			if (this.#activeSnapshotStreamAbort === streamAbort) this.#activeSnapshotStreamAbort = undefined;
+			streamAbort.abort();
 			watchdogAbort.abort();
 			await watchdog;
 		}

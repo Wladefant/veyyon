@@ -648,6 +648,89 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+
+	test("canonical same-ID reauthorization retires an old SSE stream before stale replay", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
+		const freshEntry = {
+			...original,
+			credential: { ...original.credential, access: "access-synthetic-reauthorized" },
+		};
+		// Broker restarts can reissue the same ID at a lower numeric generation.
+		let canonical: SnapshotResponse = initial.snapshot;
+		spyOn(client, "fetchSnapshot").mockImplementation(async () => ({
+			status: 200 as const, generation: canonical.generation, snapshot: canonical,
+		}));
+		const connected = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldFinished = Promise.withResolvers<void>();
+		const allowNewStream = Promise.withResolvers<void>();
+		let connections = 0;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			if (connections++ === 0) {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				connected.resolve();
+				try {
+					// A relay can have queued frames even after its connection aborts.
+					await releaseOld.promise;
+					yield {
+						kind: "entry" as const, entry: original,
+						generation: initial.snapshot.generation + 50,
+						serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					};
+					yield {
+						kind: "removed" as const, id: original.id,
+						generation: initial.snapshot.generation + 51,
+						serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					};
+					yield { kind: "snapshot" as const, ...initial.snapshot, generation: initial.snapshot.generation + 52 };
+				} finally {
+					oldFinished.resolve();
+				}
+				return;
+			}
+			await allowNewStream.promise;
+			if (opts.signal?.aborted) return;
+			// A newly established stream must still be able to revoke A.
+			yield { kind: "snapshot" as const, ...canonical };
+			yield {
+				kind: "removed" as const, id: original.id, generation: canonical.generation + 1,
+				serverNowMs: canonical.serverNowMs, refresher: canonical.refresher,
+			};
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+		});
+		try {
+			await connected.promise;
+			canonical = { ...initial.snapshot, generation: 1, credentials: [] };
+			await remote.refreshSnapshot();
+			expect(remote.listAuthCredentials()).toEqual([]);
+			canonical = { ...initial.snapshot, generation: 2, credentials: [freshEntry] };
+			await remote.refreshSnapshot();
+			expect(remote.listAuthCredentials()[0]?.credential).toMatchObject({
+				type: "oauth", access: "access-synthetic-reauthorized",
+			});
+			releaseOld.resolve();
+			await oldFinished.promise;
+			// Old entry, removal and full frames cannot overwrite canonical reuse.
+			expect(remote.listAuthCredentials()[0]?.credential).toMatchObject({
+				type: "oauth", access: "access-synthetic-reauthorized",
+			});
+			await waitUntil(() => connections >= 2, 4_000);
+			allowNewStream.resolve();
+			await waitUntil(() => remote!.listAuthCredentials().length === 0, 4_000);
+			expect(remote.listAuthCredentials()).toEqual([]);
+		} finally {
+			releaseOld.resolve();
+			allowNewStream.resolve();
+		}
+	});
+
 	test("broker-confirmed disable stays revoked against queued equal or higher-generation SSE frames", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
