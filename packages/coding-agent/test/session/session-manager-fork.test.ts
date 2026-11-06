@@ -15,6 +15,7 @@ import {
 } from "@veyyon/kernel/session/session-entries";
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
 import { FileSessionStorage, type SessionFileBody, type SessionStorageWriter, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
 import { getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
@@ -2622,6 +2623,50 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       }
     },
   );
+
+  it("refuses a second title slot appended by an independent failed-fork writer", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-title-slot-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic original title-slot archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original history with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const identity = manager.getSessionId();
+      const archive = await manager.getArtifactPath("0");
+      if (!source || !archive) throw new Error("expected original synthetic source and archive");
+      const sourceBefore = await fs.readFile(source, "utf8");
+      const archiveBefore = await fs.readFile(archive);
+      const foreignTitle = serializeTitleSlot({ title: "independent synthetic title", updatedAt: new Date().toISOString() });
+      storage.protectedSourceFile = source;
+      storage.appendForeignLineOnRefusal = foreignTitle;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected strict title-slot refusal");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((cause: string) => cause.includes("Cannot preserve unexpected session title slot"))).toBe(true);
+      expect(manager.getSessionFile()).toBe(source);
+      expect(manager.getSessionId()).toBe(identity);
+      const sourceAfter = await fs.readFile(source, "utf8");
+      expect(sourceAfter.startsWith(sourceBefore)).toBe(true);
+      expect(sourceAfter.endsWith(foreignTitle)).toBe(true);
+      expect(await fs.readFile(archive)).toEqual(archiveBefore);
+      expect(() => manager.flushSync()).toThrow(/Cannot preserve unexpected session title slot/);
+      expect(await fs.readFile(source, "utf8")).toBe(sourceAfter);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
 
   it("refuses a foreign or duplicate source header during failed-fork repair", async () => {
     for (const variant of ["foreign-header", "duplicate-owner-header"] as const) {

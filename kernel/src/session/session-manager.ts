@@ -1071,6 +1071,7 @@ export class SessionManager {
 			: undefined;
 		let liveWriterEntries = 0;
 		let seenSourceHeader = false;
+		let seenTitleSlot = false;
 		for (const raw of text.split("\n")) {
 			// Most entry lines open with their id, so a line this manager wrote is known
 			// without parsing it. Parsing every line was most of a refresh: 231ms of a
@@ -1110,7 +1111,17 @@ export class SessionManager {
 				}
 				continue;
 			}
-			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE) continue;
+			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE) {
+				// The fixed-width title slot belongs before the original header.
+				// An appended peer slot is history we cannot silently discard.
+				if (requireCompleteHistory) {
+					if (seenTitleSlot || seenSourceHeader) {
+						throw new Error("Cannot preserve unexpected session title slot during failed-fork repair");
+					}
+					seenTitleSlot = true;
+				}
+				continue;
+			}
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
 			if (requireCompleteHistory && !id) {
 				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
