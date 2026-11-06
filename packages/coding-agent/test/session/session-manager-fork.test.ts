@@ -16,7 +16,7 @@ import {
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
-import { FileSessionStorage, type SessionFileBody, type SessionStorageWriter, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
+import { FileSessionStorage, MemorySessionStorage, type SessionFileBody, type SessionStorageWriter, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
 import { getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { getTerminalId } from "@veyyon/utils/ttyid";
@@ -2758,6 +2758,69 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     } finally {
       storage.rejectNextSourceClose = false;
       storage.appendForeignBytesOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+
+  it("repairs a failed fork on text-native memory storage without refusing a valid strict reader", async () => {
+    // Memory storage has no raw undecoded bytes, so its exact-text reader
+    // remains safe when strict file-backed byte decoding becomes mandatory.
+    class RejectOneCloseMemoryStorage extends MemorySessionStorage {
+      refuseNextClose = false;
+
+      override openWriter(target: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
+        const writer = super.openWriter(target, options);
+        const actualClose = writer.close.bind(writer);
+        writer.close = async () => {
+          await actualClose();
+          if (this.refuseNextClose) {
+            this.refuseNextClose = false;
+            throw new Error("synthetic memory source close refusal");
+          }
+        };
+        return writer;
+      }
+    }
+
+    using temp = TempDir.createSync("@veyyon-fork-memory-strict-read-");
+    const storage = new RejectOneCloseMemoryStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      manager.appendMessage({
+        role: "user", content: "Synthetic memory history survives a rejected fork", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      manager.appendMessage({
+        role: "user", content: "Second synthetic append uses a writer", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const source = manager.getSessionFile();
+      const id = manager.getSessionId();
+      if (!source) throw new Error("expected memory-backed source journal");
+      const before = await storage.readText(source);
+      expect(before).toContain("Second synthetic append uses a writer");
+      expect(await storage.readTextStrict(source)).toBe(before);
+      expect(storage.readTextSyncStrict(source)).toBe(before);
+
+      storage.refuseNextClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (err) { failure = err; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected source-close failure");
+      expect(failure.errors.some((err: unknown) =>
+        String(err).includes("synthetic memory source close refusal")
+      )).toBe(true);
+      expect(manager.getSessionId()).toBe(id);
+      expect(manager.getSessionFile()).toBe(source);
+      const after = await storage.readText(source);
+      expect(after).toBe(before);
+      expect(after).not.toContain('"reason":"session_switched"');
+      expect(storage.readTextSyncStrict(source)).toBe(before);
+    } finally {
+      storage.refuseNextClose = false;
       await manager.close().catch(() => undefined);
     }
   });

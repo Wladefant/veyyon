@@ -1357,6 +1357,17 @@ export class MemorySessionStorage implements SessionStorage {
 		return entry ? materializeMemoryEntry(entry) : undefined;
 	}
 
+	// MemorySessionStorage holds already-decoded text chunks, never raw bytes.
+	// Its existing exact-string reads therefore satisfy byte-strict recovery:
+	// there is no external UTF-8 decoder that could replace malformed bytes.
+	readTextStrict(path: string): Promise<string> {
+		return this.readText(path);
+	}
+
+	readTextSyncStrict(path: string): string | undefined {
+		return this.readTextSync(path);
+	}
+
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
 		const entry = this.#files.get(path);
 		if (!entry) return Promise.reject(new Error(`File not found: ${path}`));
