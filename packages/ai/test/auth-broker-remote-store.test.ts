@@ -559,6 +559,85 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+
+	test("explicit broker refresh fences same-generation stale SSE without blocking distinct updates", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker state");
+		const revoked = initial.snapshot.credentials[0]!;
+		const generation = initial.snapshot.generation;
+		const distinct = {
+			...revoked, id: revoked.id + 1_000_001,
+			credential: { ...revoked.credential, access: "access-synthetic-refresh-distinct" },
+		};
+		const streamReady = Promise.withResolvers<void>();
+		const releaseStaleFrames = Promise.withResolvers<void>();
+		const staleFramesFinished = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			const abortRelease = () => releaseStaleFrames.resolve();
+			opts.signal?.addEventListener("abort", abortRelease, { once: true });
+			try {
+				await releaseStaleFrames.promise;
+			} finally {
+				opts.signal?.removeEventListener("abort", abortRelease);
+			}
+			if (opts.signal?.aborted) return;
+			yield {
+				kind: "entry" as const, entry: revoked, generation,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			yield {
+				kind: "entry" as const, entry: distinct, generation,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			staleFramesFinished.resolve();
+			await untilAborted(opts.signal);
+		});
+		const realFetch = client.fetchSnapshot.bind(client);
+		let simulateCanonicalReauthorization = false;
+		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
+			if (simulateCanonicalReauthorization) {
+				// Only an authoritative GET, not an old SSE frame, may
+				// restore this identity at the broker's reused generation.
+				return {
+					status: 200 as const, generation,
+					snapshot: { ...initial.snapshot, generation },
+				};
+			}
+			const response = await realFetch(options);
+			if (response.status !== 200) throw new Error("expected unconditional broker snapshot");
+			return {
+				status: 200 as const, generation,
+				snapshot: { ...response.snapshot, generation },
+			};
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+		});
+		try {
+			await streamReady.promise;
+			expect(storage!.disableCredentialById(revoked.id, "synthetic explicit refresh revocation")).toBe(true);
+			await remote.refreshSnapshot();
+			expect(remote.snapshot.generation).toBe(generation);
+			expect(remote.listAuthCredentials()).toEqual([]);
+			releaseStaleFrames.resolve();
+			await staleFramesFinished.promise;
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([distinct.id]);
+			// A later fresh canonical response can explicitly reauthorize
+			// a formerly removed identity at the SAME broker generation.
+			simulateCanonicalReauthorization = true;
+			await remote.refreshSnapshot();
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([revoked.id]);
+			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([revoked.id]);
+		} finally {
+			releaseStaleFrames.resolve();
+		}
+	});
+
 	test("pending local safety blocks do not make unchanged SSE replays fresh", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		storage!.upsertCredential("anthropic", mintOAuthCredential("pending-replay", Date.now() + 120_000));
