@@ -1676,6 +1676,7 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNextSourceClose = false;
   appendForeignLineOnRefusal: string | undefined;
+  appendForeignLineBeforeRepairPublish: string | undefined;
   // Synthetic-only seam; arm the read refusal after a failed writer close.
   refuseSourceReadOnClose = false;
   refuseNextSourceRead = false;
@@ -1686,6 +1687,28 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
       return Promise.reject(new Error("synthetic source journal read refusal"));
     }
     return super.readText(target);
+  }
+
+  private async appendForeignBeforeRepair(target: string): Promise<void> {
+    if (target !== this.protectedSourceFile || !this.appendForeignLineBeforeRepairPublish) return;
+    const foreignLine = this.appendForeignLineBeforeRepairPublish;
+    this.appendForeignLineBeforeRepairPublish = undefined;
+    await fs.appendFile(target, foreignLine);
+  }
+
+  override async writeTextAtomic(
+    target: string, body: SessionFileBody, options?: WriteTextAtomicOptions,
+  ): Promise<void> {
+    await this.appendForeignBeforeRepair(target);
+    await super.writeTextAtomic(target, body, options);
+  }
+
+  override async rewriteTailAtomic(
+    target: string, headBytes: number, keepBytes: number, head: string,
+    tail: SessionFileBody, options?: WriteTextAtomicOptions,
+  ): Promise<void> {
+    await this.appendForeignBeforeRepair(target);
+    await super.rewriteTailAtomic(target, headBytes, keepBytes, head, tail, options);
   }
 
   override openWriter(
@@ -2132,6 +2155,84 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         authStorage.close();
         if (!session) await manager.close();
       }
+    }
+  });
+
+
+
+  it("refuses stale failed-fork repair when a foreign writer appends after the successful journal read", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-append-before-replace-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic original archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original source preserves artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected original journal");
+      const sessionId = manager.getSessionId();
+      const artifactFile = await manager.getArtifactPath("0");
+      if (!artifactFile) throw new Error("expected synthetic original archive");
+      const artifactBytes = await fs.readFile(artifactFile);
+
+      const foreignLine = (id: string, content: string) => `${JSON.stringify({
+        type: "message", id, parentId: null, timestamp: new Date().toISOString(),
+        message: { role: "user", content, timestamp: Date.now() },
+      })}\n`;
+      storage.protectedSourceFile = sourceFile;
+      // The first independent append forces a successful disk reread. A second
+      // independent append arrives after that read, as staging starts.
+      storage.appendForeignLineOnRefusal = foreignLine(
+        "synthetic-foreign-before-read", "Foreign before source reread",
+      );
+      storage.appendForeignLineBeforeRepairPublish = foreignLine(
+        "synthetic-foreign-after-read", "Foreign after source reread",
+      );
+      storage.rejectNextSourceClose = true;
+
+      let failure: unknown;
+      try {
+        await manager.fork();
+      } catch (error) {
+        failure = error;
+      }
+      expect(storage.appendForeignLineBeforeRepairPublish).toBeUndefined();
+      expect(failure).toBeInstanceOf(AggregateError);
+      const reasons = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(reasons.some(reason => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some(reason => reason.includes("Original journal changed before failed-fork repair publication"))).toBe(true);
+      expect(manager.getSessionId()).toBe(sessionId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+
+      // A refused repair must leave the source and both independent appends
+      // intact, even though its own aborted end marker still awaits repair.
+      const stillOriginal = await fs.readFile(sourceFile, "utf8");
+      expect(stillOriginal).toContain("Foreign before source reread");
+      expect(stillOriginal).toContain("Foreign after source reread");
+      expect(await fs.readFile(artifactFile)).toEqual(artifactBytes);
+
+      // Once the foreign writer is quiet, explicit recovery can safely remove
+      // only our aborted end marker without discarding either foreign entry.
+      await manager.flush();
+      const repaired = await loadEntriesFromFile(sourceFile);
+      expect(repaired.some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+      expect(repaired.filter(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content.startsWith("Foreign ")
+      )).toHaveLength(2);
+      expect(await fs.readFile(artifactFile)).toEqual(artifactBytes);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      storage.appendForeignLineBeforeRepairPublish = undefined;
+      await manager.close().catch(() => undefined);
     }
   });
 

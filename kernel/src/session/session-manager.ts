@@ -851,8 +851,15 @@ export class SessionManager {
 	 * Publish the file at `sessionFile` atomically, writing only the head and the lines after the
 	 * kept prefix when {@link #tailRewritePlan} finds one. Returns how many bytes the kept lines moved.
 	 */
-	async #publishAtomically(sessionFile: string, epoch: number, updatedFrom: number): Promise<number> {
-		const options = { commitGuard: () => this.#diskEpoch === epoch };
+	async #publishAtomically(
+		sessionFile: string,
+		epoch: number,
+		updatedFrom: number,
+		canPublishSource?: () => boolean,
+	): Promise<number> {
+		const options = {
+			commitGuard: () => this.#diskEpoch === epoch && (canPublishSource?.() ?? true),
+		};
 		const plan = this.#tailRewritePlan(updatedFrom);
 		if (!plan || !this.#storage.rewriteTailAtomic) {
 			await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), options);
@@ -1179,14 +1186,57 @@ export class SessionManager {
 				// Failed-fork rollback must not overwrite an original journal that
 				// could contain unseen foreign lines when the source read fails.
 				// Preserve the existing best-effort policy for ordinary rewrites.
-				await this.#refreshForeignLines(this.#abortedForkLifecycleIdsByFile.has(sessionFile));
+				const repairingFailedFork = this.#abortedForkLifecycleIdsByFile.has(sessionFile);
+				// For failed-fork repair, an independent writer can append while
+				// we read or stage the replacement. The manager's disk epoch only
+				// fences THIS manager; check the original file's version too.
+				let originalState: SessionStorageStat | undefined;
+				if (repairingFailedFork) {
+					try {
+						originalState = this.#storage.statSync(sessionFile);
+					} catch {
+						throw new Error("Cannot verify original journal before failed-fork repair");
+					}
+				}
+				const sourceUnchanged = (): boolean => {
+					if (!originalState) return true;
+					try {
+						const current = this.#storage.statSync(sessionFile);
+						return (
+							current.identity === originalState.identity &&
+							current.size === originalState.size &&
+							current.mtimeMs === originalState.mtimeMs
+						);
+					} catch {
+						return false;
+					}
+				};
+				await this.#refreshForeignLines(repairingFailedFork);
+				if (repairingFailedFork && !sourceUnchanged()) {
+					throw new Error("Original journal changed during failed-fork repair");
+				}
 				if (this.#diskEpoch !== epoch) return false;
 				const updatedFrom = this.#firstUpdatedEntry;
 				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 				let published = false;
+				let foreignChangeRejected = false;
 				try {
 					const coldIdentity = this.#publishedFileState?.identity;
-					const shift = await this.#publishAtomically(sessionFile, epoch, updatedFrom);
+					const shift = await this.#publishAtomically(
+						sessionFile,
+						epoch,
+						updatedFrom,
+						repairingFailedFork
+							? () => {
+									const unchanged = sourceUnchanged();
+									if (!unchanged) foreignChangeRejected = true;
+									return unchanged;
+								}
+							: undefined,
+					);
+					// writeTextAtomic discards a rejected staged write without
+					// throwing. Do not mistake its successful return for a repair.
+					if (foreignChangeRejected) throw new Error("Original journal changed before failed-fork repair publication");
 					if (this.#diskEpoch !== epoch) return false;
 					this.#notePublishedFile();
 					this.#rebaseColdPayloads(coldIdentity, shift);
