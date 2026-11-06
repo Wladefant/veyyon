@@ -191,7 +191,7 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-refusal-"));
 		const journal = path.join(dir, "synthetic.jsonl");
 		const artifact = path.join(dir, "synthetic-artifact.log");
-		const original = 'ORIGINAL SYNTHETIC JOURNAL\n';
+		const original = "ORIGINAL SYNTHETIC JOURNAL\n";
 		const artifactBytes = "SYNTHETIC ARCHIVE BYTES";
 		fs.writeFileSync(journal, original);
 		fs.writeFileSync(artifact, artifactBytes);
@@ -214,13 +214,14 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		try {
 			const storage = new FileSessionStorage();
 			expect(() => storage.writeTextSync(journal, () => [
-				'REPLACEMENT SYNTHETIC JOURNAL\n', 'COMPLETE TAIL\n',
+				"REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n",
 			])).toThrow(/synthetic staged replacement EIO/);
 			expect(stagedPublications).toBe(2);
 			// The old EPERM fallback wrote directly to journal with "w" and
 			// would report success (or leave a truncated source on later EIO).
 			expect(fs.readFileSync(journal, "utf8")).toBe(original);
 			expect(fs.readFileSync(artifact, "utf8")).toBe(artifactBytes);
+			expect(fs.readdirSync(dir).sort()).toEqual(["synthetic-artifact.log", "synthetic.jsonl"]);
 		} finally {
 			renameSpy.mockRestore();
 			fs.rmSync(dir, { recursive: true, force: true });
@@ -247,12 +248,13 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		try {
 			const storage = new FileSessionStorage();
 			expect(() => storage.writeTextSync(journal, () => [
-				'REPLACEMENT SYNTHETIC JOURNAL\n', 'COMPLETE TAIL\n',
+				"REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n",
 			])).not.toThrow();
 			expect(stagedPublications).toBe(2);
 			expect(fs.readFileSync(journal, "utf8")).toBe(
-				'REPLACEMENT SYNTHETIC JOURNAL\nCOMPLETE TAIL\n',
+				"REPLACEMENT SYNTHETIC JOURNAL\nCOMPLETE TAIL\n",
 			);
+			expect(fs.readdirSync(dir)).toEqual(["synthetic.jsonl"]);
 		} finally {
 			renameSpy.mockRestore();
 			fs.rmSync(dir, { recursive: true, force: true });
