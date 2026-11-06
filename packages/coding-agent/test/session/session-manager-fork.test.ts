@@ -1677,6 +1677,9 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNextSourceClose = false;
   appendForeignLineOnRefusal: string | undefined;
+  // Test-only independent writer revises a previously owned line before the
+  // strict source reread; the id and all other journal lines remain valid.
+  rewriteOwnedRecordOnRefusal: "header" | "message" | undefined;
   appendForeignLineBeforeRepairPublish: string | undefined;
   // Independent append after the storage's final synchronous publication guard,
   // inside the actual rename hook. This deliberately exposes the residual CAS gap.
@@ -1801,6 +1804,29 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
           const foreignLine = this.appendForeignLineOnRefusal;
           this.appendForeignLineOnRefusal = undefined;
           if (foreignLine) await fs.appendFile(target, foreignLine);
+          const revision = this.rewriteOwnedRecordOnRefusal;
+          this.rewriteOwnedRecordOnRefusal = undefined;
+          if (revision) {
+            const rows = (await fs.readFile(target, "utf8")).split("\n");
+            const targetType = revision === "header" ? "session" : "message";
+            const rowIndex = rows.findIndex(row => {
+              if (!row) return false;
+              try { return (JSON.parse(row) as { type?: string }).type === targetType; }
+              catch { return false; }
+            });
+            if (rowIndex < 0) throw new Error("expected disposable original journal record");
+            const record = JSON.parse(rows[rowIndex]!) as Record<string, unknown>;
+            if (revision === "header") {
+              record.cwd = path.join(String(record.cwd), "synthetic-independent-cwd");
+            } else {
+              record.message = {
+                ...(record.message as Record<string, unknown>),
+                content: "Synthetic independently revised owned message",
+              };
+            }
+            rows[rowIndex] = JSON.stringify(record);
+            await fs.writeFile(target, rows.join("\n"));
+          }
           if (this.refuseSourceReadOnClose) {
             this.refuseSourceReadOnClose = false;
             this.refuseNextSourceRead = true;
@@ -2825,6 +2851,60 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       } finally {
         storage.rejectNextSourceClose = false;
         storage.appendForeignLineOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("refuses an independently revised owned record or same-ID source header during failed-fork repair", async () => {
+    for (const revision of ["message", "header"] as const) {
+      using temp = TempDir.createSync(`@veyyon-fork-owned-revision-${revision}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("disposable owned-revision archive", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original same-ID message with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const source = manager.getSessionFile();
+        const sessionId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!source || !artifact) throw new Error("expected synthetic source and archive");
+        const original = await fs.readFile(source, "utf8");
+        const archiveBytes = await fs.readFile(artifact);
+        storage.protectedSourceFile = source;
+        storage.rewriteOwnedRecordOnRefusal = revision;
+        storage.rejectNextSourceClose = true;
+
+        let failure: unknown;
+        try { await manager.fork(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected strict recovery refusal");
+        const causes = failure.errors.map((error: unknown) => String(error));
+        expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+        const refusal = revision === "header"
+          ? "Cannot preserve unexpected session journal header"
+          : "Cannot preserve independently modified session journal entry";
+        expect(causes.some((cause: string) => cause.includes(refusal))).toBe(true);
+
+        const observed = await fs.readFile(source, "utf8");
+        expect(observed).not.toBe(original);
+        expect(observed).toContain(revision === "header"
+          ? "synthetic-independent-cwd"
+          : "Synthetic independently revised owned message");
+        // A failed source-close can append its own aborted lifecycle marker;
+        // the complete modified journal must remain recoverable and unchanged.
+        expect(manager.getSessionId()).toBe(sessionId);
+        expect(manager.getSessionFile()).toBe(source);
+        expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+        expect(() => manager.flushSync()).toThrow(refusal);
+        expect(await fs.readFile(source, "utf8")).toBe(observed);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.rewriteOwnedRecordOnRefusal = undefined;
         await manager.close().catch(() => undefined);
       }
     }

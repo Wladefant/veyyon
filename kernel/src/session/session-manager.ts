@@ -1107,7 +1107,7 @@ export class SessionManager {
 				// header is not an owned entry. Never discard its original bytes
 				// while repairing an aborted fork.
 				if (requireCompleteHistory) {
-					if (seenSourceHeader || parsed.id !== this.#sessionId) {
+					if (seenSourceHeader || parsed.id !== this.#sessionId || `${raw}\n` !== this.#headerLine()) {
 						throw new Error("Cannot preserve unexpected session journal header during failed-fork repair");
 					}
 					seenSourceHeader = true;
@@ -1141,6 +1141,15 @@ export class SessionManager {
 					throw new Error("Cannot preserve repeated session journal entry ID during failed-fork repair");
 				}
 				seenStrictEntryIds.add(id);
+			}
+			// An independently edited owned record keeps its ID. Its original bytes
+			// must not be replaced with our older in-memory serialization during
+			// strict failed-fork repair. Ordinary rewrites retain their prior policy.
+			if (id && seenStrictEntryIds && this.#isOwnId(id)) {
+				const owned = this.#index.get(id);
+				if (!owned || `${raw}\n` !== this.#lineFor(owned)) {
+					throw new Error("Cannot preserve independently modified session journal entry during failed-fork repair");
+				}
 			}
 			if (!id || this.#isOwnId(id) || abortedForkIds?.has(id)) continue;
 			foreign.push(raw);
