@@ -1677,9 +1677,20 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   rejectNextSourceClose = false;
   appendForeignLineOnRefusal: string | undefined;
   appendForeignLineBeforeRepairPublish: string | undefined;
+  forceNextSourceAtomicEperm = false;
   // Synthetic-only seam; arm the read refusal after a failed writer close.
   refuseSourceReadOnClose = false;
   refuseNextSourceRead = false;
+
+  override renameSync(source: string, target: string): void {
+    if (this.forceNextSourceAtomicEperm && target === this.protectedSourceFile) {
+      this.forceNextSourceAtomicEperm = false;
+      const error = new Error("synthetic Windows-style EPERM replacement refusal") as NodeJS.ErrnoException;
+      error.code = "EPERM";
+      throw error;
+    }
+    super.renameSync(source, target);
+  }
 
   override readText(target: string): Promise<string> {
     if (target === this.protectedSourceFile && this.refuseNextSourceRead) {
@@ -2159,6 +2170,56 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
   });
 
 
+
+
+  it("preserves synthetic foreign journal history through the Windows EPERM rollback fallback", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-eperm-backup-guard-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic original archived bytes", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original synthetic history with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const originalArtifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !originalArtifact) throw new Error("expected persisted synthetic source and archive");
+      const preservedArtifact = await fs.readFile(originalArtifact);
+
+      storage.protectedSourceFile = sourceFile;
+      storage.appendForeignLineOnRefusal = `${JSON.stringify({
+        type: "message", id: "synthetic-eperm-foreign-history", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Keep independent EPERM foreign history", timestamp: Date.now() },
+      })}\n`;
+      storage.rejectNextSourceClose = true;
+      storage.forceNextSourceAtomicEperm = true;
+      await expect(manager.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
+      expect(storage.forceNextSourceAtomicEperm).toBe(false);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+
+      const disk = await loadEntriesFromFile(sourceFile);
+      expect(disk.some(entry => entry.type === "session_lifecycle" &&
+        entry.state === "ended" && entry.reason === "session_switched")).toBe(false);
+      expect(disk.some(entry => entry.type === "message" &&
+        entry.message.role === "user" &&
+        entry.message.content === "Keep independent EPERM foreign history")).toBe(true);
+      expect(disk.some(entry => entry.type === "message" &&
+        entry.message.role === "user" &&
+        entry.message.content === "Original synthetic history with artifact://0")).toBe(true);
+      expect(await fs.readFile(originalArtifact)).toEqual(preservedArtifact);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.forceNextSourceAtomicEperm = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
 
   it("refuses stale failed-fork repair when a foreign writer appends after the successful journal read", async () => {
     using temp = TempDir.createSync("@veyyon-fork-foreign-append-before-replace-");

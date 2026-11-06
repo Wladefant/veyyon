@@ -855,10 +855,10 @@ export class SessionManager {
 		sessionFile: string,
 		epoch: number,
 		updatedFrom: number,
-		canPublishSource?: () => boolean,
+		canPublishSource?: (sourcePath?: string) => boolean,
 	): Promise<number> {
 		const options = {
-			commitGuard: () => this.#diskEpoch === epoch && (canPublishSource?.() ?? true),
+			commitGuard: (sourcePath?: string) => this.#diskEpoch === epoch && (canPublishSource?.(sourcePath) ?? true),
 		};
 		const plan = this.#tailRewritePlan(updatedFrom);
 		if (!plan || !this.#storage.rewriteTailAtomic) {
@@ -1198,10 +1198,10 @@ export class SessionManager {
 						throw new Error("Cannot verify original journal before failed-fork repair");
 					}
 				}
-				const sourceUnchanged = (): boolean => {
+				const sourceUnchanged = (sourcePath = sessionFile): boolean => {
 					if (!originalState) return true;
 					try {
-						const current = this.#storage.statSync(sessionFile);
+						const current = this.#storage.statSync(sourcePath);
 						return (
 							current.identity === originalState.identity &&
 							current.size === originalState.size &&
@@ -1227,8 +1227,8 @@ export class SessionManager {
 						epoch,
 						updatedFrom,
 						repairingFailedFork
-							? () => {
-									const unchanged = sourceUnchanged();
+							? (sourcePath?: string) => {
+									const unchanged = sourceUnchanged(sourcePath);
 									if (!unchanged) foreignChangeRejected = true;
 									return unchanged;
 								}

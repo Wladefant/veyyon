@@ -82,7 +82,8 @@ export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: 
  * synchronous rewrite that took over cannot be overwritten by a stale body.
  */
 export interface WriteTextAtomicOptions {
-	commitGuard?: () => boolean;
+	/** The EPERM move-aside path, when a backend has renamed the original there. */
+	commitGuard?: (sourcePath?: string) => boolean;
 }
 
 /**
@@ -825,7 +826,7 @@ export class FileSessionStorage implements SessionStorage {
 		tempPath: string,
 		targetPath: string,
 		renameError: unknown,
-		commitGuard?: () => boolean,
+		commitGuard?: (sourcePath?: string) => boolean,
 	): void {
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, sessionBackupName(path.basename(targetPath), Snowflake.next()));
@@ -842,7 +843,10 @@ export class FileSessionStorage implements SessionStorage {
 			}
 			throw toError(renameError);
 		}
-		if (commitGuard && !commitGuard()) {
+		// The original journal now lives at backupPath. Give the guard that
+		// original-object path so version checks remain meaningful on Windows
+		// rather than treating our own EPERM move-aside as a foreign deletion.
+		if (commitGuard && !commitGuard(backupPath)) {
 			// A concurrent synchronous rewrite published a fresh body between the
 			// move-aside and this point. Restore the moved-aside file so we do
 			// not overwrite it with our staged (stale) body, and drop the temp
