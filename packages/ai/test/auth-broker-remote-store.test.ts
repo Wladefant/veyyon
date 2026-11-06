@@ -487,10 +487,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const initial = await peer.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
 		const revoked = initial.snapshot.credentials[0]!;
+		const unrelated = {
+			...revoked, id: revoked.id + 1_000_000,
+			credential: { ...revoked.credential, access: "access-synthetic-distinct-same-generation" },
+		};
 		const generation = initial.snapshot.generation;
 		const ready = Promise.withResolvers<void>();
 		const releaseOldFrame = Promise.withResolvers<void>();
 		let oldFrameProcessed = false;
+		let oldFullFrameProcessed = false;
+		let distinctEntryProcessed = false;
 		let canonicalReads = 0;
 		let revokedCanonicalSeen = false;
 		const allowLaterCanonicalRead = Promise.withResolvers<void>();
@@ -519,7 +525,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				kind: "entry" as const, entry: revoked, generation,
 				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 			};
-			oldFrameProcessed = true; // consumer has processed the yielded frame
+			oldFrameProcessed = true; // consumer has processed the yielded stale entry
+			// A full old-G snapshot can revive the row just as an entry frame can.
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			oldFullFrameProcessed = true;
+			// Do not block a DISTINCT, legitimate same-generation SSE addition.
+			yield {
+				kind: "entry" as const, entry: unrelated, generation,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			distinctEntryProcessed = true;
 			await untilAborted(options.signal);
 		});
 		remote = new RemoteAuthCredentialStore({
@@ -532,10 +547,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await waitUntil(() => revokedCanonicalSeen && canonicalReads > 0 && remote!.snapshot.credentials.length === 0, 4_000);
 			expect(remote.snapshot.generation).toBe(generation);
 			releaseOldFrame.resolve();
-			await waitUntil(() => oldFrameProcessed, 2_000);
-			// An old equal-G entry cannot supersede later canonical broker truth.
-			expect(remote.snapshot.credentials.some(entry => entry.id === revoked.id)).toBe(false);
-			expect(remote.listAuthCredentials()).toEqual([]);
+			await waitUntil(() => oldFrameProcessed && oldFullFrameProcessed && distinctEntryProcessed, 2_000);
+			// Neither the stale entry nor the stale full frame may resurrect
+			// a row removed by the later canonical GET. A distinct new entry
+			// on the same authenticated SSE connection is still valid progress.
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([unrelated.id]);
+			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([unrelated.id]);
 		} finally {
 			allowLaterCanonicalRead.resolve();
 			releaseOldFrame.resolve();
