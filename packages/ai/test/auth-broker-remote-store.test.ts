@@ -561,7 +561,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
-	test("explicit broker refresh fences same-generation stale SSE without blocking distinct updates", async () => {
+	test("explicit broker refresh fences old-incarnation SSE at equal or higher generations", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await peer.fetchSnapshot();
@@ -596,6 +596,13 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				kind: "entry" as const, entry: distinct, generation,
 				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 			};
+			// An old broker incarnation can advertise a greater numeric generation;
+			// it must not restore a revoked ID or erase the distinct accepted entry.
+			yield {
+				kind: "entry" as const, entry: revoked, generation: generation + 50,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			yield { kind: "snapshot" as const, ...initial.snapshot, generation: generation + 50 };
 			staleFramesFinished.resolve();
 			await untilAborted(opts.signal);
 		});
@@ -641,7 +648,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
-	test("broker-confirmed disable stays revoked against queued same-generation SSE frames", async () => {
+	test("broker-confirmed disable stays revoked against queued equal or higher-generation SSE frames", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await peer.fetchSnapshot();
@@ -666,6 +673,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 			};
 			yield { kind: "snapshot" as const, ...initial.snapshot };
+			// A stale broker incarnation might deliver old rows under larger numbers.
+			yield {
+				kind: "entry" as const, entry: revoked, generation: initial.snapshot.generation + 50,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			yield { kind: "snapshot" as const, ...initial.snapshot, generation: initial.snapshot.generation + 50 };
 			oldFramesConsumed.resolve();
 			await untilAborted(opts.signal);
 		});

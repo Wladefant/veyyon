@@ -303,11 +303,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	/** Monotonic revision of accepted broker state AND local edits; fences stale GETs across restarts and disables. */
 	#appliedSnapshotRevision = 0;
 	/**
-	 * A canonical broker GET may revoke a grant while a stale SSE transport still
-	 * replays the same process-local generation. That old transport cannot undo
-	 * the removal; only a later generation or another canonical GET can.
+	 * Broker-confirmed revocations outrank SSE from an existing transport even
+	 * when a stale relay advertises a numerically higher generation from an old
+	 * broker incarnation. Only a later canonical GET may reauthorize the ID.
 	 */
-	#canonicalRemovedCredentialGeneration = new Map<number, number>();
+	#canonicallyRemovedCredentialIds = new Set<number>();
 	#usageOverlays: Map<string, UsageReport> = new Map();
 	#backgroundAbort = new AbortController();
 	#cache: Map<string, CacheEntry> = new Map();
@@ -423,19 +423,18 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const incomingIds = new Set(snapshot.credentials.map(entry => entry.id));
 		for (const previous of this.#snapshot.credentials) {
 			if (!incomingIds.has(previous.id)) {
-				this.#canonicalRemovedCredentialGeneration.set(previous.id, generation);
+				this.#canonicallyRemovedCredentialIds.add(previous.id);
 			}
 		}
 		// A fresh canonical broker response, unlike an old SSE replay, can
 		// legitimately reintroduce the same ID after a broker restart.
-		for (const id of incomingIds) this.#canonicalRemovedCredentialGeneration.delete(id);
+		for (const id of incomingIds) this.#canonicallyRemovedCredentialIds.delete(id);
 		this.#applySnapshot(snapshot, generation);
 		return true;
 	}
 
-	#isCanonicallyRemovedAtGeneration(id: number, generation: number): boolean {
-		const removalGeneration = this.#canonicalRemovedCredentialGeneration.get(id);
-		return removalGeneration !== undefined && generation <= removalGeneration;
+	#isCanonicallyRemovedFromStream(id: number): boolean {
+		return this.#canonicallyRemovedCredentialIds.has(id);
 	}
 
 	/**
@@ -626,7 +625,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					// trust a lower-generation first frame that revives a grant
 					// whose removal was verified by a newer canonical GET.
 					if (snapshot.credentials.some(entry =>
-						this.#isCanonicallyRemovedAtGeneration(entry.id, snapshot.generation)
+						this.#isCanonicallyRemovedFromStream(entry.id)
 					)) {
 						throw new AIError.AuthBrokerError("Broker stream first frame conflicts with canonical revocation");
 					}
@@ -684,7 +683,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				// A stale full frame from an old stream must not put a
 				// canonically revoked grant back into the local selection set.
 				if (snapshot.credentials.some(entry =>
-					this.#isCanonicallyRemovedAtGeneration(entry.id, snapshot.generation)
+					this.#isCanonicallyRemovedFromStream(entry.id)
 				)) return;
 				// Replayed equal-generation state is not progress: accepting it
 				// repeatedly would starve the canonical idle GET and invalidate
@@ -697,7 +696,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			}
 			case "entry": {
 				if (event.generation < this.#generation) return;
-				if (this.#isCanonicallyRemovedAtGeneration(event.entry.id, event.generation)) return;
+				if (this.#isCanonicallyRemovedFromStream(event.entry.id)) return;
 				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
 				const effectiveIncoming = this.#retainPendingCredentialBlocks(
 					normalizeSnapshotEntryBlocks(event.entry, Date.now()), current,
@@ -1249,7 +1248,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// Every caller already received a broker-confirmed disable. An old SSE
 		// frame at the current generation is no more authoritative than this
 		// acknowledgement, even before a later canonical GET arrives.
-		this.#canonicalRemovedCredentialGeneration.set(id, this.#generation);
+		this.#canonicallyRemovedCredentialIds.add(id);
 		this.#snapshot = { ...this.#snapshot, credentials: next };
 		this.#appliedSnapshotRevision += 1;
 	}

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Keep broker-authoritatively removed grants unavailable when a stale authenticated SSE connection replays equal-generation entry or full-snapshot frames; a later canonical GET can confirm legitimate reuse ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+- Keep broker-authoritatively removed grants unavailable when a stale authenticated SSE connection replays equal- or higher-generation entry and full-snapshot frames from an earlier broker incarnation; only a later canonical GET can confirm legitimate reuse ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Pace unchanged conditional auth-broker snapshot replies to the full monotonic canonical-verification deadline, including fractional timer delays, so repeated stale HTTP 200s cannot trigger another conditional poll just before the broker truth check ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 
 ## [1.8.3] - 2026-11-05
