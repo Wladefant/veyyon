@@ -2624,6 +2624,57 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     },
   );
 
+  it("refuses an independent append that collides with an existing session entry ID", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-colliding-id-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic colliding-ID preserved sidecar", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original entry owning the ID", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      const originalEntry = manager.getEntries().find(entry => entry.type === "message");
+      if (!source || !artifact || !originalEntry) throw new Error("expected original synthetic journal");
+      const originalBytes = await fs.readFile(source, "utf8");
+      const artifactBytes = await fs.readFile(artifact);
+      // The independent writer supplies a valid JSONL record whose single ID
+      // collides with one already present in the source file.
+      const foreignLine = `${JSON.stringify({
+        type: "message", id: originalEntry.id, parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Independent payload with colliding ID", timestamp: Date.now() },
+      })}\n`;
+      storage.protectedSourceFile = source;
+      storage.appendForeignLineOnRefusal = foreignLine;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed duplicate-ID refusal");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((cause: string) => cause.includes("repeated session journal entry ID"))).toBe(true);
+      expect(manager.getSessionFile()).toBe(source);
+      expect(manager.getSessionId()).toBe(sourceId);
+      const after = await fs.readFile(source, "utf8");
+      expect(after.startsWith(originalBytes)).toBe(true);
+      expect(after.endsWith(foreignLine)).toBe(true);
+      expect(await fs.readFile(artifact)).toEqual(artifactBytes);
+      expect(() => manager.flushSync()).toThrow(/repeated session journal entry ID/);
+      expect(await fs.readFile(source, "utf8")).toBe(after);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
   it("refuses a second title slot appended by an independent failed-fork writer", async () => {
     using temp = TempDir.createSync("@veyyon-fork-foreign-title-slot-");
     const storage = new SyntheticForkSourceCloseRefusalStorage();

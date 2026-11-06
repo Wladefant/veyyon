@@ -1072,6 +1072,7 @@ export class SessionManager {
 		let liveWriterEntries = 0;
 		let seenSourceHeader = false;
 		let seenTitleSlot = false;
+		const seenStrictEntryIds = requireCompleteHistory ? new Set<string>() : undefined;
 		for (const raw of text.split("\n")) {
 			// Most entry lines open with their id, so a line this manager wrote is known
 			// without parsing it. Parsing every line was most of a refresh: 231ms of a
@@ -1125,6 +1126,14 @@ export class SessionManager {
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
 			if (requireCompleteHistory && !id) {
 				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
+			}
+			// Separate Snowflake sources may reuse an entry ID in the same journal.
+			// Never classify the second raw record as owned and erase its bytes.
+			if (id && seenStrictEntryIds) {
+				if (seenStrictEntryIds.has(id)) {
+					throw new Error("Cannot preserve repeated session journal entry ID during failed-fork repair");
+				}
+				seenStrictEntryIds.add(id);
 			}
 			if (!id || this.#isOwnId(id) || abortedForkIds?.has(id)) continue;
 			foreign.push(raw);
