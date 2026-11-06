@@ -186,6 +186,58 @@ function failNextClose(): void {
 }
 
 
+describe("FileSessionStorage asynchronous staged short-write preservation", () => {
+	it("retries a short multibyte write and refuses zero progress without overwriting history", async () => {
+		for (const outcome of ["short", "zero"] as const) {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-async-short-write-"));
+			const journal = path.join(dir, "synthetic.jsonl");
+			const artifact = path.join(dir, "synthetic-artifact.log");
+			const original = "ORIGINAL SYNTHETIC JOURNAL\n";
+			const evidence = "SYNTHETIC ARCHIVE BYTES";
+			fs.writeFileSync(journal, original);
+			fs.writeFileSync(artifact, evidence);
+			const open = fs.promises.open;
+			let injected = false;
+			const openSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (file, flags, mode) => {
+				const handle = await open(file, flags, mode);
+				if (String(file).startsWith(path.join(dir, ".synthetic.jsonl."))) {
+					const write = handle.write.bind(handle);
+					Object.defineProperty(handle, "write", {
+						configurable: true,
+						value: async (bytes: Buffer, offset: number, length: number, position: number | null) => {
+							if (!injected) {
+								injected = true;
+								if (outcome === "zero") return { bytesWritten: 0, buffer: bytes };
+								return write(bytes, offset, 1, position);
+							}
+							return write(bytes, offset, length, position);
+						},
+					});
+				}
+				return handle;
+			});
+			try {
+				const publish = new FileSessionStorage().writeTextAtomic(journal, () => [
+					"é\n", "COMPLETE SYNTHETIC TAIL\n",
+				]);
+				if (outcome === "zero") {
+					await expect(publish).rejects.toThrow(/Short async session journal write/);
+					expect(fs.readFileSync(journal, "utf8")).toBe(original);
+				} else {
+					await expect(publish).resolves.toBeUndefined();
+					expect(fs.readFileSync(journal, "utf8")).toBe("é\nCOMPLETE SYNTHETIC TAIL\n");
+				}
+				expect(injected).toBe(true);
+				expect(fs.readFileSync(artifact, "utf8")).toBe(evidence);
+				expect(fs.readdirSync(dir).sort()).toEqual(["synthetic-artifact.log", "synthetic.jsonl"]);
+			} finally {
+				openSpy.mockRestore();
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		}
+	});
+});
+
 describe("FileSessionStorage synchronous staged short-write preservation", () => {
 	it("retries a short UTF-8 byte write without publishing truncated history", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-short-write-"));

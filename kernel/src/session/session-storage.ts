@@ -155,7 +155,17 @@ async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> 
 	const handle = await fs.promises.open(fpath, "w");
 	try {
 		for (const chunk of sessionBodyChunks(body)) {
-			if (chunk.length > 0) await handle.write(chunk);
+			if (chunk.length === 0) continue;
+			// Stage all UTF-8 bytes: a fulfilled write can still be short.
+			const bytes = Buffer.from(chunk, "utf8");
+			let offset = 0;
+			while (offset < bytes.length) {
+				const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, null);
+				if (bytesWritten === 0) {
+					throw new Error(`Short async session journal write: ${offset} of ${bytes.length} bytes`);
+				}
+				offset += bytesWritten;
+			}
 		}
 		await flushStaged(handle);
 	} finally {
