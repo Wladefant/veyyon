@@ -1069,6 +1069,7 @@ describe("imageGenTool", () => {
 		const savedPath = result.details?.imagePaths[0];
 		if (!savedPath) throw new Error("Expected generated image path");
 		expect(await Bun.file(savedPath).bytes()).toEqual(Buffer.from("sandbox-advertised-image"));
+	});
 	/**
 	 * A provider's refusal reaches the model as the provider's own words with the HTTP status, so the
 	 * model can tell a bad argument from an outage. Every image provider maps its non-OK response

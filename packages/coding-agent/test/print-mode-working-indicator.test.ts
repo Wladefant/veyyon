@@ -8,8 +8,7 @@ import {
 } from "@veyyon/coding-agent/modes/print-mode";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { emptyUsage } from "@veyyon/catalog/models";
-import type { AgentSession } from "@veyyon/coding-agent/session/agent-session"
-
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 function makeAssistantMessage(text: string): AssistantMessage {
 	const timestamp = Date.now();
 	const usage = emptyUsage();
@@ -58,7 +57,7 @@ function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
 			if (!advisorDrainPrepared) throw new Error("advisor catch-up started before headless delivery was armed");
 			return true;
 		},
-		waitForQuiescence: async () => {}
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		// The display seam (agent-session.ts) resolves obfuscated secret
 		// placeholders and argot handles to real values before print-mode writes
