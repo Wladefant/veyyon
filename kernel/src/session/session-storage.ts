@@ -843,6 +843,13 @@ export class FileSessionStorage implements SessionStorage {
 			}
 			throw toError(renameError);
 		}
+		// Another writer may publish a new journal at targetPath after we move
+		// its old inode aside. Even an unchanged backup cannot authorize replacing
+		// that new journal: retain both files and report the conflict for recovery.
+		// This check is not an atomic cross-process CAS with the later rename.
+		if (this.existsStateSync(targetPath) !== "absent") {
+			throw new Error(`Session journal reappeared during EPERM replacement; original retained at ${backupPath}`);
+		}
 		// The original journal now lives at backupPath. Give the guard that
 		// original-object path so version checks remain meaningful on Windows
 		// rather than treating our own EPERM move-aside as a foreign deletion.
