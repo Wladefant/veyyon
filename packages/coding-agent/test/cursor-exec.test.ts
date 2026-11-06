@@ -269,6 +269,8 @@ describe("Cursor MCP StrReplace fallback", () => {
 
 		expect(result.isError).toBe(true);
 		expect(await Bun.file(target).text()).toBe("alpha\nbeta\n");
+	});
+});
 describe("the shell stream bridge streams every text block of a result", () => {
 	const multiBlockTool: AnyAgentTool = {
 		name: "bash",
