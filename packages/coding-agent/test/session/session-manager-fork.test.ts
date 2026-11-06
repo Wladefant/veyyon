@@ -2551,6 +2551,10 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         const retained = await fs.readFile(sourceFile, "utf8");
         expect(retained.startsWith(priorJournal)).toBe(true);
         expect(retained.endsWith(foreignBytes)).toBe(true);
+        // A shutdown/flushSync fallback must not undo the async fail-closed
+        // refusal and quietly discard an undecodable foreign tail.
+        expect(() => manager.flushSync()).toThrow(/Cannot preserve (incomplete|malformed) session journal/);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(retained);
         expect(await fs.readFile(artifact)).toEqual(priorArtifact);
       } finally {
         storage.rejectNextSourceClose = false;
