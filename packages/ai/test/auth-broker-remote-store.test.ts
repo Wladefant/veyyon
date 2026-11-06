@@ -640,6 +640,57 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+
+	test("broker-confirmed disable stays revoked against queued same-generation SSE frames", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker state");
+		const revoked = initial.snapshot.credentials[0]!;
+		const connected = Promise.withResolvers<void>();
+		const releaseOldFrames = Promise.withResolvers<void>();
+		const oldFramesConsumed = Promise.withResolvers<void>();
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			connected.resolve();
+			const releaseIfAborted = () => releaseOldFrames.resolve();
+			opts.signal?.addEventListener("abort", releaseIfAborted, { once: true });
+			try {
+				await releaseOldFrames.promise;
+			} finally {
+				opts.signal?.removeEventListener("abort", releaseIfAborted);
+			}
+			if (opts.signal?.aborted) return;
+			yield {
+				kind: "entry" as const, entry: revoked, generation: initial.snapshot.generation,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			oldFramesConsumed.resolve();
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+		});
+		try {
+			await connected.promise;
+			// This is the real client-to-disposable-broker confirmed disable
+			// path, not a canonical GET. The old active SSE stream has not
+			// delivered its newer revocation generation yet.
+			expect(await remote.deleteAuthCredentialRemote(revoked.id, "synthetic confirmed disable")).toBe(true);
+			expect(remote.listAuthCredentials()).toEqual([]);
+			releaseOldFrames.resolve();
+			await oldFramesConsumed.promise;
+			expect(remote.snapshot.credentials).toEqual([]);
+			expect(remote.listAuthCredentials()).toEqual([]);
+			const canonical = await peer.fetchSnapshot();
+			if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
+			expect(canonical.snapshot.credentials).toEqual([]);
+		} finally {
+			releaseOldFrames.resolve();
+		}
+	});
+
 	test("pending local safety blocks do not make unchanged SSE replays fresh", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		storage!.upsertCredential("anthropic", mintOAuthCredential("pending-replay", Date.now() + 120_000));
