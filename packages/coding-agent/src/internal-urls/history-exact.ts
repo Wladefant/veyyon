@@ -541,8 +541,18 @@ export function parseHistorySearchRequest(url: URL): HistorySearchRequest | unde
 function previewAt(raw: string, term: string): string {
 	const position = raw.toLowerCase().indexOf(term);
 	if (position < 0) return "";
-	const start = Math.max(0, position - 70);
-	const end = Math.min(raw.length, position + term.length + 110);
+	// Some lowercase mappings expand a character (e.g. U+0130 -> i + combining dot).
+	// Project the match offset back to the original UTF-16 string before slicing it.
+	let originalPosition = 0;
+	let loweredPosition = 0;
+	for (const character of raw) {
+		const width = character.toLowerCase().length;
+		if (loweredPosition + width > position) break;
+		loweredPosition += width;
+		originalPosition += character.length;
+	}
+	const start = Math.max(0, originalPosition - 70);
+	const end = Math.min(raw.length, originalPosition + term.length + 110);
 	return raw.slice(start, end).slice(0, MAX_PREVIEW_CHARACTERS);
 }
 
