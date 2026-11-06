@@ -515,12 +515,14 @@ export class SessionManager {
 	 * without reading the file: a different inode means someone republished the
 	 * path, whether or not the body they wrote is the same length as ours.
 	 */
-	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines } | null = null;
+	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null = null;
 	/**
 	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
 	 * installed with {@link #lastBodyBytes} once that body is published.
 	 */
 	#lastBodyLines: PublishedLines | undefined;
+	/** Owned entries actually serialized by a full rewrite with a foreign tail (no reusable offset layout). */
+	#lastBodyOwnedIds: Set<string> | undefined;
 	/**
 	 * Index in `#entries` of the earliest entry an in-place update may have changed since a rewrite
 	 * last started serializing, or `Infinity` when none has. Each rewrite takes it and resets it, so
@@ -803,6 +805,7 @@ export class SessionManager {
 	*#fileLines(): Generator<string> {
 		this.#lastBodyBytes = 0;
 		this.#lastBodyLines = undefined;
+		this.#lastBodyOwnedIds = undefined;
 		const header = this.#headerLine();
 		const foreign = this.#foreignLines;
 		const lines: PublishedLines = { base: this.#entries, baseLength: 0, appended: [], entryOffsets: [] };
@@ -815,7 +818,16 @@ export class SessionManager {
 			yield line;
 		}
 		this.#lastBodyBytes = bytes;
-		if (foreign.length === 0) this.#lastBodyLines = lines;
+		if (foreign.length === 0) {
+			this.#lastBodyLines = lines;
+		} else {
+			// Foreign lines invalidate the offset layout for future tail rewrites,
+			// but cannot erase evidence of which owned entries we actually published.
+			const ownedIds = new Set<string>();
+			for (let i = 0; i < lines.baseLength; i++) ownedIds.add(lines.base[i]!.id);
+			for (const entry of lines.appended) ownedIds.add(entry.id);
+			this.#lastBodyOwnedIds = ownedIds;
+		}
 	}
 
 	/**
@@ -846,6 +858,7 @@ export class SessionManager {
 	*#tailLines(lines: PublishedLines, keep: number, start: number): Generator<string> {
 		this.#lastBodyBytes = 0;
 		this.#lastBodyLines = undefined;
+		this.#lastBodyOwnedIds = undefined;
 		// The plan matched every kept entry against `#entries`, so while the base is still that array the
 		// kept entries are its first `keep`, appended ones included.
 		if (this.#entries === lines.base || keep <= lines.baseLength) {
@@ -1094,7 +1107,11 @@ export class SessionManager {
 		// independently removed record, but a persisted entry that vanished
 		// must never be resurrected from stale memory.
 		const publishedLines = requireCompleteHistory ? this.#publishedFileState?.lines : undefined;
-		const missingPublishedIds = publishedLines ? new Set<string>() : undefined;
+		const missingPublishedIds = publishedLines
+			? new Set<string>()
+			: this.#publishedFileState?.ownedIds
+				? new Set(this.#publishedFileState.ownedIds)
+				: undefined;
 		if (publishedLines && missingPublishedIds) {
 			for (let i = 0; i < publishedLines.baseLength; i++) {
 				const id = publishedLines.base[i]?.id;
@@ -1522,6 +1539,7 @@ export class SessionManager {
 		const length = Buffer.byteLength(line, "utf-8");
 		state.lines?.appended.push(entry);
 		state.lines?.entryOffsets.push(offset);
+		state.ownedIds?.add(entry.id);
 		state.size += length;
 		if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
 	}
@@ -1568,7 +1586,12 @@ export class SessionManager {
 		} catch {
 			identity = undefined;
 		}
-		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
+		this.#publishedFileState = {
+			size: this.#lastBodyBytes,
+			identity,
+			lines: this.#lastBodyLines,
+			ownedIds: this.#lastBodyOwnedIds,
+		};
 		// The old file has now been durably republished without our cancelled
 		// lifecycle marker; later genuine foreign entries still remain intact.
 		this.#abortedForkLifecycleLinesByFile.delete(this.#sessionFile);

@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Strict failed-fork repair retains the published owned-entry ID proof even when a previously published journal includes foreign tail entries, refusing resurrection of independently removed owned messages without enabling unsafe tail-rewrite offsets ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Strict failed-fork repair refuses a missing previously published owned message instead of resurrecting it from in-memory history; not-yet-published entries are not required on disk ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Failed-fork repair refuses backends without byte-strict journal readers instead of overwriting independent raw history through lossy text fallbacks ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Failed-fork journal recovery refuses malformed UTF-8 or unexpected byte-order marks rather than silently changing original journal bytes during strict repair ([#774](https://github.com/Wladefant/veyyon/issues/774)).

@@ -3141,7 +3141,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
   });
 
   it("refuses a revised or removed persisted owned record and a same-ID source header during failed-fork repair", async () => {
-    for (const revision of ["message", "header", "missing-message"] as const) {
+    for (const revision of ["message", "header", "missing-message", "missing-message-with-peer-tail"] as const) {
       using temp = TempDir.createSync(`@veyyon-fork-owned-revision-${revision}-`);
       const storage = new SyntheticForkSourceCloseRefusalStorage();
       const manager = SessionManager.create(
@@ -3160,10 +3160,24 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         const sessionId = manager.getSessionId();
         const artifact = await manager.getArtifactPath("0");
         if (!source || !artifact) throw new Error("expected synthetic source and archive");
+        if (revision === "missing-message-with-peer-tail") {
+          // First publish an independent valid record with our own history.
+          // Foreign tails disable the reusable byte-offset layout, but must
+          // not disable evidence that earlier owned messages were published.
+          const peerLine = `${JSON.stringify({
+            type: "message", id: "synthetic-foreign-owned-deletion-control", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: { role: "user", content: "Foreign tail survives failed recovery", timestamp: Date.now() },
+          })}\n`;
+          await fs.appendFile(source, peerLine);
+          await manager.rewriteEntries();
+          expect(await fs.readFile(source, "utf8")).toContain(peerLine);
+        }
         const original = await fs.readFile(source, "utf8");
         const archiveBytes = await fs.readFile(artifact);
         storage.protectedSourceFile = source;
-        storage.rewriteOwnedRecordOnRefusal = revision;
+        storage.rewriteOwnedRecordOnRefusal =
+          revision === "missing-message-with-peer-tail" ? "missing-message" : revision;
         storage.rejectNextSourceClose = true;
 
         let failure: unknown;
@@ -3174,16 +3188,19 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
         const refusal = revision === "header"
           ? "Cannot preserve unexpected session journal header"
-          : revision === "missing-message"
+          : revision.startsWith("missing-message")
             ? "Cannot preserve missing previously published session entry"
             : "Cannot preserve independently modified session journal entry";
         expect(causes.some((cause: string) => cause.includes(refusal))).toBe(true);
 
         const observed = await fs.readFile(source, "utf8");
         expect(observed).not.toBe(original);
-        if (revision === "missing-message") {
+        if (revision.startsWith("missing-message")) {
           expect(observed).not.toContain("Original same-ID message with artifact://0");
           expect(observed).toContain("Second original message must survive removal");
+          if (revision === "missing-message-with-peer-tail") {
+            expect(observed).toContain("Foreign tail survives failed recovery");
+          }
         } else {
           expect(observed).toContain(revision === "header"
             ? "synthetic-independent-cwd"
