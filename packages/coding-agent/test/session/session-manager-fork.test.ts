@@ -2784,9 +2784,13 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
 
     using temp = TempDir.createSync("@veyyon-fork-memory-strict-read-");
+    // The fork's artifact reservation is intentionally on the disposable OS
+    // filesystem even though the source JSONL uses the text-only memory store.
+    const sessionDir = path.join(temp.path(), "sessions");
+    await fs.mkdir(sessionDir, { recursive: true });
     const storage = new RejectOneCloseMemoryStorage();
     const manager = SessionManager.create(
-      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      temp.path(), sessionDir, storage, { instrumentation: "basic" },
     );
     try {
       manager.appendMessage({
@@ -2808,11 +2812,10 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       storage.refuseNextClose = true;
       let failure: unknown;
       try { await manager.fork(); } catch (err) { failure = err; }
-      expect(failure).toBeInstanceOf(AggregateError);
-      if (!(failure instanceof AggregateError)) throw new Error("expected source-close failure");
-      expect(failure.errors.some((err: unknown) =>
-        String(err).includes("synthetic memory source close refusal")
-      )).toBe(true);
+      // A successful durable source repair rethrows the original close error.
+      // AggregateError is reserved for a failed close PLUS failed restoration.
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toContain("synthetic memory source close refusal");
       expect(manager.getSessionId()).toBe(id);
       expect(manager.getSessionFile()).toBe(source);
       const after = await storage.readText(source);
