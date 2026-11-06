@@ -2745,6 +2745,16 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       expect(manager.getSessionFile()).toBe(sourceFile);
       expect(() => manager.flushSync()).toThrow(/Cannot verify current session journal/);
       expect(await fs.readFile(sourceFile)).toEqual(preserved);
+
+      // Simulate a backend exposing only lossy ordinary readers. A fallback
+      // would parse U+FFFD and overwrite the exact independent byte during
+      // either a synchronous exit flush or an asynchronous repair retry.
+      Object.defineProperty(storage, "readTextStrict", { value: undefined });
+      Object.defineProperty(storage, "readTextSyncStrict", { value: undefined });
+      expect(() => manager.flushSync()).toThrow(/Cannot verify current session journal/);
+      expect(await fs.readFile(sourceFile)).toEqual(preserved);
+      await expect(manager.flush()).rejects.toThrow(/Cannot verify current session journal/);
+      expect(await fs.readFile(sourceFile)).toEqual(preserved);
     } finally {
       storage.rejectNextSourceClose = false;
       storage.appendForeignBytesOnRefusal = undefined;

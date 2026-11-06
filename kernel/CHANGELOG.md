@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- Failed-fork repair refuses backends without byte-strict journal readers instead of overwriting independent raw history through lossy text fallbacks ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Failed-fork journal recovery refuses malformed UTF-8 or unexpected byte-order marks rather than silently changing original journal bytes during strict repair ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Failed-fork repair removes only the exact aborted lifecycle marker it wrote; a peer's different same-ID record instead stops replacement ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed-fork repair refuses independently revised owned message bytes or a changed original same-ID header rather than replacing those edits with older in-memory history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
