@@ -858,6 +858,11 @@ export class FileSessionStorage implements SessionStorage {
 			// move-aside and this point. Restore the moved-aside file so we do
 			// not overwrite it with our staged (stale) body, and drop the temp
 			// so `writeTextAtomic`'s "discard on abandon" contract holds.
+			// A foreign writer can reclaim the vacated pathname after the first
+			// existence check. Never restore our backup over its new journal.
+			if (this.existsStateSync(targetPath) !== "absent") {
+				throw new Error(`Session journal reappeared during EPERM rollback; original retained at ${backupPath}`);
+			}
 			try {
 				this.renameSync(backupPath, targetPath);
 			} catch (restoreErr) {
@@ -873,6 +878,14 @@ export class FileSessionStorage implements SessionStorage {
 		try {
 			this.renameSync(tempPath, targetPath);
 		} catch (replaceError) {
+			// The failed retry does not authorize discarding a journal another
+			// writer published at the vacated path. This observation is not CAS.
+			if (this.existsStateSync(targetPath) !== "absent") {
+				throw new Error(
+					`Session journal reappeared after failed EPERM replacement; original retained at ${backupPath}`,
+					{ cause: toError(replaceError) },
+				);
+			}
 			try {
 				this.renameSync(backupPath, targetPath);
 			} catch (rollbackErr) {

@@ -1684,10 +1684,33 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   // The other writer publishes a fresh journal at the vacated original path
   // while Windows-style EPERM fallback holds the old inode at a backup path.
   recreateJournalAfterMoveAside: string | undefined;
+  // A fresh foreign target can also appear AFTER the initial absence check.
+  recreateJournalOnRejectedGuard: string | undefined;
+  recreateJournalOnFailedReplace: string | undefined;
   movedAsideJournalPath: string | undefined;
   // Synthetic-only seam; arm the read refusal after a failed writer close.
   refuseSourceReadOnClose = false;
   refuseNextSourceRead = false;
+
+  override statSync(target: string) {
+    if (
+      target === this.movedAsideJournalPath &&
+      this.recreateJournalOnRejectedGuard !== undefined &&
+      this.protectedSourceFile !== undefined
+    ) {
+      const replacement = this.recreateJournalOnRejectedGuard;
+      this.recreateJournalOnRejectedGuard = undefined;
+      // The independent writer claims the original pathname while the version
+      // guard detects a changed backup. Both histories must remain recoverable.
+      nodeFs.writeFileSync(this.protectedSourceFile, replacement);
+      nodeFs.appendFileSync(target, JSON.stringify({
+        type: "message", id: "guard-rejected-foreign-tail", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Backup has an independent append", timestamp: Date.now() },
+      }) + "\n");
+    }
+    return super.statSync(target);
+  }
 
   override renameSync(source: string, target: string): void {
     if (target === this.protectedSourceFile && this.appendForeignLineAtRename) {
@@ -1701,7 +1724,25 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
       error.code = "EPERM";
       throw error;
     }
+    if (
+      target === this.protectedSourceFile &&
+      this.recreateJournalOnFailedReplace !== undefined &&
+      this.movedAsideJournalPath !== undefined
+    ) {
+      const replacement = this.recreateJournalOnFailedReplace;
+      this.recreateJournalOnFailedReplace = undefined;
+      nodeFs.writeFileSync(target, replacement);
+      const error = new Error("synthetic retry refused after foreign publication") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    }
     super.renameSync(source, target);
+    if (
+      source === this.protectedSourceFile &&
+      (this.recreateJournalOnRejectedGuard !== undefined || this.recreateJournalOnFailedReplace !== undefined)
+    ) {
+      this.movedAsideJournalPath = target;
+    }
     if (source === this.protectedSourceFile && this.recreateJournalAfterMoveAside !== undefined) {
       const replacement = this.recreateJournalAfterMoveAside;
       this.recreateJournalAfterMoveAside = undefined;
@@ -2309,6 +2350,82 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       storage.forceNextSourceAtomicEperm = false;
       storage.recreateJournalAfterMoveAside = undefined;
       await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses EPERM backup rollback over a foreign journal after guard or replacement failure", async () => {
+    for (const phase of ["guard-rejected", "retry-failed"] as const) {
+      using temp = TempDir.createSync("@veyyon-fork-eperm-rollback-foreign-" + phase);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("original synthetic archive bytes", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original source with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !artifact) throw new Error("expected disposable source and artifact");
+        const artifactBefore = await fs.readFile(artifact);
+        const foreignJournal = [
+          JSON.stringify({
+            type: "session", version: CURRENT_SESSION_VERSION, id: "retry-foreign-session",
+            timestamp: new Date().toISOString(), cwd: temp.path(),
+          }),
+          JSON.stringify({
+            type: "message", id: "retry-foreign-message", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: {
+              role: "user", content: "Foreign journal claimed original pathname",
+              timestamp: Date.now(),
+            },
+          }),
+          "",
+        ].join("\n");
+
+        storage.protectedSourceFile = sourceFile;
+        storage.rejectNextSourceClose = true;
+        storage.forceNextSourceAtomicEperm = true;
+        if (phase === "guard-rejected") storage.recreateJournalOnRejectedGuard = foreignJournal;
+        else storage.recreateJournalOnFailedReplace = foreignJournal;
+
+        let failure: unknown;
+        try {
+          await manager.fork();
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected failed fork and refused rollback");
+        const causes = failure.errors.map((error: unknown) => String(error));
+        expect(causes.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+        const conflict = phase === "guard-rejected"
+          ? "reappeared during EPERM rollback"
+          : "reappeared after failed EPERM replacement";
+        expect(causes.some((reason: string) => reason.includes(conflict))).toBe(true);
+        expect(storage.forceNextSourceAtomicEperm).toBe(false);
+        expect(storage.recreateJournalOnRejectedGuard).toBeUndefined();
+        expect(storage.recreateJournalOnFailedReplace).toBeUndefined();
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(foreignJournal);
+        const backupPath = storage.movedAsideJournalPath;
+        if (!backupPath) throw new Error("expected retained original EPERM backup");
+        const backupBytes = await fs.readFile(backupPath, "utf8");
+        expect(backupBytes).toContain("Original source with artifact://0");
+        if (phase === "guard-rejected") expect(backupBytes).toContain("Backup has an independent append");
+        expect(await fs.readFile(artifact)).toEqual(artifactBefore);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.forceNextSourceAtomicEperm = false;
+        storage.recreateJournalOnRejectedGuard = undefined;
+        storage.recreateJournalOnFailedReplace = undefined;
+        await manager.close().catch(() => undefined);
+      }
     }
   });
 
