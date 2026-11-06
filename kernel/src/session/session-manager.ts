@@ -1011,7 +1011,11 @@ export class SessionManager {
 		} else if (!(await this.#storage.exists(this.#sessionFile))) return;
 		let text: string;
 		try {
-			text = await this.#storage.readText(this.#sessionFile);
+			// Only strict failed-fork recovery must refuse malformed raw UTF-8.
+			// Ordinary rewrites retain their existing best-effort decoding policy.
+			text = requireReadable && this.#storage.readTextStrict
+				? await this.#storage.readTextStrict(this.#sessionFile)
+				: await this.#storage.readText(this.#sessionFile);
 		} catch {
 			if (requireReadable) throw new Error("Cannot verify current session journal");
 			return;
@@ -1039,7 +1043,9 @@ export class SessionManager {
 		}
 		let text: string | undefined;
 		try {
-			text = this.#storage.readTextSync?.(this.#sessionFile);
+			text = repairingFailedFork && this.#storage.readTextSyncStrict
+				? this.#storage.readTextSyncStrict(this.#sessionFile)
+				: this.#storage.readTextSync?.(this.#sessionFile);
 		} catch {
 			if (repairingFailedFork) throw new Error("Cannot verify current session journal");
 			return;
