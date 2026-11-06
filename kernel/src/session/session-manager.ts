@@ -1089,6 +1089,21 @@ export class SessionManager {
 		let seenSourceHeader = false;
 		let seenTitleSlot = false;
 		const seenStrictEntryIds = requireCompleteHistory ? new Set<string>() : undefined;
+		// Only entries known to have been published are mandatory on strict
+		// recovery. Entries still queued in memory are not evidence of an
+		// independently removed record, but a persisted entry that vanished
+		// must never be resurrected from stale memory.
+		const publishedLines = requireCompleteHistory ? this.#publishedFileState?.lines : undefined;
+		const missingPublishedIds = publishedLines ? new Set<string>() : undefined;
+		if (publishedLines && missingPublishedIds) {
+			for (let i = 0; i < publishedLines.baseLength; i++) {
+				const id = publishedLines.base[i]?.id;
+				if (id && this.#isOwnId(id)) missingPublishedIds.add(id);
+			}
+			for (const entry of publishedLines.appended) {
+				if (this.#isOwnId(entry.id)) missingPublishedIds.add(entry.id);
+			}
+		}
 		const journalLines = text.split("\n");
 		for (let lineIndex = 0; lineIndex < journalLines.length; lineIndex++) {
 			const raw = journalLines[lineIndex]!;
@@ -1174,6 +1189,7 @@ export class SessionManager {
 				if (!owned || `${raw}\n` !== this.#lineFor(owned)) {
 					throw new Error("Cannot preserve independently modified session journal entry during failed-fork repair");
 				}
+				missingPublishedIds?.delete(id);
 			}
 			const abortedLine = id ? abortedForkLines?.get(id) : undefined;
 			// Only the exact aborted marker we wrote may be removed. A peer can
@@ -1187,6 +1203,9 @@ export class SessionManager {
 		}
 		if (requireCompleteHistory && !seenSourceHeader) {
 			throw new Error("Cannot verify original session journal header during failed-fork repair");
+		}
+		if (missingPublishedIds && missingPublishedIds.size > 0) {
+			throw new Error("Cannot preserve missing previously published session entry during failed-fork repair");
 		}
 		// A title slot published by this manager cannot disappear silently during
 		// failed-fork recovery. Older loaded journals without a title slot remain

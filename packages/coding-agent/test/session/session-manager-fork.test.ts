@@ -1683,7 +1683,7 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   prependBomOnRefusal = false;
   // Test-only independent writer revises a previously owned line before the
   // strict source reread; the id and all other journal lines remain valid.
-  rewriteOwnedRecordOnRefusal: "header" | "message" | undefined;
+  rewriteOwnedRecordOnRefusal: "header" | "message" | "missing-message" | undefined;
   reviseAbortedMarkerOnRefusal: "message" | "reason" | undefined;
   appendForeignLineBeforeRepairPublish: string | undefined;
   // Independent append after the storage's final synchronous publication guard,
@@ -1836,16 +1836,22 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
               catch { return false; }
             });
             if (rowIndex < 0) throw new Error("expected disposable original journal record");
-            const record = JSON.parse(rows[rowIndex]!) as Record<string, unknown>;
-            if (revision === "header") {
-              record.cwd = path.join(String(record.cwd), "synthetic-independent-cwd");
+            if (revision === "missing-message") {
+              // A peer removes one complete, previously published owned line;
+              // the surviving journal is still syntactically valid JSONL.
+              rows.splice(rowIndex, 1);
             } else {
-              record.message = {
-                ...(record.message as Record<string, unknown>),
-                content: "Synthetic independently revised owned message",
-              };
+              const record = JSON.parse(rows[rowIndex]!) as Record<string, unknown>;
+              if (revision === "header") {
+                record.cwd = path.join(String(record.cwd), "synthetic-independent-cwd");
+              } else {
+                record.message = {
+                  ...(record.message as Record<string, unknown>),
+                  content: "Synthetic independently revised owned message",
+                };
+              }
+              rows[rowIndex] = JSON.stringify(record);
             }
-            rows[rowIndex] = JSON.stringify(record);
             await fs.writeFile(target, rows.join("\n"));
           }
           const alteredMarker = this.reviseAbortedMarkerOnRefusal;
@@ -3134,8 +3140,8 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
   });
 
-  it("refuses an independently revised owned record or same-ID source header during failed-fork repair", async () => {
-    for (const revision of ["message", "header"] as const) {
+  it("refuses a revised or removed persisted owned record and a same-ID source header during failed-fork repair", async () => {
+    for (const revision of ["message", "header", "missing-message"] as const) {
       using temp = TempDir.createSync(`@veyyon-fork-owned-revision-${revision}-`);
       const storage = new SyntheticForkSourceCloseRefusalStorage();
       const manager = SessionManager.create(
@@ -3145,6 +3151,9 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(await manager.saveArtifact("disposable owned-revision archive", "bash")).toBe("0");
         manager.appendMessage({
           role: "user", content: "Original same-ID message with artifact://0", timestamp: Date.now(),
+        });
+        manager.appendMessage({
+          role: "user", content: "Second original message must survive removal", timestamp: Date.now(),
         });
         await manager.ensureOnDisk();
         const source = manager.getSessionFile();
@@ -3165,14 +3174,21 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
         const refusal = revision === "header"
           ? "Cannot preserve unexpected session journal header"
-          : "Cannot preserve independently modified session journal entry";
+          : revision === "missing-message"
+            ? "Cannot preserve missing previously published session entry"
+            : "Cannot preserve independently modified session journal entry";
         expect(causes.some((cause: string) => cause.includes(refusal))).toBe(true);
 
         const observed = await fs.readFile(source, "utf8");
         expect(observed).not.toBe(original);
-        expect(observed).toContain(revision === "header"
-          ? "synthetic-independent-cwd"
-          : "Synthetic independently revised owned message");
+        if (revision === "missing-message") {
+          expect(observed).not.toContain("Original same-ID message with artifact://0");
+          expect(observed).toContain("Second original message must survive removal");
+        } else {
+          expect(observed).toContain(revision === "header"
+            ? "synthetic-independent-cwd"
+            : "Synthetic independently revised owned message");
+        }
         // A failed source-close can append its own aborted lifecycle marker;
         // the complete modified journal must remain recoverable and unchanged.
         expect(manager.getSessionId()).toBe(sessionId);
