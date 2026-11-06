@@ -204,7 +204,6 @@ describe("history exact record lookup", () => {
 		}
 	});
 
-
 	it("keeps case-fold-expanding Unicode matches visible in stored JSONL previews", async () => {
 		const dir = TempDir.createSync("@veyyon-history-unicode-preview-");
 		try {
