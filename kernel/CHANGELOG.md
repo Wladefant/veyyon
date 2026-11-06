@@ -15,7 +15,7 @@
 
 - A failed session fork rejects a second mutable title slot appended to the original journal during aborted-switch recovery, instead of discarding the independent bytes ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork also refuses an unexpected or duplicate source header while repairing the original JSONL, rather than silently omitting independent header bytes ([#774](https://github.com/Wladefant/veyyon/issues/774)).
-- A failed session fork refuses to rewrite incomplete or malformed independent JSONL history during aborted-switch recovery, preserving original bytes for explicit repair ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed session fork refuses to rewrite incomplete, blank-line, or malformed independent JSONL history during aborted-switch recovery, preserving original bytes for explicit repair ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork refuses a detected foreign append between rereading the original journal and publishing its rollback, leaving the source available for a safe retry ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork repairs its own aborted `session_switched` marker on the original JSONL before the rejected fork returns, so reopening without a later caller flush cannot mistake the source for a completed switch; keep genuine foreign-writer tails and original history intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
