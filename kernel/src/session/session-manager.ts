@@ -1070,6 +1070,7 @@ export class SessionManager {
 			? this.#abortedForkLifecycleIdsByFile.get(this.#sessionFile)
 			: undefined;
 		let liveWriterEntries = 0;
+		let seenSourceHeader = false;
 		for (const raw of text.split("\n")) {
 			// Most entry lines open with their id, so a line this manager wrote is known
 			// without parsing it. Parsing every line was most of a refresh: 231ms of a
@@ -1097,7 +1098,19 @@ export class SessionManager {
 			}
 			// The title slot is a fixed-width line this manager rewrites every time,
 			// and a header belongs to whoever owns the file's identity.
-			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE || parsed.type === "session") continue;
+			if (parsed.type === "session") {
+				// A second header (even with our ID) or a foreign replacement
+				// header is not an owned entry. Never discard its original bytes
+				// while repairing an aborted fork.
+				if (requireCompleteHistory) {
+					if (seenSourceHeader || parsed.id !== this.#sessionId) {
+						throw new Error("Cannot preserve unexpected session journal header during failed-fork repair");
+					}
+					seenSourceHeader = true;
+				}
+				continue;
+			}
+			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE) continue;
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
 			if (requireCompleteHistory && !id) {
 				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
@@ -1105,6 +1118,9 @@ export class SessionManager {
 			if (!id || this.#isOwnId(id) || abortedForkIds?.has(id)) continue;
 			foreign.push(raw);
 			if (parsed.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries += 1;
+		}
+		if (requireCompleteHistory && !seenSourceHeader) {
+			throw new Error("Cannot verify original session journal header during failed-fork repair");
 		}
 		this.#foreignLines = foreign;
 		if (this.#reportedForeignWriter) return;
