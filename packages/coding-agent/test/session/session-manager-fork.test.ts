@@ -2551,7 +2551,10 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(causes.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
         expect(causes.some((reason: string) => reason.includes("Cannot preserve ambiguous session journal"))).toBe(true);
         const preserved = await fs.readFile(sourceFile, "utf8");
-        expect(preserved).toBe(before + foreignLine);
+        // A rejected fork may leave its own aborted lifecycle marker between
+        // the original file and the independent tail; preserve those bytes too.
+        expect(preserved.startsWith(before)).toBe(true);
+        expect(preserved.endsWith(foreignLine)).toBe(true);
         expect(manager.getSessionId()).toBe(sourceId);
         expect(manager.getSessionFile()).toBe(sourceFile);
         expect(() => manager.flushSync()).toThrow(/Cannot preserve ambiguous session journal/);
