@@ -430,13 +430,21 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 		// A fresh canonical broker response, unlike an old SSE replay, can
 		// legitimately reintroduce the same ID after a broker restart.
+		const previousById = new Map(this.#snapshot.credentials.map(entry => [entry.id, entry] as const));
 		const reauthorized = [...incomingIds].some(id => this.#canonicallyRemovedCredentialIds.has(id));
+		const replaced = snapshot.credentials.some(entry => {
+			const previous = previousById.get(entry.id);
+			return previous !== undefined && (
+				previous.provider !== entry.provider || !isDeepStrictEqual(previous.credential, entry.credential)
+			);
+		});
 		for (const id of incomingIds) this.#canonicallyRemovedCredentialIds.delete(id);
 		this.#applySnapshot(snapshot, generation);
-		// The old stream has no broker-incarnation identity: even a delayed
-		// higher-generation `removed` frame could invalidate the fresh grant.
-		// Retire this transport and reconnect before accepting further SSE.
-		if (reauthorized) this.#activeSnapshotStreamAbort?.abort();
+		// The old stream has no broker-incarnation identity: stale frames could
+		// revert a canonically rotated credential or remove a reauthorized grant.
+		// Retire it only when GET changes a credential identity, not for idle
+		// verification, countdown churn or unrelated local safety-block changes.
+		if (reauthorized || replaced) this.#activeSnapshotStreamAbort?.abort();
 		return true;
 	}
 

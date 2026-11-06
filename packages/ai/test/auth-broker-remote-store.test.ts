@@ -731,6 +731,75 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+
+	test("canonical same-ID credential rotation retires a stale SSE transport", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
+		const rotated = {
+			...original,
+			credential: { ...original.credential, access: "access-synthetic-canonical-rotation" },
+		};
+		// The identity was never removed; a canonical GET simply replaced its
+		// synthetic access material. Old SSE does not own that replacement.
+		const canonical: SnapshotResponse = {
+			...initial.snapshot, generation: 1, credentials: [rotated],
+		};
+		spyOn(client, "fetchSnapshot").mockImplementation(async () => ({
+			status: 200 as const, generation: canonical.generation, snapshot: canonical,
+		}));
+		const connected = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldFinished = Promise.withResolvers<void>();
+		const allowNewStream = Promise.withResolvers<void>();
+		let connections = 0;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			if (connections++ === 0) {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				connected.resolve();
+				try {
+					await releaseOld.promise; // emulate a queued relay frame after abort
+					yield {
+						kind: "entry" as const, entry: original,
+						generation: initial.snapshot.generation + 50,
+						serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					};
+				} finally {
+					oldFinished.resolve();
+				}
+				return;
+			}
+			await allowNewStream.promise;
+			if (opts.signal?.aborted) return;
+			yield { kind: "snapshot" as const, ...canonical };
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+		});
+		try {
+			await connected.promise;
+			await remote.refreshSnapshot();
+			expect(remote.listAuthCredentials()[0]?.credential).toMatchObject({
+				type: "oauth", access: "access-synthetic-canonical-rotation",
+			});
+			releaseOld.resolve();
+			await oldFinished.promise;
+			// An older transport must neither roll back the rotated access
+			// credential nor suppress the fresh reconnect.
+			expect(remote.listAuthCredentials()[0]?.credential).toMatchObject({
+				type: "oauth", access: "access-synthetic-canonical-rotation",
+			});
+			await waitUntil(() => connections >= 2, 4_000);
+			allowNewStream.resolve();
+		} finally {
+			releaseOld.resolve();
+			allowNewStream.resolve();
+		}
+	});
+
 	test("broker-confirmed disable stays revoked against queued equal or higher-generation SSE frames", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
