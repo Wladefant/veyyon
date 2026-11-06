@@ -190,7 +190,7 @@ describe("FileSessionStorage synchronous staged short-write preservation", () =>
 	it("retries a short UTF-8 byte write without publishing truncated history", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-short-write-"));
 		const journal = path.join(dir, "synthetic.jsonl");
-		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC JOURNAL\\n");
+		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC JOURNAL\n");
 		const originalWrite = fs.writeSync;
 		let shortWrites = 0;
 		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation((fd, buffer, offset, length, position) => {
@@ -201,9 +201,9 @@ describe("FileSessionStorage synchronous staged short-write preservation", () =>
 			return originalWrite(fd, buffer, offset, length, position);
 		});
 		try {
-			const expected = "SYNTHETIC café journal\\nCOMPLETE UTF-8 TAIL\\n";
+			const expected = "é\nCOMPLETE UTF-8 TAIL\n";
 			new FileSessionStorage().writeTextSync(journal, () => [
-				"SYNTHETIC café journal\\n", "COMPLETE UTF-8 TAIL\\n",
+				"é\n", "COMPLETE UTF-8 TAIL\n",
 			]);
 			expect(shortWrites).toBe(1);
 			expect(fs.readFileSync(journal, "utf8")).toBe(expected);
@@ -218,14 +218,14 @@ describe("FileSessionStorage synchronous staged short-write preservation", () =>
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-zero-write-"));
 		const journal = path.join(dir, "synthetic.jsonl");
 		const artifact = path.join(dir, "synthetic-artifact.log");
-		const original = "ORIGINAL SYNTHETIC JOURNAL\\n";
+		const original = "ORIGINAL SYNTHETIC JOURNAL\n";
 		const evidence = "SYNTHETIC ARTIFACT BYTES";
 		fs.writeFileSync(journal, original);
 		fs.writeFileSync(artifact, evidence);
 		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation(() => 0);
 		try {
 			expect(() => new FileSessionStorage().writeTextSync(journal, () => [
-				"REPLACEMENT JOURNAL\\n", "TAIL\\n",
+				"REPLACEMENT JOURNAL\n", "TAIL\n",
 			])).toThrow(/Short sync session journal write/);
 			expect(fs.readFileSync(journal, "utf8")).toBe(original);
 			expect(fs.readFileSync(artifact, "utf8")).toBe(evidence);
