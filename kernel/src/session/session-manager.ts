@@ -1082,7 +1082,9 @@ export class SessionManager {
 		let seenSourceHeader = false;
 		let seenTitleSlot = false;
 		const seenStrictEntryIds = requireCompleteHistory ? new Set<string>() : undefined;
-		for (const raw of text.split("\n")) {
+		const journalLines = text.split("\n");
+		for (let lineIndex = 0; lineIndex < journalLines.length; lineIndex++) {
+			const raw = journalLines[lineIndex]!;
 			// Most entry lines open with their id, so a line this manager wrote is known
 			// without parsing it. Parsing every line was most of a refresh: 231ms of a
 			// 146MB transcript against 19ms for this match, and a refresh runs on every
@@ -1091,7 +1093,15 @@ export class SessionManager {
 			const leadingId = LEADING_ENTRY_ID.exec(raw)?.[1];
 			// Strict repair validates even our own lines before replacing the inode.
 			if (!requireCompleteHistory && leadingId !== undefined && this.#isOwnId(leadingId)) continue;
-			if (!raw.trim()) continue;
+			if (!raw.trim()) {
+				// The last empty item is the terminator from our final newline. A
+				// separate blank line (or whitespace-only line) is unknown journal
+				// content and may not be discarded by strict failed-fork repair.
+				if (requireCompleteHistory && lineIndex < journalLines.length - 1) {
+					throw new Error("Cannot preserve malformed session journal during failed-fork repair");
+				}
+				continue;
+			}
 			let parsed: { type?: unknown; id?: unknown; customType?: unknown } | undefined;
 			try {
 				parsed = JSON.parse(raw) as { type?: unknown; id?: unknown; customType?: unknown };
