@@ -3178,11 +3178,13 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
   });
 
   it("fails closed on incomplete or malformed independent JSONL during failed-fork repair", async () => {
-    // Two byte-distinct hazards: a writer interrupted mid-line, and a fully
-    // terminated line whose JSON parser cannot reconstruct any foreign ID.
+    // Reject a partial record, malformed JSON and independent blank lines;
+    // none may be silently removed by the aborted-fork repair.
     const variants = [
       ["partial", '{"type":"message","id":"synthetic-incomplete","message":'],
       ["malformed", '{"type":"message","id":"synthetic-malformed",oops}\n'],
+      ["blank-line", "\n"],
+      ["whitespace-only", " \t\n"],
     ] as const;
     for (const [variant, foreignBytes] of variants) {
       using temp = TempDir.createSync(`@veyyon-fork-unparseable-foreign-${variant}-`);
