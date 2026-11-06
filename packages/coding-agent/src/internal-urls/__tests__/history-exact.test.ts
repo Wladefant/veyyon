@@ -9,6 +9,7 @@ import {
 	readLiveHistoryEntry,
 	readStoredHistoryEntry,
 	searchStoredHistoryEntries,
+	searchLiveHistoryEntries,
 } from "../history-exact";
 
 describe("history exact record lookup", () => {
@@ -200,6 +201,49 @@ describe("history exact record lookup", () => {
 			expect(sibling.matches.map(match => match.entryId)).toEqual(["b", "a"]);
 		} finally {
 			await dir.remove();
+		}
+	});
+
+
+	it("keeps case-fold-expanding Unicode matches visible in stored JSONL previews", async () => {
+		const dir = TempDir.createSync("@veyyon-history-unicode-preview-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s-preview" },
+				{ type: "message", id: "unicode", parentId: null, message: "İ".repeat(100) + " NeedLe archived" },
+				{ type: "message", id: "plain", parentId: "unicode", message: "Plain ASCII NeedLe" },
+			];
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const request = parseHistorySearchRequest(new URL("history://Scout?q=needle&leaf=plain&limit=2"))!;
+			const found = await searchStoredHistoryEntries(file, request);
+			expect(found.status).toBe("ok");
+			expect(found.matches.map(match => match.entryId)).toEqual(["plain", "unicode"]);
+			for (const match of found.matches) {
+				expect(match.preview).toContain("NeedLe");
+				expect(match.preview.length).toBeLessThanOrEqual(200);
+				expect(match.revision).toMatch(/^[0-9a-f]{64}$/);
+			}
+			// Search previews are not evidence substitutions; exact reads remain byte-preserving.
+			const exact = await readStoredHistoryEntry(file, { entryId: "unicode", leafId: "plain", offset: 0, limit: 1000 });
+			expect(exact.status).toBe("ok");
+			expect(exact.fragment).toBe(JSON.stringify(records[1]));
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("keeps Unicode and ordinary mixed-case matches visible in live branch previews", () => {
+		const branch = [
+			{ type: "message", id: "unicode", parentId: null, message: { role: "user", content: "İ".repeat(100) + " NeedLe live" } },
+			{ type: "message", id: "plain", parentId: "unicode", message: { role: "assistant", content: "ASCII NeedLe live" } },
+		] as unknown as SessionEntry[];
+		const found = searchLiveHistoryEntries(branch, { query: "needle", limit: 2 });
+		expect(found.status).toBe("ok");
+		expect(found.matches.map(match => match.entryId)).toEqual(["plain", "unicode"]);
+		for (const match of found.matches) {
+			expect(match.preview).toContain("NeedLe");
+			expect(match.preview.length).toBeLessThanOrEqual(200);
 		}
 	});
 
