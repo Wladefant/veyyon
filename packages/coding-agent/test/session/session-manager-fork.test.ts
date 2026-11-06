@@ -2506,6 +2506,60 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     },
   );
 
+  it("fails closed on incomplete or malformed independent JSONL during failed-fork repair", async () => {
+    // Two byte-distinct hazards: a writer interrupted mid-line, and a fully
+    // terminated line whose JSON parser cannot reconstruct any foreign ID.
+    const variants = [
+      ["partial", '{"type":"message","id":"synthetic-incomplete","message":'],
+      ["malformed", '{"type":"message","id":"synthetic-malformed",oops}\n'],
+    ] as const;
+    for (const [variant, foreignBytes] of variants) {
+      using temp = TempDir.createSync(`@veyyon-fork-unparseable-foreign-${variant}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic bytes must survive rejected repair", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original history with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !artifact) throw new Error("expected disposable source and artifact");
+        const priorJournal = await fs.readFile(sourceFile, "utf8");
+        const priorArtifact = await fs.readFile(artifact);
+        storage.protectedSourceFile = sourceFile;
+        storage.appendForeignLineOnRefusal = foreignBytes;
+        storage.rejectNextSourceClose = true;
+
+        let failure: unknown;
+        try {
+          await manager.fork();
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected failed-fork aggregate rejection");
+        const causes = failure.errors.map((error: unknown) => String(error));
+        expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+        expect(causes.some((cause: string) => /Cannot preserve (incomplete|malformed) session journal/.test(cause))).toBe(true);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        const retained = await fs.readFile(sourceFile, "utf8");
+        expect(retained.startsWith(priorJournal)).toBe(true);
+        expect(retained.endsWith(foreignBytes)).toBe(true);
+        expect(await fs.readFile(artifact)).toEqual(priorArtifact);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.appendForeignLineOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
   it("refuses to overwrite unreadable foreign history during failed-fork rollback", async () => {
     using temp = TempDir.createSync("@veyyon-fork-unreadable-foreign-tail-");
     const storage = new SyntheticForkSourceCloseRefusalStorage();

@@ -971,7 +971,7 @@ export class SessionManager {
 			if (requireReadable) throw new Error("Cannot verify current session journal");
 			return;
 		}
-		this.#adoptForeignLines(text);
+		this.#adoptForeignLines(text, requireReadable);
 	}
 
 	/**
@@ -988,14 +988,22 @@ export class SessionManager {
 	#refreshForeignLinesSync(): void {
 		if (!this.#persist || !this.#sessionFile) return;
 		if (this.#fileIsExactlyAsPublished()) return;
+		const repairingFailedFork = this.#abortedForkLifecycleIdsByFile.has(this.#sessionFile);
+		if (repairingFailedFork && this.#storage.existsStateSync(this.#sessionFile) !== "present") {
+			throw new Error("Cannot verify current session journal");
+		}
 		let text: string | undefined;
 		try {
 			text = this.#storage.readTextSync?.(this.#sessionFile);
 		} catch {
+			if (repairingFailedFork) throw new Error("Cannot verify current session journal");
 			return;
 		}
-		if (text === undefined) return;
-		this.#adoptForeignLines(text);
+		if (text === undefined) {
+			if (repairingFailedFork) throw new Error("Cannot verify current session journal");
+			return;
+		}
+		this.#adoptForeignLines(text, repairingFailedFork);
 	}
 
 	/**
@@ -1008,7 +1016,13 @@ export class SessionManager {
 	 * share the parent buffer while `indexOf`/`slice` over a string that size
 	 * materializes copies.
 	 */
-	#adoptForeignLines(text: string): void {
+	#adoptForeignLines(text: string, requireCompleteHistory = false): void {
+		// A partial final record can belong to another active writer. Do not
+		// replace the original journal while a failed-fork repair cannot prove
+		// which foreign bytes it would discard. Ordinary rewrites stay best-effort.
+		if (requireCompleteHistory && text.length > 0 && !text.endsWith("\n")) {
+			throw new Error("Cannot preserve incomplete session journal during failed-fork repair");
+		}
 		const foreign: string[] = [];
 		const abortedForkIds = this.#sessionFile
 			? this.#abortedForkLifecycleIdsByFile.get(this.#sessionFile)
@@ -1021,18 +1035,28 @@ export class SessionManager {
 			// publish while another window holds the file. A line of any other shape takes
 			// the full parse below.
 			const leadingId = LEADING_ENTRY_ID.exec(raw)?.[1];
-			if (leadingId !== undefined && this.#isOwnId(leadingId)) continue;
+			// Strict repair validates even our own lines before replacing the inode.
+			if (!requireCompleteHistory && leadingId !== undefined && this.#isOwnId(leadingId)) continue;
 			if (!raw.trim()) continue;
 			let parsed: { type?: unknown; id?: unknown; customType?: unknown } | undefined;
 			try {
 				parsed = JSON.parse(raw) as { type?: unknown; id?: unknown; customType?: unknown };
 			} catch {
+				if (requireCompleteHistory) {
+					throw new Error("Cannot preserve malformed session journal during failed-fork repair");
+				}
 				continue;
+			}
+			if (requireCompleteHistory && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
+				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
 			}
 			// The title slot is a fixed-width line this manager rewrites every time,
 			// and a header belongs to whoever owns the file's identity.
 			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE || parsed.type === "session") continue;
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
+			if (requireCompleteHistory && !id) {
+				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
+			}
 			if (!id || this.#isOwnId(id) || abortedForkIds?.has(id)) continue;
 			foreign.push(raw);
 			if (parsed.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries += 1;
