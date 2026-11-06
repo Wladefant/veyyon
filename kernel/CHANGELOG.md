@@ -11,6 +11,7 @@
 - A failed-fork repair refuses independently revised owned message bytes or a changed original same-ID header rather than replacing those edits with older in-memory history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A synchronous session rewrite retains the original journal if Windows-style EPERM replacement fails, rather than truncating history in place ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork refuses a different in-place title-slot update while removing an aborted fork marker, keeping an independently written title intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Failed-fork recovery refuses a missing previously published title slot instead of recreating stale title metadata over a peer's edited journal; title-slot-free legacy sessions retain their layout allowance ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork refuses an independently appended JSONL entry that repeats an existing ID rather than dropping its different history during recovery ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - A failed session fork rejects a second mutable title slot appended to the original journal during aborted-switch recovery, instead of discarding the independent bytes ([#774](https://github.com/Wladefant/veyyon/issues/774)).

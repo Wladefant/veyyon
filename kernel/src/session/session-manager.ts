@@ -1181,6 +1181,12 @@ export class SessionManager {
 		if (requireCompleteHistory && !seenSourceHeader) {
 			throw new Error("Cannot verify original session journal header during failed-fork repair");
 		}
+		// A title slot published by this manager cannot disappear silently during
+		// failed-fork recovery. Older loaded journals without a title slot remain
+		// valid because #hasTitleSlot reflects their original on-disk layout.
+		if (requireCompleteHistory && this.#hasTitleSlot && !seenTitleSlot) {
+			throw new Error("Cannot preserve missing session title slot during failed-fork repair");
+		}
 		this.#foreignLines = foreign;
 		if (this.#reportedForeignWriter) return;
 		// A `session_exit` record is the last thing a run writes, so a foreign one is
