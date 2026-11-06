@@ -125,7 +125,18 @@ function writeChunksSync(fpath: string, body: SessionFileBody): void {
 	const fd = fs.openSync(fpath, "w");
 	try {
 		for (const chunk of sessionBodyChunks(body)) {
-			if (chunk.length > 0) fs.writeSync(fd, chunk);
+			if (chunk.length === 0) continue;
+			// A successful writeSync can still write fewer bytes than requested.
+			// Keep a single encoded chunk so retries cannot split or duplicate UTF-8.
+			const bytes = Buffer.from(chunk, "utf8");
+			let offset = 0;
+			while (offset < bytes.length) {
+				const written = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+				if (written === 0) {
+					throw new Error(`Short sync session journal write: ${offset} of ${bytes.length} bytes`);
+				}
+				offset += written;
+			}
 		}
 	} finally {
 		fs.closeSync(fd);

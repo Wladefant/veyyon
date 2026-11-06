@@ -186,6 +186,57 @@ function failNextClose(): void {
 }
 
 
+describe("FileSessionStorage synchronous staged short-write preservation", () => {
+	it("retries a short UTF-8 byte write without publishing truncated history", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-short-write-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC JOURNAL\\n");
+		const originalWrite = fs.writeSync;
+		let shortWrites = 0;
+		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation((fd, buffer, offset, length, position) => {
+			if (Buffer.isBuffer(buffer) && shortWrites === 0 && length > 1) {
+				shortWrites++;
+				return originalWrite(fd, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+			}
+			return originalWrite(fd, buffer, offset, length, position);
+		});
+		try {
+			const expected = "SYNTHETIC café journal\\nCOMPLETE UTF-8 TAIL\\n";
+			new FileSessionStorage().writeTextSync(journal, () => [
+				"SYNTHETIC café journal\\n", "COMPLETE UTF-8 TAIL\\n",
+			]);
+			expect(shortWrites).toBe(1);
+			expect(fs.readFileSync(journal, "utf8")).toBe(expected);
+			expect(fs.readdirSync(dir)).toEqual(["synthetic.jsonl"]);
+		} finally {
+			writeSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a zero-progress staged write and retains the original journal", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-zero-write-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		const artifact = path.join(dir, "synthetic-artifact.log");
+		const original = "ORIGINAL SYNTHETIC JOURNAL\\n";
+		const evidence = "SYNTHETIC ARTIFACT BYTES";
+		fs.writeFileSync(journal, original);
+		fs.writeFileSync(artifact, evidence);
+		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation(() => 0);
+		try {
+			expect(() => new FileSessionStorage().writeTextSync(journal, () => [
+				"REPLACEMENT JOURNAL\\n", "TAIL\\n",
+			])).toThrow(/Short sync session journal write/);
+			expect(fs.readFileSync(journal, "utf8")).toBe(original);
+			expect(fs.readFileSync(artifact, "utf8")).toBe(evidence);
+			expect(fs.readdirSync(dir).sort()).toEqual(["synthetic-artifact.log", "synthetic.jsonl"]);
+		} finally {
+			writeSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 	it("restores the original journal if the staged replacement fails after EPERM", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-refusal-"));
