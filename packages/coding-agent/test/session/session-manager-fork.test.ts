@@ -2442,6 +2442,70 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
   });
 
+  // POSIX rename keeps an independent O_APPEND descriptor on the displaced
+  // original inode. Windows may refuse the replacement while that handle is
+  // open; the separate EPERM tests cover its distinct path behavior.
+  // Acceptance is deliberately RED until cross-process history is protected.
+  it.skipIf(process.platform === "win32")(
+    "preserves a pre-open independent append descriptor after rollback replaces the journal",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-fork-postrename-peer-fd-");
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      let peer: SessionStorageWriter | undefined;
+      try {
+        expect(await manager.saveArtifact("synthetic retained post-rename archive", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original journal keeps artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        if (!sourceFile) throw new Error("expected original session journal");
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!artifact) throw new Error("expected synthetic archive");
+        const archiveBytes = await fs.readFile(artifact);
+        const oldInode = nodeFs.statSync(sourceFile).ino;
+
+        // A separate storage instance opens a REAL writer descriptor before
+        // the failed fork. No pathname re-open happens after the repair.
+        peer = new FileSessionStorage().openWriter(sourceFile);
+        storage.protectedSourceFile = sourceFile;
+        storage.rejectNextSourceClose = true;
+        await expect(manager.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
+        expect(storage.rejectNextSourceClose).toBe(false);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        // Verify that the repaired pathname really points at a new inode:
+        // the peer's existing append handle still targets the old one.
+        expect(nodeFs.statSync(sourceFile).ino).not.toBe(oldInode);
+
+        const foreignEntry: JsonlMessageEntry = {
+          type: "message", id: "synthetic-postrename-open-peer", parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "user", content: "Post-rename independent append remains recoverable",
+            timestamp: Date.now(),
+          },
+        };
+        // After the real rename has returned, the second writer accepts this
+        // entry. A successful repair must not leave it invisible at the path.
+        await peer.append(`${JSON.stringify(foreignEntry)}\n`);
+        await peer.sync();
+        const active = await fs.readFile(sourceFile, "utf8");
+        expect(active).toContain("Original journal keeps artifact://0");
+        expect(active).toContain("Post-rename independent append remains recoverable");
+        expect(active).not.toContain('"reason":"session_switched"');
+        expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        try { await peer?.close(); } finally { await manager.close().catch(() => undefined); }
+      }
+    },
+  );
+
   it("refuses to overwrite unreadable foreign history during failed-fork rollback", async () => {
     using temp = TempDir.createSync("@veyyon-fork-unreadable-foreign-tail-");
     const storage = new SyntheticForkSourceCloseRefusalStorage();
