@@ -1677,6 +1677,8 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNextSourceClose = false;
   appendForeignLineOnRefusal: string | undefined;
+  // Disposable raw bytes test strict failure handling before lossy UTF-8 decoding.
+  appendForeignBytesOnRefusal: Buffer | undefined;
   // Test-only independent writer revises a previously owned line before the
   // strict source reread; the id and all other journal lines remain valid.
   rewriteOwnedRecordOnRefusal: "header" | "message" | undefined;
@@ -1764,6 +1766,14 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
     return super.readText(target);
   }
 
+  override readTextStrict(target: string): Promise<string> {
+    if (target === this.protectedSourceFile && this.refuseNextSourceRead) {
+      this.refuseNextSourceRead = false;
+      return Promise.reject(new Error("synthetic source journal read refusal"));
+    }
+    return super.readTextStrict(target);
+  }
+
   private async appendForeignBeforeRepair(target: string): Promise<void> {
     if (target !== this.protectedSourceFile || !this.appendForeignLineBeforeRepairPublish) return;
     const foreignLine = this.appendForeignLineBeforeRepairPublish;
@@ -1805,6 +1815,9 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
           const foreignLine = this.appendForeignLineOnRefusal;
           this.appendForeignLineOnRefusal = undefined;
           if (foreignLine) await fs.appendFile(target, foreignLine);
+          const rawPeer = this.appendForeignBytesOnRefusal;
+          this.appendForeignBytesOnRefusal = undefined;
+          if (rawPeer) await fs.appendFile(target, rawPeer);
           const revision = this.rewriteOwnedRecordOnRefusal;
           this.rewriteOwnedRecordOnRefusal = undefined;
           if (revision) {
@@ -2674,6 +2687,63 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       }
     },
   );
+
+
+  it("refuses invalid UTF-8 bytes in a separately appended failed-fork journal record", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-raw-utf8-refusal-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic raw-byte preservation evidence", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Retain synthetic artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const originalId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !artifact) throw new Error("expected disposable source and archive");
+      const prefix = await fs.readFile(sourceFile);
+      const archiveBytes = await fs.readFile(artifact);
+
+      // JSON syntax is valid after replacement decoding, so a text-only strict
+      // parser can incorrectly republish different bytes instead of refusing.
+      const foreign = Buffer.from(JSON.stringify({
+        type: "message", id: "synthetic-raw-invalid-utf8", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "peer!bytes", timestamp: Date.now() },
+      }) + "\n", "utf8");
+      const corruptOffset = foreign.indexOf("!");
+      expect(corruptOffset).toBeGreaterThan(0);
+      foreign[corruptOffset] = 0xff;
+      storage.protectedSourceFile = sourceFile;
+      storage.appendForeignBytesOnRefusal = foreign;
+      storage.rejectNextSourceClose = true;
+
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed journal recovery");
+      const reasons = failure.errors.map((error: unknown) => String(error));
+      expect(reasons.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some((reason: string) => reason.includes("Cannot verify current session journal"))).toBe(true);
+
+      const preserved = await fs.readFile(sourceFile);
+      expect(preserved.subarray(0, prefix.length)).toEqual(prefix);
+      expect(preserved.subarray(-foreign.length)).toEqual(foreign);
+      expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+      expect(manager.getSessionId()).toBe(originalId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(() => manager.flushSync()).toThrow(/Cannot verify current session journal/);
+      expect(await fs.readFile(sourceFile)).toEqual(preserved);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignBytesOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
 
   it("refuses an independent append that collides with an existing session entry ID", async () => {
     using temp = TempDir.createSync("@veyyon-fork-foreign-colliding-id-");
