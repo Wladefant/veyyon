@@ -724,12 +724,12 @@ export class FileSessionStorage implements SessionStorage {
 	async readTextStrict(path: string): Promise<string> {
 		// Default UTF-8 text decoding replaces malformed bytes with U+FFFD, which
 		// would silently change an independently written journal during a repair.
-		return new TextDecoder("utf-8", { fatal: true }).decode(await fs.promises.readFile(path));
+		return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await fs.promises.readFile(path));
 	}
 
 	readTextSyncStrict(path: string): string | undefined {
 		try {
-			return new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(path));
+			return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(fs.readFileSync(path));
 		} catch (err) {
 			if (isEnoent(err)) return undefined;
 			throw toError(err);
