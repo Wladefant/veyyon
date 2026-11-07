@@ -1222,6 +1222,11 @@ export class SessionManager {
 			if (requireCompleteHistory && abortedLine !== undefined && `${raw}\n` !== abortedLine) {
 				throw new Error("Cannot preserve independently modified aborted fork lifecycle marker during failed-fork repair");
 			}
+			// A strict repair republishes retained owned entries before its
+			// foreign tail. A peer row between owned messages would move.
+			if (requireCompleteHistory && id && this.#isOwnId(id) && abortedLine === undefined && foreign.length > 0) {
+				throw new Error("Cannot preserve interleaved foreign journal history during failed-fork repair");
+			}
 			if (!id || this.#isOwnId(id) || abortedLine !== undefined) continue;
 			foreign.push(raw);
 			if (parsed.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries += 1;
