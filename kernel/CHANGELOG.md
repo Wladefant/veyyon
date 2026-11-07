@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- File-backed append writers rebind to the current regular journal after atomic replacement, without recreating a missing path; uncoordinated cross-process rename races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Strict failed-fork repair checks the original journal's POSIX change time against timestamp-preserving equal-length peer edits; separate cross-process rename and held-descriptor races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Synchronous strict failed-fork repair rechecks the original journal version at publication and refuses an append after its reread; separate cross-process append-at-rename and held-descriptor races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).

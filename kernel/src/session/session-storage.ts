@@ -484,10 +484,14 @@ export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 
 class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	#fd: number;
+	readonly #path: string;
+	readonly #appendMode: boolean;
 
 	constructor(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
 		super(options);
 		const flags = options?.flags ?? "a";
+		this.#path = fpath;
+		this.#appendMode = flags === "a";
 		// Ensure parent directory exists
 		const dir = path.dirname(fpath);
 		if (!fs.existsSync(dir)) {
@@ -499,9 +503,45 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		writerRegistry.register(this, this.#fd, this);
 	}
 
+	/** A peer can atomically replace the pathname while this writer keeps the old inode open. */
+	#rebindAfterReplacement(): void {
+		const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
+		// Never create a new journal when a peer moved or removed the current one.
+		const current = fs.statSync(this.#path);
+		if (fileObjectIdentity(current) === pinnedIdentity) return;
+		if (!this.#appendMode) throw new Error("Session writer target was replaced");
+		const entry = fs.lstatSync(this.#path);
+		if (!entry.isFile() || entry.isSymbolicLink()) {
+			throw new Error("Session writer target is not a regular file");
+		}
+		// Reopen in append mode WITHOUT O_CREAT or truncation. O_NOFOLLOW, where
+		// available, closes the symlink-swap window around the initial lstat.
+		const nextFd = fs.openSync(
+			this.#path,
+			fs.constants.O_WRONLY | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW ?? 0),
+		);
+		try {
+			const next = fs.lstatSync(this.#path);
+			if (!next.isFile() || next.isSymbolicLink() ||
+				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))) {
+				throw new Error("Session writer target changed during reopen");
+			}
+			fs.closeSync(this.#fd);
+		} catch (error) {
+			fs.closeSync(nextFd);
+			throw error;
+		}
+		writerRegistry.unregister(this);
+		this.#fd = nextFd;
+		writerRegistry.register(this, nextFd, this);
+	}
+
 	async append(line: string): Promise<void> {
 		this.ensureOpen();
 		try {
+			// A post-rename append must not silently write to a displaced inode.
+			// This observation cannot serialize arbitrary concurrent OS writers.
+			this.#rebindAfterReplacement();
 			const buf = Buffer.from(line, "utf-8");
 			let offset = 0;
 			while (offset < buf.length) {

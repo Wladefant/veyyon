@@ -2875,6 +2875,22 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(active).toContain("Post-rename independent append remains recoverable");
         expect(active).not.toContain('"reason":"session_switched"');
         expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+
+        // The same writer must fail closed if a peer removes the active path.
+        // In particular, O_APPEND must not recreate an empty replacement.
+        const parked = sourceFile + ".synthetic-parked";
+        await fs.rename(sourceFile, parked);
+        try {
+          await expect(peer.append(JSON.stringify({
+            type: "message", id: "synthetic-missing-target", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: { role: "user", content: "Must not appear", timestamp: Date.now() },
+          }) + "\n")).rejects.toThrow(/ENOENT|no such file/i);
+          expect(nodeFs.existsSync(sourceFile)).toBe(false);
+          expect(await fs.readFile(parked, "utf8")).not.toContain("synthetic-missing-target");
+        } finally {
+          await fs.rename(parked, sourceFile);
+        }
       } finally {
         storage.rejectNextSourceClose = false;
         try { await peer?.close(); } finally { await manager.close().catch(() => undefined); }
