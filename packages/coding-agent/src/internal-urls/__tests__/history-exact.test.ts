@@ -257,6 +257,29 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("does not split surrogate pairs at search-preview boundaries", () => {
+		const cases = [
+			{ before: "🔑" + "x".repeat(69), after: "x".repeat(40) },
+			{ before: "x".repeat(70), after: "x".repeat(49) + "🔑" + "x".repeat(40) },
+		];
+		for (const { before, after } of cases) {
+			const branch = [
+				{
+					type: "message", id: "boundary", parentId: null,
+					message: { role: "user", content: before + "N".repeat(80) + after },
+				},
+			] as unknown as SessionEntry[];
+			const found = searchLiveHistoryEntries(branch, { query: "n".repeat(80), limit: 1 });
+			expect(found.status).toBe("ok");
+			expect(found.matches).toHaveLength(1);
+			const preview = found.matches[0]!.preview;
+			expect(preview).toContain("N".repeat(80));
+			expect(preview.length).toBeLessThanOrEqual(200);
+			expect(preview).not.toMatch(/^[\\uDC00-\\uDFFF]/);
+			expect(preview).not.toMatch(/[\\uD800-\\uDBFF]$/);
+		}
+	});
+
 	it("keeps matching ancestors despite 501 hits in an abandoned sibling", async () => {
 		const dir = TempDir.createSync("@veyyon-history-sibling-cap-");
 		try {
