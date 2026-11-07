@@ -18,6 +18,9 @@ export interface SessionStorageStat {
 	size: number;
 	mtimeMs: number;
 	mtime: Date;
+	/** The filesystem's metadata-change time, when available. Unlike mtime this
+	 * advances for timestamp-preserving in-place rewrites on POSIX filesystems. */
+	ctimeMs?: number;
 	/**
 	 * What the path names RIGHT NOW, for a backend where a path can start naming
 	 * a different object: `dev:ino` on a real filesystem, where a rewrite is a
@@ -678,6 +681,7 @@ export class FileSessionStorage implements SessionStorage {
 			size: stats.size,
 			mtimeMs: stats.mtimeMs,
 			mtime: stats.mtime,
+			ctimeMs: stats.ctimeMs,
 			identity: fileObjectIdentity(stats),
 		};
 	}
