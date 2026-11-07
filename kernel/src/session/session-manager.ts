@@ -120,6 +120,48 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 const CHUNK_TARGET_CHARS = 1 << 20;
 
 /**
+ * JSON.parse silently takes the last duplicate object member. In a strict
+ * failed-fork repair this could make a foreign line appear to have our ID.
+ * Check raw member names after JSON syntax validation, including escaped-
+ * equivalent names; nested objects retain independent name namespaces.
+ */
+function hasDuplicateJsonMemberNames(raw: string): boolean {
+	const containers: Array<Set<string> | null> = [];
+	let index = 0;
+	while (index < raw.length) {
+		const char = raw[index];
+		if (char === '"') {
+			const start = index++;
+			while (index < raw.length) {
+				if (raw[index] === "\\") index += 2;
+				else if (raw[index] === '"') { index++; break; }
+				else index++;
+			}
+			const names = containers[containers.length - 1];
+			if (names) {
+				let following = index;
+				while (
+					raw[following] === " " || raw[following] === "\t" ||
+					raw[following] === "\r" || raw[following] === "\n"
+				) following++;
+				if (raw[following] === ":") {
+					const name = JSON.parse(raw.slice(start, index)) as string;
+					if (names.has(name)) return true;
+					names.add(name);
+				}
+			}
+			continue;
+		}
+		if (char === "{") containers.push(new Set<string>());
+		else if (char === "[") containers.push(null);
+		else if (char === "}" || char === "]") containers.pop();
+		index++;
+	}
+	return false;
+}
+
+
+/**
  * Where this manager's entry lines sit in the file it last published. Valid while that file is
  * exactly what it published plus the entries it appended since, and holds no line from another
  * writer, so the bytes before any entry are known without serializing anything.
@@ -383,10 +425,11 @@ export class SessionManager {
 	#lifecycleEnded = false;
 	/**
 	 * A rejected source close or new-file publication can leave this fork's own
-	 * terminal marker appended to the old JSONL. Exclude only those exact IDs
-	 * from foreign-writer preservation until the source is republished.
+	 * terminal marker appended to the old JSONL. Keep each marker's exact serialized
+	 * bytes: a peer can reuse its ID or change its content; neither may be discarded
+	 * as though it were our original aborted marker.
 	 */
-	#abortedForkLifecycleIdsByFile = new Map<string, Set<string>>();
+	#abortedForkLifecycleLinesByFile = new Map<string, Map<string, string>>();
 
 	/** File reflects all current entries; appends can go incrementally. */
 	#fileIsCurrent = false;
@@ -472,12 +515,14 @@ export class SessionManager {
 	 * without reading the file: a different inode means someone republished the
 	 * path, whether or not the body they wrote is the same length as ours.
 	 */
-	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines } | null = null;
+	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null = null;
 	/**
 	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
 	 * installed with {@link #lastBodyBytes} once that body is published.
 	 */
 	#lastBodyLines: PublishedLines | undefined;
+	/** Owned entries actually serialized by a full rewrite with a foreign tail (no reusable offset layout). */
+	#lastBodyOwnedIds: Set<string> | undefined;
 	/**
 	 * Index in `#entries` of the earliest entry an in-place update may have changed since a rewrite
 	 * last started serializing, or `Infinity` when none has. Each rewrite takes it and resets it, so
@@ -760,6 +805,7 @@ export class SessionManager {
 	*#fileLines(): Generator<string> {
 		this.#lastBodyBytes = 0;
 		this.#lastBodyLines = undefined;
+		this.#lastBodyOwnedIds = undefined;
 		const header = this.#headerLine();
 		const foreign = this.#foreignLines;
 		const lines: PublishedLines = { base: this.#entries, baseLength: 0, appended: [], entryOffsets: [] };
@@ -772,7 +818,16 @@ export class SessionManager {
 			yield line;
 		}
 		this.#lastBodyBytes = bytes;
-		if (foreign.length === 0) this.#lastBodyLines = lines;
+		if (foreign.length === 0) {
+			this.#lastBodyLines = lines;
+		} else {
+			// Foreign lines invalidate the offset layout for future tail rewrites,
+			// but cannot erase evidence of which owned entries we actually published.
+			const ownedIds = new Set<string>();
+			for (let i = 0; i < lines.baseLength; i++) ownedIds.add(lines.base[i]!.id);
+			for (const entry of lines.appended) ownedIds.add(entry.id);
+			this.#lastBodyOwnedIds = ownedIds;
+		}
 	}
 
 	/**
@@ -803,6 +858,7 @@ export class SessionManager {
 	*#tailLines(lines: PublishedLines, keep: number, start: number): Generator<string> {
 		this.#lastBodyBytes = 0;
 		this.#lastBodyLines = undefined;
+		this.#lastBodyOwnedIds = undefined;
 		// The plan matched every kept entry against `#entries`, so while the base is still that array the
 		// kept entries are its first `keep`, appended ones included.
 		if (this.#entries === lines.base || keep <= lines.baseLength) {
@@ -851,8 +907,15 @@ export class SessionManager {
 	 * Publish the file at `sessionFile` atomically, writing only the head and the lines after the
 	 * kept prefix when {@link #tailRewritePlan} finds one. Returns how many bytes the kept lines moved.
 	 */
-	async #publishAtomically(sessionFile: string, epoch: number, updatedFrom: number): Promise<number> {
-		const options = { commitGuard: () => this.#diskEpoch === epoch };
+	async #publishAtomically(
+		sessionFile: string,
+		epoch: number,
+		updatedFrom: number,
+		canPublishSource?: (sourcePath?: string) => boolean,
+	): Promise<number> {
+		const options = {
+			commitGuard: (sourcePath?: string) => this.#diskEpoch === epoch && (canPublishSource?.(sourcePath) ?? true),
+		};
 		const plan = this.#tailRewritePlan(updatedFrom);
 		if (!plan || !this.#storage.rewriteTailAtomic) {
 			await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), options);
@@ -951,7 +1014,9 @@ export class SessionManager {
 	 */
 	async #refreshForeignLines(requireReadable = false): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
-		if (this.#fileIsExactlyAsPublished()) return;
+		// A fixed-width title update writes in place: inode and byte count stay the
+		// same. Strict failed-fork recovery must inspect its actual contents.
+		if (!requireReadable && this.#fileIsExactlyAsPublished()) return;
 		if (requireReadable) {
 			const state = this.#storage.existsStateSync(this.#sessionFile);
 			if (state === "absent" && !this.#forceFileCreation && this.#publishedFileState === null) return;
@@ -959,12 +1024,20 @@ export class SessionManager {
 		} else if (!(await this.#storage.exists(this.#sessionFile))) return;
 		let text: string;
 		try {
-			text = await this.#storage.readText(this.#sessionFile);
+			// Strict failed-fork recovery may not fall back to a lossy text reader:
+			// a backend without byte-strict UTF-8 support cannot prove it retained
+			// independent source bytes. Ordinary rewrites remain best-effort.
+			if (requireReadable) {
+				if (!this.#storage.readTextStrict) throw new Error("Cannot verify current session journal");
+				text = await this.#storage.readTextStrict(this.#sessionFile);
+			} else {
+				text = await this.#storage.readText(this.#sessionFile);
+			}
 		} catch {
 			if (requireReadable) throw new Error("Cannot verify current session journal");
 			return;
 		}
-		this.#adoptForeignLines(text);
+		this.#adoptForeignLines(text, requireReadable);
 	}
 
 	/**
@@ -980,15 +1053,28 @@ export class SessionManager {
 	 */
 	#refreshForeignLinesSync(): void {
 		if (!this.#persist || !this.#sessionFile) return;
-		if (this.#fileIsExactlyAsPublished()) return;
+		const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(this.#sessionFile);
+		if (!repairingFailedFork && this.#fileIsExactlyAsPublished()) return;
+		if (repairingFailedFork && this.#storage.existsStateSync(this.#sessionFile) !== "present") {
+			throw new Error("Cannot verify current session journal");
+		}
 		let text: string | undefined;
 		try {
-			text = this.#storage.readTextSync?.(this.#sessionFile);
+			if (repairingFailedFork) {
+				if (!this.#storage.readTextSyncStrict) throw new Error("Cannot verify current session journal");
+				text = this.#storage.readTextSyncStrict(this.#sessionFile);
+			} else {
+				text = this.#storage.readTextSync?.(this.#sessionFile);
+			}
 		} catch {
+			if (repairingFailedFork) throw new Error("Cannot verify current session journal");
 			return;
 		}
-		if (text === undefined) return;
-		this.#adoptForeignLines(text);
+		if (text === undefined) {
+			if (repairingFailedFork) throw new Error("Cannot verify current session journal");
+			return;
+		}
+		this.#adoptForeignLines(text, repairingFailedFork);
 	}
 
 	/**
@@ -1001,34 +1087,161 @@ export class SessionManager {
 	 * share the parent buffer while `indexOf`/`slice` over a string that size
 	 * materializes copies.
 	 */
-	#adoptForeignLines(text: string): void {
+	#adoptForeignLines(text: string, requireCompleteHistory = false): void {
+		// A partial final record can belong to another active writer. Do not
+		// replace the original journal while a failed-fork repair cannot prove
+		// which foreign bytes it would discard. Ordinary rewrites stay best-effort.
+		if (requireCompleteHistory && text.length > 0 && !text.endsWith("\n")) {
+			throw new Error("Cannot preserve incomplete session journal during failed-fork repair");
+		}
 		const foreign: string[] = [];
-		const abortedForkIds = this.#sessionFile
-			? this.#abortedForkLifecycleIdsByFile.get(this.#sessionFile)
+		const abortedForkLines = this.#sessionFile
+			? this.#abortedForkLifecycleLinesByFile.get(this.#sessionFile)
 			: undefined;
 		let liveWriterEntries = 0;
-		for (const raw of text.split("\n")) {
+		let seenSourceHeader = false;
+		let seenTitleSlot = false;
+		const seenStrictEntryIds = requireCompleteHistory ? new Set<string>() : undefined;
+		// Only entries known to have been published are mandatory on strict
+		// recovery. Entries still queued in memory are not evidence of an
+		// independently removed record, but a persisted entry that vanished
+		// must never be resurrected from stale memory.
+		const publishedLines = requireCompleteHistory ? this.#publishedFileState?.lines : undefined;
+		const missingPublishedIds = !requireCompleteHistory
+			? undefined
+			: publishedLines
+				? new Set<string>()
+				: this.#publishedFileState?.ownedIds
+					? new Set(this.#publishedFileState.ownedIds)
+					: undefined;
+		if (publishedLines && missingPublishedIds) {
+			for (let i = 0; i < publishedLines.baseLength; i++) {
+				const id = publishedLines.base[i]?.id;
+				if (id && this.#isOwnId(id)) missingPublishedIds.add(id);
+			}
+			for (const entry of publishedLines.appended) {
+				if (this.#isOwnId(entry.id)) missingPublishedIds.add(entry.id);
+			}
+		}
+		const journalLines = text.split("\n");
+		for (let lineIndex = 0; lineIndex < journalLines.length; lineIndex++) {
+			const raw = journalLines[lineIndex]!;
 			// Most entry lines open with their id, so a line this manager wrote is known
 			// without parsing it. Parsing every line was most of a refresh: 231ms of a
 			// 146MB transcript against 19ms for this match, and a refresh runs on every
 			// publish while another window holds the file. A line of any other shape takes
 			// the full parse below.
 			const leadingId = LEADING_ENTRY_ID.exec(raw)?.[1];
-			if (leadingId !== undefined && this.#isOwnId(leadingId)) continue;
-			if (!raw.trim()) continue;
+			// Strict repair validates even our own lines before replacing the inode.
+			if (!requireCompleteHistory && leadingId !== undefined && this.#isOwnId(leadingId)) continue;
+			if (!raw.trim()) {
+				// The last empty item is the terminator from our final newline. A
+				// separate blank line (or whitespace-only line) is unknown journal
+				// content and may not be discarded by strict failed-fork repair.
+				if (requireCompleteHistory && lineIndex < journalLines.length - 1) {
+					throw new Error("Cannot preserve malformed session journal during failed-fork repair");
+				}
+				continue;
+			}
 			let parsed: { type?: unknown; id?: unknown; customType?: unknown } | undefined;
 			try {
 				parsed = JSON.parse(raw) as { type?: unknown; id?: unknown; customType?: unknown };
 			} catch {
+				if (requireCompleteHistory) {
+					throw new Error("Cannot preserve malformed session journal during failed-fork repair");
+				}
 				continue;
+			}
+			if (requireCompleteHistory && hasDuplicateJsonMemberNames(raw)) {
+			throw new Error("Cannot preserve ambiguous session journal during failed-fork repair");
+		}
+		if (requireCompleteHistory && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
+				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
 			}
 			// The title slot is a fixed-width line this manager rewrites every time,
 			// and a header belongs to whoever owns the file's identity.
-			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE || parsed.type === "session") continue;
+			if (parsed.type === "session") {
+				// A second header (even with our ID) or a foreign replacement
+				// header is not an owned entry. Never discard its original bytes
+				// while repairing an aborted fork.
+				if (requireCompleteHistory) {
+					if (seenSourceHeader || parsed.id !== this.#sessionId || `${raw}\n` !== this.#headerLine()) {
+						throw new Error("Cannot preserve unexpected session journal header during failed-fork repair");
+					}
+					seenSourceHeader = true;
+				}
+				continue;
+			}
+			if (parsed.type === SESSION_TITLE_SLOT_ENTRY_TYPE) {
+				// The fixed-width title slot belongs before the original header.
+				// An appended peer slot is history we cannot silently discard.
+				if (requireCompleteHistory) {
+					if (seenTitleSlot || seenSourceHeader) {
+						throw new Error("Cannot preserve unexpected session title slot during failed-fork repair");
+					}
+					// The title slot is mutable in place. A peer can change its
+					// fixed-width bytes while inode and length still look unchanged.
+					if (`${raw}\n` !== this.#titleSlotLine()) {
+						throw new Error("Cannot preserve independently modified session title slot during failed-fork repair");
+					}
+					seenTitleSlot = true;
+				}
+				continue;
+			}
+			// Strict rollback cannot silently move a foreign prefix past the
+			// session header when rebuilding the journal. The source header must
+			// precede every ordinary record; legacy title-slot-free sources qualify.
+			if (requireCompleteHistory && !seenSourceHeader) {
+				throw new Error("Cannot preserve journal entry before source header during failed-fork repair");
+			}
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
-			if (!id || this.#isOwnId(id) || abortedForkIds?.has(id)) continue;
+			if (requireCompleteHistory && !id) {
+				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
+			}
+			// Separate Snowflake sources may reuse an entry ID in the same journal.
+			// Never classify the second raw record as owned and erase its bytes.
+			if (id && seenStrictEntryIds) {
+				if (seenStrictEntryIds.has(id)) {
+					throw new Error("Cannot preserve repeated session journal entry ID during failed-fork repair");
+				}
+				seenStrictEntryIds.add(id);
+			}
+			// An independently edited owned record keeps its ID. Its original bytes
+			// must not be replaced with our older in-memory serialization during
+			// strict failed-fork repair. Ordinary rewrites retain their prior policy.
+			if (id && seenStrictEntryIds && this.#isOwnId(id)) {
+				const owned = this.#index.get(id);
+				if (!owned || `${raw}\n` !== this.#lineFor(owned)) {
+					throw new Error("Cannot preserve independently modified session journal entry during failed-fork repair");
+				}
+				missingPublishedIds?.delete(id);
+			}
+			const abortedLine = id ? abortedForkLines?.get(id) : undefined;
+			// Only the exact aborted marker we wrote may be removed. A peer can
+			// replace its bytes while retaining the ID, so ID-only matching loses history.
+			if (requireCompleteHistory && abortedLine !== undefined && `${raw}\n` !== abortedLine) {
+				throw new Error("Cannot preserve independently modified aborted fork lifecycle marker during failed-fork repair");
+			}
+			// A strict repair republishes retained owned entries before its
+			// foreign tail. A peer row between owned messages would move.
+			if (requireCompleteHistory && id && this.#isOwnId(id) && abortedLine === undefined && foreign.length > 0) {
+				throw new Error("Cannot preserve interleaved foreign journal history during failed-fork repair");
+			}
+			if (!id || this.#isOwnId(id) || abortedLine !== undefined) continue;
 			foreign.push(raw);
 			if (parsed.customType !== SESSION_EXIT_CUSTOM_TYPE) liveWriterEntries += 1;
+		}
+		if (requireCompleteHistory && !seenSourceHeader) {
+			throw new Error("Cannot verify original session journal header during failed-fork repair");
+		}
+		if (missingPublishedIds && missingPublishedIds.size > 0) {
+			throw new Error("Cannot preserve missing previously published session entry during failed-fork repair");
+		}
+		// A title slot published by this manager cannot disappear silently during
+		// failed-fork recovery. Older loaded journals without a title slot remain
+		// valid because #hasTitleSlot reflects their original on-disk layout.
+		if (requireCompleteHistory && this.#hasTitleSlot && !seenTitleSlot) {
+			throw new Error("Cannot preserve missing session title slot during failed-fork repair");
 		}
 		this.#foreignLines = foreign;
 		if (this.#reportedForeignWriter) return;
@@ -1082,13 +1295,35 @@ export class SessionManager {
 		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
 
 		try {
+			// Strict failed-fork repair must recheck the original object at publication,
+			// including its EPERM backup. This is not cross-process append-at-rename CAS.
+			const sessionFile = this.#sessionFile;
+			const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
+			let originalState: SessionStorageStat | undefined;
+			if (repairingFailedFork) {
+				try {
+					originalState = this.#storage.statSync(sessionFile);
+				} catch {
+					throw new Error("Cannot verify original journal before synchronous failed-fork repair");
+				}
+			}
 			this.#refreshForeignLinesSync();
+			const sourceUnchanged = (sourcePath = sessionFile): boolean => {
+				if (!originalState) return true;
+				try {
+					const current = this.#storage.statSync(sourcePath);
+					return current.identity === originalState.identity && current.size === originalState.size &&
+						current.mtimeMs === originalState.mtimeMs;
+				} catch {
+					return false;
+				}
+			};
 			const body = this.#fileBody();
 			this.#diskEpoch++;
 			this.#diskTail = Promise.resolve();
 			this.#closeWriterEventually();
 			this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
-			this.#storage.writeTextSync(this.#sessionFile, body);
+			this.#storage.writeTextSync(sessionFile, body, repairingFailedFork ? { commitGuard: sourceUnchanged } : undefined);
 			this.#notePublishedFile();
 			// The file matches memory again, so the fault episode is over and a later one
 			// is a new thing to report.
@@ -1176,14 +1411,60 @@ export class SessionManager {
 				// Read the file back first: a second manager holding the same path
 				// appends lines this manager has never seen, and a full-file body
 				// that omits them deletes them (see #refreshForeignLines).
-				await this.#refreshForeignLines();
+				// Failed-fork rollback must not overwrite an original journal that
+				// could contain unseen foreign lines when the source read fails.
+				// Preserve the existing best-effort policy for ordinary rewrites.
+				const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
+				// For failed-fork repair, an independent writer can append while
+				// we read or stage the replacement. The manager's disk epoch only
+				// fences THIS manager; check the original file's version too.
+				let originalState: SessionStorageStat | undefined;
+				if (repairingFailedFork) {
+					try {
+						originalState = this.#storage.statSync(sessionFile);
+					} catch {
+						throw new Error("Cannot verify original journal before failed-fork repair");
+					}
+				}
+				const sourceUnchanged = (sourcePath = sessionFile): boolean => {
+					if (!originalState) return true;
+					try {
+						const current = this.#storage.statSync(sourcePath);
+						return (
+							current.identity === originalState.identity &&
+							current.size === originalState.size &&
+							current.mtimeMs === originalState.mtimeMs
+						);
+					} catch {
+						return false;
+					}
+				};
+				await this.#refreshForeignLines(repairingFailedFork);
+				if (repairingFailedFork && !sourceUnchanged()) {
+					throw new Error("Original journal changed during failed-fork repair");
+				}
 				if (this.#diskEpoch !== epoch) return false;
 				const updatedFrom = this.#firstUpdatedEntry;
 				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 				let published = false;
+				let foreignChangeRejected = false;
 				try {
 					const coldIdentity = this.#publishedFileState?.identity;
-					const shift = await this.#publishAtomically(sessionFile, epoch, updatedFrom);
+					const shift = await this.#publishAtomically(
+						sessionFile,
+						epoch,
+						updatedFrom,
+						repairingFailedFork
+							? (sourcePath?: string) => {
+									const unchanged = sourceUnchanged(sourcePath);
+									if (!unchanged) foreignChangeRejected = true;
+									return unchanged;
+								}
+							: undefined,
+					);
+					// writeTextAtomic discards a rejected staged write without
+					// throwing. Do not mistake its successful return for a repair.
+					if (foreignChangeRejected) throw new Error("Original journal changed before failed-fork repair publication");
 					if (this.#diskEpoch !== epoch) return false;
 					this.#notePublishedFile();
 					this.#rebaseColdPayloads(coldIdentity, shift);
@@ -1293,6 +1574,7 @@ export class SessionManager {
 		const length = Buffer.byteLength(line, "utf-8");
 		state.lines?.appended.push(entry);
 		state.lines?.entryOffsets.push(offset);
+		state.ownedIds?.add(entry.id);
 		state.size += length;
 		if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
 	}
@@ -1339,10 +1621,15 @@ export class SessionManager {
 		} catch {
 			identity = undefined;
 		}
-		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
+		this.#publishedFileState = {
+			size: this.#lastBodyBytes,
+			identity,
+			lines: this.#lastBodyLines,
+			ownedIds: this.#lastBodyOwnedIds,
+		};
 		// The old file has now been durably republished without our cancelled
 		// lifecycle marker; later genuine foreign entries still remain intact.
-		this.#abortedForkLifecycleIdsByFile.delete(this.#sessionFile);
+		this.#abortedForkLifecycleLinesByFile.delete(this.#sessionFile);
 	}
 
 	/**
@@ -2367,7 +2654,7 @@ export class SessionManager {
 		}
 		// A direct caller may retry fork without an AgentSession-level flush.
 		// Repair its still-active original JSONL before leaving that file behind.
-		if (this.#abortedForkLifecycleIdsByFile.has(oldSessionFile)) await this.flush();
+		if (this.#abortedForkLifecycleLinesByFile.has(oldSessionFile)) await this.flush();
 		const parentSessionId = this.#sessionId;
 		const timestamp = nowIso();
 		const nextSessionId = mintSessionId();
@@ -2398,14 +2685,19 @@ export class SessionManager {
 				appended.state === "ended" &&
 				appended.reason === "session_switched"
 			) {
-				const aborted = this.#abortedForkLifecycleIdsByFile.get(oldSessionFile) ?? new Set<string>();
-				aborted.add(appended.id);
-				this.#abortedForkLifecycleIdsByFile.set(oldSessionFile, aborted);
+				const aborted = this.#abortedForkLifecycleLinesByFile.get(oldSessionFile) ?? new Map<string, string>();
+				aborted.set(appended.id, this.#lineFor(appended));
+				this.#abortedForkLifecycleLinesByFile.set(oldSessionFile, aborted);
 			}
 			try {
 				this.restoreState({ ...beforeSwitch, needsRewrite: true });
+				// Close can fail after the old file accepted session_switched.
+				// Repair that journal before exposing the failed fork to the caller:
+				// a process restart without a later caller flush must not see a
+				// spurious terminal marker. The rewrite retains genuine foreign tails.
+				await this.flush();
 			} catch (restoreError) {
-				throw new AggregateError([error, restoreError], "Fork failed and could not restore the active source");
+				throw new AggregateError([error, restoreError], "Fork failed and could not durably restore the active source");
 			}
 			throw error;
 		}
@@ -2417,6 +2709,7 @@ export class SessionManager {
 			sourceEndEntry.reason === "session_switched"
 				? sourceEndEntry.id
 				: undefined;
+		const sourceEndLine = sourceEndId && sourceEndEntry ? this.#lineFor(sourceEndEntry) : undefined;
 		this.#clearDiskError();
 		this.#entries = retainedEntries;
 		this.#index.rebuild(this.#entries);
@@ -2464,10 +2757,10 @@ export class SessionManager {
 		} catch (error) {
 			// AgentSession restores the source snapshot after a publication error.
 			// Its own flushed end marker must not return as a foreign writer tail.
-			if (sourceEndId) {
-				const aborted = this.#abortedForkLifecycleIdsByFile.get(oldSessionFile) ?? new Set<string>();
-				aborted.add(sourceEndId);
-				this.#abortedForkLifecycleIdsByFile.set(oldSessionFile, aborted);
+			if (sourceEndId && sourceEndLine) {
+				const aborted = this.#abortedForkLifecycleLinesByFile.get(oldSessionFile) ?? new Map<string, string>();
+				aborted.set(sourceEndId, sourceEndLine);
+				this.#abortedForkLifecycleLinesByFile.set(oldSessionFile, aborted);
 			}
 			throw error;
 		}

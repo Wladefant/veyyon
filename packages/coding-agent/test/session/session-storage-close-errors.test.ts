@@ -184,3 +184,183 @@ function failNextClose(): void {
 		throw Object.assign(new Error("EIO: i/o error, close"), { code: "EIO" });
 	});
 }
+
+
+describe("FileSessionStorage asynchronous staged short-write preservation", () => {
+	it("retries a short multibyte write and refuses zero progress without overwriting history", async () => {
+		for (const outcome of ["short", "zero"] as const) {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-async-short-write-"));
+			const journal = path.join(dir, "synthetic.jsonl");
+			const artifact = path.join(dir, "synthetic-artifact.log");
+			const original = "ORIGINAL SYNTHETIC JOURNAL\n";
+			const evidence = "SYNTHETIC ARCHIVE BYTES";
+			fs.writeFileSync(journal, original);
+			fs.writeFileSync(artifact, evidence);
+			const open = fs.promises.open;
+			let injected = false;
+			const openSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (file, flags, mode) => {
+				const handle = await open(file, flags, mode);
+				if (String(file).startsWith(path.join(dir, ".synthetic.jsonl."))) {
+					const write = handle.write.bind(handle);
+					Object.defineProperty(handle, "write", {
+						configurable: true,
+						value: async (bytes: Buffer, offset: number, length: number, position: number | null) => {
+							if (!injected) {
+								injected = true;
+								if (outcome === "zero") return { bytesWritten: 0, buffer: bytes };
+								return write(bytes, offset, 1, position);
+							}
+							return write(bytes, offset, length, position);
+						},
+					});
+				}
+				return handle;
+			});
+			try {
+				const publish = new FileSessionStorage().writeTextAtomic(journal, () => [
+					"é\n", "COMPLETE SYNTHETIC TAIL\n",
+				]);
+				if (outcome === "zero") {
+					await expect(publish).rejects.toThrow(/Short async session journal write/);
+					expect(fs.readFileSync(journal, "utf8")).toBe(original);
+				} else {
+					await expect(publish).resolves.toBeUndefined();
+					expect(fs.readFileSync(journal, "utf8")).toBe("é\nCOMPLETE SYNTHETIC TAIL\n");
+				}
+				expect(injected).toBe(true);
+				expect(fs.readFileSync(artifact, "utf8")).toBe(evidence);
+				expect(fs.readdirSync(dir).sort()).toEqual(["synthetic-artifact.log", "synthetic.jsonl"]);
+			} finally {
+				openSpy.mockRestore();
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		}
+	});
+});
+
+describe("FileSessionStorage synchronous staged short-write preservation", () => {
+	it("retries a short UTF-8 byte write without publishing truncated history", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-short-write-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC JOURNAL\n");
+		const originalWrite = fs.writeSync;
+		let shortWrites = 0;
+		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation((fd, buffer, offset, length, position) => {
+			if (Buffer.isBuffer(buffer) && shortWrites === 0 && length > 1) {
+				shortWrites++;
+				return originalWrite(fd, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+			}
+			return originalWrite(fd, buffer, offset, length, position);
+		});
+		try {
+			const expected = "é\nCOMPLETE UTF-8 TAIL\n";
+			new FileSessionStorage().writeTextSync(journal, () => [
+				"é\n", "COMPLETE UTF-8 TAIL\n",
+			]);
+			expect(shortWrites).toBe(1);
+			expect(fs.readFileSync(journal, "utf8")).toBe(expected);
+			expect(fs.readdirSync(dir)).toEqual(["synthetic.jsonl"]);
+		} finally {
+			writeSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a zero-progress staged write and retains the original journal", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-zero-write-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		const artifact = path.join(dir, "synthetic-artifact.log");
+		const original = "ORIGINAL SYNTHETIC JOURNAL\n";
+		const evidence = "SYNTHETIC ARTIFACT BYTES";
+		fs.writeFileSync(journal, original);
+		fs.writeFileSync(artifact, evidence);
+		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation(() => 0);
+		try {
+			expect(() => new FileSessionStorage().writeTextSync(journal, () => [
+				"REPLACEMENT JOURNAL\n", "TAIL\n",
+			])).toThrow(/Short sync session journal write/);
+			expect(fs.readFileSync(journal, "utf8")).toBe(original);
+			expect(fs.readFileSync(artifact, "utf8")).toBe(evidence);
+			expect(fs.readdirSync(dir).sort()).toEqual(["synthetic-artifact.log", "synthetic.jsonl"]);
+		} finally {
+			writeSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("FileSessionStorage synchronous EPERM publication integrity", () => {
+	it("restores the original journal if the staged replacement fails after EPERM", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-refusal-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		const artifact = path.join(dir, "synthetic-artifact.log");
+		const original = "ORIGINAL SYNTHETIC JOURNAL\n";
+		const artifactBytes = "SYNTHETIC ARCHIVE BYTES";
+		fs.writeFileSync(journal, original);
+		fs.writeFileSync(artifact, artifactBytes);
+		const rename = fs.renameSync;
+		let stagedPublications = 0;
+		const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+			const staged = path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
+				String(source).endsWith(".tmp") && String(destination) === journal;
+			if (staged) {
+				stagedPublications += 1;
+				if (stagedPublications === 1) {
+					throw Object.assign(new Error("synthetic Windows-style EPERM"), { code: "EPERM" });
+				}
+				if (stagedPublications === 2) {
+					throw Object.assign(new Error("synthetic staged replacement EIO"), { code: "EIO" });
+				}
+			}
+			return rename(source, destination);
+		});
+		try {
+			const storage = new FileSessionStorage();
+			expect(() => storage.writeTextSync(journal, () => [
+				"REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n",
+			])).toThrow(/synthetic staged replacement EIO/);
+			expect(stagedPublications).toBe(2);
+			// The old EPERM fallback wrote directly to journal with "w" and
+			// would report success (or leave a truncated source on later EIO).
+			expect(fs.readFileSync(journal, "utf8")).toBe(original);
+			expect(fs.readFileSync(artifact, "utf8")).toBe(artifactBytes);
+			expect(fs.readdirSync(dir).sort()).toEqual(["synthetic-artifact.log", "synthetic.jsonl"]);
+		} finally {
+			renameSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("publishes the complete staged replacement when the EPERM retry succeeds", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-sync-eperm-retry-"));
+		const journal = path.join(dir, "synthetic.jsonl");
+		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC HISTORY\n");
+		const rename = fs.renameSync;
+		let stagedPublications = 0;
+		const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+			const staged = path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
+				String(source).endsWith(".tmp") && String(destination) === journal;
+			if (staged) {
+				stagedPublications += 1;
+				if (stagedPublications === 1) {
+					throw Object.assign(new Error("synthetic Windows-style EPERM"), { code: "EPERM" });
+				}
+			}
+			return rename(source, destination);
+		});
+		try {
+			const storage = new FileSessionStorage();
+			expect(() => storage.writeTextSync(journal, () => [
+				"REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n",
+			])).not.toThrow();
+			expect(stagedPublications).toBe(2);
+			expect(fs.readFileSync(journal, "utf8")).toBe(
+				"REPLACEMENT SYNTHETIC JOURNAL\nCOMPLETE TAIL\n",
+			);
+			expect(fs.readdirSync(dir)).toEqual(["synthetic.jsonl"]);
+		} finally {
+			renameSpy.mockRestore();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

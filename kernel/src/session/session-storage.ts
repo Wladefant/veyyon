@@ -82,7 +82,8 @@ export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: 
  * synchronous rewrite that took over cannot be overwritten by a stale body.
  */
 export interface WriteTextAtomicOptions {
-	commitGuard?: () => boolean;
+	/** The EPERM move-aside path, when a backend has renamed the original there. */
+	commitGuard?: (sourcePath?: string) => boolean;
 }
 
 /**
@@ -124,7 +125,18 @@ function writeChunksSync(fpath: string, body: SessionFileBody): void {
 	const fd = fs.openSync(fpath, "w");
 	try {
 		for (const chunk of sessionBodyChunks(body)) {
-			if (chunk.length > 0) fs.writeSync(fd, chunk);
+			if (chunk.length === 0) continue;
+			// A successful writeSync can still write fewer bytes than requested.
+			// Keep a single encoded chunk so retries cannot split or duplicate UTF-8.
+			const bytes = Buffer.from(chunk, "utf8");
+			let offset = 0;
+			while (offset < bytes.length) {
+				const written = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+				if (written === 0) {
+					throw new Error(`Short sync session journal write: ${offset} of ${bytes.length} bytes`);
+				}
+				offset += written;
+			}
 		}
 	} finally {
 		fs.closeSync(fd);
@@ -143,7 +155,17 @@ async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> 
 	const handle = await fs.promises.open(fpath, "w");
 	try {
 		for (const chunk of sessionBodyChunks(body)) {
-			if (chunk.length > 0) await handle.write(chunk);
+			if (chunk.length === 0) continue;
+			// Stage all UTF-8 bytes: a fulfilled write can still be short.
+			const bytes = Buffer.from(chunk, "utf8");
+			let offset = 0;
+			while (offset < bytes.length) {
+				const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, null);
+				if (bytesWritten === 0) {
+					throw new Error(`Short async session journal write: ${offset} of ${bytes.length} bytes`);
+				}
+				offset += bytesWritten;
+			}
 		}
 		await flushStaged(handle);
 	} finally {
@@ -230,7 +252,8 @@ export interface SessionStorage {
 	 * the filesystem about a path those backends never wrote.
 	 */
 	existsStateSync(path: string): PathState;
-	writeTextSync(path: string, body: SessionFileBody): void;
+	/** Optional synchronous publication fence; a rejecting guard throws and preserves the target. */
+	writeTextSync(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void;
 	/**
 	 * Update the current session title through the storage backend.
 	 *
@@ -246,6 +269,15 @@ export interface SessionStorage {
 
 	exists(path: string): Promise<boolean>;
 	readText(path: string): Promise<string>;
+	/**
+	 * Optional byte-strict UTF-8 read for fail-closed history repair: unlike
+	 * ordinary text reads, malformed source bytes must never be republished as U+FFFD.
+	 */
+	readTextStrict?(path: string): Promise<string>;
+	/**
+	 * Optional synchronous byte-strict twin for failed-fork exit/flush repair.
+	 */
+	readTextSyncStrict?(path: string): string | undefined;
 	/**
 	 * Read a whole file without yielding, for a caller that cannot await.
 	 *
@@ -582,13 +614,29 @@ export class FileSessionStorage implements SessionStorage {
 		return state;
 	}
 
-	writeTextSync(fpath: string, body: SessionFileBody): void {
+	writeTextSync(fpath: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
 		const dir = path.dirname(fpath);
 		this.ensureDirSync(dir);
 		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+		let guardRejected = false;
+		const commitGuard = (sourcePath?: string): boolean => {
+			const allowed = options?.commitGuard?.(sourcePath) ?? true;
+			if (!allowed) guardRejected = true;
+			return allowed;
+		};
 		try {
 			writeChunksSync(tempPath, body);
-			fs.renameSync(tempPath, fpath);
+			if (!commitGuard()) throw new Error("Original journal changed before synchronous publication");
+			try {
+				fs.renameSync(tempPath, fpath);
+			} catch (renameError) {
+				if (!hasFsCode(renameError, "EPERM")) throw renameError;
+				// Never truncate the previous journal when replacement is refused.
+				// The existing staged-file fallback preserves or restores its backup.
+				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError,
+					options?.commitGuard ? commitGuard : undefined);
+				if (guardRejected) throw new Error("Original journal changed before synchronous publication");
+			}
 		} catch (err) {
 			try {
 				if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
@@ -600,10 +648,6 @@ export class FileSessionStorage implements SessionStorage {
 						error: toError(cleanupErr).message,
 					});
 				}
-			}
-			if (hasFsCode(err, "EPERM")) {
-				writeChunksSync(fpath, body);
-				return;
 			}
 			throw toError(err);
 		}
@@ -685,6 +729,21 @@ export class FileSessionStorage implements SessionStorage {
 
 	readText(path: string): Promise<string> {
 		return Bun.file(path).text();
+	}
+
+	async readTextStrict(path: string): Promise<string> {
+		// Default UTF-8 text decoding replaces malformed bytes with U+FFFD, which
+		// would silently change an independently written journal during a repair.
+		return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await fs.promises.readFile(path));
+	}
+
+	readTextSyncStrict(path: string): string | undefined {
+		try {
+			return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(fs.readFileSync(path));
+		} catch (err) {
+			if (isEnoent(err)) return undefined;
+			throw toError(err);
+		}
 	}
 
 	readTextSync(path: string): string | undefined {
@@ -825,7 +884,7 @@ export class FileSessionStorage implements SessionStorage {
 		tempPath: string,
 		targetPath: string,
 		renameError: unknown,
-		commitGuard?: () => boolean,
+		commitGuard?: (sourcePath?: string) => boolean,
 	): void {
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, sessionBackupName(path.basename(targetPath), Snowflake.next()));
@@ -842,11 +901,26 @@ export class FileSessionStorage implements SessionStorage {
 			}
 			throw toError(renameError);
 		}
-		if (commitGuard && !commitGuard()) {
+		// Another writer may publish a new journal at targetPath after we move
+		// its old inode aside. Even an unchanged backup cannot authorize replacing
+		// that new journal: retain both files and report the conflict for recovery.
+		// This check is not an atomic cross-process CAS with the later rename.
+		if (this.existsStateSync(targetPath) !== "absent") {
+			throw new Error(`Session journal reappeared during EPERM replacement; original retained at ${backupPath}`);
+		}
+		// The original journal now lives at backupPath. Give the guard that
+		// original-object path so version checks remain meaningful on Windows
+		// rather than treating our own EPERM move-aside as a foreign deletion.
+		if (commitGuard && !commitGuard(backupPath)) {
 			// A concurrent synchronous rewrite published a fresh body between the
 			// move-aside and this point. Restore the moved-aside file so we do
 			// not overwrite it with our staged (stale) body, and drop the temp
 			// so `writeTextAtomic`'s "discard on abandon" contract holds.
+			// A foreign writer can reclaim the vacated pathname after the first
+			// existence check. Never restore our backup over its new journal.
+			if (this.existsStateSync(targetPath) !== "absent") {
+				throw new Error(`Session journal reappeared during EPERM rollback; original retained at ${backupPath}`);
+			}
 			try {
 				this.renameSync(backupPath, targetPath);
 			} catch (restoreErr) {
@@ -862,6 +936,14 @@ export class FileSessionStorage implements SessionStorage {
 		try {
 			this.renameSync(tempPath, targetPath);
 		} catch (replaceError) {
+			// The failed retry does not authorize discarding a journal another
+			// writer published at the vacated path. This observation is not CAS.
+			if (this.existsStateSync(targetPath) !== "absent") {
+				throw new Error(
+					`Session journal reappeared after failed EPERM replacement; original retained at ${backupPath}`,
+					{ cause: toError(replaceError) },
+				);
+			}
 			try {
 				this.renameSync(backupPath, targetPath);
 			} catch (rollbackErr) {
@@ -1213,7 +1295,10 @@ export class MemorySessionStorage implements SessionStorage {
 		return this.#files.has(path) ? "present" : "absent";
 	}
 
-	writeTextSync(path: string, body: SessionFileBody): void {
+	writeTextSync(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
+		if (options?.commitGuard && !options.commitGuard()) {
+			throw new Error("Original journal changed before synchronous publication");
+		}
 		this.#files.set(path, createMemoryFileEntry(sessionBodyToString(body), Date.now()));
 	}
 
@@ -1283,6 +1368,17 @@ export class MemorySessionStorage implements SessionStorage {
 	readTextSync(path: string): string | undefined {
 		const entry = this.#files.get(path);
 		return entry ? materializeMemoryEntry(entry) : undefined;
+	}
+
+	// MemorySessionStorage holds already-decoded text chunks, never raw bytes.
+	// Its existing exact-string reads therefore satisfy byte-strict recovery:
+	// there is no external UTF-8 decoder that could replace malformed bytes.
+	readTextStrict(path: string): Promise<string> {
+		return this.readText(path);
+	}
+
+	readTextSyncStrict(path: string): string | undefined {
+		return this.readTextSync(path);
 	}
 
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
