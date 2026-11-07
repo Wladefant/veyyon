@@ -1128,8 +1128,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				[original.id, addedId].sort(),
 			);
 			await freshStarted.promise;
-			// The newly established transport must still accept a genuine removal.
+			// Release the test's *old-stream masking GET* fence only after
+			// proving the obsolete connection never removed the new grant.
+			// The legitimate later removal now requires a canonical GET.
 			expect(storage!.disableCredentialById(addedId, "synthetic new-stream revoke")).toBe(true);
+			allowLaterCanonicalGet.resolve();
 			allowFreshRemoval.resolve();
 			await waitUntil(() => remote!.listAuthCredentials().length === 1, 4_000);
 			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([original.id]);
@@ -1214,8 +1217,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([survivor.id]);
 			await freshStarted.promise;
 			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([survivor.id]);
-			// Real fresh-transport removals remain eligible after reconnection.
+			// The fake old transport already proved its queued removal cannot
+			// evict B. Permit a new canonical GET for B's genuine peer revocation.
 			expect(storage!.disableCredentialById(survivor.id, "synthetic fresh stream revoke B")).toBe(true);
+			allowLaterCanonicalGet.resolve();
 			allowFreshRemoval.resolve();
 			await waitUntil(() => remote!.listAuthCredentials().length === 0, 4_000);
 			expect(remote.listAuthCredentials()).toEqual([]);
@@ -1299,6 +1304,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				type: "oauth", access: "access-synthetic-reauthorized",
 			});
 			await waitUntil(() => connections >= 2, 4_000);
+			// The new broker must be the authority for its later removal, not
+			// a stream-only changed frame that claims an old incarnation.
+			canonical = { ...canonical, generation: 3, credentials: [] };
 			allowNewStream.resolve();
 			await waitUntil(() => remote!.listAuthCredentials().length === 0, 4_000);
 			expect(remote.listAuthCredentials()).toEqual([]);
