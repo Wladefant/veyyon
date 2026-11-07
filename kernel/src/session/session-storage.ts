@@ -252,7 +252,8 @@ export interface SessionStorage {
 	 * the filesystem about a path those backends never wrote.
 	 */
 	existsStateSync(path: string): PathState;
-	writeTextSync(path: string, body: SessionFileBody): void;
+	/** Optional synchronous publication fence; a rejecting guard throws and preserves the target. */
+	writeTextSync(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void;
 	/**
 	 * Update the current session title through the storage backend.
 	 *
@@ -613,19 +614,28 @@ export class FileSessionStorage implements SessionStorage {
 		return state;
 	}
 
-	writeTextSync(fpath: string, body: SessionFileBody): void {
+	writeTextSync(fpath: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
 		const dir = path.dirname(fpath);
 		this.ensureDirSync(dir);
 		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+		let guardRejected = false;
+		const commitGuard = (sourcePath?: string): boolean => {
+			const allowed = options?.commitGuard?.(sourcePath) ?? true;
+			if (!allowed) guardRejected = true;
+			return allowed;
+		};
 		try {
 			writeChunksSync(tempPath, body);
+			if (!commitGuard()) throw new Error("Original journal changed before synchronous publication");
 			try {
 				fs.renameSync(tempPath, fpath);
 			} catch (renameError) {
 				if (!hasFsCode(renameError, "EPERM")) throw renameError;
 				// Never truncate the previous journal when replacement is refused.
 				// The existing staged-file fallback preserves or restores its backup.
-				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError);
+				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError,
+					options?.commitGuard ? commitGuard : undefined);
+				if (guardRejected) throw new Error("Original journal changed before synchronous publication");
 			}
 		} catch (err) {
 			try {
@@ -1285,7 +1295,10 @@ export class MemorySessionStorage implements SessionStorage {
 		return this.#files.has(path) ? "present" : "absent";
 	}
 
-	writeTextSync(path: string, body: SessionFileBody): void {
+	writeTextSync(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
+		if (options?.commitGuard && !options.commitGuard()) {
+			throw new Error("Original journal changed before synchronous publication");
+		}
 		this.#files.set(path, createMemoryFileEntry(sessionBodyToString(body), Date.now()));
 	}
 

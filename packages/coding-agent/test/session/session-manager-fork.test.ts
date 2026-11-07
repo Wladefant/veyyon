@@ -1785,13 +1785,13 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
     await fs.appendFile(target, foreignLine);
   }
 
-  override writeTextSync(target: string, body: SessionFileBody): void {
+  override writeTextSync(target: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
     if (target === this.protectedSourceFile && this.appendForeignLineBeforeSyncRewrite) {
       const line = this.appendForeignLineBeforeSyncRewrite;
       this.appendForeignLineBeforeSyncRewrite = undefined;
       nodeFs.appendFileSync(target, line);
     }
-    super.writeTextSync(target, body);
+    super.writeTextSync(target, body, options);
   }
 
   override async writeTextAtomic(

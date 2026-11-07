@@ -1295,13 +1295,35 @@ export class SessionManager {
 		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
 
 		try {
+			// Strict failed-fork repair must recheck the original object at publication,
+			// including its EPERM backup. This is not cross-process append-at-rename CAS.
+			const sessionFile = this.#sessionFile;
+			const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
+			let originalState: SessionStorageStat | undefined;
+			if (repairingFailedFork) {
+				try {
+					originalState = this.#storage.statSync(sessionFile);
+				} catch {
+					throw new Error("Cannot verify original journal before synchronous failed-fork repair");
+				}
+			}
 			this.#refreshForeignLinesSync();
+			const sourceUnchanged = (sourcePath = sessionFile): boolean => {
+				if (!originalState) return true;
+				try {
+					const current = this.#storage.statSync(sourcePath);
+					return current.identity === originalState.identity && current.size === originalState.size &&
+						current.mtimeMs === originalState.mtimeMs;
+				} catch {
+					return false;
+				}
+			};
 			const body = this.#fileBody();
 			this.#diskEpoch++;
 			this.#diskTail = Promise.resolve();
 			this.#closeWriterEventually();
 			this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
-			this.#storage.writeTextSync(this.#sessionFile, body);
+			this.#storage.writeTextSync(sessionFile, body, repairingFailedFork ? { commitGuard: sourceUnchanged } : undefined);
 			this.#notePublishedFile();
 			// The file matches memory again, so the fault episode is over and a later one
 			// is a new thing to report.
