@@ -213,12 +213,25 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
 		const original = initial.snapshot.credentials[0]!;
 		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
-		const changed = {
-			...initial.snapshot,
-			credentials: [{
-				...original,
-				credential: { ...original.credential, access: "access-new-same-generation" },
-			}],
+		// This positive must be broker-authoritative, not merely a fabricated
+		// stream frame: the stale-first-SSE negative requires the opposite.
+		const updated = {
+			...mintOAuthCredential("a", Date.now() + 120_000),
+			access: "access-new-same-generation",
+		};
+		storage!.upsertCredential("anthropic", updated);
+		const canonical = await client.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected updated authoritative broker snapshot");
+		expect(canonical.snapshot.credentials).toHaveLength(1);
+		expect(canonical.snapshot.credentials[0]!.id).toBe(original.id);
+		expect(canonical.snapshot.credentials[0]!.credential).toMatchObject({
+			type: "oauth", access: updated.access,
+		});
+		// A broker restart can reuse the old numeric generation, even when
+		// its real canonical credential content has changed.
+		const changed: SnapshotResponse = {
+			...canonical.snapshot,
+			generation: initial.generation,
 		};
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			// Even though the generation did not advance, the new broker row is
