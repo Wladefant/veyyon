@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- Strict failed-fork recovery refuses foreign JSONL records inserted before the original session header instead of silently relocating them after owned history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Strict failed-fork repair retains the published owned-entry ID proof even when a previously published journal includes foreign tail entries, refusing resurrection of independently removed owned messages without enabling unsafe tail-rewrite offsets ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Strict failed-fork repair refuses a missing previously published owned message instead of resurrecting it from in-memory history; not-yet-published entries are not required on disk ([#774](https://github.com/Wladefant/veyyon/issues/774)).
