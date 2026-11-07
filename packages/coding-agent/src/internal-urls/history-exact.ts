@@ -484,6 +484,9 @@ export async function readStoredHistoryEntry(
 			}
 			if (line === undefined) {
 				incomplete = true;
+				// Before a valid header, an unreadable line could itself be an
+				// earlier session header. A later header cannot certify identity.
+				if (!admission.headerSeen) admission.invalidIdentity = true;
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
@@ -726,6 +729,8 @@ export async function searchStoredHistoryEntries(
 			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
 				unreadable = true;
+				// Keep exact reads and search consistent on pre-header corruption.
+				if (!admission.headerSeen) admission.invalidIdentity = true;
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
