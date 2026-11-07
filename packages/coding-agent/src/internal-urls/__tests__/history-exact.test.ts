@@ -1321,8 +1321,10 @@ describe("history exact record lookup", () => {
 			for (const malformedRecord of [
 				{ type: "message", id: "root", parentId: "invalid/parent", message: "needle forged" },
 				{ type: "", id: "root", parentId: null, message: "needle forged" },
+				// A benign duplicated metadata key must not conceal a repeated record ID.
+				'{"type":"message","id":"root","note":1,"note":2,"parentId":null,"message":"needle forged"}',
 			]) {
-				const malformed = JSON.stringify(malformedRecord);
+				const malformed = typeof malformedRecord === "string" ? malformedRecord : JSON.stringify(malformedRecord);
 				for (const rows of [[root, malformed], [malformed, root]]) {
 					await fs.writeFile(file, [header, ...rows].join("\n") + "\n");
 					const exact = await readStoredHistoryEntry(file, {
