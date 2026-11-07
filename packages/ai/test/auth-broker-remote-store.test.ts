@@ -1690,16 +1690,30 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const before = structuredClone(initial.snapshot);
 		expect(before.generation).toBeGreaterThan(0);
 		expect(before.credentials).toHaveLength(1);
-		const restarted: SnapshotResponse = { ...before, generation: 0, credentials: [] };
+		// A legitimate generation reset must agree with canonical broker truth.
+		// Revoke the synthetic row at the disposable broker, then emulate only
+		// the process-local generation reset in the canonical and SSE responses.
+		expect(storage!.disableCredentialById(before.credentials[0]!.id, "synthetic restarted-broker revocation")).toBe(true);
+		const after = await client.fetchSnapshot();
+		if (after.status !== 200) throw new Error("expected canonical broker revocation");
+		expect(after.snapshot.credentials).toEqual([]);
+		const restarted: SnapshotResponse = { ...after.snapshot, generation: 0 };
+		const actualFetch = client.fetchSnapshot.bind(client);
+		let canonicalReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			const result = await actualFetch(opts);
+			if (result.status !== 200) return result;
+			canonicalReads += 1;
+			return { status: 200 as const, snapshot: { ...result.snapshot, generation: 0 }, generation: 0 };
+		});
 
-		// Drive the real streaming store with a synthetic reconnect from a restarted broker.
-		// Only the transport frame is controlled; no OAuth refresh or vault access occurs.
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			yield { kind: "snapshot" as const, ...restarted };
 			await untilAborted(opts.signal);
 		});
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: before });
 		await waitUntil(() => remote!.snapshot.generation === 0 && remote!.snapshot.credentials.length === 0);
+		expect(canonicalReads).toBeGreaterThan(0);
 		expect(remote.snapshot.credentials).toEqual([]);
 	});
 
