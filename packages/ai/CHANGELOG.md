@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Retire the previous auth-broker SSE transport when a canonical broker GET removes one grant but preserves others, preventing queued old-incarnation removal frames from evicting a surviving credential; the replacement transport still accepts legitimate removals ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Retire an old auth-broker SSE connection after canonical same-ID credential reauthorization or replacement, so queued higher-generation frames cannot override the refreshed broker state ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Keep broker-authoritatively removed grants unavailable when a stale authenticated SSE connection replays equal- or higher-generation entry and full-snapshot frames from an earlier broker incarnation; only a later canonical GET can confirm legitimate reuse ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Pace unchanged conditional auth-broker snapshot replies to the full monotonic canonical-verification deadline, including fractional timer delays, so repeated stale HTTP 200s cannot trigger another conditional poll just before the broker truth check ([#602](https://github.com/Wladefant/veyyon/issues/602)).
