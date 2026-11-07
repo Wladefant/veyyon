@@ -16,6 +16,9 @@ const MAX_PAGE_CHARACTERS = 12_000;
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 // Record types are returned as metadata, not as paged raw evidence.
 const MAX_RECORD_TYPE_CHARACTERS = 128;
+const MAX_STORED_SESSION_ID_CHARACTERS = 128;
+// Search results must supply IDs that the public history:// entry/leaf grammar can read.
+const ADDRESSABLE_HISTORY_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const MAX_INDEX_ENTRIES = 100_000;
 const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
 // Unlike an isolated malformed line, a hard scan cap leaves unseen IDs behind.
@@ -175,7 +178,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		} else if (typeof entry.id !== "string") {
 			state.invalidIdentity = true;
 			return { kind: "invalid", invalidIdentity: true };
-		} else if (!entry.id.trim()) {
+		} else if (!entry.id.trim() || entry.id.length > MAX_STORED_SESSION_ID_CHARACTERS) {
 			state.invalidIdentity = true;
 		} else {
 			state.headerSeen = true;
@@ -201,7 +204,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: string; parentId?: string | null } {
 	return (
 		typeof entry.id === "string" &&
-		entry.id.trim().length > 0 &&
+		ADDRESSABLE_HISTORY_ID.test(entry.id) &&
 		typeof entry.type === "string" &&
 		entry.type.trim().length > 0 &&
 		entry.type.length <= MAX_RECORD_TYPE_CHARACTERS &&
@@ -233,7 +236,7 @@ export interface ExactHistoryResult {
 }
 
 function idParam(input: string | null, name: string): string {
-	if (!input || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input)) {
+	if (!input || !ADDRESSABLE_HISTORY_ID.test(input)) {
 		throw new Error("history:// exact read requires a valid " + name + " (1-128 ID characters)");
 	}
 	return input;
