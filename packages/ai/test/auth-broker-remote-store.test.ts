@@ -675,7 +675,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
-	test("higher-generation removals of absent IDs cannot starve canonical SSE verification", async () => {
+	test("higher-generation no-progress SSE frames cannot starve canonical verification", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const canonical = await client.fetchSnapshot();
 		if (canonical.status !== 200) throw new Error("expected synthetic broker snapshot");
@@ -683,7 +683,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const liveId = initial.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
 		const realFetch = client.fetchSnapshot.bind(client);
-		let unknownRemovals = 0;
+		let noProgressFrames = 0;
 		let canonicalGets = 0;
 		let acceptedSnapshots = 0;
 		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
@@ -691,19 +691,31 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			canonicalGets += 1;
 			return realFetch(opts);
 		});
-		// A stale relay fabricates absent-ID removals with ever-higher generations
-		// while the authoritative broker has independently removed the live grant.
+		// A stale relay repeats unchanged full snapshots, unchanged entries and
+		// phantom removals at ever-higher generations while the real broker
+		// independently revokes the live grant.
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			yield { kind: "snapshot" as const, ...initial };
 			streamReady.resolve();
 			while (!opts.signal?.aborted) {
-				unknownRemovals += 1;
-				yield {
-					kind: "removed" as const, id: liveId + 1_000_000,
-					generation: initial.generation + unknownRemovals,
-					serverNowMs: initial.serverNowMs,
-					refresher: initial.refresher,
-				};
+				noProgressFrames += 1;
+				const generation = initial.generation + noProgressFrames;
+				switch (noProgressFrames % 3) {
+					case 0:
+						yield {
+							kind: "removed" as const, id: liveId + 1_000_000,
+							generation, serverNowMs: initial.serverNowMs, refresher: initial.refresher,
+						};
+						break;
+					case 1:
+						yield {
+							kind: "entry" as const, entry: initial.credentials[0]!,
+							generation, serverNowMs: initial.serverNowMs, refresher: initial.refresher,
+						};
+						break;
+					default:
+						yield { kind: "snapshot" as const, ...initial, generation };
+				}
 				await Bun.sleep(5);
 			}
 		});
@@ -715,7 +727,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(storage!.disableCredentialById(liveId, "synthetic peer revoke behind phantom removals")).toBe(true);
 		// A stream-only fix cannot pass this: it must perform its own canonical GET.
 		await waitUntil(() => remote!.listAuthCredentials().length === 0, 4_000);
-		expect(unknownRemovals).toBeGreaterThan(2);
+		expect(noProgressFrames).toBeGreaterThan(6);
 		expect(canonicalGets).toBeGreaterThan(0);
 		expect(acceptedSnapshots).toBe(1);
 		expect(remote.listAuthCredentials()).toEqual([]);

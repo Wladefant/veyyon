@@ -497,14 +497,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * A same-generation snapshot is not new broker progress when its effective
-	 * credential state and refresh policy have not changed. The broker recomputes
+	 * A snapshot is not durable broker progress when its effective credential
+	 * state and refresh policy have not changed. A stale SSE relay can advertise
+	 * increasing generations as well as changing timestamps. The broker recomputes
 	 * timestamps and countdowns on every response; those cannot postpone an
 	 * authoritative reconciliation. Preserve pending local safety blocks while
 	 * comparing broker frames, just as for SSE, without changing wire values.
 	 */
-	#isNoProgressSnapshot(snapshot: SnapshotResponse): boolean {
-		if (snapshot.generation !== this.#generation) return false;
+	#isNoProgressSnapshot(snapshot: SnapshotResponse, ignoreGeneration = false): boolean {
+		if (!ignoreGeneration && snapshot.generation !== this.#generation) return false;
 		const previousById = new Map(this.#snapshot.credentials.map(entry => [entry.id, entry] as const));
 		return (
 			isDeepStrictEqual(
@@ -710,12 +711,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (snapshot.credentials.some(entry =>
 					this.#isCanonicallyRemovedFromStream(entry.id)
 				)) return;
-				// Replayed equal-generation state is not progress: accepting it
-				// repeatedly would starve the canonical idle GET and invalidate
+				// Replayed unchanged state is not progress, even when a stale relay
+				// advertises increasing generations: accepting it repeatedly would
+				// starve the canonical idle GET and invalidate
 				// in-flight GETs through the applied-revision fence.
 				// Compare the effective view: a locally pending safety block can be
 				// absent from an unchanged broker frame without being fresh state.
-				if (this.#isNoProgressSnapshot(snapshot)) return;
+				if (this.#isNoProgressSnapshot(snapshot, true)) return;
 				this.#applySnapshot(snapshot, snapshot.generation);
 				return;
 			}
@@ -727,7 +729,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					normalizeSnapshotEntryBlocks(event.entry, Date.now()), current,
 				);
 				if (
-					event.generation === this.#generation &&
 					current &&
 					isDeepStrictEqual(credentialSseProgressState(current), credentialSseProgressState(effectiveIncoming)) &&
 					isDeepStrictEqual(refresherSseProgressState(event.refresher), refresherSseProgressState(this.#snapshot.refresher))
