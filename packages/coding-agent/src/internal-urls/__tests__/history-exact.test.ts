@@ -1090,6 +1090,9 @@ describe("history exact record lookup", () => {
 			for (const corruptedHeader of [
 				'{"timestamp":"2026-11-07","type":"session","id":',
 				'{"metadata":{"producer":true},"type":"sess\\u0069on","id":',
+				// Invalid key escapes cannot mask a second session boundary.
+				'{"type":"session","id":"shadow","invalid\\q":true}',
+				'{"invalid\\q":true,"type":"session","id":"shadow"}',
 			]) {
 				await fs.writeFile(file, [header, root, corruptedHeader].join("\n") + "\n");
 				const exact = await readStoredHistoryEntry(file, {
@@ -1104,20 +1107,22 @@ describe("history exact record lookup", () => {
 				expect(search.matches).toEqual([]);
 			}
 			// Nested metadata cannot manufacture a second root-level session boundary.
-			await fs.writeFile(file, [
-				header, root,
+			for (const malformedSibling of [
 				'{"type":"message","id":"orphan","metadata":{"type":"session"},"parentId":',
-			].join("\n") + "\n");
-			const archived = await readStoredHistoryEntry(file, {
-				entryId: "root", leafId: "root", offset: 0, limit: 256,
-			});
-			expect(archived.status).toBe("ok");
-			expect(archived.fragment).toContain("needle healthy");
-			const search = await searchStoredHistoryEntries(file, {
-				query: "needle", leafId: "root", limit: 3,
-			});
-			expect(search.status).toBe("partial");
-			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+				'{"type":"message","id":"orphan","invalid\\q":true,"parentId":"root"}',
+			]) {
+				await fs.writeFile(file, [header, root, malformedSibling].join("\n") + "\n");
+				const archived = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(archived.status).toBe("ok");
+				expect(archived.fragment).toContain("needle healthy");
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("partial");
+				expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+			}
 		} finally {
 			await dir.remove();
 		}
