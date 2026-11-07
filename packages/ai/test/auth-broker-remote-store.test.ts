@@ -585,7 +585,21 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const streamReady = Promise.withResolvers<void>();
 		const releaseStaleFrames = Promise.withResolvers<void>();
 		const staleFramesFinished = Promise.withResolvers<void>();
+		let firstStreamSignal: AbortSignal | undefined;
+		let connections = 0;
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			if (connections++ > 0) {
+				// A fresh transport still admits an unrelated same-generation entry.
+				yield { kind: "snapshot" as const, ...initial.snapshot, credentials: [] };
+				yield {
+					kind: "entry" as const, entry: distinct, generation,
+					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+				};
+				staleFramesFinished.resolve();
+				await untilAborted(opts.signal);
+				return;
+			}
+			firstStreamSignal = opts.signal;
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			const abortRelease = () => releaseStaleFrames.resolve();
@@ -642,6 +656,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await remote.refreshSnapshot();
 			expect(remote.snapshot.generation).toBe(generation);
 			expect(remote.listAuthCredentials()).toEqual([]);
+			expect(firstStreamSignal?.aborted).toBe(true);
 			releaseStaleFrames.resolve();
 			await staleFramesFinished.promise;
 			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([distinct.id]);
