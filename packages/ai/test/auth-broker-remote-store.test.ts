@@ -1337,9 +1337,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			let affectedId = original.id;
 			let connections = 0;
 			let maskingGets = 0;
-			spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+			let allowCanonicalAfterFence = false;
+			const realCanonicalRead = client.fetchSnapshot.bind(client);
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
 				maskingGets += 1;
-				throw new Error("unexpected masking GET");
+				if (!allowCanonicalAfterFence) throw new Error("unexpected masking GET");
+				return realCanonicalRead(opts);
 			});
 			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 				if (connections++ === 0) {
@@ -1414,6 +1417,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				expect(maskingGets).toBe(0);
 				expect(connections).toBeGreaterThanOrEqual(2);
 				expect((await peer.disableCredential(affectedId, "synthetic fresh-stream revoke")).ok).toBe(true);
+				// Only the already-proven old-stream fence prohibits masking reads.
+				// The genuine later revocation needs a canonical verification.
+				allowCanonicalAfterFence = true;
 				allowFreshRemoval.resolve();
 				await waitUntil(() => !remote!.snapshot.credentials.some(row => row.id === affectedId), 4_000);
 				expect(remote.snapshot.credentials.map(row => row.id)).toEqual(mode === "upload" ? [original.id] : []);
@@ -1511,10 +1517,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		let oldSignal: AbortSignal | undefined;
 		let connections = 0;
 		let maskingGets = 0;
-		// A canonical GET should not hide a mistaken stale-stream eviction.
-		spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+		let allowCanonicalAfterFence = false;
+		// Reject a GET masking OLD-stream eviction; allow real broker truth
+		// only after that assertion, for a later genuine peer revocation.
+		const realCanonicalRead = client.fetchSnapshot.bind(client);
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
 			maskingGets += 1;
-			throw new Error("unexpected canonical GET after acknowledged disable");
+			if (!allowCanonicalAfterFence) throw new Error("unexpected masking GET after acknowledged disable");
+			return realCanonicalRead(opts);
 		});
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			if (connections++ === 0) {
@@ -1576,6 +1586,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			expect(afterDisable.snapshot.credentials.map(row => row.id)).toEqual([survivor.id]);
 			// A genuinely new stream must still accept a later real revocation.
 			expect((await peer.disableCredential(survivor.id, "synthetic fresh-stream revoke")).ok).toBe(true);
+			allowCanonicalAfterFence = true;
 			allowFreshRemoval.resolve();
 			await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
 			expect(remote.listAuthCredentials()).toEqual([]);
