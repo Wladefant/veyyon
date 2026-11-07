@@ -1689,6 +1689,10 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   // Independent append after the storage's final synchronous publication guard,
   // inside the actual rename hook. This deliberately exposes the residual CAS gap.
   appendForeignLineAtRename: string | undefined;
+  // Exercise a same-length independent edit after strict reread while a writer
+  // preserves mtime. Only the source's change time exposes this version.
+  rewriteOwnedTextAtGuard: { before: string; after: string } | undefined;
+  pinSourceMtimeOnRefusal = false;
   // Synthetic peer append after synchronous strict source reread, before staging.
   appendForeignLineBeforeSyncRewrite: string | undefined;
   forceNextSourceAtomicEperm = false;
@@ -1794,11 +1798,36 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
     super.writeTextSync(target, body, options);
   }
 
+  private withSameSizePeerEdit(
+    target: string, options?: WriteTextAtomicOptions,
+  ): WriteTextAtomicOptions | undefined {
+    const edit = this.rewriteOwnedTextAtGuard;
+    if (!edit || target !== this.protectedSourceFile || !options?.commitGuard) return options;
+    const originalGuard = options.commitGuard;
+    return {
+      ...options,
+      commitGuard: sourcePath => {
+        if (this.rewriteOwnedTextAtGuard === edit) {
+          this.rewriteOwnedTextAtGuard = undefined;
+          const original = nodeFs.readFileSync(target, "utf8");
+          if (!original.includes(edit.before) ||
+            Buffer.byteLength(edit.before) !== Buffer.byteLength(edit.after)) {
+            throw new Error("expected same-sized disposable peer revision");
+          }
+          const previous = nodeFs.statSync(target);
+          nodeFs.writeFileSync(target, original.replace(edit.before, edit.after));
+          nodeFs.utimesSync(target, previous.atime, previous.mtime);
+        }
+        return originalGuard(sourcePath);
+      },
+    };
+  }
+
   override async writeTextAtomic(
     target: string, body: SessionFileBody, options?: WriteTextAtomicOptions,
   ): Promise<void> {
     await this.appendForeignBeforeRepair(target);
-    await super.writeTextAtomic(target, body, options);
+    await super.writeTextAtomic(target, body, this.withSameSizePeerEdit(target, options));
   }
 
   override async rewriteTailAtomic(
@@ -1806,7 +1835,7 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
     tail: SessionFileBody, options?: WriteTextAtomicOptions,
   ): Promise<void> {
     await this.appendForeignBeforeRepair(target);
-    await super.rewriteTailAtomic(target, headBytes, keepBytes, head, tail, options);
+    await super.rewriteTailAtomic(target, headBytes, keepBytes, head, tail, this.withSameSizePeerEdit(target, options));
   }
 
   override openWriter(
@@ -1824,6 +1853,11 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
         await writer.close();
         if (this.rejectNextSourceClose && target === this.protectedSourceFile) {
           this.rejectNextSourceClose = false;
+          if (this.pinSourceMtimeOnRefusal) {
+            this.pinSourceMtimeOnRefusal = false;
+            const fixed = new Date("2020-01-01T00:00:00.000Z");
+            nodeFs.utimesSync(target, fixed, fixed);
+          }
           // A separate writer can append between our end marker and rollback.
           const foreignLine = this.appendForeignLineOnRefusal;
           this.appendForeignLineOnRefusal = undefined;
@@ -2608,6 +2642,51 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       storage.rejectNextSourceClose = false;
       storage.appendForeignLineOnRefusal = undefined;
       storage.appendForeignLineBeforeRepairPublish = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses a same-size independently rewritten journal despite restored mtime", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-ctime-aba-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic ctime guard archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Preserve SYNTHETIC-OLD and artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !artifact) throw new Error("expected disposable original journal and archive");
+      const archiveBytes = await fs.readFile(artifact);
+      storage.protectedSourceFile = sourceFile;
+      storage.rejectNextSourceClose = true;
+      storage.pinSourceMtimeOnRefusal = true;
+      storage.rewriteOwnedTextAtGuard = { before: "SYNTHETIC-OLD", after: "SYNTHETIC-NEW" };
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(storage.rewriteOwnedTextAtGuard).toBeUndefined();
+      expect(failure).toBeInstanceOf(AggregateError);
+      const reasons = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(reasons.some(reason => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some(reason =>
+        reason.includes("Original journal changed before failed-fork repair publication")
+      )).toBe(true);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(manager.getSessionId()).toBe(sourceId);
+      const persisted = await fs.readFile(sourceFile, "utf8");
+      expect(persisted).toContain("SYNTHETIC-NEW");
+      expect(persisted).not.toContain("SYNTHETIC-OLD");
+      expect(persisted).toContain('"reason":"session_switched"');
+      expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.pinSourceMtimeOnRefusal = false;
+      storage.rewriteOwnedTextAtGuard = undefined;
       await manager.close().catch(() => undefined);
     }
   });
