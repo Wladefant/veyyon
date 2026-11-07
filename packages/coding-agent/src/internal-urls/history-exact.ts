@@ -553,7 +553,19 @@ function previewAt(raw: string, term: string): string {
 	}
 	const start = Math.max(0, originalPosition - 70);
 	const end = Math.min(raw.length, originalPosition + term.length + 110);
-	return raw.slice(start, end).slice(0, MAX_PREVIEW_CHARACTERS);
+	// The context/window and preview cap are UTF-16 offsets. Do not emit half
+	// of an astral character when either boundary falls between surrogates.
+	const splitsPair = (index: number): boolean =>
+		index > 0 &&
+		index < raw.length &&
+		raw.charCodeAt(index - 1) >= 0xd800 &&
+		raw.charCodeAt(index - 1) <= 0xdbff &&
+		raw.charCodeAt(index) >= 0xdc00 &&
+		raw.charCodeAt(index) <= 0xdfff;
+	const safeStart = splitsPair(start) ? start + 1 : start;
+	const cappedEnd = Math.min(end, safeStart + MAX_PREVIEW_CHARACTERS);
+	const safeEnd = splitsPair(cappedEnd) ? cappedEnd - 1 : cappedEnd;
+	return raw.slice(safeStart, safeEnd);
 }
 
 /**
