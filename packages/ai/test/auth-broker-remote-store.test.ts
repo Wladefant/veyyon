@@ -2449,7 +2449,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	test("on-demand broker wait verifies an equal-generation 304 against canonical credentials", async () => {
 		// A restarted broker can reuse the worker's old generation and return 304
 		// to its explicit near-expiry wait even though the credential roster changed.
-		for (const revoked of [false, true]) {
+		for (const variant of ["unchanged", "revoked", "invalid-304"] as const) {
 			const client = new AuthBrokerClient({ url: handle!.url, token });
 			const initial = await client.fetchSnapshot();
 			if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
@@ -2471,6 +2471,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				}
 				canonicalChecks += 1;
 				expect(opts?.ifGenerationGt).toBeUndefined();
+				if (variant === "invalid-304") return { status: 304 as const, generation: oldGeneration };
 				const canonical = await originalFetch(opts);
 				if (canonical.status !== 200) throw new Error("expected unconditional broker truth");
 				// The real disposable broker supplies content; only its numeric
@@ -2485,16 +2486,26 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				onSnapshot: snapshot => { callbacks.push(snapshot.credentials.length); },
 			});
 			try {
-				if (revoked) {
+				if (variant === "revoked") {
 					expect(storage!.disableCredentialById(id, "synthetic peer revoke at reused generation")).toBe(true);
 				}
-				const progressed = await remote.waitForFreshSnapshot(25);
+				if (variant === "invalid-304") {
+					// A faulty intermediary must not turn an unconditional 304 into
+					// success-like evidence for the old selected credential.
+					await expect(remote.waitForFreshSnapshot(25)).rejects.toThrow(
+						/Unconditional broker freshness verification returned no snapshot/,
+					);
+					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
+					expect(callbacks).toEqual([]);
+				} else {
+					const progressed = await remote.waitForFreshSnapshot(25);
+					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual(variant === "revoked" ? [] : [id]);
+					expect(progressed).toBe(variant === "revoked");
+					expect(callbacks).toEqual([variant === "revoked" ? 0 : 1]);
+				}
 				expect(conditionalWaits).toBe(1);
 				expect(canonicalChecks).toBe(1); // bounded: one extra GET, no retry storm
 				expect(remote.snapshot.generation).toBe(oldGeneration);
-				expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual(revoked ? [] : [id]);
-				expect(progressed).toBe(revoked);
-				expect(callbacks).toEqual([revoked ? 0 : 1]);
 			} finally {
 				remote.close();
 				remote = undefined;
