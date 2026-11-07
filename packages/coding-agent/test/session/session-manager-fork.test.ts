@@ -2846,7 +2846,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         const oldInode = nodeFs.statSync(sourceFile).ino;
 
         // A separate storage instance opens a REAL writer descriptor before
-        // the failed fork. No pathname re-open happens after the repair.
+        // the failed fork. It rebinds only when a later append detects replacement.
         peer = new FileSessionStorage().openWriter(sourceFile);
         storage.protectedSourceFile = sourceFile;
         storage.rejectNextSourceClose = true;
@@ -2854,8 +2854,8 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(storage.rejectNextSourceClose).toBe(false);
         expect(manager.getSessionId()).toBe(sourceId);
         expect(manager.getSessionFile()).toBe(sourceFile);
-        // Verify that the repaired pathname really points at a new inode:
-        // the peer's existing append handle still targets the old one.
+        // The pathname now names a new inode; the peer's descriptor remains on
+        // the old inode until append() checks and rebinds it.
         expect(nodeFs.statSync(sourceFile).ino).not.toBe(oldInode);
 
         const foreignEntry: JsonlMessageEntry = {
@@ -2875,6 +2875,27 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(active).toContain("Post-rename independent append remains recoverable");
         expect(active).not.toContain('"reason":"session_switched"');
         expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+
+        // A new peer pinned to the repaired inode must not follow a substituted
+        // symlink into an unrelated disposable journal.
+        const symlinkPeer = new FileSessionStorage().openWriter(sourceFile);
+        const foreignPath = path.join(temp.path(), "unrelated-synthetic-journal.jsonl");
+        const foreignBytes = "UNRELATED SYNTHETIC JOURNAL\\n";
+        await fs.writeFile(foreignPath, foreignBytes);
+        const parkedForSymlink = sourceFile + ".symlink-parked";
+        await fs.rename(sourceFile, parkedForSymlink);
+        try {
+          await fs.symlink(foreignPath, sourceFile);
+          try {
+            await expect(symlinkPeer.append("MUST NOT FOLLOW SYMLINK\\n")).rejects.toThrow(/regular file|ELOOP/i);
+            expect(await fs.readFile(foreignPath, "utf8")).toBe(foreignBytes);
+          } finally {
+            await fs.unlink(sourceFile);
+          }
+        } finally {
+          await fs.rename(parkedForSymlink, sourceFile);
+          await symlinkPeer.close();
+        }
 
         // The same writer must fail closed if a peer removes the active path.
         // In particular, O_APPEND must not recreate an empty replacement.
