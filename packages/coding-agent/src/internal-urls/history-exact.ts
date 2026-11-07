@@ -551,7 +551,10 @@ function previewAt(raw: string, term: string): string {
 		loweredPosition += width;
 		originalPosition += character.length;
 	}
-	const start = Math.max(0, originalPosition - 70);
+	// Keep the full matching evidence visible even for the maximum allowed
+	// 180-character query: 70 units of prefix would otherwise exceed the cap.
+	const leadingContext = Math.min(70, Math.max(0, MAX_PREVIEW_CHARACTERS - term.length));
+	const start = Math.max(0, originalPosition - leadingContext);
 	const end = Math.min(raw.length, originalPosition + term.length + 110);
 	// The context/window and preview cap are UTF-16 offsets. Do not emit half
 	// of an astral character when either boundary falls between surrogates.
