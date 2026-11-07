@@ -1081,6 +1081,55 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("withholds blank or oversized stored record types from exact reads and search", async () => {
+		const dir = TempDir.createSync("@veyyon-history-record-type-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			for (const badType of ["", " \t ", "X".repeat(1024 * 1024)]) {
+				await fs.writeFile(file, [
+					JSON.stringify({ type: "session", id: "s-legacy" }),
+					JSON.stringify({ type: badType, id: "leaf", parentId: null, message: "needle evidence" }),
+				].join("\n") + "\n");
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "leaf", leafId: "leaf", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				expect(exact.recordType).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "leaf", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("preserves a bounded legacy custom type on a selected archive after a bad-type sibling", async () => {
+		const dir = TempDir.createSync("@veyyon-history-record-type-legacy-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "s-legacy" }),
+				JSON.stringify({ type: "custom:legacy.v1", id: "root", parentId: null, message: "needle healthy" }),
+				JSON.stringify({ type: "X".repeat(129), id: "sibling", parentId: null, message: "needle sibling" }),
+			].join("\n") + "\n");
+			const explicit = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(explicit.status).toBe("ok");
+			expect(explicit.recordType).toBe("custom:legacy.v1");
+			expect(explicit.fragment).toContain("needle healthy");
+			const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: "root", limit: 3 });
+			expect(search.status).toBe("partial");
+			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+			expect(search.matches[0]?.recordType).toBe("custom:legacy.v1");
+		} finally {
+			await dir.remove();
+		}
+	});
 	it("preserves an explicit healthy archive after a malformed nonidentity sibling", async () => {
 		const dir = TempDir.createSync("@veyyon-history-nonidentity-");
 		try {
