@@ -1140,6 +1140,52 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("treats unaddressable parent links as incomplete without hiding a healthy archived root", async () => {
+		const dir = TempDir.createSync("@veyyon-history-parent-id-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
+			for (const badParentId of ["p".repeat(129), "bad/parent", "bad🔑parent"]) {
+				await fs.writeFile(file, [
+					header, root,
+					JSON.stringify({ type: "message", id: "child", parentId: badParentId, message: "needle damaged" }),
+				].join("\n") + "\n");
+				const negative = await readStoredHistoryEntry(file, {
+					entryId: "not-found", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(negative.status).toBe("unavailable");
+				expect(negative.fragment).toBeUndefined();
+				const archived = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(archived.status).toBe("ok");
+				expect(archived.fragment).toContain("needle healthy");
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("partial");
+				expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+			}
+			// Historical, public-addressable parent IDs remain valid and traversable.
+			await fs.writeFile(file, [
+				header, root,
+				JSON.stringify({ type: "message", id: "child", parentId: "root", message: "needle child" }),
+			].join("\n") + "\n");
+			const positive = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "child", offset: 0, limit: 256,
+			});
+			expect(positive.status).toBe("ok");
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "child", limit: 3,
+			});
+			expect(search.status).toBe("ok");
+			expect(search.matches.map(match => match.entryId)).toEqual(["child", "root"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("keeps producer and legacy public-addressable IDs usable across exact pagination", async () => {
 		const dir = TempDir.createSync("@veyyon-history-valid-ids-");
 		try {
