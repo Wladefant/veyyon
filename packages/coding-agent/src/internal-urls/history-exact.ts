@@ -116,7 +116,14 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 				let next = i;
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
-					const key = JSON.parse(raw.slice(start, i)) as string;
+					let key: string;
+					try {
+						key = JSON.parse(raw.slice(start, i)) as string;
+					} catch {
+						// A malformed member name must not hide a later session type.
+						// The complete record will still fail JSON.parse below.
+						continue;
+					}
 					if (keys.has(key)) duplicates.add(key);
 					else keys.add(key);
 					if (key === "type") {
