@@ -666,12 +666,26 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					)) {
 						throw new AIError.AuthBrokerError("Broker stream first frame conflicts with canonical revocation");
 					}
-					// An identical first frame after reconnect is not new broker state.
-					// Use the existing no-progress comparator for equal generations;
-					// a real same-generation update still applies, and a broker restart
-					// with a reset generation remains authoritative on this connection.
-					if (snapshot.generation === this.#generation) this.#applyStreamEvent(event);
-					else this.#applySnapshot(snapshot, snapshot.generation);
+					// A first frame cannot establish broker incarnation by itself.
+					// If it differs from the accepted view OR numeric generation, only
+					// a canonical GET may authorize that change. The old stream might
+					// belong to a stale relay even when its generation is higher.
+					if (snapshot.generation !== this.#generation || !this.#isNoProgressSnapshot(snapshot, true)) {
+						const revisionAtVerification = this.#appliedSnapshotRevision;
+						const canonical = await this.#client.fetchSnapshot({ signal: streamSignal });
+						if (canonical.status !== 200) {
+							throw new AIError.AuthBrokerError("Broker stream initial snapshot verification returned no snapshot");
+						}
+						if (!this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtVerification)) {
+							throw new AIError.AuthBrokerError("Broker stream initial snapshot superseded during verification");
+						}
+						// A canonical read can verify the selected view, not that future
+						// events on this old transport share its authority. Reconnect
+						// before accepting more SSE mutations from this stream.
+						throw new AIError.AuthBrokerError("Broker stream initial snapshot requires canonical reconnection");
+					}
+					// Identical same-generation first frames are not fresh progress.
+					this.#applyStreamEvent(event);
 				} else {
 					this.#applyStreamEvent(event);
 				}
