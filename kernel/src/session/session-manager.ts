@@ -1313,7 +1313,12 @@ export class SessionManager {
 				try {
 					const current = this.#storage.statSync(sourcePath);
 					return current.identity === originalState.identity && current.size === originalState.size &&
-						current.mtimeMs === originalState.mtimeMs;
+						current.mtimeMs === originalState.mtimeMs &&
+						// A strict reread alone cannot detect a peer restoring mtime after
+						// a same-size edit. A Windows EPERM move-aside can legitimately
+						// change ctime, so only compare it at the original path.
+						(sourcePath !== sessionFile || originalState.ctimeMs === undefined ||
+							current.ctimeMs === originalState.ctimeMs);
 				} catch {
 					return false;
 				}
@@ -1433,7 +1438,11 @@ export class SessionManager {
 						return (
 							current.identity === originalState.identity &&
 							current.size === originalState.size &&
-							current.mtimeMs === originalState.mtimeMs
+							current.mtimeMs === originalState.mtimeMs &&
+							// The optional POSIX change stamp also catches equal-length
+							// peer rewrites that restore their previous mtime.
+							(sourcePath !== sessionFile || originalState.ctimeMs === undefined ||
+								current.ctimeMs === originalState.ctimeMs)
 						);
 					} catch {
 						return false;
