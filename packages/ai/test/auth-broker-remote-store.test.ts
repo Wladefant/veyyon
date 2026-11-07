@@ -724,12 +724,17 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			onSnapshot: () => { acceptedSnapshots += 1; },
 		});
 		await streamReady.promise;
-		expect(storage!.disableCredentialById(liveId, "synthetic peer revoke behind phantom removals")).toBe(true);
-		// A stream-only fix cannot pass this: it must perform its own canonical GET.
+		// Ensure all three no-progress event kinds were exercised before revocation.
+		// A very slow runner might do a legitimate pre-revocation idle GET;
+		// compare against that baseline rather than assuming exactly one callback.
+		await waitUntil(() => noProgressFrames >= 6, 4_000);
+		const getsBeforeRevoke = canonicalGets;
+		const callbacksBeforeRevoke = acceptedSnapshots;
+		expect(storage!.disableCredentialById(liveId, "synthetic peer revoke behind stale SSE frames")).toBe(true);
+		// A stream-only fix cannot pass this: it must perform a NEW canonical GET.
 		await waitUntil(() => remote!.listAuthCredentials().length === 0, 4_000);
-		expect(noProgressFrames).toBeGreaterThan(6);
-		expect(canonicalGets).toBeGreaterThan(0);
-		expect(acceptedSnapshots).toBe(1);
+		expect(canonicalGets).toBeGreaterThan(getsBeforeRevoke);
+		expect(acceptedSnapshots).toBe(callbacksBeforeRevoke + 1);
 		expect(remote.listAuthCredentials()).toEqual([]);
 	});
 
