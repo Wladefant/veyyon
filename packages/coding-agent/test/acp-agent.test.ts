@@ -1739,7 +1739,7 @@ describe("ACP agent", () => {
 			await harness.agent.closeSession({ sessionId: created.sessionId });
 			harness.updates.length = 0;
 			await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
-			const reopened = harness.findSession(created.sessionId);
+			const reopened = harness.sessions.at(-1);
 			if (!reopened) throw new Error("cold-loaded ACP session was not registered");
 			expect(reopened).not.toBe(original);
 			expect(reopened.sessionManager.getSessionFile()).toBe(file);
