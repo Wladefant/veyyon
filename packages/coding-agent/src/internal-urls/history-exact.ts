@@ -152,7 +152,13 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		if (!state.headerSeen) state.invalidIdentity = true;
+		// Recognize a producer-shaped, type-leading session header even when
+		// its trailing id or JSON body was truncated. Otherwise an explicitly
+		// selected older branch could claim trustworthy identity past a
+		// corrupted *repeated* session boundary.
+		if (!state.headerSeen || /^\\s*\\{\\s*"type"\\s*:\\s*"session"\\s*(?:,|\\})/.test(raw)) {
+			state.invalidIdentity = true;
+		}
 		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
