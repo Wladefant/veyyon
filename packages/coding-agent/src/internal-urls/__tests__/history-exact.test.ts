@@ -1323,6 +1323,9 @@ describe("history exact record lookup", () => {
 				{ type: "", id: "root", parentId: null, message: "needle forged" },
 				// A benign duplicated metadata key must not conceal a repeated record ID.
 				'{"type":"message","id":"root","note":1,"note":2,"parentId":null,"message":"needle forged"}',
+				// Even syntactically broken siblings can still claim a public-addressable entry ID.
+				'{"type":"message","id":"root","parentId":null,"note":"bad\\q"}',
+				'{"invalid\\q":1,"type":"message","\\u0069d":"root","parentId":null}',
 			]) {
 				const malformed = typeof malformedRecord === "string" ? malformedRecord : JSON.stringify(malformedRecord);
 				for (const rows of [[root, malformed], [malformed, root]]) {
