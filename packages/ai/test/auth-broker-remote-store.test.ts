@@ -495,8 +495,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const generation = initial.snapshot.generation;
 		const ready = Promise.withResolvers<void>();
 		const releaseOldFrame = Promise.withResolvers<void>();
-		let oldFrameProcessed = false;
-		let oldFullFrameProcessed = false;
+		let connections = 0;
 		let distinctEntryProcessed = false;
 		let canonicalReads = 0;
 		let revokedCanonicalSeen = false;
@@ -517,6 +516,18 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			};
 		});
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (options) {
+			if (connections++ > 0) {
+				// Once an authoritative GET changed membership, a fresh transport
+				// may still deliver a distinct, valid same-generation grant.
+				yield { kind: "snapshot" as const, ...initial.snapshot, credentials: [] };
+				yield {
+					kind: "entry" as const, entry: unrelated, generation,
+					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+				};
+				distinctEntryProcessed = true;
+				await untilAborted(options.signal);
+				return;
+			}
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			// The first frame was consumed; unlike the delayed-initial test,
 			// this pending entry belongs to an ALREADY active old stream.
@@ -526,10 +537,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				kind: "entry" as const, entry: revoked, generation,
 				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 			};
-			oldFrameProcessed = true; // consumer has processed the yielded stale entry
 			// A full old-G snapshot can revive the row just as an entry frame can.
 			yield { kind: "snapshot" as const, ...initial.snapshot };
-			oldFullFrameProcessed = true;
 			// Do not block a DISTINCT, legitimate same-generation SSE addition.
 			yield {
 				kind: "entry" as const, entry: unrelated, generation,
@@ -548,10 +557,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			await waitUntil(() => revokedCanonicalSeen && canonicalReads > 0 && remote!.snapshot.credentials.length === 0, 4_000);
 			expect(remote.snapshot.generation).toBe(generation);
 			releaseOldFrame.resolve();
-			await waitUntil(() => oldFrameProcessed && oldFullFrameProcessed && distinctEntryProcessed, 2_000);
+			await waitUntil(() => distinctEntryProcessed, 4_000);
 			// Neither the stale entry nor the stale full frame may resurrect
 			// a row removed by the later canonical GET. A distinct new entry
-			// on the same authenticated SSE connection is still valid progress.
+			// on a fresh authenticated SSE connection is still valid progress.
 			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([unrelated.id]);
 			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([unrelated.id]);
 		} finally {
@@ -648,6 +657,93 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+
+
+	test("canonical partial revocation retires stale SSE before it removes a surviving grant", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		storage!.upsertCredential("anthropic", mintOAuthCredential("peer-survivor", Date.now() + 120_000));
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable two-grant broker snapshot");
+		expect(initial.snapshot.credentials).toHaveLength(2);
+		const [revoked, survivor] = initial.snapshot.credentials;
+		if (!revoked || !survivor) throw new Error("expected two synthetic OAuth grants");
+		const connected = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldFinished = Promise.withResolvers<void>();
+		const freshStarted = Promise.withResolvers<void>();
+		const allowFreshRemoval = Promise.withResolvers<void>();
+		const allowLaterCanonicalGet = Promise.withResolvers<void>();
+		let canonicalGets = 0;
+		let connections = 0;
+		let oldSignal: AbortSignal | undefined;
+		spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+			canonicalGets += 1;
+			// A second GET must not repair an incorrectly accepted old removal.
+			if (canonicalGets > 1) await allowLaterCanonicalGet.promise;
+			const result = await peer.fetchSnapshot();
+			if (result.status !== 200) throw new Error("expected canonical broker HTTP 200");
+			// The replacement broker's generation can be lower than the old relay's.
+			return { status: 200 as const, generation: 1, snapshot: { ...result.snapshot, generation: 1 } };
+		});
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			if (connections++ === 0) {
+				oldSignal = opts.signal;
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				connected.resolve();
+				try {
+					// Simulate a frame already queued by the displaced broker.
+					await releaseOld.promise;
+					yield {
+						kind: "removed" as const, id: survivor.id,
+						generation: initial.snapshot.generation + 50,
+						serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					};
+				} finally {
+					oldFinished.resolve();
+				}
+				return;
+			}
+			const latest = await peer.fetchSnapshot();
+			if (latest.status !== 200) throw new Error("expected authoritative fresh stream roster");
+			yield { kind: "snapshot" as const, ...latest.snapshot };
+			freshStarted.resolve();
+			await allowFreshRemoval.promise;
+			if (opts.signal?.aborted) return;
+			yield {
+				kind: "removed" as const, id: survivor.id,
+				generation: latest.snapshot.generation + 1,
+				serverNowMs: latest.snapshot.serverNowMs, refresher: latest.snapshot.refresher,
+			};
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+		});
+		try {
+			await connected.promise;
+			expect(storage!.disableCredentialById(revoked.id, "synthetic peer revoke only A")).toBe(true);
+			await remote.refreshSnapshot();
+			expect(canonicalGets).toBe(1);
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([survivor.id]);
+			// Aborting the old stream must precede any queued high-G removed(B).
+			expect(oldSignal?.aborted).toBe(true);
+			releaseOld.resolve();
+			await oldFinished.promise;
+			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([survivor.id]);
+			await freshStarted.promise;
+			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([survivor.id]);
+			// Real fresh-transport removals remain eligible after reconnection.
+			expect(storage!.disableCredentialById(survivor.id, "synthetic fresh stream revoke B")).toBe(true);
+			allowFreshRemoval.resolve();
+			await waitUntil(() => remote!.listAuthCredentials().length === 0, 4_000);
+			expect(remote.listAuthCredentials()).toEqual([]);
+		} finally {
+			releaseOld.resolve();
+			allowFreshRemoval.resolve();
+			allowLaterCanonicalGet.resolve();
+		}
+	});
 
 	test("canonical same-ID reauthorization retires an old SSE stream before stale replay", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
