@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Verify a changed or generation-reset first auth-broker SSE snapshot with a canonical broker GET before applying it, and reconnect the unproven stream without exposing obsolete credential material ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Close obsolete broker SSE connections after a confirmed local credential disable so delayed old-stream revocations cannot evict unrelated surviving grants ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Retire stale SSE transports after broker-acknowledged credential uploads, suspect refreshes and AuthStorage refresh updates so queued frames cannot roll back accepted credentials ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Fence out-of-order broker SSE credential mutations behind higher-generation unchanged frames without resetting the canonical freshness deadline or blocking a new broker incarnation on reconnect ([#602](https://github.com/Wladefant/veyyon/issues/602)).
