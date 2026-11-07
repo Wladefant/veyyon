@@ -1045,6 +1045,382 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("refuses ambiguous first and repeated session headers instead of trusting a later valid header", async () => {
+		const dir = TempDir.createSync("@veyyon-history-header-identity-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-valid" });
+			const entry = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle trusted" });
+			const cases = [
+				['{"type":"session","id":"first","id":"forged"}', header, entry],
+				['{"type":"session","id":42}', header, entry],
+				['{"type":"session","id":', header, entry],
+				[header, entry, '{"type":"session","id":"s-valid","extra":1,"extra":2}'],
+				[header, entry, '{"type":"session","id":'],
+				[header, entry, '{"type":"message","id":"evil","id":"evil","parentId":"root","message":"needle forged"}'],
+				// A preceding benign duplicate must not hide a later duplicated identity key.
+				[header, entry, '{"type":"message","id":"evil","note":1,"note":2,"id":"evil","parentId":"root","message":"needle forged"}'],
+				[header, entry, '{"type":"message","id":"evil","note":1,"note":2,"parentId":"root","parentId":null,"message":"needle forged"}'],
+				[header, entry, '{"type":"message","id":"evil","note":1,"note":2,"type":"message","parentId":"root","message":"needle forged"}'],
+			] as const;
+			for (const lines of cases) {
+				await fs.writeFile(file, lines.join("\n") + "\n");
+				const read = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(read.status).toBe("unavailable");
+				expect(read.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("rejects truncated non-leading repeated session headers without mistaking nested sibling metadata", async () => {
+		const dir = TempDir.createSync("@veyyon-history-nonleading-header-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
+			for (const corruptedHeader of [
+				'{"timestamp":"2026-11-07","type":"session","id":',
+				'{"metadata":{"producer":true},"type":"sess\\u0069on","id":',
+				// A completed top-level array before type must not conceal a real repeated header.
+				'{"metadata":["safe"],"type":"session","id":',
+				// Invalid key escapes cannot mask a second session boundary.
+				'{"type":"session","id":"shadow","invalid\\q":true}',
+				'{"invalid\\q":true,"type":"session","id":"shadow"}',
+			]) {
+				await fs.writeFile(file, [header, root, corruptedHeader].join("\n") + "\n");
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+			// Nested metadata cannot manufacture a second root-level session boundary.
+			for (const malformedSibling of [
+				'{"type":"message","id":"orphan","metadata":{"type":"session"},"parentId":',
+				'{"type":"message","id":"orphan","invalid\\q":true,"parentId":"root"}',
+				// JSON-invalid array elements resembling object members are not root identity keys.
+				'{"type":"message","id":"orphan","metadata":["type":"session"],"parentId":"root"}',
+				'{"type":"message","id":"unrelated","metadata":["id":"root"],"parentId":"root"}',
+			]) {
+				await fs.writeFile(file, [header, root, malformedSibling].join("\n") + "\n");
+				const archived = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(archived.status).toBe("ok");
+				expect(archived.fragment).toContain("needle healthy");
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("partial");
+				expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("withholds blank or oversized stored record types from exact reads and search", async () => {
+		const dir = TempDir.createSync("@veyyon-history-record-type-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			for (const badType of ["", " \t ", "X".repeat(1024 * 1024)]) {
+				await fs.writeFile(file, [
+					JSON.stringify({ type: "session", id: "s-legacy" }),
+					JSON.stringify({ type: badType, id: "leaf", parentId: null, message: "needle evidence" }),
+				].join("\n") + "\n");
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "leaf", leafId: "leaf", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				expect(exact.recordType).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "leaf", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("withholds unaddressable stored entry IDs while preserving an explicitly selected healthy branch", async () => {
+		const dir = TempDir.createSync("@veyyon-history-addressable-ids-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			for (const badId of ["x".repeat(129), "bad/id", "bad🔑id"]) {
+				await fs.writeFile(file, [
+					JSON.stringify({ type: "session", id: "s-legacy" }),
+					JSON.stringify({ type: "message", id: "healthy", parentId: null, message: "needle healthy" }),
+					JSON.stringify({ type: "message", id: badId, parentId: "healthy", message: "needle forged" }),
+				].join("\n") + "\n");
+				const implicit = await readStoredHistoryEntry(file, {
+					entryId: "healthy", offset: 0, limit: 256,
+				});
+				expect(implicit.status).toBe("unavailable");
+				const implicitSearch = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+				expect(implicitSearch.status).toBe("unavailable");
+				expect(implicitSearch.matches).toEqual([]);
+				const explicit = await readStoredHistoryEntry(file, {
+					entryId: "healthy", leafId: "healthy", offset: 0, limit: 256,
+				});
+				expect(explicit.status).toBe("ok");
+				expect(explicit.fragment).toContain("needle healthy");
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "healthy", limit: 5,
+				});
+				expect(search.status).toBe("partial");
+				expect(search.matches.map(match => match.entryId)).toEqual(["healthy"]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("treats unaddressable parent links as incomplete without hiding a healthy archived root", async () => {
+		const dir = TempDir.createSync("@veyyon-history-parent-id-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
+			for (const badParentId of ["p".repeat(129), "bad/parent", "bad🔑parent"]) {
+				await fs.writeFile(file, [
+					header, root,
+					JSON.stringify({ type: "message", id: "child", parentId: badParentId, message: "needle damaged" }),
+				].join("\n") + "\n");
+				const negative = await readStoredHistoryEntry(file, {
+					entryId: "not-found", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(negative.status).toBe("unavailable");
+				expect(negative.fragment).toBeUndefined();
+				const archived = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(archived.status).toBe("ok");
+				expect(archived.fragment).toContain("needle healthy");
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("partial");
+				expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+			}
+			// Historical, public-addressable parent IDs remain valid and traversable.
+			await fs.writeFile(file, [
+				header, root,
+				JSON.stringify({ type: "message", id: "child", parentId: "root", message: "needle child" }),
+			].join("\n") + "\n");
+			const positive = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "child", offset: 0, limit: 256,
+			});
+			expect(positive.status).toBe("ok");
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "child", limit: 3,
+			});
+			expect(search.status).toBe("ok");
+			expect(search.matches.map(match => match.entryId)).toEqual(["child", "root"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("keeps producer and legacy public-addressable IDs usable across exact pagination", async () => {
+		const dir = TempDir.createSync("@veyyon-history-valid-ids-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const id = "legacy_.:-2026";
+			const message = "needle evidence ".repeat(18);
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "0190f800-1234-7abc-8def-123456789abc" }),
+				JSON.stringify({ type: "message", id, parentId: null, message }),
+			].join("\n") + "\n");
+			const request = parseExactHistoryRequest(new URL(
+				"history://Scout?entry=" + encodeURIComponent(id) + "&leaf=" + encodeURIComponent(id) + "&limit=24",
+			));
+			expect(request).toBeDefined();
+			const first = await readStoredHistoryEntry(file, request!);
+			expect(first.status).toBe("ok");
+			expect(first.sessionId).toBe("0190f800-1234-7abc-8def-123456789abc");
+			expect(first.nextOffset).toBeGreaterThan(0);
+			const next = await readStoredHistoryEntry(file, {
+					...request!, offset: first.nextOffset!, revision: first.revision,
+			});
+			expect(next.status).toBe("ok");
+			expect(next.offset).toBe(first.nextOffset);
+			const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: id, limit: 5 });
+			expect(search.status).toBe("ok");
+			expect(search.matches.map(match => match.entryId)).toEqual([id]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("rejects huge stored session header IDs without emitting unbounded metadata", async () => {
+		const dir = TempDir.createSync("@veyyon-history-header-id-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			for (const badSessionId of ["s".repeat(129), "s".repeat(1024 * 1024)]) {
+				await fs.writeFile(file, [
+					JSON.stringify({ type: "session", id: badSessionId }),
+					JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" }),
+				].join("\n") + "\n");
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 100,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				expect(exact.sessionId).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: "root", limit: 3 });
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+				expect(search.sessionId).toBeUndefined();
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("preserves a bounded legacy custom type on a selected archive after a bad-type sibling", async () => {
+		const dir = TempDir.createSync("@veyyon-history-record-type-legacy-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "s-legacy" }),
+				JSON.stringify({ type: "custom:legacy.v1", id: "root", parentId: null, message: "needle healthy" }),
+				JSON.stringify({ type: "X".repeat(129), id: "sibling", parentId: null, message: "needle sibling" }),
+			].join("\n") + "\n");
+			const explicit = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(explicit.status).toBe("ok");
+			expect(explicit.recordType).toBe("custom:legacy.v1");
+			expect(explicit.fragment).toContain("needle healthy");
+			const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: "root", limit: 3 });
+			expect(search.status).toBe("partial");
+			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+			expect(search.matches[0]?.recordType).toBe("custom:legacy.v1");
+		} finally {
+			await dir.remove();
+		}
+	});
+	it("refuses a repeated stored ID claimed by a malformed sibling in either record order", async () => {
+		const dir = TempDir.createSync("@veyyon-history-malformed-reused-id-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
+			for (const malformedRecord of [
+				{ type: "message", id: "root", parentId: "invalid/parent", message: "needle forged" },
+				{ type: "", id: "root", parentId: null, message: "needle forged" },
+				// A benign duplicated metadata key must not conceal a repeated record ID.
+				'{"type":"message","id":"root","note":1,"note":2,"parentId":null,"message":"needle forged"}',
+				// Even syntactically broken siblings can still claim a public-addressable entry ID.
+				'{"type":"message","id":"root","parentId":null,"note":"bad\\q"}',
+				'{"invalid\\q":1,"type":"message","\\u0069d":"root","parentId":null}',
+			]) {
+				const malformed = typeof malformedRecord === "string" ? malformedRecord : JSON.stringify(malformedRecord);
+				for (const rows of [[root, malformed], [malformed, root]]) {
+					await fs.writeFile(file, [header, ...rows].join("\n") + "\n");
+					const exact = await readStoredHistoryEntry(file, {
+						entryId: "root", leafId: "root", offset: 0, limit: 256,
+					});
+					// A valid row must not hide a second, malformed claim to the same stored ID.
+					expect(exact.status).toBe("unavailable");
+						expect(exact.fragment).toBeUndefined();
+					const search = await searchStoredHistoryEntries(file, {
+						query: "needle", leafId: "root", limit: 3,
+					});
+					expect(search.status).toBe("unavailable");
+					expect(search.matches).toEqual([]);
+				}
+			}
+			// A distinct invalid sibling is recoverable when selecting an intentional archived leaf.
+			await fs.writeFile(file, [
+				header, root,
+				JSON.stringify({ type: "message", id: "unrelated", parentId: "invalid/parent", message: "needle unrelated" }),
+			].join("\n") + "\n");
+			const archived = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(archived.status).toBe("ok");
+			expect(archived.fragment).toContain("needle healthy");
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 3,
+			});
+			expect(search.status).toBe("partial");
+			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("rejects malformed JSONL reusing a fully escaped 128-character entry ID", async () => {
+		const dir = TempDir.createSync("@veyyon-history-escaped-id-claim-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const id = "r".repeat(128);
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const valid = JSON.stringify({ type: "message", id, parentId: null, message: "needle trusted" });
+			for (const claim of ["\\u0072".repeat(128), "\\u0073".repeat(128)]) {
+				const broken = `{"type":"message","id":"${claim}","parentId":null,"note":tru}`;
+				await fs.writeFile(file, [header, valid, broken].join("\n") + "\n");
+				const exact = await readStoredHistoryEntry(file, { entryId: id, leafId: id, offset: 0, limit: 256 });
+				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: id, limit: 3 });
+				if (claim === "\\u0072".repeat(128)) {
+					expect(exact.status).toBe("unavailable");
+					expect(exact.fragment).toBeUndefined();
+					expect(search.status).toBe("unavailable");
+					expect(search.matches).toEqual([]);
+				} else {
+					expect(exact.status).toBe("ok");
+					expect(exact.fragment).toContain("needle trusted");
+					expect(search.status).toBe("partial");
+					expect(search.matches.map(match => match.entryId)).toEqual([id]);
+				}
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("preserves an explicit healthy archive after a malformed nonidentity sibling", async () => {
+		const dir = TempDir.createSync("@veyyon-history-nonidentity-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "s-legacy" }),
+				JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" }),
+				'{"type":"message","id":"other","parentId":null,"note":1,"note":2}',
+			].join("\n") + "\n");
+			const read = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(read.status).toBe("ok");
+			expect(read.fragment).toContain("needle healthy");
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 2,
+			});
+			expect(search.status).toBe("partial");
+			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();

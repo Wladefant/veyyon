@@ -14,6 +14,13 @@ import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 const DEFAULT_PAGE_CHARACTERS = 8_000;
 const MAX_PAGE_CHARACTERS = 12_000;
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
+// Record types are returned as metadata, not as paged raw evidence.
+const MAX_RECORD_TYPE_CHARACTERS = 128;
+const MAX_STORED_SESSION_ID_CHARACTERS = 128;
+// A valid 128-character ASCII entry ID may use six JSON characters per escaped character.
+const MAX_ID_MEMBER_JSON_CHARACTERS = 2 + 6 * 128;
+// Search results must supply IDs that the public history:// entry/leaf grammar can read.
+const ADDRESSABLE_HISTORY_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const MAX_INDEX_ENTRIES = 100_000;
 const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
 // Unlike an isolated malformed line, a hard scan cap leaves unseen IDs behind.
@@ -89,11 +96,25 @@ type StoredAdmissionState = {
 type StoredRecordResult =
 	| { kind: "entry"; entry: StoredEntryShape }
 	| { kind: "metadata" }
-	| { kind: "invalid"; invalidIdentity: boolean };
+	| { kind: "invalid"; invalidIdentity: boolean; claimedId?: string };
 
-function hasDuplicateTopLevelKeys(raw: string): boolean {
+function claimedRecordId(value: unknown): string | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const entry = value as StoredEntryShape;
+	// Title and session metadata are not entry claims; their identity has its own rules.
+	if (entry.type === "title" || entry.type === "session") return undefined;
+	return typeof entry.id === "string" && ADDRESSABLE_HISTORY_ID.test(entry.id) ? entry.id : undefined;
+}
+
+function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; sessionTypeMember: boolean; claimedId?: string } {
 	const keys = new Set<string>();
+	const duplicates = new Set<string>();
+	let sessionTypeMember = false;
+	let topLevelType: string | undefined;
+	let claimedId: string | undefined;
 	let depth = 0;
+	// JSON array string elements are never root-level object member names.
+	let arrayDepth = 0;
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
 		if (char === '"') {
@@ -105,44 +126,125 @@ function hasDuplicateTopLevelKeys(raw: string): boolean {
 				}
 				if (raw[i++] === '"') break;
 			}
-			if (depth === 1) {
+			if (depth === 1 && arrayDepth === 0) {
 				let next = i;
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
-					const key = JSON.parse(raw.slice(start, i)) as string;
-					if (keys.has(key)) return true;
-					keys.add(key);
+					let key: string;
+					try {
+						key = JSON.parse(raw.slice(start, i)) as string;
+					} catch {
+						// A malformed member name must not hide a later session type.
+						// The complete record will still fail JSON.parse below.
+						continue;
+					}
+					if (keys.has(key)) duplicates.add(key);
+					else keys.add(key);
+					if (key === "type" || key === "id") {
+						let valueCursor = next + 1;
+						while (/\s/.test(raw[valueCursor] ?? "")) valueCursor++;
+						if (raw[valueCursor] === '"') {
+							const valueStart = valueCursor++;
+							while (valueCursor < raw.length) {
+								if (raw[valueCursor] === "\\") {
+									valueCursor += 2;
+									continue;
+								}
+								if (raw[valueCursor++] === '"') break;
+							}
+							if (valueCursor - valueStart <= MAX_ID_MEMBER_JSON_CHARACTERS && raw[valueCursor - 1] === '"') {
+								try {
+									const member = JSON.parse(raw.slice(valueStart, valueCursor)) as unknown;
+									if (typeof member === "string") {
+										if (key === "type") {
+											topLevelType = member;
+											if (member === "session") sessionTypeMember = true;
+										} else if (ADDRESSABLE_HISTORY_ID.test(member)) claimedId = member;
+									}
+								} catch {
+									// An invalid string member cannot establish a session boundary or ID claim.
+								}
+							}
+						}
+					}
 				}
 			}
 			continue;
 		}
 		if (char === "{") depth++;
 		else if (char === "}") depth--;
+		else if (char === "[") arrayDepth++;
+		else if (char === "]") arrayDepth = Math.max(0, arrayDepth - 1);
 		i++;
 	}
-	return false;
+	// A malformed JSON object can still claim an entry ID even when full parsing fails.
+	// A recognizable session/title member is metadata and must not claim an entry ID.
+	return {
+		duplicates,
+		sessionTypeMember,
+		claimedId: topLevelType === "session" || topLevelType === "title" ? undefined : claimedId,
+	};
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
+	let sessionTypeMember = false;
+	let malformedClaimedId: string | undefined;
 	try {
-		if (hasDuplicateTopLevelKeys(raw)) return { kind: "invalid", invalidIdentity: false };
+		const scanned = scanTopLevelMembers(raw);
+		sessionTypeMember = scanned.sessionTypeMember;
+		malformedClaimedId = scanned.claimedId;
+		const { duplicates } = scanned;
+		if (duplicates.size > 0) {
+			// Duplicate identity members are never safe to ignore, even in a
+			// sibling. A repeated session header is an identity boundary even
+			// when its duplicated member is otherwise unrelated metadata.
+			if (!state.headerSeen || sessionTypeMember ||
+				duplicates.has("type") || duplicates.has("id") || duplicates.has("parentId")) {
+				state.invalidIdentity = true;
+			}
+			let claimedId = !state.invalidIdentity && !sessionTypeMember ? malformedClaimedId : undefined;
+			if (!claimedId && !state.invalidIdentity && !sessionTypeMember) {
+				// JSON permits duplicate *unrelated* members, but their malformed row
+				// can still claim an entry ID already present elsewhere in the file.
+				try {
+					claimedId = claimedRecordId(JSON.parse(raw));
+				} catch {
+					// Non-decodable content cannot establish an addressable entry claim.
+				}
+			}
+			return { kind: "invalid", invalidIdentity: state.invalidIdentity, claimedId };
+		}
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		if (!state.headerSeen) state.invalidIdentity = true;
+		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
 	}
 	let value: unknown;
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		// An unparseable repeated session header still invalidates identity
+		// even when the type member follows other top-level metadata.
+		if (!state.headerSeen || sessionTypeMember) {
+			state.invalidIdentity = true;
+		}
+		return {
+			kind: "invalid",
+			invalidIdentity: state.invalidIdentity,
+			claimedId: state.invalidIdentity ? undefined : malformedClaimedId,
+		};
 	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "invalid", invalidIdentity: false };
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		if (!state.headerSeen) state.invalidIdentity = true;
+		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+	}
 	const entry = value as StoredEntryShape;
 	if (entry.type === "session") {
 		if (state.headerSeen || state.entrySeen) {
 			state.invalidIdentity = true;
 		} else if (typeof entry.id !== "string") {
-			return { kind: "invalid", invalidIdentity: false };
-		} else if (!entry.id.trim()) {
+			state.invalidIdentity = true;
+			return { kind: "invalid", invalidIdentity: true };
+		} else if (!entry.id.trim() || entry.id.length > MAX_STORED_SESSION_ID_CHARACTERS) {
 			state.invalidIdentity = true;
 		} else {
 			state.headerSeen = true;
@@ -160,7 +262,15 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		state.invalidIdentity = true;
 		return { kind: "invalid", invalidIdentity: true };
 	}
-	if (!isStoredEntry(entry)) return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+	if (!isStoredEntry(entry)) {
+		return {
+			kind: "invalid",
+			invalidIdentity: state.invalidIdentity,
+			// A malformed sibling may still claim an existing public-addressable ID.
+			// Its claim must participate in uniqueness checks without admitting the row.
+			claimedId: claimedRecordId(entry),
+		};
+	}
 	state.entrySeen = true;
 	return { kind: "entry", entry };
 }
@@ -168,10 +278,23 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: string; parentId?: string | null } {
 	return (
 		typeof entry.id === "string" &&
-		entry.id.trim().length > 0 &&
+		ADDRESSABLE_HISTORY_ID.test(entry.id) &&
 		typeof entry.type === "string" &&
-		(entry.parentId === undefined || entry.parentId === null || typeof entry.parentId === "string")
+		entry.type.trim().length > 0 &&
+		entry.type.length <= MAX_RECORD_TYPE_CHARACTERS &&
+		(entry.parentId === undefined || entry.parentId === null ||
+			(typeof entry.parentId === "string" && ADDRESSABLE_HISTORY_ID.test(entry.parentId)))
 	);
+}
+
+function claimedIdError(
+	id: string,
+	parents: ReadonlyMap<string, string | undefined>,
+	malformedClaims: ReadonlySet<string>,
+): string | undefined {
+	if (parents.has(id) || malformedClaims.has(id)) return DUPLICATE_ID_DETAIL;
+	if (parents.size + malformedClaims.size >= MAX_INDEX_ENTRIES) return HARD_BOUND_DETAIL;
+	return undefined;
 }
 
 export interface ExactHistoryRequest {
@@ -198,7 +321,7 @@ export interface ExactHistoryResult {
 }
 
 function idParam(input: string | null, name: string): string {
-	if (!input || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input)) {
+	if (!input || !ADDRESSABLE_HISTORY_ID.test(input)) {
 		throw new Error("history:// exact read requires a valid " + name + " (1-128 ID characters)");
 	}
 	return input;
@@ -330,6 +453,7 @@ export async function readStoredHistoryEntry(
 	request: ExactHistoryRequest,
 ): Promise<ExactHistoryResult> {
 	const parents = new Map<string, string | undefined>();
+	const malformedClaims = new Set<string>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
 		entrySeen: false,
@@ -366,6 +490,17 @@ export async function readStoredHistoryEntry(
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
 				incomplete = true;
+				if (decoded.claimedId) {
+					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
+					if (detail) return {
+						status: "unavailable",
+						entryId: request.entryId,
+						sessionId,
+						source: "stored-jsonl",
+						detail,
+					};
+					malformedClaims.add(decoded.claimedId);
+				}
 				continue;
 			}
 			if (decoded.kind === "metadata") continue;
@@ -374,7 +509,7 @@ export async function readStoredHistoryEntry(
 				incomplete = true;
 				continue;
 			}
-			if (parents.has(entry.id)) {
+			if (parents.has(entry.id) || malformedClaims.has(entry.id)) {
 				return {
 					status: "unavailable",
 					entryId: request.entryId,
@@ -383,7 +518,7 @@ export async function readStoredHistoryEntry(
 					detail: DUPLICATE_ID_DETAIL,
 				};
 			}
-			if (parents.size >= MAX_INDEX_ENTRIES) {
+			if (parents.size + malformedClaims.size >= MAX_INDEX_ENTRIES) {
 				return {
 					status: "unavailable",
 					entryId: request.entryId,
@@ -558,6 +693,7 @@ export async function searchStoredHistoryEntries(
 	request: HistorySearchRequest,
 ): Promise<HistorySearchResult> {
 	const parents = new Map<string, string | undefined>();
+	const malformedClaims = new Set<string>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
 		entrySeen: false,
@@ -596,6 +732,18 @@ export async function searchStoredHistoryEntries(
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
 				unreadable = true;
+				if (decoded.claimedId) {
+					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
+					if (detail) return {
+						status: "unavailable",
+						sessionId,
+						query: request.query,
+						source: "stored-jsonl",
+						matches: [],
+						detail,
+					};
+					malformedClaims.add(decoded.claimedId);
+				}
 				continue;
 			}
 			if (decoded.kind === "metadata") continue;
@@ -604,7 +752,7 @@ export async function searchStoredHistoryEntries(
 				unreadable = true;
 				continue;
 			}
-			if (parents.has(entry.id)) {
+			if (parents.has(entry.id) || malformedClaims.has(entry.id)) {
 				return {
 					status: "unavailable",
 					sessionId,
@@ -614,7 +762,7 @@ export async function searchStoredHistoryEntries(
 					detail: DUPLICATE_ID_DETAIL,
 				};
 			}
-			if (parents.size >= MAX_INDEX_ENTRIES) {
+			if (parents.size + malformedClaims.size >= MAX_INDEX_ENTRIES) {
 				return {
 					status: "unavailable",
 					sessionId,
