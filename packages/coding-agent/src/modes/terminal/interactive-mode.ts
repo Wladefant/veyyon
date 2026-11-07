@@ -368,6 +368,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#transcriptComposer.localEchoSignatures;
 	}
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
+	get hasPendingSubmission(): boolean {
+		return this.#pendingSubmittedInput !== undefined;
+	}
 	/** Whether an edit queued the held at-rest reading for the next committed frame. */
 	#atRestReadingQueued = false;
 	lastSigintTime = 0;
@@ -2102,6 +2105,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		return promise;
 	}
 
+	reserveShutdownInput(): void {
+		this.onInputCallback = undefined;
+		this.#shutdownInputGateRelease ??= this.ui.addInputListener(data =>
+			matchesKey(data, "ctrl+c") ? undefined : { consume: true },
+		);
+	}
+
 	async shutdown(): Promise<void> {
 		if (this.#isShuttingDown) return;
 		this.#isShuttingDown = true;
@@ -2120,9 +2130,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// nothing here is reading fd 0, so the kernel queues arriving bytes and
 		// hands them to the relaunched child. That window belongs to the child,
 		// and `init()` closes it there with `flushPendingTtyInput()`.
-		this.#shutdownInputGateRelease ??= this.ui.addInputListener(data =>
-			matchesKey(data, "ctrl+c") ? undefined : { consume: true },
-		);
+		this.reserveShutdownInput();
 
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
