@@ -1081,6 +1081,48 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("rejects truncated non-leading repeated session headers without mistaking nested sibling metadata", async () => {
+		const dir = TempDir.createSync("@veyyon-history-nonleading-header-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
+			for (const corruptedHeader of [
+				'{"timestamp":"2026-11-07","type":"session","id":',
+				'{"metadata":{"producer":true},"type":"sess\\u0069on","id":',
+			]) {
+				await fs.writeFile(file, [header, root, corruptedHeader].join("\n") + "\n");
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+			// Nested metadata cannot manufacture a second root-level session boundary.
+			await fs.writeFile(file, [
+				header, root,
+				'{"type":"message","id":"orphan","metadata":{"type":"session"},"parentId":',
+			].join("\n") + "\n");
+			const archived = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(archived.status).toBe("ok");
+			expect(archived.fragment).toContain("needle healthy");
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 3,
+			});
+			expect(search.status).toBe("partial");
+			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("withholds blank or oversized stored record types from exact reads and search", async () => {
 		const dir = TempDir.createSync("@veyyon-history-record-type-bound-");
 		try {
