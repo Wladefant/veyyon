@@ -2908,7 +2908,12 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         await fs.rename(sourceFile, foreignSessionParked);
         try {
           await fs.writeFile(sourceFile, unrelatedJournal);
-          await expect(foreignSessionPeer.append("MUST NOT APPEND TO FOREIGN SESSION\\n"))
+          const crossSessionLine = `${JSON.stringify({
+            type: "message", id: "synthetic-foreign-target-append", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: { role: "user", content: "Must not contaminate another session", timestamp: Date.now() },
+          })}\n`;
+          await expect(foreignSessionPeer.append(crossSessionLine))
             .rejects.toThrow(/session|identity|header/i);
           expect(await fs.readFile(sourceFile, "utf8")).toBe(unrelatedJournal);
           expect(await fs.readFile(foreignSessionParked, "utf8")).toContain("Original journal keeps artifact://0");
