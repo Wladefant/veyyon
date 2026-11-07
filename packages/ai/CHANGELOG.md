@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Reconcile an on-demand auth-broker freshness wait after an equal-generation 304 with an unconditional canonical broker snapshot, so a restarted broker's changed credential state is not hidden by a reused generation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Verify unbound later auth-broker SSE mutations against canonical GET before selecting credential changes, and reconnect instead of trusting subsequent obsolete stream frames ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Verify a changed or generation-reset first auth-broker SSE snapshot with a canonical broker GET before applying it, and reconnect the unproven stream without exposing obsolete credential material ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Close obsolete broker SSE connections after a confirmed local credential disable so delayed old-stream revocations cannot evict unrelated surviving grants ([#602](https://github.com/Wladefant/veyyon/issues/602)).
