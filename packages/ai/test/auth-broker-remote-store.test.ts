@@ -785,6 +785,94 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
+	test("matching initial SSE cannot authorize a later stale credential delta", async () => {
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const before = await peer.fetchSnapshot();
+		if (before.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const oldEntry = before.snapshot.credentials[0]!;
+		if (oldEntry.credential.type !== "oauth") throw new Error("expected synthetic OAuth");
+		storage!.upsertCredential("anthropic", {
+			...mintOAuthCredential("a", Date.now() + 120_000), access: "access-canonical-new",
+		});
+		const fresh = await peer.fetchSnapshot();
+		if (fresh.status !== 200) throw new Error("expected updated broker snapshot");
+		expect(fresh.snapshot.credentials[0]?.id).toBe(oldEntry.id);
+		expect(fresh.snapshot.credentials[0]?.credential).toMatchObject({
+			type: "oauth", access: "access-canonical-new",
+		});
+		for (const kind of ["entry", "removed", "snapshot"] as const) {
+			const generation = fresh.generation + 50;
+			const stale =
+				kind === "entry"
+					? { kind, entry: oldEntry, generation, serverNowMs: fresh.snapshot.serverNowMs, refresher: fresh.snapshot.refresher }
+					: kind === "removed"
+						? { kind, id: oldEntry.id, generation, serverNowMs: fresh.snapshot.serverNowMs, refresher: fresh.snapshot.refresher }
+						: { kind, ...before.snapshot, generation };
+			// Both frames pass the ACTUAL client SSE decoder. Only the second
+			// frame is obsolete; the first agrees exactly with canonical truth.
+			const wire = new TextEncoder().encode([
+				"event: snapshot", "data: " + JSON.stringify({ kind: "snapshot", ...fresh.snapshot }),
+				"", "event: " + kind, "data: " + JSON.stringify(stale), "", "",
+			].join(String.fromCharCode(10)));
+			let streams = 0;
+			let realStreamConnected = false;
+			let canonicalGets = 0;
+			const observed: Array<string | null> = [];
+			const fetchImpl: typeof fetch = async (input, init) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+				const pathname = new URL(url).pathname;
+				if (pathname === "/v1/snapshot/stream") {
+					streams++;
+					if (streams > 1) {
+						const response = await fetch(input, init);
+						realStreamConnected = response.ok;
+						return response;
+					}
+					const body = new ReadableStream<Uint8Array>({
+						start(controller) { controller.enqueue(wire); controller.close(); },
+					});
+					return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+				}
+				if (pathname === "/v1/snapshot") canonicalGets++;
+				return fetch(input, init);
+			};
+			const client = new AuthBrokerClient({ url: handle!.url, token, fetchImpl });
+			const candidate = new RemoteAuthCredentialStore({
+				client, initialSnapshot: fresh.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+				onSnapshot(snapshot) {
+					const entry = snapshot.credentials.find(row => row.id === oldEntry.id);
+					observed.push(entry?.credential.type === "oauth" ? entry.credential.access : null);
+				},
+			});
+			remote = candidate;
+			try {
+				// The next connection is a barrier after the old delta was parsed.
+				await waitUntil(() => realStreamConnected, 4_000);
+				expect(streams).toBeGreaterThanOrEqual(2);
+				expect(canonicalGets).toBeGreaterThan(0);
+				expect(observed).not.toContain(oldEntry.credential.access);
+				expect(observed).not.toContain(null);
+				expect(candidate.snapshot.credentials[0]?.credential).toMatchObject({
+					type: "oauth", access: "access-canonical-new",
+				});
+			} finally {
+				candidate.close();
+				remote = undefined;
+			}
+		}
+		// Positive control: new broker-owned material remains selectable.
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: fresh.snapshot });
+		storage!.upsertCredential("anthropic", {
+			...mintOAuthCredential("a", Date.now() + 180_000), access: "access-canonical-later",
+		});
+		await waitUntil(() =>
+			remote!.snapshot.credentials[0]?.credential.type === "oauth" &&
+			remote.snapshot.credentials[0]?.credential.access === "access-canonical-later",
+			4_000,
+		);
+	});
+
 	test("rejects a schema-valid stale first SSE snapshot after canonical same-ID rotation", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		const before = await peer.fetchSnapshot();

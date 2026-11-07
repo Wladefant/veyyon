@@ -621,6 +621,38 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	/**
+	 * A same-generation initial SSE snapshot is not proof that this transport
+	 * belongs to the canonical broker incarnation. Compare changes without
+	 * trusting the stream; actual mutations need an unconditional broker GET.
+	 */
+	#isNoProgressStreamEvent(event: SnapshotStreamEvent): boolean {
+		if (event.generation < this.#generation) return true;
+		switch (event.kind) {
+			case "snapshot": {
+				const { kind: _kind, ...snapshot } = event;
+				return this.#isNoProgressSnapshot(snapshot, true);
+			}
+			case "entry": {
+				if (this.#isCanonicallyRemovedFromStream(event.entry.id)) return true;
+				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
+				if (!current) return false;
+				const incoming = this.#retainPendingCredentialBlocks(
+					normalizeSnapshotEntryBlocks(event.entry, Date.now()), current,
+				);
+				return (
+					isDeepStrictEqual(credentialSseProgressState(current), credentialSseProgressState(incoming)) &&
+					isDeepStrictEqual(
+						refresherSseProgressState(this.#snapshot.refresher),
+						refresherSseProgressState(event.refresher),
+					)
+				);
+			}
+			case "removed":
+				return !this.#snapshot.credentials.some(entry => entry.id === event.id);
+		}
+	}
+
 	async #consumeSnapshotStream(): Promise<void> {
 		const revisionAtConnect = this.#appliedSnapshotRevision;
 		let firstFrame = true;
@@ -686,6 +718,21 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					}
 					// Identical same-generation first frames are not fresh progress.
 					this.#applyStreamEvent(event);
+				} else if (!firstFrame && !this.#isNoProgressStreamEvent(event)) {
+					// A matching first frame does not authenticate later mutations.
+					// Reconcile changed entries, removals and full frames only with
+					// the canonical broker, never the unproven SSE payload.
+					const revisionAtVerification = this.#appliedSnapshotRevision;
+					const canonical = await this.#client.fetchSnapshot({ signal: streamSignal });
+					if (canonical.status !== 200) {
+						throw new AIError.AuthBrokerError("Broker stream mutation verification returned no snapshot");
+					}
+					if (!this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtVerification)) {
+						throw new AIError.AuthBrokerError("Broker stream mutation superseded during verification");
+					}
+					// A verified GET cannot certify *future* frames on this transport.
+					// Existing failure backoff bounds reconnects from stale relays.
+					throw new AIError.AuthBrokerError("Broker stream mutation requires canonical reconnection");
 				} else {
 					this.#applyStreamEvent(event);
 				}
