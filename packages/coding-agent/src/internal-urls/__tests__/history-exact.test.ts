@@ -1092,6 +1092,9 @@ describe("history exact record lookup", () => {
 				'{"metadata":{"producer":true},"type":"sess\\u0069on","id":',
 				// A completed top-level array before type must not conceal a real repeated header.
 				'{"metadata":["safe"],"type":"session","id":',
+				// Root keys after a string value still establish a repeated session boundary.
+				'{"metadata":"safe","type":"session","id":',
+				'{"metadata":"safe" "type":"session","id":',
 				// Invalid key escapes cannot mask a second session boundary.
 				'{"type":"session","id":"shadow","invalid\\q":true}',
 				'{"invalid\\q":true,"type":"session","id":"shadow"}',
