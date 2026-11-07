@@ -1045,6 +1045,61 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("refuses ambiguous first and repeated session headers instead of trusting a later valid header", async () => {
+		const dir = TempDir.createSync("@veyyon-history-header-identity-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-valid" });
+			const entry = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle trusted" });
+			const cases = [
+				['{"type":"session","id":"first","id":"forged"}', header, entry],
+				['{"type":"session","id":42}', header, entry],
+				['{"type":"session","id":', header, entry],
+				[header, entry, '{"type":"session","id":"s-valid","extra":1,"extra":2}'],
+				[header, entry, '{"type":"message","id":"evil","id":"evil","parentId":"root","message":"needle forged"}'],
+			] as const;
+			for (const lines of cases) {
+				await fs.writeFile(file, lines.join("\n") + "\n");
+				const read = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(read.status).toBe("unavailable");
+				expect(read.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("preserves an explicit healthy archive after a malformed nonidentity sibling", async () => {
+		const dir = TempDir.createSync("@veyyon-history-nonidentity-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "s-legacy" }),
+				JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" }),
+				'{"type":"message","id":"other","parentId":null,"note":1,"note":2}',
+			].join("\n") + "\n");
+			const read = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(read.status).toBe("ok");
+			expect(read.fragment).toContain("needle healthy");
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 2,
+			});
+			expect(search.status).toBe("partial");
+			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("rejects malformed search queries without suppressing ordinary letters and digits", () => {
 		expect(parseHistorySearchRequest(new URL("history://Scout?q=x0file"))?.query).toBe("x0file");
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
