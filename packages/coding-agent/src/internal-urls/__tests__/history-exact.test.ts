@@ -1312,6 +1312,52 @@ describe("history exact record lookup", () => {
 			await dir.remove();
 		}
 	});
+	it("refuses a repeated stored ID claimed by a malformed sibling in either record order", async () => {
+		const dir = TempDir.createSync("@veyyon-history-malformed-reused-id-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
+			for (const malformedRecord of [
+				{ type: "message", id: "root", parentId: "invalid/parent", message: "needle forged" },
+				{ type: "", id: "root", parentId: null, message: "needle forged" },
+			]) {
+				const malformed = JSON.stringify(malformedRecord);
+				for (const rows of [[root, malformed], [malformed, root]]) {
+					await fs.writeFile(file, [header, ...rows].join("\n") + "\n");
+					const exact = await readStoredHistoryEntry(file, {
+						entryId: "root", leafId: "root", offset: 0, limit: 256,
+					});
+					// A valid row must not hide a second, malformed claim to the same stored ID.
+					expect(exact.status).toBe("unavailable");
+						expect(exact.fragment).toBeUndefined();
+					const search = await searchStoredHistoryEntries(file, {
+						query: "needle", leafId: "root", limit: 3,
+					});
+					expect(search.status).toBe("unavailable");
+					expect(search.matches).toEqual([]);
+				}
+			}
+			// A distinct invalid sibling is recoverable when selecting an intentional archived leaf.
+			await fs.writeFile(file, [
+				header, root,
+				JSON.stringify({ type: "message", id: "unrelated", parentId: "invalid/parent", message: "needle unrelated" }),
+			].join("\n") + "\n");
+			const archived = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(archived.status).toBe("ok");
+			expect(archived.fragment).toContain("needle healthy");
+			const search = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 3,
+			});
+			expect(search.status).toBe("partial");
+			expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("preserves an explicit healthy archive after a malformed nonidentity sibling", async () => {
 		const dir = TempDir.createSync("@veyyon-history-nonidentity-");
 		try {
