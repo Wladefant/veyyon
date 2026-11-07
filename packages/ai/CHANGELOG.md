@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Ignore broker SSE removal events for IDs already absent from the accepted view, even if a stale relay advertises increasing generations, so phantom removals cannot postpone canonical peer-revocation verification ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Retire an old auth-broker SSE transport after an authoritative GET adds a new grant, preventing queued stale removal of that newly admitted credential ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Retire the previous auth-broker SSE transport when a canonical broker GET removes one grant but preserves others, preventing queued old-incarnation removal frames from evicting a surviving credential; the replacement transport still accepts legitimate removals ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Retire an old auth-broker SSE connection after canonical same-ID credential reauthorization or replacement, so queued higher-generation frames cannot override the refreshed broker state ([#602](https://github.com/Wladefant/veyyon/issues/602)).

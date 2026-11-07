@@ -737,11 +737,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			}
 			case "removed": {
 				if (event.generation < this.#generation) return;
-				if (
-					event.generation === this.#generation &&
-					!this.#snapshot.credentials.some(entry => entry.id === event.id) &&
-					isDeepStrictEqual(refresherSseProgressState(event.refresher), refresherSseProgressState(this.#snapshot.refresher))
-				) return;
+				// Removing an already-absent ID does not change the accepted credential view.
+				// In particular, a stale relay must not keep renewing the SSE freshness
+				// deadline by inventing successively higher-generation phantom removals.
+				if (!this.#snapshot.credentials.some(entry => entry.id === event.id)) return;
 				this.#removeStreamCredential(event.id, event.refresher, event.generation, event.serverNowMs);
 				return;
 			}

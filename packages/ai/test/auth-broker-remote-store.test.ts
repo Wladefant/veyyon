@@ -675,6 +675,52 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
+	test("higher-generation removals of absent IDs cannot starve canonical SSE verification", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const canonical = await client.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const initial = canonical.snapshot;
+		const liveId = initial.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		const realFetch = client.fetchSnapshot.bind(client);
+		let unknownRemovals = 0;
+		let canonicalGets = 0;
+		let acceptedSnapshots = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.ifGenerationGt !== undefined) throw new Error("unexpected conditional GET on streaming transport");
+			canonicalGets += 1;
+			return realFetch(opts);
+		});
+		// A stale relay fabricates absent-ID removals with ever-higher generations
+		// while the authoritative broker has independently removed the live grant.
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial };
+			streamReady.resolve();
+			while (!opts.signal?.aborted) {
+				unknownRemovals += 1;
+				yield {
+					kind: "removed" as const, id: liveId + 1_000_000,
+					generation: initial.generation + unknownRemovals,
+					serverNowMs: initial.serverNowMs,
+					refresher: initial.refresher,
+				};
+				await Bun.sleep(5);
+			}
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial, snapshotStreamVerifyIntervalMs: 40,
+			onSnapshot: () => { acceptedSnapshots += 1; },
+		});
+		await streamReady.promise;
+		expect(storage!.disableCredentialById(liveId, "synthetic peer revoke behind phantom removals")).toBe(true);
+		// A stream-only fix cannot pass this: it must perform its own canonical GET.
+		await waitUntil(() => remote!.listAuthCredentials().length === 0, 4_000);
+		expect(unknownRemovals).toBeGreaterThan(2);
+		expect(canonicalGets).toBeGreaterThan(0);
+		expect(acceptedSnapshots).toBe(1);
+		expect(remote.listAuthCredentials()).toEqual([]);
+	});
+
 	test("canonical addition retires stale SSE before an old stream removes the new grant", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
