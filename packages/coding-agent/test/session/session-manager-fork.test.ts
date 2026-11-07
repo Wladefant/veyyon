@@ -1689,6 +1689,8 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   // Independent append after the storage's final synchronous publication guard,
   // inside the actual rename hook. This deliberately exposes the residual CAS gap.
   appendForeignLineAtRename: string | undefined;
+  // Synthetic peer append after synchronous strict source reread, before staging.
+  appendForeignLineBeforeSyncRewrite: string | undefined;
   forceNextSourceAtomicEperm = false;
   // The other writer publishes a fresh journal at the vacated original path
   // while Windows-style EPERM fallback holds the old inode at a backup path.
@@ -1781,6 +1783,15 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
     const foreignLine = this.appendForeignLineBeforeRepairPublish;
     this.appendForeignLineBeforeRepairPublish = undefined;
     await fs.appendFile(target, foreignLine);
+  }
+
+  override writeTextSync(target: string, body: SessionFileBody): void {
+    if (target === this.protectedSourceFile && this.appendForeignLineBeforeSyncRewrite) {
+      const line = this.appendForeignLineBeforeSyncRewrite;
+      this.appendForeignLineBeforeSyncRewrite = undefined;
+      nodeFs.appendFileSync(target, line);
+    }
+    super.writeTextSync(target, body);
   }
 
   override async writeTextAtomic(
@@ -2652,6 +2663,79 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       storage.appendForeignLineOnRefusal = undefined;
       storage.appendForeignLineAtRename = undefined;
       await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("preserves a peer append after strict synchronous failed-fork reread", async () => {
+    // Exercise real flushSync -> writeTextSync with a separate append descriptor,
+    // not only an isolated rename reproduction. Both paths use disposable roots.
+    for (const injectPeer of [false, true]) {
+      using temp = TempDir.createSync("@veyyon-fork-sync-peer-publication-");
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic sync repair sidecar", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Owned journal keeps artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !artifact) throw new Error("expected disposable source and sidecar");
+        const archiveBefore = await fs.readFile(artifact);
+
+        // Fail the source writer close, then one async strict reread, so the
+        // real manager must retry the pending failed-fork repair synchronously.
+        storage.protectedSourceFile = sourceFile;
+        storage.rejectNextSourceClose = true;
+        storage.refuseSourceReadOnClose = true;
+        let forkFailure: unknown;
+        try { await manager.fork(); } catch (error) { forkFailure = error; }
+        expect(forkFailure).toBeInstanceOf(AggregateError);
+        if (!(forkFailure instanceof AggregateError)) throw new Error("expected failed async repair");
+        expect(forkFailure.errors.some((error: unknown) =>
+          String(error).includes("synthetic source writer-close refusal")
+        )).toBe(true);
+        const beforeSync = await fs.readFile(sourceFile, "utf8");
+        expect(beforeSync).toContain('"reason":"session_switched"');
+
+        const peerLine = `${JSON.stringify({
+          type: "message", id: "synthetic-sync-peer", parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "Independent sync peer history", timestamp: Date.now() },
+        })}\n`;
+        if (injectPeer) storage.appendForeignLineBeforeSyncRewrite = peerLine;
+        let syncFailure: unknown;
+        try { manager.flushSync(); } catch (error) { syncFailure = error; }
+        const afterSync = await fs.readFile(sourceFile, "utf8");
+        expect(storage.appendForeignLineBeforeSyncRewrite).toBeUndefined();
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(afterSync).toContain("Owned journal keeps artifact://0");
+        expect(await fs.readFile(artifact)).toEqual(archiveBefore);
+        if (!injectPeer) {
+          expect(syncFailure).toBeUndefined();
+          expect(afterSync).not.toContain('"reason":"session_switched"');
+        } else {
+          // Safe outcomes: preserve the peer in a repaired file, or refuse
+          // publication with the exact original+peer source still recoverable.
+          expect(afterSync).toContain(peerLine);
+          if (syncFailure === undefined) {
+            expect(afterSync).not.toContain('"reason":"session_switched"');
+          } else {
+            expect(String(syncFailure)).toMatch(/journal changed|Cannot preserve|Cannot verify/i);
+            expect(afterSync).toBe(beforeSync + peerLine);
+          }
+        }
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.refuseSourceReadOnClose = false;
+        storage.appendForeignLineBeforeSyncRewrite = undefined;
+        await manager.close().catch(() => undefined);
+      }
     }
   });
 
