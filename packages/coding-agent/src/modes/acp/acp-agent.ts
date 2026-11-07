@@ -114,6 +114,13 @@ const APPROVE_OPTION = "Approve and execute";
 const REFINE_OPTION = "Refine plan";
 const MODE_CONFIG_ID = "mode";
 const MODEL_CONFIG_ID = "model";
+const ACP_MODEL_PROVIDER_PRIORITY: Readonly<Record<string, number>> = {
+	"openai-codex": 0,
+	anthropic: 1,
+	"google-antigravity": 2,
+	"opencode-go": 3,
+	"opencode-zen": 3,
+};
 const THINKING_CONFIG_ID = "thinking";
 const THINKING_OFF = "off";
 const SESSION_PAGE_SIZE = 50;
@@ -1438,7 +1445,13 @@ export class AcpAgent implements Agent {
 			},
 		];
 
-		const models = session.getAvailableModels();
+		const models = session
+			.getAvailableModels()
+			.toSorted(
+				(left, right) =>
+					(ACP_MODEL_PROVIDER_PRIORITY[left.provider] ?? 4) -
+					(ACP_MODEL_PROVIDER_PRIORITY[right.provider] ?? 4),
+			);
 		const currentModel = session.model;
 		if (models.length > 0) {
 			configOptions.push({
