@@ -1107,6 +1107,95 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("withholds unaddressable stored entry IDs while preserving an explicitly selected healthy branch", async () => {
+		const dir = TempDir.createSync("@veyyon-history-addressable-ids-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			for (const badId of ["x".repeat(129), "bad/id", "bad🔑id"]) {
+				await fs.writeFile(file, [
+					JSON.stringify({ type: "session", id: "s-legacy" }),
+					JSON.stringify({ type: "message", id: "healthy", parentId: null, message: "needle healthy" }),
+					JSON.stringify({ type: "message", id: badId, parentId: "healthy", message: "needle forged" }),
+				].join("\n") + "\n");
+				const implicit = await readStoredHistoryEntry(file, {
+					entryId: "healthy", offset: 0, limit: 256,
+				});
+				expect(implicit.status).toBe("unavailable");
+				const implicitSearch = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+				expect(implicitSearch.status).toBe("unavailable");
+				expect(implicitSearch.matches).toEqual([]);
+				const explicit = await readStoredHistoryEntry(file, {
+					entryId: "healthy", leafId: "healthy", offset: 0, limit: 256,
+				});
+				expect(explicit.status).toBe("ok");
+				expect(explicit.fragment).toContain("needle healthy");
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "healthy", limit: 5,
+				});
+				expect(search.status).toBe("partial");
+				expect(search.matches.map(match => match.entryId)).toEqual(["healthy"]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("keeps producer and legacy public-addressable IDs usable across exact pagination", async () => {
+		const dir = TempDir.createSync("@veyyon-history-valid-ids-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const id = "legacy_.:-2026";
+			const message = "needle evidence ".repeat(18);
+			await fs.writeFile(file, [
+				JSON.stringify({ type: "session", id: "0190f800-1234-7abc-8def-123456789abc" }),
+				JSON.stringify({ type: "message", id, parentId: null, message }),
+			].join("\n") + "\n");
+			const request = parseExactHistoryRequest(new URL(
+				"history://Scout?entry=" + encodeURIComponent(id) + "&leaf=" + encodeURIComponent(id) + "&limit=24",
+			));
+			expect(request).toBeDefined();
+			const first = await readStoredHistoryEntry(file, request!);
+			expect(first.status).toBe("ok");
+			expect(first.sessionId).toBe("0190f800-1234-7abc-8def-123456789abc");
+			expect(first.nextOffset).toBeGreaterThan(0);
+			const next = await readStoredHistoryEntry(file, {
+					...request!, offset: first.nextOffset!, revision: first.revision,
+			});
+			expect(next.status).toBe("ok");
+			expect(next.offset).toBe(first.nextOffset);
+			const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: id, limit: 5 });
+			expect(search.status).toBe("ok");
+			expect(search.matches.map(match => match.entryId)).toEqual([id]);
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("rejects huge stored session header IDs without emitting unbounded metadata", async () => {
+		const dir = TempDir.createSync("@veyyon-history-header-id-bound-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			for (const badSessionId of ["s".repeat(129), "s".repeat(1024 * 1024)]) {
+				await fs.writeFile(file, [
+					JSON.stringify({ type: "session", id: badSessionId }),
+					JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" }),
+				].join("\n") + "\n");
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 100,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				expect(exact.sessionId).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: "root", limit: 3 });
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+				expect(search.sessionId).toBeUndefined();
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("preserves a bounded legacy custom type on a selected archive after a bad-type sibling", async () => {
 		const dir = TempDir.createSync("@veyyon-history-record-type-legacy-");
 		try {
