@@ -126,7 +126,12 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 				}
 				if (raw[i++] === '"') break;
 			}
-			if (depth === 1 && arrayDepth === 0) {
+			// A root string *value* followed by malformed `:` is not a member key.
+			// The full JSON parser still rejects the row; do not invent a duplicate
+			// ID or session boundary from a value that happens to spell "id"/"type".
+			let previous = start - 1;
+			while (previous >= 0 && /\s/.test(raw[previous]!)) previous--;
+			if (depth === 1 && arrayDepth === 0 && raw[previous] !== ":") {
 				let next = i;
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
