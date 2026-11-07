@@ -104,10 +104,12 @@ function claimedRecordId(value: unknown): string | undefined {
 	return typeof entry.id === "string" && ADDRESSABLE_HISTORY_ID.test(entry.id) ? entry.id : undefined;
 }
 
-function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; sessionTypeMember: boolean } {
+function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; sessionTypeMember: boolean; claimedId?: string } {
 	const keys = new Set<string>();
 	const duplicates = new Set<string>();
 	let sessionTypeMember = false;
+	let topLevelType: string | undefined;
+	let claimedId: string | undefined;
 	let depth = 0;
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
@@ -134,7 +136,7 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 					}
 					if (keys.has(key)) duplicates.add(key);
 					else keys.add(key);
-					if (key === "type") {
+					if (key === "type" || key === "id") {
 						let valueCursor = next + 1;
 						while (/\s/.test(raw[valueCursor] ?? "")) valueCursor++;
 						if (raw[valueCursor] === '"') {
@@ -148,7 +150,13 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 							}
 							if (valueCursor - valueStart <= 128 && raw[valueCursor - 1] === '"') {
 								try {
-									if (JSON.parse(raw.slice(valueStart, valueCursor)) === "session") sessionTypeMember = true;
+									const member = JSON.parse(raw.slice(valueStart, valueCursor)) as unknown;
+									if (typeof member === "string") {
+										if (key === "type") {
+											topLevelType = member;
+											if (member === "session") sessionTypeMember = true;
+										} else if (ADDRESSABLE_HISTORY_ID.test(member)) claimedId = member;
+									}
 								} catch {
 									// An invalid value is not a recognizable session type.
 								}
@@ -163,14 +171,22 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 		else if (char === "}") depth--;
 		i++;
 	}
-	return { duplicates, sessionTypeMember };
+	// A malformed JSON object can still claim an entry ID even when full parsing fails.
+	// A recognizable session/title member is metadata and must not claim an entry ID.
+	return {
+		duplicates,
+		sessionTypeMember,
+		claimedId: topLevelType === "session" || topLevelType === "title" ? undefined : claimedId,
+	};
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	let sessionTypeMember = false;
+	let malformedClaimedId: string | undefined;
 	try {
 		const scanned = scanTopLevelMembers(raw);
 		sessionTypeMember = scanned.sessionTypeMember;
+		malformedClaimedId = scanned.claimedId;
 		const { duplicates } = scanned;
 		if (duplicates.size > 0) {
 			// Duplicate identity members are never safe to ignore, even in a
@@ -180,8 +196,8 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 				duplicates.has("type") || duplicates.has("id") || duplicates.has("parentId")) {
 				state.invalidIdentity = true;
 			}
-			let claimedId: string | undefined;
-			if (!state.invalidIdentity && !sessionTypeMember) {
+			let claimedId = !state.invalidIdentity && !sessionTypeMember ? malformedClaimedId : undefined;
+			if (!claimedId && !state.invalidIdentity && !sessionTypeMember) {
 				// JSON permits duplicate *unrelated* members, but their malformed row
 				// can still claim an entry ID already present elsewhere in the file.
 				try {
@@ -205,7 +221,11 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		if (!state.headerSeen || sessionTypeMember) {
 			state.invalidIdentity = true;
 		}
-		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+		return {
+			kind: "invalid",
+			invalidIdentity: state.invalidIdentity,
+			claimedId: state.invalidIdentity ? undefined : malformedClaimedId,
+		};
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		if (!state.headerSeen) state.invalidIdentity = true;
