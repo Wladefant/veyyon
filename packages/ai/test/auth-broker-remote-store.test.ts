@@ -508,100 +508,75 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
-	test("duplicate same-generation SSE frames cannot conceal a revoked broker credential", async () => {
+	test("same-generation SSE replay cannot admit unverified grants or conceal revocation", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await peer.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
 		const original = initial.snapshot.credentials[0]!;
-		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth entry");
-		// Distinct entries within the SAME generation must still reach the client.
-		// Only exact no-progress replay is redundant.
-		const additional = {
-			...original,
-			id: original.id + 1_000_000,
-			credential: { ...original.credential, access: "access-synthetic-same-generation" },
+		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
+		// This apparently distinct same-G row was NEVER uploaded to the
+		// disposable broker. Replaying it from a transport is not authority.
+		const invented = {
+			...original, id: original.id + 1_000_000,
+			credential: { ...original.credential, access: "access-synthetic-not-at-broker" },
 		};
-		const connected = Promise.withResolvers<void>();
+		let connections = 0;
 		let replayedFrames = 0;
-		let fullSnapshotsObserved = 0;
+		let canonicalGets = 0;
+		const observedIds: number[][] = [];
+		const realFetch = client.fetchSnapshot.bind(client);
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			canonicalGets += 1;
+			return realFetch(opts);
+		});
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			connections += 1;
 			yield { kind: "snapshot" as const, ...initial.snapshot };
-			// No-progress full replay must not trigger a second full-snapshot callback.
+			// An identical full frame cannot be durable progress.
 			yield { kind: "snapshot" as const, ...initial.snapshot };
-			connected.resolve();
-			yield {
-				kind: "entry" as const, entry: additional,
-				generation: initial.snapshot.generation,
-				serverNowMs: initial.snapshot.serverNowMs,
-				refresher: initial.snapshot.refresher,
-			};
-			// A broken relay repeats a previously valid row, never forwarding
-			// the broker's subsequent revocation. Do not treat this as progress.
+			if (connections === 1) {
+				yield {
+					kind: "entry" as const, entry: invented, generation: initial.generation,
+					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+				};
+			}
 			while (!opts.signal?.aborted) {
 				replayedFrames += 1;
 				yield {
-					kind: "entry" as const, entry: original,
-					generation: initial.snapshot.generation,
-					serverNowMs: initial.snapshot.serverNowMs,
-					refresher: initial.snapshot.refresher,
+					kind: "entry" as const, entry: original, generation: initial.generation,
+					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 				};
 				yield {
-					kind: "removed" as const, id: additional.id + 1,
-					generation: initial.snapshot.generation,
-					serverNowMs: initial.snapshot.serverNowMs,
+					kind: "removed" as const, id: invented.id + 1,
+					generation: initial.generation, serverNowMs: initial.snapshot.serverNowMs,
 					refresher: initial.snapshot.refresher,
-				}; // Already absent: also no progress.
+				};
 				await Bun.sleep(5);
 			}
 		});
-		// Keep the canonical idle GET pending until the test actually revokes the
-		// peer. Otherwise a slow CI runner can observe a legitimate verifier GET
-		// before the pre-revocation no-progress assertions finish.
-		const permitCanonicalRead = Promise.withResolvers<void>();
-		const realFetchSnapshot = client.fetchSnapshot.bind(client);
-		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
-			await permitCanonicalRead.promise;
-			return realFetchSnapshot(options);
-		});
 		remote = new RemoteAuthCredentialStore({
 			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 150,
-			onSnapshot: () => {
-				fullSnapshotsObserved += 1;
-			},
+			onSnapshot: snapshot => observedIds.push(snapshot.credentials.map(entry => entry.id)),
 		});
-		try {
-			await connected.promise;
-			await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === additional.id));
-			expect(remote.snapshot.credentials.map(entry => entry.id)).toContain(additional.id);
-			// Initial and replayed full frames are unchanged. Entry events do not
-			// invoke onSnapshot: the first authoritative callback must follow revocation.
-			expect(fullSnapshotsObserved).toBe(0);
-			await waitUntil(() => replayedFrames >= 5);
-			expect(storage!.disableCredentialById(original.id, "synthetic peer revocation behind replay")).toBe(true);
-			permitCanonicalRead.resolve();
-			// Only the production idle verifier can discover the canonical broker
-			// state; no explicit refreshSnapshot() or fresh SSE event is allowed.
-			await waitUntil(() => remote!.snapshot.credentials.length === 0);
-			expect(remote.listAuthCredentials()).toEqual([]);
-			const canonical = await peer.fetchSnapshot();
-			if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
-			expect(canonical.snapshot.credentials).toEqual([]);
-			// Only the idle verifier can apply a fresh full snapshot; the fake relay
-			// never sends a revocation or a replacement full-snapshot SSE frame.
-			expect(fullSnapshotsObserved).toBeGreaterThanOrEqual(1);
-			// Stale entry replays must not resurrect the revoked credential.
-			const framesAfterReconciliation = replayedFrames;
-			await waitUntil(() => replayedFrames >= framesAfterReconciliation + 5);
-			expect(remote.snapshot.credentials).toEqual([]);
-			expect(remote.listAuthCredentials()).toEqual([]);
-		} finally {
-			// Also release a pending verifier when an earlier assertion throws.
-			permitCanonicalRead.resolve();
-		}
+		// The invented entry makes the first transport untrusted and triggers
+		// an immediate canonical GET and reconnection, not selection of it.
+		await waitUntil(() => connections >= 2 && canonicalGets >= 1, 4_000);
+		expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([original.id]);
+		expect(observedIds.every(ids => !ids.includes(invented.id))).toBe(true);
+		await waitUntil(() => replayedFrames >= 5, 4_000);
+		const getsBeforeRevoke = canonicalGets;
+		expect(storage!.disableCredentialById(original.id, "synthetic peer revoke behind replay")).toBe(true);
+		// No real revocation SSE is sent. The unchanged-frame loop cannot starve
+		// the production monotonic canonical GET watchdog.
+		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+		expect(canonicalGets).toBeGreaterThan(getsBeforeRevoke);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		expect(observedIds.every(ids => !ids.includes(invented.id))).toBe(true);
+		const canonical = await peer.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected broker truth");
+		expect(canonical.snapshot.credentials).toEqual([]);
 	});
-
-
 
 	test("a post-first-frame SSE cannot restore revoked credentials or add unverified grants", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
