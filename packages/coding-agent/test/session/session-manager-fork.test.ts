@@ -2897,6 +2897,27 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
           await symlinkPeer.close();
         }
 
+        // A same-path regular file can belong to a different session. Rebinding
+        // to its inode would splice this peer's message into unrelated history.
+        const foreignSessionPeer = new FileSessionStorage().openWriter(sourceFile);
+        const foreignSessionParked = sourceFile + ".foreign-session-parked";
+        const unrelatedJournal = `${JSON.stringify({
+          type: "session", version: 3, id: "synthetic-unrelated-session",
+          timestamp: new Date().toISOString(), cwd: temp.path(),
+        })}\n`;
+        await fs.rename(sourceFile, foreignSessionParked);
+        try {
+          await fs.writeFile(sourceFile, unrelatedJournal);
+          await expect(foreignSessionPeer.append("MUST NOT APPEND TO FOREIGN SESSION\\n"))
+            .rejects.toThrow(/session|identity|header/i);
+          expect(await fs.readFile(sourceFile, "utf8")).toBe(unrelatedJournal);
+          expect(await fs.readFile(foreignSessionParked, "utf8")).toContain("Original journal keeps artifact://0");
+        } finally {
+          await fs.rm(sourceFile, { force: true });
+          await fs.rename(foreignSessionParked, sourceFile);
+          await foreignSessionPeer.close();
+        }
+
         // The same writer must fail closed if a peer removes the active path.
         // In particular, O_APPEND must not recreate an empty replacement.
         const parked = sourceFile + ".synthetic-parked";
