@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Retire stale SSE transports after broker-acknowledged credential uploads, suspect refreshes and AuthStorage refresh updates so queued frames cannot roll back accepted credentials ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Fence out-of-order broker SSE credential mutations behind higher-generation unchanged frames without resetting the canonical freshness deadline or blocking a new broker incarnation on reconnect ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Ignore unchanged broker SSE entries and full snapshots and removal events for already-absent IDs even when a stale relay advertises increasing generations, so no-progress frames cannot postpone canonical peer-revocation verification ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Retire an old auth-broker SSE transport after an authoritative GET adds a new grant, preventing queued stale removal of that newly admitted credential ([#602](https://github.com/Wladefant/veyyon/issues/602)).

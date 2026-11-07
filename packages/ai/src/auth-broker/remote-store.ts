@@ -1035,8 +1035,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	updateAuthCredential(id: number, credential: AuthCredential): void {
 		for (const entry of this.#snapshot.credentials) {
 			if (entry.id !== id) continue;
+			const credentialStateChanged = !isDeepStrictEqual(entry.credential, credential);
 			entry.credential = credential as typeof entry.credential;
 			this.#appliedSnapshotRevision += 1;
+			// AuthStorage calls this after a broker refresh; its acknowledgment
+			// outranks old SSE frames without transferring refresh ownership.
+			if (credentialStateChanged) this.#activeSnapshotStreamAbort?.abort();
 			return;
 		}
 	}
@@ -1262,22 +1266,36 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		);
 		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
 		const incoming = entries.map(entry => credentialEntryWithBlocks(entry, existingBlocks.get(entry.id)));
+		const priorProviderById = new Map(
+			this.#snapshot.credentials.filter(entry => entry.provider === provider).map(entry => [entry.id, entry] as const),
+		);
+		const credentialStateChanged = priorProviderById.size !== incoming.length || incoming.some(entry => {
+			const prior = priorProviderById.get(entry.id);
+			return !prior || !isDeepStrictEqual(prior.credential, entry.credential);
+		});
 		this.#snapshot = { ...this.#snapshot, credentials: others.concat(incoming) };
 		this.#appliedSnapshotRevision += 1;
+		// A broker-acknowledged upload outranks already queued frames on the old
+		// SSE transport, even when the remote relay advertises a higher generation.
+		if (credentialStateChanged) this.#activeSnapshotStreamAbort?.abort();
 	}
 	#applyCredentialEntry(entry: AuthCredentialSnapshotEntry): void {
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
-		const existingBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
-		const incoming = credentialEntryWithBlocks(entry, existingBlocks);
+		const previous = index === -1 ? undefined : this.#snapshot.credentials[index];
+		const incoming = credentialEntryWithBlocks(entry, previous?.blocks);
+		const credentialStateChanged = !previous ||
+			previous.provider !== entry.provider || !isDeepStrictEqual(previous.credential, entry.credential);
 		if (index === -1) {
 			this.#snapshot = { ...this.#snapshot, credentials: this.#snapshot.credentials.concat([incoming]) };
 			this.#appliedSnapshotRevision += 1;
+			if (credentialStateChanged) this.#activeSnapshotStreamAbort?.abort();
 			return;
 		}
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = incoming;
 		this.#snapshot = { ...this.#snapshot, credentials };
 		this.#appliedSnapshotRevision += 1;
+		if (credentialStateChanged) this.#activeSnapshotStreamAbort?.abort();
 	}
 
 	#removeCredentialById(id: number): void {

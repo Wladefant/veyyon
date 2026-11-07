@@ -1071,6 +1071,113 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	});
 
 
+
+	// Direct acknowledged writes are as authoritative as a canonical GET.
+	// Exercise only synthetic rows and the disposable broker in this module.
+	for (const mode of ["upload", "suspect-refresh", "storage-mirror"] as const) {
+		test("acknowledged " + mode + " change fences stale queued SSE and retains fresh-stream revocation", async () => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const peer = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await peer.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+			const original = initial.snapshot.credentials[0]!;
+			if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth entry");
+			const oldReady = Promise.withResolvers<void>();
+			const releaseOld = Promise.withResolvers<void>();
+			const oldFinished = Promise.withResolvers<void>();
+			const freshReady = Promise.withResolvers<void>();
+			const allowFreshRemoval = Promise.withResolvers<void>();
+			let oldSignal: AbortSignal | undefined;
+			let affectedId = original.id;
+			let connections = 0;
+			let maskingGets = 0;
+			spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+				maskingGets += 1;
+				throw new Error("unexpected masking GET");
+			});
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+				if (connections++ === 0) {
+					oldSignal = opts.signal;
+					yield { kind: "snapshot" as const, ...initial.snapshot };
+					oldReady.resolve();
+					try {
+						await releaseOld.promise;
+						if (mode === "upload") {
+							yield {
+								kind: "removed" as const, id: affectedId, generation: initial.generation + 50,
+								serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+							};
+						} else {
+							yield {
+								kind: "entry" as const, entry: original, generation: initial.generation + 50,
+								serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+							};
+						}
+					} finally {
+						oldFinished.resolve();
+					}
+					return;
+				}
+				const current = await peer.fetchSnapshot();
+				if (current.status !== 200) throw new Error("expected fresh broker snapshot");
+				yield { kind: "snapshot" as const, ...current.snapshot };
+				freshReady.resolve();
+				await allowFreshRemoval.promise;
+				if (opts.signal?.aborted) return;
+				const revoked = await peer.fetchSnapshot();
+				if (revoked.status !== 200) throw new Error("expected revoked broker snapshot");
+				yield {
+					kind: "removed" as const, id: affectedId, generation: revoked.generation,
+					serverNowMs: revoked.snapshot.serverNowMs, refresher: revoked.snapshot.refresher,
+				};
+				await untilAborted(opts.signal);
+			});
+			remote = new RemoteAuthCredentialStore({
+				client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+			});
+			try {
+				await oldReady.promise;
+				if (mode === "upload") {
+					const rows = await remote.upsertAuthCredentialRemote(
+						"anthropic", mintOAuthCredential("retired", Date.now() + 120_000),
+					);
+					const added = rows.find(row => row.credential.type === "oauth" && row.credential.access === "access-retired");
+					if (!added) throw new Error("expected accepted synthetic broker upload");
+					affectedId = added.id;
+				} else {
+					store!.updateAuthCredential(original.id, mintOAuthCredential("retired", Date.now() + 120_000));
+					await storage!.reload();
+					const reply = await peer.fetchSnapshot();
+					if (reply.status !== 200) throw new Error("expected broker refreshed state");
+					const updated = reply.snapshot.credentials.find(row => row.id === original.id);
+					if (!updated) throw new Error("expected synthetic refreshed row");
+					if (mode === "suspect-refresh") {
+						spyOn(client, "refreshCredential").mockResolvedValue({ entry: updated });
+						await remote.markCredentialSuspect(original.id);
+					} else {
+						remote.updateAuthCredential(original.id, updated.credential);
+					}
+				}
+				expect(oldSignal?.aborted).toBe(true);
+				releaseOld.resolve();
+				await oldFinished.promise;
+				await freshReady.promise;
+				expect(remote.snapshot.credentials.find(row => row.id === affectedId)?.credential).toMatchObject({
+					type: "oauth", access: "access-retired", refresh: REMOTE_REFRESH_SENTINEL,
+				});
+				expect(maskingGets).toBe(0);
+				expect(connections).toBeGreaterThanOrEqual(2);
+				expect((await peer.disableCredential(affectedId, "synthetic fresh-stream revoke")).ok).toBe(true);
+				allowFreshRemoval.resolve();
+				await waitUntil(() => !remote!.snapshot.credentials.some(row => row.id === affectedId), 4_000);
+				expect(remote.snapshot.credentials.map(row => row.id)).toEqual(mode === "upload" ? [original.id] : []);
+			} finally {
+				releaseOld.resolve();
+				allowFreshRemoval.resolve();
+			}
+		});
+	}
+
 	test("canonical same-ID credential rotation retires a stale SSE transport", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
