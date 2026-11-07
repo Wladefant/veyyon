@@ -2962,11 +2962,13 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (otherId === undefined) throw new Error("expected second credential");
 			unrelatedFrame.resolve(brokerAfterPeer.snapshot);
 			await waitUntil(() => remote!.snapshot.credentials.some(entry => entry.id === otherId));
-			// The old GET is now obsolete because an unrelated SSE entry changed
-			// the global revision. A fresh GET must still reconcile A's failed POST.
+			// The old GET is now obsolete because the new SSE entry caused
+			// canonical verification and advanced the applied revision. The
+			// failed block POST still requires reconciliation, which may need
+			// another GET after that stream-verification read.
 			releaseFirstRead.resolve();
 			await waitUntil(() =>
-				fullReads === 2 &&
+				fullReads >= 2 &&
 				remote!.getCredentialBlock(id, "anthropic", "credential") === undefined,
 			);
 			expect(remote.snapshot.credentials.map(entry => entry.id).sort((a, b) => a - b))
