@@ -91,7 +91,7 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean };
 
-function hasDuplicateTopLevelKeys(raw: string): boolean {
+function duplicateTopLevelKey(raw: string): string | undefined {
 	const keys = new Set<string>();
 	let depth = 0;
 	for (let i = 0; i < raw.length; ) {
@@ -110,7 +110,7 @@ function hasDuplicateTopLevelKeys(raw: string): boolean {
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
 					const key = JSON.parse(raw.slice(start, i)) as string;
-					if (keys.has(key)) return true;
+					if (keys.has(key)) return key;
 					keys.add(key);
 				}
 			}
@@ -120,28 +120,52 @@ function hasDuplicateTopLevelKeys(raw: string): boolean {
 		else if (char === "}") depth--;
 		i++;
 	}
-	return false;
+	return undefined;
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	try {
-		if (hasDuplicateTopLevelKeys(raw)) return { kind: "invalid", invalidIdentity: false };
+		const duplicate = duplicateTopLevelKey(raw);
+		if (duplicate !== undefined) {
+			// Duplicate identity members are never safe to ignore, even in a
+			// sibling. A repeated session header is an identity boundary even
+			// when its duplicated member is otherwise unrelated metadata.
+			let isSessionHeader = false;
+			try {
+				const parsed: unknown = JSON.parse(raw);
+				isSessionHeader = !!parsed && typeof parsed === "object" &&
+					!Array.isArray(parsed) && (parsed as StoredEntryShape).type === "session";
+			} catch {
+				// The malformed record is handled below as unreadable.
+			}
+			if (!state.headerSeen || isSessionHeader ||
+				duplicate === "type" || duplicate === "id" || duplicate === "parentId") {
+				state.invalidIdentity = true;
+			}
+			return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+		}
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		if (!state.headerSeen) state.invalidIdentity = true;
+		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
 	}
 	let value: unknown;
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		if (!state.headerSeen) state.invalidIdentity = true;
+		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
 	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "invalid", invalidIdentity: false };
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		if (!state.headerSeen) state.invalidIdentity = true;
+		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+	}
 	const entry = value as StoredEntryShape;
 	if (entry.type === "session") {
 		if (state.headerSeen || state.entrySeen) {
 			state.invalidIdentity = true;
 		} else if (typeof entry.id !== "string") {
-			return { kind: "invalid", invalidIdentity: false };
+			state.invalidIdentity = true;
+			return { kind: "invalid", invalidIdentity: true };
 		} else if (!entry.id.trim()) {
 			state.invalidIdentity = true;
 		} else {
