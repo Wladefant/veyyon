@@ -113,6 +113,8 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 	let topLevelType: string | undefined;
 	let claimedId: string | undefined;
 	let depth = 0;
+	// JSON array string elements are never root-level object member names.
+	let arrayDepth = 0;
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
 		if (char === '"') {
@@ -124,7 +126,7 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 				}
 				if (raw[i++] === '"') break;
 			}
-			if (depth === 1) {
+			if (depth === 1 && arrayDepth === 0) {
 				let next = i;
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
@@ -171,6 +173,8 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 		}
 		if (char === "{") depth++;
 		else if (char === "}") depth--;
+		else if (char === "[") arrayDepth++;
+		else if (char === "]") arrayDepth = Math.max(0, arrayDepth - 1);
 		i++;
 	}
 	// A malformed JSON object can still claim an entry ID even when full parsing fails.
