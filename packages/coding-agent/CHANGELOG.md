@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Exact stored-history reads and searches now reject ambiguous session headers and duplicate identity fields, without discarding an explicitly selected healthy branch for unrelated malformed metadata.
+
 ## [1.8.5] - 2026-11-06
 
 ### Fixed
