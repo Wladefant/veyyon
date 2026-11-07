@@ -547,9 +547,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		);
 		if (result.status === 200) {
 			// A conditional 200 with no durable progress is no fresher than a 304:
-			// a broken relay may replay only different timestamps/countdowns forever.
+			// a stale relay may replay increasing generations as well as timestamps/countdowns forever.
 			// Unconditional canonical GETs are authoritative even at a reused generation.
-			if (needsCanonicalVerification || !this.#isNoProgressSnapshot(result.snapshot)) {
+			if (needsCanonicalVerification || !this.#isNoProgressSnapshot(result.snapshot, true)) {
 				this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 				return;
 			}
@@ -1166,15 +1166,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			// credential roster. Report durable progress only if the 200 was
 			// accepted by the existing local-revision fence.
 			const changed = !this.#isNoProgressSnapshot(result.snapshot, true);
-			// Volatile-only conditional 200s are not broker progress. Repeated
-			// on-demand waits must not reset the idle SSE canonical GET deadline
-			// or fence an in-flight canonical read behind a stale relay.
-			if (!changed && result.generation === this.#generation) {
-				return this.#generation !== previousGeneration;
-			}
-			if (this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest) && changed) {
-				return true;
-			}
+			// Neither volatile-only changes nor an unverified numerical generation
+			// increase is durable broker progress. A stale conditional relay must
+			// not fence the idle SSE canonical GET behind repeated on-demand waits.
+			if (!changed) return this.#generation !== previousGeneration;
+			if (this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)) return true;
 		} else {
 			// A restarted broker may reuse the worker's numeric generation:
 			// its conditional wait can return 304 despite different credentials.

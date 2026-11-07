@@ -2296,61 +2296,65 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 	}
 
-	test("unchanged conditional 200 replies cannot postpone broker revocation behind volatile timestamps", async () => {
-		const client = new AuthBrokerClient({ url: handle!.url, token });
-		const initial = await client.fetchSnapshot();
-		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
-		const id = initial.snapshot.credentials[0]!.id;
-		const originalFetch = client.fetchSnapshot.bind(client);
-		const firstConditional = Promise.withResolvers<void>();
-		let conditionalRequests = 0;
-		let canonicalRequests = 0;
-		let prematureConditionalPolls = 0;
-		let appliedSnapshots = 0;
-		// A faulty relay replays old full HTTP 200 responses rather than proper 304s.
-		// Only volatile generation-independent timestamps/countdowns change.
-		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
-			if (opts?.ifGenerationGt !== undefined) {
-				conditionalRequests += 1;
-				if (conditionalRequests > 1 && canonicalRequests === 0) prematureConditionalPolls += 1;
-				firstConditional.resolve();
-				await scheduler.wait(5, { signal: opts.signal });
-				const replay = structuredClone(initial.snapshot);
-				replay.generatedAt += conditionalRequests * 1_000;
-				replay.serverNowMs += conditionalRequests * 1_000;
-				replay.refresher.nextSweepInMs += conditionalRequests * 1_000;
-				for (const entry of replay.credentials) {
-					if (entry.credential.type === "oauth") entry.rotatesInMs = conditionalRequests * 1_000;
+	test.each(["stable", "generation-drift"] as const)(
+		"unchanged conditional 200 replies cannot postpone broker revocation behind volatile timestamps (%s)",
+		async variant => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+			const id = initial.snapshot.credentials[0]!.id;
+			const originalFetch = client.fetchSnapshot.bind(client);
+			const firstConditional = Promise.withResolvers<void>();
+			let conditionalRequests = 0;
+			let canonicalRequests = 0;
+			let prematureConditionalPolls = 0;
+			let appliedSnapshots = 0;
+			// A faulty relay replays old full HTTP 200 responses rather than proper 304s.
+			// Only volatile generation-independent timestamps/countdowns change.
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				if (opts?.ifGenerationGt !== undefined) {
+					conditionalRequests += 1;
+					if (conditionalRequests > 1 && canonicalRequests === 0) prematureConditionalPolls += 1;
+					firstConditional.resolve();
+					await scheduler.wait(5, { signal: opts.signal });
+					const replay = structuredClone(initial.snapshot);
+					replay.generatedAt += conditionalRequests * 1_000;
+					replay.serverNowMs += conditionalRequests * 1_000;
+					replay.refresher.nextSweepInMs += conditionalRequests * 1_000;
+					for (const entry of replay.credentials) {
+						if (entry.credential.type === "oauth") entry.rotatesInMs = conditionalRequests * 1_000;
+					}
+					const generation = variant === "generation-drift" ? replay.generation + conditionalRequests : replay.generation;
+					return { status: 200 as const, generation, snapshot: { ...replay, generation } };
 				}
-				return { status: 200 as const, generation: replay.generation, snapshot: replay };
-			}
-			canonicalRequests += 1;
-			const truth = await originalFetch(opts);
-			if (truth.status !== 200) throw new Error("expected unconditional broker snapshot");
-			return {
-				status: 200 as const,
-				generation: initial.snapshot.generation,
-				snapshot: { ...truth.snapshot, generation: initial.snapshot.generation },
-			};
-		});
-		remote = new RemoteAuthCredentialStore({
-			client,
-			initialSnapshot: initial.snapshot,
-			streamSnapshots: false,
-			snapshotStreamVerifyIntervalMs: 350,
-			onSnapshot: () => { appliedSnapshots += 1; },
-		});
-		await firstConditional.promise;
-		expect(conditionalRequests).toBeGreaterThan(0);
-		expect(canonicalRequests).toBe(0);
-		expect(storage!.disableCredentialById(id, "synthetic peer revoke hidden by stale 200")).toBe(true);
-		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
-		expect(prematureConditionalPolls).toBe(0);
-		expect(canonicalRequests).toBeGreaterThan(0);
-		expect(appliedSnapshots).toBe(1); // repeated stale 200s are not progress
-		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
-		expect(remote.listAuthCredentials()).toEqual([]);
-	});
+				canonicalRequests += 1;
+				const truth = await originalFetch(opts);
+				if (truth.status !== 200) throw new Error("expected unconditional broker snapshot");
+				return {
+					status: 200 as const,
+					generation: initial.snapshot.generation,
+					snapshot: { ...truth.snapshot, generation: initial.snapshot.generation },
+				};
+			});
+			remote = new RemoteAuthCredentialStore({
+				client,
+				initialSnapshot: initial.snapshot,
+				streamSnapshots: false,
+				snapshotStreamVerifyIntervalMs: 350,
+				onSnapshot: () => { appliedSnapshots += 1; },
+			});
+			await firstConditional.promise;
+			expect(conditionalRequests).toBeGreaterThan(0);
+			expect(canonicalRequests).toBe(0);
+			expect(storage!.disableCredentialById(id, "synthetic peer revoke hidden by stale 200")).toBe(true);
+			await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+			expect(prematureConditionalPolls).toBe(0);
+			expect(canonicalRequests).toBeGreaterThan(0);
+			expect(appliedSnapshots).toBe(1); // repeated stale 200s are not progress
+			expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
+			expect(remote.listAuthCredentials()).toEqual([]);
+		},
+	);
 
 	test("genuinely changed same-generation conditional 200 snapshot applies immediately", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
@@ -2446,63 +2450,67 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(brokerTruth.snapshot.credentials).toEqual([]);
 	});
 
-	test("unchanged on-demand 200 replay cannot postpone silent SSE canonical revocation verification", async () => {
-		const client = new AuthBrokerClient({ url: handle!.url, token });
-		const peer = new AuthBrokerClient({ url: handle!.url, token });
-		const initial = await peer.fetchSnapshot();
-		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
-		const id = initial.snapshot.credentials[0]!.id;
-		const streamReady = Promise.withResolvers<void>();
-		const originalFetch = client.fetchSnapshot.bind(client);
-		let conditionalWaits = 0;
-		let canonicalReads = 0;
-		let callbacks = 0;
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
-			yield { kind: "snapshot" as const, ...initial.snapshot };
-			streamReady.resolve();
-			await untilAborted(opts.signal);
-		});
-		// Only the on-demand conditional path is a stale relay; unconditional
-		// requests still reach the real disposable broker.
-		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
-			if (opts?.waitMs === 25) {
-				conditionalWaits += 1;
-				await Bun.sleep(5);
-				const replay = structuredClone(initial.snapshot);
-				replay.generatedAt += conditionalWaits * 1_000;
-				replay.serverNowMs += conditionalWaits * 1_000;
-				replay.refresher.nextSweepInMs += conditionalWaits * 1_000;
-				for (const entry of replay.credentials) {
-					if (entry.credential.type === "oauth") entry.rotatesInMs = conditionalWaits * 1_000;
+	test.each(["stable", "generation-drift"] as const)(
+		"unchanged on-demand 200 replay cannot postpone silent SSE canonical revocation verification (%s)",
+		async variant => {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const peer = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await peer.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+			const id = initial.snapshot.credentials[0]!.id;
+			const streamReady = Promise.withResolvers<void>();
+			const originalFetch = client.fetchSnapshot.bind(client);
+			let conditionalWaits = 0;
+			let canonicalReads = 0;
+			let callbacks = 0;
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				streamReady.resolve();
+				await untilAborted(opts.signal);
+			});
+			// Only the on-demand conditional path is a stale relay; unconditional
+			// requests still reach the real disposable broker.
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				if (opts?.waitMs === 25) {
+					conditionalWaits += 1;
+					await Bun.sleep(5);
+					const replay = structuredClone(initial.snapshot);
+					replay.generatedAt += conditionalWaits * 1_000;
+					replay.serverNowMs += conditionalWaits * 1_000;
+					replay.refresher.nextSweepInMs += conditionalWaits * 1_000;
+					for (const entry of replay.credentials) {
+						if (entry.credential.type === "oauth") entry.rotatesInMs = conditionalWaits * 1_000;
+					}
+					const generation = variant === "generation-drift" ? replay.generation + conditionalWaits : replay.generation;
+					return { status: 200 as const, generation, snapshot: { ...replay, generation } };
 				}
-				return { status: 200 as const, generation: replay.generation, snapshot: replay };
+				if (opts?.ifGenerationGt !== undefined) throw new Error("unexpected background conditional poll");
+				canonicalReads += 1;
+				return originalFetch(opts);
+			});
+			remote = new RemoteAuthCredentialStore({
+				client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 100,
+				onSnapshot: () => { callbacks += 1; },
+			});
+			await streamReady.promise;
+			expect(storage!.disableCredentialById(id, "synthetic peer revoke during on-demand stale 200")).toBe(true);
+			// Before the fix, each unchanged 200 resets the watchdog's freshness
+			// clock; the 600ms storm ends without a canonical GET.
+			const start = performance.now();
+			while (performance.now() - start < 600 && canonicalReads === 0) {
+				await remote.waitForFreshSnapshot(25);
+				await Bun.sleep(5);
 			}
-			if (opts?.ifGenerationGt !== undefined) throw new Error("unexpected background conditional poll");
-			canonicalReads += 1;
-			return originalFetch(opts);
-		});
-		remote = new RemoteAuthCredentialStore({
-			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 100,
-			onSnapshot: () => { callbacks += 1; },
-		});
-		await streamReady.promise;
-		expect(storage!.disableCredentialById(id, "synthetic peer revoke during on-demand stale 200")).toBe(true);
-		// Before the fix, each unchanged 200 resets the watchdog's freshness
-		// clock; the 600ms storm ends without a canonical GET.
-		const start = performance.now();
-		while (performance.now() - start < 600 && canonicalReads === 0) {
-			await remote.waitForFreshSnapshot(25);
-			await Bun.sleep(5);
-		}
-		expect(conditionalWaits).toBeGreaterThan(3);
-		expect(canonicalReads).toBeGreaterThan(0);
-		await waitUntil(() => remote!.snapshot.credentials.length === 0);
-		expect(remote.listAuthCredentials()).toEqual([]);
-		expect(callbacks).toBe(1);
-		const truth = await peer.fetchSnapshot();
-		if (truth.status !== 200) throw new Error("expected canonical broker truth");
-		expect(truth.snapshot.credentials).toEqual([]);
-	});
+			expect(conditionalWaits).toBeGreaterThan(3);
+			expect(canonicalReads).toBeGreaterThan(0);
+			await waitUntil(() => remote!.snapshot.credentials.length === 0);
+			expect(remote.listAuthCredentials()).toEqual([]);
+			expect(callbacks).toBe(1);
+			const truth = await peer.fetchSnapshot();
+			if (truth.status !== 200) throw new Error("expected canonical broker truth");
+			expect(truth.snapshot.credentials).toEqual([]);
+		},
+	);
 
 	test("on-demand broker wait reports same-generation 200 progress and verifies 304 against canonical credentials", async () => {
 		// A restarted broker can reuse the worker's generation and return an
