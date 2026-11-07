@@ -1162,7 +1162,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			signal: opts.signal,
 		});
 		if (result.status === 200) {
-			this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+			// A broker restart may reuse the generation even for a changed
+			// credential roster. Report durable progress only if the 200 was
+			// accepted by the existing local-revision fence.
+			const changed = !this.#isNoProgressSnapshot(result.snapshot, true);
+			if (this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest) && changed) {
+				return true;
+			}
 		} else {
 			// A restarted broker may reuse the worker's numeric generation:
 			// its conditional wait can return 304 despite different credentials.

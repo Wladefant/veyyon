@@ -2446,10 +2446,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(brokerTruth.snapshot.credentials).toEqual([]);
 	});
 
-	test("on-demand broker wait verifies an equal-generation 304 against canonical credentials", async () => {
-		// A restarted broker can reuse the worker's old generation and return 304
-		// to its explicit near-expiry wait even though the credential roster changed.
-		for (const variant of ["unchanged", "revoked", "invalid-304"] as const) {
+	test("on-demand broker wait reports same-generation 200 progress and verifies 304 against canonical credentials", async () => {
+		// A restarted broker can reuse the worker's generation and return an
+		// equal-generation 200 or 304 even though the credential roster changed.
+		for (const variant of ["unchanged", "revoked", "invalid-304", "changed-200", "unchanged-200"] as const) {
 			const client = new AuthBrokerClient({ url: handle!.url, token });
 			const initial = await client.fetchSnapshot();
 			if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
@@ -2467,6 +2467,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				if (opts?.waitMs === 25) {
 					conditionalWaits += 1;
 					expect(opts.ifGenerationGt).toBe(oldGeneration);
+					if (variant === "changed-200" || variant === "unchanged-200") {
+						// Use real disposable-broker state; simulate only a process-local
+						// generation collision on its conditional HTTP response.
+						const truth = await originalFetch({ signal: opts.signal });
+						if (truth.status !== 200) throw new Error("expected broker truth for conditional 200");
+						return {
+							status: 200 as const, generation: oldGeneration,
+							snapshot: { ...truth.snapshot, generation: oldGeneration },
+						};
+					}
 					return { status: 304 as const, generation: oldGeneration };
 				}
 				canonicalChecks += 1;
@@ -2486,7 +2496,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				onSnapshot: snapshot => { callbacks.push(snapshot.credentials.length); },
 			});
 			try {
-				if (variant === "revoked") {
+				if (variant === "revoked" || variant === "changed-200") {
 					expect(storage!.disableCredentialById(id, "synthetic peer revoke at reused generation")).toBe(true);
 				}
 				if (variant === "invalid-304") {
@@ -2498,13 +2508,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
 					expect(callbacks).toEqual([]);
 				} else {
+					const changed = variant === "revoked" || variant === "changed-200";
 					const progressed = await remote.waitForFreshSnapshot(25);
-					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual(variant === "revoked" ? [] : [id]);
-					expect(progressed).toBe(variant === "revoked");
-					expect(callbacks).toEqual([variant === "revoked" ? 0 : 1]);
+					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual(changed ? [] : [id]);
+					expect(progressed).toBe(changed);
+					expect(callbacks).toEqual([changed ? 0 : 1]);
 				}
 				expect(conditionalWaits).toBe(1);
-				expect(canonicalChecks).toBe(1); // bounded: one extra GET, no retry storm
+				expect(canonicalChecks).toBe(variant.endsWith("-200") ? 0 : 1); // no extra GET for HTTP 200
 				expect(remote.snapshot.generation).toBe(oldGeneration);
 			} finally {
 				remote.close();
