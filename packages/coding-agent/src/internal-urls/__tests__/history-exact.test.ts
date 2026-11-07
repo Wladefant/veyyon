@@ -1139,6 +1139,58 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("refuses an unreadable possible session header before a later valid header", async () => {
+		const dir = TempDir.createSync("@veyyon-history-unreadable-first-header-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = Buffer.from(JSON.stringify({ type: "session", id: "s-healthy" }) + "\n");
+			const root = Buffer.from(JSON.stringify({
+				type: "message", id: "root", parentId: null, message: "needle healthy",
+			}) + "\n");
+			// Both rows are emitted as undefined by the bounded, fatal-UTF-8
+			// record reader, not merely rejected by whole-record JSON.parse.
+			const unreadableFirstRows = [
+				Buffer.concat([
+					Buffer.from('{"type":"session","id":"'), Buffer.from([0xff]), Buffer.from('"}\n'),
+				]),
+				Buffer.concat([
+					Buffer.from('{"type":"session","id":"'), Buffer.alloc(8 * 1024 * 1024 + 1, 0x78),
+					Buffer.from('"}\n'),
+				]),
+			];
+			for (const unreadable of unreadableFirstRows) {
+				// Identity cannot be certified by discarding a possible first header.
+				await fs.writeFile(file, Buffer.concat([unreadable, header, root]));
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+
+				// Post-header damaged siblings remain compatible with an explicit,
+				// completely readable archived branch; implicit tips stay uncertain.
+				await fs.writeFile(file, Buffer.concat([header, root, unreadable]));
+				const archived = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(archived.status).toBe("ok");
+				expect(archived.fragment).toContain("needle healthy");
+				const archivedSearch = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(archivedSearch.status).toBe("partial");
+				expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["root"]);
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("withholds blank or oversized stored record types from exact reads and search", async () => {
 		const dir = TempDir.createSync("@veyyon-history-record-type-bound-");
 		try {
