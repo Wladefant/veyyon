@@ -91,8 +91,9 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean };
 
-function duplicateTopLevelKey(raw: string): string | undefined {
+function duplicateTopLevelKeys(raw: string): ReadonlySet<string> {
 	const keys = new Set<string>();
+	const duplicates = new Set<string>();
 	let depth = 0;
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
@@ -110,8 +111,8 @@ function duplicateTopLevelKey(raw: string): string | undefined {
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
 					const key = JSON.parse(raw.slice(start, i)) as string;
-					if (keys.has(key)) return key;
-					keys.add(key);
+					if (keys.has(key)) duplicates.add(key);
+					else keys.add(key);
 				}
 			}
 			continue;
@@ -120,13 +121,13 @@ function duplicateTopLevelKey(raw: string): string | undefined {
 		else if (char === "}") depth--;
 		i++;
 	}
-	return undefined;
+	return duplicates;
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	try {
-		const duplicate = duplicateTopLevelKey(raw);
-		if (duplicate !== undefined) {
+		const duplicates = duplicateTopLevelKeys(raw);
+		if (duplicates.size > 0) {
 			// Duplicate identity members are never safe to ignore, even in a
 			// sibling. A repeated session header is an identity boundary even
 			// when its duplicated member is otherwise unrelated metadata.
@@ -139,7 +140,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 				// The malformed record is handled below as unreadable.
 			}
 			if (!state.headerSeen || isSessionHeader ||
-				duplicate === "type" || duplicate === "id" || duplicate === "parentId") {
+				duplicates.has("type") || duplicates.has("id") || duplicates.has("parentId")) {
 				state.invalidIdentity = true;
 			}
 			return { kind: "invalid", invalidIdentity: state.invalidIdentity };
