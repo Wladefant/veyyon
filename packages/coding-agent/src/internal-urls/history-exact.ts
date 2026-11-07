@@ -17,6 +17,8 @@ const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 // Record types are returned as metadata, not as paged raw evidence.
 const MAX_RECORD_TYPE_CHARACTERS = 128;
 const MAX_STORED_SESSION_ID_CHARACTERS = 128;
+// A valid 128-character ASCII entry ID may use six JSON characters per escaped character.
+const MAX_ID_MEMBER_JSON_CHARACTERS = 2 + 6 * 128;
 // Search results must supply IDs that the public history:// entry/leaf grammar can read.
 const ADDRESSABLE_HISTORY_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const MAX_INDEX_ENTRIES = 100_000;
@@ -148,7 +150,7 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 								}
 								if (raw[valueCursor++] === '"') break;
 							}
-							if (valueCursor - valueStart <= 128 && raw[valueCursor - 1] === '"') {
+							if (valueCursor - valueStart <= MAX_ID_MEMBER_JSON_CHARACTERS && raw[valueCursor - 1] === '"') {
 								try {
 									const member = JSON.parse(raw.slice(valueStart, valueCursor)) as unknown;
 									if (typeof member === "string") {
@@ -158,7 +160,7 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 										} else if (ADDRESSABLE_HISTORY_ID.test(member)) claimedId = member;
 									}
 								} catch {
-									// An invalid value is not a recognizable session type.
+									// An invalid string member cannot establish a session boundary or ID claim.
 								}
 							}
 						}
