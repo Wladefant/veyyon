@@ -783,17 +783,24 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			const wire = new TextEncoder().encode(
 				"event: snapshot\n" + "data: " + JSON.stringify(firstFrame) + "\n\n",
 			);
-			const frameDelivered = Promise.withResolvers<void>();
 			const observedAccess: string[] = [];
 			let relayConnections = 0;
+			let realBrokerStreamConnected = false;
 			const transportFetch: typeof fetch = async (input, init) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 				if (new URL(url).pathname === "/v1/snapshot/stream") {
 					relayConnections += 1;
+					if (relayConnections > 1) {
+						const realResponse = await fetch(input, init);
+						realBrokerStreamConnected = realResponse.ok;
+						return realResponse;
+					}
 					const body = new ReadableStream<Uint8Array>({
 						start(controller) {
 							controller.enqueue(wire);
-							frameDelivered.resolve();
+							// EOF forces the real parser/store to finish processing this frame
+							// before any later broker stream may connect.
+							controller.close();
 						},
 					});
 					return new Response(body, {
@@ -816,12 +823,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			});
 			remote = candidate;
 			try {
-				await frameDelivered.promise;
-				// The real SSE parser and store consume the enqueued complete frame;
-				// capture every accepted callback, so a later correcting GET cannot
-				// hide a transient selection of stale credential material.
-				await Bun.sleep(75);
-				expect(relayConnections).toBeGreaterThanOrEqual(1);
+				// An enqueued frame is not necessarily a consumed frame. Wait for
+				// the old stream to reach EOF and the new real-broker stream to
+				// connect; its original callback can no longer be missed even if
+				// fresh broker state subsequently repairs the selected view.
+				await waitUntil(() => realBrokerStreamConnected, 4_000);
+				expect(relayConnections).toBeGreaterThanOrEqual(2);
 				expect(observedAccess).not.toContain(original.credential.access);
 				expect(candidate.snapshot.credentials.find(entry => entry.id === original.id)?.credential)
 					.toMatchObject({ type: "oauth", access: updated.access });
