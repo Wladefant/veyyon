@@ -1363,6 +1363,35 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+	it("rejects malformed JSONL reusing a fully escaped 128-character entry ID", async () => {
+		const dir = TempDir.createSync("@veyyon-history-escaped-id-claim-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const id = "r".repeat(128);
+			const header = JSON.stringify({ type: "session", id: "s-legacy" });
+			const valid = JSON.stringify({ type: "message", id, parentId: null, message: "needle trusted" });
+			for (const claim of ["\\u0072".repeat(128), "\\u0073".repeat(128)]) {
+				const broken = `{"type":"message","id":"${claim}","parentId":null,"note":tru}`;
+				await fs.writeFile(file, [header, valid, broken].join("\\n") + "\\n");
+				const exact = await readStoredHistoryEntry(file, { entryId: id, leafId: id, offset: 0, limit: 256 });
+				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: id, limit: 3 });
+				if (claim === "\\u0072".repeat(128)) {
+					expect(exact.status).toBe("unavailable");
+					expect(exact.fragment).toBeUndefined();
+					expect(search.status).toBe("unavailable");
+					expect(search.matches).toEqual([]);
+				} else {
+					expect(exact.status).toBe("ok");
+					expect(exact.fragment).toContain("needle trusted");
+					expect(search.status).toBe("partial");
+					expect(search.matches.map(match => match.entryId)).toEqual([id]);
+				}
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
 	it("preserves an explicit healthy archive after a malformed nonidentity sibling", async () => {
 		const dir = TempDir.createSync("@veyyon-history-nonidentity-");
 		try {
