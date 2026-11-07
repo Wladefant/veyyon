@@ -1246,38 +1246,68 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
-	test("broker-confirmed disable stays revoked against queued equal or higher-generation SSE frames", async () => {
+	test("broker-confirmed disable retires stale SSE without evicting a surviving credential", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		// An old stream can try to evict a survivor even though the locally
+		// disabled grant itself is protected by its confirmed tombstone.
+		storage!.upsertCredential("anthropic", mintOAuthCredential("survivor", Date.now() + 120_000));
 		const initial = await peer.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected synthetic broker state");
+		expect(initial.snapshot.credentials).toHaveLength(2);
 		const revoked = initial.snapshot.credentials[0]!;
+		const survivor = initial.snapshot.credentials[1]!;
 		const connected = Promise.withResolvers<void>();
-		const releaseOldFrames = Promise.withResolvers<void>();
-		const oldFramesConsumed = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldFinished = Promise.withResolvers<void>();
+		const freshReady = Promise.withResolvers<void>();
+		const allowFreshRemoval = Promise.withResolvers<void>();
+		let oldSignal: AbortSignal | undefined;
+		let connections = 0;
+		let maskingGets = 0;
+		// A canonical GET should not hide a mistaken stale-stream eviction.
+		spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+			maskingGets += 1;
+			throw new Error("unexpected canonical GET after acknowledged disable");
+		});
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
-			yield { kind: "snapshot" as const, ...initial.snapshot };
-			connected.resolve();
-			const releaseIfAborted = () => releaseOldFrames.resolve();
-			opts.signal?.addEventListener("abort", releaseIfAborted, { once: true });
-			try {
-				await releaseOldFrames.promise;
-			} finally {
-				opts.signal?.removeEventListener("abort", releaseIfAborted);
+			if (connections++ === 0) {
+				oldSignal = opts.signal;
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				connected.resolve();
+				const releaseOnAbort = () => releaseOld.resolve();
+				opts.signal?.addEventListener("abort", releaseOnAbort, { once: true });
+				try {
+					await releaseOld.promise;
+					// Emulate an abort-insensitive old relay: allow its queued
+					// payload through so the consumer must enforce abort.
+					yield {
+						kind: "removed" as const, id: survivor.id, generation: initial.generation + 50,
+						serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					};
+					yield {
+						kind: "entry" as const, entry: revoked, generation: initial.generation + 50,
+						serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					};
+					yield { kind: "snapshot" as const, ...initial.snapshot, generation: initial.generation + 50 };
+				} finally {
+					opts.signal?.removeEventListener("abort", releaseOnAbort);
+					oldFinished.resolve();
+				}
+				return;
 			}
+			const current = await peer.fetchSnapshot();
+			if (current.status !== 200) throw new Error("expected new transport broker truth");
+			yield { kind: "snapshot" as const, ...current.snapshot };
+			freshReady.resolve();
+			await allowFreshRemoval.promise;
 			if (opts.signal?.aborted) return;
+			const removed = await peer.fetchSnapshot();
+			if (removed.status !== 200) throw new Error("expected broker revocation");
 			yield {
-				kind: "entry" as const, entry: revoked, generation: initial.snapshot.generation,
-				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+				kind: "removed" as const, id: survivor.id, generation: removed.generation,
+				serverNowMs: removed.snapshot.serverNowMs, refresher: removed.snapshot.refresher,
 			};
-			yield { kind: "snapshot" as const, ...initial.snapshot };
-			// A stale broker incarnation might deliver old rows under larger numbers.
-			yield {
-				kind: "entry" as const, entry: revoked, generation: initial.snapshot.generation + 50,
-				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
-			};
-			yield { kind: "snapshot" as const, ...initial.snapshot, generation: initial.snapshot.generation + 50 };
-			oldFramesConsumed.resolve();
 			await untilAborted(opts.signal);
 		});
 		remote = new RemoteAuthCredentialStore({
@@ -1285,20 +1315,27 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 		try {
 			await connected.promise;
-			// This is the real client-to-disposable-broker confirmed disable
-			// path, not a canonical GET. The old active SSE stream has not
-			// delivered its newer revocation generation yet.
-			expect(await remote.deleteAuthCredentialRemote(revoked.id, "synthetic confirmed disable")).toBe(true);
+			// Use the actual client-to-disposable-broker success path, not GET.
+			expect(await remote.deleteAuthCredentialRemote(revoked.id, "synthetic direct disable")).toBe(true);
+			expect(oldSignal?.aborted).toBe(true);
+			expect(remote.listAuthCredentials().map(row => row.id)).toEqual([survivor.id]);
+			releaseOld.resolve();
+			await oldFinished.promise;
+			await freshReady.promise;
+			expect(remote.snapshot.credentials.map(row => row.id)).toEqual([survivor.id]);
+			expect(maskingGets).toBe(0);
+			expect(connections).toBeGreaterThanOrEqual(2);
+			const afterDisable = await peer.fetchSnapshot();
+			if (afterDisable.status !== 200) throw new Error("expected authoritative survivor");
+			expect(afterDisable.snapshot.credentials.map(row => row.id)).toEqual([survivor.id]);
+			// A genuinely new stream must still accept a later real revocation.
+			expect((await peer.disableCredential(survivor.id, "synthetic fresh-stream revoke")).ok).toBe(true);
+			allowFreshRemoval.resolve();
+			await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
 			expect(remote.listAuthCredentials()).toEqual([]);
-			releaseOldFrames.resolve();
-			await oldFramesConsumed.promise;
-			expect(remote.snapshot.credentials).toEqual([]);
-			expect(remote.listAuthCredentials()).toEqual([]);
-			const canonical = await peer.fetchSnapshot();
-			if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
-			expect(canonical.snapshot.credentials).toEqual([]);
 		} finally {
-			releaseOldFrames.resolve();
+			releaseOld.resolve();
+			allowFreshRemoval.resolve();
 		}
 	});
 

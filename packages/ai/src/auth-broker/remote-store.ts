@@ -1307,6 +1307,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		this.#canonicallyRemovedCredentialIds.add(id);
 		this.#snapshot = { ...this.#snapshot, credentials: next };
 		this.#appliedSnapshotRevision += 1;
+		// A broker-confirmed local disable also changes the canonical roster.
+		// Retire old SSE: its stale removed(B) must not evict a surviving B.
+		this.#activeSnapshotStreamAbort?.abort();
 	}
 
 	#upsertSnapshotBlock(block: StoredCredentialBlock): void {
