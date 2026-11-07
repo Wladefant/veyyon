@@ -3211,8 +3211,8 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
             : revision === "foreign-between-owned"
               ? "Cannot preserve interleaved foreign journal history during failed-fork repair"
               : revision.startsWith("missing-message")
-              ? "Cannot preserve missing previously published session entry"
-              : "Cannot preserve independently modified session journal entry";
+                ? "Cannot preserve missing previously published session entry"
+                : "Cannot preserve independently modified session journal entry";
         expect(causes.some((cause: string) => cause.includes(refusal))).toBe(true);
 
         const observed = await fs.readFile(source, "utf8");
