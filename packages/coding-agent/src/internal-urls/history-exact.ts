@@ -96,9 +96,10 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean };
 
-function duplicateTopLevelKeys(raw: string): ReadonlySet<string> {
+function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; sessionTypeMember: boolean } {
 	const keys = new Set<string>();
 	const duplicates = new Set<string>();
+	let sessionTypeMember = false;
 	let depth = 0;
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
@@ -118,6 +119,27 @@ function duplicateTopLevelKeys(raw: string): ReadonlySet<string> {
 					const key = JSON.parse(raw.slice(start, i)) as string;
 					if (keys.has(key)) duplicates.add(key);
 					else keys.add(key);
+					if (key === "type") {
+						let valueCursor = next + 1;
+						while (/\s/.test(raw[valueCursor] ?? "")) valueCursor++;
+						if (raw[valueCursor] === '"') {
+							const valueStart = valueCursor++;
+							while (valueCursor < raw.length) {
+								if (raw[valueCursor] === "\\") {
+									valueCursor += 2;
+									continue;
+								}
+								if (raw[valueCursor++] === '"') break;
+							}
+							if (valueCursor - valueStart <= 128 && raw[valueCursor - 1] === '"') {
+								try {
+									if (JSON.parse(raw.slice(valueStart, valueCursor)) === "session") sessionTypeMember = true;
+								} catch {
+									// An invalid value is not a recognizable session type.
+								}
+							}
+						}
+					}
 				}
 			}
 			continue;
@@ -126,25 +148,20 @@ function duplicateTopLevelKeys(raw: string): ReadonlySet<string> {
 		else if (char === "}") depth--;
 		i++;
 	}
-	return duplicates;
+	return { duplicates, sessionTypeMember };
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
+	let sessionTypeMember = false;
 	try {
-		const duplicates = duplicateTopLevelKeys(raw);
+		const scanned = scanTopLevelMembers(raw);
+		sessionTypeMember = scanned.sessionTypeMember;
+		const { duplicates } = scanned;
 		if (duplicates.size > 0) {
 			// Duplicate identity members are never safe to ignore, even in a
 			// sibling. A repeated session header is an identity boundary even
 			// when its duplicated member is otherwise unrelated metadata.
-			let isSessionHeader = false;
-			try {
-				const parsed: unknown = JSON.parse(raw);
-				isSessionHeader = !!parsed && typeof parsed === "object" &&
-					!Array.isArray(parsed) && (parsed as StoredEntryShape).type === "session";
-			} catch {
-				// The malformed record is handled below as unreadable.
-			}
-			if (!state.headerSeen || isSessionHeader ||
+			if (!state.headerSeen || sessionTypeMember ||
 				duplicates.has("type") || duplicates.has("id") || duplicates.has("parentId")) {
 				state.invalidIdentity = true;
 			}
@@ -158,11 +175,9 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		// Recognize a producer-shaped, type-leading session header even when
-		// its trailing id or JSON body was truncated. Otherwise an explicitly
-		// selected older branch could claim trustworthy identity past a
-		// corrupted *repeated* session boundary.
-		if (!state.headerSeen || /^\s*\{\s*"type"\s*:\s*"session"\s*(?:,|\})/.test(raw)) {
+		// An unparseable repeated session header still invalidates identity
+		// even when the type member follows other top-level metadata.
+		if (!state.headerSeen || sessionTypeMember) {
 			state.invalidIdentity = true;
 		}
 		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
