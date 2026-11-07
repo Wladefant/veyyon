@@ -14,6 +14,8 @@ import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 const DEFAULT_PAGE_CHARACTERS = 8_000;
 const MAX_PAGE_CHARACTERS = 12_000;
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
+// Record types are returned as metadata, not as paged raw evidence.
+const MAX_RECORD_TYPE_CHARACTERS = 128;
 const MAX_INDEX_ENTRIES = 100_000;
 const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
 // Unlike an isolated malformed line, a hard scan cap leaves unseen IDs behind.
@@ -201,6 +203,8 @@ function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: st
 		typeof entry.id === "string" &&
 		entry.id.trim().length > 0 &&
 		typeof entry.type === "string" &&
+		entry.type.trim().length > 0 &&
+		entry.type.length <= MAX_RECORD_TYPE_CHARACTERS &&
 		(entry.parentId === undefined || entry.parentId === null || typeof entry.parentId === "string")
 	);
 }
