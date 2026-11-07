@@ -1372,7 +1372,7 @@ describe("history exact record lookup", () => {
 			const valid = JSON.stringify({ type: "message", id, parentId: null, message: "needle trusted" });
 			for (const claim of ["\\u0072".repeat(128), "\\u0073".repeat(128)]) {
 				const broken = `{"type":"message","id":"${claim}","parentId":null,"note":tru}`;
-				await fs.writeFile(file, [header, valid, broken].join("\\n") + "\\n");
+				await fs.writeFile(file, [header, valid, broken].join("\n") + "\n");
 				const exact = await readStoredHistoryEntry(file, { entryId: id, leafId: id, offset: 0, limit: 256 });
 				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: id, limit: 3 });
 				if (claim === "\\u0072".repeat(128)) {
