@@ -549,8 +549,8 @@ export async function executeFileSearch(
 
 		let perWalk: Array<Array<{ path: string; mtime: number }>>;
 		try {
-			const settledTargets = await Promise.allSettled(targets.map(runTarget));
-			perTarget = settledTargets.map(result => {
+			const settledWalks = await Promise.allSettled(planWalks(targets).map(runWalk));
+			perWalk = settledWalks.map(result => {
 				if (result.status === "rejected") throw result.reason;
 				return result.value;
 			});

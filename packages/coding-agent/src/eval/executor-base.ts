@@ -13,7 +13,7 @@ import {
 } from "@veyyon/utils";
 import { Settings } from "../config/settings";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
-import { OutputSink } from "../session/streaming-output";
+import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
 import { ProducerOutputGuard } from "../secrets/producer-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
@@ -21,7 +21,7 @@ import {
 	type OutputArtifactError,
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
-	resolveOutputSinkHeadBytes,
+	resolveOutputSinkWindow,
 } from "../tools/core/output-meta";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, isEvalTimeoutControlEvent } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
