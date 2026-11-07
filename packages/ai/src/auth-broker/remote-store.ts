@@ -1161,7 +1161,23 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			waitMs: maxWaitMs,
 			signal: opts.signal,
 		});
-		if (result.status === 200) this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+		if (result.status === 200) {
+			this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
+		} else {
+			// A restarted broker may reuse the worker's numeric generation:
+			// its conditional wait can return 304 despite different credentials.
+			// Keep the original wait, then verify truth unconditionally exactly
+			// once, under the same revision fence, before deciding freshness.
+			const canonical = await this.#client.fetchSnapshot({ signal: opts.signal });
+			if (canonical.status !== 200) {
+				throw new AIError.AuthBrokerError("Unconditional broker freshness verification returned no snapshot");
+			}
+			const changed = !this.#isNoProgressSnapshot(canonical.snapshot, true);
+			if (this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtRequest) && changed) {
+				// The content may advance without a numeric generation change.
+				return true;
+			}
+		}
 		return this.#generation !== previousGeneration;
 	}
 
