@@ -1090,6 +1090,8 @@ describe("history exact record lookup", () => {
 			for (const corruptedHeader of [
 				'{"timestamp":"2026-11-07","type":"session","id":',
 				'{"metadata":{"producer":true},"type":"sess\\u0069on","id":',
+				// A completed top-level array before type must not conceal a real repeated header.
+				'{"metadata":["safe"],"type":"session","id":',
 				// Invalid key escapes cannot mask a second session boundary.
 				'{"type":"session","id":"shadow","invalid\\q":true}',
 				'{"invalid\\q":true,"type":"session","id":"shadow"}',
@@ -1110,6 +1112,9 @@ describe("history exact record lookup", () => {
 			for (const malformedSibling of [
 				'{"type":"message","id":"orphan","metadata":{"type":"session"},"parentId":',
 				'{"type":"message","id":"orphan","invalid\\q":true,"parentId":"root"}',
+				// JSON-invalid array elements resembling object members are not root identity keys.
+				'{"type":"message","id":"orphan","metadata":["type":"session"],"parentId":"root"}',
+				'{"type":"message","id":"unrelated","metadata":["id":"root"],"parentId":"root"}',
 			]) {
 				await fs.writeFile(file, [header, root, malformedSibling].join("\n") + "\n");
 				const archived = await readStoredHistoryEntry(file, {
