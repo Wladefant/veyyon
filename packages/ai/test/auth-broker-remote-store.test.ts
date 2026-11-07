@@ -147,10 +147,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(authoritative.snapshot.credentials).toEqual([]);
 	});
 
-	test("a genuine same-generation SSE refresher-policy change remains progress", async () => {
+	test("rejects an unverified same-generation SSE refresher-policy change", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		// The disposable broker has disableRefresher: true. A fabricated stream
+		// policy change is not broker progress, even at the same generation.
 		const changed: SnapshotResponse = {
 			...initial.snapshot,
 			refresher: {
@@ -158,15 +160,32 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			},
 			credentials: initial.snapshot.credentials.map(entry => ({ ...entry, rotatesInMs: 750 })),
 		};
+		const originalFetch = client.fetchSnapshot.bind(client);
+		let canonicalReads = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async (...args) => {
+			const response = await originalFetch(...args);
+			if (response.status === 200) canonicalReads += 1;
+			return response;
+		});
+		const observedRefresherEnabled: boolean[] = [];
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			yield { kind: "snapshot" as const, ...changed };
 			await untilAborted(opts.signal);
 		});
-		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
-		await waitUntil(() => remote!.snapshot.refresher.enabled);
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial.snapshot,
+			onSnapshot: snapshot => observedRefresherEnabled.push(snapshot.refresher.enabled),
+		});
+		// A divergent first frame must trigger a real canonical GET and must
+		// never publish its unverified refresher policy, even transiently.
+		await waitUntil(() => observedRefresherEnabled.length > 0);
+		expect(canonicalReads).toBeGreaterThan(0);
+		expect(observedRefresherEnabled).not.toContain(true);
+		expect(remote.snapshot.refresher.enabled).toBe(false);
 		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
-		expect(remote.snapshot.refresher).toEqual(changed.refresher);
-		expect(remote.snapshot.credentials[0]!.rotatesInMs).toBe(750);
+		expect(remote.snapshot.credentials.map(entry => entry.id))
+			.toEqual(initial.snapshot.credentials.map(entry => entry.id));
 	});
 
 	test("identical initial SSE frames on reconnect cannot hide a broker peer revocation", async () => {
@@ -244,7 +263,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			remote!.snapshot.credentials[0]?.credential.type === "oauth" &&
 			remote.snapshot.credentials[0]?.credential.access === "access-new-same-generation",
 		);
-		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
+		// The first SSE frame advertises the old generation, but only the
+		// canonical broker GET authorizes this new credential and its generation.
+		expect(changed.generation).toBe(initial.snapshot.generation);
+		expect(remote.snapshot.generation).toBe(canonical.snapshot.generation);
 		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
 			type: "oauth", access: "access-new-same-generation", refresh: REMOTE_REFRESH_SENTINEL,
 		});
