@@ -674,6 +674,97 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
+
+	test("canonical addition retires stale SSE before an old stream removes the new grant", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		const connected = Promise.withResolvers<void>();
+		const releaseOld = Promise.withResolvers<void>();
+		const oldFinished = Promise.withResolvers<void>();
+		const freshStarted = Promise.withResolvers<void>();
+		const allowFreshRemoval = Promise.withResolvers<void>();
+		const allowLaterCanonicalGet = Promise.withResolvers<void>();
+		let canonicalGets = 0;
+		let connections = 0;
+		let addedId = -1;
+		let oldSignal: AbortSignal | undefined;
+		spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+			canonicalGets += 1;
+			// Do not allow a second broker GET to repair stale SSE state under test.
+			if (canonicalGets > 1) await allowLaterCanonicalGet.promise;
+			const result = await peer.fetchSnapshot();
+			if (result.status !== 200) throw new Error("expected canonical HTTP 200");
+			return { status: 200 as const, generation: 1, snapshot: { ...result.snapshot, generation: 1 } };
+		});
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			if (connections++ === 0) {
+				oldSignal = opts.signal;
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				connected.resolve();
+				try {
+					await releaseOld.promise;
+					// The previous broker incarnation may have queued this before abort.
+					yield {
+						kind: "removed" as const, id: addedId,
+						generation: initial.snapshot.generation + 50,
+						serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+					};
+				} finally {
+					oldFinished.resolve();
+				}
+				return;
+			}
+			const latest = await peer.fetchSnapshot();
+			if (latest.status !== 200) throw new Error("expected fresh broker stream roster");
+			yield { kind: "snapshot" as const, ...latest.snapshot };
+			freshStarted.resolve();
+			await allowFreshRemoval.promise;
+			if (opts.signal?.aborted) return;
+			yield {
+				kind: "removed" as const, id: addedId,
+				generation: latest.snapshot.generation + 1,
+				serverNowMs: latest.snapshot.serverNowMs, refresher: latest.snapshot.refresher,
+			};
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+		});
+		try {
+			await connected.promise;
+			storage!.upsertCredential("anthropic", mintOAuthCredential("canonical-new-grant", Date.now() + 120_000));
+			const canonical = await peer.fetchSnapshot();
+			if (canonical.status !== 200) throw new Error("expected canonical broker roster with two grants");
+			const added = canonical.snapshot.credentials.find(entry => entry.id !== original.id);
+			if (!added) throw new Error("expected new synthetic broker grant");
+			addedId = added.id;
+			await remote.refreshSnapshot();
+			expect(canonicalGets).toBe(1);
+			expect(remote.listAuthCredentials().map(entry => entry.id).sort()).toEqual(
+				[original.id, addedId].sort(),
+			);
+			expect(oldSignal?.aborted).toBe(true);
+			releaseOld.resolve();
+			await oldFinished.promise;
+			expect(remote.listAuthCredentials().map(entry => entry.id).sort()).toEqual(
+				[original.id, addedId].sort(),
+			);
+			await freshStarted.promise;
+			// The newly established transport must still accept a genuine removal.
+			expect(storage!.disableCredentialById(addedId, "synthetic new-stream revoke")).toBe(true);
+			allowFreshRemoval.resolve();
+			await waitUntil(() => remote!.listAuthCredentials().length === 1, 4_000);
+			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([original.id]);
+		} finally {
+			releaseOld.resolve();
+			allowFreshRemoval.resolve();
+			allowLaterCanonicalGet.resolve();
+		}
+	});
+
 	test("canonical partial revocation retires stale SSE before it removes a surviving grant", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });

@@ -308,7 +308,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * broker incarnation. Only a later canonical GET may reauthorize the ID.
 	 */
 	#canonicallyRemovedCredentialIds = new Set<number>();
-	/** A broker-confirmed same-ID reauthorization must retire its older SSE connection. */
+	/** Canonical credential roster or material changes must retire the prior SSE connection. */
 	#activeSnapshotStreamAbort?: AbortController;
 	#usageOverlays: Map<string, UsageReport> = new Map();
 	#backgroundAbort = new AbortController();
@@ -433,6 +433,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		// A fresh canonical broker response, unlike an old SSE replay, can
 		// legitimately reintroduce the same ID after a broker restart.
 		const previousById = new Map(this.#snapshot.credentials.map(entry => [entry.id, entry] as const));
+		const canonicallyAdded = snapshot.credentials.some(entry => !previousById.has(entry.id));
 		const reauthorized = [...incomingIds].some(id => this.#canonicallyRemovedCredentialIds.has(id));
 		const replaced = snapshot.credentials.some(entry => {
 			const previous = previousById.get(entry.id);
@@ -443,11 +444,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		for (const id of incomingIds) this.#canonicallyRemovedCredentialIds.delete(id);
 		this.#applySnapshot(snapshot, generation);
 		// The existing SSE connection cannot prove broker incarnation: after
-		// canonical membership removal it might also remove a *surviving* ID
+		// canonical roster additions/removals it might remove a newly added ID
+		// or a *surviving* ID
 		// under a reused or higher old-stream generation. Retire that stream,
 		// just as for reauthorization or credential replacement. Unchanged
 		// GETs, countdown churn and safety-block-only changes keep their stream.
-		if (canonicallyRemoved || reauthorized || replaced) this.#activeSnapshotStreamAbort?.abort();
+		if (canonicallyRemoved || canonicallyAdded || reauthorized || replaced) this.#activeSnapshotStreamAbort?.abort();
 		return true;
 	}
 
