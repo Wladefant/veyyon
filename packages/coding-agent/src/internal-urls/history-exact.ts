@@ -156,7 +156,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		// its trailing id or JSON body was truncated. Otherwise an explicitly
 		// selected older branch could claim trustworthy identity past a
 		// corrupted *repeated* session boundary.
-		if (!state.headerSeen || /^\\s*\\{\\s*"type"\\s*:\\s*"session"\\s*(?:,|\\})/.test(raw)) {
+		if (!state.headerSeen || /^\s*\{\s*"type"\s*:\s*"session"\s*(?:,|\})/.test(raw)) {
 			state.invalidIdentity = true;
 		}
 		return { kind: "invalid", invalidIdentity: state.invalidIdentity };
