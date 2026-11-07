@@ -6,6 +6,12 @@
 
 - Exact stored-history reads and searches now reject ambiguous session headers, repeated identity fields (even after unrelated duplicates), unaddressable stored entry IDs, and oversized session-ID or record-type metadata, while preserving explicitly selected healthy legacy branches after unrelated malformed records.
 
+## [1.8.6] - 2026-11-07
+
+### Changed
+
+- ACP model choices now list OpenAI Codex, Anthropic, Antigravity and OpenCode first without removing models or changing their provider-relative order.
+
 ## [1.8.5] - 2026-11-06
 
 ### Fixed

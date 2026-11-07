@@ -4303,85 +4303,6 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	}
 
 	/**
-	 * Build a hidden companion message describing image attachments for a text-only
-	 * model. Each image is saved under local:// and a vision-capable model describes
-	 * it; the descriptions are returned as a `display: false` custom message (so the
-	 * model reads them but the TUI does not render the blob) carrying one
-	 * `<image path="local://…">…</image>` block per image. Returns `undefined` when
-	 * the active model already accepts images, the feature is disabled, or no
-	 * description could be produced. Never throws.
-	 */
-	async #buildImageDescriptionNotice(
-		normalizedImages: ImageContent[],
-		signal?: AbortSignal,
-	): Promise<CustomMessage | undefined> {
-		const model = this.model;
-		const shouldDescribe =
-			!!model &&
-			!model.input.includes("image") &&
-			!this.settings.get("images.blockImages") &&
-			this.settings.get("images.describeForTextModels");
-		if (!shouldDescribe || !model) {
-			return undefined;
-		}
-		let blocks: TextContent[];
-		try {
-			blocks = await describeAttachedImagesForTextModel(
-				normalizedImages,
-				{
-					activeModel: model,
-					modelRegistry: this.#config.modelRegistry,
-					settings: this.settings,
-					localProtocolOptions: localProtocolOptions(this.sessionManager),
-					activeModelString: formatModelString(model),
-					telemetryConfig: this.agent.telemetry,
-					sessionId: this.sessionId,
-				},
-				signal,
-			);
-		} catch (err) {
-			logger.warn("image attachment vision fallback failed; image left undescribed", {
-				error: errorMessage(err),
-			});
-			return undefined;
-		}
-		if (blocks.length === 0) {
-			return undefined;
-		}
-		return {
-			role: "custom",
-			customType: IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
-			content: blocks,
-			display: false,
-			attribution: "user",
-			timestamp: Date.now(),
-		};
-	}
-
-	/**
-	 * The content of a text message carrying image attachments: the text, then the images normalized
-	 * for the active model. When the model is text-only, the hidden companion describing the images is
-	 * returned beside it; the image stays in the message itself.
-	 */
-	async #textWithImages(
-		text: string,
-		images: ImageContent[] | undefined,
-	): Promise<{
-		content: (TextContent | ImageContent | VideoContent)[];
-		images: ImageContent[] | undefined;
-		imageDescriptionNotice: CustomMessage | undefined;
-	}> {
-		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text }];
-		if (!normalizedImages?.length) return { content, images: normalizedImages, imageDescriptionNotice: undefined };
-		content.push(...normalizedImages);
-		return {
-			content,
-			images: normalizedImages,
-			imageDescriptionNotice: await this.#buildImageDescriptionNotice(normalizedImages),
-		};
-	}
-	/**
 	 * Hand startup work to the session instead of awaiting it on the boot path.
 	 *
 	 * Chained, so several deferrals order the way they were handed over, and swallowed, so a failure
@@ -4816,7 +4737,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		// #queueUserMessage (which clears advisor auto-resume suppression and
 		// enqueues as a user-attributed message) and place the developer message
 		// directly on the follow-up queue.
-		const { content, imageDescriptionNotice } = await this.#textWithImages(expandedText, images);
+		const { content: imageContent, imageDescriptionNotice } = await this.#images.textWithImages(expandedText, images);
+		const content: (TextContent | ImageContent | VideoContent)[] = imageContent;
 		if (videos?.length) {
 			content.push(...videos);
 		}
@@ -4844,7 +4766,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		// while streaming) is a deliberate resume; re-enable advisor auto-resume that
 		// a user interrupt suppressed.
 		this.#advisorRoster.allowAutoResume();
-		const { content, imageDescriptionNotice } = await this.#textWithImages(text, images);
+		const { content: imageContent, imageDescriptionNotice } = await this.#images.textWithImages(text, images);
+		const content: (TextContent | ImageContent | VideoContent)[] = imageContent;
 		if (videos?.length) {
 			content.push(...videos);
 		}
