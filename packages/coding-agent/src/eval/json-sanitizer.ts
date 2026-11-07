@@ -8,33 +8,38 @@
 export function sanitizeJsonValue(
 	value: unknown,
 	sanitize: (text: string) => string,
-	ancestors = new WeakSet<object>(),
+	options: { cycles?: "reject" | "mark" } = {},
 ): unknown {
-	if (typeof value === "string") return sanitize(value);
-	if (value === null || typeof value !== "object") return value;
-	if (ancestors.has(value)) throw new Error("JSON value contains a cycle.");
-
-	ancestors.add(value);
-	try {
-		if (Array.isArray(value)) {
-			return value.map(item => sanitizeJsonValue(item, sanitize, ancestors));
+	const ancestors = new WeakSet<object>();
+	const clone = (current: unknown): unknown => {
+		if (typeof current === "string") return sanitize(current);
+		if (current === null || typeof current !== "object") return current;
+		if (ancestors.has(current)) {
+			if (options.cycles === "mark") return "[Circular]";
+			throw new Error("JSON value contains a cycle.");
 		}
 
-		const sanitized: Record<string, unknown> = {};
-		for (const [key, nested] of Object.entries(value)) {
-			const sanitizedKey = sanitize(key);
-			if (Object.hasOwn(sanitized, sanitizedKey)) {
-				throw new Error("Sanitized JSON keys collide.");
+		ancestors.add(current);
+		try {
+			if (Array.isArray(current)) return current.map(clone);
+
+			const sanitized: Record<string, unknown> = {};
+			for (const [key, nested] of Object.entries(current)) {
+				const sanitizedKey = sanitize(key);
+				if (Object.hasOwn(sanitized, sanitizedKey)) {
+					throw new Error("Sanitized JSON keys collide.");
+				}
+				Object.defineProperty(sanitized, sanitizedKey, {
+					value: clone(nested),
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				});
 			}
-			Object.defineProperty(sanitized, sanitizedKey, {
-				value: sanitizeJsonValue(nested, sanitize, ancestors),
-				enumerable: true,
-				configurable: true,
-				writable: true,
-			});
+			return sanitized;
+		} finally {
+			ancestors.delete(current);
 		}
-		return sanitized;
-	} finally {
-		ancestors.delete(value);
-	}
+	};
+	return clone(value);
 }

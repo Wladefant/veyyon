@@ -278,6 +278,7 @@ describe("extension worker actions survive runner initialization", () => {
 			shutdown: noop,
 			getContextUsage: () => undefined,
 			compact: async () => {},
+			obfuscateProviderText: text => text,
 			getSystemPrompt: () => [],
 		};
 

@@ -461,7 +461,7 @@ describe("history exact record lookup", () => {
 				});
 				expect(trusted.status).toBe("partial");
 				expect(trusted.matches.map(match => match.entryId)).toEqual(["root"]);
-				expect(trusted.matches[0]?.revision).toBe(exact.revision);
+				expect(trusted.matches[0]!.revision).toBe(exact.revision!);
 			}
 
 			// The first-pass title-slot exception must also apply to matching.
@@ -488,7 +488,7 @@ describe("history exact record lookup", () => {
 				limit: 256,
 			});
 			expect(exact.status).toBe("ok");
-			expect(accepted.matches[0]?.revision).toBe(exact.revision);
+			expect(accepted.matches[0]!.revision).toBe(exact.revision!);
 
 			const nested = {
 				...root,

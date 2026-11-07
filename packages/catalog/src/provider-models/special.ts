@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lazy } from "@veyyon/utils/abortable";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
+import type { CodexDiscoveryAccount } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
 import type { ModelManagerOptions } from "../model-manager";
 import { GITLAB_SAAS_URL, TYPESAFE_DEFAULT_BASE_URL } from "../provider-endpoints";

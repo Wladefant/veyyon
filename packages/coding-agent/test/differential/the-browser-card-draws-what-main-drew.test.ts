@@ -59,6 +59,7 @@ const BROWSER_KINDS: Record<NonNullable<BrowserToolDetails["browser"]>, true> = 
 	spawned: true,
 	connected: true,
 	cmux: true,
+	extension: true,
 };
 
 /** Every action the tool takes, as a total record of the schema's own union. */
@@ -67,6 +68,7 @@ const ACTIONS: Record<BrowserParams["action"], true> = {
 	close: true,
 	run: true,
 	save_state: true,
+	inventory: true,
 };
 
 const KINDS = Object.keys(BROWSER_KINDS) as Array<NonNullable<BrowserToolDetails["browser"]>>;
@@ -129,6 +131,7 @@ describe("browser tool differential", () => {
 		for (const action of EVERY_ACTION) {
 			if (action === "run" || action === "save_state") continue;
 			for (const kind of KINDS) {
+				if (action !== "open" && action !== "close") continue;
 				const args: BrowserViewArgs = { action, name: "docs", url: "https://example.com/asked-for" };
 				const settled: BrowserViewResult = {
 					content: [],

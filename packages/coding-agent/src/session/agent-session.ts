@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import path from "node:path";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -20,6 +21,7 @@ import {
 	AgentBusyError,
 	type AgentEvent,
 	type AgentMessage,
+	type AgentTurnEndContext,
 	type AgentState,
 	type AgentTool,
 	AppendOnlyContextManager,
@@ -30,7 +32,7 @@ import {
 	type ToolChoiceDirective,
 } from "@veyyon/agent-core";
 import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
-import type { CompactionResult, SessionMessageEntry, ShakeConfig } from "@veyyon/agent-core/compaction";
+import { calculateContextTokens, compactionContextTokens, shouldCompact, type CompactionResult, type SessionMessageEntry, type ShakeConfig } from "@veyyon/agent-core/compaction";
 import type {
 	AssistantMessage,
 	ImageContent,
@@ -62,7 +64,7 @@ import "@veyyon/ai/usage/defaults";
 import type { Effort } from "@veyyon/catalog/effort";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
-import { declaredContextWindow } from "@veyyon/kernel/session/agent-session-compaction-policy";
+import { declaredContextWindow, type CompactionCheckResult } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import {
 	collectPendingToolCalls,
@@ -138,7 +140,7 @@ import type { BashResult } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
-import type { ExtensionRunner } from "../extensibility/extensions";
+import type { ExtensionRunner, SessionBeforeSwitchResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
@@ -194,10 +196,13 @@ import { reportLostOutputArtifact } from "../tools/core/output-artifact";
 import { outputMeta } from "../tools/core/output-meta";
 import { buildOutputValidator, summarizeValidationFailure } from "../tools/core/output-schema-validator";
 import { shortenPath } from "../tools/core/render-utils";
+import { goalsPrompts } from "../prompts/goals/rows";
+import { sessionPrompts } from "../prompts/session/rows";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
+import { throwIfExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage, lastCopyCandidateAssistantMessage } from "./agent-session-message-shapes";
 import { compactionModelCandidates, contextPromotionTarget } from "./agent-session-model-targets";
@@ -218,6 +223,7 @@ import {
 	type AdvisorStats,
 	type AgentSessionConfig,
 	type AgentSessionDisposeOptions,
+	type AgentSessionEvent,
 	type AgentSessionEventListener,
 	type AsyncJobSnapshot,
 	type AsyncResultEntry,
@@ -239,12 +245,15 @@ import {
 	type SessionStats,
 	type SetSessionNameWithTrigger,
 	type SteerOptions,
+	type AgentContinueSkipReason,
+	type ScheduledAgentContinueOptions,
 	TOOL_SHAPE_SETTING_PATHS,
 } from "./agent-session-types";
+import { QUIESCENCE_RECHECK_MS } from "./agent-session-types";
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
 // on the session engine's graph and cost the layering gate a standing exception.
 import { computeStoredMessagesTokens } from "./context-usage";
-import { bindSessionBudget } from "./cpu-limit";
+import { bindSessionBudget, sessionCpuLimit } from "./cpu-limit";
 import {
 	type CustomMessage,
 	type CustomMessagePayload,
@@ -338,8 +347,6 @@ export class UnsupportedModelInputError extends Error {
 	}
 }
 
-/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
-export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
 /** Whether writing `path` must rebuild the prompt the model is holding. */
 function rebuildsThePrompt(path: string): boolean {
 	return isLivePromptGate(path) || TOOL_SHAPE_SETTING_PATHS[path] === true;

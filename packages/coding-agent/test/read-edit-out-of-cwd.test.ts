@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -104,11 +104,11 @@ describe("read → edit round-trip for out-of-cwd files", () => {
 		const allowed = createSession(cwdDir, false);
 		const header = textOutput(await new ReadTool(allowed).execute("read-generated", { path: file })).split("\n")[0];
 		const patch = `${header}\nSWAP 2.=2:\n+export const value = 2;\n`;
-		await expect(executeHashlineSingle(editOptions(blocked, patch))).rejects.toThrow(
+		await expect(executeHashlineSingle(hashlineExecOptions(patch, blocked))).rejects.toThrow(
 			"Cannot modify auto-generated file",
 		);
 		expect(await fs.readFile(file, "utf8")).toBe(original);
-		await executeHashlineSingle(editOptions(allowed, patch));
+		await executeHashlineSingle(hashlineExecOptions(patch, allowed));
 		expect(await fs.readFile(file, "utf8")).toBe("// @generated\nexport const value = 2;\n");
 	});
 });
