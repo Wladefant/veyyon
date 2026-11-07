@@ -437,7 +437,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		};
 		const staleProcessed = Promise.withResolvers<void>();
 		const allowNewer = Promise.withResolvers<void>();
-		const newerProcessed = Promise.withResolvers<void>();
 		let unexpectedCanonicalGets = 0;
 		const actualFetchSnapshot = client.fetchSnapshot.bind(client);
 		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
@@ -464,12 +463,12 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			};
 			staleProcessed.resolve();
 			await allowNewer.promise;
-			// Actual forward progress above the observed watermark still applies.
+			// Only a real broker-backed update, not this unbound stream delta,
+			// is allowed to change selected access material.
 			yield {
 				kind: "entry" as const, entry: newer, generation: highGeneration + 2,
 				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 			};
-			newerProcessed.resolve();
 			await untilAborted(opts.signal);
 		});
 		remote = new RemoteAuthCredentialStore({
@@ -483,13 +482,27 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			});
 			expect(remote.snapshot.credentials).toHaveLength(1);
 			expect(unexpectedCanonicalGets).toBe(0);
+			// Peer authority changes only now. The high-generation SSE delta
+			// is an invalidation hint, so the canonical GET must resolve the
+			// genuinely updated synthetic broker state instead of selecting
+			// any fabricated access material from the stream itself.
+			storage!.upsertCredential("anthropic", {
+				...mintOAuthCredential("a", Date.now() + 120_000),
+				access: "access-synthetic-newer",
+			});
+			const peer = new AuthBrokerClient({ url: handle!.url, token });
+			const canonicalNewer = await peer.fetchSnapshot();
+			if (canonicalNewer.status !== 200) throw new Error("expected synthetic broker progress");
 			allowNewer.resolve();
-			await newerProcessed.promise;
-			expect(remote.snapshot.generation).toBe(highGeneration + 2);
+			await waitUntil(() =>
+				remote!.snapshot.credentials[0]?.credential.type === "oauth" &&
+				remote.snapshot.credentials[0]?.credential.access === "access-synthetic-newer",
+			);
+			expect(remote.snapshot.generation).toBe(canonicalNewer.generation);
 			expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
 				type: "oauth", access: "access-synthetic-newer",
 			});
-			expect(unexpectedCanonicalGets).toBe(0);
+			expect(unexpectedCanonicalGets).toBe(1);
 		} finally {
 			allowNewer.resolve();
 		}
