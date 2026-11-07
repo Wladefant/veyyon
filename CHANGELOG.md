@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [1.8.7] - 2026-11-07
+
+### Changed
+
+- Terminal control supports an authenticated idle-exit request that refuses busy sessions and flushes acceptance before shutdown.
+
+### Fixed
+
+- Fixed TypeScript errors across the agent, AI, catalog and coding-agent packages.
+
 ## [1.8.6] - 2026-11-07
 
 ### Changed
