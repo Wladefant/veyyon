@@ -298,6 +298,49 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(authoritative.snapshot.credentials).toEqual([]);
 	});
 
+	test("refuses a first SSE removal without a baseline snapshot, then follows a real broker revocation", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const genuineStream = client.openSnapshotStream.bind(client);
+		let connections = 0;
+		let firstSignal: AbortSignal | undefined;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			if (connections++ === 0) {
+				firstSignal = opts.signal;
+				// An old relay lost its required initial snapshot, then replayed a
+				// higher-generation removal. Do not apply this invalid first frame.
+				yield {
+					kind: "removed" as const,
+					generation: initial.snapshot.generation + 50,
+					serverNowMs: initial.snapshot.serverNowMs,
+					refresher: initial.snapshot.refresher,
+					id,
+				};
+				await untilAborted(opts.signal);
+				return;
+			}
+			for await (const event of genuineStream(opts)) yield event;
+		});
+		remote = new RemoteAuthCredentialStore({
+			client,
+			initialSnapshot: initial.snapshot,
+			// An idle canonical GET must not hide the bad first-frame behavior.
+			snapshotStreamVerifyIntervalMs: 30_000,
+		});
+		await waitUntil(() => connections >= 2, 4_000);
+		expect(firstSignal?.aborted).toBe(true);
+		expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([id]);
+		// The replacement stream comes from the real disposable broker and
+		// still needs to carry a legitimate peer revocation.
+		expect(storage!.disableCredentialById(id, "synthetic valid revocation after reconnect")).toBe(true);
+		await waitUntil(() => remote!.snapshot.credentials.length === 0, 4_000);
+		const canonical = await client.fetchSnapshot();
+		if (canonical.status !== 200) throw new Error("expected broker snapshot after revocation");
+		expect(canonical.snapshot.credentials).toEqual([]);
+	});
+
 	test("does not resurrect a peer-revoked credential from the first SSE frame after idle GET", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });

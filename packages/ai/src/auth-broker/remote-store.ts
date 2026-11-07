@@ -641,6 +641,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		try {
 			for await (const event of iterator) {
 				if (this.#closed || streamSignal.aborted) break;
+				// The broker always sends a complete snapshot before any delta. A
+				// truncated relay must not apply a removal/entry without its baseline.
+				if (firstFrame && event.kind !== "snapshot") {
+					throw new AIError.AuthBrokerError("Auth broker snapshot stream did not start with a full snapshot");
+				}
 				// Even a higher-generation *unchanged* event establishes the order of
 				// later frames on this transport, but must NOT renew the idle canonical
 				// GET deadline or advance the accepted snapshot revision. A new SSE
