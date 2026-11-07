@@ -1005,7 +1005,8 @@ async function autoResumeSession(
 	cwd: string,
 	activeSettings: Settings,
 ): Promise<SessionManager | undefined> {
-	if (!activeSettings.get("autoResume")) {
+	// ACP clients create or load sessions through the protocol, not the launch session.
+	if (parsed.mode === "acp" || !activeSettings.get("autoResume")) {
 		// Default case (new session) returns undefined, SDK will create one
 		return undefined;
 	}

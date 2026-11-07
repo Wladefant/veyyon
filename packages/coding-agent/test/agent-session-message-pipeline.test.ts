@@ -216,6 +216,84 @@ describe("AgentSession message pipeline", () => {
 		expect(convertedText).not.toContain("&lt;xml&gt;");
 		expect(convertedText).not.toContain("&amp;");
 	});
+	it.each(["steer", "followUp"] as const)("normalizes text-only and image prompts queued during a %s stream", async mode => {
+		const api = "test-prompt-image-normalization";
+		const contexts: Context[] = [];
+		let initialStream: AssistantMessageEventStream | undefined;
+		let signalStreamReady!: () => void;
+		const streamReady = new Promise<void>(resolve => {
+			signalStreamReady = resolve;
+		});
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			initialStream = stream;
+			signalStreamReady();
+			return stream;
+		});
+		const model = buildModel({
+			id: "prompt-image-model",
+			name: "Prompt Image Model",
+			api,
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: { model, systemPrompt: ["system prompt"], messages: [], tools: [] },
+		});
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: createModelRegistryStub() as never,
+		});
+		sessions.push(session);
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+			mimeType: "image/png",
+		};
+		const queuedMessages: AgentMessage[] = [];
+		const queueMethod = mode === "steer" ? "steer" : "followUp";
+		const originalQueueMethod = agent[queueMethod].bind(agent);
+		vi.spyOn(agent, queueMethod).mockImplementation(message => {
+			queuedMessages.push(message);
+			return originalQueueMethod(message);
+		});
+		const initialPrompt = session.prompt("Inspect this image", { images: [image] });
+		await Promise.race([streamReady, initialPrompt.then(() => {
+			throw new Error("Prompt completed before reaching the provider");
+		})]);
+		expect(initialStream).toBeDefined();
+		expect(contexts[0]?.messages.at(-1)?.content).toEqual([
+			{ type: "text", text: "Inspect this image" },
+			expect.objectContaining({ type: "image" }),
+		]);
+
+		try {
+			await session.prompt("Queued text-only prompt", { streamingBehavior: mode });
+			await session.prompt("Queued image prompt", { images: [image], streamingBehavior: mode });
+
+			expect(queuedMessages.map(message => message.content)).toEqual([
+				[{ type: "text", text: "Queued text-only prompt" }],
+				[
+					{ type: "text", text: "Queued image prompt" },
+					expect.objectContaining({ type: "image" }),
+				],
+			]);
+		} finally {
+			session.clearQueue();
+			const message = createAssistantMessage("Answer");
+			initialStream!.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+			initialStream!.push({ type: "done", reason: "stop", message });
+			await initialPrompt;
+		}
+	});
 
 	it("composes session payload hooks into direct side-request options", async () => {
 		const sessionOnPayload = vi.fn(async (payload: unknown) => ({

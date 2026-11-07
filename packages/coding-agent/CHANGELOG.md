@@ -6,6 +6,12 @@
 
 - Keep matched Unicode text visible in bounded `history://` search previews, including expanding case folds, astral-character boundaries, and long queries ([Refs #984](https://github.com/Wladefant/veyyon/issues/984)).
 
+## [1.8.6] - 2026-11-07
+
+### Changed
+
+- ACP model choices now list OpenAI Codex, Anthropic, Antigravity and OpenCode first without removing models or changing their provider-relative order.
+
 ## [1.8.5] - 2026-11-06
 
 ### Fixed
