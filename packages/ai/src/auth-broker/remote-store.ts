@@ -423,9 +423,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		}
 
 		const incomingIds = new Set(snapshot.credentials.map(entry => entry.id));
+		let canonicallyRemoved = false;
 		for (const previous of this.#snapshot.credentials) {
 			if (!incomingIds.has(previous.id)) {
 				this.#canonicallyRemovedCredentialIds.add(previous.id);
+				canonicallyRemoved = true;
 			}
 		}
 		// A fresh canonical broker response, unlike an old SSE replay, can
@@ -440,11 +442,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		});
 		for (const id of incomingIds) this.#canonicallyRemovedCredentialIds.delete(id);
 		this.#applySnapshot(snapshot, generation);
-		// The old stream has no broker-incarnation identity: stale frames could
-		// revert a canonically rotated credential or remove a reauthorized grant.
-		// Retire it only when GET changes a credential identity, not for idle
-		// verification, countdown churn or unrelated local safety-block changes.
-		if (reauthorized || replaced) this.#activeSnapshotStreamAbort?.abort();
+		// The existing SSE connection cannot prove broker incarnation: after
+		// canonical membership removal it might also remove a *surviving* ID
+		// under a reused or higher old-stream generation. Retire that stream,
+		// just as for reauthorization or credential replacement. Unchanged
+		// GETs, countdown churn and safety-block-only changes keep their stream.
+		if (canonicallyRemoved || reauthorized || replaced) this.#activeSnapshotStreamAbort?.abort();
 		return true;
 	}
 
