@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-11-07
+
 ### Changed
 
 - ACP model choices now list OpenAI Codex, Anthropic, Antigravity and OpenCode first without removing models or changing their provider-relative order.
