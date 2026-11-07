@@ -94,7 +94,7 @@ type StoredAdmissionState = {
 type StoredRecordResult =
 	| { kind: "entry"; entry: StoredEntryShape }
 	| { kind: "metadata" }
-	| { kind: "invalid"; invalidIdentity: boolean };
+	| { kind: "invalid"; invalidIdentity: boolean; claimedId?: string };
 
 function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; sessionTypeMember: boolean } {
 	const keys = new Set<string>();
@@ -218,7 +218,15 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		state.invalidIdentity = true;
 		return { kind: "invalid", invalidIdentity: true };
 	}
-	if (!isStoredEntry(entry)) return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+	if (!isStoredEntry(entry)) {
+		return {
+			kind: "invalid",
+			invalidIdentity: state.invalidIdentity,
+			// A malformed sibling may still claim an existing public-addressable ID.
+			// Its claim must participate in uniqueness checks without admitting the row.
+			claimedId: typeof entry.id === "string" && ADDRESSABLE_HISTORY_ID.test(entry.id) ? entry.id : undefined,
+		};
+	}
 	state.entrySeen = true;
 	return { kind: "entry", entry };
 }
@@ -233,6 +241,16 @@ function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: st
 		(entry.parentId === undefined || entry.parentId === null ||
 			(typeof entry.parentId === "string" && ADDRESSABLE_HISTORY_ID.test(entry.parentId)))
 	);
+}
+
+function claimedIdError(
+	id: string,
+	parents: ReadonlyMap<string, string | undefined>,
+	malformedClaims: ReadonlySet<string>,
+): string | undefined {
+	if (parents.has(id) || malformedClaims.has(id)) return DUPLICATE_ID_DETAIL;
+	if (parents.size + malformedClaims.size >= MAX_INDEX_ENTRIES) return HARD_BOUND_DETAIL;
+	return undefined;
 }
 
 export interface ExactHistoryRequest {
@@ -391,6 +409,7 @@ export async function readStoredHistoryEntry(
 	request: ExactHistoryRequest,
 ): Promise<ExactHistoryResult> {
 	const parents = new Map<string, string | undefined>();
+	const malformedClaims = new Set<string>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
 		entrySeen: false,
@@ -427,6 +446,17 @@ export async function readStoredHistoryEntry(
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
 				incomplete = true;
+				if (decoded.claimedId) {
+					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
+					if (detail) return {
+						status: "unavailable",
+						entryId: request.entryId,
+						sessionId,
+						source: "stored-jsonl",
+						detail,
+					};
+					malformedClaims.add(decoded.claimedId);
+				}
 				continue;
 			}
 			if (decoded.kind === "metadata") continue;
@@ -435,7 +465,7 @@ export async function readStoredHistoryEntry(
 				incomplete = true;
 				continue;
 			}
-			if (parents.has(entry.id)) {
+			if (parents.has(entry.id) || malformedClaims.has(entry.id)) {
 				return {
 					status: "unavailable",
 					entryId: request.entryId,
@@ -444,7 +474,7 @@ export async function readStoredHistoryEntry(
 					detail: DUPLICATE_ID_DETAIL,
 				};
 			}
-			if (parents.size >= MAX_INDEX_ENTRIES) {
+			if (parents.size + malformedClaims.size >= MAX_INDEX_ENTRIES) {
 				return {
 					status: "unavailable",
 					entryId: request.entryId,
@@ -619,6 +649,7 @@ export async function searchStoredHistoryEntries(
 	request: HistorySearchRequest,
 ): Promise<HistorySearchResult> {
 	const parents = new Map<string, string | undefined>();
+	const malformedClaims = new Set<string>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
 		entrySeen: false,
@@ -657,6 +688,18 @@ export async function searchStoredHistoryEntries(
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
 				unreadable = true;
+				if (decoded.claimedId) {
+					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
+					if (detail) return {
+						status: "unavailable",
+						sessionId,
+						query: request.query,
+						source: "stored-jsonl",
+						matches: [],
+						detail,
+					};
+					malformedClaims.add(decoded.claimedId);
+				}
 				continue;
 			}
 			if (decoded.kind === "metadata") continue;
@@ -665,7 +708,7 @@ export async function searchStoredHistoryEntries(
 				unreadable = true;
 				continue;
 			}
-			if (parents.has(entry.id)) {
+			if (parents.has(entry.id) || malformedClaims.has(entry.id)) {
 				return {
 					status: "unavailable",
 					sessionId,
@@ -675,7 +718,7 @@ export async function searchStoredHistoryEntries(
 					detail: DUPLICATE_ID_DETAIL,
 				};
 			}
-			if (parents.size >= MAX_INDEX_ENTRIES) {
+			if (parents.size + malformedClaims.size >= MAX_INDEX_ENTRIES) {
 				return {
 					status: "unavailable",
 					sessionId,
