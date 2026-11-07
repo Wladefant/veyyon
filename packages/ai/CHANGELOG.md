@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserve idle SSE canonical-revocation verification during repeated unchanged on-demand conditional HTTP 200 broker waits; volatile-only responses no longer renew the freshness clock ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Treat a changed same-generation HTTP 200 from an on-demand broker freshness wait as accepted progress, rather than reporting false solely because a restarted broker reused its generation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Reconcile an on-demand auth-broker freshness wait after an equal-generation 304 with an unconditional canonical broker snapshot, so a restarted broker's changed credential state is not hidden by a reused generation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Verify unbound later auth-broker SSE mutations against canonical GET before selecting credential changes, and reconnect instead of trusting subsequent obsolete stream frames ([#602](https://github.com/Wladefant/veyyon/issues/602)).

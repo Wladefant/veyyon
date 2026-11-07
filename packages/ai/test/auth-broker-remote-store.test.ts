@@ -2446,6 +2446,64 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(brokerTruth.snapshot.credentials).toEqual([]);
 	});
 
+	test("unchanged on-demand 200 replay cannot postpone silent SSE canonical revocation verification", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const peer = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await peer.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const streamReady = Promise.withResolvers<void>();
+		const originalFetch = client.fetchSnapshot.bind(client);
+		let conditionalWaits = 0;
+		let canonicalReads = 0;
+		let callbacks = 0;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			streamReady.resolve();
+			await untilAborted(opts.signal);
+		});
+		// Only the on-demand conditional path is a stale relay; unconditional
+		// requests still reach the real disposable broker.
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.waitMs === 25) {
+				conditionalWaits += 1;
+				await Bun.sleep(5);
+				const replay = structuredClone(initial.snapshot);
+				replay.generatedAt += conditionalWaits * 1_000;
+				replay.serverNowMs += conditionalWaits * 1_000;
+				replay.refresher.nextSweepInMs += conditionalWaits * 1_000;
+				for (const entry of replay.credentials) {
+					if (entry.credential.type === "oauth") entry.rotatesInMs = conditionalWaits * 1_000;
+				}
+				return { status: 200 as const, generation: replay.generation, snapshot: replay };
+			}
+			if (opts?.ifGenerationGt !== undefined) throw new Error("unexpected background conditional poll");
+			canonicalReads += 1;
+			return originalFetch(opts);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 100,
+			onSnapshot: () => { callbacks += 1; },
+		});
+		await streamReady.promise;
+		expect(storage!.disableCredentialById(id, "synthetic peer revoke during on-demand stale 200")).toBe(true);
+		// Before the fix, each unchanged 200 resets the watchdog's freshness
+		// clock; the 600ms storm ends without a canonical GET.
+		const start = performance.now();
+		while (performance.now() - start < 600 && canonicalReads === 0) {
+			await remote.waitForFreshSnapshot(25);
+			await Bun.sleep(5);
+		}
+		expect(conditionalWaits).toBeGreaterThan(3);
+		expect(canonicalReads).toBeGreaterThan(0);
+		await waitUntil(() => remote!.snapshot.credentials.length === 0);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		expect(callbacks).toBe(1);
+		const truth = await peer.fetchSnapshot();
+		if (truth.status !== 200) throw new Error("expected canonical broker truth");
+		expect(truth.snapshot.credentials).toEqual([]);
+	});
+
 	test("on-demand broker wait reports same-generation 200 progress and verifies 304 against canonical credentials", async () => {
 		// A restarted broker can reuse the worker's generation and return an
 		// equal-generation 200 or 304 even though the credential roster changed.
@@ -2512,7 +2570,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					const progressed = await remote.waitForFreshSnapshot(25);
 					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual(changed ? [] : [id]);
 					expect(progressed).toBe(changed);
-					expect(callbacks).toEqual([changed ? 0 : 1]);
+					expect(callbacks).toEqual(variant === "unchanged-200" ? [] : [changed ? 0 : 1]);
 				}
 				expect(conditionalWaits).toBe(1);
 				expect(canonicalChecks).toBe(variant.endsWith("-200") ? 0 : 1); // no extra GET for HTTP 200

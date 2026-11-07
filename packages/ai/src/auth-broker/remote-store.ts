@@ -1166,6 +1166,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			// credential roster. Report durable progress only if the 200 was
 			// accepted by the existing local-revision fence.
 			const changed = !this.#isNoProgressSnapshot(result.snapshot, true);
+			// Volatile-only conditional 200s are not broker progress. Repeated
+			// on-demand waits must not reset the idle SSE canonical GET deadline
+			// or fence an in-flight canonical read behind a stale relay.
+			if (!changed && result.generation === this.#generation) {
+				return this.#generation !== previousGeneration;
+			}
 			if (this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest) && changed) {
 				return true;
 			}
