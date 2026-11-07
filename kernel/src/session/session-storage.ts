@@ -10,6 +10,7 @@ import { peekFileEnds } from "@veyyon/utils/peek-file";
 import { sessionBackupName, sessionFileStem } from "@veyyon/utils/session-file";
 import { Snowflake } from "@veyyon/utils/snowflake";
 import { toError } from "@veyyon/utils/type-guards";
+import { SESSION_TITLE_SLOT_ENTRY_TYPE } from "./session-entries";
 import { overlayTitleSlotContent, type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 
 const utf8Decoder = new TextDecoder("utf-8");
@@ -482,10 +483,51 @@ export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 	}
 }
 
+/**
+ * Read only the session header from an already-open journal object, with an
+ * independent read descriptor pinned to the SAME inode as the writer. A peer
+ * may replace the pathname with a perfectly ordinary file belonging to another
+ * session; regular-file checks alone do not make that replacement trustworthy.
+ *
+ * A missing/unreadable/oversized header is not proof of ownership. Calling code
+ * treats that result as a refusal to rebind, not permission to append blindly.
+ */
+function openedJournalSessionId(fpath: string, writerFd: number): string | undefined {
+	let readFd: number | undefined;
+	try {
+		readFd = fs.openSync(fpath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+		if (fileObjectIdentity(fs.fstatSync(readFd)) !== fileObjectIdentity(fs.fstatSync(writerFd))) {
+			return undefined;
+		}
+		const buffer = Buffer.alloc(64 * 1024);
+		const length = fs.readSync(readFd, buffer, 0, buffer.length, 0);
+		const firstEnd = buffer.indexOf(10);
+		if (firstEnd < 0 || firstEnd >= length) return undefined;
+		const first = JSON.parse(buffer.toString("utf-8", 0, firstEnd)) as { type?: unknown; id?: unknown };
+		let header = first;
+		if (first?.type === SESSION_TITLE_SLOT_ENTRY_TYPE) {
+			const secondEnd = buffer.indexOf(10, firstEnd + 1);
+			if (secondEnd < 0 || secondEnd >= length) return undefined;
+			header = JSON.parse(buffer.toString("utf-8", firstEnd + 1, secondEnd)) as {
+				type?: unknown;
+				id?: unknown;
+			};
+		}
+		return header?.type === "session" && typeof header.id === "string" && header.id.length > 0
+			? header.id
+			: undefined;
+	} catch {
+		return undefined;
+	} finally {
+		if (readFd !== undefined) fs.closeSync(readFd);
+	}
+}
+
 class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	#fd: number;
 	readonly #path: string;
 	readonly #appendMode: boolean;
+	readonly #sessionIdAtOpen: string | undefined;
 
 	constructor(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
 		super(options);
@@ -499,6 +541,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		}
 		// Open file once, keep fd for lifetime
 		this.#fd = fs.openSync(fpath, flags === "w" ? "w" : "a");
+		this.#sessionIdAtOpen = this.#appendMode ? openedJournalSessionId(fpath, this.#fd) : undefined;
 		// Register for cleanup if abandoned without close()
 		writerRegistry.register(this, this.#fd, this);
 	}
@@ -525,6 +568,12 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			if (!next.isFile() || next.isSymbolicLink() ||
 				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))) {
 				throw new Error("Session writer target changed during reopen");
+			}
+			// A different regular session file is not an authorized continuation.
+			// Fail closed if either header cannot be proven, including legacy or
+			// inaccessible files; never splice this writer\'s transcript into it.
+			if (!this.#sessionIdAtOpen || openedJournalSessionId(this.#path, nextFd) !== this.#sessionIdAtOpen) {
+				throw new Error("Session writer replacement has an unrelated or unverifiable session header");
 			}
 			fs.closeSync(this.#fd);
 		} catch (error) {
