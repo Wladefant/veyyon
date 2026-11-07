@@ -282,6 +282,22 @@ describe("history exact record lookup", () => {
 		}
 	});
 
+
+	it("shows the entire allowed 180-character query without exceeding the preview cap", () => {
+		const match = "N".repeat(180);
+		const branch = [
+			{
+				type: "message", id: "long-query", parentId: null,
+				message: { role: "user", content: "prefix ".repeat(18) + match + " suffix" },
+			},
+		] as unknown as SessionEntry[];
+		const found = searchLiveHistoryEntries(branch, { query: match.toLowerCase(), limit: 1 });
+		expect(found.status).toBe("ok");
+		expect(found.matches).toHaveLength(1);
+		expect(found.matches[0]!.preview).toContain(match);
+		expect(found.matches[0]!.preview.length).toBeLessThanOrEqual(200);
+	});
+
 	it("keeps matching ancestors despite 501 hits in an abandoned sibling", async () => {
 		const dir = TempDir.createSync("@veyyon-history-sibling-cap-");
 		try {
