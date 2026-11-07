@@ -208,7 +208,8 @@ function isStoredEntry(entry: StoredEntryShape): entry is { type: string; id: st
 		typeof entry.type === "string" &&
 		entry.type.trim().length > 0 &&
 		entry.type.length <= MAX_RECORD_TYPE_CHARACTERS &&
-		(entry.parentId === undefined || entry.parentId === null || typeof entry.parentId === "string")
+		(entry.parentId === undefined || entry.parentId === null ||
+			(typeof entry.parentId === "string" && ADDRESSABLE_HISTORY_ID.test(entry.parentId)))
 	);
 }
 
