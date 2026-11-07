@@ -1056,6 +1056,7 @@ describe("history exact record lookup", () => {
 				['{"type":"session","id":42}', header, entry],
 				['{"type":"session","id":', header, entry],
 				[header, entry, '{"type":"session","id":"s-valid","extra":1,"extra":2}'],
+				[header, entry, '{"type":"session","id":'],
 				[header, entry, '{"type":"message","id":"evil","id":"evil","parentId":"root","message":"needle forged"}'],
 			] as const;
 			for (const lines of cases) {
