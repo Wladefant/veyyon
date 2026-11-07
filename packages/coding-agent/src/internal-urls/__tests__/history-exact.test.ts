@@ -275,8 +275,10 @@ describe("history exact record lookup", () => {
 			const preview = found.matches[0]!.preview;
 			expect(preview).toContain("N".repeat(80));
 			expect(preview.length).toBeLessThanOrEqual(200);
-			expect(preview).not.toMatch(/^[\\uDC00-\\uDFFF]/);
-			expect(preview).not.toMatch(/[\\uD800-\\uDBFF]$/);
+			const first = preview.charCodeAt(0);
+			const last = preview.charCodeAt(preview.length - 1);
+			expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
+			expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
 		}
 	});
 
