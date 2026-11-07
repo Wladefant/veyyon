@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Strict failed-fork repair checks the original journal's POSIX change time against timestamp-preserving equal-length peer edits; separate cross-process rename and held-descriptor races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Synchronous strict failed-fork repair rechecks the original journal version at publication and refuses an append after its reread; separate cross-process append-at-rename and held-descriptor races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Strict failed-fork recovery refuses foreign journal messages interleaved with published owned entries instead of relocating them after existing history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Strict failed-fork recovery refuses foreign JSONL records inserted before the original session header instead of silently relocating them after owned history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
