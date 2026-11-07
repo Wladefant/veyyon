@@ -1683,7 +1683,7 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   prependBomOnRefusal = false;
   // Test-only independent writer revises a previously owned line before the
   // strict source reread; the id and all other journal lines remain valid.
-  rewriteOwnedRecordOnRefusal: "header" | "message" | "missing-message" | "foreign-before-header" | undefined;
+  rewriteOwnedRecordOnRefusal: "header" | "message" | "missing-message" | "foreign-before-header" | "foreign-between-owned" | undefined;
   reviseAbortedMarkerOnRefusal: "message" | "reason" | undefined;
   appendForeignLineBeforeRepairPublish: string | undefined;
   // Independent append after the storage's final synchronous publication guard,
@@ -1843,6 +1843,16 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
                 type: "message", id: "synthetic-preheader-foreign", parentId: null,
                 timestamp: new Date().toISOString(),
                 message: { role: "user", content: "Synthetic foreign entry before original header", timestamp: Date.now() },
+              }));
+            } else if (revision === "foreign-between-owned") {
+              // The peer puts valid history between two intact owned messages.
+              // Rebuilding all owned entries before a foreign tail would move it.
+              const nextOwned = rows.findIndex((row, index) => index > rowIndex && row.includes('"type":"message"'));
+              if (nextOwned < 0) throw new Error("expected second disposable owned message");
+              rows.splice(nextOwned, 0, JSON.stringify({
+                type: "message", id: "synthetic-interleaved-peer", parentId: null,
+                timestamp: new Date().toISOString(),
+                message: { role: "user", content: "Synthetic peer inserted between owned messages", timestamp: Date.now() },
               }));
             } else if (revision === "missing-message") {
               // A peer removes one complete, previously published owned line;
@@ -3148,8 +3158,8 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
   });
 
-  it("refuses a revised or removed persisted owned record and a same-ID source header during failed-fork repair", async () => {
-    for (const revision of ["message", "header", "missing-message", "missing-message-with-peer-tail", "foreign-before-header"] as const) {
+  it("refuses altered owned records and interleaved foreign history during failed-fork repair", async () => {
+    for (const revision of ["message", "header", "missing-message", "missing-message-with-peer-tail", "foreign-before-header", "foreign-between-owned"] as const) {
       using temp = TempDir.createSync(`@veyyon-fork-owned-revision-${revision}-`);
       const storage = new SyntheticForkSourceCloseRefusalStorage();
       const manager = SessionManager.create(
@@ -3198,7 +3208,9 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
           ? "Cannot preserve unexpected session journal header"
           : revision === "foreign-before-header"
             ? "Cannot preserve journal entry before source header during failed-fork repair"
-            : revision.startsWith("missing-message")
+            : revision === "foreign-between-owned"
+              ? "Cannot preserve interleaved foreign journal history during failed-fork repair"
+              : revision.startsWith("missing-message")
               ? "Cannot preserve missing previously published session entry"
               : "Cannot preserve independently modified session journal entry";
         expect(causes.some((cause: string) => cause.includes(refusal))).toBe(true);
@@ -3210,6 +3222,13 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
           expect(first.id).toBe("synthetic-preheader-foreign");
           expect(observed).toContain("Synthetic foreign entry before original header");
           expect(observed).toContain("Original same-ID message with artifact://0");
+        } else if (revision === "foreign-between-owned") {
+          const first = observed.indexOf("Original same-ID message with artifact://0");
+          const peer = observed.indexOf("Synthetic peer inserted between owned messages");
+          const second = observed.indexOf("Second original message must survive removal");
+          expect(first).toBeGreaterThanOrEqual(0);
+          expect(peer).toBeGreaterThan(first);
+          expect(second).toBeGreaterThan(peer);
         } else if (revision.startsWith("missing-message")) {
           expect(observed).not.toContain("Original same-ID message with artifact://0");
           expect(observed).toContain("Second original message must survive removal");
