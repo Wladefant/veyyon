@@ -147,6 +147,7 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 		},
 	);
 	await answers.recover();
+	let idleExitReserved = false;
 	return serveTerminalControl({
 		identity: () => ({
 			sessionId: mode.sessionManager.getSessionId(),
@@ -154,8 +155,30 @@ export async function startTerminalControl(mode: InteractiveMode): Promise<() =>
 			sessionFile: mode.sessionManager.getSessionFile() ?? "",
 		}),
 		history,
+		isIdle() {
+			const queued = mode.session.getQueuedMessages();
+			return (
+				!idleExitReserved &&
+				!mode.isShuttingDown &&
+				!mode.session.isStreaming &&
+				!mode.session.isCompacting &&
+				!mode.session.hasPostPromptWork &&
+				queued.steering.length === 0 &&
+				queued.followUp.length === 0 &&
+				mode.pendingTools.size === 0 &&
+				!mode.hasPendingSubmission
+			);
+		},
+		reserveExit() {
+			idleExitReserved = true;
+			mode.reserveShutdownInput();
+		},
+		shutdown() {
+			return mode.shutdown();
+		},
 		async deliver(text, behavior, options?: TerminalDeliveryOptions) {
-			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
+			if (idleExitReserved || mode.isShuttingDown || !mode.isInitialized)
+				throw new Error("Terminal is shutting down");
 			if (options?.telegramTrace) {
 				logTelegramDeliveryTrace(options.telegramTrace, {
 					stage: "terminal_delivery_start",
