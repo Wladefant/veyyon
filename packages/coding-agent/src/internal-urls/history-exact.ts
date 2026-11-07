@@ -96,6 +96,14 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean; claimedId?: string };
 
+function claimedRecordId(value: unknown): string | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const entry = value as StoredEntryShape;
+	// Title and session metadata are not entry claims; their identity has its own rules.
+	if (entry.type === "title" || entry.type === "session") return undefined;
+	return typeof entry.id === "string" && ADDRESSABLE_HISTORY_ID.test(entry.id) ? entry.id : undefined;
+}
+
 function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; sessionTypeMember: boolean } {
 	const keys = new Set<string>();
 	const duplicates = new Set<string>();
@@ -172,7 +180,17 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 				duplicates.has("type") || duplicates.has("id") || duplicates.has("parentId")) {
 				state.invalidIdentity = true;
 			}
-			return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+			let claimedId: string | undefined;
+			if (!state.invalidIdentity && !sessionTypeMember) {
+				// JSON permits duplicate *unrelated* members, but their malformed row
+				// can still claim an entry ID already present elsewhere in the file.
+				try {
+					claimedId = claimedRecordId(JSON.parse(raw));
+				} catch {
+					// Non-decodable content cannot establish an addressable entry claim.
+				}
+			}
+			return { kind: "invalid", invalidIdentity: state.invalidIdentity, claimedId };
 		}
 	} catch {
 		if (!state.headerSeen) state.invalidIdentity = true;
@@ -224,7 +242,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 			invalidIdentity: state.invalidIdentity,
 			// A malformed sibling may still claim an existing public-addressable ID.
 			// Its claim must participate in uniqueness checks without admitting the row.
-			claimedId: typeof entry.id === "string" && ADDRESSABLE_HISTORY_ID.test(entry.id) ? entry.id : undefined,
+			claimedId: claimedRecordId(entry),
 		};
 	}
 	state.entrySeen = true;
