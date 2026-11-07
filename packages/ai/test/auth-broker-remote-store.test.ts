@@ -386,6 +386,80 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(remote.snapshot.credentials.some(entry => entry.id === id)).toBe(false);
 	});
 
+	test("higher-generation no-progress SSE frames fence older changed entries and removals", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth credential");
+		const highGeneration = initial.generation + 100;
+		const lowGeneration = initial.generation + 1;
+		const stale = {
+			...original, credential: { ...original.credential, access: "access-synthetic-stale" },
+		};
+		const newer = {
+			...original, credential: { ...original.credential, access: "access-synthetic-newer" },
+		};
+		const staleProcessed = Promise.withResolvers<void>();
+		const allowNewer = Promise.withResolvers<void>();
+		const newerProcessed = Promise.withResolvers<void>();
+		let unexpectedCanonicalGets = 0;
+		const actualFetchSnapshot = client.fetchSnapshot.bind(client);
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			unexpectedCanonicalGets += 1;
+			return actualFetchSnapshot(opts);
+		});
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...initial.snapshot };
+			// These frames are higher generation but semantically unchanged; neither
+			// may advance accepted-state freshness, yet both establish stream order.
+			yield { kind: "snapshot" as const, ...initial.snapshot, generation: highGeneration };
+			yield {
+				kind: "entry" as const, entry: original, generation: highGeneration + 1,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			// A stale relay reorders an older credential replacement and removal.
+			yield {
+				kind: "entry" as const, entry: stale, generation: lowGeneration,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			yield {
+				kind: "removed" as const, id: original.id, generation: lowGeneration + 1,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			staleProcessed.resolve();
+			await allowNewer.promise;
+			// Actual forward progress above the observed watermark still applies.
+			yield {
+				kind: "entry" as const, entry: newer, generation: highGeneration + 2,
+				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
+			};
+			newerProcessed.resolve();
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 5_000,
+		});
+		try {
+			await staleProcessed.promise;
+			expect(remote.snapshot.generation).toBe(initial.generation);
+			expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+				type: "oauth", access: original.credential.access,
+			});
+			expect(remote.snapshot.credentials).toHaveLength(1);
+			expect(unexpectedCanonicalGets).toBe(0);
+			allowNewer.resolve();
+			await newerProcessed.promise;
+			expect(remote.snapshot.generation).toBe(highGeneration + 2);
+			expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
+				type: "oauth", access: "access-synthetic-newer",
+			});
+			expect(unexpectedCanonicalGets).toBe(0);
+		} finally {
+			allowNewer.resolve();
+		}
+	});
+
 	test("duplicate same-generation SSE frames cannot conceal a revoked broker credential", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });

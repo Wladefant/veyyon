@@ -624,6 +624,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	async #consumeSnapshotStream(): Promise<void> {
 		const revisionAtConnect = this.#appliedSnapshotRevision;
 		let firstFrame = true;
+		// Generation is broker-incarnation-local. Bound ordering to this SSE connection,
+		// separately from accepted-state freshness: ignored no-op frames must not
+		// make an older, reordered credential mutation eligible later on this stream.
+		let highestGenerationSeenOnStream: number | undefined;
 		const streamAbort = new AbortController();
 		const streamSignal = AbortSignal.any([this.#backgroundAbort.signal, streamAbort.signal]);
 		this.#activeSnapshotStreamAbort = streamAbort;
@@ -637,6 +641,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		try {
 			for await (const event of iterator) {
 				if (this.#closed || streamSignal.aborted) break;
+				// Even a higher-generation *unchanged* event establishes the order of
+				// later frames on this transport, but must NOT renew the idle canonical
+				// GET deadline or advance the accepted snapshot revision. A new SSE
+				// connection gets a new watermark so broker generation resets still work.
+				if (!firstFrame && highestGenerationSeenOnStream !== undefined &&
+					event.generation < highestGenerationSeenOnStream) continue;
+				if (highestGenerationSeenOnStream === undefined || event.generation > highestGenerationSeenOnStream) {
+					highestGenerationSeenOnStream = event.generation;
+				}
 				if (firstFrame && event.kind === "snapshot") {
 					// A reconnect starts with an authoritative full snapshot, even after
 					// the broker resets its generation. A newer local GET during connect
