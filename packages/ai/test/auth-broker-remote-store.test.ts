@@ -603,7 +603,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
-	test("a post-first-frame stale SSE entry cannot restore a same-generation canonical revocation", async () => {
+	test("a post-first-frame SSE cannot restore revoked credentials or add unverified grants", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await peer.fetchSnapshot();
@@ -618,7 +618,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const ready = Promise.withResolvers<void>();
 		const releaseOldFrame = Promise.withResolvers<void>();
 		let connections = 0;
-		let distinctEntryProcessed = false;
+		const observedCredentialIds: number[][] = [];
 		let canonicalReads = 0;
 		let revokedCanonicalSeen = false;
 		const allowLaterCanonicalRead = Promise.withResolvers<void>();
@@ -639,14 +639,13 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (options) {
 			if (connections++ > 0) {
-				// Once an authoritative GET changed membership, a fresh transport
-				// may still deliver a distinct, valid same-generation grant.
+				// Even a fresh transport cannot authenticate a new ID unless
+				// the canonical broker already owns that synthetic credential.
 				yield { kind: "snapshot" as const, ...initial.snapshot, credentials: [] };
 				yield {
 					kind: "entry" as const, entry: unrelated, generation,
 					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 				};
-				distinctEntryProcessed = true;
 				await untilAborted(options.signal);
 				return;
 			}
@@ -661,16 +660,18 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			};
 			// A full old-G snapshot can revive the row just as an entry frame can.
 			yield { kind: "snapshot" as const, ...initial.snapshot };
-			// Do not block a DISTINCT, legitimate same-generation SSE addition.
+			// A fabricated additional ID also lacks broker authority.
 			yield {
 				kind: "entry" as const, entry: unrelated, generation,
 				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 			};
-			distinctEntryProcessed = true;
 			await untilAborted(options.signal);
 		});
 		remote = new RemoteAuthCredentialStore({
 			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 75,
+			onSnapshot: snapshot => {
+				observedCredentialIds.push(snapshot.credentials.map(entry => entry.id));
+			},
 		});
 		try {
 			await ready.promise;
@@ -678,13 +679,17 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			// Drive the production idle verifier, not a manual refreshSnapshot().
 			await waitUntil(() => revokedCanonicalSeen && canonicalReads > 0 && remote!.snapshot.credentials.length === 0, 4_000);
 			expect(remote.snapshot.generation).toBe(generation);
+			// The second canonical read is intentionally delayed until AFTER
+			// the original revocation is asserted, so it cannot mask it.
+			// The later forged distinct ID requires a new broker GET.
+			allowLaterCanonicalRead.resolve();
 			releaseOldFrame.resolve();
-			await waitUntil(() => distinctEntryProcessed, 4_000);
-			// Neither the stale entry nor the stale full frame may resurrect
-			// a row removed by the later canonical GET. A distinct new entry
-			// on a fresh authenticated SSE connection is still valid progress.
-			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([unrelated.id]);
-			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([unrelated.id]);
+			await waitUntil(() => connections >= 3, 4_000);
+			// No old ID and no invented new ID is ever selectable or delivered
+			// through a callback; only a canonical broker grant may add it.
+			expect(remote.snapshot.credentials).toEqual([]);
+			expect(remote.listAuthCredentials()).toEqual([]);
+			expect(observedCredentialIds.every(ids => !ids.includes(revoked.id) && !ids.includes(unrelated.id))).toBe(true);
 		} finally {
 			allowLaterCanonicalRead.resolve();
 			releaseOldFrame.resolve();
@@ -706,18 +711,16 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		};
 		const streamReady = Promise.withResolvers<void>();
 		const releaseStaleFrames = Promise.withResolvers<void>();
-		const staleFramesFinished = Promise.withResolvers<void>();
 		let firstStreamSignal: AbortSignal | undefined;
 		let connections = 0;
 		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
 			if (connections++ > 0) {
-				// A fresh transport still admits an unrelated same-generation entry.
+				// A fresh connection still cannot authorize a fabricated new ID.
 				yield { kind: "snapshot" as const, ...initial.snapshot, credentials: [] };
 				yield {
 					kind: "entry" as const, entry: distinct, generation,
 					serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 				};
-				staleFramesFinished.resolve();
 				await untilAborted(opts.signal);
 				return;
 			}
@@ -748,7 +751,6 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				serverNowMs: initial.snapshot.serverNowMs, refresher: initial.snapshot.refresher,
 			};
 			yield { kind: "snapshot" as const, ...initial.snapshot, generation: generation + 50 };
-			staleFramesFinished.resolve();
 			await untilAborted(opts.signal);
 		});
 		const realFetch = client.fetchSnapshot.bind(client);
@@ -780,8 +782,11 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			expect(remote.listAuthCredentials()).toEqual([]);
 			expect(firstStreamSignal?.aborted).toBe(true);
 			releaseStaleFrames.resolve();
-			await staleFramesFinished.promise;
-			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([distinct.id]);
+			// After a reconnect, a fabricated same-generation addition must
+			// trigger canonical verification, not become a selected grant.
+			await waitUntil(() => connections >= 3, 4_000);
+			expect(remote.snapshot.credentials).toEqual([]);
+			expect(remote.listAuthCredentials()).toEqual([]);
 			// A later fresh canonical response can explicitly reauthorize
 			// a formerly removed identity at the SAME broker generation.
 			simulateCanonicalReauthorization = true;
