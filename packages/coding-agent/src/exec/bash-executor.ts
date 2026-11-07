@@ -760,7 +760,7 @@ export async function disposeBashSessionsByOwner(ownerId: string): Promise<void>
  * For testing and complete harness teardown.
  */
 export async function disposeAllBashSessions(): Promise<void> {
-	const shells = [...shellSessions.values(), ...retainedShells];
+	const shells = [...shellSessions.values(), ...retainedShells.keys()];
 	shellSessions.clear();
 	brokenShellSessions.clear();
 	shellSessionsInUse.clear();

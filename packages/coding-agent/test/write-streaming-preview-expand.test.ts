@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import {
-	decodeStreamedToolArgs,
-	streamingStringKeysForTool,
-} from "@veyyon/coding-agent/modes/terminal/controllers/tool-args-reveal";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import * as themeModule from "@veyyon/coding-agent/theme/theme";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "@veyyon/coding-agent/tools/core/streamed-tool-args";

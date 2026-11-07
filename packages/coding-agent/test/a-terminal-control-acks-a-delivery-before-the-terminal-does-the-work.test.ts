@@ -105,13 +105,20 @@ function connect(owner: TerminalOwner) {
 	};
 }
 
-async function serve(deliver: (text: string) => Promise<string>, sessionId: () => string = () => "busy") {
+async function serve(
+	deliver: (text: string) => Promise<string>,
+	sessionId: () => string = () => "busy",
+	options: { idle?: () => boolean; reserveExit?: () => void; shutdown?: () => void } = {},
+) {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "terminal-ack-"));
 	cleanup.push(() => fs.rm(root, { recursive: true, force: true }));
 	const close = await serveTerminalControl(
 		{
 			identity: () => ({ sessionId: sessionId(), cwd: root, sessionFile: path.join(root, "busy.jsonl") }),
 			deliver,
+			isIdle: options.idle ?? (() => true),
+			shutdown: async () => options.shutdown?.(),
+			reserveExit: options.reserveExit ?? (() => {}),
 			abort: async () => false,
 			history: () => [],
 			subscribe: () => () => {},
@@ -121,6 +128,91 @@ async function serve(deliver: (text: string) => Promise<string>, sessionId: () =
 	cleanup.push(close);
 	return readOwner(root);
 }
+
+test("idleExit refuses queued work and reserves delivery before flushing the accepted exit", async () => {
+	const gate = Promise.withResolvers<void>();
+	let exited = false;
+	const delivered: string[] = [];
+	const owner = await serve(
+		async text => {
+			await gate.promise;
+			delivered.push(text);
+			return "started";
+		},
+		() => "idle-exit",
+		{ shutdown: () => (exited = true) },
+	);
+	const pending = await rpc(owner, "deliver", { text: "working", mode: "auto", ack: true, messageId: "work-1" });
+	const ping = (await rpc(owner, "ping")).response.result;
+	expect(ping.capabilities).toContain("deliver-ack");
+	expect(ping.capabilities).toContain("idle-exit");
+	expect(ping.version).toEqual(expect.any(String));
+	expect(ping.argv).toEqual(process.argv);
+	expect((await rpc(owner, "idleExit")).response.result).toMatchObject({ accepted: false, reason: "busy" });
+	gate.resolve();
+	let state = "pending";
+	for (let attempt = 0; attempt < 50 && state !== "delivered"; attempt++)
+		state = (await rpc(owner, "deliveryStatus", { messageId: "work-1" })).response.result.state;
+	expect(state).toBe("delivered");
+
+	const exit = await rpc(owner, "idleExit");
+	expect(exit.response.result).toMatchObject({
+		accepted: true,
+		version: expect.any(String),
+		argv: process.argv,
+	});
+	expect((await rpc(owner, "idleExit")).response.result).toMatchObject({ accepted: false, reason: "busy" });
+	expect(exit.response.result.argv).toEqual(process.argv);
+	expect(owner.capabilities).toContain("idle-exit");
+	expect(exited).toBe(true);
+	const prompt = await rpc(owner, "deliver", { text: "too late", mode: "auto", ack: true, messageId: "late-1" });
+	expect(prompt.response).toMatchObject({ ok: false });
+	expect(delivered).toEqual(["working"]);
+});
+test("idleExit refuses a busy session without aborting or blocking its next prompt", async () => {
+	let exited = false;
+	const delivered: string[] = [];
+	const owner = await serve(
+		async text => {
+			delivered.push(text);
+			return "answered";
+		},
+		() => "busy-session",
+		{ idle: () => false, shutdown: () => (exited = true) },
+	);
+	expect((await rpc(owner, "idleExit")).response.result).toMatchObject({ accepted: false, reason: "busy" });
+	expect((await rpc(owner, "deliver", { text: "still accepted", mode: "auto" })).response.result).toBe("answered");
+	expect(delivered).toEqual(["still accepted"]);
+	expect(exited).toBe(false);
+});
+
+test("a prompt racing idleExit is delivered or refused, never acknowledged and lost", async () => {
+	let exited = false;
+	const delivered: string[] = [];
+	const owner = await serve(
+		async text => {
+			delivered.push(text);
+			return "answered";
+		},
+		() => "race",
+		{ shutdown: () => (exited = true) },
+	);
+	const [exit, prompt] = await Promise.all([
+		rpc(owner, "idleExit"),
+		rpc(owner, "deliver", { text: "during restart", mode: "auto" }),
+	]);
+	if (exit.response.result.accepted) {
+		expect(prompt.response.ok).toBe(false);
+		expect(exited).toBe(true);
+		expect(delivered).toEqual([]);
+	} else {
+		expect(exit.response.result).toMatchObject({ accepted: false, reason: "busy" });
+		expect(prompt.response).toMatchObject({ ok: true, result: "answered" });
+		expect(delivered).toEqual(["during restart"]);
+		expect(exited).toBe(false);
+	}
+});
+
 
 test("an acked delivery is answered within 1 s while the terminal is stuck, then runs once, in order", async () => {
 	const gate = Promise.withResolvers<void>();

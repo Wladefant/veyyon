@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import * as path from "node:path";
 import { bundledCatalogDigest } from "@veyyon/catalog/models";
 import { buildPayloadDefines } from "./generate-docs-index";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";

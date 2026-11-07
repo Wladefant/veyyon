@@ -11,6 +11,7 @@
 ### Changed
 
 - ACP model choices now list OpenAI Codex, Anthropic, Antigravity and OpenCode first without removing models or changing their provider-relative order.
+- Terminal control supports an authenticated idle-exit request that refuses busy sessions and flushes acceptance before shutdown.
 
 ## [1.8.5] - 2026-11-06
 

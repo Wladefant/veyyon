@@ -99,7 +99,7 @@ export class TurnContinuations {
 						error: errorMessage(error),
 						stack: error instanceof Error ? error.stack : undefined,
 					});
-					options?.onError?.();
+					options?.onError?.(error);
 				} finally {
 					host.endTurn();
 				}

@@ -34,7 +34,6 @@ import {
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
 	resolveOutputSinkWindow,
-	resolveOutputSinkHeadBytes,
 } from "../core/output-meta";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
@@ -43,6 +42,7 @@ import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends
 import { EVAL_DISPLAY_VERSION, formatDisplayJson } from "./eval-display";
 import { evalToolView } from "./eval-view";
 import { evalBackendLoaders } from "./manifest";
+export { formatDisplayJsonForText } from "./eval-display";
 
 /** Language tokens the eval tool accepts, in stable display order. */
 export type EvalLanguageToken = "py" | "js" | "rb" | "jl";

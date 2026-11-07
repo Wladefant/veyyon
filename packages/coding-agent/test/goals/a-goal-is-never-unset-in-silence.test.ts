@@ -35,6 +35,7 @@ import { createTools, type Tool, type ToolSession } from "@veyyon/coding-agent/t
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { pathExistsOrThrow, TempDir } from "@veyyon/utils";
 
+const fileExists = pathExistsOrThrow;
 /** The shape `GoalRuntime` persists through `appendModeChange`, as it lands on the branch. */
 function storedGoal(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return {

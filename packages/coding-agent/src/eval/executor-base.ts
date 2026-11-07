@@ -11,6 +11,7 @@ import {
 	postmortem,
 	toError,
 } from "@veyyon/utils";
+import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { Settings } from "../config/settings";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
@@ -566,7 +567,7 @@ export async function executeWithKernelBase<
 	const collectDisplay = (output: KernelDisplayOutput): void => {
 		if (output.type === "json") {
 			try {
-				const serialized = JSON.stringify(output.data);
+				const serialized = stringifyJsonSafe(output.data);
 				const filtered = new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText).sanitize(serialized);
 				output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
 			} catch {
