@@ -1683,7 +1683,7 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   prependBomOnRefusal = false;
   // Test-only independent writer revises a previously owned line before the
   // strict source reread; the id and all other journal lines remain valid.
-  rewriteOwnedRecordOnRefusal: "header" | "message" | "missing-message" | undefined;
+  rewriteOwnedRecordOnRefusal: "header" | "message" | "missing-message" | "foreign-before-header" | undefined;
   reviseAbortedMarkerOnRefusal: "message" | "reason" | undefined;
   appendForeignLineBeforeRepairPublish: string | undefined;
   // Independent append after the storage's final synchronous publication guard,
@@ -1836,7 +1836,15 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
               catch { return false; }
             });
             if (rowIndex < 0) throw new Error("expected disposable original journal record");
-            if (revision === "missing-message") {
+            if (revision === "foreign-before-header") {
+              // A valid independent JSONL row before the session header must
+              // never be silently relocated to the tail by strict recovery.
+              rows.unshift(JSON.stringify({
+                type: "message", id: "synthetic-preheader-foreign", parentId: null,
+                timestamp: new Date().toISOString(),
+                message: { role: "user", content: "Synthetic foreign entry before original header", timestamp: Date.now() },
+              }));
+            } else if (revision === "missing-message") {
               // A peer removes one complete, previously published owned line;
               // the surviving journal is still syntactically valid JSONL.
               rows.splice(rowIndex, 1);
@@ -3141,7 +3149,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
   });
 
   it("refuses a revised or removed persisted owned record and a same-ID source header during failed-fork repair", async () => {
-    for (const revision of ["message", "header", "missing-message", "missing-message-with-peer-tail"] as const) {
+    for (const revision of ["message", "header", "missing-message", "missing-message-with-peer-tail", "foreign-before-header"] as const) {
       using temp = TempDir.createSync(`@veyyon-fork-owned-revision-${revision}-`);
       const storage = new SyntheticForkSourceCloseRefusalStorage();
       const manager = SessionManager.create(
@@ -3188,6 +3196,8 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
         const refusal = revision === "header"
           ? "Cannot preserve unexpected session journal header"
+          : revision === "foreign-before-header"
+            ? "Cannot preserve journal entry before source header during failed-fork repair"
           : revision.startsWith("missing-message")
             ? "Cannot preserve missing previously published session entry"
             : "Cannot preserve independently modified session journal entry";
@@ -3195,7 +3205,12 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
 
         const observed = await fs.readFile(source, "utf8");
         expect(observed).not.toBe(original);
-        if (revision.startsWith("missing-message")) {
+        if (revision === "foreign-before-header") {
+          const first = JSON.parse(observed.split("\n")[0]!) as { id: string };
+          expect(first.id).toBe("synthetic-preheader-foreign");
+          expect(observed).toContain("Synthetic foreign entry before original header");
+          expect(observed).toContain("Original same-ID message with artifact://0");
+        } else if (revision.startsWith("missing-message")) {
           expect(observed).not.toContain("Original same-ID message with artifact://0");
           expect(observed).toContain("Second original message must survive removal");
           if (revision === "missing-message-with-peer-tail") {
