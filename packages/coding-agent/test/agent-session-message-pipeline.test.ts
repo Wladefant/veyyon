@@ -24,6 +24,7 @@ import type { MemoryBackend } from "@veyyon/coding-agent/memory/types";
 import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
 import { obfuscateProviderContext, SecretObfuscator } from "@veyyon/coding-agent/secrets";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { RawSseDebugBuffer } from "@veyyon/coding-agent/debug/raw-sse-buffer";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import { wrapSteeringForModel } from "@veyyon/coding-agent/session/steering-envelope";
@@ -279,7 +280,10 @@ describe("AgentSession message pipeline", () => {
 			await session.prompt("Queued text-only prompt", { streamingBehavior: mode });
 			await session.prompt("Queued image prompt", { images: [image], streamingBehavior: mode });
 
-			expect(queuedMessages.map(message => message.content)).toEqual([
+			expect(queuedMessages.map(message => {
+				if (message.role !== "user") throw new Error(`Expected queued user message, received ${message.role}`);
+				return message.content;
+			})).toEqual([
 				[{ type: "text", text: "Queued text-only prompt" }],
 				[
 					{ type: "text", text: "Queued image prompt" },
@@ -837,19 +841,21 @@ describe("AgentSession message pipeline", () => {
 
 	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {
 		const requestOnSseEvent = vi.fn();
+		const rawSseDebugBuffer = new RawSseDebugBuffer();
 		const session = new AgentSession({
 			agent: createAgent(),
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			onSseEvent: requestOnSseEvent,
+			rawSseDebugBuffer,
 		});
 		sessions.push(session);
 
 		const prepared = await session.prepareSimpleStreamOptions({});
 		prepared.onSseEvent?.({ event: "message", data: "{}", raw: ["event: message", "data: {}"] });
 
-		expect(session.rawSseDebugBuffer?.snapshot().totalEvents).toBe(1);
+		expect(rawSseDebugBuffer.snapshot().totalEvents).toBe(1);
 		expect(requestOnSseEvent).toHaveBeenCalledWith(
 			{ event: "message", data: "{}", raw: ["event: message", "data: {}"] },
 			undefined,

@@ -3,7 +3,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEexist, isEnoent, postmortem, ptree } from "@veyyon/utils";
-import { isEexist, isEnoent, postmortem, toError } from "@veyyon/utils";
+import { toError } from "@veyyon/utils";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { brokerHoldsLease } from "./broker-lease";

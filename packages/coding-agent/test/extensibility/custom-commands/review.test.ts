@@ -6,6 +6,7 @@ import { ReviewCommand } from "@veyyon/coding-agent/extensibility/custom-command
 import type { CustomCommandAPI } from "@veyyon/coding-agent/extensibility/custom-commands/types";
 import type { HookCommandContext } from "@veyyon/coding-agent/extensibility/hooks/types";
 import type { PrDiffPayload, ViewLookupResult } from "@veyyon/coding-agent/tools/web/gh";
+import type { CacheLookupResult } from "@veyyon/coding-agent/tools/web/github-cache";
 import * as ghFetch from "@veyyon/coding-agent/tools/web/gh-fetch";
 import * as git from "@veyyon/coding-agent/utils/git";
 import * as jj from "@veyyon/coding-agent/utils/jj";

@@ -549,7 +549,9 @@ describe("executeJs", () => {
 						controller.abort(new Error("cancelled"));
 					}
 				},
-				onChunk: chunk => chunks.push(chunk),
+				onChunk: chunk => {
+					chunks.push(chunk);
+				},
 				...(mode === "timeout" ? { timeoutMs: 100 } : { signal: controller.signal }),
 			},
 		);
@@ -571,7 +573,9 @@ describe("executeJs", () => {
 			sessionId,
 			session,
 			sessionFile,
-			onChunk: chunk => callbacks.push(chunk),
+			onChunk: chunk => {
+				callbacks.push(chunk);
+			},
 		});
 		expect(result.exitCode).toBe(1);
 		expect(result.output).toContain("eval failure");

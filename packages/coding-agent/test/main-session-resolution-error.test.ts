@@ -49,8 +49,8 @@ function buildForkArgs(fork: string, noSession = false): Args {
 	};
 }
 
-const stubSettings = { get: () => undefined } as unknown as SettingsType;
-const autoResumeSettings = { get: () => true } as unknown as SettingsType;
+const stubSettings = { get: () => undefined } as unknown as Settings;
+const autoResumeSettings = { get: () => true } as unknown as Settings;
 
 const ORIGINAL_STDOUT_WRITE = process.stdout.write.bind(process.stdout);
 const ORIGINAL_STDERR_WRITE = process.stderr.write.bind(process.stderr);

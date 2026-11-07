@@ -4,7 +4,7 @@ import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { DiscoveryFailureStage, DiscoveryHooks } from "../discovery/failure";
 import { fetchOpenAICompatibleModels } from "../discovery/openai-compatible";
 import { Effort } from "../effort";
-import { isGlm52ModelId } from "../identity/family";
+import { isGlm52ModelId, isGlm52ReasoningEffortModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import type { FetchImpl, ModelSpec, ThinkingConfig } from "../types";
 import { discoveryFetch, toNonEmptyString } from "../utils";

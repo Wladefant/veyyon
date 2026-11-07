@@ -12,6 +12,7 @@ import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { runExtensionCompact, runExtensionSetModel } from "./compact-handler";
 import { getSessionSlashCommands } from "./get-commands-handler";
 import type { ExtensionActions, ExtensionCommandContextActions, ExtensionContextActions } from "./types";
+import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 
 /** What one host does differently from every other host acting on a session. */
 export interface SessionActionHost {
@@ -31,6 +32,7 @@ export interface SessionExtensionActions {
 }
 
 export function sessionExtensionActions(session: AgentSession, host: SessionActionHost): SessionExtensionActions {
+	const workerAccess = sessionWorkerAccess(() => session.sessionManager.getSessionId());
 	const { activatable } = host;
 	return {
 		actions: {
@@ -54,6 +56,7 @@ export function sessionExtensionActions(session: AgentSession, host: SessionActi
 			setSessionName: async name => {
 				await session.sessionManager.setSessionName(name, "user");
 			},
+			...workerAccess,
 		},
 		contextActions: {
 			getModel: () => session.model,

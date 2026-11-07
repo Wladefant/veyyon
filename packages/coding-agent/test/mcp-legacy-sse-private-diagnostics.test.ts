@@ -119,7 +119,7 @@ describe("legacy SSE private diagnostics", () => {
     });
     try {
       await fixture.transport.connect();
-      expect(await fixture.transport.request("tools/list")).toEqual({ tools: [] });
+      expect(await fixture.transport.request<{ tools: unknown[] }>("tools/list")).toEqual({ tools: [] });
     } finally {
       await fixture.close();
     }

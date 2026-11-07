@@ -13,6 +13,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
 import { errorMessage, formatDuration, lazy, prompt, toError } from "@veyyon/utils";
+import { parametersWireSchema } from "@veyyon/ai/utils/schema/wire";
 import {
 	type BuildIdentity,
 	formatBuildIdentity,
@@ -111,7 +112,7 @@ export class IrcTool implements AgentTool<typeof ircSchema.value, IrcDetails> {
 		return ircSchema.value;
 	}
 	get wireParameters(): Record<string, unknown> {
-		return ircSchema.wire;
+		return parametersWireSchema(ircSchema.value);
 	}
 	readonly strict = true;
 	// Only the ops that block observe an interrupt. `list`, `inbox`, a

@@ -87,7 +87,7 @@ test.skipIf(process.platform === "win32")(
 		const file = path.join(dir, "source.json");
 		const link = path.join(dir, "mcp.json");
 		const config = {
-			mcpServers: { fixture: { type: "stdio", command: process.execPath } },
+			mcpServers: { fixture: { type: "stdio" as const, command: process.execPath } },
 		};
 		const original = JSON.stringify(config);
 		try {

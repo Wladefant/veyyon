@@ -1,3 +1,4 @@
+import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { truncateHeadBytes } from "../../session/streaming-output";
 
 export const EVAL_DISPLAY_VERSION = 1;
@@ -12,12 +13,7 @@ export interface FormattedDisplayJson {
 }
 
 export function formatDisplayJson(value: unknown): FormattedDisplayJson {
-	let fullText: string;
-	try {
-		fullText = JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		fullText = String(value);
-	}
+	const fullText = stringifyJsonSafe(value, 2);
 	const totalBytes = Buffer.byteLength(fullText, "utf-8");
 	if (totalBytes <= MAX_DISPLAY_TEXT_BYTES) {
 		return { fullText, previewText: fullText, detailsValue: value, truncated: false };

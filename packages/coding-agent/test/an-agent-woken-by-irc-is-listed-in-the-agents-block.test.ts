@@ -121,7 +121,7 @@ describe("an agent woken by IRC is listed in the Agents block while it runs", ()
 		mode.ui = new TUI(terminal);
 		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 		await mode.init();
-		await terminal.waitForRender();
+		await terminal.waitForRender(mode.ui);
 	});
 
 	afterEach(async () => {
@@ -156,7 +156,7 @@ describe("an agent woken by IRC is listed in the Agents block while it runs", ()
 		vi.advanceTimersByTime(150);
 		vi.useRealTimers();
 		mode?.ui.requestRender();
-		await terminal?.waitForRender();
+		await terminal?.waitForRender(mode!.ui);
 	}
 
 	const cases: Array<{ detached: boolean; wakePath: "idle" | "parked" }> = [

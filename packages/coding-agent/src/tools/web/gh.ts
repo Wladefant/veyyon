@@ -70,8 +70,8 @@ export type {
 	PrDiffLookupOptions,
 	PrDiffPayload,
 	PrViewLookupOptions,
-	ViewLookupResult,
 } from "./gh-fetch";
+export type { CacheLookupResult as ViewLookupResult } from "./github-cache";
 /**
  * The fetchers moved to `./gh-fetch`, which imports neither the prompt registry nor this tool. Every
  * name is re-exported here because the `github` tool was their only public home for a long time and
