@@ -1058,6 +1058,10 @@ describe("history exact record lookup", () => {
 				[header, entry, '{"type":"session","id":"s-valid","extra":1,"extra":2}'],
 				[header, entry, '{"type":"session","id":'],
 				[header, entry, '{"type":"message","id":"evil","id":"evil","parentId":"root","message":"needle forged"}'],
+				// A preceding benign duplicate must not hide a later duplicated identity key.
+				[header, entry, '{"type":"message","id":"evil","note":1,"note":2,"id":"evil","parentId":"root","message":"needle forged"}'],
+				[header, entry, '{"type":"message","id":"evil","note":1,"note":2,"parentId":"root","parentId":null,"message":"needle forged"}'],
+				[header, entry, '{"type":"message","id":"evil","note":1,"note":2,"type":"message","parentId":"root","message":"needle forged"}'],
 			] as const;
 			for (const lines of cases) {
 				await fs.writeFile(file, lines.join("\n") + "\n");
