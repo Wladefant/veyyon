@@ -12,7 +12,7 @@ test("server epoch loss blocks admission and does not reacquire silently", async
 		if (path.endsWith("/lease")) {
 			acquisitions++;
 			return Response.json({
-				ownerNode: "node",
+				ownerNode: "00000000-0000-4000-8000-000000000010",
 				epoch: 1,
 				expiresAt: "2099-01-01T00:00:00Z",
 				headSequence: 0,
@@ -21,7 +21,7 @@ test("server epoch loss blocks admission and does not reacquire silently", async
 		}
 		if (path.endsWith("/renew") && !owns) return Response.json({ error: "stale" }, { status: 409 });
 		return Response.json({
-			ownerNode: "node",
+			ownerNode: "00000000-0000-4000-8000-000000000010",
 			epoch: 1,
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
@@ -34,7 +34,7 @@ test("server epoch loss blocks admission and does not reacquire silently", async
 		key: new Uint8Array(32),
 		fetch: fake,
 	});
-	const session = new SynchronizedSession("s", client, undefined, "node");
+	const session = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-000000000010");
 	await session.admit();
 	owns = false;
 	await expect(session.admit()).rejects.toThrow(/409/);
@@ -198,7 +198,7 @@ test("concurrent admission shares one in-flight checkpoint lease acquisition", a
 	const allowLease = Promise.withResolvers<void>();
 	const actions: string[] = [];
 	const lease = {
-		ownerNode: "test-owner",
+		ownerNode: "00000000-0000-4000-8000-00000000000d",
 		epoch: 1,
 		expiresAt: "2099-01-01T00:00:00Z",
 		headSequence: 0,
@@ -217,7 +217,7 @@ test("concurrent admission shares one in-flight checkpoint lease acquisition", a
 		"concurrent-admission",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		undefined,
-		"test-owner",
+		"00000000-0000-4000-8000-00000000000d",
 	);
 	const first = session.admit();
 	const second = session.admit();
@@ -244,7 +244,7 @@ test("concurrent close calls share exactly one authority release and stay fenced
 			await finishRelease.promise;
 		}
 		return Response.json({
-			ownerNode: "test-owner",
+			ownerNode: "00000000-0000-4000-8000-00000000000d",
 			epoch: action === "release" ? 2 : 1,
 			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
 		});
@@ -253,7 +253,7 @@ test("concurrent close calls share exactly one authority release and stay fenced
 		"close-single-flight",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		undefined,
-		"test-owner",
+		"00000000-0000-4000-8000-00000000000d",
 	);
 	await session.admit();
 	const first = session.close();
@@ -280,7 +280,7 @@ test("a failed close cannot replay an ambiguous authority release", async () => 
 		actions.push(action);
 		if (action === "release") return new Response(null, { status: 409 });
 		return Response.json({
-			ownerNode: "test-owner", epoch: 1,
+			ownerNode: "00000000-0000-4000-8000-00000000000d", epoch: 1,
 			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
 		});
 	};
@@ -288,7 +288,7 @@ test("a failed close cannot replay an ambiguous authority release", async () => 
 		"ambiguous-release-single-flight",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		undefined,
-		"test-owner",
+		"00000000-0000-4000-8000-00000000000d",
 	);
 	await session.admit();
 	const first = session.close();
@@ -320,7 +320,7 @@ test("concurrent transferred-session close persists the resume epoch once", asyn
 			await finishRelease.promise;
 		}
 		return Response.json({
-			ownerNode: "runtime-owner", epoch: action === "release" ? 6 : 5,
+			ownerNode: "00000000-0000-4000-8000-00000000000c", epoch: action === "release" ? 6 : 5,
 			expiresAt: "2099-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
 			...(action === "claim" ? { targetNode: "destination-device", transferId: "transfer-close", resumeToken: token } : {}),
 		});
@@ -333,7 +333,7 @@ test("concurrent transferred-session close persists the resume epoch once", asyn
 			transferId: "transfer-close", transferEpoch: 4, claimToken: "a-long-enough-claim-capability",
 			epoch: 4,
 		},
-		"runtime-owner",
+		"00000000-0000-4000-8000-00000000000c",
 		async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
 	);
 	const deadline = setTimeout(() => entered.reject(new Error("transferred close never issued /release")), 3000);
@@ -364,7 +364,7 @@ test("close during checkpoint lease acquisition releases the late grant and refu
 	const allowLease = Promise.withResolvers<void>();
 	const actions: string[] = [];
 	const lease = {
-		ownerNode: "test-owner",
+		ownerNode: "00000000-0000-4000-8000-00000000000d",
 		epoch: 1,
 		expiresAt: "2099-01-01T00:00:00Z",
 		headSequence: 0,
@@ -383,7 +383,7 @@ test("close during checkpoint lease acquisition releases the late grant and refu
 		"late-admission",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		undefined,
-		"test-owner",
+		"00000000-0000-4000-8000-00000000000d",
 	);
 	const admission = session.admit();
 	await entered.promise;
@@ -404,7 +404,7 @@ test("an expired checkpoint lease permanently fences subsequent admissions", asy
 		const action = new URL(String(input)).pathname.split("/").pop()!;
 		actions.push(action);
 		return Response.json({
-			ownerNode: "test-owner",
+			ownerNode: "00000000-0000-4000-8000-00000000000d",
 			epoch: 1,
 			expiresAt: "2000-01-01T00:00:00Z",
 			headSequence: 0,
@@ -415,7 +415,7 @@ test("an expired checkpoint lease permanently fences subsequent admissions", asy
 		"expired-admission",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		undefined,
-		"test-owner",
+		"00000000-0000-4000-8000-00000000000d",
 	);
 	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
 	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
@@ -441,7 +441,7 @@ test("close during transfer claim releases the late grant without persisting a r
 			await allowClaim.promise;
 		}
 		return Response.json({
-			ownerNode: "runtime-owner",
+			ownerNode: "00000000-0000-4000-8000-00000000000c",
 			epoch: action === "release" ? 6 : 5,
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
@@ -463,7 +463,7 @@ test("close during transfer claim releases the late grant without persisting a r
 			"closing-transfer",
 			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 			marker,
-			"runtime-owner",
+			"00000000-0000-4000-8000-00000000000c",
 			async () => { persisted++; },
 		);
 		const admission = session.admit();
@@ -491,7 +491,7 @@ test("an expired renewal response fences the current admission", async () => {
 		const action = new URL(String(input)).pathname.split("/").pop()!;
 		actions.push(action);
 		return Response.json({
-			ownerNode: "test-owner",
+			ownerNode: "00000000-0000-4000-8000-00000000000d",
 			epoch: 1,
 			expiresAt: action === "renew" ? "2000-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
 			headSequence: 0,
@@ -502,7 +502,7 @@ test("an expired renewal response fences the current admission", async () => {
 		"expired-renewal-response",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		undefined,
-		"test-owner",
+		"00000000-0000-4000-8000-00000000000d",
 	);
 	await expect(session.admit()).rejects.toThrow(/Checkpoint lease lost/);
 	await expect(session.admit()).rejects.toThrow(/Synchronized ownership lost/);
@@ -519,7 +519,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 		const action = new URL(String(input)).pathname.split("/").pop()!;
 		expiredActions.push(action);
 		return Response.json({
-			ownerNode: "expired-owner",
+			ownerNode: "00000000-0000-4000-8000-00000000000e",
 			epoch: 1,
 			expiresAt: "2000-01-01T00:00:00Z",
 			headSequence: 0,
@@ -530,7 +530,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 		"expired-periodic",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: expiredFetch }),
 		undefined,
-		"expired-owner",
+		"00000000-0000-4000-8000-00000000000e",
 		undefined,
 		8,
 	);
@@ -541,7 +541,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 	const controlActions: string[] = [];
 	let renewals = 0;
 	const validLease = {
-		ownerNode: "valid-owner",
+		ownerNode: "00000000-0000-4000-8000-00000000000f",
 		epoch: 2,
 		expiresAt: "2099-01-01T00:00:00Z",
 		headSequence: 0,
@@ -560,7 +560,7 @@ test("lost admission never renews and close drains the periodic renewal before r
 		"valid-periodic",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: controlFetch }),
 		undefined,
-		"valid-owner",
+		"00000000-0000-4000-8000-00000000000f",
 		undefined,
 		8,
 	);
@@ -595,8 +595,8 @@ test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoc
 	const token = "a-long-enough-resume-capability";
 	const invalid = [
 		{ name: "foreign-owner", ownerNode: "foreign-owner", epoch: 6 },
-		{ name: "stale-epoch", ownerNode: "runtime-owner", epoch: 5 },
-		{ name: "fractional-epoch", ownerNode: "runtime-owner", epoch: 6.5 },
+		{ name: "stale-epoch", ownerNode: "00000000-0000-4000-8000-00000000000c", epoch: 5 },
+		{ name: "fractional-epoch", ownerNode: "00000000-0000-4000-8000-00000000000c", epoch: 6.5 },
 	];
 	try {
 		for (const scenario of invalid) {
@@ -607,7 +607,7 @@ test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoc
 				actions.push(action);
 				if (action === "finalize") return Response.json({ ok: true });
 				return Response.json({
-					ownerNode: action === "release" ? scenario.ownerNode : "runtime-owner",
+					ownerNode: action === "release" ? scenario.ownerNode : "00000000-0000-4000-8000-00000000000c",
 					epoch: action === "release" ? scenario.epoch : 5,
 					expiresAt: "2099-01-01T00:00:00Z",
 					headSequence: 0,
@@ -629,7 +629,7 @@ test("untrusted HTTP-200 release cannot persist an unverified resume-marker epoc
 				sessionId,
 				new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 				marker,
-				"runtime-owner",
+				"00000000-0000-4000-8000-00000000000c",
 				async (resumeToken, epoch) => { persisted.push({ token: resumeToken, epoch }); },
 			);
 			await session.admit();
@@ -662,7 +662,7 @@ test("invalid periodic HTTP-200 lease renewals fence further admission and stop 
 				if (renewCount === 2) secondRenew.resolve();
 			}
 			return Response.json({
-				ownerNode: "test-owner",
+				ownerNode: "00000000-0000-4000-8000-00000000000d",
 				epoch: action === "release" ? 2 : action === "renew" && renewCount === 2 ? scenario.epoch : 1,
 				expiresAt: action === "renew" && renewCount === 2 ? scenario.expiresAt : "2099-01-01T00:00:00Z",
 				headSequence: 0,
@@ -673,7 +673,7 @@ test("invalid periodic HTTP-200 lease renewals fence further admission and stop 
 			`periodic-${scenario.label}`,
 			new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 			undefined,
-			"test-owner",
+			"00000000-0000-4000-8000-00000000000d",
 			undefined,
 			5,
 		);
@@ -709,7 +709,7 @@ test("successful transfer retains its persisted resume capability on release", a
 		actions.push(action);
 		if (action === "finalize") return Response.json({ ok: true });
 		return Response.json({
-			ownerNode: "runtime-owner",
+			ownerNode: "00000000-0000-4000-8000-00000000000c",
 			epoch: action === "release" ? 6 : 5,
 			expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0,
@@ -730,7 +730,7 @@ test("successful transfer retains its persisted resume capability on release", a
 		"successful-transfer",
 		new CheckpointClient({ baseUrl: "https://test", token: "test", key: new Uint8Array(32), fetch: fake }),
 		claim,
-		"runtime-owner",
+		"00000000-0000-4000-8000-00000000000c",
 		async (resumeToken, epoch) => {
 			persisted.push({ token: resumeToken, epoch });
 		},
@@ -752,14 +752,14 @@ test("foreign-owner lease response cannot admit a synchronized session or renew 
 		const action = new URL(String(input)).pathname.split("/").pop()!;
 		actions.push(action);
 		return Response.json({
-			ownerNode: "owner-b", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
+			ownerNode: "00000000-0000-4000-8000-00000000000b", epoch: 1, expiresAt: "2099-01-01T00:00:00Z",
 			headSequence: 0, manifestHash: "",
 		});
 	};
 	const client = new CheckpointClient({
 		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
 	});
-	const session = new SynchronizedSession("foreign-owner", client, undefined, "owner-a");
+	const session = new SynchronizedSession("foreign-owner", client, undefined, "00000000-0000-4000-8000-00000000000a");
 	await expect(session.admit()).rejects.toThrow(/lease owner mismatch/);
 	expect(actions).toEqual(["lease"]);
 	await expect(client.assertWritable("foreign-owner", 1)).rejects.toThrow(/lease lost/);
@@ -788,7 +788,7 @@ test("invalid transfer grant cannot persist a resume capability before admission
 				actions.push(action);
 				if (action !== "claim") return Response.json({ ok: true });
 				return Response.json({
-					ownerNode: "runtime-owner",
+					ownerNode: "00000000-0000-4000-8000-00000000000c",
 					epoch: scenario.epoch,
 					expiresAt: scenario.expiresAt,
 					headSequence: 0,
@@ -813,7 +813,7 @@ test("invalid transfer grant cannot persist a resume capability before admission
 					claimToken: "a-long-enough-claim-capability",
 					epoch: 4,
 				},
-				"runtime-owner",
+				"00000000-0000-4000-8000-00000000000c",
 				async (token, epoch) => { persisted.push({ token, epoch }); },
 			);
 			await expect(session.admit()).rejects.toThrow(/transfer grant has invalid lease fence/);
@@ -895,7 +895,7 @@ test("a stale guard cannot release a newer owner through a shared checkpoint cli
 		} else if (action === "renew" || action === "release") {
 			if (body.ownerNode !== activeOwner || body.epoch !== epoch)
 				return Response.json({ error: "stale writer" }, { status: 409 });
-			if (action === "renew" && failOldRenewal && body.ownerNode === "owner-a") {
+			if (action === "renew" && failOldRenewal && body.ownerNode === "00000000-0000-4000-8000-00000000000a") {
 				activeOwner = undefined; // The fake authority's old lease has expired.
 				return Response.json({ error: "lease expired" }, { status: 409 });
 			}
@@ -916,8 +916,8 @@ test("a stale guard cannot release a newer owner through a shared checkpoint cli
 	const client = new CheckpointClient({
 		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
 	});
-	const stale = new SynchronizedSession("s", client, undefined, "owner-a", undefined, 60_000);
-	const current = new SynchronizedSession("s", client, undefined, "owner-b", undefined, 60_000);
+	const stale = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000a", undefined, 60_000);
+	const current = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000b", undefined, 60_000);
 	try {
 		await stale.admit();
 		failOldRenewal = true;
@@ -925,15 +925,15 @@ test("a stale guard cannot release a newer owner through a shared checkpoint cli
 		await current.admit();
 		expect(epoch).toBe(2);
 		// A's periodic renewer must not adopt B's newer session-keyed cache.
-		await expect(client.renewLease("s", { ownerNode: "owner-a", epoch: 1 }))
+		await expect(client.renewLease("s", { ownerNode: "00000000-0000-4000-8000-00000000000a", epoch: 1 }))
 			.rejects.toThrow(/Checkpoint lease lost/);
-		await expect(client.assertWritable("s", 2, "owner-a")).rejects.toThrow(/lease lost/);
-		await client.assertWritable("s", 2, "owner-b");
+		await expect(client.assertWritable("s", 2, "00000000-0000-4000-8000-00000000000a")).rejects.toThrow(/lease lost/);
+		await client.assertWritable("s", 2, "00000000-0000-4000-8000-00000000000b");
 		await stale.close();
 		expect(releases).toEqual([]);
 		await client.assertWritable("s", 2);
 		await current.close();
-		expect(releases).toEqual(["owner-b:2"]);
+		expect(releases).toEqual(["00000000-0000-4000-8000-00000000000b:2"]);
 	} finally {
 		await Promise.allSettled([stale.close(), current.close()]);
 	}
@@ -958,7 +958,7 @@ test("a late stale renewal reply cannot overwrite a replacement guard's lease", 
 		} else if (action === "renew") {
 			if (body.ownerNode !== activeOwner || body.epoch !== epoch)
 				return Response.json({ error: "stale writer" }, { status: 409 });
-			if (deferOldRenewal && body.ownerNode === "owner-a") {
+			if (deferOldRenewal && body.ownerNode === "00000000-0000-4000-8000-00000000000a") {
 				const oldReceipt = {
 					ownerNode: body.ownerNode, epoch, expiresAt: "2099-01-01T00:00:00Z",
 					headSequence: 0, manifestHash: "",
@@ -988,12 +988,12 @@ test("a late stale renewal reply cannot overwrite a replacement guard's lease", 
 	const client = new CheckpointClient({
 		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
 	});
-	const oldGuard = new SynchronizedSession("s", client, undefined, "owner-a", undefined, 60_000);
-	const newGuard = new SynchronizedSession("s", client, undefined, "owner-b", undefined, 60_000);
+	const oldGuard = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000a", undefined, 60_000);
+	const newGuard = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000b", undefined, 60_000);
 	try {
 		await oldGuard.admit();
 		deferOldRenewal = true;
-		const pending = client.renewLease("s", { ownerNode: "owner-a", epoch: 1 });
+		const pending = client.renewLease("s", { ownerNode: "00000000-0000-4000-8000-00000000000a", epoch: 1 });
 		try {
 			await entered;
 			await newGuard.admit();
@@ -1001,7 +1001,7 @@ test("a late stale renewal reply cannot overwrite a replacement guard's lease", 
 			allowOldReply();
 		}
 		await expect(pending).rejects.toThrow(/lease changed during renewal/);
-		await client.assertWritable("s", 2, "owner-b");
+		await client.assertWritable("s", 2, "00000000-0000-4000-8000-00000000000b");
 		await newGuard.close();
 	} finally {
 		allowOldReply();
@@ -1036,7 +1036,7 @@ test("a late old release reply cannot evict a newer owner's cached lease", async
 					ownerNode: body.ownerNode, epoch,
 					expiresAt: "1970-01-01T00:00:00Z", headSequence: 0, manifestHash: "",
 				};
-				if (body.ownerNode === "owner-a") {
+				if (body.ownerNode === "00000000-0000-4000-8000-00000000000a") {
 					releaseOldEntered();
 					await oldReplyGate;
 				}
@@ -1053,8 +1053,8 @@ test("a late old release reply cannot evict a newer owner's cached lease", async
 	const client = new CheckpointClient({
 		baseUrl: "https://checkpoint.invalid", token: "test", key: new Uint8Array(32), fetch: fake,
 	});
-	const previous = new SynchronizedSession("s", client, undefined, "owner-a", undefined, 60_000);
-	const replacement = new SynchronizedSession("s", client, undefined, "owner-b", undefined, 60_000);
+	const previous = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000a", undefined, 60_000);
+	const replacement = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000b", undefined, 60_000);
 	try {
 		await previous.admit();
 		const oldClose = previous.close();
@@ -1068,7 +1068,7 @@ test("a late old release reply cannot evict a newer owner's cached lease", async
 		await oldClose;
 		await client.assertWritable("s", 3);
 		await replacement.close();
-		expect(releases).toEqual(["owner-a:1", "owner-b:3"]);
+		expect(releases).toEqual(["00000000-0000-4000-8000-00000000000a:1", "00000000-0000-4000-8000-00000000000b:3"]);
 	} finally {
 		releaseOldReply();
 		await Promise.allSettled([previous.close(), replacement.close()]);

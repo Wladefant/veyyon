@@ -12,6 +12,7 @@ import { TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
 import { createOkTool } from "./helpers/ok-tool";
+import { createOkTool as makeTool } from "./helpers/ok-tool";
 
 interface HarnessOptions {
 	extraRegistryTools?: readonly AgentTool[];

@@ -10,10 +10,11 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as mcpConfigWriter from "@veyyon/coding-agent/mcp/config-writer";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
-import { TODO_VERBS } from "@veyyon/coding-agent/slash-commands/helpers/todo";
 import * as sshConfigWriter from "@veyyon/coding-agent/ssh/config-writer";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeWithRetries } from "@veyyon/utils";
+
+const TODO_VERBS = ["append", "start", "done", "drop", "rm", "pending", "reset", "copy", "export", "import", "edit", "help"] as const;
 
 interface FakeAcpBuiltinSession {
 	fastMode: boolean;
@@ -889,13 +890,13 @@ describe("wave 3 commands", () => {
 	 * when the MESSAGE changed and stayed green when the DISPATCHER did: `24e3b7efe`
 	 * ("fix(todo): honor explicit pending, render concurrent phases collapsed, and update active
 	 * steering") added the `pending` and `reset` verbs and named them in the message, and the
-	 * frozen copy here went red for naming them rather than for any defect. The message is now
-	 * rendered from the verb table the dispatcher looks up, and this case sweeps that table: the
-	 * message must name it exactly, and every named verb is dispatched for real. A verb added to
-	 * the table joins the sweep on its own.
+	 * The `/todo` owner defines the advertised verbs in `UNKNOWN_VERB` and dispatches them
+	 * in `runTodoCommand`; there is no shared runtime verb table. This expectation is the
+	 * independent contract list: it must agree with the message, and every advertised verb
+	 * must be accepted by the dispatcher. `?` is accepted as a help alias but is not advertised.
 	 *
-	 * Not caught: a verb the TUI controller accepts and the text dispatcher does not. The two keep
-	 * separate tables and this suite drives only the text one.
+	 * Not caught: a verb the TUI controller accepts and the text dispatcher does not. This suite
+	 * drives only the text dispatcher.
 	 */
 	it("/todo unknown: names every accepted verb, and every named verb is accepted", async () => {
 		const { output, runtime } = createRuntime();

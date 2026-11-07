@@ -53,6 +53,7 @@ describe("print mode disposes the session before exit", () => {
 			obfuscateProviderText: (text: string) => text,
 			state: { messages: [errorMsg] },
 			sessionManager: { getHeader: () => undefined },
+			waitForQuiescence: async () => {},
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForAdvisorCatchup: async () => {
 				order.push("catchup");

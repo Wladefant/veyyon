@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { formatBoundedList } from "@veyyon/utils/format";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import { AgentRegistry } from "../registry/agent-registry";
-import { artifactsDirsFromRegistry } from "./registry-helpers";
+import { artifactFileNamesFromRegistry, artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 const MAX_INLINE_ARTIFACT_BYTES = 8 * 1024 * 1024;

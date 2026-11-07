@@ -4,11 +4,11 @@ import { validateUsageResetOptions } from "../src/cli/usage-reset-options";
 
 describe("usage reset CLI options", () => {
 	it("accepts listing or one positive safe-integer credential id for OpenAI Codex JSON output", () => {
-		expect(validateUsageResetOptions({ resetCredits: true, provider: "openai-codex", json: true })).toEqual({
+		expect(validateUsageResetOptions({ resetCredits: true, provider: "openai-codex" })).toEqual({
 			mode: "list",
 			provider: "openai-codex",
 		});
-		expect(validateUsageResetOptions({ redeem: "42", provider: "openai-codex", json: true })).toEqual({
+		expect(validateUsageResetOptions({ redeem: "42", provider: "openai-codex" })).toEqual({
 			mode: "redeem",
 			provider: "openai-codex",
 			credentialId: 42,

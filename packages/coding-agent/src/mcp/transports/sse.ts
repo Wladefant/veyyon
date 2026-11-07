@@ -226,29 +226,42 @@ export class LegacySseTransport implements MCPTransport {
 			this.onError?.(new Error(describeJsonRpcError(error)));
 			return;
 		}
-		if (!("method" in message) && "id" in message && message.id != null) {
-			const pending = this.#pending.get(message.id);
+		const envelope = payload as Record<string, unknown>;
+		if (
+			!("method" in envelope) &&
+			"id" in envelope &&
+			(envelope.id === null || typeof envelope.id === "string" || typeof envelope.id === "number") &&
+			envelope.id !== null
+		) {
+			const responseId = envelope.id;
+			const pending = this.#pending.get(responseId);
 			if (pending) {
-				this.#pending.delete(message.id);
+				this.#pending.delete(responseId);
 				pending.operation.clear();
 				if (pending.abortHandler) pending.operation.signal?.removeEventListener("abort", pending.abortHandler);
-				const response = message as JsonRpcResponse;
 				if (
-					response.jsonrpc !== "2.0" ||
-					("result" in response) === ("error" in response) ||
-					("error" in response && (
-						response.error === null || typeof response.error !== "object" ||
-						typeof response.error.code !== "number" || !Number.isSafeInteger(response.error.code) ||
-						typeof response.error.message !== "string"
+					envelope.jsonrpc !== "2.0" ||
+					("result" in envelope) === ("error" in envelope) ||
+					("error" in envelope && (
+						envelope.error === null || typeof envelope.error !== "object" ||
+						Array.isArray(envelope.error) ||
+						!("code" in envelope.error) || typeof envelope.error.code !== "number" ||
+						!Number.isSafeInteger(envelope.error.code) ||
+						!("message" in envelope.error) || typeof envelope.error.message !== "string"
 					))
 				) {
 					pending.reject(new Error("MCP legacy SSE server returned an invalid JSON-RPC response envelope"));
 					return;
 				}
-				if (response.error) {
-					pending.reject(new Error(`MCP error ${response.error.code}: ${response.error.message}`));
+				if ("error" in envelope) {
+					const error = envelope.error;
+					if (error === null || typeof error !== "object" || Array.isArray(error) || !("code" in error) || !("message" in error)) {
+						pending.reject(new Error("MCP legacy SSE server returned an invalid JSON-RPC response envelope"));
+						return;
+					}
+					pending.reject(new Error(`MCP error ${error.code}: ${error.message}`));
 				} else {
-					pending.resolve(response.result);
+					pending.resolve(envelope.result);
 				}
 				return;
 			}

@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";

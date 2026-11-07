@@ -88,6 +88,7 @@ function redactingLease(): SecretRuntimeLease {
 		expansionObfuscator: undefined,
 		redactionObfuscator: undefined,
 		hasRedactions: true,
+		pendingRedactionPrefixLength: () => 0,
 		obfuscateText: text => text,
 		obfuscateMessages: messages => messages,
 		obfuscateContext: context => context,

@@ -99,7 +99,7 @@ describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 			const { filePath, header } = await seedFile(tempDir, session, "p.go", goSource);
 			const input = `${header}\nSWAP.BLK 3:\n+func f() {\n+\treturn\n+}`;
 
-			await executeHashlineSingle(executeOptions(tempDir, input, session));
+			await executeHashlineSingle(hashlineExecOptions(input, session));
 
 			expect(await Bun.file(filePath).text()).toBe("package p\n\nfunc f() {\n\treturn\n}\n");
 		});

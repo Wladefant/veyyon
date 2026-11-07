@@ -530,10 +530,7 @@ export class HttpTransport implements MCPTransport {
 					!response.body ||
 					!response.headers.get("Content-Type")?.includes("text/event-stream")
 				) {
-					await response.body?.cancel();
-					throw new Error(
-						mcpHttpFailureMessage(this.config.url, response.status, "Event stream response required"),
-					);
+					throw await mcpHttpFailure(this.config.url, response);
 				}
 				for await (const frame of readSseEvents(response.body, signal)) {
 					if (frame.data === "") continue;
@@ -654,88 +651,21 @@ export class HttpTransport implements MCPTransport {
 			const response = await postJsonRpc(this.#postTarget, this.config.url, body, operation.signal);
 			const contentType = response.headers.get("Content-Type") ?? "";
 			if (contentType.includes("text/event-stream")) {
-				return await this.#parseSSEResponse<T>(response, id, operation, timeout);
+				return await this.#parseSSEResponse<T>(response, id, method, operation, timeout);
 			}
-			const result = (await untilAborted(operation.signal, response.json())) as JsonRpcResponse;
-			if (result.error) throw new Error(describeJsonRpcError(result.error));
-			return result.result as T;
+			const raw: unknown = await untilAborted(operation.signal, response.json());
+			if (!isStreamMessage(raw) || "method" in raw || raw.id !== id) {
+				throw new Error("MCP HTTP server returned an invalid JSON-RPC response envelope");
+			}
+			if ("error" in raw && raw.error !== undefined) throw new Error(describeJsonRpcError(raw.error));
+			this.#acceptInitializationSessionHeader(response, method);
+			return raw.result as T;
 		} catch (error) {
 			if (operation.isTimeoutAbort(error)) {
 				throw new Error(mcpTimeoutMessage({ url: this.config.url }, `request "${method}"`, timeout));
 			}
 			throw error;
 		}
-
-		const response = await fetch(this.config.url, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-			signal: operation.signal,
-		});
-
-		if (!response.ok) {
-			const text = await untilAborted(operation.signal, response.text());
-			const wwwAuthenticate = response.headers.get("WWW-Authenticate");
-			const mcpAuthServer = response.headers.get("Mcp-Auth-Server");
-			const authHints = [
-				wwwAuthenticate ? `WWW-Authenticate: ${wwwAuthenticate}` : null,
-				mcpAuthServer ? `Mcp-Auth-Server: ${mcpAuthServer}` : null,
-			]
-				.filter(Boolean)
-				.join("; ");
-			throw new Error(mcpHttpFailureMessage(this.config.url, response.status, text, authHints || undefined));
-		}
-
-		const contentType = response.headers.get("Content-Type") ?? "";
-
-		// Handle SSE response
-		if (contentType.includes("text/event-stream")) {
-			return this.#parseSSEResponse<T>(response, id, method, operation, timeout);
-		}
-
-		// Handle JSON response. HTTP 200 does not establish JSON-RPC request identity:
-		// a stale reply cannot become the current tool call's result.
-		const raw: unknown = await untilAborted(operation.signal, response.json());
-		if (
-			!raw ||
-			typeof raw !== "object" ||
-			Array.isArray(raw) ||
-			!("jsonrpc" in raw) ||
-			raw.jsonrpc !== "2.0" ||
-			!("id" in raw) ||
-			raw.id !== id
-		) {
-			throw new Error("MCP HTTP server returned a JSON-RPC response with invalid protocol or request identity");
-		}
-		// Response envelopes need exactly one success/error branch. Otherwise
-		// a matching-id HTTP 200 can appear to succeed with an undefined result.
-		const envelope = raw as Record<string, unknown>;
-		const hasResult = Object.hasOwn(envelope, "result");
-		const hasError = Object.hasOwn(envelope, "error");
-		if (hasResult === hasError) {
-			throw new Error("MCP HTTP server returned a JSON-RPC response with invalid result/error shape");
-		}
-		if (hasError) {
-			const peerError = envelope.error;
-			if (
-				!peerError ||
-				typeof peerError !== "object" ||
-				Array.isArray(peerError) ||
-				!("code" in peerError) ||
-				!Number.isSafeInteger(peerError.code) ||
-				!("message" in peerError) ||
-				typeof peerError.message !== "string"
-			) {
-				throw new Error("MCP HTTP server returned a JSON-RPC response with invalid error shape");
-			}
-		}
-		const result = raw as JsonRpcResponse;
-		if (result.error) {
-			throw new Error(`MCP error ${result.error.code}: ${result.error.message}`);
-		}
-
-		this.#acceptInitializationSessionHeader(response, method);
-		return result.result as T;
 	}
 
 	#parseSSEResponse<T>(
@@ -807,7 +737,7 @@ export class HttpTransport implements MCPTransport {
 								reject(new Error("MCP HTTP SSE response has invalid JSON-RPC envelope"));
 								continue;
 							}
-							if ("error" in message) {
+							if ("error" in message && message.error !== undefined) {
 								reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`));
 							} else {
 								try {

@@ -830,7 +830,11 @@ describe("ACP agent", () => {
 		try {
 			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 			const modelOption = created.configOptions?.find(option => option.id === "model");
-			const advertised = modelOption?.options?.map(option => option.value);
+			if (!modelOption || !("options" in modelOption)) throw new Error("Expected a model selection option");
+			const advertised = modelOption.options.map(option => {
+				if (!("value" in option)) throw new Error("Expected an ungrouped model selection");
+				return option.value;
+			});
 			expect(advertised).toEqual([
 				"openai-codex/gpt-5.4",
 				"anthropic/claude-sonnet-4-5",
