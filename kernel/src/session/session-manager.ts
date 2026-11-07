@@ -1188,6 +1188,12 @@ export class SessionManager {
 				}
 				continue;
 			}
+			// Strict rollback cannot silently move a foreign prefix past the
+			// session header when rebuilding the journal. The source header must
+			// precede every ordinary record; legacy title-slot-free sources qualify.
+			if (requireCompleteHistory && !seenSourceHeader) {
+				throw new Error("Cannot preserve journal entry before source header during failed-fork repair");
+			}
 			const id = typeof parsed.id === "string" ? parsed.id : undefined;
 			if (requireCompleteHistory && !id) {
 				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
