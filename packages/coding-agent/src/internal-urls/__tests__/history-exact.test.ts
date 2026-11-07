@@ -1115,6 +1115,9 @@ describe("history exact record lookup", () => {
 				// JSON-invalid array elements resembling object members are not root identity keys.
 				'{"type":"message","id":"orphan","metadata":["type":"session"],"parentId":"root"}',
 				'{"type":"message","id":"unrelated","metadata":["id":"root"],"parentId":"root"}',
+				// A malformed string value followed by a colon is not a root member key.
+				'{"type":"message","id":"orphan","metadata":"type":"session","parentId":"root"}',
+				'{"type":"message","id":"unrelated","metadata":"id":"root","parentId":"root"}',
 			]) {
 				await fs.writeFile(file, [header, root, malformedSibling].join("\n") + "\n");
 				const archived = await readStoredHistoryEntry(file, {
