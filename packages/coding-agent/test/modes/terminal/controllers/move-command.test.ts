@@ -35,10 +35,7 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 				state.cwd = cwd;
 				state.movedTo = cwd;
 				return cwd;
-			},
-		},
-		sessionManager: {
-			getCwd: () => state.cwd,
+			}),
 			dropSession: vi.fn(async () => {}),
 			captureState,
 			restoreState,
