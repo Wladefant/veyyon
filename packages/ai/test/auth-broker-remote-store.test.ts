@@ -2446,6 +2446,62 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(brokerTruth.snapshot.credentials).toEqual([]);
 	});
 
+	test("on-demand broker wait verifies an equal-generation 304 against canonical credentials", async () => {
+		// A restarted broker can reuse the worker's old generation and return 304
+		// to its explicit near-expiry wait even though the credential roster changed.
+		for (const revoked of [false, true]) {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+			const id = initial.snapshot.credentials[0]!.id;
+			const oldGeneration = initial.snapshot.generation;
+			const originalFetch = client.fetchSnapshot.bind(client);
+			let conditionalWaits = 0;
+			let canonicalChecks = 0;
+			const callbacks: number[] = [];
+			spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+				if (opts?.waitMs === 30_000) {
+					await untilAborted(opts.signal);
+					throw new Error("synthetic background long-poll closed");
+				}
+				if (opts?.waitMs === 25) {
+					conditionalWaits += 1;
+					expect(opts.ifGenerationGt).toBe(oldGeneration);
+					return { status: 304 as const, generation: oldGeneration };
+				}
+				canonicalChecks += 1;
+				expect(opts?.ifGenerationGt).toBeUndefined();
+				const canonical = await originalFetch(opts);
+				if (canonical.status !== 200) throw new Error("expected unconditional broker truth");
+				// The real disposable broker supplies content; only its numeric
+				// generation is projected as if an earlier incarnation reused it.
+				return {
+					status: 200 as const, generation: oldGeneration,
+					snapshot: { ...canonical.snapshot, generation: oldGeneration },
+				};
+			});
+			remote = new RemoteAuthCredentialStore({
+				client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+				onSnapshot: snapshot => { callbacks.push(snapshot.credentials.length); },
+			});
+			try {
+				if (revoked) {
+					expect(storage!.disableCredentialById(id, "synthetic peer revoke at reused generation")).toBe(true);
+				}
+				const progressed = await remote.waitForFreshSnapshot(25);
+				expect(conditionalWaits).toBe(1);
+				expect(canonicalChecks).toBe(1); // bounded: one extra GET, no retry storm
+				expect(remote.snapshot.generation).toBe(oldGeneration);
+				expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual(revoked ? [] : [id]);
+				expect(progressed).toBe(revoked);
+				expect(callbacks).toEqual([revoked ? 0 : 1]);
+			} finally {
+				remote.close();
+				remote = undefined;
+			}
+		}
+	});
+
 	test("backs off an invalid unconditional 304 without hammering the broker", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const initial = await client.fetchSnapshot();
