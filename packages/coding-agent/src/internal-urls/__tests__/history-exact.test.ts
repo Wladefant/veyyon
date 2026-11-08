@@ -1147,9 +1147,9 @@ describe("history exact record lookup", () => {
 			const root = Buffer.from(JSON.stringify({
 				type: "message", id: "root", parentId: null, message: "needle healthy",
 			}) + "\n");
-			// Both rows are emitted as undefined by the bounded, fatal-UTF-8
-			// record reader, not merely rejected by whole-record JSON.parse.
-			const unreadableFirstRows = [
+			// An unreadable first row or a non-blank non-object row may hide
+			// a damaged original session header; neither may be silently skipped.
+			const unsafeFirstRows = [
 				Buffer.concat([
 					Buffer.from('{"type":"session","id":"'), Buffer.from([0xff]), Buffer.from('"}\n'),
 				]),
@@ -1157,8 +1157,10 @@ describe("history exact record lookup", () => {
 					Buffer.from('{"type":"session","id":"'), Buffer.alloc(8 * 1024 * 1024 + 1, 0x78),
 					Buffer.from('"}\n'),
 				]),
+				Buffer.from('"type":"session","id":"earlier"}\n'),
+				Buffer.from('"legacy non-object metadata"\n'),
 			];
-			for (const unreadable of unreadableFirstRows) {
+			for (const unreadable of unsafeFirstRows) {
 				// Identity cannot be certified by discarding a possible first header.
 				await fs.writeFile(file, Buffer.concat([unreadable, header, root]));
 				const exact = await readStoredHistoryEntry(file, {
@@ -1186,6 +1188,17 @@ describe("history exact record lookup", () => {
 				expect(archivedSearch.status).toBe("partial");
 				expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["root"]);
 			}
+			// Blank delimiters preceding a valid header remain accepted.
+			await fs.writeFile(file, Buffer.concat([Buffer.from("\n \t\n"), header, root]));
+			const blankExact = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(blankExact.status).toBe("ok");
+			const blankSearch = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 3,
+			});
+			expect(blankSearch.status).toBe("ok");
+			expect(blankSearch.matches.map(match => match.entryId)).toEqual(["root"]);
 		} finally {
 			await dir.remove();
 		}
