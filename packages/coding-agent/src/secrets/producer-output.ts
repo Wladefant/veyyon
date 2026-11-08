@@ -16,6 +16,31 @@ const ENV_ASSIGNMENT = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
 const ENV_MAP_KEY = /^(?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)$/;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
 
+/** A defs() entry names a variable and its shape, never the variable's value. */
+const DEFINITION_SHAPE = /^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|["'](?:\s*[,)\]]|\s*$))/;
+
+function redactCredentialRecords(text: string): string {
+	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
+	let result = "";
+	let cursor = 0;
+	for (let match = labels.exec(text); match; match = labels.exec(text)) {
+		const start = labels.lastIndex + /^[ \t]*/.exec(text.slice(labels.lastIndex))![0].length;
+		const tail = text.slice(start);
+		// Type-only metadata contains no credential value. Registered secrets
+		// still pass through the owner's exact-value redactor below.
+		if (match[0].includes(":") && DEFINITION_SHAPE.test(tail)) continue;
+		if (!tail || tail[0] === "{" || tail[0] === "[") return BLOCKED_OUTPUT_RECORD;
+		const quoted = isQuote(tail[0]);
+		if (quoted && quotedEnd(tail, 0) === tail.length) return BLOCKED_OUTPUT_RECORD;
+		const end = quoted ? start + quotedEnd(tail, 0) : start + (tail.search(/[\s"',;}\]]/) < 0 ? tail.length : tail.search(/[\s"',;}\]]/));
+		const valueStart = start + (quoted ? 1 : 0);
+		result += text.slice(cursor, valueStart) + "[REDACTED]";
+		cursor = end;
+		labels.lastIndex = Math.max(end + (quoted ? 1 : 0), start + 1);
+	}
+	return result + text.slice(cursor);
+}
+
 function isQuote(character: string): boolean {
 	return character === '"' || character === "'" || character === "`";
 }
@@ -151,11 +176,13 @@ export class ProducerOutputGuard {
 			const normalized = sanitizeText(text);
 			if (
 				isInventory(normalized) ||
-				normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS || CREDENTIAL_RECORD.test(line))
+				normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS)
 			) {
 				return BLOCKED_OUTPUT_RECORD;
 			}
-			const redacted = this.#redact?.(normalized) ?? normalized;
+			const labelled = redactCredentialRecords(normalized);
+			if (labelled === BLOCKED_OUTPUT_RECORD) return labelled;
+			const redacted = this.#redact?.(labelled) ?? labelled;
 			if (redacted !== normalized) return redacted;
 			return this.#redact?.(text) ?? text;
 		} catch {

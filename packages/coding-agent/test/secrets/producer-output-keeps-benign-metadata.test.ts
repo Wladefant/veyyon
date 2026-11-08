@@ -57,6 +57,12 @@ describe("producer output keeps benign metadata", () => {
 
 		expect(guard.sanitize(text)).toBe("before token=[REDACTED] after");
 	});
+	it("masks only the value after a spaced assignment delimiter", () => {
+		const token = `ghp_${"D".repeat(36)}`;
+		const text = `before token= ${token} after`;
+
+		expect(guard.sanitize(text)).toBe("before token= [REDACTED] after");
+	});
 
 	it("masks a bare real-format synthetic token and preserves surrounding metadata", () => {
 		const token = `ghp_${"B".repeat(36)}`;

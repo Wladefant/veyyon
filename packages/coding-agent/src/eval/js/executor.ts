@@ -179,7 +179,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 							const filtered = displayGuard.sanitize(serialized);
 							output = {
 								type: "json",
-								data: filtered === serialized ? sanitizedData : "[credential output withheld]",
+								data: filtered === serialized ? sanitizedData : JSON.parse(filtered),
 							};
 						} catch {
 							output = { type: "json", data: "[credential output withheld]" };

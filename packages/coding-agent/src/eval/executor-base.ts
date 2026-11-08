@@ -569,7 +569,7 @@ export async function executeWithKernelBase<
 			try {
 				const serialized = stringifyJsonSafe(output.data);
 				const filtered = new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText).sanitize(serialized);
-				output = { type: "json", data: filtered === serialized ? output.data : "[credential output withheld]" };
+				output = { type: "json", data: filtered === serialized ? output.data : JSON.parse(filtered) };
 			} catch {
 				output = { type: "json", data: "[credential output withheld]" };
 			}
