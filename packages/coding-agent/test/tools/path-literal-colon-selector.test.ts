@@ -472,7 +472,7 @@ describe("Windows drive-root directory colon selector resolution (-20261108-1452
 
 	beforeEach(async () => {
 		const uniqueName = `veyyon-reg-20261108-1452-1517-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-		uniqueRootDir = process.platform === "win32" ? path.join("C:\\", uniqueName) : path.join(os.tmpdir(), uniqueName);
+		uniqueRootDir = path.join(os.tmpdir(), uniqueName);
 		await fs.mkdir(uniqueRootDir, { recursive: true });
 	});
 
@@ -490,6 +490,21 @@ describe("Windows drive-root directory colon selector resolution (-20261108-1452
 			...overrides,
 		};
 	}
+	it("preserves drive-root selector grammar without filesystem operations", () => {
+		expect(splitPathAndSel("C:\\pr1510.diff:306-310")).toEqual({
+			path: "C:\\pr1510.diff",
+			sel: "306-310",
+		});
+		expect(splitPathAndSel("C:/pr1510.diff:raw:2-4")).toEqual({
+			path: "C:/pr1510.diff",
+			sel: "raw:2-4",
+		});
+		expect(splitPathAndSel("C:\\pr1510.diff:raw")).toEqual({
+			path: "C:\\pr1510.diff",
+			sel: "raw",
+		});
+	});
+
 
 	it("reads absolute path with line range in drive-root directory", async () => {
 		const fileName = "pr1510.diff";
