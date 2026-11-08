@@ -1,6 +1,7 @@
 import type { AnyAgentTool } from "@veyyon/agent-core";
 import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -463,5 +464,128 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		expect(perEntry).toContain("four");
 		expect(perEntry).not.toContain("one");
 		expect(perEntry).not.toContain("three");
+	});
+});
+
+describe("Windows drive-root directory colon selector resolution (-20261108-1452-1517)", () => {
+	let uniqueRootDir: string;
+
+	beforeEach(async () => {
+		const uniqueName = `veyyon-reg-20261108-1452-1517-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+		uniqueRootDir = process.platform === "win32" ? path.join("C:\\", uniqueName) : path.join(os.tmpdir(), uniqueName);
+		await fs.mkdir(uniqueRootDir, { recursive: true });
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(uniqueRootDir);
+	});
+
+	function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
+		return {
+			cwd: uniqueRootDir,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
+			...overrides,
+		};
+	}
+
+	it("reads absolute path with line range in drive-root directory", async () => {
+		const fileName = "pr1510.diff";
+		const absolute = path.join(uniqueRootDir, fileName);
+		await fs.writeFile(absolute, Array.from({ length: 400 }, (_, i) => `diff line ${i + 1}`).join("\n"));
+
+		const tool = new ReadTool(createSession());
+		const result = await tool.execute("read-drive-root-range", {
+			path: `${absolute}:306-310`,
+		});
+		const output = toolResultText(result);
+		expect(output).toContain("diff line 306");
+		expect(output).toContain("diff line 310");
+		expect(output).not.toContain("diff line 304");
+		expect(output).not.toContain("diff line 315");
+	});
+
+	it("reads absolute path with raw selector and range in drive-root directory", async () => {
+		const fileName = "pr1510.diff";
+		const absolute = path.join(uniqueRootDir, fileName);
+		await fs.writeFile(absolute, Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n"));
+
+		const tool = new ReadTool(createSession());
+		const result = await tool.execute("read-drive-root-raw-range", {
+			path: `${absolute}:raw:2-4`,
+		});
+		const output = toolResultText(result);
+		expect(output).toBe("line 2\nline 3\nline 4");
+	});
+
+	it("reads relative path with line range in drive-root directory", async () => {
+		const fileName = "pr1510.diff";
+		const absolute = path.join(uniqueRootDir, fileName);
+		await fs.writeFile(absolute, Array.from({ length: 400 }, (_, i) => `diff line ${i + 1}`).join("\n"));
+
+		const tool = new ReadTool(createSession({ cwd: uniqueRootDir }));
+		const result = await tool.execute("read-drive-root-rel-range", {
+			path: `${fileName}:306-310`,
+		});
+		const output = toolResultText(result);
+		expect(output).toContain("diff line 306");
+		expect(output).toContain("diff line 310");
+		expect(output).not.toContain("diff line 304");
+		expect(output).not.toContain("diff line 315");
+	});
+
+	it("reads relative path with raw selector in drive-root directory", async () => {
+		const fileName = "pr1510.diff";
+		const absolute = path.join(uniqueRootDir, fileName);
+		const content = "first line\nsecond line\nthird line\n";
+		await fs.writeFile(absolute, content);
+
+		const tool = new ReadTool(createSession({ cwd: uniqueRootDir }));
+		const result = await tool.execute("read-drive-root-rel-raw", {
+			path: `${fileName}:raw`,
+		});
+		const output = toolResultText(result);
+		expect(output).toBe(content);
+	});
+
+	it("preserves actual named streams on Windows while missing streams return missing", async () => {
+		if (process.platform !== "win32") return;
+		const baseFile = path.join(uniqueRootDir, "stream-test.txt");
+		await fs.writeFile(baseFile, "base content\n");
+		await fs.writeFile(`${baseFile}:custom`, "custom stream content\n");
+		await fs.writeFile(`${baseFile}:raw`, "raw stream content\n");
+
+		expect(await probeLiteralPathExists(`${baseFile}:custom`, uniqueRootDir)).toBe("exists");
+		expect(await probeLiteralPathExists(`${baseFile}:raw`, uniqueRootDir)).toBe("exists");
+
+		expect(await probeLiteralPathExists(`${baseFile}:1-5`, uniqueRootDir)).toBe("missing");
+		expect(await probeLiteralPathExists(`${baseFile}:100-200`, uniqueRootDir)).toBe("missing");
+	});
+
+	it.skipIf(process.platform !== "win32")("treats a missing stream as missing even when lstat reports its base file", async () => {
+		const baseFile = path.join(uniqueRootDir, "repro-mock.txt");
+		await fs.writeFile(baseFile, "line 1\nline 2\nline 3\n");
+		const targetPath = `${baseFile}:2-3`;
+
+		const realStat = await fs.stat(baseFile);
+		const spy = spyOn(nodeFs.promises, "lstat").mockImplementation(
+			(async (p: nodeFs.PathLike) => {
+				if (path.resolve(String(p)) === path.resolve(targetPath)) {
+					return realStat;
+				}
+				return nodeFs.promises.stat(p);
+			}) as unknown as typeof nodeFs.promises.lstat,
+		);
+		try {
+			const probe = await probeLiteralPathExists(targetPath, uniqueRootDir);
+			expect(probe).toBe("missing");
+
+			const split = await splitPathAndSelPreferringLiteral(targetPath, uniqueRootDir);
+			expect(split).toEqual({ path: baseFile, sel: "2-3" });
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
