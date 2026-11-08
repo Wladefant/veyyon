@@ -9,7 +9,7 @@ import { sanitizeJsonValue } from "../eval/json-sanitizer";
 const MAX_RECORD_CHARS = 64 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 const CREDENTIAL_RECORD =
-	/(?:^|[\s"'{,.?-])(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*["']?\s*(?:[=:]|\s{2,})/i;
+	/(?<boundary>^|[\s"'{,.?-])(?<key>(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?\s*(?:[=:]|\s{2,})/i;
 const CREDENTIAL_KEY_PREFIX =
 	/(?:^|\s+export\s+|[?.,{"'-])(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|pin|cookie|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
 
@@ -26,6 +26,8 @@ const PEM_BLOCK = /-----BEGIN ([A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/
 const PEM_START = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const EXTRA_PREFIXED_KEY = /\b(?:github_pat_[A-Za-z0-9_]{22,}|figd_[A-Za-z0-9_-]{16,})/g;
 const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>|#[A-Za-z0-9_]+#)(?=[ \t]*(?:\r?\n|$))/;
+const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
+const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
 const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
 
 function knownCredentialLength(text: string): number {
@@ -42,38 +44,107 @@ function knownCredentialLength(text: string): number {
 	return extra?.index === 0 ? extra[0].length : 0;
 }
 
-function redactCredentialRecords(text: string): string {
+function classifyCredentialText(text: string, redact?: (text: string) => string): string {
 	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
-	let result = "";
-	let cursor = 0;
+	const spans: { start: number; valueStart: number; end: number; extendToLine: boolean }[] = [];
 	for (let match = labels.exec(text); match; match = labels.exec(text)) {
 		const start = labels.lastIndex + /^[ \t]*/.exec(text.slice(labels.lastIndex))![0].length;
 		const tail = text.slice(start);
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
 		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;
-		if (match[0].includes("\n") || !tail || /^[ \t]*(?:\r?\n|$)/.test(tail)) return BLOCKED_OUTPUT_RECORD;
+		const boundaryLength = match.groups!.boundary.length;
+		if (match[0].slice(boundaryLength).includes("\n") || !tail || /^[ \t]*(?:\r?\n|$)/.test(tail)) {
+			return BLOCKED_OUTPUT_RECORD;
+		}
+		if (NUMERIC_METADATA_KEY.test(match.groups!.key) && NUMERIC_METADATA_VALUE.test(tail)) continue;
 		if (REDACTION_MARKER.test(tail)) continue;
 		if (/^[{[|>]/.test(tail)) return BLOCKED_OUTPUT_RECORD;
 		const quoted = isQuote(tail[0]);
 		const quoteEnd = quoted ? quotedEnd(tail, 0) : -1;
 		if (quoted && quoteEnd === tail.length) return BLOCKED_OUTPUT_RECORD;
-		// Unquoted credentials may contain schemes, spaces or punctuation.
-		// Without structure, only the physical record bounds the value.
+		// Unknown unquoted values extend through their physical record.
 		const newline = tail.indexOf("\n");
 		const knownLength = quoted ? 0 : knownCredentialLength(tail);
 		if (!quoted && !knownLength && PEM_START.test(tail)) return BLOCKED_OUTPUT_RECORD;
 		const end = quoted ? start + quoteEnd : start + (knownLength || (newline < 0 ? tail.length : newline));
-		result += text.slice(cursor, start + (quoted ? 1 : 0)) + "[REDACTED]";
-		cursor = end;
+		spans.push({
+			start: match.index + boundaryLength,
+			valueStart: start + (quoted ? 1 : 0),
+			end,
+			extendToLine: knownLength > 0,
+		});
 		labels.lastIndex = Math.max(end + (quoted ? 1 : 0), start + 1);
 	}
-	return result + text.slice(cursor);
-}
-
-function classifyCredentialText(text: string): string {
-	const redacted = redactCredentialRecords(text).replace(PEM_BLOCK, "[REDACTED]");
-	return PEM_START.test(redacted) ? BLOCKED_OUTPUT_RECORD : redacted;
+	PEM_BLOCK.lastIndex = 0;
+	for (const pem of text.matchAll(PEM_BLOCK)) {
+		spans.push({ start: pem.index, valueStart: pem.index, end: pem.index + pem[0].length, extendToLine: true });
+	}
+	for (let attempt = 0; attempt < (redact ? 2 : 1); attempt++) {
+		spans.sort((left, right) => left.start - right.start);
+		let count = 0;
+		for (const span of spans) {
+			const previous = spans[count - 1];
+			if (previous && span.start < previous.end) {
+				if (span.end > previous.end) {
+					previous.end = span.end;
+					previous.extendToLine = span.extendToLine;
+				}
+			} else {
+				spans[count++] = span;
+			}
+		}
+		spans.length = count;
+		let result = "";
+		let rawProjection = "";
+		let normalizedProjection = "";
+		let cursor = 0;
+		let index = 0;
+		let sensitive = false;
+		while (cursor < text.length || index < spans.length) {
+			const span = spans[index];
+			const end = sensitive ? span.end : (span?.start ?? text.length);
+			const fragment = text.slice(cursor, end);
+			if (redact) {
+				const owned = redact(fragment);
+				const normalized = redact(sanitizeText(owned));
+				rawProjection += owned;
+				normalizedProjection += normalized;
+				if (sensitive) {
+					const prefix = redact(sanitizeText(redact(text.slice(span.start, span.valueStart))));
+					// A contextual owner may change the label as well as its value.
+					result += normalized.startsWith(prefix) ? prefix + "[REDACTED]" : "[REDACTED]";
+				} else {
+					result += normalized;
+				}
+			} else {
+				result += sensitive ? text.slice(span.start, span.valueStart) + "[REDACTED]" : fragment;
+			}
+			cursor = end;
+			if (sensitive) {
+				index++;
+				sensitive = false;
+			} else {
+				sensitive = span !== undefined;
+			}
+		}
+		if (!redact) return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+		const owned = redact(text);
+		// Masking must not split a registered literal or change its owner context.
+		if (rawProjection === owned && normalizedProjection === redact(sanitizeText(owned))) {
+			return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+		}
+		let extended = false;
+		for (const span of spans) {
+			if (!span.extendToLine) continue;
+			const newline = text.indexOf("\n", span.end);
+			const end = newline < 0 ? text.length : newline;
+			extended ||= end > span.end;
+			span.end = end;
+		}
+		if (!extended) break;
+	}
+	return BLOCKED_OUTPUT_RECORD;
 }
 
 function isQuote(character: string): boolean {
@@ -192,7 +263,7 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 		transformValue: (nested, key) => {
 			if (key !== undefined && CREDENTIAL_RECORD.test(`${key}=`)) {
 				if (typeof nested === "number" || typeof nested === "bigint") {
-					if (!/(?:count|length|size|limit|ttl)$/i.test(key)) return "[REDACTED]";
+					if (!NUMERIC_METADATA_KEY.test(key)) return "[REDACTED]";
 				} else if (typeof nested === "string") {
 					return REDACTION_MARKER.test(nested) ? nested : "[REDACTED]";
 				} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {
@@ -248,7 +319,9 @@ export class ProducerOutputGuard {
 			const classified = classifyCredentialText(text);
 			if (classified === BLOCKED_OUTPUT_RECORD ||
 				sanitizeText(classified) !== classifyCredentialText(original)) return BLOCKED_OUTPUT_RECORD;
-			const sanitized = sanitizeText(this.#redact?.(classified) ?? classified);
+			const filtered = classifyCredentialText(text, this.#redact);
+			if (filtered === BLOCKED_OUTPUT_RECORD) return filtered;
+			const sanitized = sanitizeText(filtered);
 			const normalized = this.#redact?.(sanitized) ?? sanitized;
 			if (isInventory(normalized) || normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS)) {
 				return BLOCKED_OUTPUT_RECORD;
