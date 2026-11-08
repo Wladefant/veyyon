@@ -4250,4 +4250,73 @@ describe("SessionManager.fork artifact durability", () => {
 			}
 		},
 	);
+	it.skipIf(process.platform === "win32")(
+		"does not publish a fork when a copied artifact directory cannot be flushed",
+		async () => {
+			using temp = TempDir.createSync("@veyyon-fork-artifact-directory-fsync-failure-");
+			const sessions = path.join(temp.path(), "sessions");
+			const manager = SessionManager.create(temp.path(), sessions);
+			try {
+				expect(await manager.saveArtifact("SYNTHETIC SOURCE ARTIFACT", "bash")).toBe("0");
+				const sourceArtifact = await manager.getArtifactPath("0");
+				if (!sourceArtifact) throw new Error("expected persisted synthetic source artifact");
+				const sourceDir = path.dirname(sourceArtifact);
+				const nestedDir = path.join(sourceDir, "nested");
+				const nestedArtifact = path.join(nestedDir, "audit.log");
+				const nestedBytes = Buffer.from("SYNTHETIC NESTED ARTIFACT BYTES");
+				await fs.mkdir(nestedDir);
+				await fs.writeFile(nestedArtifact, nestedBytes);
+				manager.appendMessage({ role: "user", content: "Keep synthetic artifact://0", timestamp: Date.now() });
+				await manager.ensureOnDisk();
+				const sourceFile = manager.getSessionFile();
+				if (!sourceFile) throw new Error("expected persisted source session");
+				const sourceId = manager.getSessionId();
+				const sourceTranscript = await fs.readFile(sourceFile);
+				const sourceArtifactBytes = await fs.readFile(sourceArtifact);
+				const sessionFilesBefore = (await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort();
+				let copiedRoot: string | undefined;
+				let syncAttempted = false;
+				const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+				const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+				const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
+					await realCopy(from, to, options);
+					const fromPath = typeof from === "string" ? from : fileURLToPath(from);
+					const toPath = typeof to === "string" ? to : fileURLToPath(to);
+					if (path.dirname(fromPath) === sourceDir) copiedRoot = path.dirname(toPath);
+				});
+				const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+					const handle = await realOpen(file, flags, mode);
+					if (copiedRoot !== undefined && String(file) === path.join(copiedRoot, "nested")) {
+						Object.defineProperty(handle, "sync", {
+							configurable: true,
+							value: async () => {
+								syncAttempted = true;
+								const error = new Error("synthetic copied artifact directory fsync failure") as NodeJS.ErrnoException;
+								error.code = "EIO";
+								throw error;
+							},
+						});
+					}
+					return handle;
+				});
+				try {
+					await expect(manager.fork()).rejects.toThrow(/synthetic copied artifact directory fsync failure/);
+				} finally {
+					openSpy.mockRestore();
+					copySpy.mockRestore();
+				}
+				expect(syncAttempted).toBe(true);
+				if (!copiedRoot) throw new Error("expected copied artifact root");
+				expect(manager.getSessionId()).toBe(sourceId);
+				expect(manager.getSessionFile()).toBe(sourceFile);
+				expect((await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort()).toEqual(sessionFilesBefore);
+				expect(await fs.readFile(sourceFile)).toEqual(sourceTranscript);
+				expect(await fs.readFile(sourceArtifact)).toEqual(sourceArtifactBytes);
+				expect(await fs.readFile(nestedArtifact)).toEqual(nestedBytes);
+			} finally {
+				await manager.close();
+			}
+		},
+	);
+
 });
