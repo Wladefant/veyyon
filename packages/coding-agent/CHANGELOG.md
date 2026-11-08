@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- No user-facing behavior changes; ACP model-order regression coverage now verifies 257 session models survive provider sorting without local truncation.
+
 ## [1.8.16] - 2026-11-08
 
 ### Changed
