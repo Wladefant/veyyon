@@ -98,7 +98,7 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean; claimedId?: string };
 
-function claimedRecordId(value: unknown): string | undefined {function readBoundedJsonString(raw: string, start: number): { value: string; end: number } | undefined {
+function readBoundedJsonString(raw: string, start: number): { value: string; end: number } | undefined {
 	if (raw[start] !== '"') return undefined;
 	let end = start + 1;
 	while (end < raw.length) {
@@ -117,7 +117,7 @@ function claimedRecordId(value: unknown): string | undefined {function readBound
 	}
 }
 
-
+function claimedRecordId(value: unknown): string | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const entry = value as StoredEntryShape;
 	// Title and session metadata are not entry claims; their identity has its own rules.
