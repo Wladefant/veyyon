@@ -11,6 +11,7 @@
 // checks is the one the owner mints.
 import { describe, expect, it } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
+import { providerFinishErrorMessage } from "@veyyon/ai/error/classes";
 import { Flag } from "@veyyon/ai/error/flag";
 import { classify } from "@veyyon/ai/error/flags";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
@@ -125,7 +126,7 @@ describe("finish_reason: insufficient_system_resource", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -151,7 +152,7 @@ describe("in-band SSE error envelope", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -167,7 +168,7 @@ describe("in-band SSE error envelope", () => {
 			"[DONE]",
 		]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -194,7 +195,7 @@ describe("in-band SSE error envelope", () => {
 			return baseFetch(input, init);
 		};
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -207,7 +208,7 @@ describe("in-band SSE error envelope", () => {
 	it("surfaces a flat error string carried inside a successful HTTP stream", async () => {
 		const fetchMock = createSseFetch([{ error: "rate limit exceeded" }, "[DONE]"]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -219,7 +220,7 @@ describe("in-band SSE error envelope", () => {
 	it("surfaces a flat message-only error carried inside a successful HTTP stream", async () => {
 		const fetchMock = createSseFetch([{ message: "provider temporarily unavailable" }, "[DONE]"]);
 
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		}).result();
@@ -252,7 +253,7 @@ describe("premature stream closure", () => {
 
 		const eventTypes: string[] = [];
 		let errorMessage: string | undefined;
-		for await (const event of streamOpenAICompletions(completionsModel, baseContext(), {
+		for await (const event of streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: fetchMock,
 		})) {
@@ -270,7 +271,7 @@ describe("premature stream closure", () => {
 		// an error turn flagged as the empty-response family, which the provider ladder
 		// (transport stage) and the turn loop both retry; a clean `stop` here would be
 		// persisted as a blank answer.
-		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+		const result = await streamOpenAICompletions(completionsModel, sayHelloContext(), {
 			apiKey: "test-key",
 			fetch: createSseFetch([]),
 		}).result();

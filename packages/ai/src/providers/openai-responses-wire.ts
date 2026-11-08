@@ -18,6 +18,7 @@ import type {
 	ResponseFormatJSONObject,
 	ResponseFormatText,
 } from "./openai-chat-wire";
+export type { ReasoningEffort } from "./openai-chat-wire";
 
 // ─── Responses API ────────────────────────────────────────
 /**

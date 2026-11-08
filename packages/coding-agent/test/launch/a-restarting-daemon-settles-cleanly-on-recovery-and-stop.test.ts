@@ -28,6 +28,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { setTimeout as delay } from "node:timers/promises";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";

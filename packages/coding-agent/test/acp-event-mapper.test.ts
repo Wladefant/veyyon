@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import path from "node:path";
-import type { AgentSideConnection, SessionNotification } from "@agentclientprotocol/sdk";
+import type { AgentSideConnection, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import { type } from "arktype";
 
 const arkSessionNotification = type({
@@ -27,6 +27,8 @@ import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-sessi
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { expectAcpStructure, expectAcpStructureRejects } from "./helpers/acp-schema";
 
+type AcpToolCall = Extract<SessionUpdate, { sessionUpdate: "tool_call" }>;
+type AcpToolCallUpdate = Extract<SessionUpdate, { sessionUpdate: "tool_call_update" }>;
 function makeAssistantMessage(text: string) {
 	return {
 		role: "assistant" as const,
@@ -448,7 +450,7 @@ describe("ACP event mapper", () => {
 
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[] };
+		const update = updates[0]!.update as AcpToolCallUpdate;
 		expect(update.sessionUpdate).toBe("tool_call_update");
 		expect(update.locations).toEqual([{ path: "src/foo.ts" }]);
 	});
@@ -956,7 +958,7 @@ describe("ACP event mapper", () => {
 
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[]; content?: unknown };
+		const update = updates[0]!.update as AcpToolCall;
 		expect(update.sessionUpdate).toBe("tool_call");
 		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/file.ts") }]);
 		expect("content" in update).toBe(false);
@@ -974,7 +976,7 @@ describe("ACP event mapper", () => {
 
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[] };
+		const update = updates[0]!.update as AcpToolCall;
 		expect(update.sessionUpdate).toBe("tool_call");
 		expect(update.locations).toEqual([{ path: "src/current.ts" }, { path: "src/old.ts" }, { path: "src/new.ts" }]);
 	});
@@ -1018,7 +1020,7 @@ describe("ACP event mapper", () => {
 			toolName: "move",
 			args,
 			cwd: "/repo",
-		});
+		}) as AcpToolCall;
 		expectAcpStructure(arkSessionNotification, { sessionId: "session-1", update });
 		expect(update.rawInput).toEqual(args);
 		expect(update.locations).toEqual([
@@ -1047,7 +1049,7 @@ describe("ACP event mapper", () => {
 		);
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as { sessionUpdate: string; locations?: { path: string }[] };
+		const update = updates[0]!.update as AcpToolCallUpdate;
 		expect(update.sessionUpdate).toBe("tool_call_update");
 		expect(update.locations).toEqual([{ path: path.resolve("/repo", "src/valid.ts") }]);
 	});
@@ -1080,12 +1082,7 @@ describe("ACP event mapper", () => {
 		);
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as {
-			sessionUpdate: string;
-			content?: Array<{ type: string; path?: string; oldText?: string | null; newText?: string; content?: unknown }>;
-			locations?: { path: string }[];
-			rawOutput?: unknown;
-		};
+		const update = updates[0]!.update as AcpToolCallUpdate;
 		expect(update.sessionUpdate).toBe("tool_call_update");
 		expect(update.content?.filter(block => block.type === "diff")).toEqual([
 			{ type: "diff", path: path.resolve("/repo", "src/good.ts"), oldText: "good before", newText: "good after" },
@@ -1110,10 +1107,7 @@ describe("ACP event mapper", () => {
 		);
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as {
-			content?: Array<{ type: string; path?: string }>;
-			locations?: { path: string }[];
-		};
+		const update = updates[0]!.update as AcpToolCallUpdate;
 		expect(update.content?.filter(block => block.type === "diff")).toEqual([
 			{ type: "diff", path: path.resolve("/repo", "src/single.ts"), oldText: "old", newText: "new" },
 		]);
@@ -1133,7 +1127,7 @@ describe("ACP event mapper", () => {
 		);
 		expect(updates).toHaveLength(1);
 		expectAcpNotifications(updates);
-		const update = updates[0]!.update as { content?: Array<{ type: string; path?: string }> };
+		const update = updates[0]!.update as AcpToolCallUpdate;
 		expect(update.content?.filter(block => block.type === "diff")).toEqual([
 			{ type: "diff", path: "src/legacy.ts", oldText: "old", newText: "new" },
 		]);

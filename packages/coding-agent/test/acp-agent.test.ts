@@ -514,6 +514,7 @@ afterEach(async () => {
 
 async function createHarness(
 	options: {
+		models?: Model[];
 		elicitationHandler?: (req: CreateElicitationRequest) => Promise<CreateElicitationResponse>;
 		runtimeMCPConfig?: RuntimeMCPConfig;
 	} = {},
@@ -555,10 +556,11 @@ async function createHarness(
 		closed: Promise.withResolvers<void>().promise,
 	} as unknown as AgentSideConnection;
 
-	const initialSession = new FakeAgentSession(cwdA);
+	const models = options.models ?? TEST_MODELS;
+	const initialSession = new FakeAgentSession(cwdA, models);
 	sessions.push(initialSession);
 	const factory = async (cwd: string): Promise<AgentSession> => {
-		const session = new FakeAgentSession(cwd);
+		const session = new FakeAgentSession(cwd, models);
 		sessions.push(session);
 		return session as unknown as AgentSession;
 	};
@@ -811,6 +813,45 @@ describe("ACP agent", () => {
 			}
 		}
 	}, 30_000);
+
+	it("prioritizes advertised ACP models without dropping or reordering models within a provider", async () => {
+		const models: Model[] = [
+			getBundledModel("anthropic", "claude-sonnet-4-5")!,
+			getBundledModel("anthropic", "claude-opus-5-5")!,
+			getBundledModel("opencode-zen", "beam-free")!,
+			getBundledModel("google-antigravity", "claude-opus-5-5")!,
+			getBundledModel("openai-codex", "gpt-5.4")!,
+			getBundledModel("opencode-go", "beam-free")!,
+			getBundledModel("opencode-zen", "big-pickle")!,
+			getBundledModel("openai", "gpt-4o-mini")!,
+			getBundledModel("amazon-bedrock", "us.anthropic.claude-opus-5-5")!,
+		];
+		const harness = await createHarness({ models });
+		try {
+			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+			const modelOption = created.configOptions?.find(option => option.id === "model");
+			if (!modelOption || !("options" in modelOption)) throw new Error("Expected a model selection option");
+			const advertised = modelOption.options.map(option => {
+				if (!("value" in option)) throw new Error("Expected an ungrouped model selection");
+				return option.value;
+			});
+			expect(advertised).toEqual([
+				"openai-codex/gpt-5.4",
+				"anthropic/claude-sonnet-4-5",
+				"anthropic/claude-opus-5-5",
+				"google-antigravity/claude-opus-5-5",
+				"opencode-zen/beam-free",
+				"opencode-go/beam-free",
+				"opencode-zen/big-pickle",
+				"openai/gpt-4o-mini",
+				"amazon-bedrock/us.anthropic.claude-opus-5-5",
+			]);
+			expect(advertised).toHaveLength(models.length);
+			expect(modelOption?.currentValue).toBe("anthropic/claude-sonnet-4-5");
+		} finally {
+			harness.abortController.abort();
+		}
+	});
 
 	it("supports multiple live ACP sessions with model and lifecycle handlers", async () => {
 		const harness = await createHarness();

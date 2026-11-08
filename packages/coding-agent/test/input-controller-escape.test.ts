@@ -722,7 +722,7 @@ describe("InputController escape behavior", () => {
 		tui.addChild(new LongTranscript(LONG_TRANSCRIPT_ROWS));
 		try {
 			tui.start();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			const { ctx, editor } = createContext({
 				resetDisplay: () => tui.resetDisplay(),
@@ -734,7 +734,7 @@ describe("InputController escape behavior", () => {
 			writes.length = 0;
 			editor.onEscape?.();
 			editor.onEscape?.();
-			await term.waitForRender();
+			await term.waitForRender(tui);
 
 			const gesture = writes.join("");
 			// The first transcript row is only written when the whole session is

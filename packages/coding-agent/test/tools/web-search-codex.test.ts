@@ -445,6 +445,9 @@ describe("searchCodex model selection", () => {
 			});
 			expect(capturedRequest?.body?.client_metadata).toBeUndefined();
 			expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
+		}
+	});
+
 	// WHY: a search on a model the catalog marks for Responses-Lite was sent in the Lite shape, with
 	// the hosted `web_search` tool moved into an `additional_tools` input item and `tool_choice` still
 	// naming it. The endpoint answers that request 400 `Tool choice 'web_search_preview' not found in

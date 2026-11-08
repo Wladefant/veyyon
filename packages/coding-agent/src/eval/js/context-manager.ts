@@ -115,6 +115,28 @@ export function setWorkerCloseTimeoutMsForTests(ms: number): number {
 	return previous;
 }
 
+/**
+ * Send `close` and wait for acknowledgement, or return false after the grace period.
+ * The subscription is armed before sending close and is torn down on either outcome.
+ */
+async function awaitCloseAck(subscribe: (ack: () => void) => () => void, sendClose: () => void): Promise<boolean> {
+	const { promise, resolve } = Promise.withResolvers<boolean>();
+	let settled = false;
+	let timeout: NodeJS.Timeout | undefined;
+	let teardown = (): void => {};
+	const finish = (value: boolean): void => {
+		if (settled) return;
+		settled = true;
+		clearTimeout(timeout);
+		teardown();
+		resolve(value);
+	};
+	teardown = subscribe(() => finish(true));
+	timeout = setTimeout(() => finish(false), workerCloseTimeoutMs);
+	sendClose();
+	return promise;
+}
+
 /** Test-only seam for the legacy Worker lifecycle mocks. */
 export function setJsEvalWorkerThreadForTests(enabled: boolean): boolean {
 	const previous = useWorkerThreadForTests;

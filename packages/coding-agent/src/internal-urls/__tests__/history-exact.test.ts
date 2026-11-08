@@ -8,6 +8,7 @@ import {
 	parseHistorySearchRequest,
 	readLiveHistoryEntry,
 	readStoredHistoryEntry,
+	searchLiveHistoryEntries,
 	searchStoredHistoryEntries,
 } from "../history-exact";
 
@@ -201,6 +202,100 @@ describe("history exact record lookup", () => {
 		} finally {
 			await dir.remove();
 		}
+	});
+
+	it("keeps case-fold-expanding Unicode matches visible in stored JSONL previews", async () => {
+		const dir = TempDir.createSync("@veyyon-history-unicode-preview-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const records = [
+				{ type: "session", id: "s-preview" },
+				{
+					type: "message", id: "unicode", parentId: null,
+					message: "İ".repeat(100) + " NeedLe archived",
+				},
+				{ type: "message", id: "plain", parentId: "unicode", message: "Plain ASCII NeedLe" },
+			];
+			await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+			const request = parseHistorySearchRequest(new URL("history://Scout?q=needle&leaf=plain&limit=2"))!;
+			const found = await searchStoredHistoryEntries(file, request);
+			expect(found.status).toBe("ok");
+			expect(found.matches.map(match => match.entryId)).toEqual(["plain", "unicode"]);
+			for (const match of found.matches) {
+				expect(match.preview).toContain("NeedLe");
+				expect(match.preview.length).toBeLessThanOrEqual(200);
+				expect(match.revision).toMatch(/^[0-9a-f]{64}$/);
+			}
+			// Search previews are not evidence substitutions; exact reads remain byte-preserving.
+			const exact = await readStoredHistoryEntry(file, {
+				entryId: "unicode", leafId: "plain", offset: 0, limit: 1000,
+			});
+			expect(exact.status).toBe("ok");
+			expect(exact.fragment).toBe(JSON.stringify(records[1]));
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("keeps Unicode and ordinary mixed-case matches visible in live branch previews", () => {
+		const branch = [
+			{
+				type: "message", id: "unicode", parentId: null,
+				message: { role: "user", content: "İ".repeat(100) + " NeedLe live" },
+			},
+			{
+				type: "message", id: "plain", parentId: "unicode",
+				message: { role: "assistant", content: "ASCII NeedLe live" },
+			},
+		] as unknown as SessionEntry[];
+		const found = searchLiveHistoryEntries(branch, { query: "needle", limit: 2 });
+		expect(found.status).toBe("ok");
+		expect(found.matches.map(match => match.entryId)).toEqual(["plain", "unicode"]);
+		for (const match of found.matches) {
+			expect(match.preview).toContain("NeedLe");
+			expect(match.preview.length).toBeLessThanOrEqual(200);
+		}
+	});
+
+	it("does not split surrogate pairs at search-preview boundaries", () => {
+		const cases = [
+			{ before: "🔑" + "x".repeat(69), after: "x".repeat(40) },
+			{ before: "x".repeat(70), after: "x".repeat(49) + "🔑" + "x".repeat(40) },
+		];
+		for (const { before, after } of cases) {
+			const branch = [
+				{
+					type: "message", id: "boundary", parentId: null,
+					message: { role: "user", content: before + "N".repeat(80) + after },
+				},
+			] as unknown as SessionEntry[];
+			const found = searchLiveHistoryEntries(branch, { query: "n".repeat(80), limit: 1 });
+			expect(found.status).toBe("ok");
+			expect(found.matches).toHaveLength(1);
+			const preview = found.matches[0]!.preview;
+			expect(preview).toContain("N".repeat(80));
+			expect(preview.length).toBeLessThanOrEqual(200);
+			const first = preview.charCodeAt(0);
+			const last = preview.charCodeAt(preview.length - 1);
+			expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
+			expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+		}
+	});
+
+
+	it("shows the entire allowed 180-character query without exceeding the preview cap", () => {
+		const match = "N".repeat(180);
+		const branch = [
+			{
+				type: "message", id: "long-query", parentId: null,
+				message: { role: "user", content: "prefix ".repeat(18) + match + " suffix" },
+			},
+		] as unknown as SessionEntry[];
+		const found = searchLiveHistoryEntries(branch, { query: match.toLowerCase(), limit: 1 });
+		expect(found.status).toBe("ok");
+		expect(found.matches).toHaveLength(1);
+		expect(found.matches[0]!.preview).toContain(match);
+		expect(found.matches[0]!.preview.length).toBeLessThanOrEqual(200);
 	});
 
 	it("keeps matching ancestors despite 501 hits in an abandoned sibling", async () => {
@@ -461,7 +556,7 @@ describe("history exact record lookup", () => {
 				});
 				expect(trusted.status).toBe("partial");
 				expect(trusted.matches.map(match => match.entryId)).toEqual(["root"]);
-				expect(trusted.matches[0]?.revision).toBe(exact.revision);
+				expect(trusted.matches[0]!.revision).toBe(exact.revision!);
 			}
 
 			// The first-pass title-slot exception must also apply to matching.
@@ -488,7 +583,7 @@ describe("history exact record lookup", () => {
 				limit: 256,
 			});
 			expect(exact.status).toBe("ok");
-			expect(accepted.matches[0]?.revision).toBe(exact.revision);
+			expect(accepted.matches[0]!.revision).toBe(exact.revision!);
 
 			const nested = {
 				...root,

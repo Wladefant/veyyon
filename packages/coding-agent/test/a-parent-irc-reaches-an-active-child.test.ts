@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { TempDir } from "@veyyon/utils";
+import { isRecord, TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { AgentRegistry } from "../src/registry/agent-registry";
@@ -65,7 +65,9 @@ describe("parent IRC delivery to an active child", () => {
 		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
 		const received: string[] = [];
 		child.session.subscribe(event => {
-			if (event.type === "irc_message") received.push(event.message.details?.message as string);
+			if (event.type === "irc_message" && isRecord(event.message.details)) {
+				received.push(String(event.message.details.message ?? ""));
+			}
 		});
 		const turn = child.session.prompt("Continue the task.", { attribution: "agent" });
 		try {

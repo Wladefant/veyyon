@@ -194,7 +194,10 @@ function googleWireTraits<T extends GoogleApiType>(model: Model<T>): GoogleWireT
 		sendsPartId:
 			model.api !== "google-vertex" &&
 			model.provider !== "google-vertex" &&
-			(model.id.startsWith("claude-") || (model.api === "google-generative-ai" && gemini3)),
+			(model.id.startsWith("claude-") ||
+				(model.api === "google-generative-ai" && gemini3) ||
+				((model.api === "google-gemini-cli" || model.provider === "google-antigravity") &&
+					model.id.startsWith("gpt-oss-"))),
 		unsignedCallSignature: gemini3 && model.api === "google-generative-ai" ? SKIP_THOUGHT_SIGNATURE : undefined,
 		unsignedForeignCallSignature:
 			gemini3 && (model.api === "google-generative-ai" || model.api === "google-gemini-cli")

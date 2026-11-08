@@ -14,7 +14,6 @@ import {
 	normalizeCursorReplaceArgs,
 } from "@veyyon/coding-agent/cursor-bridge-tools";
 import { EditTool } from "@veyyon/coding-agent/edit";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 import { isRecord, removeWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
@@ -171,7 +170,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 	it("edits a file when the server-injected StrReplace name arrives as MCP", async () => {
 		const target = path.join(cwd, "note.txt");
 		await Bun.write(target, "alpha\nbeta\n");
-		const session = createTestSession(cwd);
+		const session = makeToolSessionAt(cwd);
 		const tools = new Map<string, AnyAgentTool>([["edit", new EditTool(session)]]);
 		const handlers = new CursorExecHandlers({
 			cwd,
@@ -198,7 +197,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 	it("runs replace-mode when advertised hashline edit is called with old_string", async () => {
 		const target = path.join(cwd, "note.txt");
 		await Bun.write(target, "alpha\nbeta\n");
-		const session = createTestSession(cwd);
+		const session = makeToolSessionAt(cwd);
 		const hashline = new EditTool(session);
 		expect(hashline.mode).not.toBe("replace");
 		const handlers = new CursorExecHandlers({
@@ -224,7 +223,7 @@ describe("Cursor MCP StrReplace fallback", () => {
 	});
 
 	it("does not run replace-mode for a hashline edit payload", async () => {
-		const session = createTestSession(cwd);
+		const session = makeToolSessionAt(cwd);
 		let replaceBuilt = 0;
 		const handlers = new CursorExecHandlers({
 			cwd,
@@ -269,6 +268,8 @@ describe("Cursor MCP StrReplace fallback", () => {
 
 		expect(result.isError).toBe(true);
 		expect(await Bun.file(target).text()).toBe("alpha\nbeta\n");
+	});
+});
 describe("the shell stream bridge streams every text block of a result", () => {
 	const multiBlockTool: AnyAgentTool = {
 		name: "bash",

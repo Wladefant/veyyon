@@ -103,7 +103,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		let acceptedSnapshots = 0;
 		// A faulty relay alternates old, schema-valid time-relative countdown
 		// telemetry but never forwards the peer's revocation generation.
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial };
 			connected.resolve();
 			while (!opts.signal?.aborted) {
@@ -168,7 +168,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			return response;
 		});
 		const observedRefresherEnabled: boolean[] = [];
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...changed };
 			await untilAborted(opts.signal);
 		});
@@ -296,17 +296,17 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			...canonical.snapshot,
 			generation: initial.generation,
 		};
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			// Even though the generation did not advance, the new broker row is
 			// genuine progress and must still be installed on the first frame.
 			yield { kind: "snapshot" as const, ...changed };
 			await untilAborted(opts.signal);
 		});
 		remote = new RemoteAuthCredentialStore({ client, initialSnapshot: initial.snapshot });
-		await waitUntil(() =>
-			remote!.snapshot.credentials[0]?.credential.type === "oauth" &&
-			remote.snapshot.credentials[0]?.credential.access === "access-new-same-generation",
-		);
+		await waitUntil(() => {
+			const credential = remote?.snapshot.credentials[0]?.credential;
+			return credential?.type === "oauth" && credential.access === "access-new-same-generation";
+		});
 		// The first SSE frame advertises the old generation, but only the
 		// canonical broker GET authorizes this new credential and its generation.
 		expect(changed.generation).toBe(initial.snapshot.generation);
@@ -358,7 +358,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const streamConnected = Promise.withResolvers<void>();
 		// Deliberately never yield the first SSE frame. This models a gateway
 		// holding its initial response body open, without using any real grant.
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			streamConnected.resolve();
 			await untilAborted(opts.signal);
 		});
@@ -391,7 +391,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		let realReconnectedSnapshotSeen = false;
 		let resumedEntryFrameSeen = false;
 
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			// Only the first connection delivers the stale snapshot. A reconnect
 			// must read the real SQLite-backed broker's new canonical state.
 			if (connections++ > 0) {
@@ -574,7 +574,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			canonicalGets += 1;
 			return realFetch(opts);
 		});
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			connections += 1;
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			// An identical full frame cannot be durable progress.
@@ -1707,7 +1707,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const connected = Promise.withResolvers<void>();
 		let replayedFrames = 0;
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			connected.resolve();
 			while (!opts.signal?.aborted) {
@@ -1745,10 +1745,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke behind held block replay")).toBe(true);
 			// Only the production watchdog can discover the canonical revocation.
 			// A repeated frame must not mask it or release the pending safety block.
-			await waitUntil(() =>
-				remote!.snapshot.credentials.length === 1 &&
-				remote.snapshot.credentials[0]?.id === blockedId,
-			);
+			await waitUntil(() => {
+				const credentials = remote?.snapshot.credentials;
+				return credentials?.length === 1 && credentials[0]?.id === blockedId;
+			});
 			expect(remote.getCredentialBlock(blockedId, "anthropic", "credential")).toBe(blockedUntilMs);
 			const canonical = await peer.fetchSnapshot();
 			if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
@@ -1777,7 +1777,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
 		const connected = Promise.withResolvers<void>();
 		let replayed = 0;
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			connected.resolve();
 			while (!opts.signal?.aborted) {
@@ -1800,10 +1800,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(storage!.disableCredentialById(revokedId, "synthetic peer revoke during permuted SSE")).toBe(true);
 		// No manual refresh or new SSE generation is sent: only the production
 		// canonical watchdog GET can see the broker's deletion.
-		await waitUntil(() =>
-			remote!.snapshot.credentials.length === 1 &&
-			remote.snapshot.credentials[0]?.id === survivorId,
-		);
+		await waitUntil(() => {
+			const credentials = remote?.snapshot.credentials;
+			return credentials?.length === 1 && credentials[0]?.id === survivorId;
+		});
 		expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([survivorId]);
 		const canonical = await peer.fetchSnapshot();
 		if (canonical.status !== 200) throw new Error("expected authoritative broker snapshot");
@@ -1817,7 +1817,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -1844,7 +1844,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -1886,7 +1886,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const initial = await client.fetchSnapshot();
 		if (initial.status !== 200) throw new Error("expected seeded broker snapshot");
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -1948,7 +1948,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			return { status: 200 as const, snapshot: { ...result.snapshot, generation: 0 }, generation: 0 };
 		});
 
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		// Drive the real streaming store with a synthetic reconnect from a restarted broker.
+		// Only the transport frame is controlled; no OAuth refresh or vault access occurs.
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...restarted };
 			await untilAborted(opts.signal);
 		});
@@ -1969,7 +1971,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const releaseOldFrame = Promise.withResolvers<void>();
 		const frameHandled = Promise.withResolvers<void>();
 
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			connected.resolve();
 			await releaseOldFrame.promise;
 			try {
@@ -2876,7 +2878,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			{ label: "foreign provider", entries: [{ ...entry, provider: "openai-codex" }] },
 			{
 				label: "unredacted refresh",
-				entries: [{ ...entry, credential: { ...entry.credential, refresh: "synthetic-unredacted-refresh" } }],
+				entries: [{
+					...entry,
+					// This malformed wire fixture deliberately violates the remote credential type.
+					credential: {
+						...entry.credential,
+						refresh: "synthetic-unredacted-refresh",
+					} as unknown as SnapshotResponse["credentials"][number]["credential"],
+				}],
 			},
 			{
 				label: "valid entry followed by foreign provider",
@@ -2988,7 +2997,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (initial.status !== 200) throw new Error("expected broker snapshot");
 			const id = initial.snapshot.credentials[0]!.id;
 			const streamReady = Promise.withResolvers<void>();
-			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 				yield { kind: "snapshot" as const, ...initial.snapshot };
 				streamReady.resolve();
 				await untilAborted(opts.signal);
@@ -3047,7 +3056,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			const id = initial.snapshot.credentials[0]!.id;
 			const streamReady = Promise.withResolvers<void>();
 			const peerEntryFrame = Promise.withResolvers<SnapshotResponse>();
-			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 				yield { kind: "snapshot" as const, ...initial.snapshot };
 				streamReady.resolve();
 				const next = await peerEntryFrame.promise;
@@ -3139,7 +3148,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				const id = initial.snapshot.credentials[0]!.id;
 				const streamReady = Promise.withResolvers<void>();
 				const peerFrame = Promise.withResolvers<SnapshotResponse>();
-				spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+				spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 					yield { kind: "snapshot" as const, ...initial.snapshot };
 					streamReady.resolve();
 					if (incoming === "SSE") {
@@ -3234,7 +3243,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 		const streamReady = Promise.withResolvers<void>();
 		const unrelatedFrame = Promise.withResolvers<SnapshotResponse>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			const next = await unrelatedFrame.promise;
@@ -3314,7 +3323,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -3467,7 +3476,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -3539,7 +3548,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -3623,7 +3632,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -3723,7 +3732,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		);
 		if (!first || !second) throw new Error("expected two independent synthetic credentials");
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -3799,7 +3808,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (initial.status !== 200) throw new Error("expected synthetic broker snapshot");
 		const id = initial.snapshot.credentials[0]!.id;
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -3887,7 +3896,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		// Hold the stream after its initial frame: a successful newer POST will
 		// not be reflected in appliedSnapshotRevision until a canonical read.
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...seeded.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -3975,7 +3984,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		if (seeded.status !== 200) throw new Error("expected seeded broker snapshot");
 
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...seeded.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);
@@ -4061,7 +4070,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		// This client still believes SSE is healthy, but receives no mutation frames.
 		// A lost DELETE acknowledgment cannot be corrected by waiting for this stream.
 		const streamReady = Promise.withResolvers<void>();
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...seeded.snapshot };
 			streamReady.resolve();
 			await untilAborted(opts.signal);

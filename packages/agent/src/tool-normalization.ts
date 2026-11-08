@@ -37,6 +37,12 @@ export function schemaDefinesProperty(schema: unknown, key: string): boolean {
 }
 
 function injectIntentIntoSchema(
+	schema: Record<string, unknown>,
+	mode?: "require" | "optional",
+	describeIntent?: boolean,
+): Record<string, unknown>;
+function injectIntentIntoSchema(schema: unknown, mode?: "require" | "optional", describeIntent?: boolean): unknown;
+function injectIntentIntoSchema(
 	schema: unknown,
 	mode: "require" | "optional" = "require",
 	describeIntent = true,
@@ -177,7 +183,7 @@ function normalizeTool(
 ): Tool {
 	const intentMode = resolveIntentMode(tool.intent);
 	const spec = specWithoutReplacedFields(tool);
-	const wireParameters = toolWireSchema(tool) as TSchema;
+	const wireParameters = toolWireSchema(tool);
 	const doInjectIntent =
 		injectIntent && intentMode !== "omit" && !schemaDefinesProperty(wireParameters, INTENT_FIELD);
 	// When the full catalog is rendered into the system prompt, ship the tool
@@ -187,12 +193,12 @@ function normalizeTool(
 	// re-inject `i` (without its hint, which `describeIntent: false` omits) so
 	// intent tracing keeps the field while no descriptions ride the wire.
 	if (pruneDescriptions) {
-		let parameters = stripSchemaDescriptions(wireParameters) as TSchema;
-		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
+		let parameters = stripSchemaDescriptions(wireParameters);
+		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false);
 		return { ...spec, parameters, description: "" } as Tool;
 	}
 	let parameters = wireParameters;
-	if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
+	if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode);
 	const description = tool.description ?? "";
 	const examplesBlock = exampleDialect
 		? renderToolExamples(exampleTool(spec, parameters), exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)

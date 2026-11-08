@@ -36,6 +36,7 @@ import { ProviderHttpError } from "./error";
 import { isAuthRetryableError } from "./error/auth-classify";
 import { AUTHENTICATED_API_KEY_SENTINEL } from "./provider-env-keys";
 import { resolveProviderInFlightLimit } from "./provider-inflight-limits";
+import { OUTPUT_FALLBACK_BUFFER } from "./providers/anthropic";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import { mapAnthropicToolChoice } from "./providers/anthropic-tool-choice";

@@ -19,6 +19,8 @@ export function idleExtensionActions(overrides: Partial<ExtensionActions> = {}):
 		setThinkingLevel: () => {},
 		getSessionName: () => undefined,
 		setSessionName: async () => {},
+		listWorkers: () => [],
+		steerWorker: async workerId => ({ to: workerId, outcome: "failed", error: "No workers are available." }),
 		...overrides,
 	};
 }

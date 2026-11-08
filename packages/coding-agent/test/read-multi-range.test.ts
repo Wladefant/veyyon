@@ -295,7 +295,7 @@ describe("read tool multi-range selector", () => {
 			readTextFile: async () => bridgeText,
 		};
 		const session = createSession(tmpDir, bridge);
-		const text = textOutput(await new ReadTool(session).execute("call-bridge-eof", { path: `${filePath}:1-2,3-3` }));
+		const text = toolResultText(await new ReadTool(session).execute("call-bridge-eof", { path: `${filePath}:1-2,3-3` }));
 		const header = text.split("\n")[0] ?? "";
 		expect(header).toMatch(/^\[bridge\.txt#[0-9A-F]{4}\]$/);
 		expect(text).toContain("1:first\n2:");

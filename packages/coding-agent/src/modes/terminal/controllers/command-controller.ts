@@ -6,7 +6,6 @@ import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
 import type { NewSessionOptions } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "@veyyon/kernel/session/shake-types";
-type SessionManagerStateSnapshot = Parameters<SessionManager["restoreState"]>[0];
 
 import { Loader, type OverlayHandle, Spacer, Text } from "@veyyon/tui";
 import {
@@ -65,6 +64,7 @@ export type CommandControllerContext = Pick<
 	| "bashComponent"
 	| "chatContainer"
 	| "clearTransientSessionUi"
+	| "applyCwdChange"
 	| "clearWorkingLoader"
 	| "createNextSession"
 	| "editor"
@@ -674,9 +674,8 @@ export class CommandController {
 		const cwd = this.ctx.sessionManager.getCwd();
 		const resolvedPath = resolveToCwd(unquoted, cwd);
 
-		if (!(await this.#ensureMoveTarget(resolvedPath))) return;
-
 		const moved = await this.#withSessionMove(async () => {
+			if (!(await this.#ensureMoveTarget(resolvedPath))) return false;
 			return this.#relocateSession(resolvedPath);
 		});
 
@@ -688,7 +687,7 @@ export class CommandController {
 		}
 	}
 
-	/** Save source settings before acquiring the gate for a complete relocation operation. */
+	/** Save source settings before acquiring the gate for the complete relocation operation. */
 	async #withSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
 		try {
 			await this.ctx.settings.flush();
@@ -707,51 +706,20 @@ export class CommandController {
 	async #relocateSession(resolvedPath: string): Promise<boolean> {
 		if (resolvedPath === path.resolve(this.ctx.sessionManager.getCwd())) return false;
 
-		const previousState = this.ctx.sessionManager.captureState();
-		// The session moves storage and every cwd-derived input as one transaction, re-roots the
-		// wire's path relativization and records the change for the model, exactly as `/move` does in
-		// ACP. Its `cwd_changed` event runs `applyCwdChange`, which refreshes what only the terminal draws.
+		// AgentSession owns storage, runtime re-scoping, rollback and the cwd_changed event. The
+		// event drives applyCwdChange, so this controller only refreshes terminal-only state.
 		try {
 			await this.ctx.session.moveToCwd(resolvedPath);
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${errorMessage(err)}`);
 			return false;
 		}
-		try {
-			await this.ctx.applyCwdChange(resolvedPath);
-		} catch (error) {
-			await this.#restoreAfterMoveFailure(previousState, error);
-			return false;
-		}
 
 		this.ctx.updateEditorBorderColor();
 		await this.ctx.reloadTodos();
-		this.ctx.ui.requestRender();
 		return true;
 	}
 
-	async #restoreAfterMoveFailure(previousState: SessionManagerStateSnapshot, error?: unknown): Promise<void> {
-		try {
-			await this.ctx.sessionManager.moveTo(previousState.cwd, previousState.sessionDir);
-		} catch (reverseError) {
-			logger.error("Failed to move the session back after a failed directory change", { error: reverseError });
-			this.ctx.showError(
-				`Move failed while applying directory change: ${errorMessage(error)}. The session could not be moved back and stays at ${this.ctx.sessionManager.getCwd()}: ${errorMessage(reverseError)}`,
-			);
-			return;
-		}
-		this.ctx.sessionManager.restoreState(previousState);
-		try {
-			await this.ctx.applyCwdChange(previousState.cwd);
-		} catch (restoreError) {
-			logger.error("Failed to restore previous working directory after move failure", {
-				error: restoreError,
-			});
-		}
-		if (error !== undefined) {
-			this.ctx.showError(`Move failed while applying directory change: ${errorMessage(error)}`);
-		}
-	}
 
 	/**
 	 * Whether `resolvedPath` is a directory the session can move into. A missing directory is created once the

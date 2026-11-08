@@ -28,6 +28,7 @@ type UserBlock = Exclude<UserMessage["content"], string>[number];
 /** Samples of every assistant block kind. A kind missing here is a type error. */
 const ASSISTANT_BLOCKS: { [K in AssistantBlock["type"]]: Array<Extract<AssistantBlock, { type: K }>> } = {
 	text: [{ type: "text", text: VISIBLE }],
+	image: [{ type: "image", data: HIDDEN, mimeType: "image/png" }],
 	thinking: [
 		{ type: "thinking", thinking: `${HIDDEN} unsigned` },
 		{ type: "thinking", thinking: `${HIDDEN} signed`, thinkingSignature: "sig-1" },
@@ -41,6 +42,7 @@ const ASSISTANT_BLOCKS: { [K in AssistantBlock["type"]]: Array<Extract<Assistant
 const USER_BLOCKS: { [K in UserBlock["type"]]: Array<Extract<UserBlock, { type: K }>> } = {
 	text: [{ type: "text", text: VISIBLE }],
 	image: [{ type: "image", data: HIDDEN, mimeType: "image/png" }],
+	video: [{ type: "video", mimeType: "video/mp4", data: HIDDEN }],
 };
 
 function assistant(content: AssistantBlock[]): AgentMessage {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { assistantText, assistantTextBlocks } from "../src/utils/message-text";
+import { assistantText, assistantTextBlocks, messageContentText } from "../src/utils/message-text";
 
 const content = [
 	{ type: "thinking" as const, thinking: "hmm", thinkingSignature: "" },
@@ -21,5 +21,16 @@ describe("assistantTextBlocks / assistantText", () => {
 	it("returns empty for a message with no text blocks", () => {
 		expect(assistantText({ content: [] })).toBe("");
 		expect(assistantTextBlocks({ content: [content[0]] })).toEqual([]);
+	});
+});
+describe("messageContentText", () => {
+	it("keeps text and image placeholders while dropping video content", () => {
+		expect(
+			messageContentText([
+				{ type: "text", text: "hello" },
+				{ type: "video", data: "clip", mimeType: "video/mp4" },
+				{ type: "image", mimeType: "image/png", data: "encoded" },
+			]),
+		).toBe("hello\n\n[image/png image]");
 	});
 });
