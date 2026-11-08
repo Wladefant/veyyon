@@ -4,11 +4,15 @@ import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import { executeJs, type JsResult } from "@veyyon/coding-agent/eval/js/executor";
+import { executeWithKernelBase } from "@veyyon/coding-agent/eval/executor-base";
+import type { KernelExecuteOptions, KernelExecutor } from "@veyyon/coding-agent/eval/kernel-base";
+import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
-import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
+useIsolatedAgentDir();
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
 // can exceed Bun's 5s default per-test timeout, flaking the suite. Give the worker-backed
@@ -41,6 +45,32 @@ function getStatusEvents(result: JsResult) {
 	return result.displayOutputs.filter(
 		(output): output is Extract<JsResult["displayOutputs"][number], { type: "status" }> => output.type === "status",
 	);
+}
+
+function runKernelDisplay(data: unknown) {
+	const kernel: KernelExecutor = {
+		async execute(_code: string, options?: KernelExecuteOptions) {
+			await options?.onDisplay?.({ type: "json", data });
+			return { status: "ok", cancelled: false, timedOut: false, stdinRequested: false };
+		},
+	};
+	return executeWithKernelBase({
+		kernel,
+		code: "display",
+		options: {},
+		runIdPrefix: "test",
+		errorLogLabel: "test",
+		cancelledErrorClass: class extends Error {
+			timedOut: boolean;
+			constructor(timedOut: boolean) {
+				super();
+				this.timedOut = timedOut;
+			}
+		},
+		buildKernelEnvPatch: () => ({}),
+		formatKernelTimeoutAnnotation: () => "",
+		formatTimeoutAnnotation: () => "",
+	});
 }
 
 describe("executeJs", () => {
@@ -496,6 +526,15 @@ describe("executeJs", () => {
 		expect(result.output).toBe("");
 		expect(result.displayOutputs).toEqual([{ type: "json", data: { answer: 42, nested: { ok: true } } }]);
 	});
+	it("preserves the size diagnosis for aggregate JSON with individually short leaves", async () => {
+		const result = await executeJs(
+			`return Array.from({ length: 1000 }, () => "x".repeat(70));`,
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(getJsonData(result)).toBe("[line over 65,536 chars, not scanned]");
+	});
 
 	it('rewrites static `import { x } from "pkg"` to dynamic import', async () => {
 		const result = await executeJs('import { join } from "node:path";\nreturn join("a", "b");', {
@@ -711,5 +750,17 @@ describe("ProducerOutputGuard finalization", () => {
 		const guard = new ProducerOutputGuard();
 		const output = guard.push("{\n  ALPHA: /fake-a{/,\n") + guard.push('  BETA: "fake-b"') + guard.finish();
 		expect(output).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+});
+describe("executeWithKernelBase JSON display safety", () => {
+	it("preserves the size diagnosis for aggregate JSON with individually short leaves", async () => {
+		const result = await runKernelDisplay(Array.from({ length: 1000 }, () => "x".repeat(70)));
+		expect(result.displayOutputs).toEqual([{ type: "json", data: OVERSIZED_OUTPUT_RECORD }]);
+	});
+
+	it("withholds credential-bearing JSON displays", async () => {
+		const result = await runKernelDisplay({ API_KEY: "fake-credential-123" });
+		expect(result.displayOutputs).toEqual([{ type: "json", data: BLOCKED_OUTPUT_RECORD }]);
+		expect(JSON.stringify(result.displayOutputs)).not.toContain("fake-credential-123");
 	});
 });
