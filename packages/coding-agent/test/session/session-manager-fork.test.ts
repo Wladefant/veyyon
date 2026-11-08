@@ -4164,7 +4164,7 @@ describe("SessionManager.fork artifact durability", () => {
 					const nestedFileSync = indexOf(`${rootName}/nested/audit.log`);
 					const nestedDirSync = indexOf(`${rootName}/nested`);
 					const rootDirSync = indexOf(rootName);
-					const parentDirSync = indexOf(".");
+					const parentDirSync = indexOf("");
 					expect(sourceFileSync).toBeGreaterThanOrEqual(0);
 					expect(nestedFileSync).toBeGreaterThanOrEqual(0);
 					expect(nestedDirSync).toBeGreaterThanOrEqual(0);

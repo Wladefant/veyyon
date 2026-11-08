@@ -2721,11 +2721,13 @@ export class SessionManager {
 					before.mtimeMs !== expected.mtimeMs ||
 					before.ctimeMs !== expected.ctimeMs
 				) throw changed();
+				// Windows FlushFileBuffers requires GENERIC_WRITE. Use a write-only
+				// handle there; POSIX fsync permits the read-only handle used below.
+				// A read-only copied artifact therefore fails closed on Windows.
 				const flags =
-					fs.constants.O_RDONLY |
-					(process.platform === "win32"
-						? 0
-						: (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+					process.platform === "win32"
+						? fs.constants.O_WRONLY
+						: fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
 				const file = await fs.promises.open(filename, flags);
 				try {
 					await verifyCopiedDirectoryPath(parentRelative);
@@ -2759,11 +2761,7 @@ export class SessionManager {
 				await flushCopiedFile(relative, expected);
 			}
 
-			if (process.platform === "win32") {
-				// File contents are flushed above. Node does not expose a portable
-				// Windows directory-fsync handle, so directory-entry durability is
-				// a separate host qualification and is not claimed as POSIX-equivalent.
-			} else {
+			if (process.platform !== "win32") {
 				const flushDirectory = async (
 					filename: string,
 					expected: fs.Stats,
@@ -2822,6 +2820,8 @@ export class SessionManager {
 				);
 				await verifyDestinationParent();
 			}
+			// Windows file contents are flushed above, but this portable Node path
+			// does not claim directory-entry durability on Windows.
 			await verifyDestinationParent();
 		}
 	}
