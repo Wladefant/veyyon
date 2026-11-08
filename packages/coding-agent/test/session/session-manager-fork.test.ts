@@ -2967,6 +2967,28 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       } finally {
         await writer.close();
       }
+
+      // The same-inode fast path must not bypass no-follow verification:
+      // stat(journal) resolves this symlink to the writer's original inode.
+      // No previous append is needed to exercise this independent boundary.
+      const idleWriter = new FileSessionStorage().openWriter(journal);
+      const parkedForAlias = path.join(temp.path(), "synthetic-same-inode-alias.jsonl");
+      const journalBytes = await fs.readFile(journal);
+      await fs.rename(journal, parkedForAlias);
+      try {
+        await fs.symlink(parkedForAlias, journal);
+        expect(nodeFs.lstatSync(journal).isSymbolicLink()).toBe(true);
+        expect(nodeFs.statSync(journal).ino).toBe(nodeFs.statSync(parkedForAlias).ino);
+        await expect(idleWriter.append(second)).rejects.toThrow(/regular file|symlink/i);
+        expect(idleWriter.getError()?.message).toMatch(/regular file|symlink/i);
+        await expect(idleWriter.sync()).rejects.toThrow(/regular file|symlink/i);
+        expect(await fs.readFile(parkedForAlias)).toEqual(journalBytes);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await fs.rm(journal, { force: true });
+        await fs.rename(parkedForAlias, journal);
+        await idleWriter.close();
+      }
     },
   );
 
