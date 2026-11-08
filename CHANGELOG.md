@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [1.8.12] - 2026-11-08
+
+### Fixed
+
+- The bwrap test sandbox binds the tested worktree's workspace packages when `node_modules` comes from an external checkout, so imports such as `@veyyon/catalog/models` resolve ([PR #1038](https://github.com/Wladefant/veyyon/pull/1038)).
+
+## [1.8.11] - 2026-11-08
+
+### Fixed
+
+- Eval JSON displays preserve the oversized-record diagnosis for aggregate values and still withhold credential-bearing output ([PR #1030](https://github.com/Wladefant/veyyon/pull/1030)).
+
+## [1.8.10] - 2026-11-08
+
+### Added
+
+- Pull-request CI counts the changed files in the net diff and in each commit, reports anything above 1,000 files, and fails above 5,000 files unless the pull request carries the `large-change-approved` label ([PR](https://github.com/Wladefant/veyyon/pull/1023)).
+
+## [1.8.9] - 2026-11-08
+
+### Fixed
+
+- Keep matched Unicode text visible in bounded `history://` search previews, including expanding case folds, astral-character boundaries, and long queries ([Refs #984](https://github.com/Wladefant/veyyon/issues/984)).
+
 ## [1.8.8] - 2026-11-08
 
 ### Fixed
