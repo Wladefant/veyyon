@@ -686,9 +686,34 @@ export function parseHistorySearchRequest(url: URL): HistorySearchRequest | unde
 function previewAt(raw: string, term: string): string {
 	const position = raw.toLowerCase().indexOf(term);
 	if (position < 0) return "";
-	const start = Math.max(0, position - 70);
-	const end = Math.min(raw.length, position + term.length + 110);
-	return raw.slice(start, end).slice(0, MAX_PREVIEW_CHARACTERS);
+	// Some lowercase mappings expand a character (e.g. U+0130 -> i + combining dot).
+	// Project the match offset back to the original UTF-16 string before slicing it.
+	let originalPosition = 0;
+	let loweredPosition = 0;
+	for (const character of raw) {
+		const width = character.toLowerCase().length;
+		if (loweredPosition + width > position) break;
+		loweredPosition += width;
+		originalPosition += character.length;
+	}
+	// Keep the full matching evidence visible even for the maximum allowed
+	// 180-character query: 70 units of prefix would otherwise exceed the cap.
+	const leadingContext = Math.min(70, Math.max(0, MAX_PREVIEW_CHARACTERS - term.length));
+	const start = Math.max(0, originalPosition - leadingContext);
+	const end = Math.min(raw.length, originalPosition + term.length + 110);
+	// The context/window and preview cap are UTF-16 offsets. Do not emit half
+	// of an astral character when either boundary falls between surrogates.
+	const splitsPair = (index: number): boolean =>
+		index > 0 &&
+		index < raw.length &&
+		raw.charCodeAt(index - 1) >= 0xd800 &&
+		raw.charCodeAt(index - 1) <= 0xdbff &&
+		raw.charCodeAt(index) >= 0xdc00 &&
+		raw.charCodeAt(index) <= 0xdfff;
+	const safeStart = splitsPair(start) ? start + 1 : start;
+	const cappedEnd = Math.min(end, safeStart + MAX_PREVIEW_CHARACTERS);
+	const safeEnd = splitsPair(cappedEnd) ? cappedEnd - 1 : cappedEnd;
+	return raw.slice(safeStart, safeEnd);
 }
 
 /**

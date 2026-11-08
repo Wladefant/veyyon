@@ -5,13 +5,28 @@
 ### Fixed
 
 - Exact stored-history reads and searches now reject ambiguous session headers, repeated identity fields (even after unrelated duplicates), unaddressable stored entry IDs, and oversized session-ID or record-type metadata, while preserving explicitly selected healthy legacy branches after unrelated malformed records.
+- Keep matched Unicode text visible in bounded `history://` search previews, including expanding case folds, astral-character boundaries, and long queries ([Refs #984](https://github.com/Wladefant/veyyon/issues/984)).
+## [1.8.8] - 2026-11-08
+
+### Fixed
+
+- `gpt-oss` models served through Google Gemini CLI and Antigravity now send the tool-call id on each function-call part, so the following turn no longer starts from an empty tool-call id ([PR](https://github.com/Wladefant/veyyon/pull/1025)).
+
+## [1.8.7] - 2026-11-07
+
+### Changed
+
+- Terminal control supports an authenticated idle-exit request that refuses busy sessions and flushes acceptance before shutdown.
+
+### Fixed
+
+- Fixed TypeScript errors across the agent, AI, catalog and coding-agent packages.
 
 ## [1.8.6] - 2026-11-07
 
 ### Changed
 
 - ACP model choices now list OpenAI Codex, Anthropic, Antigravity and OpenCode first without removing models or changing their provider-relative order.
-- Terminal control supports an authenticated idle-exit request that refuses busy sessions and flushes acceptance before shutdown.
 
 ## [1.8.5] - 2026-11-06
 
