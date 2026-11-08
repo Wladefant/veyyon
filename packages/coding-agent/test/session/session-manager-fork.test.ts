@@ -2992,6 +2992,58 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "refuses an in-place unrelated session header on the pinned inode",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-inplace-foreign-");
+      const journal = path.join(temp.path(), "synthetic-session.jsonl");
+      const archive = path.join(temp.path(), "synthetic-archive.bin");
+      const archiveBytes = Buffer.from("synthetic archived bytes unchanged");
+      const original = JSON.stringify({
+        type: "session", version: 3, id: "synthetic-original",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      }) + "\n";
+      const unrelated = JSON.stringify({
+        type: "session", version: 3, id: "synthetic-unrelated",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      }) + "\n";
+      const entry = JSON.stringify({
+        type: "message", id: "synthetic-foreign-session-entry", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Must never join the unrelated session", timestamp: Date.now() },
+      }) + "\n";
+      await fs.writeFile(journal, original);
+      await fs.writeFile(archive, archiveBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        const pinnedInode = nodeFs.statSync(journal).ino;
+        // O_TRUNC on this regular file preserves dev:ino. A replacement-only
+        // guard would accept this unrelated header and append into its history.
+        await fs.writeFile(journal, unrelated);
+        expect(nodeFs.statSync(journal).ino).toBe(pinnedInode);
+        await expect(writer.append(entry)).rejects.toThrow(/session header/i);
+        expect(writer.getError()?.message).toMatch(/session header/i);
+        await expect(writer.sync()).rejects.toThrow(/session header/i);
+        expect(await fs.readFile(journal, "utf8")).toBe(unrelated);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await writer.close();
+      }
+
+      // The unrelated journal remains usable by a newly opened, correctly
+      // pinned writer. Refusing the stale writer must not corrupt either file.
+      const fresh = new FileSessionStorage().openWriter(journal);
+      try {
+        await fresh.append(entry);
+        await fresh.sync();
+        expect(await fs.readFile(journal, "utf8")).toBe(unrelated + entry);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await fresh.close();
+      }
+    },
+  );
+
   // POSIX rename keeps an independent O_APPEND descriptor on the displaced
   // original inode. Windows may refuse the replacement while that handle is
   // open; the separate EPERM tests cover its distinct path behavior.

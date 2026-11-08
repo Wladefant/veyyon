@@ -527,7 +527,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	#fd: number;
 	readonly #path: string;
 	readonly #appendMode: boolean;
-	readonly #sessionIdAtOpen: string | undefined;
+	#sessionIdAtOpen: string | undefined;
 	/** Any prior append could be lost when a replacement lacks this writer\'s history, even after fsync. */
 	#hasAppendedToPinnedJournal = false;
 
@@ -558,7 +558,17 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		if (!current.isFile() || current.isSymbolicLink()) {
 			throw new Error("Session writer target is not a regular file");
 		}
-		if (fileObjectIdentity(current) === pinnedIdentity) return;
+		if (fileObjectIdentity(current) === pinnedIdentity) {
+			// A peer can truncate and overwrite an existing regular journal in place.
+			// Matching dev:ino alone does not prove that this is still our session.
+			// A late-created journal acquires its header identity once it exists.
+			const currentSessionId = openedJournalSessionId(this.#path, this.#fd);
+			if (this.#sessionIdAtOpen && currentSessionId !== this.#sessionIdAtOpen) {
+				throw new Error("Session writer current journal has an unrelated or unverifiable session header");
+			}
+			if (!this.#sessionIdAtOpen && currentSessionId) this.#sessionIdAtOpen = currentSessionId;
+			return;
+		}
 		if (!this.#appendMode) throw new Error("Session writer target was replaced");
 		// Neither fsync nor matching session IDs proves the new journal retained
 		// this descriptor\'s earlier lines. Without a content proof, preserve the

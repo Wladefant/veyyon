@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- File append writers reject an in-place unrelated session-header overwrite on the same pinned inode before appending, without claiming cross-process publication serialization ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - File session append writers reject a substituted same-inode symlink before their regular-file fast path; this is not an interprocess publication lock ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Append writers refuse rebinding to a replaced same-session journal after earlier appends, even after fsync, when the replacement has not proven that history retained ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - File session writers now refuse a durable `sync()` acknowledgement if a peer has replaced the journal pathname after the writer appended. This detects a displaced descriptor but is not cross-process append/rename coordination ([#774](https://github.com/Wladefant/veyyon/issues/774)).
