@@ -1699,7 +1699,7 @@ describe("ACP agent", () => {
 			const earlyToolCallId = "toolu_compacted_replay";
 			const earlyPayload = Array.from({ length: 33 }, (_, index) => ({
 				type: "text" as const,
-				text: `EARLY-TOOL-PAYLOAD-${index}:` + "x".repeat(256 * 1024),
+				text: `EARLY-TOOL-PAYLOAD-${index}:${"x".repeat(256 * 1024)}`,
 			}));
 			const earlyDetails = { marker: "EARLY-TOOL-DETAILS", retained: true };
 			original.sessionManager.appendMessage({ role: "user", content: "run the early tool", timestamp: Date.now() });
@@ -1771,8 +1771,8 @@ describe("ACP agent", () => {
 				.join("\n");
 			expect(replayText).toContain("TAIL-USER-KEPT");
 			expect(replayText).toContain("TAIL-ASSISTANT-KEPT");
-			expect(toolUpdates.findIndex(update => update === start)).toBeLessThan(
-				toolUpdates.findIndex(update => update === completion),
+			expect(toolUpdates.indexOf(start)).toBeLessThan(
+				toolUpdates.indexOf(completion),
 			);
 
 			const entriesBeforePrompt = fs.statSync(file).size;

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Read cold session payloads for ACP replay without warming the retained transcript ([Refs #1019](https://github.com/Wladefant/veyyon/issues/1019)).
+
 ## [1.8.15] - 2026-11-08
 
 ### Fixed

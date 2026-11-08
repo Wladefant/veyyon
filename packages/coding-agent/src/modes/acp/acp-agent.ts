@@ -68,7 +68,6 @@ import { MCPManager } from "../../mcp/manager";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "../../mcp/runtime-config";
 import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
 import type { MCPServerConfig } from "../../mcp/types";
-import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../../plan-mode/plan-path";
