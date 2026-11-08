@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Verify a tombstoned auth-broker ID from a reconnect's first SSE snapshot with an unconditional canonical GET before reauthorizing it, and fail closed when canonical verification is absent or invalid ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+
 - Verify unchanged on-demand conditional auth-broker HTTP 200 replies against canonical broker state before declaring credential freshness, so stale roster replay cannot conceal peer revocation ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Treat an auth-broker removal for an already-absent credential as no progress only when its refresher policy also matches, so an SSE relay cannot hide a broker policy change ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Reject initial auth-broker SSE entry/removal deltas without the required first full snapshot, rather than treating an unverified relay delta as broker credential authority ([#602](https://github.com/Wladefant/veyyon/issues/602)).
