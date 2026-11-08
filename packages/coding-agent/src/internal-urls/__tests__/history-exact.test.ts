@@ -1187,6 +1187,11 @@ describe("history exact record lookup", () => {
 				'{"metadata":{"producer":true},"type":"sess\\u0069on","id":',
 				// A completed top-level array before type must not conceal a real repeated header.
 				'{"metadata":["safe"],"type":"session","id":',
+				// Invalid structural prefixes before the first root member cannot hide identity.
+				'{["type":"session","id":"shadow"]}',
+				'{{"type":"session","id":"shadow"}}',
+				// A framing token before an otherwise recognizable JSONL object is not ignorable text.
+				'}{"type":"session","id":"shadow"}',
 				// Root keys after a string value still establish a repeated session boundary.
 				'{"metadata":"safe","type":"session","id":',
 				'{"metadata":"safe" "type":"session","id":',
@@ -1195,6 +1200,23 @@ describe("history exact record lookup", () => {
 				'{"invalid\\q":true,"type":"session","id":"shadow"}',
 			]) {
 				await fs.writeFile(file, `${[header, root, corruptedHeader].join("\n")}\n`);
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+			// Prefix-framed duplicate IDs are ambiguous whether they precede or follow the valid row.
+			for (const lines of [
+				[header, '}{"type":"message","id":"root","parentId":42}', root],
+				[header, root, '}{"type":"message","id":"root","parentId":42}'],
+			]) {
+				await fs.writeFile(file, `${lines.join("\\n")}\\n`);
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 256,
 				});
