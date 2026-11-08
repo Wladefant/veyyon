@@ -3066,6 +3066,24 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         await newWriter.close();
       }
 
+      // A writer opened against an empty new journal must not adopt a peer's
+      // foreign header if it arrives on the same inode BEFORE its first append.
+      // The later-header overwrite regression above cannot catch that race.
+      const preemptedJournal = path.join(temp.path(), "synthetic-preempted-before-first-append.jsonl");
+      const preempted = new FileSessionStorage().openWriter(preemptedJournal);
+      try {
+        const newInode = nodeFs.statSync(preemptedJournal).ino;
+        await fs.writeFile(preemptedJournal, unrelated);
+        expect(nodeFs.statSync(preemptedJournal).ino).toBe(newInode);
+        await expect(preempted.append(newHeader)).rejects.toThrow(/before first append/i);
+        expect(preempted.getError()?.message).toMatch(/before first append/i);
+        await expect(preempted.sync()).rejects.toThrow(/before first append/i);
+        expect(await fs.readFile(preemptedJournal, "utf8")).toBe(unrelated);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await preempted.close();
+      }
+
       // The unrelated journal remains usable by a newly opened, correctly
       // pinned writer. Refusing the stale writer must not corrupt either file.
       const fresh = new FileSessionStorage().openWriter(journal);

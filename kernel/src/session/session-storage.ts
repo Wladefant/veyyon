@@ -559,6 +559,14 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			throw new Error("Session writer target is not a regular file");
 		}
 		if (fileObjectIdentity(current) === pinnedIdentity) {
+			// An empty journal has no session ID to pin at open. If a peer
+			// writes its own header before our first append, adopting that ID
+			// would mix our new session with the peer's on the same inode.
+			// Prior appends (including an owned title-slot prefix) are allowed
+			// to complete our own session header on a subsequent call.
+			if (!this.#sessionIdAtOpen && !this.#hasAppendedToPinnedJournal && fs.fstatSync(this.#fd).size > 0) {
+				throw new Error("Session writer journal gained content before first append");
+			}
 			// A peer can truncate and overwrite an existing regular journal in place.
 			// Matching dev:ino alone does not prove that this is still our session.
 			// A late-created journal acquires its header identity once it exists.
