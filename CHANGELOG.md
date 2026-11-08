@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.8.15] - 2026-11-08
+
+### Fixed
+
+- AI regression fixtures use current imports, stream types, and message contracts ([Refs #1048](https://github.com/Wladefant/veyyon/issues/1048)).
+
 ## [1.8.14] - 2026-11-08
 
 ### Fixed
