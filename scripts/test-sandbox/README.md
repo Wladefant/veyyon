@@ -94,9 +94,10 @@ If a Windows worktree has no Linux dependencies, install them in a separate WSL 
 Use `bun install --frozen-lockfile` there, through a medium build slot.
 Never install through a shared Windows `node_modules` junction.
 Set `VEYYON_SANDBOX_NODE_MODULES` to that checkout's absolute Linux `node_modules` path.
-Bwrap binds only that directory read-only over the tested worktree's `node_modules`.
-Relative workspace links then resolve to the tested worktree, not the dependency checkout.
-
+Bwrap binds that tree read-only over the tested worktree's `node_modules`. It also
+automatically binds the tested worktree's `packages` over the dependency checkout's
+workspace packages, so aliases such as `@veyyon/catalog/models` resolve to the code
+under test.
 Put the command in a shell script to keep `$?` from expanding on Windows:
 
 ```sh
