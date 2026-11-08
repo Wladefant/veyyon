@@ -1,0 +1,47 @@
+bun test v1.4.3 (c6da4a4d3)
+ unavailable: ssh key /root/.ssh/id_ed25519 is not readable; set VEYYON_SANDBOX_REMOTE_KEY
+[test-sandbox] rung docker
+
+packages/ai/test/auth-storage-antigravity-selection.test.ts:
+(pass) AuthStorage google-antigravity oauth ranking > Gemini selects the 83-percent-used sibling despite its exhausted Claude quota [953.75ms]
+(pass) AuthStorage google-antigravity oauth ranking > confirmed Gemini quota failure moves a pinned request to a sibling without losing the pin [172.74ms]
+(pass) AuthStorage google-antigravity oauth ranking > blocks exhausted Antigravity Gemini counter without blocking healthy Claude counter [570.16ms]
+(pass) AuthStorage google-antigravity oauth ranking > ranks by bottleneck counter instead of healthier secondary counter [331.05ms]
+(pass) AuthStorage google-antigravity oauth ranking > prefers less-pressured antigravity account when neither is exhausted [199.94ms]
+(pass) AuthStorage google-antigravity oauth ranking > peer extended quota block preserves confirmed rotation while explicit clear defends pin from predicted holds [89.86ms]
+(pass) AuthStorage google-antigravity oauth ranking > expired confirmation does not promote a later peer prediction [69.23ms]
+(pass) AuthStorage google-antigravity oauth ranking > shorter confirmed refusal preserves the existing confirmation deadline [58.50ms]
+(pass) AuthStorage google-antigravity oauth ranking > shorter confirmed refusal completing later preserves the live deadline [30.79ms]
+
+packages/ai/test/google-antigravity-usage.test.ts:
+(pass) antigravity usage provider > merges two models with same tier into one limit [11.83ms]
+(pass) antigravity usage provider > keeps the worst remainingFraction when merging same tier [1.43ms]
+(pass) antigravity usage provider > merges mixed-case tier names under lowercased key [5.54ms]
+(pass) antigravity usage provider > treats reset-only quota entries as exhausted and preserves reset time [2.81ms]
+(pass) antigravity usage provider > separates Gemini and Claude+GPT backend counters [7.81ms]
+(pass) antigravity usage provider > separates models with different windowIds in the same tier [1.36ms]
+(pass) antigravity usage provider > surfaces named daily and weekly quota windows as separate limits [1.91ms]
+(pass) antigravity usage provider > keeps near-reset unlabeled weekly windows separate from 5-hour windows [2.32ms]
+(pass) antigravity usage provider > normalizes 7 Day window ids to the weekly usage window [1.15ms]
+(pass) antigravity usage provider > includes email and projectId in report metadata [0.57ms]
+(pass) antigravity usage provider > does not include email when credential has none [0.51ms]
+(pass) antigravity usage provider > sorts limits by remainingFraction ascending (worst first) [10.80ms]
+(pass) antigravity usage provider > returns null when credential has no projectId [0.50ms]
+(pass) antigravity usage provider > parses retrieveUserQuotaSummary response into 4-window structure (5h and weekly for Gemini and Claude+GPT) [3.13ms]
+(pass) antigravity usage provider > supplements a partial Claude/GPT summary with the omitted Gemini listing counter [10.58ms]
+(pass) antigravity usage provider > keeps summary windows authoritative when supplementing a counter [2.53ms]
+(pass) antigravity usage provider > retains missing daily windows without replacing summary windows (google) [4.44ms]
+(pass) antigravity usage provider > retains missing daily windows without replacing summary windows (claude-gpt) [6.93ms]
+(pass) antigravity usage provider > returns the partial summary when its supplementary listing fails [1.62ms]
+(pass) antigravity usage provider > returns the partial summary when supplementary listing transport throws [0.80ms]
+(pass) antigravity usage provider > yields merged Gemini limits when summary has 3p-only quota, and verifies request bodies [1.34ms]
+(pass) antigravity ranking strategy > maps the most-pressured counter to primary and leaves secondary unset [0.55ms]
+(pass) antigravity ranking strategy > lets a weekly Antigravity quota become the ranking bottleneck [0.30ms]
+(pass) antigravity ranking strategy > returns undefined windows when the credential has no usage limits [0.20ms]
+(pass) antigravity ranking strategy > uses a 24h window default for drain-rate normalisation [0.10ms]
+(pass) antigravity ranking strategy > scopes ranking bottleneck by modelId (Gemini vs Claude+GPT) [0.47ms]
+
+ 35 pass
+ 0 fail
+ 128 expect() calls
+Ran 35 tests across 2 files. [28.32s]
