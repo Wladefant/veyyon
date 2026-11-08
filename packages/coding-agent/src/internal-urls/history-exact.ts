@@ -106,12 +106,19 @@ function claimedRecordId(value: unknown): string | undefined {
 	return typeof entry.id === "string" && ADDRESSABLE_HISTORY_ID.test(entry.id) ? entry.id : undefined;
 }
 
-function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; sessionTypeMember: boolean; claimedId?: string } {
+function scanTopLevelMembers(raw: string): {
+	duplicates: ReadonlySet<string>;
+	sessionTypeMember: boolean;
+	identityAmbiguous: boolean;
+	claimedId?: string;
+} {
 	const keys = new Set<string>();
 	const duplicates = new Set<string>();
 	let sessionTypeMember = false;
 	let topLevelType: string | undefined;
 	let claimedId: string | undefined;
+	let identityAmbiguous = false;
+	let rootMemberSeen = false;
 	let depth = 0;
 	// JSON array string elements are never root-level object member names.
 	let arrayDepth = 0;
@@ -131,10 +138,14 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 			// ID or session boundary from a value that happens to spell "id"/"type".
 			let previous = start - 1;
 			while (previous >= 0 && /\s/.test(raw[previous]!)) previous--;
+			let next = i;
+			while (/\s/.test(raw[next] ?? "")) next++;
+			const keyLike = raw[next] === ":" && raw[previous] !== ":";
 			if (depth === 1 && arrayDepth === 0 && raw[previous] !== ":") {
-				let next = i;
-				while (/\s/.test(raw[next] ?? "")) next++;
-				if (raw[next] === ":") {
+				if (!keyLike) {
+					if (!rootMemberSeen) identityAmbiguous = true;
+				} else {
+					rootMemberSeen = true;
 					let key: string;
 					try {
 						key = JSON.parse(raw.slice(start, i)) as string;
@@ -176,6 +187,13 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 			}
 			continue;
 		}
+		// Before the first root member, an object/array/scalar opener cannot be
+		// a valid JSON object prefix. Do not let it shift later identity keys
+		// into a nested depth where the scanner would mistake them for metadata.
+		if (depth === 1 && arrayDepth === 0 && !rootMemberSeen &&
+			char.trim().length > 0 && char !== "}") {
+			identityAmbiguous = true;
+		}
 		if (char === "{") depth++;
 		else if (char === "}") depth--;
 		else if (char === "[") arrayDepth++;
@@ -187,8 +205,15 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 	return {
 		duplicates,
 		sessionTypeMember,
+		identityAmbiguous,
 		claimedId: topLevelType === "session" || topLevelType === "title" ? undefined : claimedId,
 	};
+}
+
+/** Reject a framing token before an otherwise recognizable JSONL object. */
+function hasFramingPrefixBeforeObject(line: string): boolean {
+	const trimmed = line.trimStart();
+	return (trimmed.startsWith("}") || trimmed.startsWith("]")) && trimmed.slice(1).trimStart().startsWith("{");
 }
 
 /** Reject JSON-structural text that could be a damaged record, not a legacy title. */
@@ -203,6 +228,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 		const scanned = scanTopLevelMembers(raw);
 		sessionTypeMember = scanned.sessionTypeMember;
 		malformedClaimedId = scanned.claimedId;
+		if (scanned.identityAmbiguous) state.invalidIdentity = true;
 		const { duplicates } = scanned;
 		if (duplicates.size > 0) {
 			// Duplicate identity members are never safe to ignore, even in a
@@ -505,7 +531,9 @@ export async function readStoredHistoryEntry(
 					}
 				} else if (line.trim().length > 0) {
 					incomplete = true;
-					if (!admission.headerSeen) admission.invalidIdentity = true;
+					if (!admission.headerSeen || hasFramingPrefixBeforeObject(line)) {
+						admission.invalidIdentity = true;
+					}
 				} else if (initialPlainTitle) {
 					initialTitleSeparated = true;
 				}
@@ -792,7 +820,9 @@ export async function searchStoredHistoryEntries(
 				} else if (line.trim().length > 0) {
 					unlocatedUnreadable = true;
 					unreadable = true;
-					if (!admission.headerSeen) admission.invalidIdentity = true;
+					if (!admission.headerSeen || hasFramingPrefixBeforeObject(line)) {
+						admission.invalidIdentity = true;
+					}
 				} else if (initialPlainTitle) {
 					initialTitleSeparated = true;
 				}
