@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [1.8.8] - 2026-11-08
+
+### Fixed
+
+- `gpt-oss` models served through Google Gemini CLI and Antigravity now send the tool-call id on each function-call part, so the following turn no longer starts from an empty tool-call id ([PR](https://github.com/Wladefant/veyyon/pull/1025)).
+
+## [1.8.7] - 2026-11-07
+
+### Changed
+
+- Terminal control supports an authenticated idle-exit request that refuses busy sessions and flushes acceptance before shutdown.
+
+### Fixed
+
+- Fixed TypeScript errors across the agent, AI, catalog and coding-agent packages.
+
 ## [1.8.6] - 2026-11-07
 
 ### Changed

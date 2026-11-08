@@ -1,16 +1,24 @@
 import { describe, expect, it } from "bun:test";
 
-import { convertMessages } from "@veyyon/ai/providers/google-shared";
+import { buildRequest } from "@veyyon/ai/providers/google-gemini-cli";
+import { convertMessages, GoogleResponseBlocks } from "@veyyon/ai/providers/google-shared";
 
-import type { Context, Model } from "@veyyon/ai/types";
+import type { AssistantMessage, AssistantStreamChunk, Context, Model, ToolCall } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 
 import { emptyUsage } from "@veyyon/catalog/models";
 
-function createGoogleModel(
+function createGoogleModel<
+	T extends "google-generative-ai" | "google-vertex" | "google-gemini-cli" = "google-generative-ai",
+>(
 	id: string,
-	api: "google-generative-ai" | "google-vertex" = "google-generative-ai",
-): Model<typeof api> {
+	api: T = "google-generative-ai" as T,
+	provider = api === "google-vertex"
+		? "google-vertex"
+		: api === "google-gemini-cli"
+			? "google-antigravity"
+			: "google",
+): Model<T> {
 	return buildModel({
 		id,
 		name: id,
@@ -72,7 +80,10 @@ function contextWithToolResult(toolName = "stale_tool_name"): Context {
 	};
 }
 
-function functionCallAndResponse(model: Model<"google-generative-ai" | "google-vertex">, context: Context) {
+function functionCallAndResponse(
+	model: Model<"google-generative-ai" | "google-vertex" | "google-gemini-cli">,
+	context: Context,
+) {
 	const contents = convertMessages(model, context);
 	const functionCall = contents.find(c => c.role === "model")?.parts?.find(part => part.functionCall)?.functionCall;
 	const functionResponse = contents
@@ -136,5 +147,91 @@ describe("Google GenerateContent function response matching", () => {
 		expect(functionCall?.id).toBe("call_12345_abc");
 		expect(functionResponse?.id).toBe("call_12345_abc");
 		expect(functionResponse?.name).toBe(functionCall?.name);
+	});
+	it("preserves tool-call IDs for Antigravity gpt-oss-120b on both functionCall and matching functionResponse", () => {
+		const model = createGoogleModel("gpt-oss-120b", "google-gemini-cli", "google-antigravity");
+		const { functionCall, functionResponse } = functionCallAndResponse(
+			model,
+			contextWithToolResult("actual_tool_name"),
+		);
+
+		expect(functionCall?.id).toBe("call_12345_abc");
+		expect(functionResponse?.id).toBe("call_12345_abc");
+		expect(functionCall?.name).toBe("actual_tool_name");
+		expect(functionResponse?.name).toBe("actual_tool_name");
+		expect(functionResponse?.name).toBe(functionCall?.name);
+	});
+
+	it("generates non-empty fallback ID for missing or empty tool-call IDs and replays matched IDs for gpt-oss-120b", () => {
+		const model = createGoogleModel("gpt-oss-120b", "google-gemini-cli", "google-antigravity");
+
+		for (const incomingId of [undefined, ""]) {
+			const output: AssistantMessage = {
+				role: "assistant",
+				content: [],
+				usage: emptyUsage(),
+				stopReason: "toolUse",
+				timestamp: 2000,
+			};
+			const stream: AssistantStreamChunk[] = [];
+			const blocks = new GoogleResponseBlocks(output, stream);
+
+			blocks.appendFunctionCall(
+				{
+					id: incomingId,
+					name: "actual_tool_name",
+					args: { query: "pi" },
+				},
+				undefined,
+			);
+
+			const toolCall = output.content[0] as ToolCall;
+			expect(toolCall).toBeDefined();
+			expect(toolCall.type).toBe("toolCall");
+			expect(toolCall.id).toBeDefined();
+			expect(typeof toolCall.id).toBe("string");
+			expect(toolCall.id.length).toBeGreaterThan(0);
+			expect(toolCall.name).toBe("actual_tool_name");
+
+			const context: Context = {
+				messages: [
+					{
+						role: "user",
+						content: "Call the tool",
+						timestamp: 1000,
+					},
+					output,
+					{
+						role: "toolResult",
+						toolCallId: toolCall.id,
+						toolName: "actual_tool_name",
+						isError: false,
+						content: [
+							{
+								type: "text",
+								text: "Tool result text",
+							},
+						],
+						timestamp: 3000,
+					},
+				],
+			};
+
+			const { functionCall, functionResponse } = functionCallAndResponse(model, context);
+			expect(functionCall?.id).toBe(toolCall.id);
+			expect(functionResponse?.id).toBe(toolCall.id);
+			expect(functionCall?.name).toBe("actual_tool_name");
+			expect(functionResponse?.name).toBe("actual_tool_name");
+
+			const ccaRequest = buildRequest(model, context, "test-project", {}, true);
+			const ccaCall = ccaRequest.request.contents
+				.find(c => c.role === "model")
+				?.parts?.find(part => part.functionCall)?.functionCall;
+			const ccaResponse = ccaRequest.request.contents
+				.find(c => c.role === "user" && c.parts?.some(part => part.functionResponse))
+				?.parts?.find(part => part.functionResponse)?.functionResponse;
+			expect(ccaCall?.id).toBe(toolCall.id);
+			expect(ccaResponse?.id).toBe(toolCall.id);
+		}
 	});
 });
