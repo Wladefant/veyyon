@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- ACP auto-resume regression coverage uses fail-on-call sentinels instead of spy-call assertions.
+- ACP auto-resume regression coverage avoids forbidden spy-call assertions ([PR #1039](https://github.com/Wladefant/veyyon/pull/1039)).
 - The issue-967 vision guard test compiles again: a duplicated import block caused TypeScript duplicate-identifier errors ([PR #1043](https://github.com/Wladefant/veyyon/pull/1043)).
 
 ## [1.8.12] - 2026-11-08
