@@ -1258,7 +1258,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       // source file or the unrelated synthetic target.
       const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
         if (copiedPath && String(file) === copiedPath && !swapped) {
-          await fs.rename(copiedPath, copiedPath + ".parked");
+          await fs.rename(copiedPath, `${copiedPath}.parked`);
           await fs.symlink(outside, copiedPath, "file");
           // A filesystem that rejects symlink creation must fail this test,
           // not pass by throwing before the prohibited link was installed.
@@ -1731,11 +1731,11 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
       // The independent writer claims the original pathname while the version
       // guard detects a changed backup. Both histories must remain recoverable.
       nodeFs.writeFileSync(this.protectedSourceFile, replacement);
-      nodeFs.appendFileSync(target, JSON.stringify({
+      nodeFs.appendFileSync(target, `${JSON.stringify({
         type: "message", id: "guard-rejected-foreign-tail", parentId: null,
         timestamp: new Date().toISOString(),
         message: { role: "user", content: "Backup has an independent append", timestamp: Date.now() },
-      }) + "\n");
+      })}\n`);
     }
     return super.statSync(target);
   }
@@ -2509,7 +2509,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
 
   it("refuses EPERM backup rollback over a foreign journal after guard or replacement failure", async () => {
     for (const phase of ["guard-rejected", "retry-failed"] as const) {
-      using temp = TempDir.createSync("@veyyon-fork-eperm-rollback-foreign-" + phase);
+      using temp = TempDir.createSync(`@veyyon-fork-eperm-rollback-foreign-${phase}`);
       const storage = new SyntheticForkSourceCloseRefusalStorage();
       const manager = SessionManager.create(
         temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
@@ -3012,19 +3012,19 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       const journal = path.join(temp.path(), "synthetic-session.jsonl");
       const archive = path.join(temp.path(), "synthetic-archive.bin");
       const archiveBytes = Buffer.from("synthetic archived bytes unchanged");
-      const original = JSON.stringify({
+      const original = `${JSON.stringify({
         type: "session", version: 3, id: "synthetic-original",
         timestamp: new Date().toISOString(), cwd: temp.path(),
-      }) + "\n";
-      const unrelated = JSON.stringify({
+      })}\n`;
+      const unrelated = `${JSON.stringify({
         type: "session", version: 3, id: "synthetic-unrelated",
         timestamp: new Date().toISOString(), cwd: temp.path(),
-      }) + "\n";
-      const entry = JSON.stringify({
+      })}\n`;
+      const entry = `${JSON.stringify({
         type: "message", id: "synthetic-foreign-session-entry", parentId: null,
         timestamp: new Date().toISOString(),
         message: { role: "user", content: "Must never join the unrelated session", timestamp: Date.now() },
-      }) + "\n";
+      })}\n`;
       await fs.writeFile(journal, original);
       await fs.writeFile(archive, archiveBytes);
       const writer = new FileSessionStorage().openWriter(journal);
@@ -3047,10 +3047,10 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       // the initial session header it must pin that ID before the next call:
       // otherwise an in-place foreign rewrite could be accidentally adopted.
       const newJournal = path.join(temp.path(), "synthetic-created-by-writer.jsonl");
-      const newHeader = JSON.stringify({
+      const newHeader = `${JSON.stringify({
         type: "session", version: 3, id: "synthetic-new-writer",
         timestamp: new Date().toISOString(), cwd: temp.path(),
-      }) + "\n";
+      })}\n`;
       const newWriter = new FileSessionStorage().openWriter(newJournal);
       try {
         await newWriter.append(newHeader);
@@ -3162,7 +3162,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         const foreignPath = path.join(temp.path(), "unrelated-synthetic-journal.jsonl");
         const foreignBytes = "UNRELATED SYNTHETIC JOURNAL\\n";
         await fs.writeFile(foreignPath, foreignBytes);
-        const parkedForSymlink = sourceFile + ".symlink-parked";
+        const parkedForSymlink = `${sourceFile}.symlink-parked`;
         await fs.rename(sourceFile, parkedForSymlink);
         try {
           await fs.symlink(foreignPath, sourceFile);
@@ -3180,7 +3180,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         // A same-path regular file can belong to a different session. Rebinding
         // to its inode would splice this peer's message into unrelated history.
         const foreignSessionPeer = new FileSessionStorage().openWriter(sourceFile);
-        const foreignSessionParked = sourceFile + ".foreign-session-parked";
+        const foreignSessionParked = `${sourceFile}.foreign-session-parked`;
         const unrelatedJournal = `${JSON.stringify({
           type: "session", version: 3, id: "synthetic-unrelated-session",
           timestamp: new Date().toISOString(), cwd: temp.path(),
@@ -3205,14 +3205,14 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
 
         // The same writer must fail closed if a peer removes the active path.
         // In particular, O_APPEND must not recreate an empty replacement.
-        const parked = sourceFile + ".synthetic-parked";
+        const parked = `${sourceFile}.synthetic-parked`;
         await fs.rename(sourceFile, parked);
         try {
-          await expect(peer.append(JSON.stringify({
+          await expect(peer.append(`${JSON.stringify({
             type: "message", id: "synthetic-missing-target", parentId: null,
             timestamp: new Date().toISOString(),
             message: { role: "user", content: "Must not appear", timestamp: Date.now() },
-          }) + "\n")).rejects.toThrow(/ENOENT|no such file/i);
+          })}\n`)).rejects.toThrow(/ENOENT|no such file/i);
           expect(nodeFs.existsSync(sourceFile)).toBe(false);
           expect(await fs.readFile(parked, "utf8")).not.toContain("synthetic-missing-target");
         } finally {
@@ -3247,11 +3247,11 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
 
       // JSON syntax is valid after replacement decoding, so a text-only strict
       // parser can incorrectly republish different bytes instead of refusing.
-      const foreign = Buffer.from(JSON.stringify({
+      const foreign = Buffer.from(`${JSON.stringify({
         type: "message", id: "synthetic-raw-invalid-utf8", parentId: null,
         timestamp: new Date().toISOString(),
         message: { role: "user", content: "peer!bytes", timestamp: Date.now() },
-      }) + "\n", "utf8");
+      })}\n`, "utf8");
       const corruptOffset = foreign.indexOf("!");
       expect(corruptOffset).toBeGreaterThan(0);
       foreign[corruptOffset] = 0xff;
@@ -3632,11 +3632,11 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         if (!source || !archive) throw new Error("expected disposable source and artifact");
         const sourceBefore = await fs.readFile(source, "utf8");
         const archiveBefore = await fs.readFile(archive);
-        const foreignHeader = JSON.stringify({
+        const foreignHeader = `${JSON.stringify({
           type: "session", version: CURRENT_SESSION_VERSION,
           id: variant === "foreign-header" ? "synthetic-independent-session" : identity,
           timestamp: new Date().toISOString(), cwd: temp.path(),
-        }) + "\n";
+        })}\n`;
         storage.protectedSourceFile = source;
         storage.appendForeignLineOnRefusal = foreignHeader;
         storage.rejectNextSourceClose = true;
@@ -3845,7 +3845,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         const contentMembers = variant === "nested-content"
           ? '"content":"independent original","content":"masked content"'
           : '"content":"independent original"';
-        const foreignLine = `{"type":"message",${idMembers},"parentId":null,"timestamp":"2026-11-06T00:00:00.000Z","message":{"role":"user",${contentMembers},"timestamp":1}}` + String.fromCharCode(10);
+        const foreignLine = `{"type":"message",${idMembers},"parentId":null,"timestamp":"2026-11-06T00:00:00.000Z","message":{"role":"user",${contentMembers},"timestamp":1}}${String.fromCharCode(10)}`;
         storage.protectedSourceFile = sourceFile;
         storage.appendForeignLineOnRefusal = foreignLine;
         storage.rejectNextSourceClose = true;
