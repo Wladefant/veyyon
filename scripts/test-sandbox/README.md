@@ -116,6 +116,32 @@ python C:/Users/wkiri/.veyyon/workflows/build_slot.py run <lane>-tests --class m
 Read the Bun summary. A receipt passes only with `N pass`, `0 fail`, and `N > 0`.
 Exit status alone does not prove that tests ran.
 
+
+### Native Windows AppContainer
+
+Native Windows execution runs inside a kernel AppContainer isolation profile.
+PowerShell launches `scripts/test-sandbox/run.ps1` with disposable scratch staging.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-sandbox/run.ps1 -- bun test <paths>
+```
+
+1. Built-in AppContainer constraints:
+   The Windows kernel enforces low integrity and capability sandboxing.
+   Network, host credentials, and user home directories remain inaccessible.
+   Access tokens pass through `UpdateProcThreadAttribute` with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`.
+2. Clean environment and scratch staging:
+   Environment variables inherit an explicit whitelist (`SystemRoot`, `PATH`, `ComSpec`).
+   Directories (`HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TMP`, `TEMP`) point to disposable scratch under `ProgramData`.
+   The repository source trees and workspace symlinks stage into scratch before launch.
+3. Denied sentinel admission:
+   `run.ps1` creates an unreadable host sentinel file in the operator's real user profile.
+   The in-container guest entry tests real home and sentinel accessibility before admitting test execution.
+   If any host path is readable, execution halts with code 126.
+4. Exact limitations:
+   Windows kernel isolation does not allow write access to `C:\` outside the granted scratch directory.
+   Tests that attempt `fs.mkdir` directly on `C:\` (such as `path-literal-colon-selector.test.ts` fixture `C:\veyyon-reg-*`) trigger real-data tripwires or filesystem permission errors.
+   Pure kernel isolation disallows runtime monkeypatching or fake redirection shims.
 ## The remote rung
 
 Set `VEYYON_SANDBOX_REMOTE_HOST=<user>@<host-or-address>` to enable it; there is no
