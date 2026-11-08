@@ -5,6 +5,7 @@ import { currentProducerSecretOwner } from "./producer-owner";
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
 const MAX_RECORD_CHARS = 64 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
+export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
 	/(?:^|[\s"'{,.?-])(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*["']?\s*(?:[=:]|\s{2,})/i;
 const CREDENTIAL_KEY_PREFIX =
@@ -129,6 +130,7 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 export class ProducerOutputGuard {
 	#pending = "";
 	#recordLength = 0;
+	#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 	#dropping = false;
 	#withholding = false;
 	#candidate = "";
@@ -145,16 +147,13 @@ export class ProducerOutputGuard {
 		this.#redact = redact ?? owner?.redact;
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
-
 	sanitize(text: string): string {
 		try {
 			const normalized = sanitizeText(text);
-			if (
-				isInventory(normalized) ||
-				normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS || CREDENTIAL_RECORD.test(line))
-			) {
-				return BLOCKED_OUTPUT_RECORD;
-			}
+			if (isInventory(normalized)) return BLOCKED_OUTPUT_RECORD;
+			if (normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS))
+				return OVERSIZED_OUTPUT_RECORD;
+			if (normalized.split("\n").some(line => CREDENTIAL_RECORD.test(line))) return BLOCKED_OUTPUT_RECORD;
 			const redacted = this.#redact?.(normalized) ?? normalized;
 			if (redacted !== normalized) return redacted;
 			return this.#redact?.(text) ?? text;
@@ -165,7 +164,8 @@ export class ProducerOutputGuard {
 
 	/** Validate a separate, complete payload without reopening this producer stream. */
 	sanitizeComplete(text: string): string {
-		if (this.sanitize(text) === BLOCKED_OUTPUT_RECORD) return BLOCKED_OUTPUT_RECORD;
+		const sanitized = this.sanitize(text);
+		if (sanitized === BLOCKED_OUTPUT_RECORD || sanitized === OVERSIZED_OUTPUT_RECORD) return sanitized;
 		const guard = new ProducerOutputGuard(
 			value => this.#redact?.(value) ?? value,
 			value => this.#pendingPrefixLength?.(value) ?? 0,
@@ -173,13 +173,13 @@ export class ProducerOutputGuard {
 		return guard.push(text) + guard.finish();
 	}
 
-	#block(): string {
+	#block(label = BLOCKED_OUTPUT_RECORD): string {
 		this.#withholding = true;
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#candidate = "";
 		this.#dropping = false;
-		return BLOCKED_OUTPUT_RECORD;
+		return label;
 	}
 
 	#flushCandidate(): string {
@@ -191,12 +191,16 @@ export class ProducerOutputGuard {
 		this.#quote = "";
 		this.#escaped = false;
 		const filtered = this.sanitize(candidate);
-		return filtered === BLOCKED_OUTPUT_RECORD ? this.#block() : filtered;
+		return filtered === BLOCKED_OUTPUT_RECORD || filtered === OVERSIZED_OUTPUT_RECORD
+			? this.#block(filtered)
+			: filtered;
 	}
 
 	#record(record: string, newline: string): string {
 		const normalized = sanitizeText(record);
-		if (this.sanitize(record + newline) === BLOCKED_OUTPUT_RECORD) return this.#block() + newline;
+		const safe = this.sanitize(record + newline);
+		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD)
+			return this.#block(safe) + newline;
 		// A registered literal can hold several physical records together. Classify every
 		// raw line, but keep the group intact until redaction can see the complete literal.
 		const lines = normalized.split("\n");
@@ -208,7 +212,7 @@ export class ProducerOutputGuard {
 		const structured = this.#structured || lines.some(line => structuredStart(line) >= 0);
 		if (structured || assignment || separator) {
 			if (this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS)
-				return prefix + this.#block() + newline;
+				return prefix + this.#block(OVERSIZED_OUTPUT_RECORD) + newline;
 			this.#candidate += record + newline;
 			for (const line of lines) {
 				if (line.trim()) {
@@ -263,11 +267,12 @@ export class ProducerOutputGuard {
 			if (!this.#dropping) {
 				const segmentLength = end - offset;
 				if (
-					this.#recordLength + segmentLength > MAX_RECORD_CHARS ||
+					this.#recordLength + segmentLength + separator.length > MAX_RECORD_CHARS ||
 					this.#pending.length + segmentLength + separator.length > MAX_RECORD_CHARS
 				) {
 					this.#pending = "";
 					this.#dropping = true;
+					this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 				} else {
 					this.#pending += chunk.slice(offset, end) + separator;
 					this.#recordLength += segmentLength;
@@ -276,7 +281,7 @@ export class ProducerOutputGuard {
 			if (newline < 0) break;
 			this.#recordLength = 0;
 			if (this.#dropping) {
-				output.push(`${this.#block()}\n`);
+				output.push(`${this.#block(this.#droppingLabel)}\n`);
 				break;
 			}
 			let pendingPrefix = 0;
@@ -314,10 +319,11 @@ export class ProducerOutputGuard {
 				return "";
 			}
 		}
-		const text = this.#dropping ? this.#block() : this.#record(this.#pending, "");
+		const text = this.#dropping ? this.#block(this.#droppingLabel) : this.#record(this.#pending, "");
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#dropping = false;
+		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 		if (!this.#withholding && this.#structured && this.#depth > 0) return text + this.#block();
 		const output = text + (this.#withholding ? "" : this.#flushCandidate());
 		if (pendingPrefix > 0) this.#withholding = true;
@@ -328,6 +334,7 @@ export class ProducerOutputGuard {
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#dropping = false;
+		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 		this.#withholding = false;
 		this.#candidate = "";
 		this.#assignments = 0;

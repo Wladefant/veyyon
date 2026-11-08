@@ -2,7 +2,7 @@ import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
-import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../secrets/producer-output";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
@@ -179,7 +179,12 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 							const filtered = displayGuard.sanitize(serialized);
 							output = {
 								type: "json",
-								data: filtered === serialized ? sanitizedData : "[credential output withheld]",
+								data:
+									filtered === serialized
+										? sanitizedData
+										: filtered === OVERSIZED_OUTPUT_RECORD
+											? OVERSIZED_OUTPUT_RECORD
+											: BLOCKED_OUTPUT_RECORD,
 							};
 						} catch {
 							output = { type: "json", data: "[credential output withheld]" };

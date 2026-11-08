@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Eval JSON displays preserve the oversized-record diagnosis for aggregate values and still withhold credential-bearing output ([PR #1030](https://github.com/Wladefant/veyyon/pull/1030)).
+
 ## [1.8.10] - 2026-11-08
 
 ### Added
