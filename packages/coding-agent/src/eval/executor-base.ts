@@ -463,7 +463,7 @@ export function buildManagedKernelEnv(options: ManagedKernelEnvOptions): Record<
 }
 
 export function attachSessionOwner(
-	session: { ownerIds: Set<string>; hasFallbackOwner: boolean; primaryOwnerId: string | undefined },
+	session: { ownerIds: Set<string>; hasFallbackOwner: boolean; primaryOwnerId?: string },
 	sessionId: string,
 	ownerId: string | undefined,
 ): void {
