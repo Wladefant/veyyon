@@ -5,6 +5,7 @@
 ### Fixed
 
 - The issue-967 vision guard test compiles again: a duplicated import block caused TypeScript duplicate-identifier errors ([PR #1043](https://github.com/Wladefant/veyyon/pull/1043)).
+- A `read` line-range selector resolves after `set_cwd` changes the working directory ([PR #1044](https://github.com/Wladefant/veyyon/pull/1044)).
 
 ## [1.8.12] - 2026-11-08
 
