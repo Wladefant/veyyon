@@ -1417,6 +1417,147 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 
 
+	test("canonically reauthorizes a tombstoned credential from the first SSE frame without a post-reauthorization refresh", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		if (original.credential.type !== "oauth") throw new Error("expected synthetic OAuth row");
+		const canonicalEntry = {
+			...original,
+			credential: { ...original.credential, access: "access-synthetic-canonical-reauthorized" },
+		};
+		const untrustedFirstFrameEntry = {
+			...original,
+			credential: { ...original.credential, access: "access-synthetic-untrusted-first-frame" },
+		};
+		let canonical: SnapshotResponse = initial.snapshot;
+		let canonicalGets = 0;
+		spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+			canonicalGets += 1;
+			return { status: 200 as const, generation: canonical.generation, snapshot: canonical };
+		});
+		const connected = Promise.withResolvers<void>();
+		const allowReauthorizationFrame = Promise.withResolvers<void>();
+		let connections = 0;
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
+			if (connections++ === 0) {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				connected.resolve();
+				await untilAborted(opts.signal);
+				return;
+			}
+			await allowReauthorizationFrame.promise;
+			if (opts.signal?.aborted) return;
+			// The relay advertises the same ID with different synthetic bytes.
+			// Only the following canonical GET may select the credential.
+			yield {
+				kind: "snapshot" as const,
+				...canonical,
+				credentials: [untrustedFirstFrameEntry],
+			};
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+		});
+		try {
+			await connected.promise;
+			canonical = {
+				...initial.snapshot,
+				generation: initial.snapshot.generation + 1,
+				credentials: [],
+			};
+			await remote.refreshSnapshot();
+			expect(remote.listAuthCredentials()).toEqual([]);
+			expect(canonicalGets).toBe(1);
+
+			await waitUntil(() => connections >= 2, 4_000);
+			canonical = {
+				...initial.snapshot,
+				generation: initial.snapshot.generation + 2,
+				credentials: [canonicalEntry],
+			};
+			allowReauthorizationFrame.resolve();
+
+			// No refreshSnapshot() follows reauthorization: the tombstoned first
+			// frame itself must cause a canonical GET, which is the only authority.
+			await waitUntil(() =>
+				canonicalGets === 2 &&
+				remote!.listAuthCredentials()[0]?.credential.type === "oauth" &&
+				remote!.listAuthCredentials()[0]?.credential.access === "access-synthetic-canonical-reauthorized",
+				4_000,
+			);
+			expect(canonicalGets).toBe(2);
+			expect(remote.listAuthCredentials()[0]?.credential).toMatchObject({
+				type: "oauth", access: "access-synthetic-canonical-reauthorized",
+			});
+			expect(remote.listAuthCredentials()[0]?.credential).not.toMatchObject({
+				access: "access-synthetic-untrusted-first-frame",
+			});
+		} finally {
+			allowReauthorizationFrame.resolve();
+			remote?.close();
+			remote = undefined;
+		}
+	});
+
+	test("keeps a revoked same-ID tombstone when a stale first SSE frame is contradicted by canonical absence or invalid verification", async () => {
+		for (const canonicalResult of ["absent", "not-modified", "error"] as const) {
+			const client = new AuthBrokerClient({ url: handle!.url, token });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+			const canonicalAbsence: SnapshotResponse = {
+				...initial.snapshot,
+				generation: initial.snapshot.generation + 1,
+				credentials: [],
+			};
+			let canonicalGets = 0;
+			spyOn(client, "fetchSnapshot").mockImplementation(async () => {
+				canonicalGets += 1;
+				if (canonicalGets === 1 || canonicalResult === "absent") {
+					return {
+						status: 200 as const,
+						generation: canonicalAbsence.generation,
+						snapshot: canonicalAbsence,
+					};
+				}
+				if (canonicalResult === "not-modified") {
+					return { status: 304 as const, generation: canonicalAbsence.generation };
+				}
+				throw new Error("synthetic canonical verification failure");
+			});
+			const connected = Promise.withResolvers<void>();
+			let connections = 0;
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
+				if (connections++ === 0) {
+					yield { kind: "snapshot" as const, ...initial.snapshot };
+					connected.resolve();
+					await untilAborted(opts.signal);
+					return;
+				}
+				// A stale relay tries to restore the exact ID after canonical removal.
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				await untilAborted(opts.signal);
+			});
+			remote = new RemoteAuthCredentialStore({
+				client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+			});
+			try {
+				await connected.promise;
+				await remote.refreshSnapshot();
+				expect(remote.listAuthCredentials()).toEqual([]);
+				await waitUntil(() => canonicalGets === 2, 4_000);
+				expect(canonicalGets).toBe(2);
+				expect(remote.snapshot.credentials).toEqual([]);
+				expect(remote.listAuthCredentials()).toEqual([]);
+			} finally {
+				remote?.close();
+				remote = undefined;
+			}
+		}
+	});
+
 	// Direct acknowledged writes are as authoritative as a canonical GET.
 	// Exercise only synthetic rows and the disposable broker in this module.
 	for (const mode of ["upload", "suspect-refresh", "storage-mirror"] as const) {
