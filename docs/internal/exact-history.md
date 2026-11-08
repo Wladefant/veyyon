@@ -34,8 +34,8 @@ After a malformed or oversized record, an implicit branch read/search is unavail
 an explicit leaf is required to select archived evidence. Before the first session
 header, a non-JSON line is treated as a legacy title only when bounded identity
 scanning finds no session-header or addressable-entry claim, including claims hidden
-behind nested array or scalar prefixes. Ordinary punctuation in legacy titles remains
-accepted. Supplying an explicit leaf selects that branch in either case. Appending
+behind nested array/scalar prefixes or a later object suffix after malformed framing.
+Ordinary punctuation in legacy titles remains accepted. Supplying an explicit leaf selects that branch in either case. Appending
 later records does not invalidate a page pinned to the earlier leaf; changing the
 selected record does.
 

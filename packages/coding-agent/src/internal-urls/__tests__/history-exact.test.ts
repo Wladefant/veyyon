@@ -1327,6 +1327,8 @@ describe("history exact record lookup", () => {
 				'[["metadata":"safe","type":"session","id":"earlier"}',
 				'x[["type":"session","id":"earlier"}',
 				'[["type":"message","id":"earlier","parentId":"root"}',
+				'}}{"type":"session","id":"earlier"}',
+				'"metadata":"safe",{"type":"session","id":"earlier"}',
 				'"id":"earlier"}',
 			]) {
 				await fs.writeFile(file, Buffer.concat([Buffer.from(`${damagedFirst}\n\n`), header, root]));

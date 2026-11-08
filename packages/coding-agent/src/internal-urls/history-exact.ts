@@ -305,12 +305,8 @@ function inspectMalformedIdentitySuffix(line: string): { invalidIdentity: boolea
 	};
 }
 
-/** Reject identity-bearing fragments before a valid session header. */
-function resemblesBrokenHeader(line: string): boolean {
-	// Wrap the whole malformed line as an object candidate. This lets the same
-	// bounded scanner see leading member fragments, nested arrays and scalar
-	// prefixes without treating ordinary title punctuation as identity evidence.
-	const scanned = scanTopLevelMembers(`{${line.trimStart()}}`);
+/** Whether a bounded structural scan found an identity-bearing claim. */
+function hasBrokenIdentity(scanned: ReturnType<typeof scanTopLevelMembers>): boolean {
 	return scanned.sessionTypeMember ||
 		scanned.arrayIdentityCandidate ||
 		scanned.duplicates.has("type") ||
@@ -318,6 +314,20 @@ function resemblesBrokenHeader(line: string): boolean {
 		scanned.duplicates.has("parentId") ||
 		scanned.claimedId !== undefined ||
 		(scanned.identityAmbiguous && scanned.nestedIdentityCandidate);
+}
+
+/** Reject identity-bearing fragments before a valid session header. */
+function resemblesBrokenHeader(line: string): boolean {
+	const trimmed = line.trimStart();
+	// The synthetic object catches leading member fragments, nested arrays and
+	// scalar prefixes. Ordinary punctuation-only legacy titles remain harmless.
+	if (hasBrokenIdentity(scanTopLevelMembers(`{${trimmed}}`))) return true;
+
+	// Preserve the first-object suffix check as a second recovery view: unmatched
+	// closers or an earlier metadata member can otherwise move the synthetic
+	// scanner's depth/root-member state past the later identity-bearing object.
+	const objectStart = trimmed.indexOf("{");
+	return objectStart >= 0 && hasBrokenIdentity(scanTopLevelMembers(trimmed.slice(objectStart)));
 }
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	let sessionTypeMember = false;
