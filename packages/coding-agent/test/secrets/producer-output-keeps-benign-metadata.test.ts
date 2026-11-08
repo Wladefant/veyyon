@@ -125,4 +125,30 @@ describe("producer output keeps benign metadata", () => {
 		expect(output).toContain(" after");
 	});
 
+	it("preserves numeric PIN counts and lengths while redacting a PIN value", () => {
+		const text = "pin_count=42\npin_length: 6\npin=123456\n";
+		expect(guard.sanitize(text)).toBe("pin_count=42\npin_length: 6\npin=[REDACTED]\n");
+	});
+
+	it("keeps an owner-replaced prefix token from exposing its opaque suffix", () => {
+		const opaqueSuffix = "opaqueRegisteredSuffixCanary";
+		const composite = `ghp_${"A".repeat(36)} ${opaqueSuffix}`;
+		const ownerGuard = new ProducerOutputGuard(value =>
+			value.replaceAll(composite, "#COMPOSITE_CANARY#"),
+		);
+		const output = ownerGuard.sanitize(`before token=${composite}\nafter`);
+		expect(output).not.toContain(opaqueSuffix);
+		expect(output).toContain("after");
+	});
+
+	it("preserves safe text after an owner-redacted known token", () => {
+		const token = `ghp_${"Z".repeat(36)}`;
+		const ownerGuard = new ProducerOutputGuard(value =>
+			value.replaceAll(token, "#TOKEN_CANARY#"),
+		);
+		const output = ownerGuard.sanitize(`before token=${token} after`);
+		expect(output).not.toContain(token);
+		expect(output).toContain(" after");
+	});
+
 });
