@@ -207,7 +207,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 		const streamConnected = Promise.withResolvers<void>();
 		const observedPolicies: boolean[] = [];
-		spyOn(relayClient, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(relayClient, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...relayInitial.snapshot };
 			streamConnected.resolve();
 			yield {
@@ -487,7 +487,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			unexpectedCanonicalGets += 1;
 			return actualFetchSnapshot(opts);
 		});
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial.snapshot };
 			// These frames are higher generation but semantically unchanged; neither
 			// may advance accepted-state freshness, yet both establish stream order.
@@ -540,7 +540,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			allowNewer.resolve();
 			await waitUntil(() =>
 				remote!.snapshot.credentials[0]?.credential.type === "oauth" &&
-				remote.snapshot.credentials[0]?.credential.access === "access-synthetic-newer",
+				remote!.snapshot.credentials[0]?.credential.access === "access-synthetic-newer",
 			);
 			expect(remote.snapshot.generation).toBe(canonicalNewer.generation);
 			expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
@@ -656,7 +656,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				snapshot: { ...canonical.snapshot, generation },
 			};
 		});
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (options) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (options = {}) {
 			if (connections++ > 0) {
 				// Even a fresh transport cannot authenticate a new ID unless
 				// the canonical broker already owns that synthetic credential.
@@ -732,7 +732,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const releaseStaleFrames = Promise.withResolvers<void>();
 		let firstStreamSignal: AbortSignal | undefined;
 		let connections = 0;
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			if (connections++ > 0) {
 				// A fresh connection still cannot authorize a fabricated new ID.
 				yield { kind: "snapshot" as const, ...initial.snapshot, credentials: [] };
@@ -855,7 +855,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			let realStreamConnected = false;
 			let canonicalGets = 0;
 			const observed: Array<string | null> = [];
-			const fetchImpl: typeof fetch = async (input, init) => {
+			const fetchImpl = Object.assign(async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 				const pathname = new URL(url).pathname;
 				if (pathname === "/v1/snapshot/stream") {
@@ -872,7 +872,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				}
 				if (pathname === "/v1/snapshot") canonicalGets++;
 				return fetch(input, init);
-			};
+			}, { preconnect: fetch.preconnect });
 			const client = new AuthBrokerClient({ url: handle!.url, token, fetchImpl });
 			const candidate = new RemoteAuthCredentialStore({
 				client, initialSnapshot: fresh.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
@@ -905,7 +905,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		});
 		await waitUntil(() =>
 			remote!.snapshot.credentials[0]?.credential.type === "oauth" &&
-			remote.snapshot.credentials[0]?.credential.access === "access-canonical-later",
+			remote!.snapshot.credentials[0]?.credential.access === "access-canonical-later",
 			4_000,
 		);
 	});
@@ -944,7 +944,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			let reconnectedToBroker = false;
 			let selectedBeforeReconnect: string | null | undefined;
 			let candidate: RemoteAuthCredentialStore | undefined;
-			const fetchImpl: typeof fetch = async (input, init) => {
+			const fetchImpl = Object.assign(async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 				if (new URL(url).pathname === "/v1/snapshot/stream") {
 					connections += 1;
@@ -965,7 +965,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					return response;
 				}
 				return fetch(input, init);
-			};
+			}, { preconnect: fetch.preconnect });
 			const client = new AuthBrokerClient({ url: handle!.url, token, fetchImpl });
 			candidate = new RemoteAuthCredentialStore({
 				client, initialSnapshot: fresh.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
@@ -1021,7 +1021,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			const observedAccess: string[] = [];
 			let relayConnections = 0;
 			let realBrokerStreamConnected = false;
-			const transportFetch: typeof fetch = async (input, init) => {
+			const transportFetch = Object.assign(async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
 				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 				if (new URL(url).pathname === "/v1/snapshot/stream") {
 					relayConnections += 1;
@@ -1045,7 +1045,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				}
 				// Every canonical GET still visits the real synthetic broker.
 				return fetch(input, init);
-			};
+			}, { preconnect: fetch.preconnect });
 			const client = new AuthBrokerClient({ url: handle!.url, token, fetchImpl: transportFetch });
 			const candidate = new RemoteAuthCredentialStore({
 				client,
@@ -1105,7 +1105,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		// A stale relay repeats unchanged full snapshots, unchanged entries and
 		// phantom removals at ever-higher generations while the real broker
 		// independently revokes the live grant.
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			yield { kind: "snapshot" as const, ...initial };
 			streamReady.resolve();
 			while (!opts.signal?.aborted) {
@@ -1173,7 +1173,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (result.status !== 200) throw new Error("expected canonical HTTP 200");
 			return { status: 200 as const, generation: 1, snapshot: { ...result.snapshot, generation: 1 } };
 		});
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			if (connections++ === 0) {
 				oldSignal = opts.signal;
 				yield { kind: "snapshot" as const, ...initial.snapshot };
@@ -1269,7 +1269,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			// The replacement broker's generation can be lower than the old relay's.
 			return { status: 200 as const, generation: 1, snapshot: { ...result.snapshot, generation: 1 } };
 		});
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			if (connections++ === 0) {
 				oldSignal = opts.signal;
 				yield { kind: "snapshot" as const, ...initial.snapshot };
@@ -1350,7 +1350,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const oldFinished = Promise.withResolvers<void>();
 		const allowNewStream = Promise.withResolvers<void>();
 		let connections = 0;
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			if (connections++ === 0) {
 				yield { kind: "snapshot" as const, ...initial.snapshot };
 				connected.resolve();
@@ -1443,7 +1443,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				if (!allowCanonicalAfterFence) throw new Error("unexpected masking GET");
 				return realCanonicalRead(opts);
 			});
-			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 				if (connections++ === 0) {
 					oldSignal = opts.signal;
 					yield { kind: "snapshot" as const, ...initial.snapshot };
@@ -1552,7 +1552,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		const oldFinished = Promise.withResolvers<void>();
 		const allowNewStream = Promise.withResolvers<void>();
 		let connections = 0;
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			if (connections++ === 0) {
 				yield { kind: "snapshot" as const, ...initial.snapshot };
 				connected.resolve();
@@ -1625,7 +1625,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			if (!allowCanonicalAfterFence) throw new Error("unexpected masking GET after acknowledged disable");
 			return realCanonicalRead(opts);
 		});
-		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 			if (connections++ === 0) {
 				oldSignal = opts.signal;
 				yield { kind: "snapshot" as const, ...initial.snapshot };
@@ -2623,7 +2623,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			let conditionalWaits = 0;
 			let canonicalReads = 0;
 			let callbacks = 0;
-			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts) {
+			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 				yield { kind: "snapshot" as const, ...initial.snapshot };
 				streamReady.resolve();
 				await untilAborted(opts.signal);
