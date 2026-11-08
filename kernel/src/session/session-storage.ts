@@ -495,8 +495,14 @@ export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 function openedJournalSessionId(fpath: string, writerFd: number): string | undefined {
 	let readFd: number | undefined;
 	try {
-		readFd = fs.openSync(fpath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-		if (fileObjectIdentity(fs.fstatSync(readFd)) !== fileObjectIdentity(fs.fstatSync(writerFd))) {
+		readFd = fs.openSync(
+			fpath,
+			fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0),
+		);
+		const readStat = fs.fstatSync(readFd);
+		// O_NOFOLLOW does not reject FIFOs. Nonblocking open plus an opened-object
+		// regular-file check prevents a pathname swap from hanging this sync probe.
+		if (!readStat.isFile() || fileObjectIdentity(readStat) !== fileObjectIdentity(fs.fstatSync(writerFd))) {
 			return undefined;
 		}
 		const buffer = Buffer.alloc(64 * 1024);
@@ -571,6 +577,17 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			// Matching dev:ino alone does not prove that this is still our session.
 			// A late-created journal acquires its header identity once it exists.
 			const currentSessionId = openedJournalSessionId(this.#path, this.#fd);
+			// The pathname can change after the earlier lstat and during the
+			// independent header open. Revalidate the exact writer inode after
+			// the probe before allowing an append to the pinned descriptor.
+			const afterHeaderProbe = fs.lstatSync(this.#path);
+			if (
+				!afterHeaderProbe.isFile() ||
+				afterHeaderProbe.isSymbolicLink() ||
+				fileObjectIdentity(afterHeaderProbe) !== pinnedIdentity
+			) {
+				throw new Error("Session writer target changed during header probe");
+			}
 			if (this.#sessionIdAtOpen && currentSessionId !== this.#sessionIdAtOpen) {
 				throw new Error("Session writer current journal has an unrelated or unverifiable session header");
 			}
