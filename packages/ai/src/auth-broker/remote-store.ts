@@ -546,12 +546,27 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					},
 		);
 		if (result.status === 200) {
-			// A conditional 200 with no durable progress is no fresher than a 304:
-			// a stale relay may replay increasing generations as well as timestamps/countdowns forever.
-			// Unconditional canonical GETs are authoritative even at a reused generation.
-			if (needsCanonicalVerification || !this.#isNoProgressSnapshot(result.snapshot, true)) {
+			// A scheduled unconditional GET is already authoritative, even if the
+			// broker restarted and reused its numeric generation.
+			if (needsCanonicalVerification) {
 				this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest);
 				return;
+			}
+			// A conditional 200 with unchanged durable content is no fresher than a
+			// 304. Nor may a changed conditional 200 authorize state: a stale relay
+			// can replay an obsolete credential roster with an invented generation.
+			if (!this.#isNoProgressSnapshot(result.snapshot, true)) {
+				const canonical = await this.#client.fetchSnapshot({ signal: this.#backgroundAbort.signal });
+				if (canonical.status !== 200) {
+					throw new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot");
+				}
+				if (!this.#isNoProgressSnapshot(canonical.snapshot, true) &&
+					this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtRequest)) {
+					return;
+				}
+				// The replay was changed but broker truth was not. Pace the unused
+				// long-poll window below: an immediate stale relay must not hot-loop
+				// through repeated conditional and unconditional network requests.
 			}
 		} else if (needsCanonicalVerification) {
 			// An unconditional read must return broker truth; a 304 cannot establish freshness.
@@ -1162,15 +1177,21 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			signal: opts.signal,
 		});
 		if (result.status === 200) {
-			// A broker restart may reuse the generation even for a changed
-			// credential roster. Report durable progress only if the 200 was
-			// accepted by the existing local-revision fence.
-			const changed = !this.#isNoProgressSnapshot(result.snapshot, true);
 			// Neither volatile-only changes nor an unverified numerical generation
-			// increase is durable broker progress. A stale conditional relay must
-			// not fence the idle SSE canonical GET behind repeated on-demand waits.
-			if (!changed) return this.#generation !== previousGeneration;
-			if (this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)) return true;
+			// increase is durable progress. A changed conditional 200 is also not
+			// proof of broker authority: an old relay can replay an obsolete grant.
+			if (this.#isNoProgressSnapshot(result.snapshot, true)) return this.#generation !== previousGeneration;
+			const canonical = await this.#client.fetchSnapshot({ signal: opts.signal });
+			if (canonical.status !== 200) {
+				throw new AIError.AuthBrokerError("Unconditional broker freshness verification returned no snapshot");
+			}
+			// A conditional change confirmed by the canonical broker may reuse
+			// the old generation. Do not apply an unconfirmed replay or let a
+			// concurrent newer local revision be overwritten by this earlier wait.
+			if (!this.#isNoProgressSnapshot(canonical.snapshot, true) &&
+				this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtRequest)) {
+				return true;
+			}
 		} else {
 			// A restarted broker may reuse the worker's numeric generation:
 			// its conditional wait can return 304 despite different credentials.
