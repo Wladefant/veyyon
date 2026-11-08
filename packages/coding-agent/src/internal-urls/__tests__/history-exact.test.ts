@@ -1216,7 +1216,7 @@ describe("history exact record lookup", () => {
 				[header, '}{"type":"message","id":"root","parentId":42}', root],
 				[header, root, '}{"type":"message","id":"root","parentId":42}'],
 			]) {
-				await fs.writeFile(file, `${lines.join("\\n")}\\n`);
+				await fs.writeFile(file, `${lines.join("\n")}\n`);
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 256,
 				});
