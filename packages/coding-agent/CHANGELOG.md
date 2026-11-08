@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- An edit that issues a fresh hashline tag no longer carries forward visibility of older lines it did not change ([PR #1046](https://github.com/Wladefant/veyyon/pull/1046)).
+
+### Changed
+
+- The docker test sandbox also masks `/root` on hosts that run as root, so sandboxed tests no longer see the host root home ([PR #1055](https://github.com/Wladefant/veyyon/pull/1055)).
+
 ## [1.8.15] - 2026-11-08
 
 ### Fixed
