@@ -642,6 +642,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * trusting the stream; actual mutations need an unconditional broker GET.
 	 */
 	#isNoProgressStreamEvent(event: SnapshotStreamEvent): boolean {
+		const tombstonedHint = event.kind === "entry"
+			? this.#isCanonicallyRemovedFromStream(event.entry.id)
+			: event.kind === "snapshot" && event.credentials.some(entry =>
+				this.#isCanonicallyRemovedFromStream(entry.id)
+			);
+		if (tombstonedHint) return false;
 		if (event.generation < this.#generation) return true;
 		switch (event.kind) {
 			case "snapshot": {
@@ -649,7 +655,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				return this.#isNoProgressSnapshot(snapshot, true);
 			}
 			case "entry": {
-				if (this.#isCanonicallyRemovedFromStream(event.entry.id)) return true;
+				
 				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
 				if (!current) return false;
 				const incoming = this.#retainPendingCredentialBlocks(
@@ -692,8 +698,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				// later frames on this transport, but must NOT renew the idle canonical
 				// GET deadline or advance the accepted snapshot revision. A new SSE
 				// connection gets a new watermark so broker generation resets still work.
+				const tombstonedHint = event.kind === "entry"
+					? this.#isCanonicallyRemovedFromStream(event.entry.id)
+					: event.kind === "snapshot" && event.credentials.some(entry =>
+						this.#isCanonicallyRemovedFromStream(entry.id)
+					);
 				if (!firstFrame && highestGenerationSeenOnStream !== undefined &&
-					event.generation < highestGenerationSeenOnStream) continue;
+					event.generation < highestGenerationSeenOnStream && !tombstonedHint) continue;
 				if (highestGenerationSeenOnStream === undefined || event.generation > highestGenerationSeenOnStream) {
 					highestGenerationSeenOnStream = event.generation;
 				}
@@ -715,16 +726,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					// A reconnect can itself be served by a stale relay. Do not
 					// trust a lower-generation first frame that revives a grant
 					// whose removal was verified by a newer canonical GET.
-					if (snapshot.credentials.some(entry =>
-						this.#isCanonicallyRemovedFromStream(entry.id)
-					)) {
-						throw new AIError.AuthBrokerError("Broker stream first frame conflicts with canonical revocation");
-					}
 					// A first frame cannot establish broker incarnation by itself.
-					// If it differs from the accepted view OR numeric generation, only
-					// a canonical GET may authorize that change. The old stream might
-					// belong to a stale relay even when its generation is higher.
-					if (snapshot.generation !== this.#generation || !this.#isNoProgressSnapshot(snapshot, true)) {
+					// Tombstoned IDs are hints that need canonical verification.
+					// The old stream must be retired after that read.
+					if (snapshot.generation !== this.#generation || tombstonedHint ||
+						!this.#isNoProgressSnapshot(snapshot, true)) {
 						const revisionAtVerification = this.#appliedSnapshotRevision;
 						const canonical = await this.#client.fetchSnapshot({ signal: streamSignal });
 						if (canonical.status !== 200) {

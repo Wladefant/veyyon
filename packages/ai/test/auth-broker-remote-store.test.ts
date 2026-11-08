@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, spyOn, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -671,6 +672,167 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		}
 	});
 
+	test("SSE tombstone hints recover same-ID reauthorization only after an HTTP canonical GET", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		const streamReady = Promise.withResolvers<void>();
+		const observedSnapshotIds: number[][] = [];
+		const firstHintSent = Promise.withResolvers<void>();
+		const laterHintAllowed = Promise.withResolvers<void>();
+		let connections = 0;
+		let canonicalGets = 0;
+		const realFetch = client.fetchSnapshot.bind(client);
+		let lastCanonicalSnapshot: SnapshotResponse | undefined;
+		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
+			canonicalGets += 1;
+			const result = await realFetch(options);
+			if (result.status === 200) lastCanonicalSnapshot = result.snapshot;
+			return result;
+		});
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (options) {
+			const connection = connections++;
+			if (connection === 0) {
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				streamReady.resolve();
+				await untilAborted(options.signal);
+				return;
+			}
+			if (connection === 1) {
+				// A forged first frame names the tombstoned ID while HTTP truth
+				// still reports it absent.
+				firstHintSent.resolve();
+				yield { kind: "snapshot" as const, ...initial.snapshot };
+				await untilAborted(options.signal);
+				return;
+			}
+			// This is the genuine empty canonical roster after revocation.
+			const emptyCanonical = await realFetch();
+			if (emptyCanonical.status !== 200) throw new Error("expected empty canonical broker snapshot");
+			yield { kind: "snapshot" as const, ...emptyCanonical.snapshot };
+			await laterHintAllowed.promise;
+			if (options.signal?.aborted) return;
+			const inserted = storage!.upsertCredential("anthropic", {
+				...mintOAuthCredential("a", Date.now() + 120_000),
+				access: "access-synthetic-same-id-reauthorized",
+			})[0]!;
+			const database = new Database(path.join(tempDir, "agent.db"));
+			try {
+				database.prepare("UPDATE auth_credentials SET id = ? WHERE id = ?").run(original.id, inserted.id);
+			} finally {
+				database.close();
+			}
+			await storage!.reload();
+			const restored = { ...inserted, id: original.id };
+			yield {
+				kind: "entry" as const, entry: restored,
+				generation: initial.snapshot.generation - 1,
+				serverNowMs: initial.snapshot.serverNowMs,
+				refresher: initial.snapshot.refresher,
+			};
+			await untilAborted(options.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+			onSnapshot: snapshot => observedSnapshotIds.push(snapshot.credentials.map(entry => entry.id)),
+		});
+		try {
+			await streamReady.promise;
+			expect(storage!.disableCredentialById(original.id, "synthetic canonical revocation")).toBe(true);
+			await remote.refreshSnapshot();
+			const getsAfterManualRevocation = canonicalGets;
+			expect(remote.listAuthCredentials()).toEqual([]);
+			await firstHintSent.promise;
+			await waitUntil(() => connections >= 3, 4_000);
+			expect(canonicalGets).toBe(getsAfterManualRevocation + 1);
+			expect(lastCanonicalSnapshot?.credentials).toEqual([]);
+			expect(remote.snapshot.credentials).toEqual([]);
+			expect(remote.listAuthCredentials()).toEqual([]);
+
+			// The next stream's later entry is only a hint. Its lower reused
+			// generation cannot make it stale before canonical verification.
+			laterHintAllowed.resolve();
+			await waitUntil(() => canonicalGets >= getsAfterManualRevocation + 2, 4_000);
+			expect(canonicalGets).toBe(getsAfterManualRevocation + 2);
+			expect(lastCanonicalSnapshot?.credentials.map(entry => entry.id)).toEqual([original.id]);
+			expect(remote!.listAuthCredentials().some(entry => entry.id === original.id)).toBe(true);
+			expect(canonicalGets).toBe(getsAfterManualRevocation + 2);
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([original.id]);
+			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([original.id]);
+			expect(observedSnapshotIds.at(-1)).toEqual([original.id]);
+			await waitUntil(() => connections >= 4, 4_000);
+			expect(canonicalGets).toBe(getsAfterManualRevocation + 2);
+		} finally {
+			laterHintAllowed.resolve();
+		}
+	}, 15_000);
+
+
+	test("the real broker SSE stream hints a tombstoned same-ID restore for canonical verification", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const initial = await client.fetchSnapshot();
+		if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
+		const original = initial.snapshot.credentials[0]!;
+		const realFetch = client.fetchSnapshot.bind(client);
+		const realStream = client.openSnapshotStream.bind(client);
+		let canonicalGets = 0;
+		let canonicalRevoked = false;
+		const streamReady = Promise.withResolvers<void>();
+		let restoredHintFrames = 0;
+		let connections = 0;
+		const observedSnapshotIds: number[][] = [];
+		spyOn(client, "fetchSnapshot").mockImplementation(async options => {
+			canonicalGets += 1;
+			return realFetch(options);
+		});
+		spyOn(client, "openSnapshotStream").mockImplementation(async function* (options) {
+			connections += 1;
+			for await (const event of realStream(options)) {
+				streamReady.resolve();
+				if (canonicalRevoked && (
+					(event.kind === "snapshot" && event.credentials.some(entry => entry.id === original.id)) ||
+					(event.kind === "entry" && event.entry.id === original.id)
+				)) restoredHintFrames += 1;
+				yield event;
+			}
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+			onSnapshot: snapshot => observedSnapshotIds.push(snapshot.credentials.map(entry => entry.id)),
+		});
+		try {
+			await streamReady.promise;
+			expect(storage!.disableCredentialById(original.id, "synthetic canonical revocation")).toBe(true);
+			await remote.refreshSnapshot();
+			canonicalRevoked = true;
+			expect(remote.listAuthCredentials()).toEqual([]);
+			const getsAfterRevocation = canonicalGets;
+
+			// The disposable SQLite fixture makes broker incarnation reuse explicit.
+			const inserted = storage!.upsertCredential("anthropic", {
+				...mintOAuthCredential("a", Date.now() + 120_000),
+				access: "access-synthetic-network-same-id-restore",
+			})[0]!;
+			const database = new Database(path.join(tempDir, "agent.db"));
+			try {
+				database.prepare("UPDATE auth_credentials SET id = ? WHERE id = ?").run(original.id, inserted.id);
+			} finally {
+				database.close();
+			}
+			await storage!.reload();
+
+			await waitUntil(() => restoredHintFrames > 0, 4_000);
+			await waitUntil(() => remote!.listAuthCredentials().some(entry => entry.id === original.id), 4_000);
+			expect(canonicalGets).toBeGreaterThan(getsAfterRevocation);
+			expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([original.id]);
+			expect(remote.listAuthCredentials().map(entry => entry.id)).toEqual([original.id]);
+			expect(observedSnapshotIds.at(-1)).toEqual([original.id]);
+			await waitUntil(() => connections >= 3, 4_000);
+		} finally {
+			canonicalRevoked = false;
+		}
+	}, 15_000);
 
 	test("explicit broker refresh fences old-incarnation SSE at equal or higher generations", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
