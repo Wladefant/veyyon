@@ -81,8 +81,6 @@ function makeToolSession(
   } as unknown as ToolSession;
 }
 
-
-
 async function createSessionWithReadTool(
   cwd: string,
   agentDir: string,
@@ -476,8 +474,6 @@ describe("history:// caller-bound archived opt-in", () => {
     expect(resolveHistoryCallerCapability(Object.freeze({}))).toBeUndefined();
   });
 
-
-
   it("does not let a stale ToolSession mint archived authority after same-transcript revival", async () => {
     const temp = TempDir.createSync("@veyyon-history-stale-tool-session-");
     let authStorage: AuthStorage | undefined;
@@ -497,7 +493,9 @@ describe("history:// caller-bound archived opt-in", () => {
       );
       const sessionId = first.result.session.sessionManager.getSessionId();
       const sessionFile = first.result.session.sessionManager.getSessionFile();
+      expect(sessionId).toBeTruthy();
       expect(sessionFile).toBeTruthy();
+      expect(first.toolSession.getOwningAgentSession?.()).toBe(first.result.session);
       const beforeRevival = createHistoryCallerCapability(first.toolSession);
       expect(beforeRevival).toBeDefined();
 
@@ -510,6 +508,8 @@ describe("history:// caller-bound archived opt-in", () => {
       revived = await createSessionWithReadTool(cwd, temp.path(), authStorage, reopened);
       expect(revived.agentId).toBe(first.agentId);
       expect(revived.result.session.sessionManager.getSessionId()).toBe(sessionId);
+      expect(revived.toolSession.getOwningAgentSession?.()).toBe(revived.result.session);
+      expect(revived.toolSession.getOwningAgentSession?.()).not.toBe(first.toolSession.getOwningAgentSession?.());
 
       const archivedFile = await archive(temp.path(), "Scout", "archived-session", [
         { id: "record-one", parentId: null, message: "same-transcript revival evidence" },
