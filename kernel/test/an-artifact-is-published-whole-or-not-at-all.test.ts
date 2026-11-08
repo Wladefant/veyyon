@@ -37,10 +37,12 @@ describe("artifact publication is whole-or-nothing", () => {
 		for (const dir of dirs.splice(0)) await removeWithRetries(dir);
 	});
 
-	/** Directory entries other than the exact hidden id reservations, which outlive a failed save on purpose. */
+	/** Directory entries other than the exact hidden id reservations and database sidecars, which outlive a failed save on purpose. */
 	async function listPublished(dir: string, reservedIds: (string | number)[] = []): Promise<string[]> {
 		const expectedReservations = new Set(reservedIds.map(id => `.artifact-id-${id}`));
-		return (await fs.readdir(dir)).filter(name => !expectedReservations.has(name));
+		return (await fs.readdir(dir)).filter(
+			name => !expectedReservations.has(name) && !name.startsWith(".artifact-ids.sqlite"),
+		);
 	}
 
 	/** Model a short write faithfully: partial bytes land, and the count reports short. */
@@ -65,7 +67,7 @@ describe("artifact publication is whole-or-nothing", () => {
 		// Neither the artifact nor a leftover staging sibling may survive, or the
 		// directory scan resolves a truncated payload as a finished result.
 		// Exactly the reservation directory survived.
-		expect(await fs.readdir(dir)).toEqual([`.artifact-id-${id}`]);
+		expect((await fs.readdir(dir)).filter(name => !name.startsWith(".artifact-ids.sqlite"))).toEqual([`.artifact-id-${id}`]);
 		expect(await listPublished(dir, [id])).toEqual([]);
 		expect(await manager.getPath(id)).toBeNull();
 		expect(await manager.exists(id)).toBe(false);
@@ -100,7 +102,7 @@ describe("artifact publication is whole-or-nothing", () => {
 		expect(resolved).not.toBeNull();
 		expect(await Bun.file(resolved as string).text()).toBe(body);
 		// Exactly the artifact and the reservation directory, with no staging sibling left next to it.
-		expect((await fs.readdir(dir)).sort()).toEqual([`.artifact-id-${id}`, path.basename(resolved as string)].sort());
+		expect((await fs.readdir(dir)).filter(name => !name.startsWith(".artifact-ids.sqlite")).sort()).toEqual([`.artifact-id-${id}`, path.basename(resolved as string)].sort());
 		expect(await listPublished(dir, [id])).toEqual([path.basename(resolved as string)]);
 	});
 
@@ -113,7 +115,7 @@ describe("artifact publication is whole-or-nothing", () => {
 
 		expect(id).toBe("8");
 		expect((await manager.listFiles()).sort()).toEqual(["7.task.log", "8.task.log"]);
-		expect((await fs.readdir(dir)).sort()).toEqual([`.artifact-id-${id}`, "7.task.log", "8.task.log"].sort());
+		expect((await fs.readdir(dir)).filter(name => !name.startsWith(".artifact-ids.sqlite")).sort()).toEqual([`.artifact-id-${id}`, "7.task.log", "8.task.log"].sort());
 		expect((await listPublished(dir, [id])).sort()).toEqual(["7.task.log", "8.task.log"]);
 	});
 });
