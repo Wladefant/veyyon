@@ -3030,6 +3030,29 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         await writer.close();
       }
 
+      // A brand-new append writer has no header at open. After it appends
+      // the initial session header it must pin that ID before the next call:
+      // otherwise an in-place foreign rewrite could be accidentally adopted.
+      const newJournal = path.join(temp.path(), "synthetic-created-by-writer.jsonl");
+      const newHeader = JSON.stringify({
+        type: "session", version: 3, id: "synthetic-new-writer",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      }) + "\n";
+      const newWriter = new FileSessionStorage().openWriter(newJournal);
+      try {
+        await newWriter.append(newHeader);
+        await newWriter.sync();
+        const newInode = nodeFs.statSync(newJournal).ino;
+        await fs.writeFile(newJournal, unrelated);
+        expect(nodeFs.statSync(newJournal).ino).toBe(newInode);
+        await expect(newWriter.append(entry)).rejects.toThrow(/session header/i);
+        expect(newWriter.getError()?.message).toMatch(/session header/i);
+        expect(await fs.readFile(newJournal, "utf8")).toBe(unrelated);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await newWriter.close();
+      }
+
       // The unrelated journal remains usable by a newly opened, correctly
       // pinned writer. Refusing the stale writer must not corrupt either file.
       const fresh = new FileSessionStorage().openWriter(journal);

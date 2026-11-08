@@ -624,6 +624,13 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 				offset += written;
 			}
 			this.#hasAppendedToPinnedJournal = true;
+			// New append-mode files have no header at open. Capture the first
+			// complete session header after writing it; otherwise a foreign
+			// in-place rewrite before the next append could become the first ID
+			// we ever pin, silently claiming the unrelated session.
+			if (this.#appendMode && !this.#sessionIdAtOpen) {
+				this.#sessionIdAtOpen = openedJournalSessionId(this.#path, this.#fd);
+			}
 		} catch (err) {
 			throw this.recordError(err);
 		}
