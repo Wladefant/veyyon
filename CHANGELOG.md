@@ -7,6 +7,49 @@
 
 - Python eval cancellation targets the request without killing the shared kernel, and only its original primary owner can reset it.
 
+## [1.8.15] - 2026-11-08
+
+### Fixed
+
+- AI regression fixtures use current imports, stream types, and message contracts ([Refs #1048](https://github.com/Wladefant/veyyon/issues/1048)).
+
+## [1.8.14] - 2026-11-08
+
+### Fixed
+
+- Producer output preserves benign metadata while redacting complete credentials, including label-only multiline values and numeric secrets ([Refs #1033](https://github.com/Wladefant/veyyon/issues/1033)).
+- A `read` line-range selector resolves after `set_cwd` changes the working directory ([PR #1044](https://github.com/Wladefant/veyyon/pull/1044)).
+
+## [1.8.13] - 2026-11-08
+
+### Fixed
+
+- The issue-967 vision guard test compiles again: a duplicated import block caused TypeScript duplicate-identifier errors ([PR #1043](https://github.com/Wladefant/veyyon/pull/1043)).
+
+## [1.8.12] - 2026-11-08
+
+### Fixed
+
+- The bwrap test sandbox binds the tested worktree's workspace packages when `node_modules` comes from an external checkout, so imports such as `@veyyon/catalog/models` resolve ([PR #1038](https://github.com/Wladefant/veyyon/pull/1038)).
+
+## [1.8.11] - 2026-11-08
+
+### Fixed
+
+- Eval JSON displays preserve the oversized-record diagnosis for aggregate values and still withhold credential-bearing output ([PR #1030](https://github.com/Wladefant/veyyon/pull/1030)).
+
+## [1.8.10] - 2026-11-08
+
+### Added
+
+- Pull-request CI counts the changed files in the net diff and in each commit, reports anything above 1,000 files, and fails above 5,000 files unless the pull request carries the `large-change-approved` label ([PR](https://github.com/Wladefant/veyyon/pull/1023)).
+
+## [1.8.9] - 2026-11-08
+
+### Fixed
+
+- Keep matched Unicode text visible in bounded `history://` search previews, including expanding case folds, astral-character boundaries, and long queries ([Refs #984](https://github.com/Wladefant/veyyon/issues/984)).
+
 ## [1.8.8] - 2026-11-08
 
 ### Fixed

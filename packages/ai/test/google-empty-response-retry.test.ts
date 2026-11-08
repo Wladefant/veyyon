@@ -476,7 +476,7 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		let calls = 0;
 		const fetchMock: FetchImpl = async () => {
 			calls += 1;
-			const response = sse(ccaThinkingOnlyChunk("The task is complete, but I omitted the final answer."));
+			const response = sseResponse([ccaThinkingOnlyChunk("The task is complete, but I omitted the final answer.")]);
 			Object.defineProperty(response, "url", { value: "https://example.com/v1internal:streamGenerateContent" });
 			return response;
 		};
@@ -507,7 +507,7 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 		const fetchMock: FetchImpl = async input => {
 			const endpoint = endpointFromInput(input);
 			requestedEndpoints.push(endpoint);
-			const response = endpoint === ANTIGRAVITY_SANDBOX_ENDPOINT ? sse(ccaChunk("Recovered.")) : sse(ccaChunk(""));
+			const response = endpoint === ANTIGRAVITY_SANDBOX_ENDPOINT ? sseResponse([ccaChunk("Recovered.")]) : sseResponse([ccaChunk("")]);
 			return withResponseUrl(response, endpoint);
 		};
 
@@ -539,7 +539,7 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 			const fetchMock: FetchImpl = async input => {
 				const requestedEndpoint = endpointFromInput(input);
 				requestedEndpoints.push(requestedEndpoint);
-				return withResponseUrl(sse(ccaChunk("")), requestedEndpoint);
+				return withResponseUrl(sseResponse([ccaChunk("")]), requestedEndpoint);
 			};
 
 			const stream = streamGoogleGeminiCli(antigravityModel, context, {
@@ -584,7 +584,7 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 			const fetchMock: FetchImpl = async input => {
 				const endpoint = endpointFromInput(input);
 				requestedEndpoints.push(endpoint);
-				return withResponseUrl(sse(chunk), endpoint);
+				return withResponseUrl(sseResponse([chunk]), endpoint);
 			};
 
 			const stream = streamGoogleGeminiCli(antigravityModel, context, {
@@ -641,7 +641,7 @@ describe("Google empty-response retry (Cloud Code Assist path)", () => {
 			const endpoint = endpointFromInput(input);
 			requestedEndpoints.push(endpoint);
 			return withResponseUrl(
-				sse({ response: { candidates: [{ content: { parts: [{ text: "partial" }] } }] } }),
+				sseResponse([{ response: { candidates: [{ content: { parts: [{ text: "partial" }] } }] } }]),
 				endpoint,
 			);
 		};
