@@ -98,7 +98,26 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean; claimedId?: string };
 
-function claimedRecordId(value: unknown): string | undefined {
+function claimedRecordId(value: unknown): string | undefined {function readBoundedJsonString(raw: string, start: number): { value: string; end: number } | undefined {
+	if (raw[start] !== '"') return undefined;
+	let end = start + 1;
+	while (end < raw.length) {
+		if (raw[end] === "\\") {
+			end += 2;
+			continue;
+		}
+		if (raw[end++] === '"') break;
+	}
+	if (raw[end - 1] !== '"' || end - start > MAX_ID_MEMBER_JSON_CHARACTERS) return undefined;
+	try {
+		const value = JSON.parse(raw.slice(start, end)) as unknown;
+		return typeof value === "string" ? { value, end } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const entry = value as StoredEntryShape;
 	// Title and session metadata are not entry claims; their identity has its own rules.
@@ -111,6 +130,7 @@ function scanTopLevelMembers(raw: string): {
 	sessionTypeMember: boolean;
 	identityAmbiguous: boolean;
 	arrayIdentityCandidate: boolean;
+	nestedIdentityCandidate: boolean;
 	claimedId?: string;
 } {
 	const keys = new Set<string>();
@@ -120,6 +140,7 @@ function scanTopLevelMembers(raw: string): {
 	let claimedId: string | undefined;
 	let identityAmbiguous = false;
 	let arrayIdentityCandidate = false;
+	let nestedIdentityCandidate = false;
 	let rootMemberSeen = false;
 	let depth = 0;
 	// JSON array string elements are never root-level object member names.
@@ -143,6 +164,21 @@ function scanTopLevelMembers(raw: string): {
 			let next = i;
 			while (/\s/.test(raw[next] ?? "")) next++;
 			const keyLike = raw[next] === ":" && raw[previous] !== ":";
+			// A scalar or impossible opener can shift a later identity-bearing
+			// object below the root depth. Preserve that signal for pre-header
+			// classification without treating arbitrary brace punctuation as a header.
+			if (keyLike && (depth > 1 || arrayDepth > 0)) {
+				const key = readBoundedJsonString(raw, start)?.value;
+				if (key === "type" || key === "id") {
+					let valueStart = next + 1;
+					while (/\s/.test(raw[valueStart] ?? "")) valueStart++;
+					const member = readBoundedJsonString(raw, valueStart)?.value;
+					if ((key === "type" && member === "session") ||
+						(key === "id" && typeof member === "string" && ADDRESSABLE_HISTORY_ID.test(member))) {
+						nestedIdentityCandidate = true;
+					}
+				}
+			}
 			if (depth === 1 && arrayDepth === 0 && raw[previous] !== ":") {
 				if (!keyLike) {
 					if (!rootMemberSeen) identityAmbiguous = true;
@@ -246,6 +282,7 @@ function scanTopLevelMembers(raw: string): {
 		sessionTypeMember,
 		identityAmbiguous: identityAmbiguous || (arrayIdentityCandidate && topLevelType === undefined),
 		arrayIdentityCandidate,
+		nestedIdentityCandidate,
 		claimedId: topLevelType === "session" || topLevelType === "title" ? undefined : claimedId,
 	};
 }
@@ -315,7 +352,8 @@ function resemblesBrokenHeader(line: string): boolean {
 		scanned.duplicates.has("type") ||
 		scanned.duplicates.has("id") ||
 		scanned.duplicates.has("parentId") ||
-		scanned.claimedId !== undefined;
+		scanned.claimedId !== undefined ||
+		(scanned.identityAmbiguous && scanned.nestedIdentityCandidate);
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {

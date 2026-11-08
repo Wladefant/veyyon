@@ -1147,6 +1147,8 @@ describe("history exact record lookup", () => {
 			const header = JSON.stringify({ type: "session", id: "s-valid" });
 			const entry = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle trusted" });
 			const cases = [
+				['x{0{"type":"session","id":"shadow"}}', header, entry],
+				['x{0{"type":"message","id":"orphan","parentId":"root"}}', header, entry],
 				['{"type":"session","id":"first","id":"forged"}', header, entry],
 				['{"type":"session","id":42}', header, entry],
 				['{"type":"session","id":', header, entry],
@@ -1338,7 +1340,7 @@ describe("history exact record lookup", () => {
 				"Optional title",
 				'Project [Q4] with "quoted" wording',
 				'"Quoted title" [Q4] release',
-				"Release {Q4} [archive] — retained title",
+				"Release {Q4 {draft}} [archive] — retained title",
 			]) {
 				await fs.writeFile(file, Buffer.concat([Buffer.from(legacyTitle + "\n\n"), header, root]));
 				const titledExact = await readStoredHistoryEntry(file, {
