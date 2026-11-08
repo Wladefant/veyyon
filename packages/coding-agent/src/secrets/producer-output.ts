@@ -1,8 +1,8 @@
 import { PROVIDER_SECRET_FAMILIES, redactProviderSecrets } from "@veyyon/ai/error/error-body";
-import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
-import { currentProducerSecretOwner } from "./producer-owner";
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { sanitizeJsonValue } from "../eval/json-sanitizer";
+import { currentProducerSecretOwner } from "./producer-owner";
 
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
@@ -21,7 +21,8 @@ const ENV_MAP_KEY = /^(?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)$/;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
 
 /** A defs() entry names a variable and its shape, never the variable's value. */
-const DEFINITION_SHAPE = /^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|\r?\n|["'](?:\s*[,)\]]|\s*$)|(?<sourceDelimiter>[ \t]*[,;}]))/;
+const DEFINITION_SHAPE =
+	/^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|\r?\n|["'](?:\s*[,)\]]|\s*$)|(?<sourceDelimiter>[ \t]*[,;}]))/;
 
 const PEM_BLOCK = /-----BEGIN ([A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g;
 const PEM_START = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
@@ -114,12 +115,12 @@ function classifyCredentialText(text: string, redact?: (text: string) => string)
 				if (sensitive) {
 					const prefix = redact(sanitizeText(redact(text.slice(span.start, span.valueStart))));
 					// A contextual owner may change the label as well as its value.
-					result += normalized.startsWith(prefix) ? prefix + "[REDACTED]" : "[REDACTED]";
+					result += normalized.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]";
 				} else {
 					result += normalized;
 				}
 			} else {
-				result += sensitive ? text.slice(span.start, span.valueStart) + "[REDACTED]" : fragment;
+				result += sensitive ? `${text.slice(span.start, span.valueStart)}[REDACTED]` : fragment;
 			}
 			cursor = end;
 			if (sensitive) {
@@ -321,8 +322,8 @@ export class ProducerOutputGuard {
 			// Classify labels before an owner can rename them. Normalization must not
 			// reveal a label that was missed while retaining raw literal secret bytes.
 			const classified = classifyCredentialText(text);
-			if (classified === BLOCKED_OUTPUT_RECORD ||
-				sanitizeText(classified) !== classifyCredentialText(original)) return BLOCKED_OUTPUT_RECORD;
+			if (classified === BLOCKED_OUTPUT_RECORD || sanitizeText(classified) !== classifyCredentialText(original))
+				return BLOCKED_OUTPUT_RECORD;
 			const filtered = classifyCredentialText(text, this.#redact);
 			if (filtered === BLOCKED_OUTPUT_RECORD) return filtered;
 			const sanitized = sanitizeText(filtered);
@@ -374,8 +375,7 @@ export class ProducerOutputGuard {
 	#record(record: string, newline: string): string {
 		const normalized = sanitizeText(record);
 		const safe = this.sanitize(record + newline);
-		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD)
-			return this.#block(safe) + newline;
+		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD) return this.#block(safe) + newline;
 		// A registered literal can hold several physical records together. Classify every
 		// raw line, but keep the group intact until redaction can see the complete literal.
 		const lines = normalized.split("\n");

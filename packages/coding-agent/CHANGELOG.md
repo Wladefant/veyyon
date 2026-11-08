@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Executor and producer output enforce Biome diagnostics and typing ([PR #1052](https://github.com/Wladefant/veyyon/pull/1052)).
 ## [1.8.16] - 2026-11-08
 
 ### Changed

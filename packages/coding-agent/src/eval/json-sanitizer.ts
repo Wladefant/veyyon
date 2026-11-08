@@ -25,7 +25,7 @@ export function sanitizeJsonValue(
 
 		ancestors.add(current);
 		try {
-			if (Array.isArray(current)) return current.map((item) => clone(item));
+			if (Array.isArray(current)) return current.map(item => clone(item));
 
 			const sanitized: Record<string, unknown> = {};
 			for (const [key, nested] of Object.entries(current)) {

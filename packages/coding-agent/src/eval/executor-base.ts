@@ -12,9 +12,9 @@ import {
 	toError,
 } from "@veyyon/utils";
 import { Settings } from "../config/settings";
+import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
-import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
 import {
@@ -541,24 +541,6 @@ export async function executeWithKernelBase<
 	});
 
 	const displayOutputs: KernelDisplayOutput[] = [];
-	/** The run's result over everything the sink holds, with `annotation` appended to the output. */
-	const finish = async (
-		outcome: Pick<KernelExecutionResult, "exitCode" | "cancelled" | "stdinRequested">,
-		annotation?: string,
-	): Promise<KernelExecutionResult> => {
-		const dumped = await sink.dump(annotation);
-		return {
-			...outcome,
-			truncated: dumped.truncated,
-			output: dumped.output,
-			artifactId: dumped.artifactId ?? undefined,
-			totalLines: dumped.totalLines,
-			totalBytes: dumped.totalBytes,
-			outputLines: dumped.outputLines,
-			outputBytes: dumped.outputBytes,
-			displayOutputs,
-		};
-	};
 	const deadlineMs = (resolveDeadlineMs ?? getExecutionDeadlineMs)(options);
 	let executionTimeoutMs: number | undefined;
 	const abortShield = createBridgeAbortShield(options?.signal);

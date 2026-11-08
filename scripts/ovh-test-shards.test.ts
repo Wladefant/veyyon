@@ -73,11 +73,13 @@ describe("OVH shard planner writes the selected plan", () => {
 		await writeFile(input, "b.test.ts\na.test.ts\n");
 		await writeFile(githubOutput, "previous=value\n");
 		const plan = await runCli(["--input", input, "--output", output], { GITHUB_OUTPUT: githubOutput });
+		if (typeof plan === "number") throw new Error(`expected plan, got exit code ${plan}`);
 		expect(plan.shards.flatMap(shard => shard.files)).toEqual(["a.test.ts", "b.test.ts"]);
 		expect(JSON.parse(await readFile(path.join(output, "plan.json"), "utf8"))).toEqual(plan);
 		for (const shard of plan.shards) {
-			expect(await readFile(path.join(output, `shard-${shard.index}.txt`), "utf8"))
-				.toBe(shard.files.join("\n") + (shard.files.length ? "\n" : ""));
+			expect(await readFile(path.join(output, `shard-${shard.index}.txt`), "utf8")).toBe(
+				shard.files.join("\n") + (shard.files.length ? "\n" : ""),
+			);
 		}
 		const lines = (await readFile(githubOutput, "utf8")).trimEnd().split("\n");
 		expect(lines[0]).toBe("previous=value");
@@ -119,15 +121,22 @@ describe("OVH shard file verification (--verify)", () => {
 	it("rejects an empty or short file when tests were planned, and a non-empty file when none were", async () => {
 		const file = path.join(dir, "shard-0.txt");
 		await writeFile(file, "");
-		await expect(runCli(["--verify", file, "--expected", "1"])).rejects.toThrow(/lists 0 tests but the plan selected 1/);
+		await expect(runCli(["--verify", file, "--expected", "1"])).rejects.toThrow(
+			/lists 0 tests but the plan selected 1/,
+		);
 		await writeFile(file, "a.test.ts\n");
-		await expect(runCli(["--verify", file, "--expected", "2"])).rejects.toThrow(/lists 1 tests but the plan selected 2/);
-		await expect(runCli(["--verify", file, "--expected", "0"])).rejects.toThrow(/lists 1 tests but the plan selected 0/);
+		await expect(runCli(["--verify", file, "--expected", "2"])).rejects.toThrow(
+			/lists 1 tests but the plan selected 2/,
+		);
+		await expect(runCli(["--verify", file, "--expected", "0"])).rejects.toThrow(
+			/lists 1 tests but the plan selected 0/,
+		);
 	});
 
 	it("rejects a malformed expected count", async () => {
 		const file = path.join(dir, "shard-0.txt");
 		await writeFile(file, "a.test.ts\n");
-		for (const bad of ["", "-1", "1.5", "x"]) await expect(runCli(["--verify", file, "--expected", bad])).rejects.toThrow(/usage/);
+		for (const bad of ["", "-1", "1.5", "x"])
+			await expect(runCli(["--verify", file, "--expected", bad])).rejects.toThrow(/usage/);
 	});
 });
