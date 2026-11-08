@@ -59,6 +59,7 @@ import {
 } from "@veyyon/coding-agent/speech/tts/models";
 import { CONFIGURED_THINKING_LEVELS, configuredThinkingLevelsForModel } from "@veyyon/coding-agent/thinking";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { STREAM_LOAD_THRESHOLD_BYTES } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setAgentDir } from "@veyyon/utils";
 import type { z } from "zod/v4";
@@ -1687,6 +1688,107 @@ describe("ACP agent", () => {
 		expect(session.sessionManager.getSessionFile()).toBe(file);
 		await harness.agent.closeSession({ sessionId: created.sessionId });
 		harness.abortController.abort();
+	});
+
+	it("replays a compacted early tool result from cold disk and appends the next prompt to its transcript", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		try {
+			const original = harness.findSession(created.sessionId);
+			if (!original) throw new Error("ACP session was not registered");
+			const earlyToolCallId = "toolu_compacted_replay";
+			const earlyPayload = Array.from({ length: 33 }, (_, index) => ({
+				type: "text" as const,
+				text: `EARLY-TOOL-PAYLOAD-${index}:` + "x".repeat(256 * 1024),
+			}));
+			const earlyDetails = { marker: "EARLY-TOOL-DETAILS", retained: true };
+			original.sessionManager.appendMessage({ role: "user", content: "run the early tool", timestamp: Date.now() });
+			original.sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "toolCall", id: earlyToolCallId, name: "inspect", arguments: { target: "early-file" } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: TEST_MODELS[0].id,
+				usage: { ...emptyUsage(), input: 1, output: 1, totalTokens: 2 },
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			});
+			original.sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: earlyToolCallId,
+				toolName: "inspect",
+				content: earlyPayload,
+				details: earlyDetails,
+				isError: false,
+				timestamp: Date.now(),
+			});
+			const tailUserId = original.sessionManager.appendMessage({
+				role: "user",
+				content: "TAIL-USER-KEPT",
+				timestamp: Date.now(),
+			});
+			original.sessionManager.appendMessage(makeAssistantMessage("TAIL-ASSISTANT-KEPT"));
+			original.sessionManager.appendCompaction("compact the early turn", undefined, tailUserId, 1000);
+			await original.sessionManager.ensureOnDisk();
+			await original.sessionManager.flush();
+			const file = original.sessionManager.getSessionFile();
+			if (!file) throw new Error("ACP session has no transcript file");
+			expect(fs.statSync(file).size).toBeGreaterThanOrEqual(STREAM_LOAD_THRESHOLD_BYTES);
+			const jsonlFilesBefore = fs.readdirSync(path.dirname(file)).filter(name => name.endsWith(".jsonl")).sort();
+
+			await harness.agent.closeSession({ sessionId: created.sessionId });
+			harness.updates.length = 0;
+			await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
+			const reopened = harness.sessions.at(-1);
+			if (!reopened) throw new Error("cold-loaded ACP session was not registered");
+			expect(reopened).not.toBe(original);
+			expect(reopened.sessionManager.getSessionFile()).toBe(file);
+
+			const toolUpdates = harness.updates
+				.filter(notification => notification.sessionId === created.sessionId)
+				.map(notification => notification.update)
+				.filter(update => "toolCallId" in update && update.toolCallId === earlyToolCallId);
+			const start = toolUpdates.find(update => update.sessionUpdate === "tool_call");
+			const completion = toolUpdates.find(
+				update => update.sessionUpdate === "tool_call_update" && update.status === "completed",
+			);
+			expect(start).toEqual(expect.objectContaining({
+				sessionUpdate: "tool_call",
+				toolCallId: earlyToolCallId,
+				rawInput: { target: "early-file" },
+			}));
+			expect(completion).toEqual(expect.objectContaining({
+				sessionUpdate: "tool_call_update",
+				toolCallId: earlyToolCallId,
+				rawOutput: expect.objectContaining({ content: earlyPayload, details: earlyDetails }),
+			}));
+			const replayText = harness.updates
+				.filter(notification => notification.sessionId === created.sessionId)
+				.flatMap(({ update }) =>
+					(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
+					update.content.type === "text" ? [update.content.text] : [],
+				)
+				.join("\n");
+			expect(replayText).toContain("TAIL-USER-KEPT");
+			expect(replayText).toContain("TAIL-ASSISTANT-KEPT");
+			expect(toolUpdates.findIndex(update => update === start)).toBeLessThan(
+				toolUpdates.findIndex(update => update === completion),
+			);
+
+			const entriesBeforePrompt = fs.statSync(file).size;
+
+			await harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "continue after replay" }],
+			});
+			const jsonlFilesAfter = fs.readdirSync(path.dirname(file)).filter(name => name.endsWith(".jsonl")).sort();
+			expect(jsonlFilesAfter).toEqual(jsonlFilesBefore);
+			expect(fs.statSync(file).size).toBeGreaterThan(entriesBeforePrompt);
+			expect(reopened.sessionManager.getSessionFile()).toBe(file);
+		} finally {
+			await harness.agent.closeSession({ sessionId: created.sessionId });
+			harness.abortController.abort();
+		}
 	});
 
 	it("loads a stored session by ID when the client cwd has changed", async () => {
