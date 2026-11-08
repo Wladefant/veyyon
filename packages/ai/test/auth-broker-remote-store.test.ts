@@ -186,6 +186,50 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(remote.snapshot.generation).toBe(initial.snapshot.generation);
 		expect(remote.snapshot.credentials.map(entry => entry.id))
 			.toEqual(initial.snapshot.credentials.map(entry => entry.id));
+		// A removal for an already-absent synthetic ID can still carry a
+		// changed refresher policy. It must trigger canonical reconciliation.
+		remote.close();
+		remote = undefined;
+		const relayClient = new AuthBrokerClient({ url: handle!.url, token });
+		const relayInitial = await relayClient.fetchSnapshot();
+		if (relayInitial.status !== 200) throw new Error("expected synthetic relay snapshot");
+		expect(relayInitial.snapshot.refresher.enabled).toBe(false);
+		const changedRefresher = {
+			...relayInitial.snapshot.refresher,
+			enabled: true, intervalMs: 1_000, skewMs: 250, nextSweepInMs: 750,
+		};
+		const relayOriginalFetch = relayClient.fetchSnapshot.bind(relayClient);
+		let relayCanonicalReads = 0;
+		spyOn(relayClient, "fetchSnapshot").mockImplementation(async (...args) => {
+			const response = await relayOriginalFetch(...args);
+			if (response.status === 200) relayCanonicalReads += 1;
+			return response;
+		});
+		const streamConnected = Promise.withResolvers<void>();
+		const observedPolicies: boolean[] = [];
+		spyOn(relayClient, "openSnapshotStream").mockImplementation(async function* (opts) {
+			yield { kind: "snapshot" as const, ...relayInitial.snapshot };
+			streamConnected.resolve();
+			yield {
+				kind: "removed" as const,
+				id: relayInitial.snapshot.credentials[0]!.id + 1_000_000,
+				generation: relayInitial.snapshot.generation,
+				serverNowMs: relayInitial.snapshot.serverNowMs,
+				refresher: changedRefresher,
+			};
+			await untilAborted(opts.signal);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client: relayClient,
+			initialSnapshot: relayInitial.snapshot,
+			snapshotStreamVerifyIntervalMs: 30_000,
+			onSnapshot: snapshot => observedPolicies.push(snapshot.refresher.enabled),
+		});
+		await streamConnected.promise;
+		await waitUntil(() => relayCanonicalReads > 0, 1_000);
+		expect(relayCanonicalReads).toBeGreaterThan(0);
+		expect(observedPolicies).not.toContain(true);
+		expect(remote.snapshot.refresher.enabled).toBe(false);
 	});
 
 	test("identical initial SSE frames on reconnect cannot hide a broker peer revocation", async () => {
