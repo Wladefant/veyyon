@@ -866,6 +866,81 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		);
 	});
 
+	test.each(["entry", "removed"] as const)(
+		"rejects an unverified first %s SSE delta before it can alter canonical credentials",
+		async kind => {
+			const peer = new AuthBrokerClient({ url: handle!.url, token });
+			const before = await peer.fetchSnapshot();
+			if (before.status !== 200) throw new Error("expected disposable broker snapshot");
+			const previous = before.snapshot.credentials[0]!;
+			if (previous.credential.type !== "oauth") throw new Error("expected synthetic OAuth");
+			// The accepted client view is newer than the relay's first delta.
+			storage!.upsertCredential("anthropic", {
+				...mintOAuthCredential("a", Date.now() + 120_000),
+				access: "access-canonical-no-first-delta",
+			});
+			const fresh = await peer.fetchSnapshot();
+			if (fresh.status !== 200) throw new Error("expected canonical broker rotation");
+			expect(fresh.snapshot.credentials[0]?.id).toBe(previous.id);
+			const forged = kind === "entry"
+				? {
+						kind, entry: previous, generation: fresh.generation + 50,
+						serverNowMs: fresh.snapshot.serverNowMs, refresher: fresh.snapshot.refresher,
+					}
+				: {
+						kind, id: previous.id, generation: fresh.generation + 50,
+						serverNowMs: fresh.snapshot.serverNowMs, refresher: fresh.snapshot.refresher,
+					};
+			// Feed the actual SSE decoder a *delta as its first frame*. A relay
+			// that drops the mandatory full snapshot must not gain write authority.
+			const wire = new TextEncoder().encode(
+				`event: ${kind}\\ndata: ${JSON.stringify(forged)}\\n\\n`.replaceAll("\\n", "\n"),
+			);
+			let connections = 0;
+			let reconnectedToBroker = false;
+			let selectedBeforeReconnect: string | null | undefined;
+			let candidate: RemoteAuthCredentialStore | undefined;
+			const fetchImpl: typeof fetch = async (input, init) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+				if (new URL(url).pathname === "/v1/snapshot/stream") {
+					connections += 1;
+					if (connections === 1) {
+						return new Response(new ReadableStream<Uint8Array>({
+							start(controller) {
+								controller.enqueue(wire);
+								controller.close();
+							},
+						}), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+					}
+					// Inspect BEFORE the real broker's reconnect snapshot can
+					// repair an illicit first-frame mutation and hide the regression.
+					const selected = candidate?.snapshot.credentials.find(row => row.id === previous.id);
+					selectedBeforeReconnect = selected?.credential.type === "oauth" ? selected.credential.access : null;
+					const response = await fetch(input, init);
+					reconnectedToBroker = response.ok;
+					return response;
+				}
+				return fetch(input, init);
+			};
+			const client = new AuthBrokerClient({ url: handle!.url, token, fetchImpl });
+			candidate = new RemoteAuthCredentialStore({
+				client, initialSnapshot: fresh.snapshot, snapshotStreamVerifyIntervalMs: 60_000,
+			});
+			remote = candidate;
+			try {
+				await waitUntil(() => reconnectedToBroker, 4_000);
+				expect(connections).toBeGreaterThanOrEqual(2);
+				expect(selectedBeforeReconnect).toBe("access-canonical-no-first-delta");
+				expect(candidate.snapshot.credentials[0]?.credential).toMatchObject({
+					type: "oauth", access: "access-canonical-no-first-delta",
+				});
+			} finally {
+				candidate.close();
+				remote = undefined;
+			}
+		},
+	);
+
 	test("rejects a schema-valid stale first SSE snapshot after canonical same-ID rotation", async () => {
 		const peer = new AuthBrokerClient({ url: handle!.url, token });
 		const before = await peer.fetchSnapshot();
