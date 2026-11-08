@@ -664,7 +664,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				);
 			}
 			case "removed":
-				return !this.#snapshot.credentials.some(entry => entry.id === event.id);
+				return (
+					!this.#snapshot.credentials.some(entry => entry.id === event.id) &&
+					isDeepStrictEqual(
+						refresherSseProgressState(this.#snapshot.refresher),
+						refresherSseProgressState(event.refresher),
+					)
+				);
 		}
 	}
 
