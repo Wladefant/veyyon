@@ -1450,12 +1450,16 @@ describe("history exact record lookup", () => {
 			const first = await readStoredHistoryEntry(file, request!);
 			expect(first.status).toBe("ok");
 			expect(first.sessionId).toBe("0190f800-1234-7abc-8def-123456789abc");
-			expect(first.nextOffset).toBeGreaterThan(0);
+			const nextOffset = first.nextOffset;
+			if (typeof nextOffset !== "number") {
+				throw new Error("Expected the exact history response to have a next offset");
+			}
+			expect(nextOffset).toBeGreaterThan(0);
 			const next = await readStoredHistoryEntry(file, {
-					...request!, offset: first.nextOffset!, revision: first.revision,
+				...request!, offset: nextOffset, revision: first.revision,
 			});
 			expect(next.status).toBe("ok");
-			expect(next.offset).toBe(first.nextOffset);
+			expect(next.offset).toBe(nextOffset);
 			const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: id, limit: 5 });
 			expect(search.status).toBe("ok");
 			expect(search.matches.map(match => match.entryId)).toEqual([id]);
