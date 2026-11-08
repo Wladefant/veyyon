@@ -849,8 +849,8 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
-  it("rejects missing or extra unreferenced nested files in a fork copy without losing the source", async () => {
-    for (const fault of ["missing", "extra"] as const) {
+  it("rejects incomplete copies and source-tree changes during a fork without losing the source", async () => {
+    for (const fault of ["missing", "extra", "source-extra"] as const) {
       using temp = TempDir.createSync("@veyyon-fork-nested-inventory-");
       const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
       try {
@@ -879,10 +879,13 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
           if (sourcePath !== sourceNotes) return;
           const copiedNotes = destPath;
           if (fault === "missing") await fs.unlink(path.join(copiedNotes, "audit.log"));
-          else await fs.writeFile(path.join(copiedNotes, "extra.log"), "SYNTHETIC UNEXPECTED FILE");
+          else if (fault === "extra") await fs.writeFile(path.join(copiedNotes, "extra.log"), "SYNTHETIC UNEXPECTED FILE");
+          else await fs.writeFile(path.join(sourceNotes, "extra.log"), "SYNTHETIC SOURCE ADDED DURING COPY");
         });
         try {
-          await expect(manager.fork()).rejects.toThrow(/artifact copy incomplete/i);
+          await expect(manager.fork()).rejects.toThrow(
+            fault === "source-extra" ? /artifact source changed during copy/i : /artifact copy incomplete/i,
+          );
         } finally {
           copySpy.mockRestore();
         }
@@ -891,12 +894,22 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
         expect(await fs.readFile(sourceArtifact, "utf8")).toBe(originalBytes);
         expect(await fs.readFile(path.join(sourceNotes, "audit.log"), "utf8")).toBe(nestedOriginal);
+        if (fault === "source-extra") {
+          expect(await fs.readFile(path.join(sourceNotes, "extra.log"), "utf8"))
+            .toBe("SYNTHETIC SOURCE ADDED DURING COPY");
+        }
 
         const fork = await manager.fork();
         if (!fork) throw new Error("expected successful clean retry");
         const copiedNotes = path.join(fork.newSessionFile.slice(0, -".jsonl".length), "unreferenced-notes");
-        expect(await fs.readdir(copiedNotes)).toEqual(["audit.log"]);
+        expect((await fs.readdir(copiedNotes)).sort()).toEqual(
+          fault === "source-extra" ? ["audit.log", "extra.log"] : ["audit.log"],
+        );
         expect(await fs.readFile(path.join(copiedNotes, "audit.log"), "utf8")).toBe(nestedOriginal);
+        if (fault === "source-extra") {
+          expect(await fs.readFile(path.join(copiedNotes, "extra.log"), "utf8"))
+            .toBe("SYNTHETIC SOURCE ADDED DURING COPY");
+        }
         expect(await readSaved(manager, "0")).toBe(originalBytes);
         expect(await manager.saveArtifact("new independent output", "bash")).toBe("1");
         expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
