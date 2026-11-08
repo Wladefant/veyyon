@@ -23,6 +23,16 @@ describe("producer output keeps benign metadata", () => {
 
 		expect(guard.sanitize(text)).toBe(text);
 	});
+	it("masks a JSON credential value while preserving its commit metadata", () => {
+		const token = `ghp_${"E".repeat(36)}`;
+		const commit = "5a".repeat(20);
+		const text = JSON.stringify({ token, commit });
+		const sanitized = guard.sanitize(text);
+		const parsed = JSON.parse(sanitized) as { token: string; commit: string };
+
+		expect(parsed).toEqual({ token: "[REDACTED]", commit });
+	});
+
 	it("keeps plain defs-style metadata unchanged", () => {
 		const text = "figma_secret: str";
 
