@@ -102,7 +102,7 @@ async function submit(runner: RunnerClient, id: string, code: string): Promise<v
 	await runner.send({ id, code });
 }
 
-async function submitAndDone(runner: RunnerClient, id: string, code: string): Promise<RunnerFrame> {
+async function submitAndDone(runner: RunnerClient, id: string, code: string): Promise<RunnerFrame & { result: unknown }> {
 	await submit(runner, id, code);
 	const frames: RunnerFrame[] = [];
 	while (true) {
