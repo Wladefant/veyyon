@@ -607,7 +607,23 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	async sync(): Promise<void> {
 		await this.flush();
 		try {
+			// A peer may replace the journal after our last append. fsync of the
+			// displaced inode still succeeds, but cannot acknowledge the journal
+			// currently reachable at this pathname. Unlike append(), do NOT
+			// rebind here: already written lines could remain only on the old inode.
+			const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
+			const assertCurrentTarget = (): void => {
+				const entry = fs.lstatSync(this.#path);
+				if (!entry.isFile() || entry.isSymbolicLink() ||
+					fileObjectIdentity(entry) !== pinnedIdentity) {
+					throw new Error("Session writer target changed before durable sync");
+				}
+			};
+			assertCurrentTarget();
 			fs.fsyncSync(this.#fd);
+			// Detect replacement during fsync too. This remains observational,
+			// not a cross-process lock or guarantee against a subsequent rename.
+			assertCurrentTarget();
 		} catch (error) {
 			throw this.recordError(error);
 		}
