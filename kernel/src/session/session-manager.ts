@@ -2409,6 +2409,24 @@ export class SessionManager {
 		// a JSONL, including when the source has no artifact directory.
 		// Keep the sidecar private; a failed later publication leaves the
 		// reservation/evidence in place for explicit owner recovery, not deletion.
+		const destinationParentPath = path.dirname(nextArtifactDir);
+		const destinationParentRealPath = await fs.promises.realpath(destinationParentPath);
+		const destinationParentStat = await fs.promises.lstat(destinationParentRealPath);
+		if (!destinationParentStat.isDirectory()) {
+			throw new Error("Cannot fork session: destination session directory is not regular");
+		}
+		const verifyDestinationParent = async (): Promise<void> => {
+			const currentRealPath = await fs.promises.realpath(destinationParentPath);
+			const current = await fs.promises.lstat(currentRealPath);
+			if (
+				currentRealPath !== destinationParentRealPath ||
+				!current.isDirectory() ||
+				current.dev !== destinationParentStat.dev ||
+				current.ino !== destinationParentStat.ino
+			) {
+				throw new Error("Cannot fork session: destination session directory changed");
+			}
+		};
 		const reserveDestination = async (): Promise<void> => {
 			try {
 				await fs.promises.mkdir(nextArtifactDir, { mode: 0o700 });
@@ -2430,6 +2448,7 @@ export class SessionManager {
 		};
 		if (!sourceNames) {
 			await reserveDestination();
+			await verifyDestinationParent();
 			return;
 		}
 		if (sourceNames) {
@@ -2485,6 +2504,7 @@ export class SessionManager {
 			// A failed copy leaves the old session and its original evidence usable.
 			// Never overwrite a newly created destination with another fork's data.
 			await reserveDestination();
+			await verifyDestinationParent();
 			for (const name of sourceNames) {
 				await fs.promises.cp(path.join(oldArtifactDir, name), path.join(nextArtifactDir, name), {
 					recursive: true, force: false, errorOnExist: true,
@@ -2653,6 +2673,156 @@ export class SessionManager {
 					actual.ino !== expected.ino
 				) throw new Error("Cannot fork session: artifact directory changed during verification");
 			}
+			await verifyDestinationParent();
+
+			// A child JSONL can become durable before the artifact bytes it names.
+			// Flush every copied file first, then directory entries from the leaves
+			// upward, and finally the session directory containing the sidecar root.
+			const copiedDirectoryMatches = (actual: fs.Stats, expected: fs.Stats): boolean =>
+				actual.isDirectory() &&
+				actual.dev === expected.dev &&
+				actual.ino === expected.ino &&
+				actual.mode === expected.mode &&
+				actual.uid === expected.uid &&
+				actual.gid === expected.gid &&
+				actual.mtimeMs === expected.mtimeMs &&
+				actual.ctimeMs === expected.ctimeMs;
+			const verifyCopiedDirectoryPath = async (relative: string): Promise<void> => {
+				let current = nextArtifactDir;
+				let currentRelative = "";
+				const components = relative ? relative.split(path.sep) : [];
+				for (const component of ["", ...components]) {
+					if (component) {
+						current = path.join(current, component);
+						currentRelative = currentRelative ? path.join(currentRelative, component) : component;
+					}
+					const expected = copiedTree.directories.get(currentRelative);
+					const actual = await fs.promises.lstat(current);
+					if (!expected || !copiedDirectoryMatches(actual, expected)) {
+						throw new Error("Cannot fork session: copied artifact directory changed before durability flush");
+					}
+				}
+			};
+			const copiedFileMatches = (actual: fs.Stats, expected: fs.Stats): boolean =>
+				actual.isFile() &&
+				actual.nlink === 1 &&
+				actual.dev === expected.dev &&
+				actual.ino === expected.ino &&
+				actual.size === expected.size;
+			const flushCopiedFile = async (relative: string, expected: fs.Stats): Promise<void> => {
+				const filename = path.join(nextArtifactDir, relative);
+				const parentRelative = path.dirname(relative) === "." ? "" : path.dirname(relative);
+				const changed = () =>
+					new Error("Cannot fork session: copied artifact changed before durability flush");
+				await verifyCopiedDirectoryPath(parentRelative);
+				const before = await fs.promises.lstat(filename);
+				if (
+					!copiedFileMatches(before, expected) ||
+					before.mtimeMs !== expected.mtimeMs ||
+					before.ctimeMs !== expected.ctimeMs
+				) throw changed();
+				const flags =
+					fs.constants.O_RDONLY |
+					(process.platform === "win32"
+						? 0
+						: (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+				const file = await fs.promises.open(filename, flags);
+				try {
+					await verifyCopiedDirectoryPath(parentRelative);
+					const opened = await file.stat();
+					const pathAfterOpen = await fs.promises.lstat(filename);
+					if (
+						!copiedFileMatches(opened, expected) ||
+						!copiedFileMatches(pathAfterOpen, expected) ||
+						opened.mtimeMs !== expected.mtimeMs ||
+						opened.ctimeMs !== expected.ctimeMs ||
+						pathAfterOpen.mtimeMs !== expected.mtimeMs ||
+						pathAfterOpen.ctimeMs !== expected.ctimeMs
+					) throw changed();
+					await file.sync();
+					await verifyCopiedDirectoryPath(parentRelative);
+					const afterSync = await file.stat();
+					const pathAfterSync = await fs.promises.lstat(filename);
+					if (
+						!copiedFileMatches(afterSync, expected) ||
+						!copiedFileMatches(pathAfterSync, expected) ||
+						afterSync.mtimeMs !== expected.mtimeMs ||
+						afterSync.ctimeMs !== expected.ctimeMs ||
+						pathAfterSync.mtimeMs !== expected.mtimeMs ||
+						pathAfterSync.ctimeMs !== expected.ctimeMs
+					) throw changed();
+				} finally {
+					await file.close();
+				}
+			};
+			for (const [relative, expected] of [...copiedTree.files.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+				await flushCopiedFile(relative, expected);
+			}
+
+			if (process.platform === "win32") {
+				// File contents are flushed above. Node does not expose a portable
+				// Windows directory-fsync handle, so directory-entry durability is
+				// a separate host qualification and is not claimed as POSIX-equivalent.
+			} else {
+				const flushDirectory = async (
+					filename: string,
+					expected: fs.Stats,
+					verifyPath: () => Promise<void>,
+					compareMetadata: boolean,
+				): Promise<void> => {
+					const matches = (actual: fs.Stats): boolean =>
+						actual.isDirectory() &&
+						actual.dev === expected.dev &&
+						actual.ino === expected.ino &&
+						(!compareMetadata || (
+							actual.mode === expected.mode &&
+							actual.uid === expected.uid &&
+							actual.gid === expected.gid &&
+							actual.mtimeMs === expected.mtimeMs &&
+							actual.ctimeMs === expected.ctimeMs
+						));
+					const changed = () =>
+						new Error("Cannot fork session: artifact directory changed before durability flush");
+					const before = await fs.promises.lstat(filename);
+					if (!matches(before)) throw changed();
+					const flags =
+						fs.constants.O_RDONLY |
+						(fs.constants.O_DIRECTORY ?? 0) |
+						(fs.constants.O_NOFOLLOW ?? 0) |
+						(fs.constants.O_NONBLOCK ?? 0);
+					const directory = await fs.promises.open(filename, flags);
+					try {
+						await verifyPath();
+						const opened = await directory.stat();
+						const pathAfterOpen = await fs.promises.lstat(filename);
+						if (!matches(opened) || !matches(pathAfterOpen)) throw changed();
+						await directory.sync();
+						await verifyPath();
+						const afterSync = await directory.stat();
+						const pathAfterSync = await fs.promises.lstat(filename);
+						if (!matches(afterSync) || !matches(pathAfterSync)) throw changed();
+					} finally {
+						await directory.close();
+					}
+				};
+				const directories = [...copiedTree.directories.entries()].sort(([left], [right]) => {
+					const depth = (relative: string): number => relative ? relative.split(path.sep).length : 0;
+					return depth(right) - depth(left) || left.localeCompare(right);
+				});
+				for (const [relative, expected] of directories) {
+					const filename = relative ? path.join(nextArtifactDir, relative) : nextArtifactDir;
+					await flushDirectory(filename, expected, () => verifyCopiedDirectoryPath(relative), true);
+				}
+				await verifyDestinationParent();
+				await flushDirectory(
+					destinationParentRealPath,
+					destinationParentStat,
+					verifyDestinationParent,
+					false,
+				);
+				await verifyDestinationParent();
+			}
+			await verifyDestinationParent();
 		}
 	}
 
