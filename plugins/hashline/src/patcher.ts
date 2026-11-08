@@ -83,6 +83,8 @@ export interface PatcherOptions {
 	 * host did not wire a resolver). Plain line-range ops never need it.
 	 */
 	blockResolver?: BlockResolver;
+	/** Carry prior displayed-line provenance onto edited snapshots. Defaults to true for library callers. */
+	readonly inheritSeenLines?: boolean;
 }
 
 /** Per-section result returned by {@link Patcher.apply} / {@link Patcher.commit}. */
@@ -205,6 +207,7 @@ export class Patcher {
 	readonly snapshots: SnapshotStore;
 	readonly recovery: Recovery;
 	readonly blockResolver: BlockResolver | undefined;
+	readonly inheritSeenLines: boolean;
 
 	constructor(options: PatcherOptions) {
 		if (!options.snapshots) {
@@ -213,6 +216,7 @@ export class Patcher {
 		this.fs = options.fs;
 		this.snapshots = options.snapshots;
 		this.recovery = new Recovery(options.snapshots);
+		this.inheritSeenLines = options.inheritSeenLines ?? true;
 		this.blockResolver = options.blockResolver;
 	}
 
@@ -518,7 +522,7 @@ export class Patcher {
 	 * narrow it.
 	 */
 	recordPreviewLines(result: PatchSectionResult, preview: string): void {
-		const seen = enforcedSeenLines(this.snapshots.byContent(result.canonicalPath, result.after));
+		const seen = enforcedSeenLines(this.snapshots.byContent(result.canonicalPath, result.after), !this.inheritSeenLines);
 		if (!seen) return;
 		const text = result.after;
 		let line = 1;
@@ -590,12 +594,17 @@ export class Patcher {
 	 *   - no `base`, or one without a record, accepted an edit at any line, and
 	 *     the edited text keeps that: every one of its lines is recorded displayed.
 	 * The edited text stays unrestricted when it is already a retained version
-	 * without a record.
+	 * without a record. Strict mode records only lines written by this edit.
 	 */
 	#recordEditedSnapshot(canonicalPath: string, base: Snapshot | null, before: string, after: string): string {
 		const retained = this.snapshots.byContent(canonicalPath, after);
 		const hash = this.snapshots.record(canonicalPath, after);
-		if (retained && !enforcedSeenLines(retained)) return hash;
+		if (retained && !enforcedSeenLines(retained, !this.inheritSeenLines)) return hash;
+		const lineMap = new LineMap(before, after);
+		if (!this.inheritSeenLines) {
+			this.snapshots.recordSeenLines(canonicalPath, hash, lineMap.written());
+			return hash;
+		}
 		let seen: Iterable<number> | undefined = enforcedSeenLines(base);
 		let clipped: Iterable<number> | undefined = base?.clippedLines;
 		if (base && base.text !== before) {
@@ -607,7 +616,6 @@ export class Patcher {
 			this.snapshots.recordSeenLines(canonicalPath, hash, lineNumbers(after));
 			return hash;
 		}
-		const lineMap = new LineMap(before, after);
 		this.snapshots.recordSeenLines(canonicalPath, hash, [...lineMap.written(), ...mapLines(lineMap, seen)]);
 		if (clipped) this.snapshots.recordClippedLines(canonicalPath, hash, mapLines(lineMap, clipped));
 		return hash;
@@ -667,9 +675,7 @@ export class Patcher {
 		// recovery below, where line numbers shift, so resolutions are dropped.)
 		if (expected === undefined || liveMatches) {
 			// The line numbers in `edits` index the exact content the tag names.
-			// Reject any anchor the read never displayed: editing lines the model
-			// has not seen is the off-by-memory mistake that mangles files.
-			if (expected !== undefined) assertSeenLines(section, expected, matchedSnapshot, this.snapshots);
+			if (expected !== undefined) assertSeenLines(section, expected, matchedSnapshot, this.snapshots, !this.inheritSeenLines);
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings(blockResolutions.length > 0 ? { ...result, blockResolutions } : result);
 		}
@@ -760,9 +766,10 @@ function assertSeenLines(
 	expected: string,
 	matchedSnapshot: Snapshot | null,
 	snapshots: SnapshotStore,
+	strict: boolean,
 ): void {
 	if (!matchedSnapshot) return;
-	const seen = enforcedSeenLines(matchedSnapshot);
+	const seen = enforcedSeenLines(matchedSnapshot, strict);
 	if (!seen) return;
 	const rewritten = collectRewrittenAnchorLines(section.edits);
 	const unseenOf = (lines: readonly number[]): number[] =>
@@ -771,16 +778,14 @@ function assertSeenLines(
 		);
 	let unseen = unseenOf(section.collectAnchorLines());
 	if (unseen.length === 0) return;
-	// A line displayed in another copy of this text, such as the file it was
-	// copied from, was displayed for this one.
-	snapshots.mergeDisplayedCopies(matchedSnapshot);
-	unseen = unseenOf(unseen);
-	if (unseen.length === 0) return;
-	// A line displayed in another version of this file, which the change
-	// between the two left at the same line, was displayed for this one.
-	snapshots.mergeUnmovedLines(matchedSnapshot);
-	unseen = unseenOf(unseen);
-	if (unseen.length === 0) return;
+	if (!strict) {
+		snapshots.mergeDisplayedCopies(matchedSnapshot);
+		unseen = unseenOf(unseen);
+		if (unseen.length === 0) return;
+		snapshots.mergeUnmovedLines(matchedSnapshot);
+		unseen = unseenOf(unseen);
+		if (unseen.length === 0) return;
+	}
 	const sourceLines = matchedSnapshot.text.split("\n");
 	const { revealed, columnTruncated } = revealUnseenLines(unseen, sourceLines);
 	const overCap = unseen.length > revealed.length;
@@ -818,9 +823,9 @@ function assertSeenLines(
  * The displayed lines an edit under `snapshot`'s tag is checked against, or
  * `undefined` when none were recorded and an edit at any line applies.
  */
-function enforcedSeenLines(snapshot: Snapshot | null): Set<number> | undefined {
+function enforcedSeenLines(snapshot: Snapshot | null, enforceEmpty = false): Set<number> | undefined {
 	const seen = snapshot?.seenLines;
-	return seen && seen.size > 0 ? seen : undefined;
+	return seen && (enforceEmpty || seen.size > 0) ? seen : undefined;
 }
 
 /** Every 1-indexed line of `text`, one per `split("\n")` segment. */

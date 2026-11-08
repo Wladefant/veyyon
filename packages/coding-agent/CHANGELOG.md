@@ -5,6 +5,17 @@
 ### Fixed
 
 - Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+## [1.8.16] - 2026-11-08
+
+### Changed
+
+- The docker test sandbox also masks `/root` on hosts that run as root, so sandboxed tests no longer see the host root home ([PR #1055](https://github.com/Wladefant/veyyon/pull/1055)).
+
+### Fixed
+
+- An edit that issues a fresh hashline tag no longer carries forward visibility of older lines it did not change ([PR #1046](https://github.com/Wladefant/veyyon/pull/1046)).
+- ACP auto-resume regression coverage avoids forbidden spy-call assertions ([PR #1039](https://github.com/Wladefant/veyyon/pull/1039)).
+
 ## [1.8.15] - 2026-11-08
 
 ### Fixed
