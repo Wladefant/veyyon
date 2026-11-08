@@ -162,7 +162,7 @@ function scanTopLevelMembers(raw: string): {
 						if (raw[valueCursor] === '"') {
 							const valueStart = valueCursor++;
 							while (valueCursor < raw.length) {
-								if (raw[valueCursor] === "\") {
+								if (raw[valueCursor] === "\\") {
 									valueCursor += 2;
 									continue;
 								}
@@ -202,7 +202,7 @@ function scanTopLevelMembers(raw: string): {
 					if (raw[valueCursor] === '"') {
 						const valueStart = valueCursor++;
 						while (valueCursor < raw.length) {
-							if (raw[valueCursor] === "\\\\") {
+							if (raw[valueCursor] === "\\") {
 								valueCursor += 2;
 								continue;
 							}
