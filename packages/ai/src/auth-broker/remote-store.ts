@@ -721,16 +721,21 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					// A reconnect can itself be served by a stale relay. Do not
 					// trust a lower-generation first frame that revives a grant
 					// whose removal was verified by a newer canonical GET.
-					if (snapshot.credentials.some(entry =>
+					// A tombstone makes this first frame a candidate for canonical
+					// verification, not a reason to reject before the GET that can
+					// distinguish a stale replay from legitimate same-ID reauthorization.
+					const firstFrameConflictsWithCanonicalRevocation = snapshot.credentials.some(entry =>
 						this.#isCanonicallyRemovedFromStream(entry.id)
-					)) {
-						throw new AIError.AuthBrokerError("Broker stream first frame conflicts with canonical revocation");
-					}
+					);
 					// A first frame cannot establish broker incarnation by itself.
 					// If it differs from the accepted view OR numeric generation, only
 					// a canonical GET may authorize that change. The old stream might
 					// belong to a stale relay even when its generation is higher.
-					if (snapshot.generation !== this.#generation || !this.#isNoProgressSnapshot(snapshot, true)) {
+					if (
+						firstFrameConflictsWithCanonicalRevocation ||
+						snapshot.generation !== this.#generation ||
+						!this.#isNoProgressSnapshot(snapshot, true)
+					) {
 						const revisionAtVerification = this.#appliedSnapshotRevision;
 						const canonical = await this.#client.fetchSnapshot({ signal: streamSignal });
 						if (canonical.status !== 200) {
