@@ -129,6 +129,36 @@ describe("producer output keeps benign metadata", () => {
 		const text = "pin_count=42\npin_length: 6\npin=123456\n";
 		expect(guard.sanitize(text)).toBe("pin_count=42\npin_length: 6\npin=[REDACTED]\n");
 	});
+	it("preserves only complete numeric metadata strings in JSON and text", () => {
+		const json = sanitizeProducerJson(
+			{
+				token_count: "42",
+				pin_length: "6",
+				commit: "abc",
+				api_key: "opaque",
+				token_count_hint: "42,opaque",
+			},
+			guard,
+		) as Record<string, unknown>;
+		expect(json).toEqual({
+			token_count: "42",
+			pin_length: "6",
+			commit: "abc",
+			api_key: "[REDACTED]",
+			token_count_hint: "[REDACTED]",
+		});
+		expect(
+			sanitizeProducerJson({ token_count: "42,opaque", pin_length: "42\nopaque", api_key: "42" }, guard),
+		).toEqual({
+			token_count: "[REDACTED]",
+			pin_length: "[REDACTED]",
+			api_key: "[REDACTED]",
+		});
+		expect(guard.sanitize('{"token_count":"42","api_key":"opaque"}')).toBe(
+			'{"token_count":"42","api_key":"[REDACTED]"}',
+		);
+	});
+
 
 	it("keeps an owner-replaced prefix token from exposing its opaque suffix", () => {
 		const opaqueSuffix = "opaqueRegisteredSuffixCanary";

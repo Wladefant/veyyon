@@ -266,7 +266,9 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 				if (typeof nested === "number" || typeof nested === "bigint") {
 					if (!NUMERIC_METADATA_KEY.test(key)) return "[REDACTED]";
 				} else if (typeof nested === "string") {
-					return REDACTION_MARKER.test(nested) ? nested : "[REDACTED]";
+					if (REDACTION_MARKER.test(nested)) return nested;
+					if (NUMERIC_METADATA_KEY.test(key) && NUMERIC_METADATA_VALUE.exec(nested)?.[0] === nested) return nested;
+					return "[REDACTED]";
 				} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {
 					return BLOCKED_OUTPUT_RECORD;
 				}
