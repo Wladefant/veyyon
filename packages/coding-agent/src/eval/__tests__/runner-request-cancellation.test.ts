@@ -109,7 +109,7 @@ async function submitAndDone(runner: RunnerClient, id: string, code: string): Pr
 		const frame = await runner.nextMatchingFrame(candidate => candidate.id === id);
 		frames.push(frame);
 		if (frame.type === "done") {
-			return { ...frame, result: frames.find(item => item.type === "display")?.bundle?.["text/plain"] };
+			return { ...frame, result: frames.find(item => item.type === "result")?.bundle?.["text/plain"] };
 		}
 	}
 }
