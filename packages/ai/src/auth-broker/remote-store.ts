@@ -1189,11 +1189,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			waitMs: maxWaitMs,
 			signal: opts.signal,
 		});
-		if (result.status === 200) {
-			// Neither volatile-only changes nor an unverified numerical generation
-			// increase is durable progress. A changed conditional 200 is also not
-			// proof of broker authority: an old relay can replay an obsolete grant.
-			if (this.#isNoProgressSnapshot(result.snapshot, true)) return this.#generation !== previousGeneration;
+		// A conditional 200 with unchanged credential data is no more proof
+		// of freshness than 304: a stale relay can replay the old roster after
+		// an independent broker revocation at a reused generation.
+		if (result.status === 200 && !this.#isNoProgressSnapshot(result.snapshot, true)) {
+			// A changed conditional 200 is also untrusted until canonical GET
+			// confirms the replacement credential state.
 			const canonical = await this.#client.fetchSnapshot({ signal: opts.signal });
 			if (canonical.status !== 200) {
 				throw new AIError.AuthBrokerError("Unconditional broker freshness verification returned no snapshot");
@@ -1206,10 +1207,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				return true;
 			}
 		} else {
-			// A restarted broker may reuse the worker's numeric generation:
-			// its conditional wait can return 304 despite different credentials.
-			// Keep the original wait, then verify truth unconditionally exactly
-			// once, under the same revision fence, before deciding freshness.
+			// A restarted broker may reuse its numeric generation. An unchanged
+			// conditional 200 or a 304 can both conceal different broker truth;
+			// verify once under the original revision fence before returning.
 			const canonical = await this.#client.fetchSnapshot({ signal: opts.signal });
 			if (canonical.status !== 200) {
 				throw new AIError.AuthBrokerError("Unconditional broker freshness verification returned no snapshot");
