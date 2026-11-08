@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.8.8] - 2026-11-08
+
+### Fixed
+
+- `gpt-oss` models served through Google Gemini CLI and Antigravity now send the tool-call id on each function-call part, so the following turn no longer starts from an empty tool-call id ([PR](https://github.com/Wladefant/veyyon/pull/1025)).
+
 ## [1.8.7] - 2026-11-07
 
 ### Changed
