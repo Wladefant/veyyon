@@ -127,8 +127,8 @@ export async function artifactFileNamesFromRegistry(): Promise<string[]> {
  * which would make the collision impossible rather than merely detected. Not
  * done here: it changes the on-disk layout and every existing reference.
  */
-export async function sessionFilesFromDisk(): Promise<Map<string, string>> {
-	const { files } = await scanSessionFilesFromDisk();
+export async function sessionFilesFromDisk(signal?: AbortSignal): Promise<Map<string, string>> {
+	const { files } = await scanSessionFilesFromDisk(signal);
 	return files;
 }
 
@@ -138,12 +138,14 @@ export async function sessionFilesFromDisk(): Promise<Map<string, string>> {
  * "no such agent" from "several agents share that name in this process", which are
  * different problems with different remedies.
  */
-export async function ambiguousSessionFileIds(): Promise<Set<string>> {
-	const { ambiguous } = await scanSessionFilesFromDisk();
+export async function ambiguousSessionFileIds(signal?: AbortSignal): Promise<Set<string>> {
+	const { ambiguous } = await scanSessionFilesFromDisk(signal);
 	return ambiguous;
 }
 
-async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>; ambiguous: Set<string> }> {
+const ARTIFACT_RESERVATION_DIR_PATTERN = /^\.artifact-id-\d+$/;
+
+async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<{ files: Map<string, string>; ambiguous: Set<string> }> {
 	const found = new Map<string, string>();
 	const ambiguous = new Set<string>();
 	// Preserve public display casing, but compare the same folded IDs as history://.
@@ -155,18 +157,23 @@ async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>;
 	const minVisitedDepth = new Map<string, number>();
 	const scan = async (dir: string, depth: number): Promise<void> => {
 		if (depth > 8) return;
+		if (signal?.aborted) signal.throwIfAborted();
 		const priorDepth = minVisitedDepth.get(dir);
 		if (priorDepth !== undefined && priorDepth <= depth) return;
 		minVisitedDepth.set(dir, depth);
 		let entries: Dirent[];
 		try {
+			if (signal?.aborted) signal.throwIfAborted();
 			entries = await fs.readdir(dir, { withFileTypes: true });
+			if (signal?.aborted) signal.throwIfAborted();
 		} catch (err) {
 			if (isMissingPath(err)) return;
 			throw err;
 		}
 		for (const entry of entries) {
+			if (signal?.aborted) signal.throwIfAborted();
 			if (entry.isDirectory()) {
+				if (ARTIFACT_RESERVATION_DIR_PATTERN.test(entry.name)) continue;
 				await scan(path.join(dir, entry.name), depth + 1);
 				continue;
 			}
@@ -194,6 +201,9 @@ async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>;
 			found.delete(existing.id);
 		}
 	};
-	for (const dir of artifactsDirsFromRegistry()) await scan(dir, 0);
+	for (const dir of artifactsDirsFromRegistry()) {
+		if (signal?.aborted) signal.throwIfAborted();
+		await scan(dir, 0);
+	}
 	return { files: found, ambiguous };
 }

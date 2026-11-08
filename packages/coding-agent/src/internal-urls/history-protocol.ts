@@ -79,11 +79,35 @@ function registeredConversationScopes(): string[] {
  * on-disk `.jsonl` transcripts, serving read-only history for live, parked,
  * and unregistered agents alike.
  */
+const HISTORY_RESOLVE_DEADLINE_MS = 5000;
+
 export class HistoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "history";
 	readonly immutable = false;
 
 	async resolve(url: InternalUrl): Promise<InternalResource> {
+		const controller = new AbortController();
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			const { promise: timeoutPromise, reject: rejectTimeout } = Promise.withResolvers<never>();
+			timer = setTimeout(() => {
+				controller.abort();
+				rejectTimeout(
+					new Error(
+						`history:// timed out after 5s resolving '${url.href}'.\n` +
+							`Scanning agent session files on disk took too long. Check for deep or circular directory structures under registered artifact paths.`,
+					),
+				);
+			}, HISTORY_RESOLVE_DEADLINE_MS);
+			const resolvePromise = this.#resolve(url, controller.signal);
+			resolvePromise.catch(() => {});
+			return await Promise.race([resolvePromise, timeoutPromise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	async #resolve(url: InternalUrl, signal?: AbortSignal): Promise<InternalResource> {
 		const agentId = url.rawHost || url.hostname;
 		const registry = AgentRegistry.global();
 		// The disk fallback already refuses an id that names a transcript in two
@@ -116,7 +140,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			if (url.searchParams.has("entry") || url.searchParams.has("q")) {
 				throw new Error("history:// search and exact reads require an agent ID");
 			}
-			const content = await renderIndex(visible, new Set(registered.map(ref => ref.id.toLowerCase())));
+			const content = await renderIndex(visible, new Set(registered.map(ref => ref.id.toLowerCase())), signal);
 			return {
 				url: url.href,
 				content,
@@ -171,7 +195,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			}
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
 			if (!sessionFile && !ref?.session && diskFallbackSafe) {
-				const disk = await sessionFilesFromDisk();
+				const disk = await sessionFilesFromDisk(signal);
 				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
 				sessionFile = found?.[1];
 			}
@@ -212,14 +236,14 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		if (!ref) {
 			// Registry miss — the agent may have been unregistered or lost on resume.
 			// Serve its transcript straight from disk if the session file persists.
-			const disk = await resolveFromDisk(agentId);
+			const disk = await resolveFromDisk(agentId, signal);
 			if (disk) return { ...disk, url: url.href };
 
 			// AMBIGUOUS is not UNKNOWN, and saying the wrong one sends the operator
 			// looking for a lost transcript that is not lost. Two conversations in this
 			// process each ran an agent by this name, so `sessionFilesFromDisk` dropped
 			// it rather than hand back whichever dir was enumerated first.
-			const ambiguous = await ambiguousSessionFileIds();
+			const ambiguous = await ambiguousSessionFileIds(signal);
 			const collided = ambiguous.has(agentId)
 				? agentId
 				: Array.from(ambiguous).find(id => id.toLowerCase() === agentId.toLowerCase());
@@ -249,7 +273,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			// No live session and no retained sessionFile — try the disk scan before
 			// giving up, in case the transcript lingers under an artifacts dir.
 			if (diskFallbackSafe) {
-				const disk = await resolveFromDisk(ref.id);
+				const disk = await resolveFromDisk(ref.id, signal);
 				if (disk) return { ...disk, url: url.href };
 			}
 			throw new Error(`Agent ${ref.id} has no transcript: session is gone and no session file was retained`);
@@ -305,8 +329,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
  * Load a transcript for `agentId` from an on-disk `.jsonl` session file,
  * matched case-insensitively. Returns `undefined` when no file is found.
  */
-async function resolveFromDisk(agentId: string): Promise<InternalResource | undefined> {
-	const files = await sessionFilesFromDisk();
+async function resolveFromDisk(agentId: string, signal?: AbortSignal): Promise<InternalResource | undefined> {
+	const files = await sessionFilesFromDisk(signal);
 	const lower = agentId.toLowerCase();
 	let matchedId: string | undefined;
 	let sessionFile: string | undefined;
@@ -330,7 +354,7 @@ async function resolveFromDisk(agentId: string): Promise<InternalResource | unde
 	};
 }
 
-async function renderIndex(refs: AgentRef[], registeredFolded: ReadonlySet<string>): Promise<string> {
+async function renderIndex(refs: AgentRef[], registeredFolded: ReadonlySet<string>, signal?: AbortSignal): Promise<string> {
 	const entries: IndexEntry[] = refs.map(ref => ({
 		id: ref.id,
 		status: ref.status,
@@ -342,7 +366,7 @@ async function renderIndex(refs: AgentRef[], registeredFolded: ReadonlySet<strin
 	// Resolve and completions compare agent IDs case-insensitively, so an
 	// on-disk alias shadowed by any registered ID must not appear selectable.
 	// The caller includes hidden registered advisor IDs in the reserved set.
-	const disk = await sessionFilesFromDisk();
+	const disk = await sessionFilesFromDisk(signal);
 	for (const id of disk.keys()) {
 		if (registeredFolded.has(id.toLowerCase())) continue;
 		entries.push({ id, status: "on disk", kind: "—", parent: "—", lastActivity: "—" });
