@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 ## [1.8.16] - 2026-11-08
 
 ### Changed
