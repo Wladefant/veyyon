@@ -32,7 +32,7 @@
  * host, where those rungs exist.
  */
 import { describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -502,6 +502,38 @@ describe("the files the remote rung puts back after honouring .gitignore", () =>
 			expect(line).toMatch(
 				/^\+ \/((packages|contracts|hosts|apps|clients|plugins|natives)\/[^/]+|kernel)\/src\/[^\n]*[^/]$/,
 			);
+		}
+	});
+});
+
+describe("the external node_modules mount", () => {
+	it("binds the tested worktree packages over the dependency checkout workspace aliases", () => {
+		const fixture = mkdtempSync(path.join(os.tmpdir(), "sandbox-node-modules-"));
+		const shimDir = path.join(fixture, "bin");
+		const dependencyRoot = path.join(fixture, "dependencies");
+		const nodeModules = path.join(dependencyRoot, "node_modules");
+		const capture = path.join(fixture, "bwrap-args");
+		const bwrap = path.join(shimDir, "bwrap");
+		mkdirSync(shimDir, { recursive: true });
+		mkdirSync(path.join(dependencyRoot, "packages"), { recursive: true });
+		mkdirSync(nodeModules, { recursive: true });
+		writeFileSync(bwrap, '#!/bin/sh\nprintf "%s\\n" "$@" >> "$CAPTURE"\n');
+		chmodSync(bwrap, 0o755);
+
+		try {
+			const result = runDriver(["--rung=bwrap", "/bin/true"], {
+				PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+				CAPTURE: capture,
+				VEYYON_SANDBOX_NODE_MODULES: nodeModules,
+			});
+			expect(result.status).toBe(0);
+			const args = readFileSync(capture, "utf8");
+			expect(args).toContain(`--ro-bind\n${dependencyRoot}\n${dependencyRoot}\n`);
+			expect(args).toContain(
+				`--bind\n${path.join(REPO_ROOT, "packages")}\n${path.join(dependencyRoot, "packages")}\n`,
+			);
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
 		}
 	});
 });
