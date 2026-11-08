@@ -4149,7 +4149,7 @@ describe("SessionManager.fork artifact durability", () => {
 				try {
 					const fork = await manager.fork();
 					if (!fork) throw new Error("expected persisted fork");
-					expect(copiedRoot).toBeString();
+					if (!copiedRoot) throw new Error("expected copied artifact root");
 					const publishIndex = events.findIndex(event => event.kind === "publish");
 					expect(publishIndex).toBeGreaterThan(-1);
 					const syncBeforePublish = events.slice(0, publishIndex)
@@ -4238,7 +4238,7 @@ describe("SessionManager.fork artifact durability", () => {
 					copySpy.mockRestore();
 				}
 				expect(syncAttempted).toBe(true);
-				expect(copiedArtifact).toBeString();
+				if (!copiedArtifact) throw new Error("expected copied artifact path");
 				expect(manager.getSessionId()).toBe(sourceId);
 				expect(manager.getSessionFile()).toBe(sourceFile);
 				expect((await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort()).toEqual(sessionFilesBefore);
