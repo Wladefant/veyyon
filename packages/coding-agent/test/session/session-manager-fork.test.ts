@@ -2818,6 +2818,57 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")(
+    "refuses a false durable sync after another writer replaces the journal pathname",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-sync-displaced-fd-");
+      const journal = path.join(temp.path(), "synthetic-sync-journal.jsonl");
+      const displaced = path.join(temp.path(), "synthetic-displaced-journal.jsonl");
+      const sidecar = path.join(temp.path(), "synthetic-archive.log");
+      const sidecarBytes = Buffer.from("synthetic archived evidence preserved");
+      const header = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-durable-sync", timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const appendedLine = `${JSON.stringify({
+        type: "message", id: "synthetic-synced-peer", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Synthetic peer data must not be acknowledged on the wrong inode", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(journal, header);
+      await fs.writeFile(sidecar, sidecarBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        await writer.append(appendedLine);
+        expect(await fs.readFile(journal, "utf8")).toBe(header + appendedLine);
+        const originalInode = nodeFs.statSync(journal).ino;
+
+        // The name now selects a different, regular journal with the SAME
+        // session header. fsync(oldFd) still succeeds on POSIX, but that does
+        // not make the previously appended line durable at this pathname.
+        await fs.rename(journal, displaced);
+        await fs.writeFile(journal, header);
+        expect(nodeFs.statSync(journal).ino).not.toBe(originalInode);
+        await expect(writer.sync()).rejects.toThrow(/session writer target.*(?:replaced|changed)|durable sync/i);
+        expect(await fs.readFile(journal, "utf8")).toBe(header);
+        expect(await fs.readFile(displaced, "utf8")).toBe(header + appendedLine);
+        expect(await fs.readFile(sidecar)).toEqual(sidecarBytes);
+
+        // A new writer pinned to the replacement still has a valid durability
+        // route. A refused old writer must never silently adopt it during sync.
+        const currentWriter = new FileSessionStorage().openWriter(journal);
+        try {
+          await currentWriter.append(appendedLine);
+          await currentWriter.sync();
+          expect(await fs.readFile(journal, "utf8")).toBe(header + appendedLine);
+        } finally {
+          await currentWriter.close();
+        }
+      } finally {
+        await writer.close();
+      }
+    },
+  );
+
   // POSIX rename keeps an independent O_APPEND descriptor on the displaced
   // original inode. Windows may refuse the replacement while that handle is
   // open; the separate EPERM tests cover its distinct path behavior.
