@@ -2623,18 +2623,35 @@ export class SessionManager {
 					);
 				}
 			}
-			// Recheck empty directories too: they have no file hash operation.
-			for (const [root, directories] of [
-				[oldArtifactDir, sourceTree.directories],
-				[nextArtifactDir, copiedTree.directories],
-			] as const) {
-				for (const [relative, expected] of directories) {
-					const actual = await fs.promises.lstat(path.join(root, relative));
-					if (
-						!actual.isDirectory() || actual.dev !== expected.dev ||
-						actual.ino !== expected.ino
-					) throw new Error("Cannot fork session: artifact directory changed during verification");
-				}
+			// Re-inventory the source after copying. Directory inode checks alone
+			// miss a regular file added or removed inside an existing directory.
+			const finalSourceTree = await assertRegularTree(oldArtifactDir);
+			const sourceTreeChanged =
+				sourceTree.entries.length !== finalSourceTree.entries.length ||
+				sourceTree.entries.some((entry, index) => entry !== finalSourceTree.entries[index]) ||
+				[...sourceTree.directories].some(([relative, expected]) => {
+					const actual = finalSourceTree.directories.get(relative);
+					return !actual || actual.dev !== expected.dev || actual.ino !== expected.ino ||
+						actual.mode !== expected.mode || actual.uid !== expected.uid || actual.gid !== expected.gid ||
+						actual.mtimeMs !== expected.mtimeMs || actual.ctimeMs !== expected.ctimeMs;
+				}) ||
+				[...sourceTree.files].some(([relative, expected]) => {
+					const actual = finalSourceTree.files.get(relative);
+					return !actual || actual.dev !== expected.dev || actual.ino !== expected.ino ||
+						actual.nlink !== expected.nlink || actual.size !== expected.size ||
+						actual.mode !== expected.mode || actual.uid !== expected.uid || actual.gid !== expected.gid ||
+						actual.mtimeMs !== expected.mtimeMs || actual.ctimeMs !== expected.ctimeMs;
+				});
+			if (sourceTreeChanged) throw new Error("Cannot fork session: artifact source changed during copy");
+			// This narrows the copy window; it is not an interprocess lock. A peer
+			// can still mutate the source after this final inventory.
+			// Recheck empty destination directories too: they have no file hash operation.
+			for (const [relative, expected] of copiedTree.directories) {
+				const actual = await fs.promises.lstat(path.join(nextArtifactDir, relative));
+				if (
+					!actual.isDirectory() || actual.dev !== expected.dev ||
+					actual.ino !== expected.ino
+				) throw new Error("Cannot fork session: artifact directory changed during verification");
 			}
 		}
 	}
