@@ -107,6 +107,28 @@ test("a caller arriving while an abandoned startup is being released gets a fres
 });
 
 
+// Bounded race to observe whether unauthenticated reset attempts synchronously reject before baseline hangs on fake shutdown gate.
+async function observeOutcome<T>(
+	promise: Promise<T>,
+	timeoutMs = 150,
+): Promise<{ status: "rejected"; error: unknown } | { status: "resolved"; value: T } | { status: "pending" }> {
+	let timer: NodeJS.Timeout | undefined;
+	const timeoutPromise = new Promise<{ status: "pending" }>(resolve => {
+		timer = setTimeout(() => resolve({ status: "pending" }), timeoutMs);
+	});
+	try {
+		return await Promise.race([
+			promise.then(
+				value => ({ status: "resolved" as const, value }),
+				error => ({ status: "rejected" as const, error }),
+			),
+			timeoutPromise,
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 test("only the primary owner can reset a shared kernel session", async () => {
 	const counter = { shutdowns: 0 };
 	const release = Promise.withResolvers<void>();
@@ -117,16 +139,41 @@ test("only the primary owner can reset a shared kernel session", async () => {
 		logLabel: "primary-reset-owner",
 		startKernel: async () => kernel,
 	});
-	const primary = await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-a" });
-	await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-b" });
-	await expect(pool.resetSession("shared", "owner-b")).rejects.toThrow(/primary kernel owner/);
-	expect(pool.sessions.get("shared")).toBe(primary);
-	expect(counter.shutdowns).toBe(0);
-	const ownerReset = pool.resetSession("shared", "owner-a");
-	await shutdownStarted.promise;
-	await expect(pool.resetSession("shared", "owner-b")).rejects.toThrow(/primary kernel owner/);
-	release.resolve();
-	await ownerReset;
-	expect(counter.shutdowns).toBe(1);
-	expect(pool.sessions.has("shared")).toBe(false);
-});
+	let ownerReset: Promise<void> | undefined;
+	try {
+		const primary = await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-a" });
+		await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-b" });
+
+		const firstReset = pool.resetSession("shared", "owner-b");
+		const firstOutcome = await observeOutcome(firstReset);
+		expect(firstOutcome.status).toBe("rejected");
+		if (firstOutcome.status === "rejected") {
+			expect(String((firstOutcome.error as Error)?.message ?? firstOutcome.error)).toMatch(/primary kernel owner/);
+		}
+		expect(pool.sessions.get("shared")).toBe(primary);
+		expect(counter.shutdowns).toBe(0);
+
+		ownerReset = pool.resetSession("shared", "owner-a");
+		await Promise.race([
+			shutdownStarted.promise,
+			new Promise<never>((_, rej) => setTimeout(() => rej(new Error("shutdown did not start")), 1000)),
+		]);
+
+		const concurrentReset = pool.resetSession("shared", "owner-b");
+		const concurrentOutcome = await observeOutcome(concurrentReset);
+		expect(concurrentOutcome.status).toBe("rejected");
+		if (concurrentOutcome.status === "rejected") {
+			expect(String((concurrentOutcome.error as Error)?.message ?? concurrentOutcome.error)).toMatch(
+				/primary kernel owner/,
+			);
+		}
+
+		release.resolve();
+		await ownerReset;
+		expect(counter.shutdowns).toBe(1);
+		expect(pool.sessions.has("shared")).toBe(false);
+	} finally {
+		release.resolve();
+		await ownerReset?.catch(() => {});
+	}
+}, 5000);

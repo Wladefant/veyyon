@@ -506,7 +506,7 @@ export interface ExecuteWithKernelBaseParams<
 	isJulia?: boolean;
 	cancelledErrorClass: CancelledErrorClass;
 	buildKernelEnvPatch: (options: TOptions) => TEnv;
-	formatKernelTimeoutAnnotation: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
+	formatKernelTimeoutAnnotation: (executionTimeoutMs: number | undefined, kernelKilled: boolean, cancellationPending?: boolean) => string;
 	formatTimeoutAnnotation: (executionTimeoutMs: number | undefined) => string | undefined;
 	/**
 	 * Override how the wall-clock deadline is derived from options. Defaults to
@@ -1181,7 +1181,7 @@ export interface KernelExecutionDriverOptions<
 	/** See `buildEvalSessionKey`: what in a cwd selects the default runtime, when anything does. */
 	resolveDefaultRuntimeScope?: (cwd: string) => string;
 	buildKernelEnvPatch?: (options: TOptions) => Record<string, string | null | undefined>;
-	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
+	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean, cancellationPending?: boolean) => string;
 	formatTimeoutAnnotation?: (executionTimeoutMs: number | undefined) => string | undefined;
 	createCancelledResult?: (timedOut: boolean, timeoutMs?: number) => KernelExecutionResult;
 	resolveDeadlineMs?: (options?: TOptions) => number | undefined;
