@@ -23,6 +23,33 @@ describe("producer output keeps benign metadata", () => {
 
 		expect(guard.sanitize(text)).toBe(text);
 	});
+	it("keeps plain defs-style metadata unchanged", () => {
+		const text = "figma_secret: str";
+
+		expect(guard.sanitize(text)).toBe(text);
+	});
+
+	it("keeps defs metadata and labelled-token context across every stream split", () => {
+		const token = `ghp_${"C".repeat(36)}`;
+		const inputs = ["before\nfigma_secret: str\nafter\n", `before token=${token} after\n`];
+
+		for (const input of inputs) {
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+
+				if (input.includes("figma_secret")) {
+					expect(streamed).toBe(input);
+				} else {
+					expect(streamed).toBe(`before token=[REDACTED] after\n`);
+				}
+			}
+		}
+	});
+
 
 	it("masks only the value of a labelled synthetic credential", () => {
 		const token = `ghp_${"A".repeat(36)}`;
