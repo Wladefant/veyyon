@@ -1190,6 +1190,8 @@ describe("history exact record lookup", () => {
 				// Invalid structural prefixes before the first root member cannot hide identity.
 				'{["type":"session","id":"shadow"]}',
 				'{{"type":"session","id":"shadow"}}',
+				// An invalid array member before a root type can also conceal a header.
+				'{"metadata":["type":"session"],"id":"shadow"}',
 				// A framing token before an otherwise recognizable JSONL object is not ignorable text.
 				'}{"type":"session","id":"shadow"}',
 				// Root keys after a string value still establish a repeated session boundary.
