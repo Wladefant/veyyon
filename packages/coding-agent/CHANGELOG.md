@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Producer output preserves benign metadata while redacting complete credentials, including label-only multiline values and numeric secrets ([Refs #1033](https://github.com/Wladefant/veyyon/issues/1033)).
 ## [1.8.13] - 2026-11-08
 
 ### Fixed
