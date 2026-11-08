@@ -83,6 +83,26 @@ describe("producer output keeps complete credential spans closed", () => {
 		expect(guard.sanitize(`before ${token} after`)).not.toContain(token);
 	});
 
+
+	it.each(["pin=123456", "password: 98765432", "api_key=4242424242"])(
+		"redacts numeric secret spans: %s",
+		input => {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).toContain("[REDACTED]");
+			expect(sanitized).not.toContain(input.match(/\d+/)![0]);
+		},
+	);
+
+	it("masks numeric API keys in producer JSON and preserves token counts", () => {
+		const sanitizeJsonValue = (producerOutput as typeof producerOutput & {
+			sanitizeProducerJson?: (value: unknown, guard: InstanceType<typeof ProducerOutputGuard>) => unknown;
+		}).sanitizeProducerJson;
+		expect(sanitizeJsonValue).toBeTypeOf("function");
+		expect(sanitizeJsonValue!({ api_key: 4242424242, token_count: 42 }, guard)).toEqual({
+			api_key: "[REDACTED]",
+			token_count: 42,
+		});
+	});
 	it("keeps redaction markers idempotent", () => {
 		const once = guard.sanitize("before token=opaqueValue12345 after");
 		expect(guard.sanitize(once)).toBe(once);
