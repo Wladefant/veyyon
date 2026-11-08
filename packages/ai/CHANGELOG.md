@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Treat an auth-broker removal for an already-absent credential as no progress only when its refresher policy also matches, so an SSE relay cannot hide a broker policy change ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Reject initial auth-broker SSE entry/removal deltas without the required first full snapshot, rather than treating an unverified relay delta as broker credential authority ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Verify durable changes from conditional auth-broker HTTP 200 snapshots against an unconditional canonical GET before accepting them; reject stale relay mutations, preserve real broker revocations, and pace unchanged canonical results instead of retrying an immediate stale long-poll ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Keep conditional broker HTTP 200 replies with drifting numeric generations but unchanged durable state from postponing canonical SSE and long-poll revocation verification ([#602](https://github.com/Wladefant/veyyon/issues/602)).
