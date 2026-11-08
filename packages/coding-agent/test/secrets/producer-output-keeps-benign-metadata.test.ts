@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { redactUsageText } from "@veyyon/ai/auth-storage/usage-redaction";
+import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import { ProducerOutputGuard } from "../../src/secrets/producer-output";
 
-const guard = new ProducerOutputGuard(text => redactUsageText(text, []));
+const guard = new ProducerOutputGuard(redactProviderSecrets);
 
 describe("producer output keeps benign metadata", () => {
 	it("keeps hashes, UUIDs, and GitHub node ids unchanged", () => {
@@ -19,7 +19,7 @@ describe("producer output keeps benign metadata", () => {
 	});
 
 	it("keeps defs-style string arrays unchanged", () => {
-		const text = JSON.stringify(["token: str", "secret: string", "password: str"]);
+		const text = JSON.stringify(["figma_secret: str", "live_token: string", "password: str"]);
 
 		expect(guard.sanitize(text)).toBe(text);
 	});
@@ -28,7 +28,7 @@ describe("producer output keeps benign metadata", () => {
 		const token = `ghp_${"A".repeat(36)}`;
 		const text = `before token=${token} after`;
 
-		expect(guard.sanitize(text)).toBe("before token=<redacted 40 chars> after");
+		expect(guard.sanitize(text)).toBe("before token=[REDACTED] after");
 	});
 
 	it("masks a bare real-format synthetic token and preserves surrounding metadata", () => {
