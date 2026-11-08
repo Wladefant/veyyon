@@ -4082,3 +4082,172 @@ describe("SessionManager.createBranchedSession fail-closed artifact ownership", 
 		}
 	});
 });
+
+
+describe("SessionManager.fork artifact durability", () => {
+	it.skipIf(process.platform === "win32")(
+		"flushes copied artifact files and directories before publishing the child JSONL",
+		async () => {
+			using temp = TempDir.createSync("@veyyon-fork-artifact-durability-");
+			const sessions = path.join(temp.path(), "sessions");
+			const manager = SessionManager.create(temp.path(), sessions);
+			try {
+				expect(await manager.saveArtifact("SYNTHETIC ORIGINAL ARTIFACT BYTES", "bash")).toBe("0");
+				const sourceArtifact = await manager.getArtifactPath("0");
+				if (!sourceArtifact) throw new Error("expected synthetic source artifact");
+				const sourceDir = path.dirname(sourceArtifact);
+				const nestedDir = path.join(sourceDir, "nested");
+				const nestedArtifact = path.join(nestedDir, "audit.log");
+				const nestedBytes = Buffer.from("SYNTHETIC NESTED ARCHIVE BYTES");
+				await fs.mkdir(nestedDir);
+				await fs.writeFile(nestedArtifact, nestedBytes);
+				manager.appendMessage({ role: "user", content: "Retain synthetic artifact://0", timestamp: Date.now() });
+				await manager.ensureOnDisk();
+				const sourceFile = manager.getSessionFile();
+				if (!sourceFile) throw new Error("expected persisted source session");
+				const sourceArtifactBytes = await fs.readFile(sourceArtifact);
+				const events: Array<{ kind: "sync" | "publish"; path: string }> = [];
+				let copiedRoot: string | undefined;
+				const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+				const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+				const realRename = nodeFs.promises.rename.bind(nodeFs.promises);
+				const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
+					await realCopy(from, to, options);
+					const fromPath = typeof from === "string" ? from : fileURLToPath(from);
+					const toPath = typeof to === "string" ? to : fileURLToPath(to);
+					if (path.dirname(fromPath) === sourceDir) {
+						const candidate = path.dirname(toPath);
+						if (copiedRoot === undefined) copiedRoot = candidate;
+						else expect(candidate).toBe(copiedRoot);
+					}
+				});
+				const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+					const handle = await realOpen(file, flags, mode);
+					const filename = String(file);
+					if (copiedRoot !== undefined) {
+						const parent = path.dirname(copiedRoot);
+						if (filename === parent || filename === copiedRoot || filename.startsWith(copiedRoot + path.sep)) {
+							const sync = handle.sync.bind(handle);
+							Object.defineProperty(handle, "sync", {
+								configurable: true,
+							value: async () => {
+									events.push({ kind: "sync", path: filename });
+									return sync();
+								},
+							});
+						}
+					}
+					return handle;
+				});
+				const renameSpy = spyOn(nodeFs.promises, "rename").mockImplementation(async (from, to) => {
+					const target = String(to);
+					if (target.endsWith(".jsonl") && path.dirname(target) === sessions) {
+						events.push({ kind: "publish", path: target });
+					}
+					return realRename(from, to);
+				});
+				try {
+					const fork = await manager.fork();
+					if (!fork) throw new Error("expected persisted fork");
+					expect(copiedRoot).toBeString();
+					const publishIndex = events.findIndex(event => event.kind === "publish");
+					expect(publishIndex).toBeGreaterThan(-1);
+					const syncBeforePublish = events.slice(0, publishIndex)
+						.filter((event): event is { kind: "sync"; path: string } => event.kind === "sync")
+						.map(event => event.path);
+					const rootName = path.basename(copiedRoot!);
+					const relative = (filename: string) =>
+						path.relative(path.dirname(copiedRoot!), filename).split(path.sep).join("/");
+					const synced = syncBeforePublish.map(relative);
+					const indexOf = (name: string) => synced.indexOf(name);
+					const sourceFileSync = indexOf(`${rootName}/0.bash.log`);
+					const nestedFileSync = indexOf(`${rootName}/nested/audit.log`);
+					const nestedDirSync = indexOf(`${rootName}/nested`);
+					const rootDirSync = indexOf(rootName);
+					const parentDirSync = indexOf(".");
+					expect(sourceFileSync).toBeGreaterThanOrEqual(0);
+					expect(nestedFileSync).toBeGreaterThanOrEqual(0);
+					expect(nestedDirSync).toBeGreaterThanOrEqual(0);
+					expect(rootDirSync).toBeGreaterThanOrEqual(0);
+					expect(parentDirSync).toBeGreaterThanOrEqual(0);
+					expect(sourceFileSync).toBeLessThan(nestedDirSync);
+					expect(nestedFileSync).toBeLessThan(nestedDirSync);
+					expect(nestedDirSync).toBeLessThan(rootDirSync);
+					expect(rootDirSync).toBeLessThan(parentDirSync);
+				} finally {
+					renameSpy.mockRestore();
+					openSpy.mockRestore();
+					copySpy.mockRestore();
+				}
+				const copiedArtifact = await manager.getArtifactPath("0");
+				if (!copiedArtifact) throw new Error("expected forked artifact");
+				expect(await fs.readFile(copiedArtifact)).toEqual(sourceArtifactBytes);
+				expect(await fs.readFile(path.join(path.dirname(copiedArtifact), "nested", "audit.log"))).toEqual(nestedBytes);
+			} finally {
+				await manager.close();
+			}
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"does not publish a fork when a copied artifact file cannot be flushed",
+		async () => {
+			using temp = TempDir.createSync("@veyyon-fork-artifact-fsync-failure-");
+			const sessions = path.join(temp.path(), "sessions");
+			const manager = SessionManager.create(temp.path(), sessions);
+			try {
+				expect(await manager.saveArtifact("SYNTHETIC SOURCE ARTIFACT", "bash")).toBe("0");
+				manager.appendMessage({ role: "user", content: "Keep synthetic artifact://0", timestamp: Date.now() });
+				await manager.ensureOnDisk();
+				const sourceFile = manager.getSessionFile();
+				const sourceArtifact = await manager.getArtifactPath("0");
+				if (!sourceFile || !sourceArtifact) throw new Error("expected persisted synthetic source");
+				const sourceId = manager.getSessionId();
+				const sourceTranscript = await fs.readFile(sourceFile);
+				const sourceArtifactBytes = await fs.readFile(sourceArtifact);
+				const sessionFilesBefore = (await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort();
+				let copiedArtifact: string | undefined;
+				let syncAttempted = false;
+				const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+				const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+				const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
+					await realCopy(from, to, options);
+					const fromPath = typeof from === "string" ? from : fileURLToPath(from);
+					const toPath = typeof to === "string" ? to : fileURLToPath(to);
+					if (fromPath === sourceArtifact) copiedArtifact = toPath;
+				});
+				const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+					const handle = await realOpen(file, flags, mode);
+					if (copiedArtifact !== undefined && String(file) === copiedArtifact) {
+						Object.defineProperty(handle, "sync", {
+							configurable: true,
+							value: async () => {
+								syncAttempted = true;
+								const error = new Error("synthetic copied artifact fsync failure") as NodeJS.ErrnoException;
+								error.code = "EIO";
+								throw error;
+							},
+						});
+					}
+					return handle;
+				});
+				try {
+					await expect(manager.fork()).rejects.toThrow(/synthetic copied artifact fsync failure/);
+				} finally {
+					openSpy.mockRestore();
+					copySpy.mockRestore();
+				}
+				expect(syncAttempted).toBe(true);
+				expect(copiedArtifact).toBeString();
+				expect(manager.getSessionId()).toBe(sourceId);
+				expect(manager.getSessionFile()).toBe(sourceFile);
+				expect((await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort()).toEqual(sessionFilesBefore);
+				expect(await fs.readFile(sourceFile)).toEqual(sourceTranscript);
+				expect(await fs.readFile(sourceArtifact)).toEqual(sourceArtifactBytes);
+				expect(await fs.readFile(copiedArtifact!)).toEqual(sourceArtifactBytes);
+			} finally {
+				await manager.close();
+			}
+		},
+	);
+});
