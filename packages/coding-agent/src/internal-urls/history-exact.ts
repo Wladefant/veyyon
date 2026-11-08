@@ -470,7 +470,6 @@ export async function readStoredHistoryEntry(
 	let raw: string | undefined;
 	let recordType: string | undefined;
 	let incomplete = false;
-	let startedJsonl = false;
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
@@ -490,10 +489,13 @@ export async function readStoredHistoryEntry(
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (startedJsonl && line.trim().length > 0) incomplete = true;
+				if (line.trim().length > 0) {
+					incomplete = true;
+					// Before a valid header this could conceal an earlier session identity.
+					if (!admission.headerSeen) admission.invalidIdentity = true;
+				}
 				continue;
 			}
-			startedJsonl = true;
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
@@ -712,7 +714,6 @@ export async function searchStoredHistoryEntries(
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
 	let unreadable = false;
-	let startedJsonl = false;
 	const topologyHash = createHash("sha256");
 	try {
 		for await (const line of storedLines(filePath)) {
@@ -734,10 +735,13 @@ export async function searchStoredHistoryEntries(
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (startedJsonl && line.trim().length > 0) unreadable = true;
+				if (line.trim().length > 0) {
+					unreadable = true;
+					// Search and exact reads must agree about pre-header uncertainty.
+					if (!admission.headerSeen) admission.invalidIdentity = true;
+				}
 				continue;
 			}
-			startedJsonl = true;
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
