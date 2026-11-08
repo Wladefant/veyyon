@@ -193,7 +193,7 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 
 /** Reject JSON-structural text that could be a damaged record, not a legacy title. */
 function resemblesBrokenHeader(line: string): boolean {
-	return /["{}\[\]]/.test(line);
+	return /["{}[\]]/.test(line);
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
@@ -332,7 +332,7 @@ export interface ExactHistoryResult {
 
 function idParam(input: string | null, name: string): string {
 	if (!input || !ADDRESSABLE_HISTORY_ID.test(input)) {
-		throw new Error("history:// exact read requires a valid " + name + " (1-128 ID characters)");
+		throw new Error(`history:// exact read requires a valid ${name} (1-128 ID characters)`);
 	}
 	return input;
 }
@@ -340,11 +340,11 @@ function idParam(input: string | null, name: string): string {
 function numericParam(input: string | null, name: string, fallback: number, maximum: number): number {
 	if (input === null) return fallback;
 	if (!/^(0|[1-9][0-9]*)$/.test(input)) {
-		throw new Error("history:// exact read " + name + " must be a nonnegative integer");
+		throw new Error(`history:// exact read ${name} must be a nonnegative integer`);
 	}
 	const n = Number(input);
 	if (!Number.isSafeInteger(n) || n > maximum) {
-		throw new Error("history:// exact read " + name + " exceeds the supported range");
+		throw new Error(`history:// exact read ${name} exceeds the supported range`);
 	}
 	return n;
 }

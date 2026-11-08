@@ -1159,7 +1159,7 @@ describe("history exact record lookup", () => {
 				[header, entry, '{"type":"message","id":"evil","note":1,"note":2,"type":"message","parentId":"root","message":"needle forged"}'],
 			] as const;
 			for (const lines of cases) {
-				await fs.writeFile(file, lines.join("\n") + "\n");
+				await fs.writeFile(file, `${lines.join("\n")}\n`);
 				const read = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 256,
 				});
@@ -1194,7 +1194,7 @@ describe("history exact record lookup", () => {
 				'{"type":"session","id":"shadow","invalid\\q":true}',
 				'{"invalid\\q":true,"type":"session","id":"shadow"}',
 			]) {
-				await fs.writeFile(file, [header, root, corruptedHeader].join("\n") + "\n");
+				await fs.writeFile(file, `${[header, root, corruptedHeader].join("\n")}\n`);
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 256,
 				});
@@ -1217,7 +1217,7 @@ describe("history exact record lookup", () => {
 				'{"type":"message","id":"orphan","metadata":"type":"session","parentId":"root"}',
 				'{"type":"message","id":"unrelated","metadata":"id":"root","parentId":"root"}',
 			]) {
-				await fs.writeFile(file, [header, root, malformedSibling].join("\n") + "\n");
+				await fs.writeFile(file, `${[header, root, malformedSibling].join("\n")}\n`);
 				const archived = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 256,
 				});
@@ -1238,10 +1238,10 @@ describe("history exact record lookup", () => {
 		const dir = TempDir.createSync("@veyyon-history-unreadable-first-header-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			const header = Buffer.from(JSON.stringify({ type: "session", id: "s-healthy" }) + "\n");
-			const root = Buffer.from(JSON.stringify({
+			const header = Buffer.from(`${JSON.stringify({ type: "session", id: "s-healthy" })}\n`);
+			const root = Buffer.from(`${JSON.stringify({
 				type: "message", id: "root", parentId: null, message: "needle healthy",
-			}) + "\n");
+			})}\n`);
 			// An unreadable first row or a non-blank non-object row may hide
 			// a damaged original session header; neither may be silently skipped.
 			const unsafeFirstRows = [
@@ -1290,7 +1290,7 @@ describe("history exact record lookup", () => {
 				'["type":"session","id":"earlier"}',
 				'"id":"earlier"}',
 			]) {
-				await fs.writeFile(file, Buffer.concat([Buffer.from(damagedFirst + "\n\n"), header, root]));
+				await fs.writeFile(file, Buffer.concat([Buffer.from(`${damagedFirst}\n\n`), header, root]));
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 256,
 				});
@@ -1333,10 +1333,10 @@ describe("history exact record lookup", () => {
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
 			for (const badType of ["", " \t ", "X".repeat(1024 * 1024)]) {
-				await fs.writeFile(file, [
+				await fs.writeFile(file, `${[
 					JSON.stringify({ type: "session", id: "s-legacy" }),
 					JSON.stringify({ type: badType, id: "leaf", parentId: null, message: "needle evidence" }),
-				].join("\n") + "\n");
+				].join("\n")}\n`);
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "leaf", leafId: "leaf", offset: 0, limit: 256,
 				});
@@ -1359,11 +1359,11 @@ describe("history exact record lookup", () => {
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
 			for (const badId of ["x".repeat(129), "bad/id", "bad🔑id"]) {
-				await fs.writeFile(file, [
+				await fs.writeFile(file, `${[
 					JSON.stringify({ type: "session", id: "s-legacy" }),
 					JSON.stringify({ type: "message", id: "healthy", parentId: null, message: "needle healthy" }),
 					JSON.stringify({ type: "message", id: badId, parentId: "healthy", message: "needle forged" }),
-				].join("\n") + "\n");
+				].join("\n")}\n`);
 				const implicit = await readStoredHistoryEntry(file, {
 					entryId: "healthy", offset: 0, limit: 256,
 				});
@@ -1394,10 +1394,10 @@ describe("history exact record lookup", () => {
 			const header = JSON.stringify({ type: "session", id: "s-legacy" });
 			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
 			for (const badParentId of ["p".repeat(129), "bad/parent", "bad🔑parent"]) {
-				await fs.writeFile(file, [
+				await fs.writeFile(file, `${[
 					header, root,
 					JSON.stringify({ type: "message", id: "child", parentId: badParentId, message: "needle damaged" }),
-				].join("\n") + "\n");
+				].join("\n")}\n`);
 				const negative = await readStoredHistoryEntry(file, {
 					entryId: "not-found", leafId: "root", offset: 0, limit: 256,
 				});
@@ -1415,10 +1415,10 @@ describe("history exact record lookup", () => {
 				expect(search.matches.map(match => match.entryId)).toEqual(["root"]);
 			}
 			// Historical, public-addressable parent IDs remain valid and traversable.
-			await fs.writeFile(file, [
+			await fs.writeFile(file, `${[
 				header, root,
 				JSON.stringify({ type: "message", id: "child", parentId: "root", message: "needle child" }),
-			].join("\n") + "\n");
+			].join("\n")}\n`);
 			const positive = await readStoredHistoryEntry(file, {
 				entryId: "root", leafId: "child", offset: 0, limit: 256,
 			});
@@ -1439,12 +1439,12 @@ describe("history exact record lookup", () => {
 			const file = path.join(dir.path(), "session.jsonl");
 			const id = "legacy_.:-2026";
 			const message = "needle evidence ".repeat(18);
-			await fs.writeFile(file, [
+			await fs.writeFile(file, `${[
 				JSON.stringify({ type: "session", id: "0190f800-1234-7abc-8def-123456789abc" }),
 				JSON.stringify({ type: "message", id, parentId: null, message }),
-			].join("\n") + "\n");
+			].join("\n")}\n`);
 			const request = parseExactHistoryRequest(new URL(
-				"history://Scout?entry=" + encodeURIComponent(id) + "&leaf=" + encodeURIComponent(id) + "&limit=24",
+				`history://Scout?entry=${encodeURIComponent(id)}&leaf=${encodeURIComponent(id)}&limit=24`,
 			));
 			expect(request).toBeDefined();
 			const first = await readStoredHistoryEntry(file, request!);
@@ -1469,10 +1469,10 @@ describe("history exact record lookup", () => {
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
 			for (const badSessionId of ["s".repeat(129), "s".repeat(1024 * 1024)]) {
-				await fs.writeFile(file, [
+				await fs.writeFile(file, `${[
 					JSON.stringify({ type: "session", id: badSessionId }),
 					JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" }),
-				].join("\n") + "\n");
+				].join("\n")}\n`);
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 100,
 				});
@@ -1493,11 +1493,11 @@ describe("history exact record lookup", () => {
 		const dir = TempDir.createSync("@veyyon-history-record-type-legacy-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			await fs.writeFile(file, [
+			await fs.writeFile(file, `${[
 				JSON.stringify({ type: "session", id: "s-legacy" }),
 				JSON.stringify({ type: "custom:legacy.v1", id: "root", parentId: null, message: "needle healthy" }),
 				JSON.stringify({ type: "X".repeat(129), id: "sibling", parentId: null, message: "needle sibling" }),
-			].join("\n") + "\n");
+			].join("\n")}\n`);
 			const explicit = await readStoredHistoryEntry(file, {
 				entryId: "root", leafId: "root", offset: 0, limit: 256,
 			});
@@ -1531,7 +1531,7 @@ describe("history exact record lookup", () => {
 			]) {
 				const malformed = typeof malformedRecord === "string" ? malformedRecord : JSON.stringify(malformedRecord);
 				for (const rows of [[root, malformed], [malformed, root]]) {
-					await fs.writeFile(file, [header, ...rows].join("\n") + "\n");
+					await fs.writeFile(file, `${[header, ...rows].join("\n")}\n`);
 					const exact = await readStoredHistoryEntry(file, {
 						entryId: "root", leafId: "root", offset: 0, limit: 256,
 					});
@@ -1546,10 +1546,10 @@ describe("history exact record lookup", () => {
 				}
 			}
 			// A distinct invalid sibling is recoverable when selecting an intentional archived leaf.
-			await fs.writeFile(file, [
+			await fs.writeFile(file, `${[
 				header, root,
 				JSON.stringify({ type: "message", id: "unrelated", parentId: "invalid/parent", message: "needle unrelated" }),
-			].join("\n") + "\n");
+			].join("\n")}\n`);
 			const archived = await readStoredHistoryEntry(file, {
 				entryId: "root", leafId: "root", offset: 0, limit: 256,
 			});
@@ -1574,7 +1574,7 @@ describe("history exact record lookup", () => {
 			const valid = JSON.stringify({ type: "message", id, parentId: null, message: "needle trusted" });
 			for (const claim of ["\\u0072".repeat(128), "\\u0073".repeat(128)]) {
 				const broken = `{"type":"message","id":"${claim}","parentId":null,"note":tru}`;
-				await fs.writeFile(file, [header, valid, broken].join("\n") + "\n");
+				await fs.writeFile(file, `${[header, valid, broken].join("\n")}\n`);
 				const exact = await readStoredHistoryEntry(file, { entryId: id, leafId: id, offset: 0, limit: 256 });
 				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: id, limit: 3 });
 				if (claim === "\\u0072".repeat(128)) {
@@ -1598,11 +1598,11 @@ describe("history exact record lookup", () => {
 		const dir = TempDir.createSync("@veyyon-history-nonidentity-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			await fs.writeFile(file, [
+			await fs.writeFile(file, `${[
 				JSON.stringify({ type: "session", id: "s-legacy" }),
 				JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" }),
 				'{"type":"message","id":"other","parentId":null,"note":1,"note":2}',
-			].join("\n") + "\n");
+			].join("\n")}\n`);
 			const read = await readStoredHistoryEntry(file, {
 				entryId: "root", leafId: "root", offset: 0, limit: 256,
 			});
