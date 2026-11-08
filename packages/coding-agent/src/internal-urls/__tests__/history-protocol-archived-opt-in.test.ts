@@ -495,17 +495,18 @@ describe("history:// caller-bound archived opt-in", () => {
       createHistoryCallerCapability(makeToolSession("main:disposed", () => "disposed-session")),
     ).toBeUndefined();
 
-    let disposalChecks = 0;
+    let disposing = false;
     registerLiveRef(
       "main:disposing",
       "disposing-session",
       "session-a",
       "main",
-      () => ++disposalChecks > 1,
+      () => disposing,
     );
     const disposingSession = makeToolSession("main:disposing", () => "disposing-session");
     const disposingCapability = createHistoryCallerCapability(disposingSession);
     expect(disposingCapability).toBeDefined();
+    disposing = true;
     expect(resolveHistoryCallerCapability(disposingCapability)).toBeUndefined();
 
     const nonGlobalRegistry = {} as AgentRegistry;
