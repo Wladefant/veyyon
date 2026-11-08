@@ -3,7 +3,8 @@ import { describe, expect, it } from "bun:test";
 import { buildRequest } from "@veyyon/ai/providers/google-gemini-cli";
 import { convertMessages, GoogleResponseBlocks } from "@veyyon/ai/providers/google-shared";
 
-import type { AssistantMessage, AssistantStreamChunk, Context, Model, ToolCall } from "@veyyon/ai/types";
+import type { AssistantMessage, Context, Model, ToolCall } from "@veyyon/ai/types";
+import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
 
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -168,13 +169,16 @@ describe("Google GenerateContent function response matching", () => {
 		for (const incomingId of [undefined, ""]) {
 			const output: AssistantMessage = {
 				role: "assistant",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
 				content: [],
 				usage: emptyUsage(),
 				stopReason: "toolUse",
 				timestamp: 2000,
 			};
-			const stream: AssistantStreamChunk[] = [];
-			const blocks = new GoogleResponseBlocks(output, stream);
+			const stream = new AssistantMessageEventStream();
+			const blocks = new GoogleResponseBlocks(output, stream, false);
 
 			blocks.appendFunctionCall(
 				{
