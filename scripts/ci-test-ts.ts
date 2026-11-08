@@ -37,7 +37,7 @@ import {
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
-type Mode =
+export type Mode =
 	| "all"
 	| "local"
 	| "local-ts"
@@ -258,15 +258,33 @@ interface CodingAgentBucketPlan {
 	parallel: number;
 	// Required, with no unchunked spelling: see the comment above.
 	chunkSize: number;
+	ciChunksAtOnce: number;
 }
 
 export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
-	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10 },
-	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
-	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
-	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
+	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 1 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 2 },
 };
 
+const BUCKET_OF_MODE: Partial<Record<Mode, CodingAgentBucket>> = {
+	"coding-agent-singleton": "singleton",
+	"coding-agent-ui": "ui",
+	"coding-agent-runtime": "runtime",
+	"coding-agent-native": "native",
+};
+
+/**
+ * How many of `total` chunk processes run at once. In CI it is the bucket plan's
+ * `ciChunksAtOnce` for a single coding-agent bucket and 1 for every other mode;
+ * outside CI it is {@link testConcurrency}.
+ */
+export function chunksAtOnce(mode: Mode, ci: boolean, total: number): number {
+	if (!ci) return testConcurrency(total);
+	const bucket = BUCKET_OF_MODE[mode];
+	return Math.max(1, Math.min(bucket ? codingAgentBucketPlans[bucket].ciChunksAtOnce : 1, total));
+}
 // Smaller workspace packages stay separate from native/TUI/integration suites so
 // their short TS suites can run together. CI still downloads the Linux x64 native
 // addon before this bucket: shared utility barrels may load native-backed modules.
@@ -943,9 +961,7 @@ export async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 						env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
 						extraArgs: [
 							...onlyFailuresArgs,
-							...(pkg === "packages/utils"
-								? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
-								: []),
+							...(pkg === "packages/utils" ? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"] : []),
 						],
 					}),
 				];
@@ -1230,9 +1246,7 @@ export function parseCiTestShard(value: string | undefined): CiTestShard | undef
 	return { index, count };
 }
 
-export function resolveCiTestShard(
-	env: Record<string, string | undefined> = Bun.env,
-): CiTestShard | undefined {
+export function resolveCiTestShard(env: Record<string, string | undefined> = Bun.env): CiTestShard | undefined {
 	const testShardVal = env.VEYYON_CI_TEST_SHARD;
 	const vShard = env.VEYYON_CI_SHARD;
 	const vShards = env.VEYYON_CI_SHARDS;
@@ -1284,9 +1298,7 @@ export function resolveCiTestShard(
 			throw new Error(`Invalid CF_SHARD_COUNT ${JSON.stringify(cfCount)}; expected positive integer`);
 		}
 		if (!Number.isSafeInteger(indexNum) || indexNum < 0 || indexNum >= countNum) {
-			throw new Error(
-				`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`,
-			);
+			throw new Error(`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`);
 		}
 		normB = { index: indexNum + 1, count: countNum };
 	}
@@ -1352,11 +1364,7 @@ function resolveWorkspaceCloudflareOverride(label: string): number | undefined {
 	return undefined;
 }
 
-export function allocateCloudflareTestCommands<T>(
-	mode: string,
-	commands: readonly T[],
-	shard: CiTestShard,
-): T[] {
+export function allocateCloudflareTestCommands<T>(mode: string, commands: readonly T[], shard: CiTestShard): T[] {
 	if (shard.count !== 3) {
 		return partitionTestCommands(commands, shard);
 	}
@@ -1529,7 +1537,6 @@ export function reportNodeTestTotals(totals: NodeTestTotals): void {
 		`CLOUDFLARE_CI_NODE_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} files=${totals.files} runs=${totals.runs}\n`,
 	);
 }
-
 
 // Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
 // above. Used by the progress line and footer so timings read like `bun test`.
@@ -1827,7 +1834,6 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 		process.stdout.write(
 			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds, testTotals)}\n`,
 		);
-
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
@@ -2299,11 +2305,7 @@ if (import.meta.main) {
 
 	const bucketStartedAt = performance.now();
 	try {
-		if (
-			!isDryRun &&
-			testCommands.length > 0 &&
-			(junitReportDir !== null || (!isCI() && testCommands.length > 1))
-		) {
+		if (!isDryRun && testCommands.length > 0 && (junitReportDir !== null || (!isCI() && testCommands.length > 1))) {
 			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
 		} else {
 			await runTestCommandsInSequence(testCommands);

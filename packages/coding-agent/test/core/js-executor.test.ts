@@ -2,16 +2,17 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, setDefaultTimeout
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { executeWithKernelBase } from "@veyyon/coding-agent/eval/executor-base";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import { executeJs, type JsResult } from "@veyyon/coding-agent/eval/js/executor";
-import { executeWithKernelBase } from "@veyyon/coding-agent/eval/executor-base";
 import type { KernelExecuteOptions, KernelExecutor } from "@veyyon/coding-agent/eval/kernel-base";
-import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
 import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
+import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
+
 useIsolatedAgentDir();
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
@@ -547,10 +548,8 @@ describe("executeJs", () => {
 	it("streams real OutputSink chunks and dumps without credential text", async () => {
 		const credential = "synthetic-output-credential";
 		const chunks: string[] = [];
-		const result = await runKernelDisplay(
-			null,
-			`api_key=${credential}\nstatus: ready\n`,
-			chunk => chunks.push(chunk),
+		const result = await runKernelDisplay(null, `api_key=${credential}\nstatus: ready\n`, chunk =>
+			chunks.push(chunk),
 		);
 
 		expect(chunks.join("")).toContain("status: ready");
@@ -559,10 +558,11 @@ describe("executeJs", () => {
 		expect(result.output).not.toContain(credential);
 	});
 	it("preserves the size diagnosis for aggregate JSON with individually short leaves", async () => {
-		const result = await executeJs(
-			`return Array.from({ length: 1000 }, () => "x".repeat(70));`,
-			{ sessionId, session, sessionFile },
-		);
+		const result = await executeJs(`return Array.from({ length: 1000 }, () => "x".repeat(70));`, {
+			sessionId,
+			session,
+			sessionFile,
+		});
 
 		expect(result.exitCode).toBe(0);
 		expect(getJsonData(result)).toBe("[line over 65,536 chars, not scanned]");

@@ -2,9 +2,9 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SetCwdTool } from "@veyyon/coding-agent/tools/fs/set-cwd";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { toolResultText } from "../helpers/tool-result-text";
 import { makeToolSessionAt } from "../helpers/tool-session";
 
@@ -24,9 +24,13 @@ describe("read selectors after changing the session cwd", () => {
 				setCwd: (cwd, options) => manager.setCwd(cwd, options),
 			});
 			Object.defineProperty(session, "cwd", { get: () => manager.getCwd(), configurable: true });
-			const setCwdPath = process.platform === "win32"
-				? path.resolve(destination).replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`).replaceAll("\\", "/")
-				: destination;
+			const setCwdPath =
+				process.platform === "win32"
+					? path
+							.resolve(destination)
+							.replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`)
+							.replaceAll("\\", "/")
+					: destination;
 			const moved = await new SetCwdTool(session).execute("set-cwd", { path: setCwdPath });
 			expect(manager.getCwd()).toBe(path.resolve(destination));
 			expect(toolResultText(moved)).toContain(path.resolve(destination));
@@ -40,7 +44,10 @@ describe("read selectors after changing the session cwd", () => {
 							`${file.replaceAll("/", "\\")}:2-3`,
 							`${file.replaceAll("\\", "/")}:2-3`,
 							"rel\\file.ts:2-3",
-							`${path.resolve(destination).replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`).replaceAll("\\", "/")}/rel/file.ts:2-3`,
+							`${path
+								.resolve(destination)
+								.replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`)
+								.replaceAll("\\", "/")}/rel/file.ts:2-3`,
 						]
 					: []),
 			];

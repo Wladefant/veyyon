@@ -1,6 +1,6 @@
-import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
+import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
 
 const guard = new ProducerOutputGuard(redactProviderSecrets);
 
@@ -49,9 +49,7 @@ describe("producer output keeps benign metadata", () => {
 			for (let split = 0; split <= input.length; split++) {
 				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
 				const streamed =
-					streamGuard.push(input.slice(0, split)) +
-					streamGuard.push(input.slice(split)) +
-					streamGuard.finish();
+					streamGuard.push(input.slice(0, split)) + streamGuard.push(input.slice(split)) + streamGuard.finish();
 
 				if (input.includes("figma_secret")) {
 					expect(streamed).toBe(input);
@@ -97,19 +95,18 @@ describe("producer output keeps benign metadata", () => {
 		for (let split = 0; split <= input.length; split++) {
 			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
 			const output =
-				streamGuard.push(input.slice(0, split)) +
-				streamGuard.push(input.slice(split)) +
-				streamGuard.finish();
+				streamGuard.push(input.slice(0, split)) + streamGuard.push(input.slice(split)) + streamGuard.finish();
 			expect(output).not.toContain(token);
 			expect(output).toContain(" after");
 		}
 	});
 
 	it("preserves JSON-safe BigInt metadata and redacts the sensitive BigInt value", () => {
-		const result = sanitizeProducerJson(
-			{ count: 42n, commit: "abc", password: 987654321n },
-			guard,
-		) as { count: unknown; commit: unknown; password: unknown };
+		const result = sanitizeProducerJson({ count: 42n, commit: "abc", password: 987654321n }, guard) as {
+			count: unknown;
+			commit: unknown;
+			password: unknown;
+		};
 		expect(result.count).toBe("42n");
 		expect(result.commit).toBe("abc");
 		expect(result.password).toBe("[REDACTED]");
@@ -159,13 +156,10 @@ describe("producer output keeps benign metadata", () => {
 		);
 	});
 
-
 	it("keeps an owner-replaced prefix token from exposing its opaque suffix", () => {
 		const opaqueSuffix = "opaqueRegisteredSuffixCanary";
 		const composite = `ghp_${"A".repeat(36)} ${opaqueSuffix}`;
-		const ownerGuard = new ProducerOutputGuard(value =>
-			value.replaceAll(composite, "#COMPOSITE_CANARY#"),
-		);
+		const ownerGuard = new ProducerOutputGuard(value => value.replaceAll(composite, "#COMPOSITE_CANARY#"));
 		const output = ownerGuard.sanitize(`before token=${composite}\nafter`);
 		expect(output).not.toContain(opaqueSuffix);
 		expect(output).toContain("after");
@@ -173,12 +167,9 @@ describe("producer output keeps benign metadata", () => {
 
 	it("preserves safe text after an owner-redacted known token", () => {
 		const token = `ghp_${"Z".repeat(36)}`;
-		const ownerGuard = new ProducerOutputGuard(value =>
-			value.replaceAll(token, "#TOKEN_CANARY#"),
-		);
+		const ownerGuard = new ProducerOutputGuard(value => value.replaceAll(token, "#TOKEN_CANARY#"));
 		const output = ownerGuard.sanitize(`before token=${token} after`);
 		expect(output).not.toContain(token);
 		expect(output).toContain(" after");
 	});
-
 });

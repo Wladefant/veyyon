@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
-import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
+import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
 import { runWithProducerSecretOwner } from "../../src/secrets/producer-owner";
 
 const guard = new ProducerOutputGuard();
@@ -16,9 +16,7 @@ describe("producer output keeps complete credential spans closed", () => {
 		for (let split = 0; split <= input.length; split++) {
 			const streamGuard = new ProducerOutputGuard();
 			const output =
-				streamGuard.push(input.slice(0, split)) +
-					streamGuard.push(input.slice(split)) +
-					streamGuard.finish();
+				streamGuard.push(input.slice(0, split)) + streamGuard.push(input.slice(split)) + streamGuard.finish();
 			expect(output).not.toContain(token);
 			expect(output).toBe(sanitized);
 		}
@@ -67,30 +65,24 @@ describe("producer output keeps complete credential spans closed", () => {
 			for (let split = 0; split <= input.length; split++) {
 				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
 				const output =
-					streamGuard.push(input.slice(0, split)) +
-					streamGuard.push(input.slice(split)) +
-					streamGuard.finish();
+					streamGuard.push(input.slice(0, split)) + streamGuard.push(input.slice(split)) + streamGuard.finish();
 				expect(output).not.toContain("Q29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==");
 			}
 		}
 	});
 
-	it.each([
-		`github_pat_${"A".repeat(32)}`,
-		`figd_${"B".repeat(32)}`,
-	])("redacts bare synthetic credential formats: %s", token => {
-		expect(guard.sanitize(`before ${token} after`)).not.toContain(token);
-	});
-
-
-	it.each(["pin=123456", "password: 98765432", "api_key=4242424242"])(
-		"redacts numeric secret spans: %s",
-		input => {
-			const sanitized = guard.sanitize(input);
-			expect(sanitized).toContain("[REDACTED]");
-			expect(sanitized).not.toContain(input.match(/\d+/)![0]);
+	it.each([`github_pat_${"A".repeat(32)}`, `figd_${"B".repeat(32)}`])(
+		"redacts bare synthetic credential formats: %s",
+		token => {
+			expect(guard.sanitize(`before ${token} after`)).not.toContain(token);
 		},
 	);
+
+	it.each(["pin=123456", "password: 98765432", "api_key=4242424242"])("redacts numeric secret spans: %s", input => {
+		const sanitized = guard.sanitize(input);
+		expect(sanitized).toContain("[REDACTED]");
+		expect(sanitized).not.toContain(input.match(/\d+/)![0]);
+	});
 
 	it("masks numeric API keys in producer JSON and preserves token counts", () => {
 		expect(sanitizeProducerJson({ api_key: 4242424242, token_count: 42 }, guard)).toEqual({
@@ -130,9 +122,7 @@ describe("producer output keeps complete credential spans closed", () => {
 			for (let split = 0; split <= input.length; split++) {
 				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
 				const streamed =
-					streamGuard.push(input.slice(0, split)) +
-					streamGuard.push(input.slice(split)) +
-					streamGuard.finish();
+					streamGuard.push(input.slice(0, split)) + streamGuard.push(input.slice(split)) + streamGuard.finish();
 				expect(streamed).not.toContain(body);
 			}
 		},
@@ -159,9 +149,8 @@ describe("producer output keeps complete credential spans closed", () => {
 		const output = runWithProducerSecretOwner(owner, () => new ProducerOutputGuard().sanitize(text));
 		expect(output).not.toContain(token);
 
-		const jsonOutput = runWithProducerSecretOwner(
-			owner,
-			() => new ProducerOutputGuard().sanitize(JSON.stringify({ password: token, sibling: "safe" })),
+		const jsonOutput = runWithProducerSecretOwner(owner, () =>
+			new ProducerOutputGuard().sanitize(JSON.stringify({ password: token, sibling: "safe" })),
 		);
 		expect(jsonOutput).not.toContain(token);
 		expect(JSON.parse(jsonOutput)).toMatchObject({ sibling: "safe" });
@@ -177,9 +166,9 @@ describe("producer output keeps complete credential spans closed", () => {
 		for (let split = 0; split <= input.length; split++) {
 			const output = runWithProducerSecretOwner(owner, () => {
 				const streamGuard = new ProducerOutputGuard();
-				return streamGuard.push(input.slice(0, split)) +
-					streamGuard.push(input.slice(split)) +
-					streamGuard.finish();
+				return (
+					streamGuard.push(input.slice(0, split)) + streamGuard.push(input.slice(split)) + streamGuard.finish()
+				);
 			});
 			expect(output).not.toContain(token);
 		}
