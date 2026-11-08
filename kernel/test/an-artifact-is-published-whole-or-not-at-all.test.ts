@@ -117,6 +117,7 @@ describe("artifact publication is whole-or-nothing", () => {
 		expect((await fs.readdir(dir)).sort()).toEqual([`.artifact-id-${id}`, "7.task.log", "8.task.log"].sort());
 		expect((await listPublished(dir, [id])).sort()).toEqual(["7.task.log", "8.task.log"]);
 	});
+
 	it.skipIf(process.platform === "win32")(
 		"refuses async artifact publication when the session directory entry cannot be flushed",
 		async () => {
