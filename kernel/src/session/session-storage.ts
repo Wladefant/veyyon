@@ -551,8 +551,13 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	/** A peer can atomically replace the pathname while this writer keeps the old inode open. */
 	#rebindAfterReplacement(): void {
 		const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
-		// Never create a new journal when a peer moved or removed the current one.
-		const current = fs.statSync(this.#path);
+		// Never follow a substituted symlink, even when it resolves to the
+		// original pinned inode. A stat-based same-inode fast path otherwise
+		// bypasses every later no-follow check before appending.
+		const current = fs.lstatSync(this.#path);
+		if (!current.isFile() || current.isSymbolicLink()) {
+			throw new Error("Session writer target is not a regular file");
+		}
 		if (fileObjectIdentity(current) === pinnedIdentity) return;
 		if (!this.#appendMode) throw new Error("Session writer target was replaced");
 		// Neither fsync nor matching session IDs proves the new journal retained
