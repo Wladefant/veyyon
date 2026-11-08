@@ -199,8 +199,10 @@ export class ProducerOutputGuard {
 
 	sanitize(text: string): string {
 		try {
-			const normalized = sanitizeText(this.#redact?.(text) ?? text);
+			const sanitized = sanitizeText(this.#redact?.(text) ?? text);
+			const normalized = this.#redact?.(sanitized) ?? sanitized;
 			if (
+				isInventory(sanitizeText(text)) ||
 				isInventory(normalized) ||
 				normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS)
 			) {
