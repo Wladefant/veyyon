@@ -11,11 +11,10 @@ import {
 	postmortem,
 	toError,
 } from "@veyyon/utils";
-import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { Settings } from "../config/settings";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
-import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../secrets/producer-output";
+import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
 import {
@@ -567,17 +566,8 @@ export async function executeWithKernelBase<
 	const collectDisplay = (output: KernelDisplayOutput): void => {
 		if (output.type === "json") {
 			try {
-				const serialized = stringifyJsonSafe(output.data);
-				const filtered = new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText).sanitize(serialized);
-				output = {
-					type: "json",
-					data:
-						filtered === serialized
-							? output.data
-							: filtered === OVERSIZED_OUTPUT_RECORD
-								? OVERSIZED_OUTPUT_RECORD
-								: BLOCKED_OUTPUT_RECORD,
-				};
+				const guard = new ProducerOutputGuard(options?.toolSession?.obfuscateProviderText);
+				output = { type: "json", data: sanitizeProducerJson(output.data, guard) };
 			} catch {
 				output = { type: "json", data: "[credential output withheld]" };
 			}
