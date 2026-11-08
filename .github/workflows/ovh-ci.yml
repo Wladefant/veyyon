@@ -78,6 +78,11 @@ jobs:
           fi
           echo "checked-out SHA: $(git rev-parse HEAD)"
           echo "runner.name: ${RUNNER_NAME}"
+      - name: Check net and individual commit file counts
+        if: github.event_name == 'pull_request'
+        run: node .github/scripts/large-change-gate.cjs
+        env:
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
       - name: Detect changed paths
         id: changed
         shell: bash scripts/ovh-process-group.sh bash --noprofile --norc -eo pipefail {0}

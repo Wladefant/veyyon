@@ -1,8 +1,7 @@
 import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
-import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
-import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard, sanitizeProducerJson } from "../../secrets/producer-output";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
 import { inlineBudgetFor } from "../../tools/core/output-artifact";
@@ -13,7 +12,6 @@ import {
 	resolveOutputSinkWindow,
 } from "../../tools/core/output-meta";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
-import { sanitizeJsonValue } from "../json-sanitizer";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";
 
@@ -172,15 +170,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 					if (output.type === "json") {
 						try {
 							const displayGuard = new ProducerOutputGuard(options.session.obfuscateProviderText);
-							const sanitizedData = sanitizeJsonValue(output.data, text => displayGuard.sanitize(text), {
-								cycles: "mark",
-							});
-							const serialized = stringifyJsonSafe(sanitizedData);
-							const filtered = displayGuard.sanitize(serialized);
-							output = {
-								type: "json",
-								data: filtered === serialized ? sanitizedData : "[credential output withheld]",
-							};
+							output = { type: "json", data: sanitizeProducerJson(output.data, displayGuard) };
 						} catch {
 							output = { type: "json", data: "[credential output withheld]" };
 						}
