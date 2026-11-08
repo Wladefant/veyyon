@@ -893,9 +893,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					};
 			// Feed the actual SSE decoder a *delta as its first frame*. A relay
 			// that drops the mandatory full snapshot must not gain write authority.
-			const wire = new TextEncoder().encode(
-				`event: ${kind}\\ndata: ${JSON.stringify(forged)}\\n\\n`.replaceAll("\\n", "\n"),
-			);
+			const wire = new TextEncoder().encode([
+				"event: " + kind, "data: " + JSON.stringify(forged), "", "",
+			].join(String.fromCharCode(10)));
 			let connections = 0;
 			let reconnectedToBroker = false;
 			let selectedBeforeReconnect: string | null | undefined;
