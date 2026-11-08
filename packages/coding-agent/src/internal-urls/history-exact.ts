@@ -466,6 +466,8 @@ export async function readStoredHistoryEntry(
 		invalidIdentity: false,
 	};
 	let sessionId: string | undefined;
+	let initialPlainTitle = false;
+	let initialTitleSeparated = false;
 	let lastId: string | undefined;
 	let raw: string | undefined;
 	let recordType: string | undefined;
@@ -489,18 +491,35 @@ export async function readStoredHistoryEntry(
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (line.trim().length > 0) {
+				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
+					if (initialPlainTitle) {
+						admission.invalidIdentity = true;
+					} else {
+						initialPlainTitle = true;
+					}
+				} else if (line.trim().length > 0) {
 					incomplete = true;
-					// Before a valid header this could conceal an earlier session identity.
 					if (!admission.headerSeen) admission.invalidIdentity = true;
+				} else if (initialPlainTitle) {
+					initialTitleSeparated = true;
 				}
 				continue;
 			}
+			if (initialPlainTitle && !initialTitleSeparated) admission.invalidIdentity = true;
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
 				incomplete = true;
-				if (decoded.claimedId) {
+				const parentIdIsStructurallyInvalid = decoded.claimedId && (() => {
+					try {
+						const value = JSON.parse(line) as StoredEntryShape;
+						return value.parentId !== undefined && value.parentId !== null &&
+							typeof value.parentId !== "string";
+					} catch {
+						return false;
+					}
+				})();
+				if (decoded.claimedId && !parentIdIsStructurallyInvalid) {
 					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
 					if (detail) return {
 						status: "unavailable",
@@ -740,6 +759,9 @@ export async function searchStoredHistoryEntries(
 	let sessionId: string | undefined;
 	let unreadable = false;
 	const topologyHash = createHash("sha256");
+	let initialPlainTitle = false;
+	let initialTitleSeparated = false;
+	let unlocatedUnreadable = false;
 	try {
 		for await (const line of storedLines(filePath)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
@@ -754,24 +776,56 @@ export async function searchStoredHistoryEntries(
 			}
 			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
+				unlocatedUnreadable = true;
 				unreadable = true;
 				// Keep exact reads and search consistent on pre-header corruption.
 				if (!admission.headerSeen) admission.invalidIdentity = true;
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (line.trim().length > 0) {
+				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
+					if (initialPlainTitle) {
+						admission.invalidIdentity = true;
+						unreadable = true;
+					} else {
+						initialPlainTitle = true;
+					}
+				} else if (line.trim().length > 0) {
+					unlocatedUnreadable = true;
 					unreadable = true;
-					// Search and exact reads must agree about pre-header uncertainty.
 					if (!admission.headerSeen) admission.invalidIdentity = true;
+				} else if (initialPlainTitle) {
+					initialTitleSeparated = true;
 				}
 				continue;
 			}
+			if (initialPlainTitle && !initialTitleSeparated) admission.invalidIdentity = true;
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
 				unreadable = true;
-				if (decoded.claimedId) {
+				let rejectedParentId: unknown;
+				try {
+					rejectedParentId = (JSON.parse(line) as StoredEntryShape).parentId;
+				} catch {
+					// A malformed row cannot locate its corruption outside the selected branch.
+				}
+				const parentIdIsStructurallyInvalid =
+					rejectedParentId !== undefined && rejectedParentId !== null && typeof rejectedParentId !== "string";
+				if (!(decoded.claimedId && !parents.has(decoded.claimedId) && rejectedParentId === "")) {
+					unlocatedUnreadable = true;
+				}
+				if (decoded.claimedId && parents.has(decoded.claimedId) && !parentIdIsStructurallyInvalid) {
+					return {
+						status: "unavailable",
+						sessionId,
+						query: request.query,
+						source: "stored-jsonl",
+						matches: [],
+						detail: DUPLICATE_ID_DETAIL,
+					};
+				}
+				if (decoded.claimedId && !parents.has(decoded.claimedId)) {
 					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
 					if (detail) return {
 						status: "unavailable",
@@ -939,6 +993,7 @@ export async function searchStoredHistoryEntries(
 			detail: "Stored session changed during search; retry to select a consistent branch",
 		};
 	}
+	const selectedCorruption = unlocatedUnreadable || [...malformedClaims].some(id => selectedIds.has(id));
 	const matches = candidates
 		.reverse()
 		.slice(0, request.limit)
@@ -947,15 +1002,15 @@ export async function searchStoredHistoryEntries(
 			revision: recordRevision(digest, "stored-jsonl", leafId, sessionId),
 		}));
 	return {
-		status: unreadable || truncated ? "partial" : "ok",
+		status: selectedCorruption || truncated ? "partial" : "ok",
 		sessionId,
 		leafId,
 		query: request.query,
 		source: "stored-jsonl",
 		matches,
 		detail:
-			unreadable || truncated
-				? "Not exhaustive: malformed/oversized records or more than 500 selected-branch candidates or 128 MiB/100,000 indexed entries; stored text only, blobs not searched"
+			selectedCorruption || truncated
+				? "Not exhaustive: malformed/oversized records on the selected branch or more than 500 selected-branch candidates; stored text only, blobs not searched"
 				: "Bounded newest-first matches from stored JSONL text; externalized blobs were not searched",
 	};
 }
