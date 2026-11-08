@@ -2387,7 +2387,8 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
 			access: "access-canonical", refresh: REMOTE_REFRESH_SENTINEL,
 		});
-		expect(conditionalRequests).toBe(1);
+		expect(conditionalRequests).toBeGreaterThanOrEqual(1);
+		expect(conditionalRequests).toBeLessThanOrEqual(2); // second unchanged poll may already start
 		expect(canonicalRequests).toBe(1);
 	});
 
@@ -2426,8 +2427,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		await waitUntil(() => remote!.snapshot.credentials.length === 0);
 		expect(remote.listAuthCredentials()).toEqual([]);
 		expect(observedCredentialIds).toEqual([[]]);
-		expect(conditionalRequests).toBe(1);
-		expect(canonicalRequests).toBe(1);
+		expect(conditionalRequests).toBeGreaterThanOrEqual(1);
+		expect(conditionalRequests).toBeLessThanOrEqual(2);
+		expect(canonicalRequests).toBeGreaterThanOrEqual(1);
+		expect(canonicalRequests).toBeLessThanOrEqual(2); // replay after peer revoke must be paced
 	});
 
 	test("long-poll reconciles a peer revoke despite equal broker generations after restart", async () => {
@@ -2551,7 +2554,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	test("on-demand broker wait reports same-generation 200 progress and verifies 304 against canonical credentials", async () => {
 		// A restarted broker can reuse the worker's generation and return an
 		// equal-generation 200 or 304 even though the credential roster changed.
-		for (const variant of ["unchanged", "revoked", "invalid-304", "changed-200", "unchanged-200", "replayed-changed-200"] as const) {
+		for (const variant of ["unchanged", "revoked", "invalid-304", "changed-200", "unchanged-200", "replayed-changed-200", "invalid-changed-200"] as const) {
 			const client = new AuthBrokerClient({ url: handle!.url, token });
 			const initial = await client.fetchSnapshot();
 			if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
@@ -2569,7 +2572,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				if (opts?.waitMs === 25) {
 					conditionalWaits += 1;
 					expect(opts.ifGenerationGt).toBe(oldGeneration);
-					if (variant === "replayed-changed-200") {
+					if (variant === "replayed-changed-200" || variant === "invalid-changed-200") {
 						// The conditional relay lies about changed durable state after a peer
 						// revocation; only an independent unconditional GET may reauthorize it.
 						const replay = structuredClone(initial.snapshot);
@@ -2594,7 +2597,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				}
 				canonicalChecks += 1;
 				expect(opts?.ifGenerationGt).toBeUndefined();
-				if (variant === "invalid-304") return { status: 304 as const, generation: oldGeneration };
+				if (variant === "invalid-304" || variant === "invalid-changed-200") {
+					return { status: 304 as const, generation: oldGeneration };
+				}
 				const canonical = await originalFetch(opts);
 				if (canonical.status !== 200) throw new Error("expected unconditional broker truth");
 				// The real disposable broker supplies content; only its numeric
@@ -2609,10 +2614,10 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				onSnapshot: snapshot => { callbacks.push(snapshot.credentials.length); },
 			});
 			try {
-				if (variant === "revoked" || variant === "changed-200" || variant === "replayed-changed-200") {
+				if (variant === "revoked" || variant === "changed-200" || variant === "replayed-changed-200" || variant === "invalid-changed-200") {
 					expect(storage!.disableCredentialById(id, "synthetic peer revoke at reused generation")).toBe(true);
 				}
-				if (variant === "invalid-304") {
+				if (variant === "invalid-304" || variant === "invalid-changed-200") {
 					// A faulty intermediary must not turn an unconditional 304 into
 					// success-like evidence for the old selected credential.
 					await expect(remote.waitForFreshSnapshot(25)).rejects.toThrow(
