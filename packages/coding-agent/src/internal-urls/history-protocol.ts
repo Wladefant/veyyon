@@ -32,7 +32,8 @@ import {
 	searchStoredHistoryEntries,
 } from "./history-exact";
 import { ambiguousSessionFileIds, sessionFilesFromDisk } from "./registry-helpers";
-import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
+import { resolveHistoryCallerCapability } from "./history-caller";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 /** Humanize a last-activity timestamp as `Ns/Nm/Nh/Nd ago`. */
 function formatAgo(timestamp: number): string {
@@ -72,6 +73,197 @@ function registeredConversationScopes(): string[] {
 	return Array.from(scopes);
 }
 
+
+const ARCHIVED_HISTORY_UNAVAILABLE = "Archived history is unavailable for this caller and request.";
+
+type ResolvedHistoryCaller = NonNullable<ReturnType<typeof resolveHistoryCallerCapability>>;
+type ArchivedHistoryMode =
+  | { kind: "index" }
+  | { kind: "exact"; request: NonNullable<ReturnType<typeof parseExactHistoryRequest>> }
+  | { kind: "search"; request: NonNullable<ReturnType<typeof parseHistorySearchRequest>> };
+
+function archivedUnavailable(): never {
+  throw new Error(ARCHIVED_HISTORY_UNAVAILABLE);
+}
+
+/**
+ * Parse the opt-in as a closed query contract. URL-supplied actor/scope/session
+ * claims and duplicate parameters are never authority and are rejected.
+ */
+function parseArchivedHistoryMode(url: InternalUrl, agentId: string): ArchivedHistoryMode | undefined {
+  const archived = url.searchParams.getAll("archived");
+  if (archived.length === 0) return undefined;
+  if (archived.length !== 1 || archived[0] !== "1") return archivedUnavailable();
+
+  if (
+    url.hash !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.port !== "" ||
+    (url.pathname !== "" && url.pathname !== "/") ||
+    (url.rawPathname !== undefined && url.rawPathname !== "" && url.rawPathname !== "/")
+  ) {
+    return archivedUnavailable();
+  }
+
+  const keys = [...url.searchParams.keys()];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    if (seen.has(key)) return archivedUnavailable();
+    seen.add(key);
+  }
+
+  if (!agentId) {
+    if (keys.some(key => key !== "archived")) return archivedUnavailable();
+    return { kind: "index" };
+  }
+
+  const hasEntry = url.searchParams.has("entry");
+  const hasQuery = url.searchParams.has("q");
+  if (hasEntry === hasQuery) return archivedUnavailable();
+
+  if (hasEntry) {
+    const allowed = new Set(["archived", "entry", "leaf", "revision", "offset", "limit"]);
+    if (keys.some(key => !allowed.has(key))) return archivedUnavailable();
+    try {
+      const request = parseExactHistoryRequest(url);
+      if (!request) return archivedUnavailable();
+      return { kind: "exact", request };
+    } catch {
+      return archivedUnavailable();
+    }
+  }
+
+  const allowed = new Set(["archived", "q", "leaf", "limit"]);
+  if (keys.some(key => !allowed.has(key))) return archivedUnavailable();
+  try {
+    const request = parseHistorySearchRequest(url);
+    if (!request) return archivedUnavailable();
+    return { kind: "search", request };
+  } catch {
+    return archivedUnavailable();
+  }
+}
+
+/**
+ * An exact registered ID wins over case-fold aliases. Without an exact match,
+ * a case-folded alias is usable only when exactly one registered identity owns
+ * that spelling. No disk-only or unknown-scope fallback exists in this mode.
+ */
+function archivedTargetForCaller(caller: ResolvedHistoryCaller, agentId: string): AgentRef | undefined {
+  const exact = caller.registry.get(agentId);
+  let target = exact;
+  if (!target) {
+    const matches = caller.registry.list().filter(ref => ref.id.toLowerCase() === agentId.toLowerCase());
+    if (matches.length !== 1) return undefined;
+    target = matches[0];
+  }
+
+  if (
+    !target ||
+    target.kind === "advisor" ||
+    target.scope !== caller.scope ||
+    (target.status !== "parked" && target.status !== "aborted") ||
+    target.session !== null ||
+    typeof target.sessionFile !== "string" ||
+    target.sessionFile.trim().length === 0
+  ) {
+    return undefined;
+  }
+
+  return target;
+}
+
+/** A same-scope, parked-only roster. It never scans or merges disk-only names. */
+function renderArchivedIndex(refs: AgentRef[], scope: string): string {
+  const entries = refs
+    .filter(
+      ref =>
+        ref.kind !== "advisor" &&
+        ref.scope === scope &&
+        ref.status === "parked" &&
+        ref.session === null &&
+        typeof ref.sessionFile === "string" &&
+        ref.sessionFile.trim().length > 0,
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  const lines = ["# Archived agents in this conversation", ""];
+  if (entries.length === 0) {
+    lines.push("No parked agents in this conversation.");
+  } else {
+    lines.push("| id | status | kind | last activity |", "|---|---|---|---|");
+    for (const ref of entries) {
+      lines.push(`| ${ref.id} | ${ref.status} | ${ref.kind} | ${formatAgo(ref.lastActivity)} |`);
+    }
+  }
+  lines.push(
+    "",
+    "Read an exact stored record with `read history://<id>?archived=1&entry=<entryId>`.",
+    "Search stored records with `read history://<id>?archived=1&q=<term>`.",
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+async function resolveArchivedHistory(
+  url: InternalUrl,
+  agentId: string,
+  mode: ArchivedHistoryMode,
+  capability: unknown,
+): Promise<InternalResource> {
+  const caller = resolveHistoryCallerCapability(capability);
+  if (!caller) return archivedUnavailable();
+
+  if (mode.kind === "index") {
+    const content = renderArchivedIndex(caller.registry.list(), caller.scope);
+    return {
+      url: url.href,
+      content,
+      contentType: "text/markdown",
+      size: Buffer.byteLength(content, "utf-8"),
+      notes: ["Same-conversation parked-only index; disk-only transcript names are not enumerated"],
+    };
+  }
+
+  if (!agentId) return archivedUnavailable();
+  const target = archivedTargetForCaller(caller, agentId);
+  if (!target || !target.sessionFile) return archivedUnavailable();
+  const sessionFile = target.sessionFile;
+
+  const result =
+    mode.kind === "exact"
+      ? await readStoredHistoryEntry(sessionFile, mode.request)
+      : await searchStoredHistoryEntries(sessionFile, mode.request);
+
+  // The scan is bounded but asynchronous. Do not return its content if the
+  // caller was disposed/rescoped or the target was revived/replaced mid-read.
+  const currentCaller = resolveHistoryCallerCapability(capability);
+  if (
+    !currentCaller ||
+    currentCaller.registry !== caller.registry ||
+    currentCaller.actor !== caller.actor ||
+    currentCaller.scope !== caller.scope ||
+    caller.registry.get(target.id) !== target ||
+    target.kind === "advisor" ||
+    target.scope !== caller.scope ||
+    (target.status !== "parked" && target.status !== "aborted") ||
+    target.session !== null ||
+    target.sessionFile !== sessionFile
+  ) {
+    return archivedUnavailable();
+  }
+
+  const content = JSON.stringify(result, null, 2);
+  return {
+    url: url.href,
+    content,
+    contentType: "application/json",
+    size: Buffer.byteLength(content, "utf-8"),
+    notes: ["Read-only bounded archived records in the caller's conversation; externalized blobs are not expanded or searched"],
+  };
+}
+
+
 /**
  * Handler for history:// URLs.
  *
@@ -83,8 +275,10 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "history";
 	readonly immutable = false;
 
-	async resolve(url: InternalUrl): Promise<InternalResource> {
+	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const agentId = url.rawHost || url.hostname;
+		const archivedMode = parseArchivedHistoryMode(url, agentId);
+		if (archivedMode) return resolveArchivedHistory(url, agentId, archivedMode, context?.historyCaller);
 		const registry = AgentRegistry.global();
 		// The disk fallback already refuses an id that names a transcript in two
 		// conversations, but the REGISTRY path never reached it: `registry.get(id)`

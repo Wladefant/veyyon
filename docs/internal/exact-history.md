@@ -15,6 +15,41 @@ leaf, entry ID, revision, total code-point length and next offset. Revisions bin
 the stored text to its source, session and selected branch leaf. They identify the
 record read, not a claim that historic pruning never happened.
 
+## Caller-bound archived reads (explicit per-read opt-in)
+
+Multi-conversation archived retrieval is available only through an explicit
+`archived=1` query on that individual read:
+
+```text
+history://?archived=1
+history://Scout?archived=1&entry=entry-id&limit=8000
+history://Scout?archived=1&q=deployment%20error
+```
+
+The trusted `read` tool mints a process-local opaque capability from its actual
+`ToolSession`. The capability is accepted only while the exact registered actor
+and its own current SessionManager ID still match the same global registry, the
+actor remains live and non-advisor, and the actor has a nonempty attributed root
+conversation scope. URL-supplied `actor`, `scope`, `session`, path or other
+identity claims are not authority and are rejected.
+
+A target must be an exact-scope-equal registered `parked` or `aborted` ref,
+with `session === null` and a retained `sessionFile`. Exact reads and search use
+the existing read-only scanners and retain their 12,000-code-point page,
+128 MiB/100,000-entry scan, and 500-snippet bounds. The archived mode does not
+expose the concise full-transcript overview. Its index lists same-scope parked
+refs only; it never enumerates disk-only names. Unknown, foreign, live, advisor,
+unscoped, or unregistered disk-only targets fail with the same unavailable
+diagnostic. A case-folded alias is refused when more than one registered
+identity matches; an exact ID in the caller's scope remains usable.
+
+This is a per-read capability, not a settings change or default. Ordinary
+`history://` behavior and its multi-conversation refusal remain unchanged, as
+do context-free completions when multiple scopes survive. The separate #780
+task-record extension and its `task-record-context=false` default are
+unchanged; this route does not activate compaction context, archive before
+rewrite, prune history, restart a session, or change host/provider state.
+
 ## Following a page
 
 Every subsequent page must repeat the returned `leaf` and `revision` along with
@@ -43,8 +78,7 @@ unreadable file reports `unavailable`, distinct from a searched entry with no ma
 Reads are read-only, bounded to 12,000 Unicode code points per page, and retain
 stored wording. An exact stored record may still contain external blob references
 or historic prune markers. Missing and unavailable evidence are not recovered by
-guessing or by searching another conversation. Concurrent conversations retain the
-existing scope refusal. This route does not change default compaction behavior.
+guessing or by searching another conversation. Ordinary reads retain the existing concurrent-conversation scope refusal; the separate caller-bound archived mode above requires explicit per-read opt-in. Neither route changes default compaction behavior.
 
 ## Verification
 
