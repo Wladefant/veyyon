@@ -111,14 +111,19 @@ run_docker() {
 	# this rung alone, with messages that read like the script under test was
 	# broken. `nosuid,nodev` are restated because naming any option drops the
 	# defaults.
+	# Root hosts retain uid 0 in the guest. Mask the image's /root as well as
+	# /home, and drop the DAC bypass capabilities so mode 0000 also denies root.
+	# Read-only prevents root from restoring permissions with chmod.
 	docker run --rm "${tty_args[@]}" \
 		--network none \
+		--cap-drop DAC_OVERRIDE --cap-drop DAC_READ_SEARCH \
 		--user "$(id -u):$(id -g)" \
 		--memory "${memory}" --memory-swap "${memory}" \
 		--pids-limit "${pids}" \
 		--oom-score-adj 1000 \
 		"${mount_args[@]}" \
 		--tmpfs "/home:rw,nosuid,nodev,exec,mode=0755" \
+		--tmpfs "/root:ro,nosuid,nodev,noexec,mode=0000" \
 		--tmpfs "/tmp:rw,nosuid,nodev,exec,mode=1777" \
 		--tmpfs "/sandbox:rw,nosuid,nodev,exec,mode=1777" \
 		-w "${GUEST_REPO}" \
