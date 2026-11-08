@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- ACP auto-resume regression coverage uses fail-on-call sentinels instead of spy-call assertions.
+
 ## [1.8.11] - 2026-11-08
 
 ### Fixed
