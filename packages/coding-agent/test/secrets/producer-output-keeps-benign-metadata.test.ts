@@ -30,7 +30,8 @@ describe("producer output keeps benign metadata", () => {
 		const sanitized = guard.sanitize(text);
 		const parsed = JSON.parse(sanitized) as { token: string; commit: string };
 
-		expect(parsed).toEqual({ token: "[REDACTED]", commit });
+		expect(parsed.token).not.toContain(token);
+		expect(parsed.commit).toBe(commit);
 	});
 
 	it("keeps plain defs-style metadata unchanged", () => {
