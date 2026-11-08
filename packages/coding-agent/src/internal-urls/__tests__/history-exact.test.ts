@@ -1333,17 +1333,24 @@ describe("history exact record lookup", () => {
 				expect(search.status).toBe("unavailable");
 				expect(search.matches).toEqual([]);
 			}
-			// Genuine legacy plain titles with separators must remain readable.
-			await fs.writeFile(file, Buffer.concat([Buffer.from("Optional title\n\n"), header, root]));
-			const titledExact = await readStoredHistoryEntry(file, {
-				entryId: "root", leafId: "root", offset: 0, limit: 256,
-			});
-			expect(titledExact.status).toBe("ok");
-			const titledSearch = await searchStoredHistoryEntries(file, {
-				query: "needle", leafId: "root", limit: 3,
-			});
-			expect(titledSearch.status).toBe("ok");
-			expect(titledSearch.matches.map(match => match.entryId)).toEqual(["root"]);
+			// Genuine legacy titles may contain ordinary quotes, brackets and braces.
+			for (const legacyTitle of [
+				"Optional title",
+				'Project [Q4] with "quoted" wording',
+				'"Quoted title" [Q4] release',
+				"Release {Q4} [archive] — retained title",
+			]) {
+				await fs.writeFile(file, Buffer.concat([Buffer.from(legacyTitle + "\n\n"), header, root]));
+				const titledExact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(titledExact.status).toBe("ok");
+				const titledSearch = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(titledSearch.status).toBe("ok");
+				expect(titledSearch.matches.map(match => match.entryId)).toEqual(["root"]);
+			}
 
 			// Blank delimiters preceding a valid header remain accepted.
 			await fs.writeFile(file, Buffer.concat([Buffer.from("\n \t\n"), header, root]));

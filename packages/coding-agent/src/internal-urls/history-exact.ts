@@ -110,6 +110,7 @@ function scanTopLevelMembers(raw: string): {
 	duplicates: ReadonlySet<string>;
 	sessionTypeMember: boolean;
 	identityAmbiguous: boolean;
+	arrayIdentityCandidate: boolean;
 	claimedId?: string;
 } {
 	const keys = new Set<string>();
@@ -244,6 +245,7 @@ function scanTopLevelMembers(raw: string): {
 		duplicates,
 		sessionTypeMember,
 		identityAmbiguous: identityAmbiguous || (arrayIdentityCandidate && topLevelType === undefined),
+		arrayIdentityCandidate,
 		claimedId: topLevelType === "session" || topLevelType === "title" ? undefined : claimedId,
 	};
 }
@@ -266,9 +268,54 @@ function inspectMalformedIdentitySuffix(line: string): { invalidIdentity: boolea
 	};
 }
 
-/** Reject JSON-structural text that could be a damaged record, not a legacy title. */
+/** Detect a leading JSON member fragment without treating punctuation in a legacy title as corruption. */
+function hasLeadingJsonMemberFragment(line: string): boolean {
+	const trimmed = line.trimStart();
+	let cursor = 0;
+	if (trimmed[cursor] === "[") {
+		cursor++;
+		while (/\s/.test(trimmed[cursor] ?? "")) cursor++;
+	}
+	if (trimmed[cursor] !== '"') return false;
+
+	const start = cursor++;
+	while (cursor < trimmed.length) {
+		if (trimmed[cursor] === "\\") {
+			cursor += 2;
+			continue;
+		}
+		if (trimmed[cursor++] === '"') break;
+	}
+	if (trimmed[cursor - 1] !== '"') return false;
+
+	let next = cursor;
+	while (/\s/.test(trimmed[next] ?? "")) next++;
+	if (trimmed[next] !== ":") return false;
+	try {
+		return typeof JSON.parse(trimmed.slice(start, cursor)) === "string";
+	} catch {
+		return false;
+	}
+}
+
+/** Reject identity-bearing structural fragments, not ordinary title punctuation. */
 function resemblesBrokenHeader(line: string): boolean {
-	return /["{}[\]]/.test(line);
+	if (hasLeadingJsonMemberFragment(line)) return true;
+
+	const trimmed = line.trimStart();
+	const objectStart = trimmed.indexOf("{");
+	if (objectStart < 0) return false;
+	const suffix = trimmed.slice(objectStart);
+	// Impossible nested openers can hide a later root identity member.
+	if (/^\{\s*[\[{]/.test(suffix)) return true;
+
+	const scanned = scanTopLevelMembers(suffix);
+	return scanned.sessionTypeMember ||
+		scanned.arrayIdentityCandidate ||
+		scanned.duplicates.has("type") ||
+		scanned.duplicates.has("id") ||
+		scanned.duplicates.has("parentId") ||
+		scanned.claimedId !== undefined;
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
