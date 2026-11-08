@@ -3107,7 +3107,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				if (olderSnapshot.status !== 200) throw new Error("expected older broker state");
 				if (incoming === "SSE") {
 					peerEntryFrame.resolve(olderSnapshot.snapshot);
-					await waitUntil(() => remote!.snapshot.generation === olderSnapshot.snapshot.generation);
+					await waitUntil(() =>
+						remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs
+					);
 				} else {
 					await remote.refreshSnapshot();
 				}
@@ -3957,9 +3959,9 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			releaseDeleteReply.resolve();
 			await waitUntil(() =>
 				canonicalReads === 1 &&
-				remote!.getCredentialBlock(id, "anthropic", "new-scope") === newUntilMs
+				remote!.getCredentialBlock(id, "anthropic", "new-scope") === newUntilMs &&
+				remote!.getCredentialBlock(id, "anthropic", "old-scope") === undefined
 			);
-			expect(remote.getCredentialBlock(id, "anthropic", "old-scope")).toBeUndefined();
 			expect(remote.listCredentialBlocks([id])).toMatchObject([
 				{ credentialId: id, providerKey: "anthropic", blockScope: "new-scope", blockedUntilMs: newUntilMs },
 			]);
