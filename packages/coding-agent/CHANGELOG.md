@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [1.8.15] - 2026-11-08
+
+### Fixed
+
+- AI regression fixtures use current imports, stream types, and message contracts ([Refs #1048](https://github.com/Wladefant/veyyon/issues/1048)).
+
+## [1.8.14] - 2026-11-08
+
+### Fixed
+
+- Producer output preserves benign metadata while redacting complete credentials, including label-only multiline values and numeric secrets ([Refs #1033](https://github.com/Wladefant/veyyon/issues/1033)).
+- A `read` line-range selector resolves after `set_cwd` changes the working directory ([PR #1044](https://github.com/Wladefant/veyyon/pull/1044)).
+
+## [1.8.13] - 2026-11-08
+
 ### Fixed
 
 - ACP auto-resume regression coverage avoids forbidden spy-call assertions ([PR #1039](https://github.com/Wladefant/veyyon/pull/1039)).

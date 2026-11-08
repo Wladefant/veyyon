@@ -47,17 +47,18 @@ function getStatusEvents(result: JsResult) {
 	);
 }
 
-function runKernelDisplay(data: unknown) {
+function runKernelDisplay(data: unknown, streamedText = "", onChunk?: (chunk: string) => void) {
 	const kernel: KernelExecutor = {
 		async execute(_code: string, options?: KernelExecuteOptions) {
 			await options?.onDisplay?.({ type: "json", data });
+			if (streamedText) await options?.onChunk?.(streamedText);
 			return { status: "ok", cancelled: false, timedOut: false, stdinRequested: false };
 		},
 	};
 	return executeWithKernelBase({
 		kernel,
 		code: "display",
-		options: {},
+		options: { onChunk },
 		runIdPrefix: "test",
 		errorLogLabel: "test",
 		cancelledErrorClass: class extends Error {
@@ -526,6 +527,37 @@ describe("executeJs", () => {
 		expect(result.output).toBe("");
 		expect(result.displayOutputs).toEqual([{ type: "json", data: { answer: 42, nested: { ok: true } } }]);
 	});
+	it("redacts a credential from actual worker display JSON and preserves safe siblings", async () => {
+		const result = await executeJs(
+			`display({ api_key: "synthetic-worker-credential", status: "ready", token_count: 3, enabled: true, metadata: { region: "west" } });`,
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(getJsonData(result)).toEqual({
+			api_key: "[REDACTED]",
+			status: "ready",
+			token_count: 3,
+			enabled: true,
+			metadata: { region: "west" },
+		});
+		expect(JSON.stringify(result.displayOutputs)).not.toContain("synthetic-worker-credential");
+	});
+
+	it("streams real OutputSink chunks and dumps without credential text", async () => {
+		const credential = "synthetic-output-credential";
+		const chunks: string[] = [];
+		const result = await runKernelDisplay(
+			null,
+			`api_key=${credential}\nstatus: ready\n`,
+			chunk => chunks.push(chunk),
+		);
+
+		expect(chunks.join("")).toContain("status: ready");
+		expect(chunks.join("")).not.toContain(credential);
+		expect(result.output).toContain("status: ready");
+		expect(result.output).not.toContain(credential);
+	});
 	it("preserves the size diagnosis for aggregate JSON with individually short leaves", async () => {
 		const result = await executeJs(
 			`return Array.from({ length: 1000 }, () => "x".repeat(70));`,
@@ -758,9 +790,27 @@ describe("executeWithKernelBase JSON display safety", () => {
 		expect(result.displayOutputs).toEqual([{ type: "json", data: OVERSIZED_OUTPUT_RECORD }]);
 	});
 
-	it("withholds credential-bearing JSON displays", async () => {
-		const result = await runKernelDisplay({ API_KEY: "fake-credential-123" });
-		expect(result.displayOutputs).toEqual([{ type: "json", data: BLOCKED_OUTPUT_RECORD }]);
-		expect(JSON.stringify(result.displayOutputs)).not.toContain("fake-credential-123");
+	it("redacts credential-bearing JSON while preserving safe siblings", async () => {
+		const credential = "synthetic-kernel-credential";
+		const result = await runKernelDisplay({
+			api_key: credential,
+			status: "safe",
+			token_count: 9,
+			enabled: true,
+			metadata: { source: "test" },
+		});
+		expect(result.displayOutputs).toEqual([
+			{
+				type: "json",
+				data: {
+					api_key: "[REDACTED]",
+					status: "safe",
+					token_count: 9,
+					enabled: true,
+					metadata: { source: "test" },
+				},
+			},
+		]);
+		expect(JSON.stringify(result.displayOutputs)).not.toContain(credential);
 	});
 });

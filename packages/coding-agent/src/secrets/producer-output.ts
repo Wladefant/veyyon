@@ -1,5 +1,8 @@
+import { PROVIDER_SECRET_FAMILIES, redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
+import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { currentProducerSecretOwner } from "./producer-owner";
+import { sanitizeJsonValue } from "../eval/json-sanitizer";
 
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
@@ -7,15 +10,143 @@ const MAX_RECORD_CHARS = 64 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
-	/(?:^|[\s"'{,.?-])(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*["']?\s*(?:[=:]|\s{2,})/i;
+	/(?<boundary>^|[\s"'{,.?-])(?<key>(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?\s*(?:[=:]|\s{2,})/i;
 const CREDENTIAL_KEY_PREFIX =
-	/(?:^|\s+export\s+|[?.,{"'-])(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
+	/(?:^|\s+export\s+|[?.,{"'-])(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|pin|cookie|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
 
 // Two ordinary assignments remain useful; a bulk run is an inventory even when
 // none of its names says "secret". Hold the prefix until that decision is known.
 const ENV_ASSIGNMENT = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
 const ENV_MAP_KEY = /^(?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)$/;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
+
+/** A defs() entry names a variable and its shape, never the variable's value. */
+const DEFINITION_SHAPE = /^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|\r?\n|["'](?:\s*[,)\]]|\s*$)|(?<sourceDelimiter>[ \t]*[,;}]))/;
+
+const PEM_BLOCK = /-----BEGIN ([A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g;
+const PEM_START = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+const EXTRA_PREFIXED_KEY = /\b(?:github_pat_[A-Za-z0-9_]{22,}|figd_[A-Za-z0-9_-]{16,})/g;
+const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>|#[A-Za-z0-9_]+#)(?=[ \t]*(?:\r?\n|$))/;
+const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
+const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
+const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
+
+function knownCredentialLength(text: string): number {
+	if (text.startsWith("-----BEGIN ")) {
+		PEM_BLOCK.lastIndex = 0;
+		const pem = PEM_BLOCK.exec(text);
+		if (pem?.index === 0) return pem[0].length;
+	}
+	const redacted = redactProviderSecrets(text);
+	const marker = text.startsWith("<redacted ") || redacted === text ? null : /^<redacted (\d+) chars>/.exec(redacted);
+	if (marker) return Number(marker[1]);
+	EXTRA_PREFIXED_KEY.lastIndex = 0;
+	const extra = EXTRA_PREFIXED_KEY.exec(text);
+	return extra?.index === 0 ? extra[0].length : 0;
+}
+
+function classifyCredentialText(text: string, redact?: (text: string) => string): string {
+	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
+	const spans: { start: number; valueStart: number; end: number; extendToLine: boolean }[] = [];
+	for (let match = labels.exec(text); match; match = labels.exec(text)) {
+		const start = labels.lastIndex + /^[ \t]*/.exec(text.slice(labels.lastIndex))![0].length;
+		const tail = text.slice(start);
+		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
+		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
+		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;
+		const boundaryLength = match.groups!.boundary.length;
+		if (match[0].slice(boundaryLength).includes("\n") || !tail || /^[ \t]*(?:\r?\n|$)/.test(tail)) {
+			return BLOCKED_OUTPUT_RECORD;
+		}
+		if (NUMERIC_METADATA_KEY.test(match.groups!.key) && NUMERIC_METADATA_VALUE.test(tail)) continue;
+		if (REDACTION_MARKER.test(tail)) continue;
+		if (/^[{[|>]/.test(tail)) return BLOCKED_OUTPUT_RECORD;
+		const quoted = isQuote(tail[0]);
+		const quoteEnd = quoted ? quotedEnd(tail, 0) : -1;
+		if (quoted && quoteEnd === tail.length) return BLOCKED_OUTPUT_RECORD;
+		// Unknown unquoted values extend through their physical record.
+		const newline = tail.indexOf("\n");
+		const knownLength = quoted ? 0 : knownCredentialLength(tail);
+		if (!quoted && !knownLength && PEM_START.test(tail)) return BLOCKED_OUTPUT_RECORD;
+		const end = quoted ? start + quoteEnd : start + (knownLength || (newline < 0 ? tail.length : newline));
+		spans.push({
+			start: match.index + boundaryLength,
+			valueStart: start + (quoted ? 1 : 0),
+			end,
+			extendToLine: knownLength > 0,
+		});
+		labels.lastIndex = Math.max(end + (quoted ? 1 : 0), start + 1);
+	}
+	PEM_BLOCK.lastIndex = 0;
+	for (const pem of text.matchAll(PEM_BLOCK)) {
+		spans.push({ start: pem.index, valueStart: pem.index, end: pem.index + pem[0].length, extendToLine: true });
+	}
+	for (let attempt = 0; attempt < (redact ? 2 : 1); attempt++) {
+		spans.sort((left, right) => left.start - right.start);
+		let count = 0;
+		for (const span of spans) {
+			const previous = spans[count - 1];
+			if (previous && span.start < previous.end) {
+				if (span.end > previous.end) {
+					previous.end = span.end;
+					previous.extendToLine = span.extendToLine;
+				}
+			} else {
+				spans[count++] = span;
+			}
+		}
+		spans.length = count;
+		let result = "";
+		let rawProjection = "";
+		let normalizedProjection = "";
+		let cursor = 0;
+		let index = 0;
+		let sensitive = false;
+		while (cursor < text.length || index < spans.length) {
+			const span = spans[index];
+			const end = sensitive ? span.end : (span?.start ?? text.length);
+			const fragment = text.slice(cursor, end);
+			if (redact) {
+				const owned = redact(fragment);
+				const normalized = redact(sanitizeText(owned));
+				rawProjection += owned;
+				normalizedProjection += normalized;
+				if (sensitive) {
+					const prefix = redact(sanitizeText(redact(text.slice(span.start, span.valueStart))));
+					// A contextual owner may change the label as well as its value.
+					result += normalized.startsWith(prefix) ? prefix + "[REDACTED]" : "[REDACTED]";
+				} else {
+					result += normalized;
+				}
+			} else {
+				result += sensitive ? text.slice(span.start, span.valueStart) + "[REDACTED]" : fragment;
+			}
+			cursor = end;
+			if (sensitive) {
+				index++;
+				sensitive = false;
+			} else {
+				sensitive = span !== undefined;
+			}
+		}
+		if (!redact) return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+		const owned = redact(text);
+		// Masking must not split a registered literal or change its owner context.
+		if (rawProjection === owned && normalizedProjection === redact(sanitizeText(owned))) {
+			return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+		}
+		let extended = false;
+		for (const span of spans) {
+			if (!span.extendToLine) continue;
+			const newline = text.indexOf("\n", span.end);
+			const end = newline < 0 ? text.length : newline;
+			extended ||= end > span.end;
+			span.end = end;
+		}
+		if (!extended) break;
+	}
+	return BLOCKED_OUTPUT_RECORD;
+}
 
 function isQuote(character: string): boolean {
 	return character === '"' || character === "'" || character === "`";
@@ -126,6 +257,32 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 	return match[0].length - 1;
 }
 
+/** Keep JSON structure and primitive metadata out of the text-record grammar. */
+export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
+	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
+		cycles: "mark",
+		transformValue: (nested, key) => {
+			if (key !== undefined && CREDENTIAL_RECORD.test(`${key}=`)) {
+				if (typeof nested === "number" || typeof nested === "bigint") {
+					if (!NUMERIC_METADATA_KEY.test(key)) return "[REDACTED]";
+				} else if (typeof nested === "string") {
+					if (REDACTION_MARKER.test(nested)) return nested;
+					if (NUMERIC_METADATA_KEY.test(key) && NUMERIC_METADATA_VALUE.exec(nested)?.[0] === nested) return nested;
+					return "[REDACTED]";
+				} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {
+					return BLOCKED_OUTPUT_RECORD;
+				}
+			}
+			if (typeof nested === "bigint") return `${nested}n`;
+			if (typeof nested === "function" || typeof nested === "symbol") return JSON.parse(stringifyJsonSafe(nested));
+			return nested;
+		},
+	});
+	const serialized = JSON.stringify(safe);
+	if (typeof serialized === "string" && serialized.length > MAX_RECORD_CHARS) return OVERSIZED_OUTPUT_RECORD;
+	return typeof serialized !== "string" || isInventory(sanitizeText(serialized)) ? BLOCKED_OUTPUT_RECORD : safe;
+}
+
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
 export class ProducerOutputGuard {
 	#pending = "";
@@ -149,14 +306,32 @@ export class ProducerOutputGuard {
 	}
 	sanitize(text: string): string {
 		try {
-			const normalized = sanitizeText(text);
+			const original = sanitizeText(text);
+			if (isInventory(original)) return BLOCKED_OUTPUT_RECORD;
+			if (original.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return OVERSIZED_OUTPUT_RECORD;
+			if (/^\s*[{[]/.test(text)) {
+				try {
+					const value = JSON.parse(text);
+					const serialized = JSON.stringify(sanitizeProducerJson(value, this));
+					return serialized === JSON.stringify(value) ? original : serialized;
+				} catch {
+					// util.inspect records are not JSON; the bounded record guard owns them.
+				}
+			}
+			// Classify labels before an owner can rename them. Normalization must not
+			// reveal a label that was missed while retaining raw literal secret bytes.
+			const classified = classifyCredentialText(text);
+			if (classified === BLOCKED_OUTPUT_RECORD ||
+				sanitizeText(classified) !== classifyCredentialText(original)) return BLOCKED_OUTPUT_RECORD;
+			const filtered = classifyCredentialText(text, this.#redact);
+			if (filtered === BLOCKED_OUTPUT_RECORD) return filtered;
+			const sanitized = sanitizeText(filtered);
+			const normalized = this.#redact?.(sanitized) ?? sanitized;
 			if (isInventory(normalized)) return BLOCKED_OUTPUT_RECORD;
-			if (normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS))
-				return OVERSIZED_OUTPUT_RECORD;
-			if (normalized.split("\n").some(line => CREDENTIAL_RECORD.test(line))) return BLOCKED_OUTPUT_RECORD;
-			const redacted = this.#redact?.(normalized) ?? normalized;
-			if (redacted !== normalized) return redacted;
-			return this.#redact?.(text) ?? text;
+			if (normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return OVERSIZED_OUTPUT_RECORD;
+			let redacted = normalized;
+			for (const family of BARE_PROVIDER_SECRET_FAMILIES) redacted = family.redact(redacted);
+			return redacted.replace(EXTRA_PREFIXED_KEY, "[REDACTED]");
 		} catch {
 			return BLOCKED_OUTPUT_RECORD;
 		}

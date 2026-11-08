@@ -7,21 +7,11 @@
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@veyyon/ai/providers/openai-completions";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "@veyyon/ai/providers/vision-content";
-import type { AssistantMessage, Context, Model, ToolResultMessage, Usage } from "@veyyon/ai/types";
-import { buildModel } from "@veyyon/catalog/build";
-import { getBundledModel } from "@veyyon/catalog/models";
-import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
-
-import { convertMessages } from "@veyyon/ai/providers/openai-completions";
-
-import { NON_VISION_IMAGE_PLACEHOLDER } from "@veyyon/ai/providers/vision-guard";
-
 import type { AssistantMessage, Context, Model, ToolResultMessage } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
-
 import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
-
 import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
+
 
 const compat: ResolvedOpenAICompat = {
 	supportsStore: true,
