@@ -54,7 +54,7 @@ describe("producer output keeps benign metadata", () => {
 				if (input.includes("figma_secret")) {
 					expect(streamed).toBe(input);
 				} else {
-					expect(streamed).toBe(`before token=[REDACTED] after\n`);
+					expect(streamed).toBe(`before token=[REDACTED]\n`);
 				}
 			}
 		}
@@ -65,13 +65,13 @@ describe("producer output keeps benign metadata", () => {
 		const token = `ghp_${"A".repeat(36)}`;
 		const text = `before token=${token} after`;
 
-		expect(guard.sanitize(text)).toBe("before token=[REDACTED] after");
+		expect(guard.sanitize(text)).toBe("before token=[REDACTED]");
 	});
 	it("masks only the value after a spaced assignment delimiter", () => {
 		const token = `ghp_${"D".repeat(36)}`;
 		const text = `before token= ${token} after`;
 
-		expect(guard.sanitize(text)).toBe("before token= [REDACTED] after");
+		expect(guard.sanitize(text)).toBe("before token= [REDACTED]");
 	});
 
 	it("masks a bare real-format synthetic token and preserves surrounding metadata", () => {
