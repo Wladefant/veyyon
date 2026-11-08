@@ -25,6 +25,12 @@ describe("producer output keeps complete credential spans closed", () => {
 		}
 	});
 
+	it("does not leak a Bearer suffix when an owner redactor masks only the scheme", () => {
+		const token = "opaqueABCDEFGHIJK12345678";
+		const schemeOnlyGuard = new ProducerOutputGuard(text => text.replace("Bearer", "[REDACTED]"));
+		expect(schemeOnlyGuard.sanitize(`Authorization: Bearer ${token}\n`)).not.toContain(token);
+	});
+
 	it("does not publish unquoted multiword secret suffixes", () => {
 		expect(guard.sanitize("secret: multiple words in secret\n")).not.toContain("words in secret");
 	});
