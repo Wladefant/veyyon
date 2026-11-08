@@ -697,6 +697,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (highestGenerationSeenOnStream === undefined || event.generation > highestGenerationSeenOnStream) {
 					highestGenerationSeenOnStream = event.generation;
 				}
+				// The broker protocol begins every SSE connection with a full
+				// snapshot. A relay that drops it cannot promote an entry/removal
+				// delta to authority: the normal subsequent-frame guard is gated on
+				// !firstFrame, and a first delta must never reach #applyStreamEvent.
+				if (firstFrame && event.kind !== "snapshot") {
+					throw new AIError.AuthBrokerError("Auth broker stream must begin with a full snapshot");
+				}
 				if (firstFrame && event.kind === "snapshot") {
 					// A reconnect starts with an authoritative full snapshot, even after
 					// the broker resets its generation. A newer local GET during connect
