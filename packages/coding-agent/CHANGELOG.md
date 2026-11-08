@@ -5,6 +5,11 @@
 ### Added
 
 - Pull-request CI counts the changed files in the net diff and in each commit, reports anything above 1,000 files, and fails above 5,000 files unless the pull request carries the `large-change-approved` label ([PR](https://github.com/Wladefant/veyyon/pull/1023)).
+## [1.8.9] - 2026-11-08
+
+### Fixed
+
+- Keep matched Unicode text visible in bounded `history://` search previews, including expanding case folds, astral-character boundaries, and long queries ([Refs #984](https://github.com/Wladefant/veyyon/issues/984)).
 
 ## [1.8.8] - 2026-11-08
 
