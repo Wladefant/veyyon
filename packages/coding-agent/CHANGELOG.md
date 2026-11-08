@@ -6,6 +6,10 @@
 
 - `history://` supports explicit per-read, caller-bound access to bounded same-conversation archived records without changing defaults ([Refs #774]).
 
+### Fixed
+
+- `history://` revalidates case-folded archived-agent aliases after the stored scan, refusing identities that become ambiguous while preserving exact-ID reads ([Refs #774]).
+
 ## [1.8.15] - 2026-11-08
 
 ### Fixed

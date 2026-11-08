@@ -244,6 +244,7 @@ async function resolveArchivedHistory(
     currentCaller.actor !== caller.actor ||
     currentCaller.scope !== caller.scope ||
     caller.registry.get(target.id) !== target ||
+    archivedTargetForCaller(currentCaller, agentId) !== target ||
     target.kind === "advisor" ||
     target.scope !== caller.scope ||
     (target.status !== "parked" && target.status !== "aborted") ||

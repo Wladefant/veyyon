@@ -286,4 +286,51 @@ describe("history:// caller-bound archived opt-in", () => {
       await temp.remove();
     }
   });
+  it("refuses a case-fold alias that becomes ambiguous during an archived scan but keeps exact IDs usable", async () => {
+    const temp = TempDir.createSync("@veyyon-history-alias-race-");
+    try {
+      registerLiveRef("main:a", "session-a", "session-a");
+      const caller = makeToolSession("main:a", () => "session-a");
+      const targetFile = await archive(temp.path(), "Scout", "scout-session", [
+        { id: "record-one", parentId: null, message: "same-scope evidence" },
+      ]);
+      const foreignFile = await archive(temp.path(), "SCOUT", "foreign-session", [
+        { id: "foreign-entry", parentId: null, message: "foreign evidence" },
+      ]);
+      registerArchivedRef("Scout", "session-a", targetFile);
+
+      // Inject the colliding identity immediately after the first alias snapshot.
+      // The initial lookup sees one target; post-scan revalidation must see two.
+      const registry = AgentRegistry.global();
+      const originalList = registry.list;
+      let collisionRegistered = false;
+      registry.list = function () {
+        const snapshot = originalList.call(this);
+        if (!collisionRegistered) {
+          collisionRegistered = true;
+          registerArchivedRef("SCOUT", "session-b", foreignFile);
+        }
+        return snapshot;
+      };
+      try {
+        await expect(
+          read(caller, "history://scout?archived=1&entry=record-one"),
+        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      } finally {
+        registry.list = originalList;
+      }
+
+      expect(collisionRegistered).toBe(true);
+
+      // An exact same-scope ID remains usable despite a foreign case-fold alias.
+      const exact = JSON.parse(
+        await read(caller, "history://Scout?archived=1&entry=record-one"),
+      ) as { status: string; fragment?: string };
+      expect(exact.status).toBe("ok");
+      expect(exact.fragment).toContain("same-scope evidence");
+    } finally {
+      await temp.remove();
+    }
+  });
+
 });
