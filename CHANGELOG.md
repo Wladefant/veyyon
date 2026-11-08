@@ -4,10 +4,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- The AI package test suite compiles without duplicate TypeScript diagnostics ([Refs #1048](https://github.com/Wladefant/veyyon/issues/1048)).
-
 ## [1.8.14] - 2026-11-08
 
 ### Fixed
