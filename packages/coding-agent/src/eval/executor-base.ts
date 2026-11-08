@@ -483,6 +483,17 @@ export function attachSessionOwner(
 	}
 }
 
+export function detachSessionOwner(
+	session: { ownerIds: Set<string>; hasFallbackOwner?: boolean; primaryOwnerId?: string },
+	ownerId: string,
+): void {
+	session.ownerIds.delete(ownerId);
+	if (session.primaryOwnerId === ownerId) {
+		const next = session.ownerIds.values().next().value;
+		session.primaryOwnerId = next;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Base executor implementation
 // ---------------------------------------------------------------------------
@@ -920,7 +931,7 @@ export class KernelSessionPool<
 			if (starting.disposedOwnerIds.has(ownerKey)) throw new this.#cancelledErrorClass(false);
 			return session;
 		} catch (error) {
-			if (leave() === 0) starting.ownerIds.delete(ownerKey);
+			if (leave() === 0) detachSessionOwner(starting, ownerKey);
 			if (starting.ownerIds.size === 0) starting.startupAbort.abort(error);
 			const session = this.#sessions.get(sessionKey);
 			if (session?.ownerIds === starting.ownerIds && session.ownerIds.size === 0 && starting.waiters.size === 0) {
@@ -1069,7 +1080,7 @@ export class KernelSessionPool<
 		const owner =
 			this.#sessions.get(sessionKey) ?? this.#startingSessions.get(sessionKey) ?? this.#failedStartups.get(sessionKey);
 		const resettingOwner = this.#resettingOwners.get(sessionKey);
-		if (owner && owner.primaryOwnerId !== ownerId) {
+		if (owner && (!owner.ownerIds.has(ownerId) || owner.primaryOwnerId !== ownerId)) {
 			throw new Error("Only the primary kernel owner may reset this session");
 		}
 		if (!owner && resettingOwner !== undefined && resettingOwner !== ownerId) {
@@ -1131,12 +1142,12 @@ export class KernelSessionPool<
 				toShutdown.push(session);
 				continue;
 			}
-			session.ownerIds.delete(ownerId);
+			detachSessionOwner(session, ownerId);
 			this.#logOwnership(session, "owned");
 		}
 		for (const [sessionKey, starting] of [...this.#startingSessions.entries()]) {
 			if (this.#sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
-			starting.ownerIds.delete(ownerId);
+			detachSessionOwner(starting, ownerId);
 			starting.disposedOwnerIds.add(ownerId);
 			if (starting.ownerIds.size === 0) starting.startupAbort.abort(new this.#cancelledErrorClass(false));
 			// Keep startup visible until its eventual runner exits. Another live
@@ -1147,7 +1158,7 @@ export class KernelSessionPool<
 			const session = toShutdown[i];
 			const result = results[i];
 			if (result.status === "fulfilled") {
-				session.ownerIds.delete(ownerId);
+				detachSessionOwner(session, ownerId);
 				continue;
 			}
 			const reason = result.status === "rejected" ? result.reason : "not confirmed";

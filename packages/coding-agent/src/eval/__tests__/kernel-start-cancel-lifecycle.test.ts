@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { attachSessionOwner, KernelSessionPool } from "../executor-base";
+import { attachSessionOwner, detachSessionOwner, KernelSessionPool } from "../executor-base";
 import { type SessionKernel, UnconfirmedKernelStartupError } from "../kernel-base";
 
 test("cancelled startup releases its late kernel instead of losing ownership", async () => {
@@ -177,6 +177,69 @@ test("only the primary owner can reset a shared kernel session", async () => {
 		await ownerReset?.catch(() => {});
 	}
 }, 5000);
+
+test("disposing primary owner transfers custody to surviving co-owner and refuses reset by departed owner", async () => {
+	const counter = { shutdowns: 0 };
+	const release = Promise.withResolvers<void>();
+	const kernel = fakeKernel(counter, release.promise);
+	const pool = new KernelSessionPool({
+		languageName: "Python",
+		logLabel: "departing-primary-owner",
+		startKernel: async () => kernel,
+	});
+	let ownerReset: Promise<void> | undefined;
+	try {
+		const session = await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-a" });
+		await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-b" });
+		expect(session.primaryOwnerId).toBe("owner-a");
+		expect([...session.ownerIds]).toEqual(["owner-a", "owner-b"]);
+
+		// Dispose primary owner A while B remains
+		await pool.disposeByOwner("owner-a");
+		expect([...session.ownerIds]).toEqual(["owner-b"]);
+		expect(session.primaryOwnerId).toBe("owner-b");
+		expect(counter.shutdowns).toBe(0);
+		expect(pool.sessions.get("shared")).toBe(session);
+
+		// Departed owner A cannot reset B's surviving kernel
+		const departedReset = pool.resetSession("shared", "owner-a");
+		const departedOutcome = await observeOutcome(departedReset);
+		expect(departedOutcome.status).toBe("rejected");
+		if (departedOutcome.status === "rejected") {
+			expect(String((departedOutcome.error as Error)?.message ?? departedOutcome.error)).toMatch(/primary kernel owner/);
+		}
+		expect(counter.shutdowns).toBe(0);
+		expect(pool.sessions.get("shared")).toBe(session);
+
+		// Surviving owner B can reset the kernel
+		ownerReset = pool.resetSession("shared", "owner-b");
+		release.resolve();
+		await ownerReset;
+		expect(counter.shutdowns).toBe(1);
+		expect(pool.sessions.has("shared")).toBe(false);
+	} finally {
+		release.resolve();
+		await ownerReset?.catch(() => {});
+	}
+});
+
+test("detachSessionOwner transfers primaryOwnerId to next surviving owner", () => {
+	const session = {
+		ownerIds: new Set<string>(["owner-a", "owner-b", "owner-c"]),
+		primaryOwnerId: "owner-a" as string | undefined,
+	};
+	detachSessionOwner(session, "owner-b");
+	expect(session.primaryOwnerId).toBe("owner-a");
+	expect([...session.ownerIds]).toEqual(["owner-a", "owner-c"]);
+
+	detachSessionOwner(session, "owner-a");
+	expect(session.primaryOwnerId).toBe("owner-c");
+	expect([...session.ownerIds]).toEqual(["owner-c"]);
+
+	detachSessionOwner(session, "owner-c");
+	expect(session.primaryOwnerId).toBeUndefined();
+	expect([...session.ownerIds]).toEqual([]);
+});
 
 test("attachSessionOwner preserves primaryOwnerId when a later explicit co-owner attaches", () => {
 	const session = {
