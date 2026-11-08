@@ -6,6 +6,7 @@ import {
 	applyOwnerOnlyWindowsAcl,
 	atomicWriteFileWith,
 	getConfigRootDir,
+	isCompiledBinary,
 	logTelegramDeliveryTrace,
 	normalizeDeliveryOutcome,
 	parseTelegramTrace,
@@ -39,6 +40,9 @@ export interface TerminalControlTarget {
 	identity(): { sessionId: string; cwd: string; sessionFile: string };
 	deliver(text: string, mode: "auto" | "steer" | "followUp", options?: TerminalDeliveryOptions): Promise<string>;
 	abort(): Promise<boolean>;
+	isIdle?(): boolean;
+	reserveExit?(): void;
+	shutdown?(): Promise<void>;
 	history(): { entryId: string; text: string }[];
 	subscribe(listener: (event: unknown) => void): () => void;
 	registerSecretIntake?(registration: TerminalSecretRegistration): Promise<TerminalSecretActorContext>;
@@ -68,7 +72,8 @@ export interface TerminalControlOptions {
 }
 
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
-export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices", "rotate"] as const;
+export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices", "rotate", "idle-exit"] as const;
+
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
 const MAX_REMEMBERED_DELIVERIES = 256;
@@ -148,14 +153,22 @@ export async function serveTerminalControl(
 	root = getConfigRootDir(),
 	options: TerminalControlOptions = {},
 ): Promise<() => void> {
+	const startupArgv = isCompiledBinary()
+		? [process.execPath, ...process.argv.slice(2)]
+		: [process.execPath, ...process.argv.slice(1)];
 	const secretIntakeContext = (): TerminalSecretActorContext | undefined =>
 		target.secretRequest ? target.secretIntakeContext?.() : undefined;
 	const secretIntakeCapability = () => {
 		const context = secretIntakeContext();
 		return context ? { version: 1 as const, sealed: true as const, context } : undefined;
 	};
-	const capabilities = (): readonly string[] =>
-		secretIntakeContext() ? [...TERMINAL_CAPABILITIES, "secret-intake"] : TERMINAL_CAPABILITIES;
+	const capabilities = (): readonly string[] => {
+		const available = TERMINAL_CAPABILITIES.filter(
+			capability =>
+				capability !== "idle-exit" || Boolean(target.isIdle && target.reserveExit && target.shutdown),
+		);
+		return secretIntakeContext() ? [...available, "secret-intake"] : available;
+	};
 	const directory = path.join(root, "run", "terminals");
 	await fs.mkdir(directory, { recursive: true, mode: 0o700 });
 	if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(directory);
@@ -304,6 +317,7 @@ export async function serveTerminalControl(
 	// One chain for acked and plain deliveries: messages reach the terminal in the order they were accepted.
 	let deliveryChain: Promise<void> = Promise.resolve();
 	let pendingDeliveries = 0;
+	let exitReserved = false;
 	const sendDelivery = (
 		socket: TerminalSocket,
 		record: { sessionId: string; messageId: string; status: DeliveryState },
@@ -475,6 +489,7 @@ export async function serveTerminalControl(
 				buffer = buffer.slice(newline + 1);
 				const handle = async (): Promise<void> => {
 					let id: unknown;
+					let shutdownAfterResponse = false;
 					try {
 						const request = JSON.parse(line);
 						id = request?.id;
@@ -610,6 +625,7 @@ export async function serveTerminalControl(
 								break;
 							}
 							case "deliver": {
+								if (exitReserved) throw new Error("Terminal is exiting; delivery refused");
 								if (
 									typeof request.text !== "string" ||
 									!request.text.trim() ||
@@ -812,19 +828,52 @@ export async function serveTerminalControl(
 								}
 								break;
 							}
+							case "idleExit": {
+								if (exitReserved) {
+									result = { accepted: false, reason: "busy" };
+									break;
+								}
+								if (
+									pendingDeliveries > 0 ||
+									target.isIdle?.() !== true ||
+									!target.reserveExit ||
+									!target.shutdown
+								) {
+									result = { accepted: false, reason: "busy" };
+									break;
+								}
+								exitReserved = true;
+								target.reserveExit();
+								shutdownAfterResponse = true;
+								result = { accepted: true, ...getLoadedBuildIdentity(), argv: startupArgv };
+								break;
+							}
 							case "ping":
-								result = { ...target.identity(), pid: process.pid, capabilities: capabilities() };
+								result = {
+									...target.identity(),
+									pid: process.pid,
+									capabilities: capabilities(),
+									...getLoadedBuildIdentity(),
+									argv: startupArgv,
+								};
 								break;
 							default:
 								throw new Error("Unknown terminal operation");
 						}
 						const intake = request.op === "subscribe" ? secretIntakeCapability() : undefined;
-						send(socket, {
+						const frame = {
 							id,
 							ok: true,
 							result,
 							...(intake ? { secretIntake: intake } : {}),
-						});
+						};
+						if (shutdownAfterResponse) {
+							socket.write(`${JSON.stringify(frame)}\n`, () => {
+								void target.shutdown?.();
+							});
+						} else {
+							send(socket, frame);
+						}
 					} catch (error) {
 						send(socket, { id, ok: false, error: String(error) });
 					}

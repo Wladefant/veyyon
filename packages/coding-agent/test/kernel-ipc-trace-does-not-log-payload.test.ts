@@ -48,7 +48,7 @@ describe("kernel IPC tracing publishes metadata without request source", () => {
 				expect(JSON.stringify(sent)).not.toContain("fake-trace-value");
 				expect(sent[0].fields).toEqual({ characters: expect.any(Number) });
 			} finally {
-				await kernel.dispose();
+				await kernel.shutdown();
 			}
 		}, 5_000);
 	}

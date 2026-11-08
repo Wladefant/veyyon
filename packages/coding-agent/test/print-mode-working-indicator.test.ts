@@ -8,7 +8,7 @@ import {
 } from "@veyyon/coding-agent/modes/print-mode";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { emptyUsage } from "@veyyon/catalog/models";
-import type { AgentSession } from "@veyyon/coding-agent/session/agent-session"
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 
 function makeAssistantMessage(text: string): AssistantMessage {
 	const timestamp = Date.now();
@@ -58,7 +58,7 @@ function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
 			if (!advisorDrainPrepared) throw new Error("advisor catch-up started before headless delivery was armed");
 			return true;
 		},
-		waitForQuiescence: async () => {}
+		waitForQuiescence: async () => {},
 		dispose: async () => {},
 		// The display seam (agent-session.ts) resolves obfuscated secret
 		// placeholders and argot handles to real values before print-mode writes
@@ -158,6 +158,7 @@ describe("print mode working indicator", () => {
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForAdvisorCatchup: async () => true,
 			dispose: async () => {},
+			waitForQuiescence: async () => {},
 			displayAssistantContent: (content: AssistantMessage["content"]) => content,
 			obfuscateProviderText: (text: string) => text,
 			getPlanReferencePath: () => "",
@@ -245,6 +246,7 @@ describe("print mode working indicator", () => {
 				});
 				return true;
 			},
+			waitForQuiescence: async () => {},
 			dispose: async () => {
 				disposed = true;
 			},
@@ -299,6 +301,7 @@ describe("print mode working indicator", () => {
 			},
 			displayAssistantContent: (content: AssistantMessage["content"]) => content,
 			obfuscateProviderText: (text: string) => text,
+			waitForQuiescence: async () => {},
 		};
 
 		const run = runPrintMode(session, { mode: "text", initialMessage: "hello" });

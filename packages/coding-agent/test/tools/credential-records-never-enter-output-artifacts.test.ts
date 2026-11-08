@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
-import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "@veyyon/coding-agent/secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "@veyyon/coding-agent/secrets/producer-output";
 import { OutputSink } from "@veyyon/coding-agent/session/streaming-output";
 
 const directories: string[] = [];
@@ -62,7 +62,7 @@ test("known values redact at EOF and on minimizer replacement without enumeratin
 test("unterminated oversized records never leak their suffix and memory stays bounded", () => {
 	const guard = new ProducerOutputGuard();
 	expect(guard.push("x".repeat(65537))).toBe("");
-	expect(guard.push("fake-credential-123\nmore-secret-data\n")).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+	expect(guard.push("fake-credential-123\nmore-secret-data\n")).toBe(`${OVERSIZED_OUTPUT_RECORD}\n`);
 	expect(guard.finish()).toBe("");
 });
 
@@ -189,7 +189,7 @@ test("host text after an unfinished inventory reaches every sink while the inven
 test("host text carrying a credential record is still withheld", async () => {
 	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard() });
 	sink.pushHostText("Error: API_KEY=fake-credential-123\n");
-	expect((await sink.dump()).output).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+	expect((await sink.dump()).output).toBe(BLOCKED_OUTPUT_RECORD);
 });
 
 test.each([

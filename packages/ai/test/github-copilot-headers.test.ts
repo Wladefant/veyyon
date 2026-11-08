@@ -7,6 +7,7 @@ import {
 	inferCopilotInitiator,
 } from "@veyyon/ai/providers/github-copilot-headers";
 import type { Message } from "@veyyon/ai/types";
+import { emptyUsage } from "@veyyon/catalog/models";
 import { COPILOT_USER_AGENT } from "@veyyon/catalog/wire/github-copilot";
 import { VERSION } from "@veyyon/utils";
 

@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, ToolExample } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";
+import { type ToolSchema, toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { errorMessage, formatCount, lazy, logger, prompt } from "@veyyon/utils";
 import type { ExecutorBackend, ExecutorBackendResult } from "../../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../../eval/bridge-timeout";
@@ -9,7 +10,7 @@ import type { BackendProbeOptions } from "../../eval/probe";
 import { defaultEvalSessionId } from "../../eval/session-id";
 import { upsertStatusEvent } from "../../eval/status-events";
 import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails } from "../../eval/types";
-import { formatExitCodeNotice } from "../../exec/exit-notice";
+import { appendNotice, formatExitCodeNotice } from "../../exec/exit-notice";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import {
 	DEFAULT_MAX_BYTES,
@@ -32,7 +33,7 @@ import {
 	formatArtifactErrorNotice,
 	resolveOutputMaxColumns,
 	resolveOutputSinkArtifactMaxBytes,
-	resolveOutputSinkHeadBytes,
+	resolveOutputSinkWindow,
 } from "../core/output-meta";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
@@ -41,6 +42,7 @@ import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends
 import { EVAL_DISPLAY_VERSION, formatDisplayJson } from "./eval-display";
 import { evalToolView } from "./eval-view";
 import { evalBackendLoaders } from "./manifest";
+export { formatDisplayJsonForText } from "./eval-display";
 
 /** Language tokens the eval tool accepts, in stable display order. */
 export type EvalLanguageToken = "py" | "js" | "rb" | "jl";

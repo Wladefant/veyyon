@@ -25,12 +25,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { id: linux-x64-baseline, os: ubuntu-22.04, platform: linux, arch: x64, variant: baseline, target: x86_64-unknown-linux-gnu, glibc: "2.17" }
-          - { id: linux-x64-modern, os: ubuntu-22.04, platform: linux, arch: x64, variant: modern, target: x86_64-unknown-linux-gnu, glibc: "2.17" }
+          - { id: linux-x64-baseline, os: [self-hosted, Linux, X64, veyyon], platform: linux, arch: x64, variant: baseline, target: x86_64-unknown-linux-gnu, glibc: "2.17" }
+          - { id: linux-x64-modern, os: [self-hosted, Linux, X64, veyyon], platform: linux, arch: x64, variant: modern, target: x86_64-unknown-linux-gnu, glibc: "2.17" }
           - { id: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64, variant: "", target: aarch64-unknown-linux-gnu, glibc: "2.17" }
           - { id: darwin-x64, os: macos-15-intel, platform: darwin, arch: x64, variant: baseline, target: "", glibc: "" }
           - { id: darwin-arm64, os: macos-15, platform: darwin, arch: arm64, variant: "", target: "", glibc: "" }
-          - { id: win32-x64, os: ubuntu-22.04, platform: win32, arch: x64, variant: baseline, target: x86_64-pc-windows-msvc, glibc: "" }
+          - { id: win32-x64, os: [self-hosted, Linux, X64, veyyon], platform: win32, arch: x64, variant: baseline, target: x86_64-pc-windows-msvc, glibc: "" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -72,11 +72,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { id: linux-x64, os: ubuntu-22.04, native: 'veyyon-natives-linux-x64-*-h*' }
+          - { id: linux-x64, os: [self-hosted, Linux, X64, veyyon], native: 'veyyon-natives-linux-x64-*-h*' }
           - { id: linux-arm64, os: ubuntu-24.04-arm, native: 'veyyon-natives-linux-arm64-h*' }
           - { id: darwin-x64, os: macos-15-intel, native: 'veyyon-natives-darwin-x64-baseline-h*' }
           - { id: darwin-arm64, os: macos-15, native: 'veyyon-natives-darwin-arm64-h*' }
-          - { id: win32-x64, os: ubuntu-22.04, native: 'veyyon-natives-win32-x64-baseline-h*' }
+          - { id: win32-x64, os: [self-hosted, Linux, X64, veyyon], native: 'veyyon-natives-win32-x64-baseline-h*' }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -136,7 +136,7 @@ jobs:
   upload-draft:
     name: Upload complete asset set to existing draft
     needs: [native, binary, verify-windows]
-    runs-on: ubuntu-22.04
+    runs-on: [self-hosted, Linux, X64, veyyon]
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:

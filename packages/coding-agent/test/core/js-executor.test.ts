@@ -4,11 +4,15 @@ import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import { executeJs, type JsResult } from "@veyyon/coding-agent/eval/js/executor";
+import { executeWithKernelBase } from "@veyyon/coding-agent/eval/executor-base";
+import type { KernelExecuteOptions, KernelExecutor } from "@veyyon/coding-agent/eval/kernel-base";
+import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
-import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
+useIsolatedAgentDir();
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
 // can exceed Bun's 5s default per-test timeout, flaking the suite. Give the worker-backed
@@ -41,6 +45,33 @@ function getStatusEvents(result: JsResult) {
 	return result.displayOutputs.filter(
 		(output): output is Extract<JsResult["displayOutputs"][number], { type: "status" }> => output.type === "status",
 	);
+}
+
+function runKernelDisplay(data: unknown, streamedText = "", onChunk?: (chunk: string) => void) {
+	const kernel: KernelExecutor = {
+		async execute(_code: string, options?: KernelExecuteOptions) {
+			await options?.onDisplay?.({ type: "json", data });
+			if (streamedText) await options?.onChunk?.(streamedText);
+			return { status: "ok", cancelled: false, timedOut: false, stdinRequested: false };
+		},
+	};
+	return executeWithKernelBase({
+		kernel,
+		code: "display",
+		options: { onChunk },
+		runIdPrefix: "test",
+		errorLogLabel: "test",
+		cancelledErrorClass: class extends Error {
+			timedOut: boolean;
+			constructor(timedOut: boolean) {
+				super();
+				this.timedOut = timedOut;
+			}
+		},
+		buildKernelEnvPatch: () => ({}),
+		formatKernelTimeoutAnnotation: () => "",
+		formatTimeoutAnnotation: () => "",
+	});
 }
 
 describe("executeJs", () => {
@@ -496,6 +527,46 @@ describe("executeJs", () => {
 		expect(result.output).toBe("");
 		expect(result.displayOutputs).toEqual([{ type: "json", data: { answer: 42, nested: { ok: true } } }]);
 	});
+	it("redacts a credential from actual worker display JSON and preserves safe siblings", async () => {
+		const result = await executeJs(
+			`display({ api_key: "synthetic-worker-credential", status: "ready", token_count: 3, enabled: true, metadata: { region: "west" } });`,
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(getJsonData(result)).toEqual({
+			api_key: "[REDACTED]",
+			status: "ready",
+			token_count: 3,
+			enabled: true,
+			metadata: { region: "west" },
+		});
+		expect(JSON.stringify(result.displayOutputs)).not.toContain("synthetic-worker-credential");
+	});
+
+	it("streams real OutputSink chunks and dumps without credential text", async () => {
+		const credential = "synthetic-output-credential";
+		const chunks: string[] = [];
+		const result = await runKernelDisplay(
+			null,
+			`api_key=${credential}\nstatus: ready\n`,
+			chunk => chunks.push(chunk),
+		);
+
+		expect(chunks.join("")).toContain("status: ready");
+		expect(chunks.join("")).not.toContain(credential);
+		expect(result.output).toContain("status: ready");
+		expect(result.output).not.toContain(credential);
+	});
+	it("preserves the size diagnosis for aggregate JSON with individually short leaves", async () => {
+		const result = await executeJs(
+			`return Array.from({ length: 1000 }, () => "x".repeat(70));`,
+			{ sessionId, session, sessionFile },
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(getJsonData(result)).toBe("[line over 65,536 chars, not scanned]");
+	});
 
 	it('rewrites static `import { x } from "pkg"` to dynamic import', async () => {
 		const result = await executeJs('import { join } from "node:path";\nreturn join("a", "b");', {
@@ -549,7 +620,9 @@ describe("executeJs", () => {
 						controller.abort(new Error("cancelled"));
 					}
 				},
-				onChunk: chunk => chunks.push(chunk),
+				onChunk: chunk => {
+					chunks.push(chunk);
+				},
 				...(mode === "timeout" ? { timeoutMs: 100 } : { signal: controller.signal }),
 			},
 		);
@@ -571,7 +644,9 @@ describe("executeJs", () => {
 			sessionId,
 			session,
 			sessionFile,
-			onChunk: chunk => callbacks.push(chunk),
+			onChunk: chunk => {
+				callbacks.push(chunk);
+			},
 		});
 		expect(result.exitCode).toBe(1);
 		expect(result.output).toContain("eval failure");
@@ -707,5 +782,35 @@ describe("ProducerOutputGuard finalization", () => {
 		const guard = new ProducerOutputGuard();
 		const output = guard.push("{\n  ALPHA: /fake-a{/,\n") + guard.push('  BETA: "fake-b"') + guard.finish();
 		expect(output).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+});
+describe("executeWithKernelBase JSON display safety", () => {
+	it("preserves the size diagnosis for aggregate JSON with individually short leaves", async () => {
+		const result = await runKernelDisplay(Array.from({ length: 1000 }, () => "x".repeat(70)));
+		expect(result.displayOutputs).toEqual([{ type: "json", data: OVERSIZED_OUTPUT_RECORD }]);
+	});
+
+	it("redacts credential-bearing JSON while preserving safe siblings", async () => {
+		const credential = "synthetic-kernel-credential";
+		const result = await runKernelDisplay({
+			api_key: credential,
+			status: "safe",
+			token_count: 9,
+			enabled: true,
+			metadata: { source: "test" },
+		});
+		expect(result.displayOutputs).toEqual([
+			{
+				type: "json",
+				data: {
+					api_key: "[REDACTED]",
+					status: "safe",
+					token_count: 9,
+					enabled: true,
+					metadata: { source: "test" },
+				},
+			},
+		]);
+		expect(JSON.stringify(result.displayOutputs)).not.toContain(credential);
 	});
 });

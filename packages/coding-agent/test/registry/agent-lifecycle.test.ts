@@ -5,7 +5,7 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
-
+const deferred = <T = void>() => Promise.withResolvers<T>();
 interface SessionStub {
 	session: AgentSession;
 	flushCalls: () => number;

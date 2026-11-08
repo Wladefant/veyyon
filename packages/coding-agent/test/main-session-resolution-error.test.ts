@@ -50,6 +50,7 @@ function buildForkArgs(fork: string, noSession = false): Args {
 }
 
 const stubSettings = { get: () => undefined } as unknown as Settings;
+const autoResumeSettings = { get: () => true } as unknown as Settings;
 
 const ORIGINAL_STDOUT_WRITE = process.stdout.write.bind(process.stdout);
 const ORIGINAL_STDERR_WRITE = process.stderr.write.bind(process.stderr);
@@ -123,6 +124,32 @@ describe("createSessionManager — missing session (#2084)", () => {
 			vi.restoreAllMocks();
 		}
 	});
+	it("does not auto-resume an existing session in ACP mode", async () => {
+		const parsed: Args = {
+			mode: "acp",
+			messages: [],
+			fileArgs: [],
+			unknownFlags: new Map(),
+			unrecognizedFlags: [],
+		};
+		const continueRecent = vi
+			.spyOn(SessionManager, "continueRecent")
+			.mockImplementation(async () => {
+				throw new Error("ACP owns the terminal");
+			});
+		const open = vi.spyOn(SessionManager, "open").mockImplementation(async () => {
+			throw new Error("ACP owns the terminal");
+		});
+		try {
+			await expect(createSessionManager(parsed, "/current/project", autoResumeSettings)).resolves.toBeUndefined();
+			expect(continueRecent).not.toHaveBeenCalled();
+			expect(open).not.toHaveBeenCalled();
+			expect(parsed.continue).toBeUndefined();
+		} finally {
+			vi.restoreAllMocks();
+		}
+	});
+
 
 	it("rejects --resume with unknown id instead of falling back to latest persisted session", async () => {
 		const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), "veyyon-resume-unknown-id-"));

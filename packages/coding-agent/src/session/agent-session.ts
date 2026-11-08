@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import path from "node:path";
 import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
@@ -20,6 +21,7 @@ import {
 	AgentBusyError,
 	type AgentEvent,
 	type AgentMessage,
+	type AgentTurnEndContext,
 	type AgentState,
 	type AgentTool,
 	AppendOnlyContextManager,
@@ -30,7 +32,7 @@ import {
 	type ToolChoiceDirective,
 } from "@veyyon/agent-core";
 import { isProviderRefusalMessage } from "@veyyon/agent-core/replay-policy";
-import type { CompactionResult, SessionMessageEntry, ShakeConfig } from "@veyyon/agent-core/compaction";
+import { calculateContextTokens, compactionContextTokens, shouldCompact, type CompactionResult, type SessionMessageEntry, type ShakeConfig } from "@veyyon/agent-core/compaction";
 import type {
 	AssistantMessage,
 	ImageContent,
@@ -62,8 +64,14 @@ import "@veyyon/ai/usage/defaults";
 import type { Effort } from "@veyyon/catalog/effort";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
-import { declaredContextWindow } from "@veyyon/kernel/session/agent-session-compaction-policy";
+import { declaredContextWindow, type CompactionCheckResult } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
+import {
+	collectPendingToolCalls,
+	SESSION_EXIT_CUSTOM_TYPE,
+	type SessionExitData,
+	sessionExitLogLevel,
+} from "@veyyon/kernel/session/exit-diagnostics";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import {
@@ -132,7 +140,7 @@ import type { BashResult } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands/types";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
-import type { ExtensionRunner } from "../extensibility/extensions";
+import type { ExtensionRunner, SessionBeforeSwitchResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
@@ -155,7 +163,10 @@ import type { HindsightSessionState } from "../memory/hindsight/state";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
 import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import type { PlanModeState } from "../plan-mode/state";
+import { sideChannelPrompts } from "../prompts/side-channel/rows";
+import { steeringPrompts } from "../prompts/steering/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
+import { AgentRegistry } from "../registry/agent-registry";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { isLivePromptGate } from "../system-prompt-builder/gate-registry";
 import {
@@ -166,6 +177,7 @@ import {
 	resolveHelperModel,
 } from "../task/helper-settings";
 import {
+	IrcBus,
 	type IrcMessage,
 	type IrcPersistedDeliveryFacts,
 	type IrcPersistedDeliveryTelemetry,
@@ -184,10 +196,13 @@ import { reportLostOutputArtifact } from "../tools/core/output-artifact";
 import { outputMeta } from "../tools/core/output-meta";
 import { buildOutputValidator, summarizeValidationFailure } from "../tools/core/output-schema-validator";
 import { shortenPath } from "../tools/core/render-utils";
+import { goalsPrompts } from "../prompts/goals/rows";
+import { sessionPrompts } from "../prompts/session/rows";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
+import { throwIfExtensionCommand } from "./agent-session-commands";
 import { type EphemeralTurnArgs, type EphemeralTurnResult, runEphemeralTurn } from "./agent-session-ephemeral-turn";
 import { findLastAssistantMessage, lastCopyCandidateAssistantMessage } from "./agent-session-message-shapes";
 import { compactionModelCandidates, contextPromotionTarget } from "./agent-session-model-targets";
@@ -208,6 +223,7 @@ import {
 	type AdvisorStats,
 	type AgentSessionConfig,
 	type AgentSessionDisposeOptions,
+	type AgentSessionEvent,
 	type AgentSessionEventListener,
 	type AsyncJobSnapshot,
 	type AsyncResultEntry,
@@ -229,12 +245,15 @@ import {
 	type SessionStats,
 	type SetSessionNameWithTrigger,
 	type SteerOptions,
+	type AgentContinueSkipReason,
+	type ScheduledAgentContinueOptions,
 	TOOL_SHAPE_SETTING_PATHS,
 } from "./agent-session-types";
+import { QUIESCENCE_RECHECK_MS } from "./agent-session-types";
 // The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
 // on the session engine's graph and cost the layering gate a standing exception.
 import { computeStoredMessagesTokens } from "./context-usage";
-import { bindSessionBudget } from "./cpu-limit";
+import { bindSessionBudget, sessionCpuLimit } from "./cpu-limit";
 import {
 	type CustomMessage,
 	type CustomMessagePayload,
@@ -265,7 +284,7 @@ import { ExitRecord } from "./runtime/exit-record";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
 import { type ImageAttachment, ImageAttachments } from "./runtime/image-attachments";
-import { IrcContinuationOutbox, IrcInbox } from "./runtime/irc-inbox";
+import { IrcContinuationOutbox } from "./runtime/irc-inbox";
 import { IrcDelivery } from "./runtime/irc-delivery";
 import { LoopGuards } from "./runtime/loop-guards";
 import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
@@ -328,8 +347,6 @@ export class UnsupportedModelInputError extends Error {
 	}
 }
 
-/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
-export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
 /** Whether writing `path` must rebuild the prompt the model is holding. */
 function rebuildsThePrompt(path: string): boolean {
 	return isLivePromptGate(path) || TOOL_SHAPE_SETTING_PATHS[path] === true;
@@ -596,8 +613,7 @@ export class AgentSession {
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
-	#cancelExitRecorder?: () => void;
-	#exitRecorded = false;
+	#cancelExitCleanup?: () => void;
 	/** Session ids can change on fork/compaction; cleanup must use the id recorded at start. */
 	#toolMarkerSessions = new Map<string, string>();
 	/** In-flight tool names keyed by toolCallId for heartbeat phase reporting. */
@@ -763,9 +779,6 @@ export class AgentSession {
 	 */
 	readonly #asyncJobManager: AsyncJobManager | undefined;
 
-	// Incoming IRC records received while a turn was streaming. Parent IRCs enter the steering
-	// queue; peer IRCs wait here as interrupts and drain as asides at the next boundary.
-	readonly #ircInbox = new IrcInbox();
 	#lastNoticeScanAt = 0;
 	/** Notice ids waiting in the inbox for their turn, and ids already in a turn; repeats of a re-offered claim are dropped by these. */
 	readonly #noticesInInbox = new Set<string>();
@@ -979,9 +992,9 @@ export class AgentSession {
 	 *  resume turn whose aside poll already consumes these (no double-wake). */
 	#resumeStrandedIrcAsides(): void {
 		if (this.#isDisposed || this.isStreaming) return;
-		if (this.#ircInbox.isEmpty) return;
+		if (this.#irc.inbox.isEmpty) return;
 		if (this.#queue.canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
-		const completionWake = this.#ircInbox.completionWake;
+		const completionWake = this.#irc.inbox.completionWake;
 		const records = this.#takeIrcRecords();
 		if (completionWake) records.push(completionWake);
 		if (this.#planMode.enabled) {
@@ -1687,7 +1700,7 @@ export class AgentSession {
 		// `job poll` / `irc wait` can return early before the boundary drains them.
 		this.agent.hasIrcInterrupts = () => this.#irc.inbox.hasInterrupts;
 		this.agent.setAsideMessageProvider(() => {
-const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
+			const pendingIrc = this.#takeIrcRecords();
 			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
 			thunks.push(...this.yieldQueue.drainLazy());
 			// Mid-run todo reconciliation — evaluated at injection time so a turn
@@ -1919,7 +1932,7 @@ const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
 			sessionStore: this.sessionManager,
 			redact: text => this.obfuscateProviderText(text),
 		});
-		// The counterpart of the exit recorder below: a death that never reached
+		// The counterpart of the exit record: a death that never reached
 		// JavaScript wrote no `session_exit` entry and no error line, so the only
 		// account of it is what its process left on disk — the in-flight marker of
 		// a tool call, and the heartbeat naming the phase it was in. Sweep those
@@ -1938,8 +1951,8 @@ const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
 							? "provider"
 							: "idle",
 		});
-		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
-			this.#recordSessionExit(reason);
+		this.#cancelExitCleanup = postmortem.register(`agent-session-markers:${this.sessionManager.getSessionId()}`, () => {
+			this.#clearLifecycleMarkers();
 		});
 		this.#heartbeatLogInterval = setInterval(() => this.#logHeartbeat(), SESSION_HEARTBEAT_INTERVAL_MS);
 		this.#heartbeatLogInterval.unref?.();
@@ -2503,9 +2516,7 @@ const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
 		}
 	}
 
-	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
-		if (this.#exitRecorded) return;
-		this.#exitRecorded = true;
+	#clearLifecycleMarkers(): void {
 		if (this.#heartbeatLogInterval !== undefined) {
 			clearInterval(this.#heartbeatLogInterval);
 			this.#heartbeatLogInterval = undefined;
@@ -2514,6 +2525,7 @@ const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
 		// Same reason as the markers below: this exit reaches JavaScript, so the
 		// log accounts for it and the heartbeat must not report it as silent.
 		this.#heartbeat?.leave();
+		this.#heartbeat = undefined;
 		// This exit reached JavaScript, so the log will carry an account of it
 		// either way. Leaving the marker behind would report the next launch a
 		// crash that did not happen.
@@ -2521,47 +2533,6 @@ const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
 			clearToolCallInFlight(sessionId, toolCallId);
 		}
 		this.#toolMarkerSessions.clear();
-		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
-		if (
-			pendingToolCalls.length === 0 &&
-			!this.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")
-		) {
-			return;
-		}
-		const kind: SessionExitData["kind"] =
-			reason === "dispose" || reason === postmortem.Reason.MANUAL
-				? "normal"
-				: reason === postmortem.Reason.UNCAUGHT_EXCEPTION || reason === postmortem.Reason.UNHANDLED_REJECTION
-					? "fatal"
-					: reason === postmortem.Reason.EXIT
-						? "process_exit"
-						: "signal";
-		const data: SessionExitData = {
-			reason,
-			kind,
-			recordedAt: new Date().toISOString(),
-		};
-		if (pendingToolCalls.length > 0) data.pendingToolCalls = pendingToolCalls;
-		try {
-			this.sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, data);
-			this.sessionManager.flushSync();
-			// Looked up on `logger` at call time, not captured in a table: the level is the
-			// method name, and a captured function would also detach the spy a test installs.
-			logger[sessionExitLogLevel(kind, pendingToolCalls.length)]("Session exit recorded", {
-				sessionId: this.sessionManager.getSessionId(),
-				sessionFile: this.sessionManager.getSessionFile(),
-				reason,
-				kind,
-				pendingToolCalls: pendingToolCalls.length,
-			});
-		} catch (error) {
-			logger.error("Failed to record session exit", {
-				sessionId: this.sessionManager.getSessionId(),
-				sessionFile: this.sessionManager.getSessionFile(),
-				reason,
-				error: errorMessage(error),
-			});
-		}
 	}
 
 
@@ -2672,7 +2643,6 @@ const pendingIrc = [...this.#takeIrcRecords(), ...this.#irc.inbox.takeAll()];
 				// this the working line announces a call in raw handle form while the
 				// transcript right beneath it shows the same call expanded.
 				const intent = this.displayToolIntent(event.intent);
-recordToolExecutionStart(this, event);
 this.#exitRecord.recordToolStart(event);
 const markerSessionId = this.sessionManager.getSessionId();
 this.#toolMarkerSessions.set(event.toolCallId, markerSessionId);
@@ -3448,14 +3418,9 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		this.beginDispose();
-		this.#recordSessionExit(options.reason ?? "dispose");
-		if (this.#heartbeatLogInterval !== undefined) {
-			clearInterval(this.#heartbeatLogInterval);
-			this.#heartbeatLogInterval = undefined;
-		}
-		this.#inFlightToolNames.clear();
-		this.#cancelExitRecorder?.();
-		this.#cancelExitRecorder = undefined;
+		this.#clearLifecycleMarkers();
+		this.#cancelExitCleanup?.();
+		this.#cancelExitCleanup = undefined;
 		this.#exitRecord.close(options.reason ?? "dispose");
 		try {
 			if (this.#config.extensionRunner?.hasHandlers("session_shutdown")) {
@@ -4345,85 +4310,6 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	}
 
 	/**
-	 * Build a hidden companion message describing image attachments for a text-only
-	 * model. Each image is saved under local:// and a vision-capable model describes
-	 * it; the descriptions are returned as a `display: false` custom message (so the
-	 * model reads them but the TUI does not render the blob) carrying one
-	 * `<image path="local://…">…</image>` block per image. Returns `undefined` when
-	 * the active model already accepts images, the feature is disabled, or no
-	 * description could be produced. Never throws.
-	 */
-	async #buildImageDescriptionNotice(
-		normalizedImages: ImageContent[],
-		signal?: AbortSignal,
-	): Promise<CustomMessage | undefined> {
-		const model = this.model;
-		const shouldDescribe =
-			!!model &&
-			!model.input.includes("image") &&
-			!this.settings.get("images.blockImages") &&
-			this.settings.get("images.describeForTextModels");
-		if (!shouldDescribe || !model) {
-			return undefined;
-		}
-		let blocks: TextContent[];
-		try {
-			blocks = await describeAttachedImagesForTextModel(
-				normalizedImages,
-				{
-					activeModel: model,
-					modelRegistry: this.#config.modelRegistry,
-					settings: this.settings,
-					localProtocolOptions: localProtocolOptions(this.sessionManager),
-					activeModelString: formatModelString(model),
-					telemetryConfig: this.agent.telemetry,
-					sessionId: this.sessionId,
-				},
-				signal,
-			);
-		} catch (err) {
-			logger.warn("image attachment vision fallback failed; image left undescribed", {
-				error: errorMessage(err),
-			});
-			return undefined;
-		}
-		if (blocks.length === 0) {
-			return undefined;
-		}
-		return {
-			role: "custom",
-			customType: IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
-			content: blocks,
-			display: false,
-			attribution: "user",
-			timestamp: Date.now(),
-		};
-	}
-
-	/**
-	 * The content of a text message carrying image attachments: the text, then the images normalized
-	 * for the active model. When the model is text-only, the hidden companion describing the images is
-	 * returned beside it; the image stays in the message itself.
-	 */
-	async #textWithImages(
-		text: string,
-		images: ImageContent[] | undefined,
-	): Promise<{
-		content: (TextContent | ImageContent | VideoContent)[];
-		images: ImageContent[] | undefined;
-		imageDescriptionNotice: CustomMessage | undefined;
-	}> {
-		const normalizedImages = await normalizeModelContextImages(images, { model: this.model });
-		const content: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text }];
-		if (!normalizedImages?.length) return { content, images: normalizedImages, imageDescriptionNotice: undefined };
-		content.push(...normalizedImages);
-		return {
-			content,
-			images: normalizedImages,
-			imageDescriptionNotice: await this.#buildImageDescriptionNotice(normalizedImages),
-		};
-	}
-	/**
 	 * Hand startup work to the session instead of awaiting it on the boot path.
 	 *
 	 * Chained, so several deferrals order the way they were handed over, and swallowed, so a failure
@@ -4858,7 +4744,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		// #queueUserMessage (which clears advisor auto-resume suppression and
 		// enqueues as a user-attributed message) and place the developer message
 		// directly on the follow-up queue.
-		const { content, imageDescriptionNotice } = await this.#textWithImages(expandedText, images);
+		const { content: imageContent, imageDescriptionNotice } = await this.#images.textWithImages(expandedText, images);
+		const content: (TextContent | ImageContent | VideoContent)[] = imageContent;
 		if (videos?.length) {
 			content.push(...videos);
 		}
@@ -4886,7 +4773,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		// while streaming) is a deliberate resume; re-enable advisor auto-resume that
 		// a user interrupt suppressed.
 		this.#advisorRoster.allowAutoResume();
-		const { content, imageDescriptionNotice } = await this.#textWithImages(text, images);
+		const { content: imageContent, imageDescriptionNotice } = await this.#images.textWithImages(text, images);
+		const content: (TextContent | ImageContent | VideoContent)[] = imageContent;
 		if (videos?.length) {
 			content.push(...videos);
 		}
@@ -5976,7 +5864,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			await this.sessionManager.sync();
 			void this.#events.send({ type: "irc_message", message: record });
 			if (this.isStreaming) {
-				this.#ircInbox.queueCompletionWake(record);
+				this.#irc.inbox.queueCompletionWake(record);
 				return "injected";
 			}
 			if (this.#planMode.enabled) return "injected";
@@ -6013,7 +5901,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 					steering: true,
 				});
 			} else {
-				this.#ircInbox.queueInterrupt(record);
+				this.#irc.inbox.queueInterrupt(record);
 			}
 			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
@@ -6147,7 +6035,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			void this.#events.send({ type: "irc_message", message: record });
 			// Asides drain at the next step boundary; anything left over is
 			// flushed at the start of the next prompt (#flushPendingIrcAsides).
-			this.#ircInbox.queueAside(record);
+			this.#irc.inbox.queueAside(record);
 			// `from` must be the id the sender addressed (msg.to) so their
 			// from-filtered waiter matches.
 			const receipt = await IrcBus.global().send({ from: msg.to, to: msg.from, body, replyTo: msg.id });
@@ -6243,7 +6131,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	 * the turn. A crash before this point leaves the claim in `claimed/`, and it is offered again.
 	 */
 	#takeIrcRecords(): CustomMessage[] {
-		const records = this.#ircInbox.takeAll();
+		const records = this.#irc.inbox.takeAll();
 		const noticeIds: string[] = [];
 		for (const record of records) {
 			const id = record.customType === "session:notice" ? Reflect.get(record.details ?? {}, "id") : undefined;
@@ -6317,7 +6205,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				timestamp: notice.ts,
 			};
 			void this.#events.send({ type: "irc_message", message: record });
-			this.#ircInbox.queueAside(record);
+			this.#irc.inbox.queueAside(record);
 			this.#noticesInInbox.add(notice.id);
 		}
 	}

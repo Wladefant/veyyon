@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { configureGitHubCopilotOAuthClientId, GITHUB_COPILOT_EXPIRING_TOKEN_MESSAGE } from "@veyyon/ai/github-copilot-client-id";
 import { getOAuthApiKey } from "@veyyon/ai/registry/oauth";
 import { loginGitHubCopilot } from "@veyyon/ai/registry/oauth/github-copilot";
@@ -92,7 +93,6 @@ describe("loginGitHubCopilot", () => {
 			return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 		});
 		await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),
@@ -111,7 +111,6 @@ describe("loginGitHubCopilot", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		});
 		const failure = await loginGitHubCopilot({
-			...FAST_POLL_OPTIONS,
 			fetch: fetchMock as unknown as typeof fetch,
 			onAuth: vi.fn(),
 			onPrompt: mockOnPrompt(""),

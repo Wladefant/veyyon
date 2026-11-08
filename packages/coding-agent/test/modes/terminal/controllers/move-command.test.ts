@@ -15,12 +15,10 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		completedBtwVisible: true,
 	};
 	const present = vi.fn();
-	const captureState = vi.fn(() => ({ cwd: state.cwd }));
-	const restoreState = vi.fn((snap: { cwd: string }) => {
-		state.cwd = snap.cwd;
-	});
+	const requestRender = vi.fn();
 	const applyCwdChange = vi.fn(async (cwd: string): Promise<void> => {
 		expect(state.cwd).toBe(cwd);
+		requestRender();
 	});
 	const withBtwSessionMove = vi.fn(async (operation: () => Promise<boolean>) => {
 		const moved = await operation();
@@ -28,20 +26,18 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		return moved;
 	});
 	const ctx = {
-		session: { isStreaming },
-		sessionManager: {
-			getCwd: () => state.cwd,
-			moveTo: vi.fn(async (cwd: string) => {
+		session: {
+			isStreaming,
+			moveToCwd: vi.fn(async (cwd: string) => {
 				state.cwd = cwd;
 				state.movedTo = cwd;
+				await applyCwdChange(cwd);
 				return cwd;
-			},
+			}),
 		},
 		sessionManager: {
 			getCwd: () => state.cwd,
 			dropSession: vi.fn(async () => {}),
-			captureState,
-			restoreState,
 		},
 		settings: {
 			flush: settingsFlush ?? vi.fn(async () => {}),
@@ -55,7 +51,7 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		updateEditorBorderColor: vi.fn(),
 		reloadTodos: vi.fn(async () => {}),
 		ui: {
-			requestRender: vi.fn(),
+			requestRender,
 			setFocus: vi.fn(),
 			showOverlay: vi.fn((overlay: unknown) => {
 				if (overlay instanceof MoveOverlay) {
@@ -69,7 +65,7 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		refreshComposerShortcuts: vi.fn(),
 		dismissWelcome: vi.fn(),
 	} as unknown as InteractiveModeContext;
-	return { ctx, state, present, captureState, restoreState, withBtwSessionMove };
+	return { ctx, state, present, withBtwSessionMove };
 }
 
 describe("CommandController /move", () => {
@@ -91,11 +87,13 @@ describe("CommandController /move", () => {
 			await controller.handleMoveCommand(targetDir);
 
 			expect(state.movedTo).toBe(targetDir);
+			expect(ctx.session.moveToCwd).toHaveBeenCalledTimes(1);
+			expect(ctx.applyCwdChange).toHaveBeenCalledTimes(1);
 			expect(state.completedBtwVisible).toBe(false);
 			expect(ctx.sessionManager.dropSession).not.toHaveBeenCalled();
-			expect(ctx.updateEditorBorderColor).toHaveBeenCalled();
-			expect(ctx.reloadTodos).toHaveBeenCalled();
-			expect(ctx.ui.requestRender).toHaveBeenCalledWith();
+			expect(ctx.updateEditorBorderColor).toHaveBeenCalledTimes(1);
+			expect(ctx.reloadTodos).toHaveBeenCalledTimes(1);
+			expect(ctx.ui.requestRender).toHaveBeenCalledTimes(1);
 			expect(present).toHaveBeenCalled();
 			expect(ctx.showError).not.toHaveBeenCalled();
 		} finally {
@@ -121,7 +119,7 @@ describe("CommandController /move", () => {
 			expect(ctx.showHookConfirm).not.toHaveBeenCalled();
 			expect(mkdir).not.toHaveBeenCalled();
 			expect(await fs.readdir(sourceDir)).toEqual([]);
-			expect(ctx.sessionManager.moveTo).not.toHaveBeenCalled();
+			expect(ctx.session.moveToCwd).not.toHaveBeenCalled();
 			expect(ctx.applyCwdChange).not.toHaveBeenCalled();
 			expect(withBtwSessionMove).not.toHaveBeenCalled();
 			expect(state.completedBtwVisible).toBe(true);
@@ -156,14 +154,14 @@ describe("CommandController /move", () => {
 
 				await controller.handleMoveCommand(targetPath);
 
-				if (rejection === "declined creation") {
+				if (rejection === "declined creation" || rejection === "missing parent") {
 					expect(withBtwSessionMove).toHaveBeenCalledTimes(1);
 					const firstResult = await withBtwSessionMove.mock.results[0]?.value;
 					expect(firstResult).toBe(false);
 				} else {
 					expect(withBtwSessionMove).not.toHaveBeenCalled();
 				}
-				expect(ctx.sessionManager.moveTo).not.toHaveBeenCalled();
+				expect(ctx.session.moveToCwd).not.toHaveBeenCalled();
 				expect(ctx.applyCwdChange).not.toHaveBeenCalled();
 				expect(state.cwd).toBe(sourceDir);
 				expect(state.movedTo).toBeUndefined();
@@ -189,7 +187,7 @@ describe("CommandController /move", () => {
 			expect(ctx.showHookConfirm).not.toHaveBeenCalled();
 			expect(mkdir).not.toHaveBeenCalled();
 			expect(await fs.readdir(sourceDir)).toEqual([]);
-			expect(ctx.sessionManager.moveTo).not.toHaveBeenCalled();
+			expect(ctx.session.moveToCwd).not.toHaveBeenCalled();
 			expect(ctx.applyCwdChange).not.toHaveBeenCalled();
 			expect(state.cwd).toBe(sourceDir);
 			expect(state.movedTo).toBeUndefined();
@@ -246,12 +244,14 @@ describe("CommandController /move", () => {
 					return undefined;
 				});
 				restoreMkdir = () => mkdir.mockRestore();
-				ctx.sessionManager.moveTo = vi.fn(async cwd => {
+				ctx.session.moveToCwd = vi.fn(async cwd => {
 					relocating.resolve();
 					await relocated.promise;
 					await fs.rename(sourceFile, targetFile);
 					state.cwd = cwd;
 					state.movedTo = cwd;
+					await ctx.applyCwdChange(cwd);
+					return cwd;
 				});
 				command = new CommandController(ctx).handleMoveCommand(targetDir);
 				await confirming.promise;
@@ -265,7 +265,7 @@ describe("CommandController /move", () => {
 					await creating.promise;
 					expect(held).toBe(true);
 					expect(commits).toBe(0);
-					expect(ctx.sessionManager.moveTo).not.toHaveBeenCalled();
+					expect(ctx.session.moveToCwd).not.toHaveBeenCalled();
 					created.resolve();
 					await relocating.promise;
 					expect((await fs.stat(targetDir)).isDirectory()).toBe(true);
@@ -280,7 +280,7 @@ describe("CommandController /move", () => {
 				expect(ctx.withBtwSessionMove).toHaveBeenCalledTimes(1);
 				expect(ctx.showHookConfirm).toHaveBeenCalledTimes(1);
 				expect(mkdir).toHaveBeenCalledTimes(confirmed ? 1 : 0);
-				expect(ctx.sessionManager.moveTo).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+				expect(ctx.session.moveToCwd).toHaveBeenCalledTimes(confirmed ? 1 : 0);
 				expect(commits).toBe(confirmed ? 1 : 0);
 				expect(state.completedBtwVisible).toBe(!confirmed);
 				expect(state.cwd).toBe(confirmed ? targetDir : sourceDir);

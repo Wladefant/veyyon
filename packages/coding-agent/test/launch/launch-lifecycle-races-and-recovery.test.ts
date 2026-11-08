@@ -34,6 +34,7 @@ import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/lau
 import { managedDaemonDir, managedDaemonMetaPath, managedDaemonPreviousLogPath } from "../../src/launch/paths";
 import { toolContent } from "../../src/tools/shell/launch";
 import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
+const shutdown = shutdownBroker;
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-races");

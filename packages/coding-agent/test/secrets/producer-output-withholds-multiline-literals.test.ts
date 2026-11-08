@@ -198,6 +198,18 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(cancelled.push("synthetic-second-line\n")).toBe("");
 	});
 
+	it("labels oversized GitHub JSON lines without releasing planted credentials", () => {
+		const longLine = `{"payload":"${"x".repeat(65_537)}","token":"ghs_planted_fake_value"}`;
+		const direct = new ProducerOutputGuard().sanitize(longLine);
+		expect(direct).toBe("[line over 65,536 chars, not scanned]");
+		expect(direct).not.toContain("ghs_");
+
+		const guard = new ProducerOutputGuard();
+		const streamed = guard.push(`${longLine}\n`) + guard.finish();
+		expect(streamed).toBe("[line over 65,536 chars, not scanned]\n");
+		expect(streamed).not.toContain("ghs_");
+		expect(guard.push('{"later":"safe"}\n')).toBe("");
+	});
 	it("withholds a known multiline literal that exceeds the bounded pending record", () => {
 		const longSecret = `${"a".repeat(32 * 1024)}\n${"b".repeat(32 * 1024)}`;
 		const guard = guardFor(longSecret);
@@ -206,7 +218,7 @@ describe("producer output withholds multiline registered literals", () => {
 
 		expect(guard.push(firstRecord)).toBe("");
 		const blocked = guard.push(secondRecord);
-		expect(blocked).toBe("[credential output withheld]\n");
+		expect(blocked).toBe("[line over 65,536 chars, not scanned]\n");
 		expect(blocked).not.toContain(longSecret);
 		expect(guard.push("after\n")).toBe("");
 	});
