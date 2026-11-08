@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- Flush copied fork artifact files before child-session publication and flush POSIX directory entries deepest-first ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Refuse first append to a newly opened empty session journal if a peer already wrote foreign contents to its pinned inode before this writer's own header ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Refuse a fork when the source artifact tree changes during the pre-switch copy, rather than silently omitting unreferenced evidence ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - File append writers reject an in-place unrelated session-header overwrite on the same pinned inode before appending, without claiming cross-process publication serialization ([#774](https://github.com/Wladefant/veyyon/issues/774)).
