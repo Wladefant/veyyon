@@ -28,13 +28,13 @@ describe("producer output keeps benign metadata", () => {
 		const token = `ghp_${"A".repeat(36)}`;
 		const text = `before token=${token} after`;
 
-		expect(guard.sanitize(text)).toBe("before token=[REDACTED] after");
+		expect(guard.sanitize(text)).toBe("before token=<redacted 40 chars> after");
 	});
 
 	it("masks a bare real-format synthetic token and preserves surrounding metadata", () => {
 		const token = `ghp_${"B".repeat(36)}`;
 		const text = `before ${token} after`;
 
-		expect(guard.sanitize(text)).toBe("before [REDACTED] after");
+		expect(guard.sanitize(text)).toBe("before <redacted 40 chars> after");
 	});
 });
