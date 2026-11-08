@@ -5,7 +5,6 @@ const content = [
 	{ type: "thinking" as const, thinking: "hmm", thinkingSignature: "" },
 	{ type: "text" as const, text: "first" },
 	{ type: "toolCall" as const, id: "t1", name: "read", arguments: {} },
-	{ type: "video" as const, video: "clip" },
 	{ type: "text" as const, text: "second" },
 ];
 
@@ -29,7 +28,7 @@ describe("messageContentText", () => {
 		expect(
 			messageContentText([
 				{ type: "text", text: "hello" },
-				{ type: "video", video: "clip" },
+				{ type: "video", data: "clip", mimeType: "video/mp4" },
 				{ type: "image", mimeType: "image/png", data: "encoded" },
 			]),
 		).toBe("hello\n\n[image/png image]");

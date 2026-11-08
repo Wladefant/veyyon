@@ -91,7 +91,7 @@ async function captureBody(
 					? init.body
 					: "{}";
 		body = JSON.parse(raw) as Record<string, unknown>;
-		return model.api === "google-generative-ai" ? googleSse() : codexSse();
+		return model.api === "google-generative-ai" ? googleOkSse() : codexSse();
 	}) as FetchImpl;
 	const isCodex = model.api === "openai-codex-responses";
 	for await (const event of streamSimple(model as never, context, {
