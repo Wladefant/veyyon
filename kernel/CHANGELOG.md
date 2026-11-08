@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- File session writers now refuse a durable `sync()` acknowledgement if a peer has replaced the journal pathname after the writer appended. This detects a displaced descriptor but is not cross-process append/rename coordination ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 - Append-writer rebinding refuses an unrelated regular journal unless its session header ID matches the pinned writer; this is not an interprocess append/rename transaction ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - File-backed append writers rebind to the current regular journal after atomic replacement, without recreating a missing path; uncoordinated cross-process rename races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
