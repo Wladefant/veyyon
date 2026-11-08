@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Python eval cancellation targets the request without killing the shared kernel, and only its original primary owner can reset it.
 
 ## [1.8.16] - 2026-11-08
 

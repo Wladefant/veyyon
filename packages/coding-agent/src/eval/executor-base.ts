@@ -470,7 +470,7 @@ export function attachSessionOwner(
 		if (session.hasFallbackOwner) {
 			session.ownerIds.delete(sessionId);
 			session.hasFallbackOwner = false;
-			session.primaryOwnerId = ownerId;
+			if (session.primaryOwnerId === sessionId) session.primaryOwnerId = ownerId;
 		}
 		session.ownerIds.add(ownerId);
 		if (session.primaryOwnerId === undefined) session.primaryOwnerId = ownerId;
@@ -1087,7 +1087,6 @@ export class KernelSessionPool<
 		try {
 			if (failed) {
 				await this.#retireFailedStartup(sessionKey);
-				return;
 			}
 			const session = active ?? (await starting?.promise.catch(() => undefined));
 			if (!session) return;
