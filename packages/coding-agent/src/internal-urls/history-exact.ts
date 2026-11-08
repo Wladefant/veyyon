@@ -343,9 +343,8 @@ function resemblesBrokenHeader(line: string): boolean {
 	const objectStart = trimmed.indexOf("{");
 	if (objectStart < 0) return false;
 	const suffix = trimmed.slice(objectStart);
-	// Impossible nested openers can hide a later root identity member.
-	if (/^\{\s*[\[{]/.test(suffix)) return true;
-
+	// Nested openers alone are valid legacy-title punctuation. Reject a malformed
+	// prefix only when the bounded scan finds identity-bearing evidence below.
 	const scanned = scanTopLevelMembers(suffix);
 	return scanned.sessionTypeMember ||
 		scanned.arrayIdentityCandidate ||
