@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Eval JSON displays preserve the oversized-record diagnosis for aggregate values and still withhold credential-bearing output ([PR #1030](https://github.com/Wladefant/veyyon/pull/1030)).
+
 ## [1.8.10] - 2026-11-08
 
 ### Added
@@ -13,7 +17,6 @@
 ### Fixed
 
 - Keep matched Unicode text visible in bounded `history://` search previews, including expanding case folds, astral-character boundaries, and long queries ([Refs #984](https://github.com/Wladefant/veyyon/issues/984)).
-- Eval JSON displays preserve the oversized-record diagnosis for aggregate values and still withhold credential-bearing output ([PR #1030](https://github.com/Wladefant/veyyon/pull/1030)).
 
 ## [1.8.8] - 2026-11-08
 
