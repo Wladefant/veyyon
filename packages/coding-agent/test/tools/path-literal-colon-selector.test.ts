@@ -412,6 +412,17 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		expect(await Bun.file(abs).text()).toBe("replaced\nsecond\n");
 	});
 
+	it("parses selector tails after relative and Windows drive paths", () => {
+		const relative = "selector-fixture.txt";
+		const windowsPath = "C:\\workspace\\selector-fixture.txt";
+		for (const base of [relative, windowsPath]) {
+			expect(splitPathAndSel(`${base}:1-3`)).toEqual({ path: base, sel: "1-3" });
+			expect(splitPathAndSel(`${base}:raw`)).toEqual({ path: base, sel: "raw" });
+			expect(splitPathAndSel(`${base}:raw:1-3`)).toEqual({ path: base, sel: "raw:1-3" });
+		}
+	});
+
+
 	it("keeps selector behavior in real reads and parses Windows absolute paths portably", async () => {
 		const relative = "selector-fixture.txt";
 		const absolute = path.join(tmpDir, relative);
@@ -434,6 +445,7 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		const relativeRange = await read(`${relative}:2-3`);
 		expect(relativeRange).toContain("one");
 		expect(relativeRange).toContain("two");
+
 		expect(await read(`${relative}:raw:2-3`)).toBe("one\ntwo");
 
 		const windowsAbsolute = absolute.replaceAll("/", "\\");
