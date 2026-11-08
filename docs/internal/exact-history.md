@@ -31,9 +31,13 @@ A running agent's default leaf comes from its active session manager, including
 after navigating to an earlier branch. A parked session defaults to the last
 stored entry only when every record needed for branch selection was readable.
 After a malformed or oversized record, an implicit branch read/search is unavailable;
-an explicit leaf is required to select archived evidence. Supplying an explicit leaf
-selects that branch in either case. Appending later records does not invalidate a
-page pinned to the earlier leaf; changing the selected record does.
+an explicit leaf is required to select archived evidence. Before the first session
+header, a non-JSON line is treated as a legacy title only when bounded identity
+scanning finds no session-header or addressable-entry claim, including claims hidden
+behind nested array or scalar prefixes. Ordinary punctuation in legacy titles remains
+accepted. Supplying an explicit leaf selects that branch in either case. Appending
+later records does not invalidate a page pinned to the earlier leaf; changing the
+selected record does.
 
 Oversized JSONL lines are discarded incrementally before their full text is
 allocated. A scan reads at most 128 MiB and indexes at most 100,000 entries and reports partial/unavailable

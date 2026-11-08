@@ -305,47 +305,12 @@ function inspectMalformedIdentitySuffix(line: string): { invalidIdentity: boolea
 	};
 }
 
-/** Detect a leading JSON member fragment without treating punctuation in a legacy title as corruption. */
-function hasLeadingJsonMemberFragment(line: string): boolean {
-	const trimmed = line.trimStart();
-	let cursor = 0;
-	if (trimmed[cursor] === "[") {
-		cursor++;
-		while (/\s/.test(trimmed[cursor] ?? "")) cursor++;
-	}
-	if (trimmed[cursor] !== '"') return false;
-
-	const start = cursor++;
-	while (cursor < trimmed.length) {
-		if (trimmed[cursor] === "\\") {
-			cursor += 2;
-			continue;
-		}
-		if (trimmed[cursor++] === '"') break;
-	}
-	if (trimmed[cursor - 1] !== '"') return false;
-
-	let next = cursor;
-	while (/\s/.test(trimmed[next] ?? "")) next++;
-	if (trimmed[next] !== ":") return false;
-	try {
-		return typeof JSON.parse(trimmed.slice(start, cursor)) === "string";
-	} catch {
-		return false;
-	}
-}
-
-/** Reject identity-bearing structural fragments, not ordinary title punctuation. */
+/** Reject identity-bearing fragments before a valid session header. */
 function resemblesBrokenHeader(line: string): boolean {
-	if (hasLeadingJsonMemberFragment(line)) return true;
-
-	const trimmed = line.trimStart();
-	const objectStart = trimmed.indexOf("{");
-	if (objectStart < 0) return false;
-	const suffix = trimmed.slice(objectStart);
-	// Nested openers alone are valid legacy-title punctuation. Reject a malformed
-	// prefix only when the bounded scan finds identity-bearing evidence below.
-	const scanned = scanTopLevelMembers(suffix);
+	// Wrap the whole malformed line as an object candidate. This lets the same
+	// bounded scanner see leading member fragments, nested arrays and scalar
+	// prefixes without treating ordinary title punctuation as identity evidence.
+	const scanned = scanTopLevelMembers(`{${line.trimStart()}}`);
 	return scanned.sessionTypeMember ||
 		scanned.arrayIdentityCandidate ||
 		scanned.duplicates.has("type") ||
@@ -354,7 +319,6 @@ function resemblesBrokenHeader(line: string): boolean {
 		scanned.claimedId !== undefined ||
 		(scanned.identityAmbiguous && scanned.nestedIdentityCandidate);
 }
-
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	let sessionTypeMember = false;
 	let malformedClaimedId: string | undefined;

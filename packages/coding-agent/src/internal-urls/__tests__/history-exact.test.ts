@@ -1318,19 +1318,31 @@ describe("history exact record lookup", () => {
 				expect(archivedSearch.status).toBe("partial");
 				expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["root"]);
 			}
-			// A blank separator cannot reclassify a damaged header as a title.
+			// A blank separator cannot reclassify a damaged identity fragment as a title.
 			for (const damagedFirst of [
 				'"type":"session","id":"earlier"}',
 				'"\\u0074ype":"session","id":"earlier"}',
 				'["type":"session","id":"earlier"}',
+				'[["type":"session","id":"earlier"}',
+				'[["metadata":"safe","type":"session","id":"earlier"}',
+				'x[["type":"session","id":"earlier"}',
+				'[["type":"message","id":"earlier","parentId":"root"}',
 				'"id":"earlier"}',
 			]) {
 				await fs.writeFile(file, Buffer.concat([Buffer.from(`${damagedFirst}\n\n`), header, root]));
+				const implicitExact = await readStoredHistoryEntry(file, {
+					entryId: "root", offset: 0, limit: 256,
+				});
+				expect(implicitExact.status).toBe("unavailable");
+				expect(implicitExact.fragment).toBeUndefined();
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "root", leafId: "root", offset: 0, limit: 256,
 				});
 				expect(exact.status).toBe("unavailable");
 				expect(exact.fragment).toBeUndefined();
+				const implicitSearch = await searchStoredHistoryEntries(file, { query: "needle", limit: 3 });
+				expect(implicitSearch.status).toBe("unavailable");
+				expect(implicitSearch.matches).toEqual([]);
 				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: "root", limit: 3 });
 				expect(search.status).toBe("unavailable");
 				expect(search.matches).toEqual([]);
@@ -1353,6 +1365,13 @@ describe("history exact record lookup", () => {
 				});
 				expect(titledSearch.status).toBe("ok");
 				expect(titledSearch.matches.map(match => match.entryId)).toEqual(["root"]);
+				const implicitTitledExact = await readStoredHistoryEntry(file, {
+					entryId: "root", offset: 0, limit: 256,
+				});
+				expect(implicitTitledExact.status).toBe("ok");
+				const implicitTitledSearch = await searchStoredHistoryEntries(file, { query: "needle", limit: 3 });
+				expect(implicitTitledSearch.status).toBe("ok");
+				expect(implicitTitledSearch.matches.map(match => match.entryId)).toEqual(["root"]);
 			}
 
 			// Blank delimiters preceding a valid header remain accepted.
