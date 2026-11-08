@@ -310,16 +310,62 @@ describe("history:// caller-bound archived opt-in", () => {
   it("caps archived index pages by UTF-8 bytes for long registered IDs", async () => {
     registerLiveRef("main:a", "session-a", "session-a");
     const caller = makeToolSession("main:a", () => "session-a");
-    for (let i = 0; i < 50; i++) {
-      const id = "Long-" + String(i).padStart(2, "0") + "-" + "x".repeat(900);
+    const expectedIds = Array.from(
+      { length: 50 },
+      (_, i) => "Long-" + String(i).padStart(2, "0") + "-" + "x".repeat(900),
+    );
+    for (const [i, id] of expectedIds.entries()) {
       registerArchivedRef(id, "session-a", "/synthetic/long-" + i + ".jsonl");
     }
-    const page = await read(caller, "history://?archived=1&limit=100");
-    expect(Buffer.byteLength(page, "utf-8")).toBeLessThanOrEqual(24_000);
-    const shown = Number(page.match(/Showing (\d+) of 50 parked agents/)?.[1]);
-    expect(shown).toBeGreaterThan(0);
-    expect(shown).toBeLessThan(50);
-    expect(page).toContain("Next page:");
+
+    let offset = 0;
+    let revision: string | undefined;
+    let pageCount = 0;
+    const actualIds: string[] = [];
+    for (let pageIndex = 0; pageIndex < 50; pageIndex++) {
+      const request =
+        "history://?archived=1&offset=" +
+        offset +
+        "&limit=100" +
+        (revision === undefined ? "" : "&revision=" + revision);
+      const page = await read(caller, request);
+      pageCount++;
+      expect(Buffer.byteLength(page, "utf-8")).toBeLessThanOrEqual(24_000);
+
+      const pageRevision = page.match(/^Revision: .([a-f0-9]{64}).$/m)?.[1];
+      expect(pageRevision).toBeDefined();
+      if (revision !== undefined) expect(pageRevision).toBe(revision);
+      else revision = pageRevision;
+
+      const summary = page.match(/Showing (\d+) of 50 parked agents \(offset (\d+)\)/);
+      expect(summary).toBeDefined();
+      const shown = Number(summary?.[1]);
+      expect(Number(summary?.[2])).toBe(offset);
+      expect(shown).toBeGreaterThan(0);
+
+      const ids = [...page.matchAll(/- .("Long-\d{2}-x+"). —/g)].map(match => JSON.parse(match[1]!));
+      expect(ids).toHaveLength(shown);
+      actualIds.push(...ids);
+
+      const next = page.match(
+        /Next page: .history:\/\/\?archived=1&offset=(\d+)&limit=(\d+)&revision=([a-f0-9]{64})./,
+      );
+      if (!next) {
+        expect(offset + shown).toBe(50);
+        break;
+      }
+
+      const nextOffset = Number(next[1]);
+      expect(nextOffset).toBe(offset + shown);
+      expect(Number(next[2])).toBe(100);
+      expect(next[3]).toBe(revision);
+      offset = nextOffset;
+    }
+
+    expect(pageCount).toBeGreaterThan(1);
+    expect(actualIds).toHaveLength(50);
+    expect(new Set(actualIds).size).toBe(50);
+    expect(new Set(actualIds)).toEqual(new Set(expectedIds));
 
     registerArchivedRef("z".repeat(1_025), "session-a", "/synthetic/oversized-id.jsonl");
     await expect(read(caller, "history://?archived=1")).rejects.toThrow(ARCHIVED_UNAVAILABLE);
