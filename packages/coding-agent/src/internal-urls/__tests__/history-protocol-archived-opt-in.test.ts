@@ -252,6 +252,78 @@ describe("history:// caller-bound archived opt-in", () => {
     }
   });
 
+  it("paginates a bounded archived index and rejects stale continuation cursors", async () => {
+    registerLiveRef("main:a", "session-a", "session-a");
+    const caller = makeToolSession("main:a", () => "session-a");
+    for (let i = 0; i < 205; i++) {
+      const id = "Archived-" + String(i).padStart(3, "0");
+      registerArchivedRef(id, "session-a", "/synthetic/" + id + ".jsonl");
+    }
+
+    const first = await read(caller, "history://?archived=1&limit=100");
+    expect(Buffer.byteLength(first, "utf-8")).toBeLessThanOrEqual(24_000);
+    expect(first).toContain('`"Archived-000"`');
+    expect(first).toContain('`"Archived-099"`');
+    expect(first).not.toContain('`"Archived-100"`');
+    const firstNext = first.match(/history:\/\/\?archived=1&offset=(\d+)&limit=100&revision=([a-f0-9]{64})/);
+    expect(firstNext).toBeDefined();
+    const secondOffset = Number(firstNext?.[1]);
+    const revision = firstNext?.[2];
+    expect(secondOffset).toBe(100);
+    expect(revision).toBeDefined();
+
+    const second = await read(
+      caller,
+      "history://?archived=1&offset=" + secondOffset + "&limit=100&revision=" + revision,
+    );
+    expect(second).toContain('`"Archived-100"`');
+    expect(second).toContain('`"Archived-199"`');
+    expect(second).not.toContain('`"Archived-200"`');
+    const secondNext = second.match(/history:\/\/\?archived=1&offset=(\d+)&limit=100&revision=([a-f0-9]{64})/);
+    expect(secondNext).toBeDefined();
+    expect(Number(secondNext?.[1])).toBe(200);
+    expect(secondNext?.[2]).toBe(revision);
+
+    const third = await read(
+      caller,
+      "history://?archived=1&offset=200&limit=100&revision=" + revision,
+    );
+    expect(third).toContain('`"Archived-200"`');
+    expect(third).toContain('`"Archived-204"`');
+    expect(third).not.toMatch(/Next page:/);
+
+    const combined = first + "\n" + second + "\n" + third;
+    const ids = [...combined.matchAll(/- `("Archived-\d{3}")` —/g)].map(match => JSON.parse(match[1]!));
+    expect(ids).toHaveLength(205);
+    expect(new Set(ids).size).toBe(205);
+
+    registerArchivedRef("Archived-205", "session-a", "/synthetic/Archived-205.jsonl");
+    await expect(
+      read(caller, "history://?archived=1&offset=100&limit=100&revision=" + revision),
+    ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+    await expect(read(caller, "history://?archived=1&offset=100&limit=100")).rejects.toThrow(
+      ARCHIVED_UNAVAILABLE,
+    );
+    await expect(read(caller, "history://?archived=1&limit=101")).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+  });
+
+  it("caps archived index pages by UTF-8 bytes for long registered IDs", async () => {
+    registerLiveRef("main:a", "session-a", "session-a");
+    const caller = makeToolSession("main:a", () => "session-a");
+    for (let i = 0; i < 50; i++) {
+      const id = "Long-" + String(i).padStart(2, "0") + "-" + "x".repeat(900);
+      registerArchivedRef(id, "session-a", "/synthetic/long-" + i + ".jsonl");
+    }
+    const page = await read(caller, "history://?archived=1&limit=100");
+    expect(Buffer.byteLength(page, "utf-8")).toBeLessThanOrEqual(24_000);
+    const shown = Number(page.match(/Showing (\d+) of 50 parked agents/)?.[1]);
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(50);
+    expect(page).toContain("Next page:");
+
+    registerArchivedRef("z".repeat(1_025), "session-a", "/synthetic/oversized-id.jsonl");
+    await expect(read(caller, "history://?archived=1")).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+  });
   it("requires a live non-advisor caller bound to the exact global registry and revalidates the session", () => {
     registerLiveRef("main:a", "session-a", "session-a");
     let currentSessionId = "session-a";

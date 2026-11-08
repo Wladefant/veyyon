@@ -19,6 +19,7 @@
  * - history://<agentId>?entry=<entryId>&offset=0&limit=8000 - Exact stored record page
  */
 
+import { createHash } from "node:crypto";
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -75,10 +76,17 @@ function registeredConversationScopes(): string[] {
 
 
 const ARCHIVED_HISTORY_UNAVAILABLE = "Archived history is unavailable for this caller and request.";
+const DEFAULT_ARCHIVED_INDEX_LIMIT = 50;
+const MAX_ARCHIVED_INDEX_LIMIT = 100;
+const MAX_ARCHIVED_INDEX_OFFSET = 100_000;
+const MAX_ARCHIVED_INDEX_ENTRIES = 100_000;
+const MAX_ARCHIVED_INDEX_ID_BYTES = 1_024;
+const MAX_ARCHIVED_INDEX_PAGE_BYTES = 24_000;
 
 type ResolvedHistoryCaller = NonNullable<ReturnType<typeof resolveHistoryCallerCapability>>;
+type ArchivedIndexRequest = { offset: number; limit: number; revision?: string };
 type ArchivedHistoryMode =
-  | { kind: "index" }
+  | { kind: "index"; request: ArchivedIndexRequest }
   | { kind: "exact"; request: NonNullable<ReturnType<typeof parseExactHistoryRequest>> }
   | { kind: "search"; request: NonNullable<ReturnType<typeof parseHistorySearchRequest>> };
 
@@ -114,8 +122,24 @@ function parseArchivedHistoryMode(url: InternalUrl, agentId: string): ArchivedHi
   }
 
   if (!agentId) {
-    if (keys.some(key => key !== "archived")) return archivedUnavailable();
-    return { kind: "index" };
+    const allowed = new Set(["archived", "offset", "limit", "revision"]);
+    if (keys.some(key => !allowed.has(key))) return archivedUnavailable();
+    const readIndexNumber = (name: string, fallback: number, maximum: number): number => {
+      const value = url.searchParams.get(name);
+      if (value === null) return fallback;
+      if (!/^(0|[1-9][0-9]*)$/.test(value)) return archivedUnavailable();
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed > maximum) return archivedUnavailable();
+      return parsed;
+    };
+    const offset = readIndexNumber("offset", 0, MAX_ARCHIVED_INDEX_OFFSET);
+    const limit = readIndexNumber("limit", DEFAULT_ARCHIVED_INDEX_LIMIT, MAX_ARCHIVED_INDEX_LIMIT);
+    const revision = url.searchParams.get("revision") ?? undefined;
+    if (limit === 0 || (revision !== undefined && !/^[a-f0-9]{64}$/.test(revision))) {
+      return archivedUnavailable();
+    }
+    if (offset > 0 && revision === undefined) return archivedUnavailable();
+    return { kind: "index", request: { offset, limit, revision } };
   }
 
   const hasEntry = url.searchParams.has("entry");
@@ -174,8 +198,8 @@ function archivedTargetForCaller(caller: ResolvedHistoryCaller, agentId: string)
   return target;
 }
 
-/** A same-scope, parked-only roster. It never scans or merges disk-only names. */
-function renderArchivedIndex(refs: AgentRef[], scope: string): string {
+/** A bounded, revision-pinned same-scope parked-agent index. */
+function renderArchivedIndex(refs: AgentRef[], scope: string, request: ArchivedIndexRequest): string {
   const entries = refs
     .filter(
       ref =>
@@ -188,21 +212,66 @@ function renderArchivedIndex(refs: AgentRef[], scope: string): string {
     )
     .sort((a, b) => a.id.localeCompare(b.id));
 
-  const lines = ["# Archived agents in this conversation", ""];
-  if (entries.length === 0) {
-    lines.push("No parked agents in this conversation.");
-  } else {
-    lines.push("| id | status | kind | last activity |", "|---|---|---|---|");
-    for (const ref of entries) {
-      lines.push(`| ${ref.id} | ${ref.status} | ${ref.kind} | ${formatAgo(ref.lastActivity)} |`);
-    }
+  if (entries.length > MAX_ARCHIVED_INDEX_ENTRIES) return archivedUnavailable();
+  if (entries.some(ref => Buffer.byteLength(ref.id, "utf-8") > MAX_ARCHIVED_INDEX_ID_BYTES)) {
+    return archivedUnavailable();
   }
-  lines.push(
+
+  const digest = createHash("sha256").update(JSON.stringify(["archived-index-v1", scope])).update("\n");
+  for (const ref of entries) {
+    digest.update(JSON.stringify([ref.id, ref.kind, ref.lastActivity, ref.sessionFile])).update("\n");
+  }
+  const revision = digest.digest("hex");
+  if (request.revision !== undefined && request.revision !== revision) return archivedUnavailable();
+  if (request.offset > entries.length) return archivedUnavailable();
+
+  const footer = [
     "",
     "Read an exact stored record with `read history://<id>?archived=1&entry=<entryId>`.",
     "Search stored records with `read history://<id>?archived=1&q=<term>`.",
-  );
-  return `${lines.join("\n")}\n`;
+  ];
+  const selected = entries.slice(request.offset, request.offset + request.limit);
+  const buildPage = (page: AgentRef[]): string => {
+    const nextOffset = request.offset + page.length;
+    const lines = [
+      "# Archived agents in this conversation",
+      "",
+      "Revision: `" + revision + "`",
+      "Showing " + page.length + " of " + entries.length + " parked agents (offset " + request.offset + ").",
+      "",
+    ];
+    if (page.length === 0) {
+      lines.push(entries.length === 0 ? "No parked agents in this conversation." : "No entries remain at this offset.");
+    } else {
+      for (const ref of page) {
+        // JSON quoting plus a code span keeps model-derived IDs on one inert line.
+        const id = JSON.stringify(ref.id).replace(/`/g, "\\u0060");
+        lines.push("- `" + id + "` — " + ref.status + " (" + ref.kind + "); last activity " + formatAgo(ref.lastActivity));
+      }
+    }
+    if (nextOffset < entries.length) {
+      lines.push(
+        "",
+        "Next page: `history://?archived=1&offset=" + nextOffset + "&limit=" + request.limit + "&revision=" + revision + "`",
+      );
+    }
+    lines.push(...footer);
+    return lines.join("\n") + "\n";
+  };
+
+  let page = selected;
+  let content = buildPage(page);
+  while (Buffer.byteLength(content, "utf-8") > MAX_ARCHIVED_INDEX_PAGE_BYTES && page.length > 0) {
+    page = page.slice(0, -1);
+    content = buildPage(page);
+  }
+  if (
+    Buffer.byteLength(content, "utf-8") > MAX_ARCHIVED_INDEX_PAGE_BYTES ||
+    (request.offset < entries.length && page.length === 0)
+  ) {
+    return archivedUnavailable();
+  }
+  return content;
 }
 
 async function resolveArchivedHistory(
@@ -215,13 +284,13 @@ async function resolveArchivedHistory(
   if (!caller) return archivedUnavailable();
 
   if (mode.kind === "index") {
-    const content = renderArchivedIndex(caller.registry.list(), caller.scope);
+    const content = renderArchivedIndex(caller.registry.list(), caller.scope, mode.request);
     return {
       url: url.href,
       content,
       contentType: "text/markdown",
       size: Buffer.byteLength(content, "utf-8"),
-      notes: ["Same-conversation parked-only index; disk-only transcript names are not enumerated"],
+      notes: ["Same-conversation parked-only index; bounded to 24,000 bytes per revision-pinned page; disk-only transcript names are not enumerated"],
     };
   }
 

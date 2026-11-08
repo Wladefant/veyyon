@@ -21,7 +21,8 @@ Multi-conversation archived retrieval is available only through an explicit
 `archived=1` query on that individual read:
 
 ```text
-history://?archived=1
+history://?archived=1&limit=50
+history://?archived=1&offset=50&limit=50&revision=<returned-sha256>
 history://Scout?archived=1&entry=entry-id&limit=8000
 history://Scout?archived=1&q=deployment%20error
 ```
@@ -38,7 +39,7 @@ with `session === null` and a retained `sessionFile`. Exact reads and search use
 the existing read-only scanners and retain their 12,000-code-point page,
 128 MiB/100,000-entry scan, and 500-snippet bounds. The archived mode does not
 expose the concise full-transcript overview. Its index lists same-scope parked
-refs only; it never enumerates disk-only names. Unknown, foreign, live, advisor,
+refs only; it never enumerates disk-only names. The index is limited to 100,000 refs, 100 entries and 24,000 UTF-8 bytes per page; each page carries a SHA-256 roster revision and continuation offset. A changed roster invalidates the old cursor and requires a fresh offset-zero read. IDs over 1 KiB fail closed rather than expanding the response. Unknown, foreign, live, advisor,
 unscoped, or unregistered disk-only targets fail with the same unavailable
 diagnostic. A case-folded alias is refused when more than one registered
 identity matches; an exact ID in the caller's scope remains usable.
