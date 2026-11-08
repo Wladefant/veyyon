@@ -185,6 +185,43 @@ function scanTopLevelMembers(raw: string): {
 					}
 				}
 			}
+			// A malformed array cannot contain bare object members. Before a
+			// root type is established, an identity-looking pair here could be
+			// a hidden session header or addressable entry claim. Once a root
+			// message type is known, nested malformed metadata remains recoverable.
+			if (depth === 1 && arrayDepth > 0 && topLevelType === undefined && keyLike) {
+				let key: string | undefined;
+				try {
+					key = JSON.parse(raw.slice(start, i)) as string;
+				} catch {
+					// An invalid array string cannot establish an identity claim.
+				}
+				if (key === "type" || key === "id") {
+					let valueCursor = next + 1;
+					while (/\\s/.test(raw[valueCursor] ?? "")) valueCursor++;
+					if (raw[valueCursor] === '"') {
+						const valueStart = valueCursor++;
+						while (valueCursor < raw.length) {
+							if (raw[valueCursor] === "\\\\") {
+								valueCursor += 2;
+								continue;
+							}
+							if (raw[valueCursor++] === '"') break;
+						}
+						if (raw[valueCursor - 1] === '"' && valueCursor - valueStart <= MAX_ID_MEMBER_JSON_CHARACTERS) {
+							try {
+								const member = JSON.parse(raw.slice(valueStart, valueCursor)) as unknown;
+								if ((key === "type" && member === "session") ||
+									(key === "id" && typeof member === "string" && ADDRESSABLE_HISTORY_ID.test(member))) {
+									identityAmbiguous = true;
+								}
+							} catch {
+								// An invalid string value cannot establish an identity claim.
+							}
+						}
+					}
+				}
+			}
 			continue;
 		}
 		// Before the first root member, an object/array/scalar opener cannot be
