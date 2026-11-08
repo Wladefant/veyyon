@@ -177,6 +177,38 @@ describe("the opt-in task record policy preserves execution and evidence", () =>
 		expect(await runner.emit(event())).toBeUndefined();
 	});
 
+	it("rejects duplicate JSON member names before task-record capture", async () => {
+		const ownerField = '"ownerSessionId":"' + manager.getSessionId() + '"';
+		const malformed = [
+			recordText.replace(',"nextActions":', ',"pending":[],"nextActions":'),
+			recordText.replace(',"facts":', ',"constraints":[],"facts":'),
+			recordText.replace(ownerField, '"ownerSessionId":"foreign-session",' + ownerField),
+			recordText.replace(ownerField, ownerField + ',"ownerSessionId":"foreign-session"'),
+			recordText.replace(ownerField, ownerField + ',"owner\\u0053essionId":"foreign-session"'),
+			recordText.replace(',"nextActions":', ',"\\u0070ending":[],"nextActions":'),
+			recordText.replace('"id":"job-start-1","summary":', '"id":"shadow","id":"job-start-1","summary":'),
+			recordText.replace('"id":"job-start-1","summary":', '"id":"job-start-1","id":"shadow","summary":'),
+		] as const;
+		for (const candidate of malformed) {
+			expect(candidate).not.toBe(recordText);
+			expect(() => parseContinuityTaskRecord(candidate)).toThrow("duplicate JSON member names");
+		}
+		const command = extension.commands.get("context-record");
+		if (!command) throw new Error("Expected the registered command");
+		const beforeBranch = JSON.stringify(manager.getBranch());
+		const beforeFile = await fs.readFile(originalFile, "utf8");
+		const beforeLeaf = manager.getLeafId();
+		for (const candidate of malformed) {
+			await command.handler(candidate, runner.createCommandContext());
+			expect(manager.getLeafId()).toBe(beforeLeaf);
+			expect(JSON.stringify(manager.getBranch())).toBe(beforeBranch);
+			expect(await fs.readFile(originalFile, "utf8")).toBe(beforeFile);
+		}
+		const valid = parseContinuityTaskRecord(recordText);
+		expect(valid.constraints).toEqual(["Do not start the job again."]);
+		expect(valid.pending).toEqual([{ id: "job-1", kind: "job", ownerSessionId: manager.getSessionId() }]);
+	});
+
 	for (const fault of ["missing-id", "archive-write", "missing-path"] as const) {
 		it(`cancels when ${fault} prevents a durable recovery pointer`, async () => {
 			runtime.flagValues.set(TASK_RECORD_FLAG, true);
