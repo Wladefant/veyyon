@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The bwrap test sandbox binds the tested worktree's workspace packages when `node_modules` comes from an external checkout, so imports such as `@veyyon/catalog/models` resolve ([PR #1038](https://github.com/Wladefant/veyyon/pull/1038)).
+
 ## [1.8.11] - 2026-11-08
 
 ### Fixed
