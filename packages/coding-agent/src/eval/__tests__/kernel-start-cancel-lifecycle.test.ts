@@ -105,3 +105,28 @@ test("a caller arriving while an abandoned startup is being released gets a fres
 	expect(counter.shutdowns).toBe(1);
 	expect(pool.sessions.get("key")).toBe(next);
 });
+
+
+test("only the primary owner can reset a shared kernel session", async () => {
+	const counter = { shutdowns: 0 };
+	const release = Promise.withResolvers<void>();
+	const shutdownStarted = Promise.withResolvers<void>();
+	const kernel = fakeKernel(counter, release.promise, () => shutdownStarted.resolve());
+	const pool = new KernelSessionPool({
+		languageName: "Python",
+		logLabel: "primary-reset-owner",
+		startKernel: async () => kernel,
+	});
+	const primary = await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-a" });
+	await pool.acquireSession("shared", "session", process.cwd(), { kernelOwnerId: "owner-b" });
+	await expect(pool.resetSession("shared", "owner-b")).rejects.toThrow(/primary kernel owner/);
+	expect(pool.sessions.get("shared")).toBe(primary);
+	expect(counter.shutdowns).toBe(0);
+	const ownerReset = pool.resetSession("shared", "owner-a");
+	await shutdownStarted.promise;
+	await expect(pool.resetSession("shared", "owner-b")).rejects.toThrow(/primary kernel owner/);
+	release.resolve();
+	await ownerReset;
+	expect(counter.shutdowns).toBe(1);
+	expect(pool.sessions.has("shared")).toBe(false);
+});

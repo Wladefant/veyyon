@@ -3,6 +3,9 @@
 > **Generated file.** This changelog is assembled from every `packages/*/CHANGELOG.md`. Add your entry to the Unreleased section of the changelog for the package you changed, then run `bun scripts/sync-root-changelog.ts`. An entry written here is deleted by the next regeneration.
 
 ## [Unreleased]
+### Fixed
+
+- Python eval cancellation targets the request without killing the shared kernel, and only its original primary owner can reset it.
 
 ## [1.8.8] - 2026-11-08
 

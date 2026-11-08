@@ -448,7 +448,7 @@ describe("an owner disposed during kernel startup", () => {
 				expect(failed.shutdownCalls).toBe(3);
 				await pool.disposeAll();
 				expect(failed.shutdownCalls).toBe(4);
-				await expect(pool.resetSession(KEY)).rejects.toThrow(/shutdown/);
+				await expect(pool.resetSession(KEY, "owner")).rejects.toThrow(/shutdown/);
 				expect(failed.shutdownCalls).toBe(5);
 				expect(starts).toBe(1);
 				failed.exitConfirmed = true;

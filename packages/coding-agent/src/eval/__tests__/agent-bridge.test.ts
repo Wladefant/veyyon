@@ -837,6 +837,39 @@ describe("agent() through eval runtimes", () => {
 		expect(result.output.trim()).toBe("hello from python");
 	});
 
+	it("runs an agent bridge child eval on the same Python kernel before its async caller resumes", async () => {
+		using tempDir = TempDir.createSync("@veyyon-eval-agent-py-reentrant-");
+		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-reentrant");
+		mockAgents();
+		let childFinished = false;
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			const child = await executePython("print('CHILD_REQUEST_FINISHED', flush=True)", {
+				cwd: tempDir.path(),
+				sessionId,
+				sessionFile,
+				kernelMode: "session",
+				toolSession: session,
+			});
+			expect(child.exitCode).toBe(0);
+			expect(child.output.trim()).toBe("CHILD_REQUEST_FINISHED");
+			childFinished = true;
+			return singleResult(options, { output: child.output.trim() });
+		});
+
+		const result = await executePython(
+			["import asyncio", "await asyncio.to_thread(agent, 'invoke child')", "print('PARENT_RESUMED', flush=True)"].join("\n"),
+			{ cwd: tempDir.path(), sessionId, sessionFile, kernelMode: "session", toolSession: session },
+		);
+		if (result.exitCode === undefined && result.cancelled) {
+			expect(result.output).toBe("");
+			return; // kernel unavailable in this environment
+		}
+
+		expect(result.exitCode).toBe(0);
+		expect(childFinished).toBe(true);
+		expect(result.output).toContain("PARENT_RESUMED");
+	});
+
 	it("bounds Python parallel() by the agent.maxConcurrency setting while preserving order", async () => {
 		using tempDir = TempDir.createSync("@veyyon-eval-agent-py-parallel-");
 		const settings = Settings.isolated({

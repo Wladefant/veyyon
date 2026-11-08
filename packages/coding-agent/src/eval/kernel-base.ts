@@ -58,6 +58,8 @@ export interface KernelExecuteResult {
 	 * kernel died unexpectedly). When false, the kernel remains reusable.
 	 */
 	kernelKilled?: boolean;
+	/** Cancellation was sent, but this request has not acknowledged it yet. */
+	cancellationPending?: boolean;
 }
 
 export interface KernelShutdownResult {
@@ -124,6 +126,8 @@ export interface BaseKernelOptions<TExecuteOptions extends KernelExecuteOptions 
 	shutdownGraceMs?: number;
 	/** Serializes an execution request into the runner's wire protocol. */
 	buildPayload?: (code: string, msgId: string, options?: TExecuteOptions) => string;
+	/** Serializes request-scoped cancellation into the runner wire protocol. */
+	buildCancelPayload?: (msgId: string) => string;
 }
 export type FrameType = "started" | "stdout" | "stderr" | "display" | "result" | "error" | "done";
 
@@ -149,6 +153,7 @@ interface PendingExecution {
 	cancelled: boolean;
 	timedOut: boolean;
 	stdinRequested: boolean;
+	cancellationPending: boolean;
 	kernelKilled: boolean;
 	settled: boolean;
 	escalationTimer?: NodeJS.Timeout;
@@ -653,10 +658,12 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#ownedProcess: Process | null | undefined;
 	readonly #ownedTree = new Map<number, Process>();
 	#pending = new Map<string, PendingExecution>();
-	readonly #options: Required<BaseKernelOptions<TExecuteOptions>>;
+	readonly #options: Omit<Required<BaseKernelOptions<TExecuteOptions>>, "buildCancelPayload">;
+	readonly #buildCancelPayload: ((msgId: string) => string) | undefined;
 
 	constructor(id: string, options: BaseKernelOptions<TExecuteOptions>) {
 		this.id = id;
+		this.#buildCancelPayload = options.buildCancelPayload;
 		this.#options = {
 			languageName: options.languageName,
 			traceIpc: options.traceIpc ?? false,
@@ -705,6 +712,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			cancelled: false,
 			timedOut: false,
 			stdinRequested: false,
+			cancellationPending: false,
 			settled: false,
 			kernelKilled: false,
 		};
@@ -723,6 +731,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				timedOut: pending.timedOut,
 				stdinRequested: pending.stdinRequested,
 				kernelKilled: pending.kernelKilled,
+				cancellationPending: pending.cancellationPending,
 			});
 		};
 
@@ -731,6 +740,18 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			if (pending.settled || pending.escalationTimer) return;
 			if (!requestWritten) {
 				finalize();
+				return;
+			}
+			if (this.#buildCancelPayload) {
+				pending.cancellationPending = true;
+				void this.#writeLine(this.#buildCancelPayload(msgId)).catch(error => {
+					logger.debug(`${this.#options.languageName} cancellation frame write failed`, { error: errorMessage(error) });
+				});
+				const grace = setTimeout(() => {
+					if (!pending.settled) finalize();
+				}, this.#options.interruptEscalationMs);
+				grace.unref?.();
+				pending.escalationTimer = grace;
 				return;
 			}
 			void this.interrupt();
@@ -1074,6 +1095,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				if (frame.cancelled) {
 					pending.cancelled = true;
 				}
+				pending.cancellationPending = false;
 				pending.finalize?.();
 				return;
 			}

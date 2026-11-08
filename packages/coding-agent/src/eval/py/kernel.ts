@@ -47,12 +47,6 @@ const TRACE_IPC = $flag(kernelIpcTraceEnvVar("PYTHON"));
 const ensureRunnerScript = createRunnerScriptPublisher("python", RUNNER_SCRIPT, "py");
 
 const STARTUP_TIMEOUT_MS = DEFAULT_KERNEL_STARTUP_TIMEOUT_MS;
-// How long to wait after SIGINT for the runner to emit `done`. If the cell is
-// stuck in code that ignores Python signals (e.g. a C extension holding the
-// GIL), we escalate to a full subprocess shutdown so the host queue unblocks
-// instead of hanging the session forever. The grace window is intentionally
-// generous: a clean interrupt is far preferable to losing the persistent
-// kernel's state, so we only kill as a last-resort recovery path.
 
 export interface PythonKernelAvailability {
 	ok: boolean;
@@ -92,6 +86,7 @@ export class PythonKernel extends BaseKernel {
 			traceIpc: TRACE_IPC,
 			interruptEscalationMs: KERNEL_INTERRUPT_ESCALATION_MS,
 			shutdownGraceMs: KERNEL_SHUTDOWN_GRACE_MS,
+		buildCancelPayload: msgId => JSON.stringify({ type: "cancel", id: msgId }),
 		});
 	}
 

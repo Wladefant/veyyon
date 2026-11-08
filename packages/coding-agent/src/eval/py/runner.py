@@ -38,6 +38,7 @@ import json
 import locale
 import os
 import re
+import _thread
 import runpy
 import shlex
 import signal
@@ -294,6 +295,11 @@ class _RunnerState:
         # processes inheriting stdout). With overlapping requests the most
         # recently started one wins — strictly better than dropping the bytes.
         self.capture_rid: str | None = None
+        self.request_tasks: dict[str, asyncio.Task] = {}
+        self.cancelled_requests: set[str] = set()
+        self.cancel_lock = threading.RLock()
+        self.known_requests: set[str] = set()
+        self.started_requests: set[str] = set()
 
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -1149,12 +1155,7 @@ def _run_compiled_sync(code, ns: dict, *, want_value: bool) -> Any:
 
 
 async def _run_compiled_async(code, ns: dict, *, want_value: bool) -> Any:
-    """Execute a code object in the persistent event loop.
-
-    Coroutine code is awaited in this task so top-level ``await`` interleaves
-    with sibling requests. Plain statement/expression code runs on the main
-    runner thread so SIGINT can interrupt it reliably.
-    """
+    """Await coroutine code in this request; keep synchronous code on the main thread."""
     if code.co_flags & inspect.CO_COROUTINE:
         result = await eval(code, ns)
         return result if want_value else None
@@ -1214,30 +1215,40 @@ async def _exec_source_async(source: str, ns: dict) -> None:
 
 
 def _install_idle_sigint() -> None:
+    def cancel_current_request(_signum, _frame):
+        rid = _CURRENT_RID.get()
+        with _STATE.cancel_lock:
+            requested = rid in _STATE.started_requests and rid in _STATE.cancelled_requests
+        if requested:
+            raise KeyboardInterrupt
+
     try:
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, cancel_current_request)
     except (OSError, ValueError):
-        # Some platforms (Windows in non-console mode) reject this; fine.
         pass
 
 
-def _install_exec_sigint() -> None:
-    try:
-        signal.signal(signal.SIGINT, signal.default_int_handler)
-    except (OSError, ValueError):
-        pass
+def _cancel_task(rid: str) -> None:
+    with _STATE.cancel_lock:
+        task = _STATE.request_tasks.get(rid)
+        started = rid in _STATE.started_requests
+    # A task cancelled before its first step cannot emit its done frame.
+    if task is not None and started:
+        task.cancel()
 
 
-def _begin_exec_sigint() -> None:
-    _STATE.active_executions += 1
-    _install_exec_sigint()
-
-
-def _end_exec_sigint() -> None:
-    if _STATE.active_executions > 0:
-        _STATE.active_executions -= 1
-    if _STATE.active_executions == 0:
-        _install_idle_sigint()
+def _cancel_request(rid: str, loop: asyncio.AbstractEventLoop) -> None:
+    with _STATE.cancel_lock:
+        if rid not in _STATE.known_requests:
+            return
+        _STATE.cancelled_requests.add(rid)
+        task = _STATE.request_tasks.get(rid)
+        active = task is not None and task is asyncio.current_task(loop=loop)
+    if active:
+        # The handler checks the request again when Python delivers the signal.
+        # A late interrupt cannot cancel the next cell.
+        _thread.interrupt_main()
+    loop.call_soon_threadsafe(_cancel_task, rid)
 
 
 _MANAGED_ENV_KEYS = (
@@ -1295,9 +1306,8 @@ def _apply_request_runtime(req: dict) -> None:
 # where the C library has no such call (macOS, musl, Windows).
 _MALLOC_TRIM: Any = None
 
-
 def _trim_freed_heap() -> None:
-    """Return the free pages of the C heap to the system, where glibc provides ``malloc_trim``."""
+    """Return free C-heap pages where glibc provides ``malloc_trim``."""
     global _MALLOC_TRIM
     if _MALLOC_TRIM is None:
         _MALLOC_TRIM = False
@@ -1316,7 +1326,7 @@ def _trim_freed_heap() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Request dispatch
+# Request execution
 # ---------------------------------------------------------------------------
 
 
@@ -1326,77 +1336,45 @@ async def _handle_request_async(req: dict) -> None:
     displayed_matplotlib_token = _CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS.set(set())
     _STATE.capture_rid = rid
     _STATE.user_ns["__veyyon_run_id__"] = rid
-    _STATE.cancel_requested = False
     _STATE.execution_count += 1
     execution_count = _STATE.execution_count
     _emit({"type": "started", "id": rid})
-
-    status: str = "ok"
+    status = "ok"
     cancelled = False
-
     try:
         try:
+            with _STATE.cancel_lock:
+                _STATE.started_requests.add(rid)
+                requested = rid in _STATE.cancelled_requests
+            if requested:
+                raise asyncio.CancelledError
             _apply_request_runtime(req)
             transformed = transform_cell(req.get("code", ""))
-        except SyntaxError as exc:
-            _emit_error(rid, exc)
-            _emit(
-                {
-                    "type": "done",
-                    "id": rid,
-                    "status": "error",
-                    "executionCount": execution_count,
-                    "cancelled": False,
-                }
-            )
-            return
-        except BaseException as exc:  # noqa: BLE001 - runtime setup errors must settle the request
-            _emit_error(rid, exc)
-            _emit(
-                {
-                    "type": "done",
-                    "id": rid,
-                    "status": "error",
-                    "executionCount": execution_count,
-                    "cancelled": False,
-                }
-            )
-            return
-
-        _begin_exec_sigint()
-        try:
             await _exec_source_async(transformed, _STATE.user_ns)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             cancelled = True
             status = "error"
             _emit_error(rid, KeyboardInterrupt("Execution interrupted"))
-        except SystemExit as exc:
-            status = "error"
-            _emit_error(rid, exc)
-        except BaseException as exc:  # noqa: BLE001 - we want to surface every user error
+        except BaseException as exc:
             status = "error"
             _emit_error(rid, exc)
         finally:
-            _end_exec_sigint()
+            with _STATE.cancel_lock:
+                _STATE.started_requests.discard(rid)
             try:
                 _flush_matplotlib_figures()
             except Exception:
                 pass
-
         _flush_stream_proxies(rid)
-        # Before the done frame, so a kernel the host sees finish a cell holds
-        # only what its namespace still references.
         _trim_freed_heap()
-        _emit(
-            {
-                "type": "done",
-                "id": rid,
-                "status": status,
-                "executionCount": execution_count,
-                "cancelled": cancelled,
-            }
-        )
+        _emit({"type": "done", "id": rid, "status": status,
+               "executionCount": execution_count, "cancelled": cancelled})
     finally:
+        with _STATE.cancel_lock:
+            _STATE.request_tasks.pop(rid, None)
+            _STATE.known_requests.discard(rid)
+            _STATE.started_requests.discard(rid)
+            _STATE.cancelled_requests.discard(rid)
         if _STATE.capture_rid == rid:
             _STATE.capture_rid = None
         _flush_stream_proxies(rid)
@@ -1481,6 +1459,12 @@ def _read_stdin(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stdin) ->
                 }
             )
             continue
+        if req.get("type") == "cancel":
+            _cancel_request(str(req.get("id")), loop)
+            continue
+        if req.get("type") != "exit":
+            with _STATE.cancel_lock:
+                _STATE.known_requests.add(str(req.get("id")))
         loop.call_soon_threadsafe(queue.put_nowait, req)
     loop.call_soon_threadsafe(queue.put_nowait, {"type": "exit"})
 
@@ -1525,6 +1509,8 @@ async def _main_async() -> None:
             if req.get("type") == "exit":
                 break
             task = asyncio.create_task(_handle_request_async(req))
+            with _STATE.cancel_lock:
+                _STATE.request_tasks[str(req.get("id"))] = task
             tasks.add(task)
             task.add_done_callback(_task_done)
     finally:
