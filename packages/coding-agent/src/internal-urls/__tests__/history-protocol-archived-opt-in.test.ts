@@ -304,6 +304,48 @@ describe("history:// caller-bound archived opt-in", () => {
     }
   });
 
+  it("rejects unscoped refs for archived opt-in while preserving legacy single-scope history", async () => {
+    const temp = TempDir.createSync("@veyyon-history-unscoped-compat-");
+    try {
+      registerLiveRef("main:a", "session-a", "session-a");
+      const caller = makeToolSession("main:a", () => "session-a");
+      const sessionFile = await archive(temp.path(), "LegacyUnscoped", "legacy-session", [
+        { id: "legacy-entry", parentId: null, message: "needle legacy unscoped evidence" },
+      ]);
+
+      // An unattributed registry ref is not eligible for the caller-bound
+      // archived route, even when it is the only parked transcript on disk.
+      AgentRegistry.global().register({
+        id: "LegacyUnscoped",
+        displayName: "LegacyUnscoped",
+        kind: "sub",
+        session: null,
+        sessionFile,
+        status: "parked",
+      });
+      await expect(
+        read(caller, "history://LegacyUnscoped?archived=1&entry=legacy-entry"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      const archivedIndex = await read(caller, "history://?archived=1");
+      expect(archivedIndex).not.toContain("LegacyUnscoped");
+
+      // Until #774 makes an explicit compatibility decision, the ordinary
+      // single-known-scope route keeps its historical index/overview/exact
+      // behavior rather than silently denying or inventing this ref's scope.
+      const legacyIndex = await read(caller, "history://");
+      expect(legacyIndex).toContain("LegacyUnscoped");
+      const legacyOverview = await read(caller, "history://LegacyUnscoped");
+      expect(legacyOverview).toContain("legacy unscoped evidence");
+      const legacyExact = JSON.parse(
+        await read(caller, "history://LegacyUnscoped?entry=legacy-entry"),
+      ) as { status: string; fragment?: string };
+      expect(legacyExact.status).toBe("ok");
+      expect(legacyExact.fragment).toContain("legacy unscoped evidence");
+    } finally {
+      await temp.remove();
+    }
+  });
+
   it("paginates a bounded archived index and rejects stale continuation cursors", async () => {
     registerLiveRef("main:a", "session-a", "session-a");
     const caller = makeToolSession("main:a", () => "session-a");
