@@ -57,9 +57,10 @@ junction: do not install through that junction.
 
 Reuse a prepared Linux dependency tree for the checkout's lockfile. Set
 `VEYYON_SANDBOX_NODE_MODULES` to its absolute Linux `node_modules` path. The bwrap
-rung binds that tree read-only over the worktree's `node_modules`. Relative workspace
-links resolve against the tested worktree. This prevents a Windows junction from
-leaving workspace imports such as `@veyyon/catalog/models` unresolved in Linux.
+runner binds that tree read-only over the worktree's `node_modules` and automatically
+binds the tested worktree's `packages` over the dependency checkout's workspace
+packages. Workspace aliases such as `@veyyon/catalog/models` therefore resolve to
+the code under test, not to another checkout.
 The manifest's Bun version must be available outside the hidden home, normally at
 `/usr/local/bin/bun`. WSL must also provide Git, sh, and bwrap.
 
@@ -72,7 +73,7 @@ Save this script outside the repository, replacing both example paths:
 set -euo pipefail
 cd /mnt/c/repo/veyyon-wt/my-lane
 export VEYYON_SANDBOX_NODE_MODULES=/opt/prepared-veyyon-deps/node_modules
-bash scripts/test-sandbox/run.sh --rung=bwrap bun test ./packages/coding-agent/test/a-replayed-operator-answer-injects-nothing.test.ts
+bash scripts/test-sandbox/run.sh --rung=bwrap bun test ./packages/catalog/test/model-thinking.test.ts
 ```
 
 Run the script through the workstation's build-slot wrapper:

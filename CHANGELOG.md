@@ -7,6 +7,11 @@
 ### Fixed
 
 - Coding-agent hashline edit-response tags no longer inherit visibility of old lines, so a fresh tag cannot authorize an edit to carried-forward lines it never showed; direct `Patcher` callers retain the legacy default ([Refs #1036](https://github.com/Wladefant/veyyon/issues/1036)).
+## [1.8.12] - 2026-11-08
+
+### Fixed
+
+- The bwrap test sandbox binds the tested worktree's workspace packages when `node_modules` comes from an external checkout, so imports such as `@veyyon/catalog/models` resolve ([PR #1038](https://github.com/Wladefant/veyyon/pull/1038)).
 
 ## [1.8.11] - 2026-11-08
 

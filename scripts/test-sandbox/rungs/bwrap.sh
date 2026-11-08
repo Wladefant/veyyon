@@ -30,22 +30,27 @@ run_bwrap() {
 	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")
 
 	local -a extra_mounts=()
+	bind_workspace_packages() {
+		local nm_path="$1" nm_parent
+		nm_parent="$(dirname "$nm_path")"
+		extra_mounts+=(--ro-bind "$nm_parent" "$nm_parent")
+		if [ -d "${REPO_ROOT}/packages" ] && [ -d "${nm_parent}/packages" ]; then
+			extra_mounts+=(--bind "${REPO_ROOT}/packages" "${nm_parent}/packages")
+		fi
+	}
+
 	if [ -n "${VEYYON_SANDBOX_NODE_MODULES:-}" ]; then
 		if [ ! -d "${VEYYON_SANDBOX_NODE_MODULES}" ]; then
 			log "Linux node_modules directory does not exist: ${VEYYON_SANDBOX_NODE_MODULES}"
 			return "${RUNG_SETUP_FAILED:-126}"
 		fi
 		extra_mounts+=(--ro-bind "${VEYYON_SANDBOX_NODE_MODULES}" "${REPO_ROOT}/node_modules")
+		bind_workspace_packages "${VEYYON_SANDBOX_NODE_MODULES}"
 	elif [ -L "${REPO_ROOT}/node_modules" ]; then
 		local nm_target
 		nm_target="$(readlink "${REPO_ROOT}/node_modules" 2>/dev/null || true)"
 		if [ -n "$nm_target" ] && [ -d "$nm_target" ]; then
-			local nm_parent
-			nm_parent="$(dirname "$nm_target")"
-			extra_mounts+=(--ro-bind "$nm_parent" "$nm_parent")
-			if [ -d "${REPO_ROOT}/packages" ] && [ -d "${nm_parent}/packages" ]; then
-				extra_mounts+=(--bind "${REPO_ROOT}/packages" "${nm_parent}/packages")
-			fi
+			bind_workspace_packages "$nm_target"
 		fi
 	fi
 
