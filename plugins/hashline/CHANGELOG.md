@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.8.16] - 2026-11-08
+
+### Fixed
+
+- Coding-agent hashline edit-response tags no longer inherit visibility of old lines, so a fresh tag cannot authorize an edit to carried-forward lines it never showed; direct `Patcher` callers retain the legacy default ([Refs #1036](https://github.com/Wladefant/veyyon/issues/1036)).
+
 ## [1.8.0] - 2026-11-05
 
 ### Changed

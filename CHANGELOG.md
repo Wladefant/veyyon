@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [1.8.16] - 2026-11-08
+
+### Changed
+
+- The docker test sandbox also masks `/root` on hosts that run as root, so sandboxed tests no longer see the host root home ([PR #1055](https://github.com/Wladefant/veyyon/pull/1055)).
+
+### Fixed
+
+- An edit that issues a fresh hashline tag no longer carries forward visibility of older lines it did not change ([PR #1046](https://github.com/Wladefant/veyyon/pull/1046)).
+- ACP auto-resume regression coverage avoids forbidden spy-call assertions ([PR #1039](https://github.com/Wladefant/veyyon/pull/1039)).
+- Coding-agent hashline edit-response tags no longer inherit visibility of old lines, so a fresh tag cannot authorize an edit to carried-forward lines it never showed; direct `Patcher` callers retain the legacy default ([Refs #1036](https://github.com/Wladefant/veyyon/issues/1036)).
+
 ## [1.8.15] - 2026-11-08
 
 ### Fixed

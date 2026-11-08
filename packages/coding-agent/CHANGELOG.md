@@ -6,6 +6,17 @@
 
 - Exact stored-history reads and searches reject JSON-structural fragments before session headers, even across blank lines, and reject duplicate entry-ID claims regardless of malformed parent type or record order; they also reject repeated identity fields, unaddressable IDs, and oversized session-ID or record-type metadata while preserving explicitly selected healthy legacy branches after unrelated malformed records.
 
+## [1.8.16] - 2026-11-08
+
+### Changed
+
+- The docker test sandbox also masks `/root` on hosts that run as root, so sandboxed tests no longer see the host root home ([PR #1055](https://github.com/Wladefant/veyyon/pull/1055)).
+
+### Fixed
+
+- An edit that issues a fresh hashline tag no longer carries forward visibility of older lines it did not change ([PR #1046](https://github.com/Wladefant/veyyon/pull/1046)).
+- ACP auto-resume regression coverage avoids forbidden spy-call assertions ([PR #1039](https://github.com/Wladefant/veyyon/pull/1039)).
+
 ## [1.8.15] - 2026-11-08
 
 ### Fixed
