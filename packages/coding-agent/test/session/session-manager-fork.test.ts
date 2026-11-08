@@ -2870,7 +2870,7 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "refuses rebinding after unsynced append bytes would be lost on a same-session replacement",
+    "refuses rebinding after pending append bytes would be lost on a same-session replacement",
     async () => {
       using temp = TempDir.createSync("@veyyon-session-unsynced-rebind-");
       const journal = path.join(temp.path(), "synthetic-journal.jsonl");
@@ -2903,9 +2903,9 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
 
         // The replacement has the same valid session header, so a header-only
         // rebind would accept it even though the first unsynced line is absent.
-        await expect(writer.append(second)).rejects.toThrow(/unsynced appends/);
-        expect(writer.getError()?.message).toMatch(/unsynced appends/);
-        await expect(writer.sync()).rejects.toThrow(/unsynced appends/);
+        await expect(writer.append(second)).rejects.toThrow(/after earlier appends/);
+        expect(writer.getError()?.message).toMatch(/after earlier appends/);
+        await expect(writer.sync()).rejects.toThrow(/after earlier appends/);
         expect(await fs.readFile(journal, "utf8")).toBe(header);
         expect(await fs.readFile(displaced, "utf8")).toBe(header + first);
         expect(await fs.readFile(archive)).toEqual(archiveBytes);
@@ -2920,6 +2920,50 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         } finally {
           await fresh.close();
         }
+      } finally {
+        await writer.close();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a same-session rebind even when earlier journal entries were fsynced",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-synced-rebind-");
+      const journal = path.join(temp.path(), "synthetic-journal.jsonl");
+      const displaced = path.join(temp.path(), "synthetic-synced-journal.jsonl");
+      const archive = path.join(temp.path(), "synthetic-archive.bin");
+      const archiveBytes = Buffer.from("retained synthetic archive");
+      const header = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-synced-writer",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const first = `${JSON.stringify({
+        type: "message", id: "synthetic-synced-first", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Previously acknowledged entry", timestamp: Date.now() },
+      })}\n`;
+      const second = `${JSON.stringify({
+        type: "message", id: "synthetic-synced-second", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "New entry must not hide previous one", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(journal, header);
+      await fs.writeFile(archive, archiveBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        await writer.append(first);
+        await writer.sync(); // fsync does not prove what a later replacement retained.
+        const firstInode = nodeFs.statSync(journal).ino;
+        await fs.rename(journal, displaced);
+        await fs.writeFile(journal, header);
+        expect(nodeFs.statSync(journal).ino).not.toBe(firstInode);
+        await expect(writer.append(second)).rejects.toThrow(/after earlier appends/);
+        expect(writer.getError()?.message).toMatch(/after earlier appends/);
+        expect(await fs.readFile(journal, "utf8")).toBe(header);
+        expect(await fs.readFile(displaced, "utf8")).toBe(header + first);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+        await expect(writer.sync()).rejects.toThrow(/after earlier appends/);
       } finally {
         await writer.close();
       }
