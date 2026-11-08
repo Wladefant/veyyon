@@ -2356,20 +2356,17 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 		},
 	);
 
-	test("genuinely changed same-generation conditional 200 snapshot applies immediately", async () => {
+	test("genuinely changed same-generation conditional 200 is accepted after canonical verification", async () => {
 		const client = new AuthBrokerClient({ url: handle!.url, token });
-		const initial = await client.fetchSnapshot();
+		const originalFetch = client.fetchSnapshot.bind(client);
+		const initial = await originalFetch();
 		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
-		const changed: SnapshotResponse = {
-			...initial.snapshot,
-			refresher: { ...initial.snapshot.refresher, skewMs: initial.snapshot.refresher.skewMs + 1 },
-			credentials: initial.snapshot.credentials.map(entry => ({
-				...entry,
-				credential: entry.credential.type === "oauth"
-					? { ...entry.credential, access: "synthetic-accepted-access-change" }
-					: entry.credential,
-			})),
-		};
+		const id = initial.snapshot.credentials[0]!.id;
+		store!.updateAuthCredential(id, mintOAuthCredential("canonical", Date.now() + 120_000));
+		await storage!.reload();
+		const authoritative = await originalFetch();
+		if (authoritative.status !== 200) throw new Error("expected updated synthetic broker snapshot");
+		const changed: SnapshotResponse = { ...authoritative.snapshot, generation: initial.snapshot.generation };
 		let conditionalRequests = 0;
 		let canonicalRequests = 0;
 		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
@@ -2378,20 +2375,59 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				return { status: 200 as const, generation: initial.snapshot.generation, snapshot: changed };
 			}
 			canonicalRequests += 1;
-			throw new Error("unnecessary canonical broker request before changed conditional 200");
+			return originalFetch(opts);
 		});
 		remote = new RemoteAuthCredentialStore({
-			client,
-			initialSnapshot: initial.snapshot,
-			streamSnapshots: false,
+			client, initialSnapshot: initial.snapshot, streamSnapshots: false,
 			snapshotStreamVerifyIntervalMs: 5_000,
 		});
-		await waitUntil(() => remote!.snapshot.refresher.skewMs === changed.refresher.skewMs);
+		await waitUntil(() => remote!.snapshot.credentials.some(entry =>
+			entry.credential.type === "oauth" && entry.credential.access === "access-canonical"
+		));
 		expect(remote.snapshot.credentials[0]?.credential).toMatchObject({
-			access: "synthetic-accepted-access-change", refresh: REMOTE_REFRESH_SENTINEL,
+			access: "access-canonical", refresh: REMOTE_REFRESH_SENTINEL,
 		});
-		expect(conditionalRequests).toBeGreaterThan(0);
-		expect(canonicalRequests).toBe(0);
+		expect(conditionalRequests).toBe(1);
+		expect(canonicalRequests).toBe(1);
+	});
+
+	test("changed stale long-poll 200 cannot restore a peer-revoked credential or hot-loop", async () => {
+		const client = new AuthBrokerClient({ url: handle!.url, token });
+		const originalFetch = client.fetchSnapshot.bind(client);
+		const initial = await originalFetch();
+		if (initial.status !== 200) throw new Error("expected synthetic initial broker snapshot");
+		const id = initial.snapshot.credentials[0]!.id;
+		const replay: SnapshotResponse = {
+			...initial.snapshot, generation: initial.snapshot.generation + 37,
+			credentials: initial.snapshot.credentials.map(entry => ({
+				...entry,
+				credential: entry.credential.type === "oauth"
+					? { ...entry.credential, access: "synthetic-stale-relay-access" }
+					: entry.credential,
+			})),
+		};
+		expect(storage!.disableCredentialById(id, "synthetic peer revocation before stale long-poll")).toBe(true);
+		let conditionalRequests = 0;
+		let canonicalRequests = 0;
+		const observedCredentialIds: number[][] = [];
+		spyOn(client, "fetchSnapshot").mockImplementation(async opts => {
+			if (opts?.ifGenerationGt !== undefined) {
+				conditionalRequests += 1;
+				return { status: 200 as const, generation: replay.generation, snapshot: replay };
+			}
+			canonicalRequests += 1;
+			return originalFetch(opts);
+		});
+		remote = new RemoteAuthCredentialStore({
+			client, initialSnapshot: initial.snapshot, streamSnapshots: false,
+			snapshotStreamVerifyIntervalMs: 5_000,
+			onSnapshot: snapshot => { observedCredentialIds.push(snapshot.credentials.map(entry => entry.id)); },
+		});
+		await waitUntil(() => remote!.snapshot.credentials.length === 0);
+		expect(remote.listAuthCredentials()).toEqual([]);
+		expect(observedCredentialIds).toEqual([[]]);
+		expect(conditionalRequests).toBe(1);
+		expect(canonicalRequests).toBe(1);
 	});
 
 	test("long-poll reconciles a peer revoke despite equal broker generations after restart", async () => {
@@ -2515,7 +2551,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 	test("on-demand broker wait reports same-generation 200 progress and verifies 304 against canonical credentials", async () => {
 		// A restarted broker can reuse the worker's generation and return an
 		// equal-generation 200 or 304 even though the credential roster changed.
-		for (const variant of ["unchanged", "revoked", "invalid-304", "changed-200", "unchanged-200"] as const) {
+		for (const variant of ["unchanged", "revoked", "invalid-304", "changed-200", "unchanged-200", "replayed-changed-200"] as const) {
 			const client = new AuthBrokerClient({ url: handle!.url, token });
 			const initial = await client.fetchSnapshot();
 			if (initial.status !== 200) throw new Error("expected disposable broker snapshot");
@@ -2533,6 +2569,17 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				if (opts?.waitMs === 25) {
 					conditionalWaits += 1;
 					expect(opts.ifGenerationGt).toBe(oldGeneration);
+					if (variant === "replayed-changed-200") {
+						// The conditional relay lies about changed durable state after a peer
+						// revocation; only an independent unconditional GET may reauthorize it.
+						const replay = structuredClone(initial.snapshot);
+						for (const entry of replay.credentials) {
+							if (entry.credential.type === "oauth") {
+								entry.credential.access = "synthetic-stale-replayed-access";
+							}
+						}
+						return { status: 200 as const, generation: oldGeneration + 37, snapshot: { ...replay, generation: oldGeneration + 37 } };
+					}
 					if (variant === "changed-200" || variant === "unchanged-200") {
 						// Use real disposable-broker state; simulate only a process-local
 						// generation collision on its conditional HTTP response.
@@ -2562,7 +2609,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				onSnapshot: snapshot => { callbacks.push(snapshot.credentials.length); },
 			});
 			try {
-				if (variant === "revoked" || variant === "changed-200") {
+				if (variant === "revoked" || variant === "changed-200" || variant === "replayed-changed-200") {
 					expect(storage!.disableCredentialById(id, "synthetic peer revoke at reused generation")).toBe(true);
 				}
 				if (variant === "invalid-304") {
@@ -2574,14 +2621,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual([id]);
 					expect(callbacks).toEqual([]);
 				} else {
-					const changed = variant === "revoked" || variant === "changed-200";
+					const changed = variant === "revoked" || variant === "changed-200" || variant === "replayed-changed-200";
 					const progressed = await remote.waitForFreshSnapshot(25);
 					expect(remote.snapshot.credentials.map(entry => entry.id)).toEqual(changed ? [] : [id]);
 					expect(progressed).toBe(changed);
 					expect(callbacks).toEqual(variant === "unchanged-200" ? [] : [changed ? 0 : 1]);
 				}
 				expect(conditionalWaits).toBe(1);
-				expect(canonicalChecks).toBe(variant.endsWith("-200") ? 0 : 1); // no extra GET for HTTP 200
+				expect(canonicalChecks).toBe(variant === "unchanged-200" ? 0 : 1); // changed 200 requires broker proof
 				expect(remote.snapshot.generation).toBe(oldGeneration);
 			} finally {
 				remote.close();
