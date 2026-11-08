@@ -36,6 +36,23 @@ describe("producer output keeps complete credential spans closed", () => {
 		expect(guard.sanitize(input)).not.toContain("Q29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==");
 	});
 
+	it("keeps unregistered PEM bodies closed across every stream split", () => {
+		const inputs = [
+			"private_key: -----BEGIN PRIVATE KEY-----\nQ29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==\n-----END PRIVATE KEY-----\n",
+			"private_key: |\n  -----BEGIN PRIVATE KEY-----\n  Q29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==\n  -----END PRIVATE KEY-----\n",
+		];
+		for (const input of inputs) {
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const output =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(output).not.toContain("Q29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==");
+			}
+		}
+	});
+
 	it.each([
 		`github_pat_${"A".repeat(32)}`,
 		`figd_${"B".repeat(32)}`,
