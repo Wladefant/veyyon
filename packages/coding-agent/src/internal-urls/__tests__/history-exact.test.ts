@@ -1192,8 +1192,9 @@ describe("history exact record lookup", () => {
 				'{{"type":"session","id":"shadow"}}',
 				// An invalid array member before a root type can also conceal a header.
 				'{"metadata":["type":"session"],"id":"shadow"}',
-				// A framing token before an otherwise recognizable JSONL object is not ignorable text.
+				// A framing token or arbitrary prefix before an identity-bearing object is not ignorable text.
 				'}{"type":"session","id":"shadow"}',
+				'x{"type":"session","id":"shadow"}',
 				// Root keys after a string value still establish a repeated session boundary.
 				'{"metadata":"safe","type":"session","id":',
 				'{"metadata":"safe" "type":"session","id":',
@@ -1217,6 +1218,8 @@ describe("history exact record lookup", () => {
 			for (const lines of [
 				[header, '}{"type":"message","id":"root","parentId":42}', root],
 				[header, root, '}{"type":"message","id":"root","parentId":42}'],
+				[header, 'x{"type":"message","id":"root","parentId":42}', root],
+				[header, root, 'x{"type":"message","id":"root","parentId":42}'],
 			]) {
 				await fs.writeFile(file, `${lines.join("\n")}\n`);
 				const exact = await readStoredHistoryEntry(file, {
@@ -1232,6 +1235,12 @@ describe("history exact record lookup", () => {
 			}
 			// Nested metadata cannot manufacture a second root-level session boundary.
 			for (const malformedSibling of [
+				// An object-like suffix with a distinct ID remains an unrelated malformed sibling.
+				'x{"type":"message","id":"orphan-prefix","parentId":"root"}',
+				// Array pseudo-members before a later root message type are malformed metadata, not session identity.
+				'{"metadata":["type":"session"],"type":"message","id":"orphan-array-type","parentId":"root"}',
+				'{"metadata":["id":"shadow"],"type":"message","id":"orphan-array-id","parentId":"root"}',
+				"NOT-JSON archive sibling",
 				'{"type":"message","id":"orphan","metadata":{"type":"session"},"parentId":',
 				'{"type":"message","id":"orphan","invalid\\q":true,"parentId":"root"}',
 				// JSON-invalid array elements resembling object members are not root identity keys.

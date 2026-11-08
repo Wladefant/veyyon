@@ -118,6 +118,7 @@ function scanTopLevelMembers(raw: string): {
 	let topLevelType: string | undefined;
 	let claimedId: string | undefined;
 	let identityAmbiguous = false;
+	let arrayIdentityCandidate = false;
 	let rootMemberSeen = false;
 	let depth = 0;
 	// JSON array string elements are never root-level object member names.
@@ -213,7 +214,7 @@ function scanTopLevelMembers(raw: string): {
 								const member = JSON.parse(raw.slice(valueStart, valueCursor)) as unknown;
 								if ((key === "type" && member === "session") ||
 									(key === "id" && typeof member === "string" && ADDRESSABLE_HISTORY_ID.test(member))) {
-									identityAmbiguous = true;
+									arrayIdentityCandidate = true;
 								}
 							} catch {
 								// An invalid string value cannot establish an identity claim.
@@ -242,15 +243,27 @@ function scanTopLevelMembers(raw: string): {
 	return {
 		duplicates,
 		sessionTypeMember,
-		identityAmbiguous,
+		identityAmbiguous: identityAmbiguous || (arrayIdentityCandidate && topLevelType === undefined),
 		claimedId: topLevelType === "session" || topLevelType === "title" ? undefined : claimedId,
 	};
 }
 
-/** Reject a framing token before an otherwise recognizable JSONL object. */
-function hasFramingPrefixBeforeObject(line: string): boolean {
+/**
+ * Inspect a malformed JSONL row's first object suffix for identity claims.
+ * Plain non-JSON siblings remain ordinary unreadable records; a damaged prefix
+ * must not hide a repeated session header or an addressable duplicate ID.
+ */
+function inspectMalformedIdentitySuffix(line: string): { invalidIdentity: boolean; claimedId?: string } {
 	const trimmed = line.trimStart();
-	return (trimmed.startsWith("}") || trimmed.startsWith("]")) && trimmed.slice(1).trimStart().startsWith("{");
+	const objectStart = trimmed.indexOf("{");
+	if (objectStart < 0) return { invalidIdentity: false };
+	const scanned = scanTopLevelMembers(trimmed.slice(objectStart));
+	const invalidIdentity = scanned.identityAmbiguous || scanned.sessionTypeMember ||
+		scanned.duplicates.has("type") || scanned.duplicates.has("id") || scanned.duplicates.has("parentId");
+	return {
+		invalidIdentity,
+		claimedId: invalidIdentity ? undefined : scanned.claimedId,
+	};
 }
 
 /** Reject JSON-structural text that could be a damaged record, not a legacy title. */
@@ -568,8 +581,18 @@ export async function readStoredHistoryEntry(
 					}
 				} else if (line.trim().length > 0) {
 					incomplete = true;
-					if (!admission.headerSeen || hasFramingPrefixBeforeObject(line)) {
-						admission.invalidIdentity = true;
+					const suffix = inspectMalformedIdentitySuffix(line);
+					if (!admission.headerSeen || suffix.invalidIdentity) admission.invalidIdentity = true;
+					if (suffix.claimedId) {
+						const detail = claimedIdError(suffix.claimedId, parents, malformedClaims);
+						if (detail) return {
+							status: "unavailable",
+							entryId: request.entryId,
+							sessionId,
+							source: "stored-jsonl",
+							detail,
+						};
+						malformedClaims.add(suffix.claimedId);
 					}
 				} else if (initialPlainTitle) {
 					initialTitleSeparated = true;
@@ -857,8 +880,19 @@ export async function searchStoredHistoryEntries(
 				} else if (line.trim().length > 0) {
 					unlocatedUnreadable = true;
 					unreadable = true;
-					if (!admission.headerSeen || hasFramingPrefixBeforeObject(line)) {
-						admission.invalidIdentity = true;
+					const suffix = inspectMalformedIdentitySuffix(line);
+					if (!admission.headerSeen || suffix.invalidIdentity) admission.invalidIdentity = true;
+					if (suffix.claimedId) {
+						const detail = claimedIdError(suffix.claimedId, parents, malformedClaims);
+						if (detail) return {
+							status: "unavailable",
+							sessionId,
+							query: request.query,
+							source: "stored-jsonl",
+							matches: [],
+							detail,
+						};
+						malformedClaims.add(suffix.claimedId);
 					}
 				} else if (initialPlainTitle) {
 					initialTitleSeparated = true;

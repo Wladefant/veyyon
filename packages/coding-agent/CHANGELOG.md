@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Exact stored-history reads and searches reject JSON-structural fragments before session headers, even across blank lines, and reject duplicate entry-ID claims regardless of malformed parent type or record order; they also reject repeated identity fields, unaddressable IDs, and oversized session-ID or record-type metadata while preserving explicitly selected healthy legacy branches after unrelated malformed records.
+- Exact stored-history reads and searches reject JSON-structural fragments before session headers, including identity-bearing object suffixes after malformed non-JSON framing, and reject duplicate entry-ID claims regardless of malformed parent type or record order. They preserve plain non-JSON siblings and malformed nested metadata once a root entry type disambiguates it, while repeated identity fields, unaddressable IDs, oversized session-ID or record-type metadata, and implicit branch selection after unreadable records still fail closed.
 
 ## [1.8.16] - 2026-11-08
 
