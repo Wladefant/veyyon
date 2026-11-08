@@ -343,6 +343,9 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 			const id = sessionManager.getSessionId?.();
 			return id ? `${id}-advisor` : null;
 		},
+		// The advisor is a derived review context, not the primary AgentSession owner.
+		// It must not inherit the primary's archived-history caller authority.
+		getOwningAgentSession: () => undefined,
 		getAgentId: () => "advisor",
 		// The advisor runs its own conversation; the primary agent's context is not what it sees.
 		getLiveMessages: undefined,
