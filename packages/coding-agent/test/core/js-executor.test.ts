@@ -93,6 +93,11 @@ describe("executeJs", () => {
 		expect(resetResult.exitCode).toBe(0);
 		expect(resetResult.output.trim()).toBe("undefined");
 	});
+	it("displays bigint JSON values with safe sibling metadata", async () => {
+		const result = await executeJs("({ count: 42n, commit: 'abc' })", { sessionId, session, sessionFile });
+		expect(result.exitCode).toBe(0);
+		expect(getJsonData(result)).toEqual({ count: "42n", commit: "abc" });
+	});
 
 	it("parallel() barriers until every thunk settles and throws the lowest-index error", async () => {
 		const result = await executeJs(

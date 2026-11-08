@@ -17,6 +17,7 @@ import {
 	truncateTailBytes,
 } from "@veyyon/coding-agent/session/streaming-output";
 import { formatOutputNotice, outputMeta } from "@veyyon/coding-agent/tools/core/output-meta";
+import { ProducerOutputGuard } from "../src/secrets/producer-output";
 import { removeWithRetries } from "@veyyon/utils";
 
 const createdTempDirs: string[] = [];
@@ -408,6 +409,19 @@ describe("OutputSink", () => {
 		await sink.push("abc");
 		await sink.push("def");
 		expect(chunks).toEqual(["abc", "def"]);
+	});
+
+	test("keeps label-only credential continuations out of onChunk and dump", async () => {
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk) });
+		const guard = new ProducerOutputGuard();
+		const input = "secret:\n  opaqueSyntheticBody1234567890\n";
+		await sink.push(guard.push(input));
+		await sink.push(guard.finish());
+		const dumped = await sink.dump();
+
+		expect(chunks.join("")).not.toContain("opaqueSyntheticBody1234567890");
+		expect(dumped.output).not.toContain("opaqueSyntheticBody1234567890");
 	});
 
 	test("preserves SIXEL chunks when passthrough gates are enabled", async () => {

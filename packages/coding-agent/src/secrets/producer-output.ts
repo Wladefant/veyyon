@@ -1,3 +1,4 @@
+import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { currentProducerSecretOwner } from "./producer-owner";
@@ -35,7 +36,7 @@ function redactCredentialRecords(text: string): string {
 		const tail = text.slice(start);
 		if (match[0].includes(":") && DEFINITION_SHAPE.test(tail)) continue;
 		if (REDACTION_MARKER.test(tail)) continue;
-		if (!tail || /^[{[|>]/.test(tail)) return BLOCKED_OUTPUT_RECORD;
+		if (!tail || /^[ \t]*(?:\r?\n|$)/.test(tail) || /^[{[|>]/.test(tail)) return BLOCKED_OUTPUT_RECORD;
 		const quoted = isQuote(tail[0]);
 		const quoteEnd = quoted ? quotedEnd(tail, 0) : -1;
 		if (quoted && quoteEnd === tail.length) return BLOCKED_OUTPUT_RECORD;
@@ -159,21 +160,31 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 	return match[0].length - 1;
 }
 
-/** Keep JSON structure and primitive metadata out of the text-record grammar. */
+function classifyJsonCredentialFields(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(classifyJsonCredentialFields);
+	if (value === null || typeof value !== "object") return value;
+	const classified: Record<string, unknown> = {};
+	for (const [key, nested] of Object.entries(value)) {
+		if (CREDENTIAL_RECORD.test(`${key}=`)) {
+			classified[key] = typeof nested === "number" && /(?:count|length|size|limit|ttl)$/i.test(key)
+				? nested
+				: BLOCKED_OUTPUT_RECORD;
+		} else {
+			classified[key] = classifyJsonCredentialFields(nested);
+		}
+	}
+	return classified;
+}
+
 export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
-	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), { cycles: "mark" });
-	const serialized = JSON.stringify(safe);
-	if (typeof serialized !== "string" || isInventory(sanitizeText(serialized))) return BLOCKED_OUTPUT_RECORD;
-	return JSON.parse(JSON.stringify(safe, (key, nested) => {
-		if (!CREDENTIAL_RECORD.test(`${key}=`)) return nested;
-		if (nested !== null && typeof nested === "object") return BLOCKED_OUTPUT_RECORD;
-		if (typeof nested === "number") return /(?:count|length|size|limit|ttl)$/i.test(key) ? nested : "[REDACTED]";
-		if (typeof nested !== "string") return nested;
-		if (REDACTION_MARKER.test(nested)) return nested;
-		const prefix = `${key}=`;
-		const redacted = guard.sanitize(prefix + nested);
-		return redacted === BLOCKED_OUTPUT_RECORD ? redacted : redacted.slice(prefix.length);
-	}));
+	const source = JSON.parse(stringifyJsonSafe(value)) as unknown;
+	const safe = sanitizeJsonValue(classifyJsonCredentialFields(source), text => guard.sanitize(text), {
+		cycles: "mark",
+	});
+	const serialized = stringifyJsonSafe(safe);
+	const normalized = JSON.parse(serialized) as unknown;
+	if (isInventory(sanitizeText(serialized))) return BLOCKED_OUTPUT_RECORD;
+	return normalized;
 }
 
 /** Filters text before a producer can stream, retain, minimize, or persist it. */
@@ -199,9 +210,16 @@ export class ProducerOutputGuard {
 
 	sanitize(text: string): string {
 		try {
-			const sanitized = sanitizeText(this.#redact?.(text) ?? text);
+			const raw = sanitizeText(text);
+			const classification = redactCredentialRecords(raw);
+			const classified = PEM_START.test(raw) ? raw : classification;
+			const ownerOutput = sanitizeText(this.#redact?.(text) ?? text);
+			const sanitized = classified === raw
+				? ownerOutput
+				: sanitizeText(this.#redact?.(classified) ?? classified);
 			const normalized = this.#redact?.(sanitized) ?? sanitized;
 			if (
+				isInventory(raw) ||
 				isInventory(sanitizeText(text)) ||
 				isInventory(normalized) ||
 				normalized.split("\n").some(line => line.length > MAX_RECORD_CHARS)
@@ -216,10 +234,8 @@ export class ProducerOutputGuard {
 					// util.inspect records are not JSON; the bounded record guard owns them.
 				}
 			}
-			// Redact the original label before changing its scheme or value.
 			let redacted = redactProviderSecrets(normalized);
-			redacted = redacted.replace(PEM_BLOCK, "[REDACTED]")
-				.replace(EXTRA_PREFIXED_KEY, "[REDACTED]");
+			redacted = redacted.replace(PEM_BLOCK, "[REDACTED]").replace(EXTRA_PREFIXED_KEY, "[REDACTED]");
 			if (PEM_START.test(redacted)) return BLOCKED_OUTPUT_RECORD;
 			return redactCredentialRecords(redacted);
 		} catch {

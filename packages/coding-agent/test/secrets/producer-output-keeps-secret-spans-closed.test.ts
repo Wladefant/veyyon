@@ -34,6 +34,64 @@ describe("producer output keeps complete credential spans closed", () => {
 	it("does not publish unquoted multiword secret suffixes", () => {
 		expect(guard.sanitize("secret: multiple words in secret\n")).not.toContain("words in secret");
 	});
+	it("withholds an unknown-length indented value after a label-only line", () => {
+		const input = "secret:\n  opaqueSyntheticBody1234567890\n";
+		expect(guard.sanitize(input)).not.toContain("opaqueSyntheticBody1234567890");
+		for (let split = 0; split <= input.length; split++) {
+			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+			const output =
+				streamGuard.push(input.slice(0, split)) +
+				streamGuard.push(input.slice(split)) +
+				streamGuard.finish();
+			expect(output).not.toContain("opaqueSyntheticBody1234567890");
+		}
+		const sanitizeJsonValue = (producerOutput as typeof producerOutput & {
+			sanitizeProducerJson?: (value: unknown, guard: InstanceType<typeof ProducerOutputGuard>) => unknown;
+		}).sanitizeProducerJson!;
+		expect(JSON.stringify(sanitizeJsonValue({ message: input }, guard))).not.toContain(
+			"opaqueSyntheticBody1234567890",
+		);
+	});
+
+	it("classifies original password labels before owner redaction", () => {
+		const password = "opaqueSyntheticCredentialABC123456";
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: "password", name: "PASSWORD_LABEL" },
+		]);
+		const owner = {
+			redact: (text: string) => obfuscator.obfuscate(text),
+			pendingPrefixLength: (text: string) => obfuscator.pendingRedactionPrefixLength(text),
+		};
+		const output = runWithProducerSecretOwner(owner, () =>
+			new ProducerOutputGuard().sanitize(`password=${password}\n`),
+		);
+		expect(output).not.toContain(password);
+		const input = `password=${password}\n`;
+		for (let split = 0; split <= input.length; split++) {
+			const streamed = runWithProducerSecretOwner(owner, () => {
+				const streamGuard = new ProducerOutputGuard();
+				return streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+			});
+			expect(streamed).not.toContain(password);
+		}
+		const sanitizeJsonValue = (producerOutput as typeof producerOutput & {
+			sanitizeProducerJson?: (value: unknown, guard: InstanceType<typeof ProducerOutputGuard>) => unknown;
+		}).sanitizeProducerJson!;
+		expect(JSON.stringify(sanitizeJsonValue({ password }, new ProducerOutputGuard(text => obfuscator.obfuscate(text))))
+		).not.toContain(password);
+	});
+
+	it("preserves bigint display values and safe JSON siblings", () => {
+		const sanitizeJsonValue = (producerOutput as typeof producerOutput & {
+			sanitizeProducerJson?: (value: unknown, guard: InstanceType<typeof ProducerOutputGuard>) => unknown;
+		}).sanitizeProducerJson!;
+		expect(sanitizeJsonValue({ count: 42n, commit: "abc" }, guard)).toEqual({
+			count: "42n",
+			commit: "abc",
+		});
+	});
 
 	it("redacts a registered literal before removing its control characters", () => {
 		const secret = "opaque\u0000registered-value";
