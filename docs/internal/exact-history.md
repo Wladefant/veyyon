@@ -28,10 +28,13 @@ history://Scout?archived=1&q=deployment%20error
 ```
 
 The trusted `read` tool mints a process-local opaque capability from its actual
-`ToolSession`. The capability is accepted only while the exact registered actor
-and its own current SessionManager ID still match the same global registry, the
-actor remains live, not disposing, and non-advisor, and the actor has a nonempty
-attributed root conversation scope. URL-supplied `actor`, `scope`, `session`, path or other
+`ToolSession` and exact owning `AgentSession`. The ToolSession's captured owner
+must be the same object as the registry actor's current session; matching stable
+agent/session IDs alone is insufficient. A stale ToolSession retained across
+same-transcript revival cannot mint fresh authority for the replacement actor.
+The capability is accepted only while the exact actor remains live, not disposing,
+and non-advisor in the same global registry, and it has a nonempty attributed
+root conversation scope. URL-supplied `actor`, `scope`, `session`, path or other
 identity claims are not authority and are rejected.
 
 A target must be an exact-scope-equal registered `parked` or `aborted` ref,

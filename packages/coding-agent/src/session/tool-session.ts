@@ -246,6 +246,7 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 		trackEvalExecution: (execution, abortController) =>
 			inputs.session()?.trackEvalExecution(execution, abortController) ?? execution,
 		getSessionId: () => sessionManager.getSessionId?.() ?? null,
+		getOwningAgentSession: () => inputs.session(),
 		getTurnIndex: () => inputs.session()?.getTurnIndex() ?? 0,
 		// An extension `context` handler rewrites the messages each request sends, so the live
 		// state no longer states what the model sees; no message counts as in context then.

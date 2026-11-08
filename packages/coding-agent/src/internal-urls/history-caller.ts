@@ -30,6 +30,9 @@ const capabilities = new WeakMap<object, CapabilityBinding>();
  */
 function currentCaller(session: ToolSession): ResolvedHistoryCaller | undefined {
   try {
+    const ownerSession = session.getOwningAgentSession?.();
+    if (!ownerSession || ownerSession.isDisposed) return undefined;
+
     const registry = session.agentRegistry;
     if (!registry || registry !== AgentRegistry.global()) return undefined;
 
@@ -50,6 +53,7 @@ function currentCaller(session: ToolSession): ResolvedHistoryCaller | undefined 
       actor.kind === "advisor" ||
       (actor.status !== "running" && actor.status !== "idle") ||
       !actor.session ||
+      actor.session !== ownerSession ||
       actor.session.isDisposed
     ) {
       return undefined;
@@ -58,6 +62,7 @@ function currentCaller(session: ToolSession): ResolvedHistoryCaller | undefined 
     const scope = actor.scope;
     if (typeof scope !== "string" || scope.trim().length === 0) return undefined;
     if (actor.session.sessionManager.getSessionId() !== sessionId) return undefined;
+    if (ownerSession.isDisposed || session.getOwningAgentSession?.() !== ownerSession) return undefined;
 
     return { registry, actor, agentId, sessionId, scope };
   } catch {

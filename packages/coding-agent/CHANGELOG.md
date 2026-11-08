@@ -10,6 +10,7 @@
 
 - `history://` revalidates case-folded archived-agent aliases after the stored scan, refuses callers as soon as session disposal begins, accepts colon-namespaced registered IDs through the internal URL fallback, and verifies forged-capability rejection with a valid exact request ([Refs #774]).
 - Caller-bound archived-history index pages are byte- and entry-bounded, revision-pinned across continuation, and fail closed when the parked roster changes ([Refs #774]).
+- Archived-history capabilities are bound to the exact live AgentSession that owns the minting ToolSession, so a stale tool session cannot mint authority after same-transcript revival ([Refs #774]).
 
 ## [1.8.16] - 2026-11-08
 

@@ -5,12 +5,18 @@
  * per-read capability, and it only reaches registered archived refs in the
  * caller's exact attributed conversation scope.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { getBundledModel } from "@veyyon/catalog/models";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
+import { ModelRegistry } from "../../config/model-registry";
+import { Settings } from "../../config/settings";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
+import { BUILTIN_TOOLS, createAgentSession } from "../../sdk";
 import type { ToolSession } from "../../tools";
 import { handleInternalUrl } from "../../tools/fs/read-internal-url";
 import type { ReadContext } from "../../tools/fs/read-types";
@@ -63,14 +69,62 @@ function makeToolSession(
   getSessionId: () => string | null,
   registry: AgentRegistry = AgentRegistry.global(),
 ): ToolSession {
+  const ownerSession = registry.get(id)?.session ?? undefined;
   return {
     cwd: process.cwd(),
     settings: { get: () => undefined },
     hasEditTool: false,
     getAgentId: () => id,
     getSessionId,
+    getOwningAgentSession: () => ownerSession,
     agentRegistry: registry,
   } as unknown as ToolSession;
+}
+
+
+
+async function createSessionWithReadTool(
+  cwd: string,
+  agentDir: string,
+  authStorage: AuthStorage,
+  sessionManager: SessionManager,
+) {
+  const captured: ToolSession[] = [];
+  const buildRead = BUILTIN_TOOLS.read;
+  const readFactory = spyOn(BUILTIN_TOOLS, "read").mockImplementation(session => {
+    captured.push(session);
+    return buildRead(session);
+  });
+  let result: Awaited<ReturnType<typeof createAgentSession>> | undefined;
+  try {
+    const settings = Settings.isolated({ "async.enabled": false, "advisor.enabled": false });
+    result = await createAgentSession({
+      cwd,
+      agentDir,
+      sessionManager,
+      authStorage,
+      modelRegistry: new ModelRegistry(authStorage),
+      settings,
+      model: getBundledModel("openai", "gpt-4o-mini"),
+      disableExtensionDiscovery: true,
+      skills: [],
+      contextFiles: [],
+      workspaceTree: { rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
+      promptTemplates: [],
+      slashCommands: [],
+      enableMCP: false,
+      enableLsp: false,
+    });
+    const ref = AgentRegistry.global().list().find(candidate => candidate.session === result?.session);
+    const toolSession = ref && captured.find(candidate => candidate.getAgentId?.() === ref.id);
+    if (!ref || !toolSession) throw new Error("createAgentSession built no primary read ToolSession");
+    return { result, toolSession, agentId: ref.id };
+  } catch (error) {
+    if (result) await result.session.dispose();
+    throw error;
+  } finally {
+    readFactory.mockRestore();
+  }
 }
 
 function makeReadContext(session: ToolSession): ReadContext {
@@ -420,6 +474,67 @@ describe("history:// caller-bound archived opt-in", () => {
     ).toBeUndefined();
 
     expect(resolveHistoryCallerCapability(Object.freeze({}))).toBeUndefined();
+  });
+
+
+
+  it("does not let a stale ToolSession mint archived authority after same-transcript revival", async () => {
+    const temp = TempDir.createSync("@veyyon-history-stale-tool-session-");
+    let authStorage: AuthStorage | undefined;
+    let first: Awaited<ReturnType<typeof createSessionWithReadTool>> | undefined;
+    let revived: Awaited<ReturnType<typeof createSessionWithReadTool>> | undefined;
+    try {
+      const cwd = temp.join("project");
+      await Bun.write(`${cwd}/.keep`, "");
+      authStorage = await AuthStorage.create(temp.join("testauth.db"));
+      authStorage.setRuntimeApiKey("openai", "test-key");
+
+      first = await createSessionWithReadTool(
+        cwd,
+        temp.path(),
+        authStorage,
+        SessionManager.create(cwd, temp.join("sessions")),
+      );
+      const sessionId = first.result.session.sessionManager.getSessionId();
+      const sessionFile = first.result.session.sessionManager.getSessionFile();
+      expect(sessionFile).toBeTruthy();
+      const beforeRevival = createHistoryCallerCapability(first.toolSession);
+      expect(beforeRevival).toBeDefined();
+
+      // The same transcript and stable IDs are reopened under a new AgentSession.
+      await first.result.session.dispose();
+      const reopened = await SessionManager.open(sessionFile!, undefined, undefined, {
+        initialCwd: cwd,
+        suppressBreadcrumb: true,
+      });
+      revived = await createSessionWithReadTool(cwd, temp.path(), authStorage, reopened);
+      expect(revived.agentId).toBe(first.agentId);
+      expect(revived.result.session.sessionManager.getSessionId()).toBe(sessionId);
+
+      const archivedFile = await archive(temp.path(), "Scout", "archived-session", [
+        { id: "record-one", parentId: null, message: "same-transcript revival evidence" },
+      ]);
+      registerArtifactsDir(temp.path());
+      registerArchivedRef("Scout", sessionId, archivedFile);
+
+      // Stable IDs now resolve to the replacement actor, never to the disposed ToolSession owner.
+      expect(createHistoryCallerCapability(first.toolSession)).toBeUndefined();
+      expect(resolveHistoryCallerCapability(beforeRevival)).toBeUndefined();
+      await expect(
+        read(first.toolSession, "history://Scout?archived=1&entry=record-one"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+
+      const current = JSON.parse(
+        await read(revived.toolSession, "history://Scout?archived=1&entry=record-one"),
+      ) as { status: string; fragment?: string };
+      expect(current.status).toBe("ok");
+      expect(current.fragment).toContain("same-transcript revival evidence");
+    } finally {
+      if (revived) await revived.result.session.dispose();
+      if (first) await first.result.session.dispose();
+      authStorage?.close();
+      await temp.remove();
+    }
   });
 
   it("rejects a caller-supplied ResolveContext object that was not minted at the read seam", async () => {
