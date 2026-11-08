@@ -96,10 +96,10 @@ function parseArchivedHistoryMode(url: InternalUrl, agentId: string): ArchivedHi
   if (archived.length !== 1 || archived[0] !== "1") return archivedUnavailable();
 
   if (
-    url.hash !== "" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.port !== "" ||
+    url.hash ||
+    url.username ||
+    url.password ||
+    url.port ||
     (url.pathname !== "" && url.pathname !== "/") ||
     (url.rawPathname !== undefined && url.rawPathname !== "" && url.rawPathname !== "/")
   ) {

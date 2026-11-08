@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- `history://` revalidates case-folded archived-agent aliases after the stored scan, refusing identities that become ambiguous while preserving exact-ID reads ([Refs #774]).
+- `history://` revalidates case-folded archived-agent aliases after the stored scan, refuses callers as soon as session disposal begins, accepts colon-namespaced registered IDs through the internal URL fallback, and verifies forged-capability rejection with a valid exact request ([Refs #774]).
 
 ## [1.8.16] - 2026-11-08
 

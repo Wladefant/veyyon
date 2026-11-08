@@ -29,8 +29,8 @@ history://Scout?archived=1&q=deployment%20error
 The trusted `read` tool mints a process-local opaque capability from its actual
 `ToolSession`. The capability is accepted only while the exact registered actor
 and its own current SessionManager ID still match the same global registry, the
-actor remains live and non-advisor, and the actor has a nonempty attributed root
-conversation scope. URL-supplied `actor`, `scope`, `session`, path or other
+actor remains live, not disposing, and non-advisor, and the actor has a nonempty
+attributed root conversation scope. URL-supplied `actor`, `scope`, `session`, path or other
 identity claims are not authority and are rejected.
 
 A target must be an exact-scope-equal registered `parked` or `aborted` ref,

@@ -49,7 +49,8 @@ function currentCaller(session: ToolSession): ResolvedHistoryCaller | undefined 
       !actor ||
       actor.kind === "advisor" ||
       (actor.status !== "running" && actor.status !== "idle") ||
-      !actor.session
+      !actor.session ||
+      actor.session.isDisposed
     ) {
       return undefined;
     }

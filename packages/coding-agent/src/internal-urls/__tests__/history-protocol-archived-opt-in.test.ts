@@ -17,6 +17,7 @@ import type { ReadContext } from "../../tools/fs/read-types";
 import { parseSel } from "../../tools/core/path-utils";
 import { createHistoryCallerCapability, resolveHistoryCallerCapability } from "../history-caller";
 import { HistoryProtocolHandler } from "../history-protocol";
+import { parseInternalUrl } from "../parse";
 import { InternalUrlRouter } from "../router";
 import { registerArtifactsDir, resetRegisteredArtifactDirsForTests } from "../registry-helpers";
 
@@ -33,12 +34,19 @@ function registerLiveRef(
   sessionId: string,
   scope: string | undefined,
   kind: "main" | "sub" | "advisor" = "main",
+  isDisposed: () => boolean = () => false,
 ): void {
   const sessionManager = {
     getSessionId: () => sessionId,
     getArtifactsDir: () => null,
   };
-  const session = { sessionManager, messages: [] } as unknown as AgentSession;
+  const session = {
+    sessionManager,
+    messages: [],
+    get isDisposed() {
+      return isDisposed();
+    },
+  } as unknown as AgentSession;
   AgentRegistry.global().register({
     id,
     displayName: id,
@@ -168,6 +176,16 @@ describe("history:// caller-bound archived opt-in", () => {
       expect(exact.fragment).toContain("needle same-scope archived evidence");
       expect(exact.sessionId).toBe("scout-session");
 
+      const namespacedFile = await archive(temp.path(), "Namespaced", "sub-session", [
+        { id: "namespaced-entry", parentId: null, message: "namespaced target evidence" },
+      ]);
+      registerArchivedRef("sub:session-a", "session-a", namespacedFile, "parked", "sub");
+      const namespaced = JSON.parse(
+        await read(caller, "history://sub:session-a?archived=1&entry=namespaced-entry"),
+      ) as { status: string; fragment?: string };
+      expect(namespaced.status).toBe("ok");
+      expect(namespaced.fragment).toContain("namespaced target evidence");
+
       const search = JSON.parse(await read(caller, "history://Scout?archived=1&q=needle")) as {
         status: string;
         matches: Array<{ entryId: string }>;
@@ -259,6 +277,25 @@ describe("history:// caller-bound archived opt-in", () => {
       createHistoryCallerCapability(makeToolSession("sub:unscoped", () => "unscoped-session")),
     ).toBeUndefined();
 
+    let disposed = true;
+    registerLiveRef("main:disposed", "disposed-session", "session-a", "main", () => disposed);
+    expect(
+      createHistoryCallerCapability(makeToolSession("main:disposed", () => "disposed-session")),
+    ).toBeUndefined();
+
+    let disposalChecks = 0;
+    registerLiveRef(
+      "main:disposing",
+      "disposing-session",
+      "session-a",
+      "main",
+      () => ++disposalChecks > 1,
+    );
+    const disposingSession = makeToolSession("main:disposing", () => "disposing-session");
+    const disposingCapability = createHistoryCallerCapability(disposingSession);
+    expect(disposingCapability).toBeDefined();
+    expect(resolveHistoryCallerCapability(disposingCapability)).toBeUndefined();
+
     const nonGlobalRegistry = {} as AgentRegistry;
     expect(
       createHistoryCallerCapability(makeToolSession("main:a", () => "session-a", nonGlobalRegistry)),
@@ -276,11 +313,15 @@ describe("history:// caller-bound archived opt-in", () => {
         { id: "record-one", parentId: null, message: "secret" },
       ]);
       registerArchivedRef("Scout", "session-a", file);
+      const handler = new HistoryProtocolHandler();
+      const url = parseInternalUrl("history://Scout?archived=1&entry=record-one");
+      const validCapability = createHistoryCallerCapability(makeToolSession("main:a", () => "session-a"));
+      expect(validCapability).toBeDefined();
+      const valid = await handler.resolve(url, { historyCaller: validCapability });
+      expect(valid.content).toContain("secret");
+
       await expect(
-        new HistoryProtocolHandler().resolve(
-          new URL("history://Scout?archived=1") as never,
-          { historyCaller: Object.freeze({}) as never },
-        ),
+        handler.resolve(url, { historyCaller: Object.freeze({}) as never }),
       ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
     } finally {
       await temp.remove();
