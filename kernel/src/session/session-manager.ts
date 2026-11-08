@@ -347,6 +347,7 @@ export interface SessionManagerStateSnapshot {
 	lifecycleEnded: boolean;
 	header: SessionHeader;
 	entries: SessionEntry[];
+	publishedFileState?: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null;
 }
 
 interface DiskQueueOptions {
@@ -1208,7 +1209,6 @@ export class SessionManager {
 			}
 			// An independently edited owned record keeps its ID. Its original bytes
 			// must not be replaced with our older in-memory serialization during
-			// strict failed-fork repair. Ordinary rewrites retain their prior policy.
 			if (id && seenStrictEntryIds && this.#isOwnId(id)) {
 				const owned = this.#index.get(id);
 				if (!owned || `${raw}\n` !== this.#lineFor(owned)) {
@@ -1217,7 +1217,6 @@ export class SessionManager {
 				missingPublishedIds?.delete(id);
 			}
 			const abortedLine = id ? abortedForkLines?.get(id) : undefined;
-			// Only the exact aborted marker we wrote may be removed. A peer can
 			// replace its bytes while retaining the ID, so ID-only matching loses history.
 			if (requireCompleteHistory && abortedLine !== undefined && `${raw}\n` !== abortedLine) {
 				throw new Error("Cannot preserve independently modified aborted fork lifecycle marker during failed-fork repair");
@@ -1291,14 +1290,14 @@ export class SessionManager {
 	 * yielding carries only the foreign lines the last atomic publish learned
 	 * about, which is all a synchronous path can do there.
 	 */
-	#rewriteSynchronously(): void {
-		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
-
+#rewriteSynchronously(): void {
+	if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
+	const sessionFile = this.#sessionFile;
+	const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
+	const runRewrite = (): void => {
 		try {
 			// Strict failed-fork repair must recheck the original object at publication,
 			// including its EPERM backup. This is not cross-process append-at-rename CAS.
-			const sessionFile = this.#sessionFile;
-			const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
 			let originalState: SessionStorageStat | undefined;
 			if (repairingFailedFork) {
 				try {
@@ -1336,12 +1335,17 @@ export class SessionManager {
 			this.#fileIsCurrent = true;
 			this.#materializeBreadcrumb();
 			this.#rewriteRequired = false;
-			this.#hasTitleSlot = true;
 			this.#coolUnreachablePayloads();
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
+	};
+	if (repairingFailedFork && this.#storage.withJournalLockSync) {
+		this.#storage.withJournalLockSync(sessionFile, runRewrite);
+	} else {
+		runRewrite();
 	}
+}
 
 	/**
 	 * Republish the file atomically (temp-write + rename, EPERM-safe) on the
@@ -1406,31 +1410,24 @@ export class SessionManager {
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
 		this.#atomicRewriteFenceEpoch = epoch;
-		try {
-			do {
-				this.#atomicRewriteDirty = false;
-				await this.#closeWriterHandle();
-				const sessionFile = this.#sessionFile;
-				if (!sessionFile) return false;
-				if (this.#diskEpoch !== epoch) return false;
-				// Read the file back first: a second manager holding the same path
-				// appends lines this manager has never seen, and a full-file body
-				// that omits them deletes them (see #refreshForeignLines).
-				// Failed-fork rollback must not overwrite an original journal that
-				// could contain unseen foreign lines when the source read fails.
-				// Preserve the existing best-effort policy for ordinary rewrites.
-				const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
-				// For failed-fork repair, an independent writer can append while
-				// we read or stage the replacement. The manager's disk epoch only
-				// fences THIS manager; check the original file's version too.
-				let originalState: SessionStorageStat | undefined;
-				if (repairingFailedFork) {
-					try {
-						originalState = this.#storage.statSync(sessionFile);
-					} catch {
-						throw new Error("Cannot verify original journal before failed-fork repair");
+		const sessionFile = this.#sessionFile;
+		if (!sessionFile) return false;
+		const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
+		const runRewrite = async (): Promise<boolean> => {
+			try {
+				do {
+					this.#atomicRewriteDirty = false;
+					await this.#closeWriterHandle();
+					if (!this.#sessionFile || this.#sessionFile !== sessionFile) return false;
+					if (this.#diskEpoch !== epoch) return false;
+					let originalState: SessionStorageStat | undefined;
+					if (repairingFailedFork) {
+						try {
+							originalState = this.#storage.statSync(sessionFile);
+						} catch {
+							throw new Error("Cannot verify original journal before failed-fork repair");
+						}
 					}
-				}
 				const sourceUnchanged = (sourcePath = sessionFile): boolean => {
 					if (!originalState) return true;
 					try {
@@ -1484,15 +1481,20 @@ export class SessionManager {
 				}
 			} while (this.#atomicRewriteDirty);
 			return true;
-		} finally {
-			// Only relinquish the fence if we still own it. A superseding
-			// synchronous rewrite (`flushSync` → `#rewriteSynchronously`) may
-			// have reset `#diskTail`, scheduled a fresh atomic task at the new
-			// epoch, and that task may have taken ownership of the fence while
-			// this stale rewrite was still awaiting storage. Clearing it here
-			// unconditionally would strand appends during the newer publish.
-			if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
+			} finally {
+				// Only relinquish the fence if we still own it. A superseding
+				// synchronous rewrite (`flushSync` → `#rewriteSynchronously`) may
+				// have reset `#diskTail`, scheduled a fresh atomic task at the new
+				// epoch, and that task may have taken ownership of the fence while
+				// this stale rewrite was still awaiting storage. Clearing it here
+				// would tear down the newer rewrite's fence.
+				if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = undefined;
+			}
+		};
+		if (repairingFailedFork && this.#storage.withJournalLock) {
+			return await this.#storage.withJournalLock(sessionFile, runRewrite);
 		}
+		return await runRewrite();
 	}
 
 	#appendToSessionFile(entry: SessionEntry): void {
@@ -2122,6 +2124,30 @@ export class SessionManager {
 			// active header/array wholesale, so rollback needs no deep clone.
 			header: this.#header,
 			entries: this.#entries.slice(),
+			publishedFileState: this.#publishedFileState
+				? {
+						size: this.#publishedFileState.size,
+						identity: this.#publishedFileState.identity,
+						ownedIds: (() => {
+							if (this.#publishedFileState?.ownedIds) {
+								return new Set(this.#publishedFileState.ownedIds);
+							}
+							if (this.#publishedFileState?.lines) {
+								const ids = new Set<string>();
+								const lines = this.#publishedFileState.lines;
+								for (let i = 0; i < lines.baseLength; i++) {
+									const id = lines.base[i]?.id;
+									if (id) ids.add(id);
+								}
+								for (const entry of lines.appended) {
+									if (entry.id) ids.add(entry.id);
+								}
+								return ids;
+							}
+							return undefined;
+						})(),
+				  }
+				: null,
 		};
 	}
 
@@ -2141,6 +2167,16 @@ export class SessionManager {
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
+		if (snapshot.publishedFileState !== undefined) {
+			this.#publishedFileState = snapshot.publishedFileState
+				? {
+						...snapshot.publishedFileState,
+						ownedIds: snapshot.publishedFileState.ownedIds
+							? new Set(snapshot.publishedFileState.ownedIds)
+							: undefined,
+				  }
+				: null;
+		}
 		this.#nextSequence = snapshot.nextSequence;
 		this.#lifecycleStarted = snapshot.lifecycleStarted;
 		this.#lifecycleEnded = snapshot.lifecycleEnded;
@@ -2890,7 +2926,6 @@ export class SessionManager {
 				// Close can fail after the old file accepted session_switched.
 				// Repair that journal before exposing the failed fork to the caller:
 				// a process restart without a later caller flush must not see a
-				// spurious terminal marker. The rewrite retains genuine foreign tails.
 				await this.flush();
 			} catch (restoreError) {
 				throw new AggregateError([error, restoreError], "Fork failed and could not durably restore the active source");

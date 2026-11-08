@@ -4130,7 +4130,7 @@ describe("SessionManager.fork artifact durability", () => {
 							const sync = handle.sync.bind(handle);
 							Object.defineProperty(handle, "sync", {
 								configurable: true,
-							value: async () => {
+								value: async () => {
 									events.push({ kind: "sync", path: filename });
 									return sync();
 								},
@@ -4139,12 +4139,20 @@ describe("SessionManager.fork artifact durability", () => {
 					}
 					return handle;
 				});
-				const renameSpy = spyOn(nodeFs.promises, "rename").mockImplementation(async (from, to) => {
+				const onPublish = (to: string | Buffer | URL) => {
 					const target = String(to);
 					if (target.endsWith(".jsonl") && path.dirname(target) === sessions) {
 						events.push({ kind: "publish", path: target });
 					}
+				};
+				const renameSpy = spyOn(nodeFs.promises, "rename").mockImplementation(async (from, to) => {
+					onPublish(to);
 					return realRename(from, to);
+				});
+				const realRenameSync = nodeFs.renameSync.bind(nodeFs);
+				const renameSyncSpy = spyOn(nodeFs, "renameSync").mockImplementation((from, to) => {
+					onPublish(to);
+					return realRenameSync(from, to);
 				});
 				try {
 					const fork = await manager.fork();
@@ -4169,12 +4177,12 @@ describe("SessionManager.fork artifact durability", () => {
 					expect(nestedFileSync).toBeGreaterThanOrEqual(0);
 					expect(nestedDirSync).toBeGreaterThanOrEqual(0);
 					expect(rootDirSync).toBeGreaterThanOrEqual(0);
-					expect(parentDirSync).toBeGreaterThanOrEqual(0);
 					expect(sourceFileSync).toBeLessThan(nestedDirSync);
 					expect(nestedFileSync).toBeLessThan(nestedDirSync);
 					expect(nestedDirSync).toBeLessThan(rootDirSync);
 					expect(rootDirSync).toBeLessThan(parentDirSync);
 				} finally {
+					renameSyncSpy.mockRestore();
 					renameSpy.mockRestore();
 					openSpy.mockRestore();
 					copySpy.mockRestore();
