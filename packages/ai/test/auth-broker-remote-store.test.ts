@@ -1482,12 +1482,14 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 
 			// No refreshSnapshot() follows reauthorization: the tombstoned first
 			// frame itself must cause a canonical GET, which is the only authority.
-			await waitUntil(() =>
-				canonicalGets === 2 &&
-				remote!.listAuthCredentials()[0]?.credential.type === "oauth" &&
-				remote!.listAuthCredentials()[0]?.credential.access === "access-synthetic-canonical-reauthorized",
-				4_000,
-			);
+			await waitUntil(() => {
+				const selected = remote!.listAuthCredentials()[0];
+				return (
+					canonicalGets === 2 &&
+					selected?.credential.type === "oauth" &&
+					selected.credential.access === "access-synthetic-canonical-reauthorized"
+				);
+			}, 4_000);
 			expect(canonicalGets).toBe(2);
 			expect(remote.listAuthCredentials()[0]?.credential).toMatchObject({
 				type: "oauth", access: "access-synthetic-canonical-reauthorized",
