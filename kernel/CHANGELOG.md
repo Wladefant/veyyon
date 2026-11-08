@@ -4,6 +4,43 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Flush copied fork artifact files before child-session publication and flush POSIX directory entries deepest-first ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- Refuse first append to a newly opened empty session journal if a peer already wrote foreign contents to its pinned inode before this writer's own header ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Refuse a fork when the source artifact tree changes during the pre-switch copy, rather than silently omitting unreferenced evidence ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- File append writers reject an in-place unrelated session-header overwrite on the same pinned inode before appending, without claiming cross-process publication serialization ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- File session append writers reject a substituted same-inode symlink before their regular-file fast path; this is not an interprocess publication lock ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Append writers refuse rebinding to a replaced same-session journal after earlier appends, even after fsync, when the replacement has not proven that history retained ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- File session writers now refuse a durable `sync()` acknowledgement if a peer has replaced the journal pathname after the writer appended. This detects a displaced descriptor but is not cross-process append/rename coordination ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- Append-writer rebinding refuses an unrelated regular journal unless its session header ID matches the pinned writer; this is not an interprocess append/rename transaction ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- File-backed append writers rebind to the current regular journal after atomic replacement, without recreating a missing path; uncoordinated cross-process rename races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Strict failed-fork repair checks the original journal's POSIX change time against timestamp-preserving equal-length peer edits; separate cross-process rename and held-descriptor races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- Synchronous strict failed-fork repair rechecks the original journal version at publication and refuses an append after its reread; separate cross-process append-at-rename and held-descriptor races remain ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Strict failed-fork recovery refuses foreign journal messages interleaved with published owned entries instead of relocating them after existing history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Strict failed-fork recovery refuses foreign JSONL records inserted before the original session header instead of silently relocating them after owned history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Strict failed-fork repair retains the published owned-entry ID proof even when a previously published journal includes foreign tail entries, refusing resurrection of independently removed owned messages without enabling unsafe tail-rewrite offsets ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- Strict failed-fork repair refuses a missing previously published owned message instead of resurrecting it from in-memory history; not-yet-published entries are not required on disk ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Failed-fork repair refuses backends without byte-strict journal readers instead of overwriting independent raw history through lossy text fallbacks ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Failed-fork journal recovery refuses malformed UTF-8 or unexpected byte-order marks rather than silently changing original journal bytes during strict repair ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Failed-fork repair removes only the exact aborted lifecycle marker it wrote; a peer's different same-ID record instead stops replacement ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed-fork repair refuses independently revised owned message bytes or a changed original same-ID header rather than replacing those edits with older in-memory history ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A synchronous session rewrite retains the original journal if Windows-style EPERM replacement fails, rather than truncating history in place ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed session fork refuses a different in-place title-slot update while removing an aborted fork marker, keeping an independently written title intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Failed-fork recovery refuses a missing previously published title slot instead of recreating stale title metadata over a peer's edited journal; title-slot-free legacy sessions retain their layout allowance ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed session fork refuses an independently appended JSONL entry that repeats an existing ID rather than dropping its different history during recovery ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+- A failed session fork rejects a second mutable title slot appended to the original journal during aborted-switch recovery, instead of discarding the independent bytes ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed session fork also refuses an unexpected or duplicate source header while repairing the original JSONL, rather than silently omitting independent header bytes ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed session fork refuses to rewrite incomplete, blank-line, or malformed independent JSONL history during aborted-switch recovery, preserving original bytes for explicit repair ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed session fork refuses a detected foreign append between rereading the original journal and publishing its rollback, leaving the source available for a safe retry ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- A failed session fork repairs its own aborted `session_switched` marker on the original JSONL before the rejected fork returns, so reopening without a later caller flush cannot mistake the source for a completed switch; keep genuine foreign-writer tails and original history intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.8.0] - 2026-11-05
 
 ### Breaking Changes

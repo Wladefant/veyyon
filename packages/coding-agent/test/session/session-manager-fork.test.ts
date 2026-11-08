@@ -15,7 +15,8 @@ import {
 } from "@veyyon/kernel/session/session-entries";
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { FileSessionStorage, type SessionFileBody, type SessionStorageWriter, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
+import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
+import { FileSessionStorage, MemorySessionStorage, type SessionFileBody, type SessionStorageWriter, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
 import { getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { getTerminalId } from "@veyyon/utils/ttyid";
@@ -848,8 +849,8 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
     }
   });
 
-  it("rejects missing or extra unreferenced nested files in a fork copy without losing the source", async () => {
-    for (const fault of ["missing", "extra"] as const) {
+  it("rejects incomplete copies and source-tree changes during a fork without losing the source", async () => {
+    for (const fault of ["missing", "extra", "source-extra"] as const) {
       using temp = TempDir.createSync("@veyyon-fork-nested-inventory-");
       const manager = SessionManager.create(temp.path(), path.join(temp.path(), "sessions"));
       try {
@@ -878,10 +879,13 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
           if (sourcePath !== sourceNotes) return;
           const copiedNotes = destPath;
           if (fault === "missing") await fs.unlink(path.join(copiedNotes, "audit.log"));
-          else await fs.writeFile(path.join(copiedNotes, "extra.log"), "SYNTHETIC UNEXPECTED FILE");
+          else if (fault === "extra") await fs.writeFile(path.join(copiedNotes, "extra.log"), "SYNTHETIC UNEXPECTED FILE");
+          else await fs.writeFile(path.join(sourceNotes, "extra.log"), "SYNTHETIC SOURCE ADDED DURING COPY");
         });
         try {
-          await expect(manager.fork()).rejects.toThrow(/artifact copy incomplete/i);
+          await expect(manager.fork()).rejects.toThrow(
+            fault === "source-extra" ? /artifact source changed during copy/i : /artifact copy incomplete/i,
+          );
         } finally {
           copySpy.mockRestore();
         }
@@ -890,12 +894,22 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
         expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
         expect(await fs.readFile(sourceArtifact, "utf8")).toBe(originalBytes);
         expect(await fs.readFile(path.join(sourceNotes, "audit.log"), "utf8")).toBe(nestedOriginal);
+        if (fault === "source-extra") {
+          expect(await fs.readFile(path.join(sourceNotes, "extra.log"), "utf8"))
+            .toBe("SYNTHETIC SOURCE ADDED DURING COPY");
+        }
 
         const fork = await manager.fork();
         if (!fork) throw new Error("expected successful clean retry");
         const copiedNotes = path.join(fork.newSessionFile.slice(0, -".jsonl".length), "unreferenced-notes");
-        expect(await fs.readdir(copiedNotes)).toEqual(["audit.log"]);
+        expect((await fs.readdir(copiedNotes)).sort()).toEqual(
+          fault === "source-extra" ? ["audit.log", "extra.log"] : ["audit.log"],
+        );
         expect(await fs.readFile(path.join(copiedNotes, "audit.log"), "utf8")).toBe(nestedOriginal);
+        if (fault === "source-extra") {
+          expect(await fs.readFile(path.join(copiedNotes, "extra.log"), "utf8"))
+            .toBe("SYNTHETIC SOURCE ADDED DURING COPY");
+        }
         expect(await readSaved(manager, "0")).toBe(originalBytes);
         expect(await manager.saveArtifact("new independent output", "bash")).toBe("1");
         expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceJsonl);
@@ -1244,7 +1258,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
       // source file or the unrelated synthetic target.
       const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
         if (copiedPath && String(file) === copiedPath && !swapped) {
-          await fs.rename(copiedPath, copiedPath + ".parked");
+          await fs.rename(copiedPath, `${copiedPath}.parked`);
           await fs.symlink(outside, copiedPath, "file");
           // A filesystem that rejects symlink creation must fail this test,
           // not pass by throwing before the prohibited link was installed.
@@ -1653,6 +1667,7 @@ describe("SessionManager.fork preserves inherited artifact evidence", () => {
 class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNewSession = false;
+  rejectSourceRepair = false;
 
   override async writeTextAtomic(
     target: string,
@@ -1661,6 +1676,9 @@ class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
   ): Promise<void> {
     if (this.rejectNewSession && target !== this.protectedSourceFile) {
       throw new Error("synthetic new fork JSONL publication refusal");
+    }
+    if (this.rejectSourceRepair && target === this.protectedSourceFile) {
+      throw new Error("synthetic original-source rollback refusal");
     }
     await super.writeTextAtomic(target, body, options);
   }
@@ -1671,6 +1689,167 @@ class SyntheticForkJsonlRefusalStorage extends FileSessionStorage {
 class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
   protectedSourceFile: string | undefined;
   rejectNextSourceClose = false;
+  appendForeignLineOnRefusal: string | undefined;
+  // Disposable raw bytes test strict failure handling before lossy UTF-8 decoding.
+  appendForeignBytesOnRefusal: Buffer | undefined;
+  // Deliberately prepend a real UTF-8 BOM to a disposable already-written journal.
+  prependBomOnRefusal = false;
+  // Test-only independent writer revises a previously owned line before the
+  // strict source reread; the id and all other journal lines remain valid.
+  rewriteOwnedRecordOnRefusal: "header" | "message" | "missing-message" | "foreign-before-header" | "foreign-between-owned" | undefined;
+  reviseAbortedMarkerOnRefusal: "message" | "reason" | undefined;
+  appendForeignLineBeforeRepairPublish: string | undefined;
+  // Independent append after the storage's final synchronous publication guard,
+  // inside the actual rename hook. This deliberately exposes the residual CAS gap.
+  appendForeignLineAtRename: string | undefined;
+  // Exercise a same-length independent edit after strict reread while a writer
+  // preserves mtime. Only the source's change time exposes this version.
+  rewriteOwnedTextAtGuard: { before: string; after: string } | undefined;
+  pinSourceMtimeOnRefusal = false;
+  // Synthetic peer append after synchronous strict source reread, before staging.
+  appendForeignLineBeforeSyncRewrite: string | undefined;
+  forceNextSourceAtomicEperm = false;
+  // The other writer publishes a fresh journal at the vacated original path
+  // while Windows-style EPERM fallback holds the old inode at a backup path.
+  recreateJournalAfterMoveAside: string | undefined;
+  // A fresh foreign target can also appear AFTER the initial absence check.
+  recreateJournalOnRejectedGuard: string | undefined;
+  recreateJournalOnFailedReplace: string | undefined;
+  movedAsideJournalPath: string | undefined;
+  // Synthetic-only seam; arm the read refusal after a failed writer close.
+  refuseSourceReadOnClose = false;
+  refuseNextSourceRead = false;
+
+  override statSync(target: string) {
+    if (
+      target === this.movedAsideJournalPath &&
+      this.recreateJournalOnRejectedGuard !== undefined &&
+      this.protectedSourceFile !== undefined
+    ) {
+      const replacement = this.recreateJournalOnRejectedGuard;
+      this.recreateJournalOnRejectedGuard = undefined;
+      // The independent writer claims the original pathname while the version
+      // guard detects a changed backup. Both histories must remain recoverable.
+      nodeFs.writeFileSync(this.protectedSourceFile, replacement);
+      nodeFs.appendFileSync(target, `${JSON.stringify({
+        type: "message", id: "guard-rejected-foreign-tail", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Backup has an independent append", timestamp: Date.now() },
+      })}\n`);
+    }
+    return super.statSync(target);
+  }
+
+  override renameSync(source: string, target: string): void {
+    if (target === this.protectedSourceFile && this.appendForeignLineAtRename) {
+      const foreignLine = this.appendForeignLineAtRename;
+      this.appendForeignLineAtRename = undefined;
+      nodeFs.appendFileSync(target, foreignLine);
+    }
+    if (this.forceNextSourceAtomicEperm && target === this.protectedSourceFile) {
+      this.forceNextSourceAtomicEperm = false;
+      const error = new Error("synthetic Windows-style EPERM replacement refusal") as NodeJS.ErrnoException;
+      error.code = "EPERM";
+      throw error;
+    }
+    if (
+      target === this.protectedSourceFile &&
+      this.recreateJournalOnFailedReplace !== undefined &&
+      this.movedAsideJournalPath !== undefined
+    ) {
+      const replacement = this.recreateJournalOnFailedReplace;
+      this.recreateJournalOnFailedReplace = undefined;
+      nodeFs.writeFileSync(target, replacement);
+      const error = new Error("synthetic retry refused after foreign publication") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    }
+    super.renameSync(source, target);
+    if (
+      source === this.protectedSourceFile &&
+      (this.recreateJournalOnRejectedGuard !== undefined || this.recreateJournalOnFailedReplace !== undefined)
+    ) {
+      this.movedAsideJournalPath = target;
+    }
+    if (source === this.protectedSourceFile && this.recreateJournalAfterMoveAside !== undefined) {
+      const replacement = this.recreateJournalAfterMoveAside;
+      this.recreateJournalAfterMoveAside = undefined;
+      this.movedAsideJournalPath = target;
+      nodeFs.writeFileSync(source, replacement);
+    }
+  }
+
+  override readText(target: string): Promise<string> {
+    if (target === this.protectedSourceFile && this.refuseNextSourceRead) {
+      this.refuseNextSourceRead = false;
+      return Promise.reject(new Error("synthetic source journal read refusal"));
+    }
+    return super.readText(target);
+  }
+
+  override readTextStrict(target: string): Promise<string> {
+    if (target === this.protectedSourceFile && this.refuseNextSourceRead) {
+      this.refuseNextSourceRead = false;
+      return Promise.reject(new Error("synthetic source journal read refusal"));
+    }
+    return super.readTextStrict(target);
+  }
+
+  private async appendForeignBeforeRepair(target: string): Promise<void> {
+    if (target !== this.protectedSourceFile || !this.appendForeignLineBeforeRepairPublish) return;
+    const foreignLine = this.appendForeignLineBeforeRepairPublish;
+    this.appendForeignLineBeforeRepairPublish = undefined;
+    await fs.appendFile(target, foreignLine);
+  }
+
+  override writeTextSync(target: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
+    if (target === this.protectedSourceFile && this.appendForeignLineBeforeSyncRewrite) {
+      const line = this.appendForeignLineBeforeSyncRewrite;
+      this.appendForeignLineBeforeSyncRewrite = undefined;
+      nodeFs.appendFileSync(target, line);
+    }
+    super.writeTextSync(target, body, options);
+  }
+
+  private withSameSizePeerEdit(
+    target: string, options?: WriteTextAtomicOptions,
+  ): WriteTextAtomicOptions | undefined {
+    const edit = this.rewriteOwnedTextAtGuard;
+    if (!edit || target !== this.protectedSourceFile || !options?.commitGuard) return options;
+    const originalGuard = options.commitGuard;
+    return {
+      ...options,
+      commitGuard: sourcePath => {
+        if (this.rewriteOwnedTextAtGuard === edit) {
+          this.rewriteOwnedTextAtGuard = undefined;
+          const original = nodeFs.readFileSync(target, "utf8");
+          if (!original.includes(edit.before) ||
+            Buffer.byteLength(edit.before) !== Buffer.byteLength(edit.after)) {
+            throw new Error("expected same-sized disposable peer revision");
+          }
+          const previous = nodeFs.statSync(target);
+          nodeFs.writeFileSync(target, original.replace(edit.before, edit.after));
+          nodeFs.utimesSync(target, previous.atime, previous.mtime);
+        }
+        return originalGuard(sourcePath);
+      },
+    };
+  }
+
+  override async writeTextAtomic(
+    target: string, body: SessionFileBody, options?: WriteTextAtomicOptions,
+  ): Promise<void> {
+    await this.appendForeignBeforeRepair(target);
+    await super.writeTextAtomic(target, body, this.withSameSizePeerEdit(target, options));
+  }
+
+  override async rewriteTailAtomic(
+    target: string, headBytes: number, keepBytes: number, head: string,
+    tail: SessionFileBody, options?: WriteTextAtomicOptions,
+  ): Promise<void> {
+    await this.appendForeignBeforeRepair(target);
+    await super.rewriteTailAtomic(target, headBytes, keepBytes, head, tail, this.withSameSizePeerEdit(target, options));
+  }
 
   override openWriter(
     target: string,
@@ -1687,6 +1866,98 @@ class SyntheticForkSourceCloseRefusalStorage extends FileSessionStorage {
         await writer.close();
         if (this.rejectNextSourceClose && target === this.protectedSourceFile) {
           this.rejectNextSourceClose = false;
+          if (this.pinSourceMtimeOnRefusal) {
+            this.pinSourceMtimeOnRefusal = false;
+            const fixed = new Date("2020-01-01T00:00:00.000Z");
+            nodeFs.utimesSync(target, fixed, fixed);
+          }
+          // A separate writer can append between our end marker and rollback.
+          const foreignLine = this.appendForeignLineOnRefusal;
+          this.appendForeignLineOnRefusal = undefined;
+          if (foreignLine) await fs.appendFile(target, foreignLine);
+          const rawPeer = this.appendForeignBytesOnRefusal;
+          this.appendForeignBytesOnRefusal = undefined;
+          if (rawPeer) await fs.appendFile(target, rawPeer);
+          if (this.prependBomOnRefusal) {
+            this.prependBomOnRefusal = false;
+            const original = await fs.readFile(target);
+            await fs.writeFile(target, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), original]));
+          }
+          const revision = this.rewriteOwnedRecordOnRefusal;
+          this.rewriteOwnedRecordOnRefusal = undefined;
+          if (revision) {
+            const rows = (await fs.readFile(target, "utf8")).split("\n");
+            const targetType = revision === "header" ? "session" : "message";
+            const rowIndex = rows.findIndex(row => {
+              if (!row) return false;
+              try { return (JSON.parse(row) as { type?: string }).type === targetType; }
+              catch { return false; }
+            });
+            if (rowIndex < 0) throw new Error("expected disposable original journal record");
+            if (revision === "foreign-before-header") {
+              // A valid independent JSONL row before the session header must
+              // never be silently relocated to the tail by strict recovery.
+              rows.unshift(JSON.stringify({
+                type: "message", id: "synthetic-preheader-foreign", parentId: null,
+                timestamp: new Date().toISOString(),
+                message: { role: "user", content: "Synthetic foreign entry before original header", timestamp: Date.now() },
+              }));
+            } else if (revision === "foreign-between-owned") {
+              // The peer puts valid history between two intact owned messages.
+              // Rebuilding all owned entries before a foreign tail would move it.
+              const nextOwned = rows.findIndex((row, index) => index > rowIndex && row.includes('"type":"message"'));
+              if (nextOwned < 0) throw new Error("expected second disposable owned message");
+              rows.splice(nextOwned, 0, JSON.stringify({
+                type: "message", id: "synthetic-interleaved-peer", parentId: null,
+                timestamp: new Date().toISOString(),
+                message: { role: "user", content: "Synthetic peer inserted between owned messages", timestamp: Date.now() },
+              }));
+            } else if (revision === "missing-message") {
+              // A peer removes one complete, previously published owned line;
+              // the surviving journal is still syntactically valid JSONL.
+              rows.splice(rowIndex, 1);
+            } else {
+              const record = JSON.parse(rows[rowIndex]!) as Record<string, unknown>;
+              if (revision === "header") {
+                record.cwd = path.join(String(record.cwd), "synthetic-independent-cwd");
+              } else {
+                record.message = {
+                  ...(record.message as Record<string, unknown>),
+                  content: "Synthetic independently revised owned message",
+                };
+              }
+              rows[rowIndex] = JSON.stringify(record);
+            }
+            await fs.writeFile(target, rows.join("\n"));
+          }
+          const alteredMarker = this.reviseAbortedMarkerOnRefusal;
+          this.reviseAbortedMarkerOnRefusal = undefined;
+          if (alteredMarker) {
+            const rows = (await fs.readFile(target, "utf8")).split("\n");
+            const markerIndex = rows.findIndex(row => {
+              if (!row) return false;
+              try {
+                const entry = JSON.parse(row) as { type?: string; state?: string; reason?: string };
+                return entry.type === "session_lifecycle" &&
+                  entry.state === "ended" && entry.reason === "session_switched";
+              } catch { return false; }
+            });
+            if (markerIndex < 0) throw new Error("expected synthetic aborted fork marker on disk");
+            const originalMarker = JSON.parse(rows[markerIndex]!) as Record<string, unknown>;
+            // Keep the marker's ID while independently changing a valid record.
+            rows[markerIndex] = JSON.stringify(alteredMarker === "message"
+              ? {
+                type: "message", id: originalMarker.id, parentId: null,
+                timestamp: originalMarker.timestamp,
+                message: { role: "user", content: "Synthetic peer with reused aborted marker ID", timestamp: Date.now() },
+              }
+              : { ...originalMarker, reason: "closed" });
+            await fs.writeFile(target, rows.join("\n"));
+          }
+          if (this.refuseSourceReadOnClose) {
+            this.refuseSourceReadOnClose = false;
+            this.refuseNextSourceRead = true;
+          }
           throw new Error("synthetic source writer-close refusal");
         }
       },
@@ -1804,14 +2075,19 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
     const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
     let session: AgentSession | undefined;
     try {
+      // A failed fork must not mutate the original artifact/archive sidecar.
+      expect(await manager.saveArtifact("synthetic retained archive evidence", "bash")).toBe("0");
       manager.appendMessage({
-        role: "user", content: "Original recoverable conversation", timestamp: Date.now(),
+        role: "user", content: "Original recoverable conversation artifact://0", timestamp: Date.now(),
       });
       await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
       if (!sourceFile) throw new Error("expected durable source session");
       const sourceId = manager.getSessionId();
       const sourceBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected source artifact");
+      const originalArtifactBytes = await fs.readFile(sourceArtifact);
 
       const agent = new Agent({
         initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
@@ -1833,13 +2109,17 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       expect(manager.getHeader()?.id).toBe(sourceId);
       expect(manager.getSessionFile()).toBe(sourceFile);
       expect(agent.sessionId).toBe(providerSessionId);
+      // Read the disk journal without a caller flush: even if the process
+      // terminates now, reopening this source must not observe a false end.
       const failedEntries = await loadEntriesFromFile(sourceFile);
       expect(failedEntries.some(entry =>
         entry.type === "session_lifecycle" && entry.state === "ended" &&
         entry.reason === "session_switched"
-      )).toBe(instrumentation === "basic");
+      )).toBe(false);
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
 
-      // A foreign writer can append after rollback, before source repair.
+      // A foreign writer can append after durable rollback; later appends
       const foreignEntry: JsonlMessageEntry = {
         type: "message",
         id: "publication-refusal-foreign-tail",
@@ -1868,6 +2148,7 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       expect(recoveredSource).toContain("Original recoverable conversation");
       expect(recoveredSource).toContain("Entry after rejected fork");
       expect(recoveredSource).not.toBe(sourceBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
 
       // Positive twin: a genuinely published fork still switches both identities
       // and leaves the source's original recovery bytes intact.
@@ -1885,8 +2166,82 @@ describe("AgentSession fork after an unpublished JSONL refusal", () => {
       )).toBe(instrumentation === "basic");
       expect(await fs.readFile(sourceFile, "utf8")).toContain("Entry after rejected fork");
       expect(await fs.readFile(sourceFile, "utf8")).toContain("Foreign publication recovery tail");
+      const copiedArtifact = await manager.getArtifactPath("0");
+      if (!copiedArtifact) throw new Error("expected copied archived artifact");
+      expect(copiedArtifact).not.toBe(sourceArtifact);
+      expect(await fs.readFile(copiedArtifact)).toEqual(originalArtifactBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
     } finally {
       storage.rejectNewSession = false;
+      try { await session?.dispose(); } finally {
+        authStorage.close();
+        if (!session) await manager.close();
+      }
+    }
+  });
+
+  it("reports both failures when the rejected fork cannot repair its original journal", async () => {
+    using temp = TempDir.createSync("@veyyon-agent-fork-double-refusal-");
+    const storage = new SyntheticForkJsonlRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
+    let session: AgentSession | undefined;
+    try {
+      manager.appendMessage({
+        role: "user", content: "Original history survives both failures", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const originalFile = manager.getSessionFile();
+      if (!originalFile) throw new Error("expected persisted source");
+      const originalId = manager.getSessionId();
+
+      const agent = new Agent({
+        initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
+      });
+      session = new AgentSession({
+        agent,
+        sessionManager: manager,
+        settings: Settings.isolated({ "async.enabled": false }),
+        modelRegistry: new ModelRegistry(authStorage, path.join(temp.path(), "models.yml")),
+      });
+      const providerId = agent.sessionId;
+      storage.protectedSourceFile = originalFile;
+      storage.rejectNewSession = true;
+      storage.rejectSourceRepair = true;
+      let failure: unknown;
+      try {
+        await session.fork();
+      } catch (error) {
+        failure = error;
+      }
+      // Never silently claim a safe rollback when the repair itself failed.
+      expect(failure).toBeInstanceOf(AggregateError);
+      const errors = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(errors.some(error => error.includes("synthetic new fork JSONL publication refusal"))).toBe(true);
+      expect(errors.some(error => error.includes("synthetic original-source rollback refusal"))).toBe(true);
+      expect(manager.getSessionId()).toBe(originalId);
+      expect(manager.getSessionFile()).toBe(originalFile);
+      expect(agent.sessionId).toBe(providerId);
+
+      // The active source must be repaired before it is treated as reloadable.
+      // This is explicit recovery after the caller observed the aggregate error.
+      storage.rejectSourceRepair = false;
+      storage.rejectNewSession = false;
+      await manager.flush();
+      const repaired = await loadEntriesFromFile(originalFile);
+      expect(repaired.some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+      expect(repaired.some(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content === "Original history survives both failures"
+      )).toBe(true);
+    } finally {
+      storage.rejectNewSession = false;
+      storage.rejectSourceRepair = false;
       try { await session?.dispose(); } finally {
         authStorage.close();
         if (!session) await manager.close();
@@ -1905,8 +2260,12 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     const authStorage = await AuthStorage.create(path.join(temp.path(), "synthetic-auth.db"));
     let session: AgentSession | undefined;
     try {
+      expect(await manager.saveArtifact("synthetic pre-switch archival evidence", "bash")).toBe("0");
       manager.appendMessage({
         role: "user", content: "Original active session", timestamp: Date.now(),
+      });
+      manager.appendMessage({
+        role: "user", content: "Retain artifact://0 through a failed source close", timestamp: Date.now(),
       });
       await manager.ensureOnDisk();
       const sourceFile = manager.getSessionFile();
@@ -1914,6 +2273,9 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       const sourceId = manager.getSessionId();
       expect(manager.getLifecycleState()).toBe("running");
       const initialBytes = await fs.readFile(sourceFile, "utf8");
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected original sidecar evidence");
+      const originalArtifactBytes = await fs.readFile(sourceArtifact);
 
       const agent = new Agent({
         initialState: { systemPrompt: ["Synthetic test prompt"], tools: [], messages: [] },
@@ -1927,6 +2289,18 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       const providerSessionId = agent.sessionId;
 
       storage.protectedSourceFile = sourceFile;
+      // Interleave a real file append from an independent synthetic writer
+      // AFTER our old-source end marker but BEFORE the rollback repairs it.
+      const interleavedForeign: JsonlMessageEntry = {
+        type: "message",
+        id: "synthetic-interleaved-close-tail",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user", content: "Foreign tail before rollback", timestamp: Date.now(),
+        },
+      };
+      storage.appendForeignLineOnRefusal = `${JSON.stringify(interleavedForeign)}\n`;
       storage.rejectNextSourceClose = true;
       await expect(session.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
       expect(storage.rejectNextSourceClose).toBe(false);
@@ -1938,8 +2312,24 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
         entry.type === "session_lifecycle" && entry.state === "ended" &&
         entry.reason === "session_switched"
       )).toBe(false);
+      // Reparse the actual source bytes without an explicit caller flush.
+      // The aborted terminal marker must not survive a process restart.
+      const diskAfterRefusal = await loadEntriesFromFile(sourceFile);
+      expect(diskAfterRefusal.some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+      expect(diskAfterRefusal.some(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content === "Original active session"
+      )).toBe(true);
+      expect(diskAfterRefusal.some(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        entry.message.content === "Foreign tail before rollback"
+      )).toBe(true);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
 
-      // Simulate a different, legitimate writer while this manager repairs
+      // Simulate another legitimate writer after this manager has repaired
       // only its own aborted switch marker. The foreign line must survive.
       const foreignEntry: JsonlMessageEntry = {
         type: "message",
@@ -1977,12 +2367,1633 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
       expect(manager.getSessionId()).not.toBe(sourceId);
       expect(agent.sessionId).toBe(manager.getSessionId());
       expect(await fs.readFile(sourceFile, "utf8")).toContain("Foreign writer must survive recovery");
+      // No source history/sidecar elision, and the published fork gets its own copy.
+      const forkedArtifact = await manager.getArtifactPath("0");
+      if (!forkedArtifact) throw new Error("expected fork sidecar copy");
+      expect(forkedArtifact).not.toBe(sourceArtifact);
+      expect(await fs.readFile(forkedArtifact)).toEqual(originalArtifactBytes);
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifactBytes);
     } finally {
       storage.rejectNextSourceClose = false;
       try { await session?.dispose(); } finally {
         authStorage.close();
         if (!session) await manager.close();
       }
+    }
+  });
+
+
+
+
+  it("preserves synthetic foreign journal history through the Windows EPERM rollback fallback", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-eperm-backup-guard-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic original archived bytes", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original synthetic history with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const originalArtifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !originalArtifact) throw new Error("expected persisted synthetic source and archive");
+      const preservedArtifact = await fs.readFile(originalArtifact);
+
+      storage.protectedSourceFile = sourceFile;
+      storage.appendForeignLineOnRefusal = `${JSON.stringify({
+        type: "message", id: "synthetic-eperm-foreign-history", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Keep independent EPERM foreign history", timestamp: Date.now() },
+      })}\n`;
+      storage.rejectNextSourceClose = true;
+      storage.forceNextSourceAtomicEperm = true;
+      await expect(manager.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
+      expect(storage.forceNextSourceAtomicEperm).toBe(false);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+
+      const disk = await loadEntriesFromFile(sourceFile);
+      expect(disk.some(entry => entry.type === "session_lifecycle" &&
+        entry.state === "ended" && entry.reason === "session_switched")).toBe(false);
+      expect(disk.some(entry => entry.type === "message" &&
+        entry.message.role === "user" &&
+        entry.message.content === "Keep independent EPERM foreign history")).toBe(true);
+      expect(disk.some(entry => entry.type === "message" &&
+        entry.message.role === "user" &&
+        entry.message.content === "Original synthetic history with artifact://0")).toBe(true);
+      expect(await fs.readFile(originalArtifact)).toEqual(preservedArtifact);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.forceNextSourceAtomicEperm = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses Windows EPERM rollback that would overwrite a re-created foreign journal", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-eperm-foreign-recreate-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("original synthetic archive preserved", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original source with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !artifact) throw new Error("expected disposable source and artifact");
+      const preservedArtifact = await fs.readFile(artifact);
+      const foreignJournal = [
+        JSON.stringify({
+          type: "session", version: CURRENT_SESSION_VERSION, id: "independent-published-session",
+          timestamp: new Date().toISOString(), cwd: temp.path(),
+        }),
+        JSON.stringify({
+          type: "message", id: "independent-published-message", parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "user", content: "Fresh independent journal must not be overwritten",
+            timestamp: Date.now(),
+          },
+        }),
+        "",
+      ].join("\n");
+
+      storage.protectedSourceFile = sourceFile;
+      storage.recreateJournalAfterMoveAside = foreignJournal;
+      storage.rejectNextSourceClose = true;
+      storage.forceNextSourceAtomicEperm = true;
+
+      let failure: unknown;
+      try {
+        await manager.fork();
+      } catch (error) {
+        failure = error;
+      }
+      // Returning only the injected writer-close failure would misreport a
+      // destructive or unverified recovery as complete.
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed fork repair");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((error: string) => error.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((error: string) => /foreign|changed|reappeared|conflict|replace/i.test(error))).toBe(true);
+
+      expect(storage.recreateJournalAfterMoveAside).toBeUndefined();
+      expect(storage.forceNextSourceAtomicEperm).toBe(false);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      // A foreign writer published a different valid JSONL inode while the old
+      // source was moved aside. Neither the new journal nor the old source's
+      // archive/history may be silently discarded on failed recovery.
+      expect(await fs.readFile(sourceFile, "utf8")).toBe(foreignJournal);
+      const backupPath = storage.movedAsideJournalPath;
+      if (!backupPath) throw new Error("expected captured EPERM move-aside path");
+      const backupText = await fs.readFile(backupPath, "utf8");
+      expect(backupText).toContain("Original source with artifact://0");
+      expect(await fs.readFile(artifact)).toEqual(preservedArtifact);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.forceNextSourceAtomicEperm = false;
+      storage.recreateJournalAfterMoveAside = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses EPERM backup rollback over a foreign journal after guard or replacement failure", async () => {
+    for (const phase of ["guard-rejected", "retry-failed"] as const) {
+      using temp = TempDir.createSync(`@veyyon-fork-eperm-rollback-foreign-${phase}`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("original synthetic archive bytes", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original source with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !artifact) throw new Error("expected disposable source and artifact");
+        const artifactBefore = await fs.readFile(artifact);
+        const foreignJournal = [
+          JSON.stringify({
+            type: "session", version: CURRENT_SESSION_VERSION, id: "retry-foreign-session",
+            timestamp: new Date().toISOString(), cwd: temp.path(),
+          }),
+          JSON.stringify({
+            type: "message", id: "retry-foreign-message", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: {
+              role: "user", content: "Foreign journal claimed original pathname",
+              timestamp: Date.now(),
+            },
+          }),
+          "",
+        ].join("\n");
+
+        storage.protectedSourceFile = sourceFile;
+        storage.rejectNextSourceClose = true;
+        storage.forceNextSourceAtomicEperm = true;
+        if (phase === "guard-rejected") storage.recreateJournalOnRejectedGuard = foreignJournal;
+        else storage.recreateJournalOnFailedReplace = foreignJournal;
+
+        let failure: unknown;
+        try {
+          await manager.fork();
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected failed fork and refused rollback");
+        const causes = failure.errors.map((error: unknown) => String(error));
+        expect(causes.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+        const conflict = phase === "guard-rejected"
+          ? "reappeared during EPERM rollback"
+          : "reappeared after failed EPERM replacement";
+        expect(causes.some((reason: string) => reason.includes(conflict))).toBe(true);
+        expect(storage.forceNextSourceAtomicEperm).toBe(false);
+        expect(storage.recreateJournalOnRejectedGuard).toBeUndefined();
+        expect(storage.recreateJournalOnFailedReplace).toBeUndefined();
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(foreignJournal);
+        const backupPath = storage.movedAsideJournalPath;
+        if (!backupPath) throw new Error("expected retained original EPERM backup");
+        const backupBytes = await fs.readFile(backupPath, "utf8");
+        expect(backupBytes).toContain("Original source with artifact://0");
+        if (phase === "guard-rejected") expect(backupBytes).toContain("Backup has an independent append");
+        expect(await fs.readFile(artifact)).toEqual(artifactBefore);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.forceNextSourceAtomicEperm = false;
+        storage.recreateJournalOnRejectedGuard = undefined;
+        storage.recreateJournalOnFailedReplace = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("refuses stale failed-fork repair when a foreign writer appends after the successful journal read", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-append-before-replace-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic original archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original source preserves artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected original journal");
+      const sessionId = manager.getSessionId();
+      const artifactFile = await manager.getArtifactPath("0");
+      if (!artifactFile) throw new Error("expected synthetic original archive");
+      const artifactBytes = await fs.readFile(artifactFile);
+
+      const foreignLine = (id: string, content: string) => `${JSON.stringify({
+        type: "message", id, parentId: null, timestamp: new Date().toISOString(),
+        message: { role: "user", content, timestamp: Date.now() },
+      })}\n`;
+      storage.protectedSourceFile = sourceFile;
+      // The first independent append forces a successful disk reread. A second
+      // independent append arrives after that read, as staging starts.
+      storage.appendForeignLineOnRefusal = foreignLine(
+        "synthetic-foreign-before-read", "Foreign before source reread",
+      );
+      storage.appendForeignLineBeforeRepairPublish = foreignLine(
+        "synthetic-foreign-after-read", "Foreign after source reread",
+      );
+      storage.rejectNextSourceClose = true;
+
+      let failure: unknown;
+      try {
+        await manager.fork();
+      } catch (error) {
+        failure = error;
+      }
+      expect(storage.appendForeignLineBeforeRepairPublish).toBeUndefined();
+      expect(failure).toBeInstanceOf(AggregateError);
+      const reasons = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(reasons.some(reason => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some(reason => reason.includes("Original journal changed before failed-fork repair publication"))).toBe(true);
+      expect(manager.getSessionId()).toBe(sessionId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+
+      // A refused repair must leave the source and both independent appends
+      // intact, even though its own aborted end marker still awaits repair.
+      const stillOriginal = await fs.readFile(sourceFile, "utf8");
+      expect(stillOriginal).toContain("Foreign before source reread");
+      expect(stillOriginal).toContain("Foreign after source reread");
+      expect(await fs.readFile(artifactFile)).toEqual(artifactBytes);
+
+      // Once the foreign writer is quiet, explicit recovery can safely remove
+      // only our aborted end marker without discarding either foreign entry.
+      await manager.flush();
+      const repaired = await loadEntriesFromFile(sourceFile);
+      expect(repaired.some(entry =>
+        entry.type === "session_lifecycle" && entry.state === "ended" &&
+        entry.reason === "session_switched"
+      )).toBe(false);
+      expect(repaired.filter(entry =>
+        entry.type === "message" && entry.message.role === "user" &&
+        typeof entry.message.content === "string" && entry.message.content.startsWith("Foreign ")
+      )).toHaveLength(2);
+      expect(await fs.readFile(artifactFile)).toEqual(artifactBytes);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      storage.appendForeignLineBeforeRepairPublish = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses a same-size independently rewritten journal despite restored mtime", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-ctime-aba-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic ctime guard archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Preserve SYNTHETIC-OLD and artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !artifact) throw new Error("expected disposable original journal and archive");
+      const archiveBytes = await fs.readFile(artifact);
+      storage.protectedSourceFile = sourceFile;
+      storage.rejectNextSourceClose = true;
+      storage.pinSourceMtimeOnRefusal = true;
+      storage.rewriteOwnedTextAtGuard = { before: "SYNTHETIC-OLD", after: "SYNTHETIC-NEW" };
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(storage.rewriteOwnedTextAtGuard).toBeUndefined();
+      expect(failure).toBeInstanceOf(AggregateError);
+      const reasons = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(reasons.some(reason => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some(reason =>
+        reason.includes("Original journal changed before failed-fork repair publication")
+      )).toBe(true);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(manager.getSessionId()).toBe(sourceId);
+      const persisted = await fs.readFile(sourceFile, "utf8");
+      expect(persisted).toContain("SYNTHETIC-NEW");
+      expect(persisted).not.toContain("SYNTHETIC-OLD");
+      expect(persisted).toContain('"reason":"session_switched"');
+      expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.pinSourceMtimeOnRefusal = false;
+      storage.rewriteOwnedTextAtGuard = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("preserves a separate append landing after the final guard, immediately before rename", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-final-guard-race-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic retained sidecar", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original journal keeps artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const originalFile = manager.getSessionFile();
+      const originalId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!originalFile || !artifact) throw new Error("expected synthetic journal and sidecar");
+      const archiveBefore = await fs.readFile(artifact);
+      const entry = (id: string, content: string) => `${JSON.stringify({
+        type: "message", id, parentId: null, timestamp: new Date().toISOString(),
+        message: { role: "user", content, timestamp: Date.now() },
+      })}\n`;
+
+      storage.protectedSourceFile = originalFile;
+      // The first independent append forces a successful source reread. The
+      // second is written synchronously in renameSync, AFTER commitGuard().
+      storage.appendForeignLineOnRefusal = entry(
+        "synthetic-before-reread", "Independent entry before rollback reread",
+      );
+      storage.appendForeignLineAtRename = entry(
+        "synthetic-last-window", "Independent entry after final guard",
+      );
+      storage.rejectNextSourceClose = true;
+      await expect(manager.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
+      expect(storage.appendForeignLineAtRename).toBeUndefined();
+      expect(manager.getSessionFile()).toBe(originalFile);
+      expect(manager.getSessionId()).toBe(originalId);
+
+      // In the current implementation the final guard checks the OLD inode,
+      // then rename replaces it. An uncoordinated append in that gap is lost.
+      // This is an acceptance regression, not a known-green test.
+      const disk = await fs.readFile(originalFile, "utf8");
+      expect(disk).toContain("Original journal keeps artifact://0");
+      expect(disk).toContain("Independent entry before rollback reread");
+      expect(disk).toContain("Independent entry after final guard");
+      expect(disk).not.toContain('"reason":"session_switched"');
+      expect(await fs.readFile(artifact)).toEqual(archiveBefore);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      storage.appendForeignLineAtRename = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("preserves a peer append after strict synchronous failed-fork reread", async () => {
+    // Exercise real flushSync -> writeTextSync with a separate append descriptor,
+    // not only an isolated rename reproduction. Both paths use disposable roots.
+    for (const injectPeer of [false, true]) {
+      using temp = TempDir.createSync("@veyyon-fork-sync-peer-publication-");
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic sync repair sidecar", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Owned journal keeps artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !artifact) throw new Error("expected disposable source and sidecar");
+        const archiveBefore = await fs.readFile(artifact);
+
+        // Fail the source writer close, then one async strict reread, so the
+        // real manager must retry the pending failed-fork repair synchronously.
+        storage.protectedSourceFile = sourceFile;
+        storage.rejectNextSourceClose = true;
+        storage.refuseSourceReadOnClose = true;
+        let forkFailure: unknown;
+        try { await manager.fork(); } catch (error) { forkFailure = error; }
+        expect(forkFailure).toBeInstanceOf(AggregateError);
+        if (!(forkFailure instanceof AggregateError)) throw new Error("expected failed async repair");
+        expect(forkFailure.errors.some((error: unknown) =>
+          String(error).includes("synthetic source writer-close refusal")
+        )).toBe(true);
+        const beforeSync = await fs.readFile(sourceFile, "utf8");
+        expect(beforeSync).toContain('"reason":"session_switched"');
+
+        const peerLine = `${JSON.stringify({
+          type: "message", id: "synthetic-sync-peer", parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "Independent sync peer history", timestamp: Date.now() },
+        })}\n`;
+        if (injectPeer) storage.appendForeignLineBeforeSyncRewrite = peerLine;
+        let syncFailure: unknown;
+        try { manager.flushSync(); } catch (error) { syncFailure = error; }
+        const afterSync = await fs.readFile(sourceFile, "utf8");
+        expect(storage.appendForeignLineBeforeSyncRewrite).toBeUndefined();
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(afterSync).toContain("Owned journal keeps artifact://0");
+        expect(await fs.readFile(artifact)).toEqual(archiveBefore);
+        if (!injectPeer) {
+          expect(syncFailure).toBeUndefined();
+          expect(afterSync).not.toContain('"reason":"session_switched"');
+        } else {
+          // Safe outcomes: preserve the peer in a repaired file, or refuse
+          // publication with the exact original+peer source still recoverable.
+          expect(afterSync).toContain(peerLine);
+          if (syncFailure === undefined) {
+            expect(afterSync).not.toContain('"reason":"session_switched"');
+          } else {
+            expect(String(syncFailure)).toMatch(/journal changed|Cannot preserve|Cannot verify/i);
+            expect(afterSync).toBe(beforeSync + peerLine);
+          }
+        }
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.refuseSourceReadOnClose = false;
+        storage.appendForeignLineBeforeSyncRewrite = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a false durable sync after another writer replaces the journal pathname",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-sync-displaced-fd-");
+      const journal = path.join(temp.path(), "synthetic-sync-journal.jsonl");
+      const displaced = path.join(temp.path(), "synthetic-displaced-journal.jsonl");
+      const sidecar = path.join(temp.path(), "synthetic-archive.log");
+      const sidecarBytes = Buffer.from("synthetic archived evidence preserved");
+      const header = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-durable-sync", timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const appendedLine = `${JSON.stringify({
+        type: "message", id: "synthetic-synced-peer", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Synthetic peer data must not be acknowledged on the wrong inode", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(journal, header);
+      await fs.writeFile(sidecar, sidecarBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        await writer.append(appendedLine);
+        expect(await fs.readFile(journal, "utf8")).toBe(header + appendedLine);
+        const originalInode = nodeFs.statSync(journal).ino;
+
+        // The name now selects a different, regular journal with the SAME
+        // session header. fsync(oldFd) still succeeds on POSIX, but that does
+        // not make the previously appended line durable at this pathname.
+        await fs.rename(journal, displaced);
+        await fs.writeFile(journal, header);
+        expect(nodeFs.statSync(journal).ino).not.toBe(originalInode);
+        await expect(writer.sync()).rejects.toThrow(/session writer target.*(?:replaced|changed)|durable sync/i);
+        expect(await fs.readFile(journal, "utf8")).toBe(header);
+        expect(await fs.readFile(displaced, "utf8")).toBe(header + appendedLine);
+        expect(await fs.readFile(sidecar)).toEqual(sidecarBytes);
+
+        // A new writer pinned to the replacement still has a valid durability
+        // route. A refused old writer must never silently adopt it during sync.
+        const currentWriter = new FileSessionStorage().openWriter(journal);
+        try {
+          await currentWriter.append(appendedLine);
+          await currentWriter.sync();
+          expect(await fs.readFile(journal, "utf8")).toBe(header + appendedLine);
+        } finally {
+          await currentWriter.close();
+        }
+      } finally {
+        await writer.close();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses rebinding after pending append bytes would be lost on a same-session replacement",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-unsynced-rebind-");
+      const journal = path.join(temp.path(), "synthetic-journal.jsonl");
+      const displaced = path.join(temp.path(), "synthetic-displaced.jsonl");
+      const archive = path.join(temp.path(), "synthetic-archive.bin");
+      const archiveBytes = Buffer.from("synthetic retained artifact bytes");
+      const header = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-unsynced-writer",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const first = `${JSON.stringify({
+        type: "message", id: "synthetic-unsynced-first", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "First line must remain recoverable", timestamp: Date.now() },
+      })}\n`;
+      const second = `${JSON.stringify({
+        type: "message", id: "synthetic-unsynced-second", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Second line must not be appended if first is missing", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(journal, header);
+      await fs.writeFile(archive, archiveBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        await writer.append(first);
+        const oldInode = nodeFs.statSync(journal).ino;
+        await fs.rename(journal, displaced);
+        await fs.writeFile(journal, header);
+        expect(nodeFs.statSync(journal).ino).not.toBe(oldInode);
+
+        // The replacement has the same valid session header, so a header-only
+        // rebind would accept it even though the first unsynced line is absent.
+        await expect(writer.append(second)).rejects.toThrow(/after earlier appends/);
+        expect(writer.getError()?.message).toMatch(/after earlier appends/);
+        await expect(writer.sync()).rejects.toThrow(/after earlier appends/);
+        expect(await fs.readFile(journal, "utf8")).toBe(header);
+        expect(await fs.readFile(displaced, "utf8")).toBe(header + first);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+
+        // A fresh writer owns the current inode and retains ordinary sync.
+        const fresh = new FileSessionStorage().openWriter(journal);
+        try {
+          await fresh.append(second);
+          await fresh.sync();
+          expect(await fs.readFile(journal, "utf8")).toBe(header + second);
+          expect(await fs.readFile(displaced, "utf8")).toBe(header + first);
+        } finally {
+          await fresh.close();
+        }
+      } finally {
+        await writer.close();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a same-session rebind even when earlier journal entries were fsynced",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-synced-rebind-");
+      const journal = path.join(temp.path(), "synthetic-journal.jsonl");
+      const displaced = path.join(temp.path(), "synthetic-synced-journal.jsonl");
+      const archive = path.join(temp.path(), "synthetic-archive.bin");
+      const archiveBytes = Buffer.from("retained synthetic archive");
+      const header = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-synced-writer",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const first = `${JSON.stringify({
+        type: "message", id: "synthetic-synced-first", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Previously acknowledged entry", timestamp: Date.now() },
+      })}\n`;
+      const second = `${JSON.stringify({
+        type: "message", id: "synthetic-synced-second", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "New entry must not hide previous one", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(journal, header);
+      await fs.writeFile(archive, archiveBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        await writer.append(first);
+        await writer.sync(); // fsync does not prove what a later replacement retained.
+        const firstInode = nodeFs.statSync(journal).ino;
+        await fs.rename(journal, displaced);
+        await fs.writeFile(journal, header);
+        expect(nodeFs.statSync(journal).ino).not.toBe(firstInode);
+        await expect(writer.append(second)).rejects.toThrow(/after earlier appends/);
+        expect(writer.getError()?.message).toMatch(/after earlier appends/);
+        expect(await fs.readFile(journal, "utf8")).toBe(header);
+        expect(await fs.readFile(displaced, "utf8")).toBe(header + first);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+        await expect(writer.sync()).rejects.toThrow(/after earlier appends/);
+      } finally {
+        await writer.close();
+      }
+
+      // The same-inode fast path must not bypass no-follow verification:
+      // stat(journal) resolves this symlink to the writer's original inode.
+      // No previous append is needed to exercise this independent boundary.
+      const idleWriter = new FileSessionStorage().openWriter(journal);
+      const parkedForAlias = path.join(temp.path(), "synthetic-same-inode-alias.jsonl");
+      const journalBytes = await fs.readFile(journal);
+      await fs.rename(journal, parkedForAlias);
+      try {
+        await fs.symlink(parkedForAlias, journal);
+        expect(nodeFs.lstatSync(journal).isSymbolicLink()).toBe(true);
+        expect(nodeFs.statSync(journal).ino).toBe(nodeFs.statSync(parkedForAlias).ino);
+        await expect(idleWriter.append(second)).rejects.toThrow(/regular file|symlink/i);
+        expect(idleWriter.getError()?.message).toMatch(/regular file|symlink/i);
+        await expect(idleWriter.sync()).rejects.toThrow(/regular file|symlink/i);
+        expect(await fs.readFile(parkedForAlias)).toEqual(journalBytes);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await fs.rm(journal, { force: true });
+        await fs.rename(parkedForAlias, journal);
+        await idleWriter.close();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses an in-place unrelated session header on the pinned inode",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-inplace-foreign-");
+      const journal = path.join(temp.path(), "synthetic-session.jsonl");
+      const archive = path.join(temp.path(), "synthetic-archive.bin");
+      const archiveBytes = Buffer.from("synthetic archived bytes unchanged");
+      const original = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-original",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const unrelated = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-unrelated",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const entry = `${JSON.stringify({
+        type: "message", id: "synthetic-foreign-session-entry", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Must never join the unrelated session", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(journal, original);
+      await fs.writeFile(archive, archiveBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        const pinnedInode = nodeFs.statSync(journal).ino;
+        // O_TRUNC on this regular file preserves dev:ino. A replacement-only
+        // guard would accept this unrelated header and append into its history.
+        await fs.writeFile(journal, unrelated);
+        expect(nodeFs.statSync(journal).ino).toBe(pinnedInode);
+        await expect(writer.append(entry)).rejects.toThrow(/session header/i);
+        expect(writer.getError()?.message).toMatch(/session header/i);
+        await expect(writer.sync()).rejects.toThrow(/session header/i);
+        expect(await fs.readFile(journal, "utf8")).toBe(unrelated);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await writer.close();
+      }
+
+      // A brand-new append writer has no header at open. After it appends
+      // the initial session header it must pin that ID before the next call:
+      // otherwise an in-place foreign rewrite could be accidentally adopted.
+      const newJournal = path.join(temp.path(), "synthetic-created-by-writer.jsonl");
+      const newHeader = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-new-writer",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const newWriter = new FileSessionStorage().openWriter(newJournal);
+      try {
+        await newWriter.append(newHeader);
+        await newWriter.sync();
+        const newInode = nodeFs.statSync(newJournal).ino;
+        await fs.writeFile(newJournal, unrelated);
+        expect(nodeFs.statSync(newJournal).ino).toBe(newInode);
+        await expect(newWriter.append(entry)).rejects.toThrow(/session header/i);
+        expect(newWriter.getError()?.message).toMatch(/session header/i);
+        expect(await fs.readFile(newJournal, "utf8")).toBe(unrelated);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await newWriter.close();
+      }
+
+      // A writer opened against an empty new journal must not adopt a peer's
+      // foreign header if it arrives on the same inode BEFORE its first append.
+      // The later-header overwrite regression above cannot catch that race.
+      const preemptedJournal = path.join(temp.path(), "synthetic-preempted-before-first-append.jsonl");
+      const preempted = new FileSessionStorage().openWriter(preemptedJournal);
+      try {
+        const newInode = nodeFs.statSync(preemptedJournal).ino;
+        await fs.writeFile(preemptedJournal, unrelated);
+        expect(nodeFs.statSync(preemptedJournal).ino).toBe(newInode);
+        await expect(preempted.append(newHeader)).rejects.toThrow(/before first append/i);
+        expect(preempted.getError()?.message).toMatch(/before first append/i);
+        await expect(preempted.sync()).rejects.toThrow(/before first append/i);
+        expect(await fs.readFile(preemptedJournal, "utf8")).toBe(unrelated);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await preempted.close();
+      }
+
+      // The unrelated journal remains usable by a newly opened, correctly
+      // pinned writer. Refusing the stale writer must not corrupt either file.
+      const fresh = new FileSessionStorage().openWriter(journal);
+      try {
+        await fresh.append(entry);
+        await fresh.sync();
+        expect(await fs.readFile(journal, "utf8")).toBe(unrelated + entry);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+      } finally {
+        await fresh.close();
+      }
+    },
+  );
+
+  // POSIX rename keeps an independent O_APPEND descriptor on the displaced
+  // original inode. Windows may refuse the replacement while that handle is
+  // open; the separate EPERM tests cover its distinct path behavior.
+  // Acceptance is deliberately RED until cross-process history is protected.
+  it.skipIf(process.platform === "win32")(
+    "preserves a pre-open independent append descriptor after rollback replaces the journal",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-fork-postrename-peer-fd-");
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      let peer: SessionStorageWriter | undefined;
+      try {
+        expect(await manager.saveArtifact("synthetic retained post-rename archive", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original journal keeps artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        if (!sourceFile) throw new Error("expected original session journal");
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!artifact) throw new Error("expected synthetic archive");
+        const archiveBytes = await fs.readFile(artifact);
+        const oldInode = nodeFs.statSync(sourceFile).ino;
+
+        // A separate storage instance opens a REAL writer descriptor before
+        // the failed fork. It rebinds only when a later append detects replacement.
+        peer = new FileSessionStorage().openWriter(sourceFile);
+        storage.protectedSourceFile = sourceFile;
+        storage.rejectNextSourceClose = true;
+        await expect(manager.fork()).rejects.toThrow(/synthetic source writer-close refusal/);
+        expect(storage.rejectNextSourceClose).toBe(false);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        // The pathname now names a new inode; the peer's descriptor remains on
+        // the old inode until append() checks and rebinds it.
+        expect(nodeFs.statSync(sourceFile).ino).not.toBe(oldInode);
+
+        const foreignEntry: JsonlMessageEntry = {
+          type: "message", id: "synthetic-postrename-open-peer", parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "user", content: "Post-rename independent append remains recoverable",
+            timestamp: Date.now(),
+          },
+        };
+        // After the real rename has returned, the second writer accepts this
+        // entry. A successful repair must not leave it invisible at the path.
+        await peer.append(`${JSON.stringify(foreignEntry)}\n`);
+        await peer.sync();
+        const active = await fs.readFile(sourceFile, "utf8");
+        expect(active).toContain("Original journal keeps artifact://0");
+        expect(active).toContain("Post-rename independent append remains recoverable");
+        expect(active).not.toContain('"reason":"session_switched"');
+        expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+
+        // A new peer pinned to the repaired inode must not follow a substituted
+        // symlink into an unrelated disposable journal.
+        const symlinkPeer = new FileSessionStorage().openWriter(sourceFile);
+        const foreignPath = path.join(temp.path(), "unrelated-synthetic-journal.jsonl");
+        const foreignBytes = "UNRELATED SYNTHETIC JOURNAL\\n";
+        await fs.writeFile(foreignPath, foreignBytes);
+        const parkedForSymlink = `${sourceFile}.symlink-parked`;
+        await fs.rename(sourceFile, parkedForSymlink);
+        try {
+          await fs.symlink(foreignPath, sourceFile);
+          try {
+            await expect(symlinkPeer.append("MUST NOT FOLLOW SYMLINK\\n")).rejects.toThrow(/regular file|ELOOP/i);
+            expect(await fs.readFile(foreignPath, "utf8")).toBe(foreignBytes);
+          } finally {
+            await fs.unlink(sourceFile);
+          }
+        } finally {
+          await fs.rename(parkedForSymlink, sourceFile);
+          await symlinkPeer.close();
+        }
+
+        // A same-path regular file can belong to a different session. Rebinding
+        // to its inode would splice this peer's message into unrelated history.
+        const foreignSessionPeer = new FileSessionStorage().openWriter(sourceFile);
+        const foreignSessionParked = `${sourceFile}.foreign-session-parked`;
+        const unrelatedJournal = `${JSON.stringify({
+          type: "session", version: 3, id: "synthetic-unrelated-session",
+          timestamp: new Date().toISOString(), cwd: temp.path(),
+        })}\n`;
+        await fs.rename(sourceFile, foreignSessionParked);
+        try {
+          await fs.writeFile(sourceFile, unrelatedJournal);
+          const crossSessionLine = `${JSON.stringify({
+            type: "message", id: "synthetic-foreign-target-append", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: { role: "user", content: "Must not contaminate another session", timestamp: Date.now() },
+          })}\n`;
+          await expect(foreignSessionPeer.append(crossSessionLine))
+            .rejects.toThrow(/session|identity|header/i);
+          expect(await fs.readFile(sourceFile, "utf8")).toBe(unrelatedJournal);
+          expect(await fs.readFile(foreignSessionParked, "utf8")).toContain("Original journal keeps artifact://0");
+        } finally {
+          await fs.rm(sourceFile, { force: true });
+          await fs.rename(foreignSessionParked, sourceFile);
+          await foreignSessionPeer.close();
+        }
+
+        // The same writer must fail closed if a peer removes the active path.
+        // In particular, O_APPEND must not recreate an empty replacement.
+        const parked = `${sourceFile}.synthetic-parked`;
+        await fs.rename(sourceFile, parked);
+        try {
+          await expect(peer.append(`${JSON.stringify({
+            type: "message", id: "synthetic-missing-target", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: { role: "user", content: "Must not appear", timestamp: Date.now() },
+          })}\n`)).rejects.toThrow(/ENOENT|no such file/i);
+          expect(nodeFs.existsSync(sourceFile)).toBe(false);
+          expect(await fs.readFile(parked, "utf8")).not.toContain("synthetic-missing-target");
+        } finally {
+          await fs.rename(parked, sourceFile);
+        }
+      } finally {
+        storage.rejectNextSourceClose = false;
+        try { await peer?.close(); } finally { await manager.close().catch(() => undefined); }
+      }
+    },
+  );
+
+
+  it("refuses invalid UTF-8 bytes in a separately appended failed-fork journal record", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-raw-utf8-refusal-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic raw-byte preservation evidence", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Retain synthetic artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      const originalId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!sourceFile || !artifact) throw new Error("expected disposable source and archive");
+      const prefix = await fs.readFile(sourceFile);
+      const archiveBytes = await fs.readFile(artifact);
+
+      // JSON syntax is valid after replacement decoding, so a text-only strict
+      // parser can incorrectly republish different bytes instead of refusing.
+      const foreign = Buffer.from(`${JSON.stringify({
+        type: "message", id: "synthetic-raw-invalid-utf8", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "peer!bytes", timestamp: Date.now() },
+      })}\n`, "utf8");
+      const corruptOffset = foreign.indexOf("!");
+      expect(corruptOffset).toBeGreaterThan(0);
+      foreign[corruptOffset] = 0xff;
+      storage.protectedSourceFile = sourceFile;
+      storage.appendForeignBytesOnRefusal = foreign;
+      storage.rejectNextSourceClose = true;
+
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed journal recovery");
+      const reasons = failure.errors.map((error: unknown) => String(error));
+      expect(reasons.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some((reason: string) => reason.includes("Cannot verify current session journal"))).toBe(true);
+
+      const preserved = await fs.readFile(sourceFile);
+      expect(preserved.subarray(0, prefix.length)).toEqual(prefix);
+      expect(preserved.subarray(-foreign.length)).toEqual(foreign);
+      expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+      expect(manager.getSessionId()).toBe(originalId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+      expect(() => manager.flushSync()).toThrow(/Cannot verify current session journal/);
+      expect(await fs.readFile(sourceFile)).toEqual(preserved);
+
+      // Simulate a backend exposing only lossy ordinary readers. A fallback
+      // would parse U+FFFD and overwrite the exact independent byte during
+      // either a synchronous exit flush or an asynchronous repair retry.
+      Object.defineProperty(storage, "readTextStrict", { value: undefined });
+      Object.defineProperty(storage, "readTextSyncStrict", { value: undefined });
+      expect(() => manager.flushSync()).toThrow(/Cannot verify current session journal/);
+      expect(await fs.readFile(sourceFile)).toEqual(preserved);
+      await expect(manager.flush()).rejects.toThrow(/Cannot verify current session journal/);
+      expect(await fs.readFile(sourceFile)).toEqual(preserved);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignBytesOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+
+  it("repairs a failed fork on text-native memory storage without refusing a valid strict reader", async () => {
+    // Memory storage has no raw undecoded bytes, so its exact-text reader
+    // remains safe when strict file-backed byte decoding becomes mandatory.
+    class RejectOneCloseMemoryStorage extends MemorySessionStorage {
+      refuseNextClose = false;
+
+      override openWriter(target: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
+        const writer = super.openWriter(target, options);
+        const actualClose = writer.close.bind(writer);
+        writer.close = async () => {
+          await actualClose();
+          if (this.refuseNextClose) {
+            this.refuseNextClose = false;
+            throw new Error("synthetic memory source close refusal");
+          }
+        };
+        return writer;
+      }
+    }
+
+    using temp = TempDir.createSync("@veyyon-fork-memory-strict-read-");
+    // The fork's artifact reservation is intentionally on the disposable OS
+    // filesystem even though the source JSONL uses the text-only memory store.
+    const sessionDir = path.join(temp.path(), "sessions");
+    await fs.mkdir(sessionDir, { recursive: true });
+    const storage = new RejectOneCloseMemoryStorage();
+    const manager = SessionManager.create(
+      temp.path(), sessionDir, storage, { instrumentation: "basic" },
+    );
+    try {
+      manager.appendMessage({
+        role: "user", content: "Synthetic memory history survives a rejected fork", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      manager.appendMessage({
+        role: "user", content: "Second synthetic append uses a writer", timestamp: Date.now(),
+      });
+      await manager.flush();
+      const source = manager.getSessionFile();
+      const id = manager.getSessionId();
+      if (!source) throw new Error("expected memory-backed source journal");
+      const before = await storage.readText(source);
+      expect(before).toContain("Second synthetic append uses a writer");
+      expect(await storage.readTextStrict(source)).toBe(before);
+      expect(storage.readTextSyncStrict(source)).toBe(before);
+
+      storage.refuseNextClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (err) { failure = err; }
+      // A successful durable source repair rethrows the original close error.
+      // AggregateError is reserved for a failed close PLUS failed restoration.
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toContain("synthetic memory source close refusal");
+      expect(manager.getSessionId()).toBe(id);
+      expect(manager.getSessionFile()).toBe(source);
+      const after = await storage.readText(source);
+      expect(after).toBe(before);
+      expect(after).not.toContain('"reason":"session_switched"');
+      expect(storage.readTextSyncStrict(source)).toBe(before);
+    } finally {
+      storage.refuseNextClose = false;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+
+  it("refuses a new UTF-8 BOM at the beginning of the original failed-fork journal", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-strict-bom-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic BOM preservation evidence", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Keep synthetic artifact://0 intact", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const originalFile = manager.getSessionFile();
+      const originalId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!originalFile || !artifact) throw new Error("expected disposable original and sidecar");
+      const archiveBefore = await fs.readFile(artifact);
+      const prefixBefore = await fs.readFile(originalFile);
+      storage.protectedSourceFile = originalFile;
+      storage.prependBomOnRefusal = true;
+      storage.rejectNextSourceClose = true;
+
+      // TextDecoder's default ignoreBOM=false strips the BOM: even a fatal
+      // decoder then sees clean JSON and may erase these three peer bytes.
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected failed-fork rollback refusal");
+      const reasons = failure.errors.map((error: unknown) => String(error));
+      expect(reasons.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some((reason: string) =>
+        reason.includes("Cannot preserve malformed session journal") ||
+        reason.includes("Cannot verify current session journal")
+      )).toBe(true);
+
+      const bytes = await fs.readFile(originalFile);
+      expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
+      expect(bytes.subarray(3, 3 + prefixBefore.length)).toEqual(prefixBefore);
+      expect(await fs.readFile(artifact)).toEqual(archiveBefore);
+      expect(manager.getSessionId()).toBe(originalId);
+      expect(manager.getSessionFile()).toBe(originalFile);
+      expect(() => manager.flushSync()).toThrow(/Cannot preserve malformed session journal|Cannot verify current session journal/);
+      expect(await fs.readFile(originalFile)).toEqual(bytes);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.prependBomOnRefusal = false;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses an independent append that collides with an existing session entry ID", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-colliding-id-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic colliding-ID preserved sidecar", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original entry owning the ID", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const sourceId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      const originalEntry = manager.getEntries().find(entry => entry.type === "message");
+      if (!source || !artifact || !originalEntry) throw new Error("expected original synthetic journal");
+      const originalBytes = await fs.readFile(source, "utf8");
+      const artifactBytes = await fs.readFile(artifact);
+      // The independent writer supplies a valid JSONL record whose single ID
+      // collides with one already present in the source file.
+      const foreignLine = `${JSON.stringify({
+        type: "message", id: originalEntry.id, parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Independent payload with colliding ID", timestamp: Date.now() },
+      })}\n`;
+      storage.protectedSourceFile = source;
+      storage.appendForeignLineOnRefusal = foreignLine;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed duplicate-ID refusal");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((cause: string) => cause.includes("repeated session journal entry ID"))).toBe(true);
+      expect(manager.getSessionFile()).toBe(source);
+      expect(manager.getSessionId()).toBe(sourceId);
+      const after = await fs.readFile(source, "utf8");
+      expect(after.startsWith(originalBytes)).toBe(true);
+      expect(after.endsWith(foreignLine)).toBe(true);
+      expect(await fs.readFile(artifact)).toEqual(artifactBytes);
+      expect(() => manager.flushSync()).toThrow(/repeated session journal entry ID/);
+      expect(await fs.readFile(source, "utf8")).toBe(after);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses a same-size in-place title update by an independent writer during failed-fork recovery", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-title-in-place-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic in-place title archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original journal with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const sessionId = manager.getSessionId();
+      const artifact = await manager.getArtifactPath("0");
+      if (!source || !artifact) throw new Error("expected disposable original journal and archive");
+      const savedArtifact = await fs.readFile(artifact);
+      const originalBytes = await fs.readFile(source, "utf8");
+      const originalStat = nodeFs.statSync(source);
+      // The independent writer modifies the fixed-size first slot, with no
+      // append, inode replacement or total-length change.
+      const foreignSlot = serializeTitleSlot({
+        title: "independent synthetic updated title", source: "user", updatedAt: new Date().toISOString(),
+      });
+      const fd = nodeFs.openSync(source, "r+");
+      try {
+        const encoded = Buffer.from(foreignSlot, "utf8");
+        expect(nodeFs.writeSync(fd, encoded, 0, encoded.length, 0)).toBe(encoded.length);
+      } finally {
+        nodeFs.closeSync(fd);
+      }
+      expect(nodeFs.statSync(source).ino).toBe(originalStat.ino);
+      expect(nodeFs.statSync(source).size).toBe(originalStat.size);
+      const foreignBefore = await fs.readFile(source, "utf8");
+      expect(foreignBefore.startsWith(foreignSlot)).toBe(true);
+      expect(foreignBefore.slice(foreignSlot.length)).toBe(originalBytes.slice(foreignSlot.length));
+
+      storage.protectedSourceFile = source;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed title update refusal");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((cause: string) => cause.includes("independently modified session title slot"))).toBe(true);
+      expect(manager.getSessionFile()).toBe(source);
+      expect(manager.getSessionId()).toBe(sessionId);
+      const after = await fs.readFile(source, "utf8");
+      expect(after.startsWith(foreignSlot)).toBe(true);
+      expect(after.slice(foreignSlot.length).startsWith(originalBytes.slice(foreignSlot.length))).toBe(true);
+      expect(await fs.readFile(artifact)).toEqual(savedArtifact);
+      expect(() => manager.flushSync()).toThrow(/independently modified session title slot/);
+      expect(await fs.readFile(source, "utf8")).toBe(after);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses to recreate a title slot removed by an independent failed-fork writer", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-removed-title-slot-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic removed-slot archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Preserve original journal artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const identity = manager.getSessionId();
+      const archive = await manager.getArtifactPath("0");
+      if (!source || !archive) throw new Error("expected disposable source and artifact");
+      const original = await fs.readFile(source, "utf8");
+      const archiveBefore = await fs.readFile(archive);
+      const afterSlot = original.indexOf("\n") + 1;
+      expect(afterSlot).toBeGreaterThan(1);
+      const withoutSlot = original.slice(afterSlot);
+      expect(JSON.parse(withoutSlot.split("\n")[0]!).type).toBe("session");
+
+      // A separate writer removes the first fixed-width title record, leaving
+      // otherwise parseable legacy-shaped JSONL. Recovery must not reconstruct
+      // an old title and erase this independently modified source history.
+      await fs.writeFile(source, withoutSlot);
+      storage.protectedSourceFile = source;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected missing-slot integrity refusal");
+      const reasons = failure.errors.map((error: unknown) => String(error));
+      expect(reasons.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(reasons.some((reason: string) => reason.includes("missing session title slot"))).toBe(true);
+      expect(manager.getSessionId()).toBe(identity);
+      expect(manager.getSessionFile()).toBe(source);
+      const preserved = await fs.readFile(source, "utf8");
+      expect(preserved.startsWith(withoutSlot)).toBe(true);
+      expect(await fs.readFile(archive)).toEqual(archiveBefore);
+      expect(() => manager.flushSync()).toThrow(/missing session title slot/);
+      expect(await fs.readFile(source, "utf8")).toBe(preserved);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses a second title slot appended by an independent failed-fork writer", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-foreign-title-slot-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic original title-slot archive", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original history with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const source = manager.getSessionFile();
+      const identity = manager.getSessionId();
+      const archive = await manager.getArtifactPath("0");
+      if (!source || !archive) throw new Error("expected original synthetic source and archive");
+      const sourceBefore = await fs.readFile(source, "utf8");
+      const archiveBefore = await fs.readFile(archive);
+      const foreignTitle = serializeTitleSlot({ title: "independent synthetic title", updatedAt: new Date().toISOString() });
+      storage.protectedSourceFile = source;
+      storage.appendForeignLineOnRefusal = foreignTitle;
+      storage.rejectNextSourceClose = true;
+      let failure: unknown;
+      try { await manager.fork(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(AggregateError);
+      if (!(failure instanceof AggregateError)) throw new Error("expected strict title-slot refusal");
+      const causes = failure.errors.map((error: unknown) => String(error));
+      expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some((cause: string) => cause.includes("Cannot preserve unexpected session title slot"))).toBe(true);
+      expect(manager.getSessionFile()).toBe(source);
+      expect(manager.getSessionId()).toBe(identity);
+      const sourceAfter = await fs.readFile(source, "utf8");
+      expect(sourceAfter.startsWith(sourceBefore)).toBe(true);
+      expect(sourceAfter.endsWith(foreignTitle)).toBe(true);
+      expect(await fs.readFile(archive)).toEqual(archiveBefore);
+      expect(() => manager.flushSync()).toThrow(/Cannot preserve unexpected session title slot/);
+      expect(await fs.readFile(source, "utf8")).toBe(sourceAfter);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.appendForeignLineOnRefusal = undefined;
+      await manager.close().catch(() => undefined);
+    }
+  });
+
+  it("refuses a foreign or duplicate source header during failed-fork repair", async () => {
+    for (const variant of ["foreign-header", "duplicate-owner-header"] as const) {
+      using temp = TempDir.createSync(`@veyyon-fork-unowned-source-header-${variant}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic header refusal archive", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original journal with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const source = manager.getSessionFile();
+        const identity = manager.getSessionId();
+        const archive = await manager.getArtifactPath("0");
+        if (!source || !archive) throw new Error("expected disposable source and artifact");
+        const sourceBefore = await fs.readFile(source, "utf8");
+        const archiveBefore = await fs.readFile(archive);
+        const foreignHeader = `${JSON.stringify({
+          type: "session", version: CURRENT_SESSION_VERSION,
+          id: variant === "foreign-header" ? "synthetic-independent-session" : identity,
+          timestamp: new Date().toISOString(), cwd: temp.path(),
+        })}\n`;
+        storage.protectedSourceFile = source;
+        storage.appendForeignLineOnRefusal = foreignHeader;
+        storage.rejectNextSourceClose = true;
+
+        let failure: unknown;
+        try { await manager.fork(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected fail-closed header refusal");
+        const causes = failure.errors.map((error: unknown) => String(error));
+        expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+        expect(causes.some((cause: string) => cause.includes("Cannot preserve unexpected session journal header"))).toBe(true);
+        expect(manager.getSessionId()).toBe(identity);
+        expect(manager.getSessionFile()).toBe(source);
+        const sourceAfter = await fs.readFile(source, "utf8");
+        expect(sourceAfter.startsWith(sourceBefore)).toBe(true);
+        expect(sourceAfter.endsWith(foreignHeader)).toBe(true);
+        expect(await fs.readFile(archive)).toEqual(archiveBefore);
+        expect(() => manager.flushSync()).toThrow(/Cannot preserve unexpected session journal header/);
+        expect(await fs.readFile(source, "utf8")).toBe(sourceAfter);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.appendForeignLineOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("refuses altered owned records and interleaved foreign history during failed-fork repair", async () => {
+    for (const revision of ["message", "header", "missing-message", "missing-message-with-peer-tail", "foreign-before-header", "foreign-between-owned"] as const) {
+      using temp = TempDir.createSync(`@veyyon-fork-owned-revision-${revision}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("disposable owned-revision archive", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original same-ID message with artifact://0", timestamp: Date.now(),
+        });
+        manager.appendMessage({
+          role: "user", content: "Second original message must survive removal", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const source = manager.getSessionFile();
+        const sessionId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!source || !artifact) throw new Error("expected synthetic source and archive");
+        if (revision === "missing-message-with-peer-tail") {
+          // First publish an independent valid record with our own history.
+          // Foreign tails disable the reusable byte-offset layout, but must
+          // not disable evidence that earlier owned messages were published.
+          const peerLine = `${JSON.stringify({
+            type: "message", id: "synthetic-foreign-owned-deletion-control", parentId: null,
+            timestamp: new Date().toISOString(),
+            message: { role: "user", content: "Foreign tail survives failed recovery", timestamp: Date.now() },
+          })}\n`;
+          await fs.appendFile(source, peerLine);
+          await manager.rewriteEntries();
+          expect(await fs.readFile(source, "utf8")).toContain(peerLine);
+        }
+        const original = await fs.readFile(source, "utf8");
+        const archiveBytes = await fs.readFile(artifact);
+        storage.protectedSourceFile = source;
+        storage.rewriteOwnedRecordOnRefusal =
+          revision === "missing-message-with-peer-tail" ? "missing-message" : revision;
+        storage.rejectNextSourceClose = true;
+
+        let failure: unknown;
+        try { await manager.fork(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected strict recovery refusal");
+        const causes = failure.errors.map((error: unknown) => String(error));
+        expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+        const refusal = revision === "header"
+          ? "Cannot preserve unexpected session journal header"
+          : revision === "foreign-before-header"
+            ? "Cannot preserve journal entry before source header during failed-fork repair"
+            : revision === "foreign-between-owned"
+              ? "Cannot preserve interleaved foreign journal history during failed-fork repair"
+              : revision.startsWith("missing-message")
+                ? "Cannot preserve missing previously published session entry"
+                : "Cannot preserve independently modified session journal entry";
+        expect(causes.some((cause: string) => cause.includes(refusal))).toBe(true);
+
+        const observed = await fs.readFile(source, "utf8");
+        expect(observed).not.toBe(original);
+        if (revision === "foreign-before-header") {
+          const first = JSON.parse(observed.split("\n")[0]!) as { id: string };
+          expect(first.id).toBe("synthetic-preheader-foreign");
+          expect(observed).toContain("Synthetic foreign entry before original header");
+          expect(observed).toContain("Original same-ID message with artifact://0");
+        } else if (revision === "foreign-between-owned") {
+          const first = observed.indexOf("Original same-ID message with artifact://0");
+          const peer = observed.indexOf("Synthetic peer inserted between owned messages");
+          const second = observed.indexOf("Second original message must survive removal");
+          expect(first).toBeGreaterThanOrEqual(0);
+          expect(peer).toBeGreaterThan(first);
+          expect(second).toBeGreaterThan(peer);
+        } else if (revision.startsWith("missing-message")) {
+          expect(observed).not.toContain("Original same-ID message with artifact://0");
+          expect(observed).toContain("Second original message must survive removal");
+          if (revision === "missing-message-with-peer-tail") {
+            expect(observed).toContain("Foreign tail survives failed recovery");
+          }
+        } else {
+          expect(observed).toContain(revision === "header"
+            ? "synthetic-independent-cwd"
+            : "Synthetic independently revised owned message");
+        }
+        // A failed source-close can append its own aborted lifecycle marker;
+        // the complete modified journal must remain recoverable and unchanged.
+        expect(manager.getSessionId()).toBe(sessionId);
+        expect(manager.getSessionFile()).toBe(source);
+        expect(await fs.readFile(artifact)).toEqual(archiveBytes);
+        expect(() => manager.flushSync()).toThrow(refusal);
+        expect(await fs.readFile(source, "utf8")).toBe(observed);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.rewriteOwnedRecordOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("refuses a peer rewrite that reuses an aborted fork marker ID", async () => {
+    for (const variant of ["message", "reason"] as const) {
+      using temp = TempDir.createSync(`@veyyon-fork-aborted-marker-collision-${variant}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic marker-collision archive", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Retain artifact://0 through refused recovery", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const source = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!source || !artifact) throw new Error("expected disposable session and archive");
+        const before = await fs.readFile(source, "utf8");
+        const artifactBefore = await fs.readFile(artifact);
+        storage.protectedSourceFile = source;
+        storage.reviseAbortedMarkerOnRefusal = variant;
+        storage.rejectNextSourceClose = true;
+
+        let failure: unknown;
+        try { await manager.fork(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected collision refusal");
+        const errors = failure.errors.map((error: unknown) => String(error));
+        expect(errors.some((error: string) => error.includes("synthetic source writer-close refusal"))).toBe(true);
+        expect(errors.some((error: string) =>
+          error.includes("Cannot preserve independently modified aborted fork lifecycle marker")
+        )).toBe(true);
+
+        const observed = await fs.readFile(source, "utf8");
+        expect(observed).not.toBe(before);
+        expect(observed).toContain(variant === "message"
+          ? "Synthetic peer with reused aborted marker ID"
+          : '"reason":"closed"');
+        expect(manager.getSessionFile()).toBe(source);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(await fs.readFile(artifact)).toEqual(artifactBefore);
+        expect(() => manager.flushSync()).toThrow(/independently modified aborted fork lifecycle marker/);
+        expect(await fs.readFile(source, "utf8")).toBe(observed);
+        expect(await fs.readFile(artifact)).toEqual(artifactBefore);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.reviseAbortedMarkerOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("refuses duplicate JSON members that could hide independent failed-fork history", async () => {
+    // JSON.parse keeps the last duplicate property, including escaped-equivalent
+    // names. A peer's earlier entry ID must not be masked by our own ID.
+    const variants = ["literal-id", "escaped-id", "nested-content"] as const;
+    for (const variant of variants) {
+      using temp = TempDir.createSync(`@veyyon-fork-duplicate-id-${variant}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic artifact survives ambiguous rollback", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original owner history with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const ownerId = manager.getEntries().find(entry => entry.type === "message")?.id;
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !ownerId || !artifact) throw new Error("expected disposable original journal");
+        const before = await fs.readFile(sourceFile, "utf8");
+        const archive = await fs.readFile(artifact);
+        const peerId = "independent-unpublished-history";
+        const idMembers = variant === "escaped-id"
+          ? `"\\u0069d":"${peerId}","id":${JSON.stringify(ownerId)}`
+          : variant === "nested-content"
+            ? `"id":"${peerId}"`
+            : `"id":"${peerId}","id":${JSON.stringify(ownerId)}`;
+        const contentMembers = variant === "nested-content"
+          ? '"content":"independent original","content":"masked content"'
+          : '"content":"independent original"';
+        const foreignLine = `{"type":"message",${idMembers},"parentId":null,"timestamp":"2026-11-06T00:00:00.000Z","message":{"role":"user",${contentMembers},"timestamp":1}}${String.fromCharCode(10)}`;
+        storage.protectedSourceFile = sourceFile;
+        storage.appendForeignLineOnRefusal = foreignLine;
+        storage.rejectNextSourceClose = true;
+
+        let failed: unknown;
+        try { await manager.fork(); } catch (error) { failed = error; }
+        expect(failed).toBeInstanceOf(AggregateError);
+        if (!(failed instanceof AggregateError)) throw new Error("expected failed-fork integrity refusal");
+        const causes = failed.errors.map((error: unknown) => String(error));
+        expect(causes.some((reason: string) => reason.includes("synthetic source writer-close refusal"))).toBe(true);
+        expect(causes.some((reason: string) => reason.includes("Cannot preserve ambiguous session journal"))).toBe(true);
+        const preserved = await fs.readFile(sourceFile, "utf8");
+        // A rejected fork may leave its own aborted lifecycle marker between
+        // the original file and the independent tail; preserve those bytes too.
+        expect(preserved.startsWith(before)).toBe(true);
+        expect(preserved.endsWith(foreignLine)).toBe(true);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        expect(() => manager.flushSync()).toThrow(/Cannot preserve ambiguous session journal/);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(preserved);
+        expect(await fs.readFile(artifact)).toEqual(archive);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.appendForeignLineOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("fails closed on incomplete or malformed independent JSONL during failed-fork repair", async () => {
+    // Reject a partial record, malformed JSON and independent blank lines;
+    // none may be silently removed by the aborted-fork repair.
+    const variants = [
+      ["partial", '{"type":"message","id":"synthetic-incomplete","message":'],
+      ["malformed", '{"type":"message","id":"synthetic-malformed",oops}\n'],
+      ["blank-line", "\n"],
+      ["whitespace-only", " \t\n"],
+    ] as const;
+    for (const [variant, foreignBytes] of variants) {
+      using temp = TempDir.createSync(`@veyyon-fork-unparseable-foreign-${variant}-`);
+      const storage = new SyntheticForkSourceCloseRefusalStorage();
+      const manager = SessionManager.create(
+        temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+      );
+      try {
+        expect(await manager.saveArtifact("synthetic bytes must survive rejected repair", "bash")).toBe("0");
+        manager.appendMessage({
+          role: "user", content: "Original history with artifact://0", timestamp: Date.now(),
+        });
+        await manager.ensureOnDisk();
+        const sourceFile = manager.getSessionFile();
+        const sourceId = manager.getSessionId();
+        const artifact = await manager.getArtifactPath("0");
+        if (!sourceFile || !artifact) throw new Error("expected disposable source and artifact");
+        const priorJournal = await fs.readFile(sourceFile, "utf8");
+        const priorArtifact = await fs.readFile(artifact);
+        storage.protectedSourceFile = sourceFile;
+        storage.appendForeignLineOnRefusal = foreignBytes;
+        storage.rejectNextSourceClose = true;
+
+        let failure: unknown;
+        try {
+          await manager.fork();
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(AggregateError);
+        if (!(failure instanceof AggregateError)) throw new Error("expected failed-fork aggregate rejection");
+        const causes = failure.errors.map((error: unknown) => String(error));
+        expect(causes.some((cause: string) => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+        expect(causes.some((cause: string) => /Cannot preserve (incomplete|malformed) session journal/.test(cause))).toBe(true);
+        expect(manager.getSessionId()).toBe(sourceId);
+        expect(manager.getSessionFile()).toBe(sourceFile);
+        const retained = await fs.readFile(sourceFile, "utf8");
+        expect(retained.startsWith(priorJournal)).toBe(true);
+        expect(retained.endsWith(foreignBytes)).toBe(true);
+        // A shutdown/flushSync fallback must not undo the async fail-closed
+        // refusal and quietly discard an undecodable foreign tail.
+        expect(() => manager.flushSync()).toThrow(/Cannot preserve (incomplete|malformed) session journal/);
+        expect(await fs.readFile(sourceFile, "utf8")).toBe(retained);
+        expect(await fs.readFile(artifact)).toEqual(priorArtifact);
+      } finally {
+        storage.rejectNextSourceClose = false;
+        storage.appendForeignLineOnRefusal = undefined;
+        await manager.close().catch(() => undefined);
+      }
+    }
+  });
+
+  it("refuses to overwrite unreadable foreign history during failed-fork rollback", async () => {
+    using temp = TempDir.createSync("@veyyon-fork-unreadable-foreign-tail-");
+    const storage = new SyntheticForkSourceCloseRefusalStorage();
+    const manager = SessionManager.create(
+      temp.path(), path.join(temp.path(), "sessions"), storage, { instrumentation: "basic" },
+    );
+    try {
+      expect(await manager.saveArtifact("synthetic retained archive evidence", "bash")).toBe("0");
+      manager.appendMessage({
+        role: "user", content: "Original source with artifact://0", timestamp: Date.now(),
+      });
+      await manager.ensureOnDisk();
+      const sourceFile = manager.getSessionFile();
+      if (!sourceFile) throw new Error("expected synthetic persisted source");
+      const sourceId = manager.getSessionId();
+      const sourceArtifact = await manager.getArtifactPath("0");
+      if (!sourceArtifact) throw new Error("expected synthetic source artifact");
+      const originalArtifact = await fs.readFile(sourceArtifact);
+
+      const foreign: JsonlMessageEntry = {
+        type: "message",
+        id: "synthetic-unreadable-foreign-tail",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user", content: "Foreign history must survive read refusal", timestamp: Date.now(),
+        },
+      };
+      storage.protectedSourceFile = sourceFile;
+      storage.appendForeignLineOnRefusal = `${JSON.stringify(foreign)}\n`;
+      storage.rejectNextSourceClose = true;
+      storage.refuseSourceReadOnClose = true;
+
+      let failure: unknown;
+      try {
+        await manager.fork();
+      } catch (error) {
+        failure = error;
+      }
+      // The fault was consumed by the genuine rollback read, not preflight.
+      expect(storage.refuseNextSourceRead).toBe(false);
+      expect(failure).toBeInstanceOf(AggregateError);
+      const causes = (failure as AggregateError).errors.map((error: unknown) => String(error));
+      expect(causes.some(cause => cause.includes("synthetic source writer-close refusal"))).toBe(true);
+      expect(causes.some(cause => cause.includes("Cannot verify current session journal"))).toBe(true);
+      expect(manager.getSessionId()).toBe(sourceId);
+      expect(manager.getSessionFile()).toBe(sourceFile);
+
+      // No extra caller flush: the failed repair must not report success or
+      // silently overwrite the independent writer's original journal bytes.
+      const disk = await fs.readFile(sourceFile, "utf8");
+      expect(disk).toContain("Original source with artifact://0");
+      expect(disk).toContain("Foreign history must survive read refusal");
+      expect(await fs.readFile(sourceArtifact)).toEqual(originalArtifact);
+    } finally {
+      storage.rejectNextSourceClose = false;
+      storage.refuseSourceReadOnClose = false;
+      storage.refuseNextSourceRead = false;
+      await manager.close().catch(() => undefined);
     }
   });
 });
@@ -2070,4 +4081,250 @@ describe("SessionManager.createBranchedSession fail-closed artifact ownership", 
 			await parent.close();
 		}
 	});
+});
+
+
+describe("SessionManager.fork artifact durability", () => {
+	it.skipIf(process.platform === "win32")(
+		"flushes copied artifact files and directories before publishing the child JSONL",
+		async () => {
+			using temp = TempDir.createSync("@veyyon-fork-artifact-durability-");
+			const sessions = path.join(temp.path(), "sessions");
+			const manager = SessionManager.create(temp.path(), sessions);
+			try {
+				expect(await manager.saveArtifact("SYNTHETIC ORIGINAL ARTIFACT BYTES", "bash")).toBe("0");
+				const sourceArtifact = await manager.getArtifactPath("0");
+				if (!sourceArtifact) throw new Error("expected synthetic source artifact");
+				const sourceDir = path.dirname(sourceArtifact);
+				const nestedDir = path.join(sourceDir, "nested");
+				const nestedArtifact = path.join(nestedDir, "audit.log");
+				const nestedBytes = Buffer.from("SYNTHETIC NESTED ARCHIVE BYTES");
+				await fs.mkdir(nestedDir);
+				await fs.writeFile(nestedArtifact, nestedBytes);
+				manager.appendMessage({ role: "user", content: "Retain synthetic artifact://0", timestamp: Date.now() });
+				await manager.ensureOnDisk();
+				const sourceFile = manager.getSessionFile();
+				if (!sourceFile) throw new Error("expected persisted source session");
+				const sourceArtifactBytes = await fs.readFile(sourceArtifact);
+				const events: Array<{ kind: "sync" | "publish"; path: string }> = [];
+				let copiedRoot: string | undefined;
+				const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+				const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+				const realRename = nodeFs.promises.rename.bind(nodeFs.promises);
+				const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
+					await realCopy(from, to, options);
+					const fromPath = typeof from === "string" ? from : fileURLToPath(from);
+					const toPath = typeof to === "string" ? to : fileURLToPath(to);
+					if (path.dirname(fromPath) === sourceDir) {
+						const candidate = path.dirname(toPath);
+						if (copiedRoot === undefined) copiedRoot = candidate;
+						else expect(candidate).toBe(copiedRoot);
+					}
+				});
+				const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+					const handle = await realOpen(file, flags, mode);
+					const filename = String(file);
+					if (copiedRoot !== undefined) {
+						const parent = path.dirname(copiedRoot);
+						if (filename === parent || filename === copiedRoot || filename.startsWith(copiedRoot + path.sep)) {
+							const sync = handle.sync.bind(handle);
+							Object.defineProperty(handle, "sync", {
+								configurable: true,
+								value: async () => {
+									events.push({ kind: "sync", path: filename });
+									return sync();
+								},
+							});
+						}
+					}
+					return handle;
+				});
+				const onPublish = (to: string | Buffer | URL) => {
+					const target = String(to);
+					if (target.endsWith(".jsonl") && path.dirname(target) === sessions) {
+						events.push({ kind: "publish", path: target });
+					}
+				};
+				const renameSpy = spyOn(nodeFs.promises, "rename").mockImplementation(async (from, to) => {
+					onPublish(to);
+					return realRename(from, to);
+				});
+				const realRenameSync = nodeFs.renameSync.bind(nodeFs);
+				const renameSyncSpy = spyOn(nodeFs, "renameSync").mockImplementation((from, to) => {
+					onPublish(to);
+					return realRenameSync(from, to);
+				});
+				try {
+					const fork = await manager.fork();
+					if (!fork) throw new Error("expected persisted fork");
+					if (!copiedRoot) throw new Error("expected copied artifact root");
+					const publishIndex = events.findIndex(event => event.kind === "publish");
+					expect(publishIndex).toBeGreaterThan(-1);
+					const syncBeforePublish = events.slice(0, publishIndex)
+						.filter((event): event is { kind: "sync"; path: string } => event.kind === "sync")
+						.map(event => event.path);
+					const rootName = path.basename(copiedRoot!);
+					const relative = (filename: string) =>
+						path.relative(path.dirname(copiedRoot!), filename).split(path.sep).join("/");
+					const synced = syncBeforePublish.map(relative);
+					const indexOf = (name: string) => synced.indexOf(name);
+					const sourceFileSync = indexOf(`${rootName}/0.bash.log`);
+					const nestedFileSync = indexOf(`${rootName}/nested/audit.log`);
+					const nestedDirSync = indexOf(`${rootName}/nested`);
+					const rootDirSync = indexOf(rootName);
+					const parentDirSync = indexOf("");
+					expect(sourceFileSync).toBeGreaterThanOrEqual(0);
+					expect(nestedFileSync).toBeGreaterThanOrEqual(0);
+					expect(nestedDirSync).toBeGreaterThanOrEqual(0);
+					expect(rootDirSync).toBeGreaterThanOrEqual(0);
+					expect(sourceFileSync).toBeLessThan(nestedDirSync);
+					expect(nestedFileSync).toBeLessThan(nestedDirSync);
+					expect(nestedDirSync).toBeLessThan(rootDirSync);
+					expect(rootDirSync).toBeLessThan(parentDirSync);
+				} finally {
+					renameSyncSpy.mockRestore();
+					renameSpy.mockRestore();
+					openSpy.mockRestore();
+					copySpy.mockRestore();
+				}
+				const copiedArtifact = await manager.getArtifactPath("0");
+				if (!copiedArtifact) throw new Error("expected forked artifact");
+				expect(await fs.readFile(copiedArtifact)).toEqual(sourceArtifactBytes);
+				expect(await fs.readFile(path.join(path.dirname(copiedArtifact), "nested", "audit.log"))).toEqual(nestedBytes);
+			} finally {
+				await manager.close();
+			}
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"does not publish a fork when a copied artifact file cannot be flushed",
+		async () => {
+			using temp = TempDir.createSync("@veyyon-fork-artifact-fsync-failure-");
+			const sessions = path.join(temp.path(), "sessions");
+			const manager = SessionManager.create(temp.path(), sessions);
+			try {
+				expect(await manager.saveArtifact("SYNTHETIC SOURCE ARTIFACT", "bash")).toBe("0");
+				manager.appendMessage({ role: "user", content: "Keep synthetic artifact://0", timestamp: Date.now() });
+				await manager.ensureOnDisk();
+				const sourceFile = manager.getSessionFile();
+				const sourceArtifact = await manager.getArtifactPath("0");
+				if (!sourceFile || !sourceArtifact) throw new Error("expected persisted synthetic source");
+				const sourceId = manager.getSessionId();
+				const sourceTranscript = await fs.readFile(sourceFile);
+				const sourceArtifactBytes = await fs.readFile(sourceArtifact);
+				const sessionFilesBefore = (await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort();
+				let copiedArtifact: string | undefined;
+				let syncAttempted = false;
+				const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+				const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+				const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
+					await realCopy(from, to, options);
+					const fromPath = typeof from === "string" ? from : fileURLToPath(from);
+					const toPath = typeof to === "string" ? to : fileURLToPath(to);
+					if (fromPath === sourceArtifact) copiedArtifact = toPath;
+				});
+				const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+					const handle = await realOpen(file, flags, mode);
+					if (copiedArtifact !== undefined && String(file) === copiedArtifact) {
+						Object.defineProperty(handle, "sync", {
+							configurable: true,
+							value: async () => {
+								syncAttempted = true;
+								const error = new Error("synthetic copied artifact fsync failure") as NodeJS.ErrnoException;
+								error.code = "EIO";
+								throw error;
+							},
+						});
+					}
+					return handle;
+				});
+				try {
+					await expect(manager.fork()).rejects.toThrow(/synthetic copied artifact fsync failure/);
+				} finally {
+					openSpy.mockRestore();
+					copySpy.mockRestore();
+				}
+				expect(syncAttempted).toBe(true);
+				if (!copiedArtifact) throw new Error("expected copied artifact path");
+				expect(manager.getSessionId()).toBe(sourceId);
+				expect(manager.getSessionFile()).toBe(sourceFile);
+				expect((await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort()).toEqual(sessionFilesBefore);
+				expect(await fs.readFile(sourceFile)).toEqual(sourceTranscript);
+				expect(await fs.readFile(sourceArtifact)).toEqual(sourceArtifactBytes);
+				expect(await fs.readFile(copiedArtifact!)).toEqual(sourceArtifactBytes);
+			} finally {
+				await manager.close();
+			}
+		},
+	);
+	it.skipIf(process.platform === "win32")(
+		"does not publish a fork when a copied artifact directory cannot be flushed",
+		async () => {
+			using temp = TempDir.createSync("@veyyon-fork-artifact-directory-fsync-failure-");
+			const sessions = path.join(temp.path(), "sessions");
+			const manager = SessionManager.create(temp.path(), sessions);
+			try {
+				expect(await manager.saveArtifact("SYNTHETIC SOURCE ARTIFACT", "bash")).toBe("0");
+				const sourceArtifact = await manager.getArtifactPath("0");
+				if (!sourceArtifact) throw new Error("expected persisted synthetic source artifact");
+				const sourceDir = path.dirname(sourceArtifact);
+				const nestedDir = path.join(sourceDir, "nested");
+				const nestedArtifact = path.join(nestedDir, "audit.log");
+				const nestedBytes = Buffer.from("SYNTHETIC NESTED ARTIFACT BYTES");
+				await fs.mkdir(nestedDir);
+				await fs.writeFile(nestedArtifact, nestedBytes);
+				manager.appendMessage({ role: "user", content: "Keep synthetic artifact://0", timestamp: Date.now() });
+				await manager.ensureOnDisk();
+				const sourceFile = manager.getSessionFile();
+				if (!sourceFile) throw new Error("expected persisted source session");
+				const sourceId = manager.getSessionId();
+				const sourceTranscript = await fs.readFile(sourceFile);
+				const sourceArtifactBytes = await fs.readFile(sourceArtifact);
+				const sessionFilesBefore = (await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort();
+				let copiedRoot: string | undefined;
+				let syncAttempted = false;
+				const realCopy = nodeFs.promises.cp.bind(nodeFs.promises);
+				const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
+				const copySpy = spyOn(nodeFs.promises, "cp").mockImplementation(async (from, to, options) => {
+					await realCopy(from, to, options);
+					const fromPath = typeof from === "string" ? from : fileURLToPath(from);
+					const toPath = typeof to === "string" ? to : fileURLToPath(to);
+					if (path.dirname(fromPath) === sourceDir) copiedRoot = path.dirname(toPath);
+				});
+				const openSpy = spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+					const handle = await realOpen(file, flags, mode);
+					if (copiedRoot !== undefined && String(file) === path.join(copiedRoot, "nested")) {
+						Object.defineProperty(handle, "sync", {
+							configurable: true,
+							value: async () => {
+								syncAttempted = true;
+								const error = new Error("synthetic copied artifact directory fsync failure") as NodeJS.ErrnoException;
+								error.code = "EIO";
+								throw error;
+							},
+						});
+					}
+					return handle;
+				});
+				try {
+					await expect(manager.fork()).rejects.toThrow(/synthetic copied artifact directory fsync failure/);
+				} finally {
+					openSpy.mockRestore();
+					copySpy.mockRestore();
+				}
+				expect(syncAttempted).toBe(true);
+				if (!copiedRoot) throw new Error("expected copied artifact root");
+				expect(manager.getSessionId()).toBe(sourceId);
+				expect(manager.getSessionFile()).toBe(sourceFile);
+				expect((await fs.readdir(sessions)).filter(name => name.endsWith(".jsonl")).sort()).toEqual(sessionFilesBefore);
+				expect(await fs.readFile(sourceFile)).toEqual(sourceTranscript);
+				expect(await fs.readFile(sourceArtifact)).toEqual(sourceArtifactBytes);
+				expect(await fs.readFile(nestedArtifact)).toEqual(nestedBytes);
+			} finally {
+				await manager.close();
+			}
+		},
+	);
+
 });
