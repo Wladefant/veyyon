@@ -1,6 +1,6 @@
+import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
-import { ProducerOutputGuard } from "../../src/secrets/producer-output";
 
 const guard = new ProducerOutputGuard(redactProviderSecrets);
 
@@ -23,6 +23,7 @@ describe("producer output keeps benign metadata", () => {
 
 		expect(guard.sanitize(text)).toBe(text);
 	});
+
 	it("masks a JSON credential value while preserving its commit metadata", () => {
 		const token = `ghp_${"E".repeat(36)}`;
 		const commit = "5a".repeat(20);
@@ -40,7 +41,7 @@ describe("producer output keeps benign metadata", () => {
 		expect(guard.sanitize(text)).toBe(text);
 	});
 
-	it("keeps defs metadata and labelled-token context across every stream split", () => {
+	it("keeps defs metadata and known-token context across every stream split", () => {
 		const token = `ghp_${"C".repeat(36)}`;
 		const inputs = ["before\nfigma_secret: str\nafter\n", `before token=${token} after\n`];
 
@@ -55,24 +56,32 @@ describe("producer output keeps benign metadata", () => {
 				if (input.includes("figma_secret")) {
 					expect(streamed).toBe(input);
 				} else {
-					expect(streamed).toBe(`before token=[REDACTED]\n`);
+					expect(streamed).not.toContain(token);
+					expect(streamed).toContain(" after\n");
 				}
 			}
 		}
 	});
 
-
-	it("masks only the value of a labelled synthetic credential", () => {
-		const token = `ghp_${"A".repeat(36)}`;
-		const text = `before token=${token} after`;
-
-		expect(guard.sanitize(text)).toBe("before token=[REDACTED]");
+	it("preserves TypeScript type annotations with token fields", () => {
+		const text = "type Options = { token: string, retries: number };";
+		expect(guard.sanitize(text)).toBe(text);
 	});
+
+	it("masks only a known token span and preserves its safe suffix", () => {
+		const token = `ghp_${"F".repeat(36)}`;
+		const text = `before token=${token} after`;
+		const output = guard.sanitize(text);
+		expect(output).not.toContain(token);
+		expect(output).toContain(" after");
+	});
+
 	it("masks only the value after a spaced assignment delimiter", () => {
 		const token = `ghp_${"D".repeat(36)}`;
 		const text = `before token= ${token} after`;
 
-		expect(guard.sanitize(text)).toBe("before token= [REDACTED]");
+		expect(guard.sanitize(text)).not.toContain(token);
+		expect(guard.sanitize(text)).toContain(" after");
 	});
 
 	it("masks a bare real-format synthetic token and preserves surrounding metadata", () => {
@@ -80,5 +89,29 @@ describe("producer output keeps benign metadata", () => {
 		const text = `before ${token} after`;
 
 		expect(guard.sanitize(text)).toBe("before <redacted 40 chars> after");
+	});
+
+	it("preserves safe suffixes around known tokens for every stream split", () => {
+		const token = `ghp_${"G".repeat(36)}`;
+		const input = `before token=${token} after`;
+		for (let split = 0; split <= input.length; split++) {
+			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+			const output =
+				streamGuard.push(input.slice(0, split)) +
+				streamGuard.push(input.slice(split)) +
+				streamGuard.finish();
+			expect(output).not.toContain(token);
+			expect(output).toContain(" after");
+		}
+	});
+
+	it("preserves JSON-safe BigInt metadata and redacts the sensitive BigInt value", () => {
+		const result = sanitizeProducerJson(
+			{ count: 42n, commit: "abc", password: 987654321n },
+			guard,
+		) as { count: unknown; commit: unknown; password: unknown };
+		expect(result.count).toBe("42n");
+		expect(result.commit).toBe("abc");
+		expect(result.password).toBe("[REDACTED]");
 	});
 });

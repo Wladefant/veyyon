@@ -1,11 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
-import * as producerOutput from "../../src/secrets/producer-output";
+import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
 import { runWithProducerSecretOwner } from "../../src/secrets/producer-owner";
 
-const { ProducerOutputGuard } = producerOutput;
-const guard = new ProducerOutputGuard(redactProviderSecrets);
+const guard = new ProducerOutputGuard();
 
 describe("producer output keeps complete credential spans closed", () => {
 	it("redacts Authorization Bearer credentials, including every two-chunk split", () => {
@@ -15,7 +14,7 @@ describe("producer output keeps complete credential spans closed", () => {
 
 		expect(sanitized).not.toContain(token);
 		for (let split = 0; split <= input.length; split++) {
-			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+			const streamGuard = new ProducerOutputGuard();
 			const output =
 				streamGuard.push(input.slice(0, split)) +
 					streamGuard.push(input.slice(split)) +
@@ -94,11 +93,7 @@ describe("producer output keeps complete credential spans closed", () => {
 	);
 
 	it("masks numeric API keys in producer JSON and preserves token counts", () => {
-		const sanitizeJsonValue = (producerOutput as typeof producerOutput & {
-			sanitizeProducerJson?: (value: unknown, guard: InstanceType<typeof ProducerOutputGuard>) => unknown;
-		}).sanitizeProducerJson;
-		expect(sanitizeJsonValue).toBeTypeOf("function");
-		expect(sanitizeJsonValue!({ api_key: 4242424242, token_count: 42 }, guard)).toEqual({
+		expect(sanitizeProducerJson({ api_key: 4242424242, token_count: 42 }, guard)).toEqual({
 			api_key: "[REDACTED]",
 			token_count: 42,
 		});
@@ -109,10 +104,6 @@ describe("producer output keeps complete credential spans closed", () => {
 	});
 
 	it("sanitizes JSON fields structurally and preserves safe sibling metadata", () => {
-		const sanitizeJsonValue = (producerOutput as typeof producerOutput & {
-			sanitizeProducerJson?: (value: unknown, guard: InstanceType<typeof ProducerOutputGuard>) => unknown;
-		}).sanitizeProducerJson;
-		expect(sanitizeJsonValue).toBeTypeOf("function");
 		const source = {
 			token_count: 42,
 			enabled: true,
@@ -120,7 +111,7 @@ describe("producer output keeps complete credential spans closed", () => {
 			commit: "abc",
 			message: "before token=opaqueValue12345 after",
 		};
-		const result = sanitizeJsonValue!(source, guard) as typeof source;
+		const result = sanitizeProducerJson(source, guard) as typeof source;
 		expect(result).toEqual({
 			token_count: 42,
 			enabled: true,
@@ -128,5 +119,69 @@ describe("producer output keeps complete credential spans closed", () => {
 			commit: "abc",
 			message: "before token=[REDACTED]",
 		});
+	});
+
+	it.each(["secret:\n  ", "secret:   \n  ", "secret:\r\n  "])(
+		"keeps an opaque continuation closed after a label-only record: %j",
+		inputPrefix => {
+			const body = "opaqueSyntheticBody1234567890";
+			const input = `${inputPrefix}${body}\nnext=safe\n`;
+			expect(guard.sanitize(input)).not.toContain(body);
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(body);
+			}
+		},
+	);
+
+	it("keeps label-only continuation values closed in JSON messages", () => {
+		const body = "opaqueSyntheticJsonBody1234567890";
+		const input = JSON.stringify({ message: `secret:\n  ${body}\n`, sibling: "safe" });
+		const output = guard.sanitize(input);
+		expect(output).not.toContain(body);
+		expect(JSON.parse(output)).toMatchObject({ sibling: "safe" });
+	});
+
+	it("retains sensitivity when the real owner obfuscates a password label", () => {
+		const token = "opaqueSyntheticCredentialABC123456";
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "password", name: "PASSWORD_CANARY", source: "test", origin: "config" },
+		]);
+		const owner = {
+			redact: (value: string) => obfuscator.obfuscate(value),
+			pendingPrefixLength: (value: string) => obfuscator.pendingRedactionPrefixLength(value),
+		};
+		const text = `password=${token}\n`;
+		const output = runWithProducerSecretOwner(owner, () => new ProducerOutputGuard().sanitize(text));
+		expect(output).not.toContain(token);
+
+		const jsonOutput = runWithProducerSecretOwner(
+			owner,
+			() => new ProducerOutputGuard().sanitize(JSON.stringify({ password: token, sibling: "safe" })),
+		);
+		expect(jsonOutput).not.toContain(token);
+		expect(JSON.parse(jsonOutput)).toMatchObject({ sibling: "safe" });
+	});
+
+	it("retains sensitivity when a callback obscures password labels across every split", () => {
+		const token = "opaqueSyntheticCallbackCredential123456";
+		const owner = { redact: (text: string) => text.replaceAll("password", "#PASSWORD_ALIAS#") };
+		const input = `password=${token}\n`;
+		const withOwnerGuard = (text: string) =>
+			runWithProducerSecretOwner(owner, () => new ProducerOutputGuard().sanitize(text));
+		expect(withOwnerGuard(input)).not.toContain(token);
+		for (let split = 0; split <= input.length; split++) {
+			const output = runWithProducerSecretOwner(owner, () => {
+				const streamGuard = new ProducerOutputGuard();
+				return streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+			});
+			expect(output).not.toContain(token);
+		}
 	});
 });

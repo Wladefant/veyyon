@@ -8,10 +8,14 @@
 export function sanitizeJsonValue(
 	value: unknown,
 	sanitize: (text: string) => string,
-	options: { cycles?: "reject" | "mark" } = {},
+	options: {
+		cycles?: "reject" | "mark";
+		transformValue?: (value: unknown, key?: string) => unknown;
+	} = {},
 ): unknown {
 	const ancestors = new WeakSet<object>();
-	const clone = (current: unknown): unknown => {
+	const clone = (original: unknown, key?: string): unknown => {
+		const current = options.transformValue ? options.transformValue(original, key) : original;
 		if (typeof current === "string") return sanitize(current);
 		if (current === null || typeof current !== "object") return current;
 		if (ancestors.has(current)) {
@@ -21,7 +25,7 @@ export function sanitizeJsonValue(
 
 		ancestors.add(current);
 		try {
-			if (Array.isArray(current)) return current.map(clone);
+			if (Array.isArray(current)) return current.map((item) => clone(item));
 
 			const sanitized: Record<string, unknown> = {};
 			for (const [key, nested] of Object.entries(current)) {
@@ -30,7 +34,7 @@ export function sanitizeJsonValue(
 					throw new Error("Sanitized JSON keys collide.");
 				}
 				Object.defineProperty(sanitized, sanitizedKey, {
-					value: clone(nested),
+					value: clone(nested, key),
 					enumerable: true,
 					configurable: true,
 					writable: true,
