@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import * as producerOutput from "../../src/secrets/producer-output";
+import { SecretObfuscator } from "../../src/secrets/obfuscator";
+import { runWithProducerSecretOwner } from "../../src/secrets/producer-owner";
 
 const { ProducerOutputGuard } = producerOutput;
 const guard = new ProducerOutputGuard(redactProviderSecrets);
@@ -25,6 +27,21 @@ describe("producer output keeps complete credential spans closed", () => {
 
 	it("does not publish unquoted multiword secret suffixes", () => {
 		expect(guard.sanitize("secret: multiple words in secret\n")).not.toContain("words in secret");
+	});
+
+	it("redacts a registered literal before removing its control characters", () => {
+		const secret = "opaque\u0000registered-value";
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: secret, name: "CONTROL_CANARY" },
+		]);
+		const output = runWithProducerSecretOwner(
+			{
+				redact: text => obfuscator.obfuscate(text),
+				pendingPrefixLength: text => obfuscator.pendingRedactionPrefixLength(text),
+			},
+			() => new ProducerOutputGuard().sanitize(`before ${secret} after`),
+		);
+		expect(output).not.toContain("registered-value");
 	});
 
 	it.each([
