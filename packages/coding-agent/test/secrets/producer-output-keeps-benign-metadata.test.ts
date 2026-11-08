@@ -114,4 +114,15 @@ describe("producer output keeps benign metadata", () => {
 		expect(result.commit).toBe("abc");
 		expect(result.password).toBe("[REDACTED]");
 	});
+	it("preserves safe text after a complete PEM credential span", () => {
+		const input =
+			"before private_key: -----BEGIN PRIVATE KEY-----\n" +
+			"Q29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==\n" +
+			"-----END PRIVATE KEY----- after";
+		const output = guard.sanitize(input);
+		expect(output).not.toContain("Q29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==");
+		expect(output).toContain("before private_key:");
+		expect(output).toContain(" after");
+	});
+
 });

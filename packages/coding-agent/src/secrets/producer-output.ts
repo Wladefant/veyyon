@@ -29,6 +29,11 @@ const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>
 const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
 
 function knownCredentialLength(text: string): number {
+	if (text.startsWith("-----BEGIN ")) {
+		PEM_BLOCK.lastIndex = 0;
+		const pem = PEM_BLOCK.exec(text);
+		if (pem?.index === 0) return pem[0].length;
+	}
 	const redacted = redactProviderSecrets(text);
 	const marker = text.startsWith("<redacted ") || redacted === text ? null : /^<redacted (\d+) chars>/.exec(redacted);
 	if (marker) return Number(marker[1]);
@@ -57,6 +62,7 @@ function redactCredentialRecords(text: string): string {
 		// Without structure, only the physical record bounds the value.
 		const newline = tail.indexOf("\n");
 		const knownLength = quoted ? 0 : knownCredentialLength(tail);
+		if (!quoted && !knownLength && PEM_START.test(tail)) return BLOCKED_OUTPUT_RECORD;
 		const end = quoted ? start + quoteEnd : start + (knownLength || (newline < 0 ? tail.length : newline));
 		result += text.slice(cursor, start + (quoted ? 1 : 0)) + "[REDACTED]";
 		cursor = end;
@@ -66,8 +72,8 @@ function redactCredentialRecords(text: string): string {
 }
 
 function classifyCredentialText(text: string): string {
-	const redacted = text.replace(PEM_BLOCK, "[REDACTED]");
-	return PEM_START.test(redacted) ? BLOCKED_OUTPUT_RECORD : redactCredentialRecords(redacted);
+	const redacted = redactCredentialRecords(text).replace(PEM_BLOCK, "[REDACTED]");
+	return PEM_START.test(redacted) ? BLOCKED_OUTPUT_RECORD : redacted;
 }
 
 function isQuote(character: string): boolean {
