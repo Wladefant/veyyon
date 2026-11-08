@@ -191,14 +191,9 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 	};
 }
 
-/** Refuse cut-off JSONL identity fields masquerading as an optional plain title. */
+/** Reject JSON-structural text that could be a damaged record, not a legacy title. */
 function resemblesBrokenHeader(line: string): boolean {
-	const trimmed = line.trimStart();
-	if (!trimmed.startsWith('"')) return false;
-	// A missing opening brace must not make a former session header trustworthy.
-	// The existing bounded member scanner also recognizes JSON-escaped keys.
-	const candidate = scanTopLevelMembers(`{${trimmed}`);
-	return candidate.sessionTypeMember || candidate.claimedId !== undefined;
+	return /["{}\[\]]/.test(line);
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {

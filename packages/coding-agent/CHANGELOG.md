@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Exact stored-history reads and searches now reject ambiguous session headers, repeated identity fields (even after unrelated duplicates), unaddressable stored entry IDs, and oversized session-ID or record-type metadata, while preserving explicitly selected healthy legacy branches after unrelated malformed records.
+- Exact stored-history reads and searches reject JSON-structural fragments before session headers, even across blank lines, and reject duplicate entry-ID claims regardless of malformed parent type or record order; they also reject repeated identity fields, unaddressable IDs, and oversized session-ID or record-type metadata while preserving explicitly selected healthy legacy branches after unrelated malformed records.
 - Keep matched Unicode text visible in bounded `history://` search previews, including expanding case folds, astral-character boundaries, and long queries ([Refs #984](https://github.com/Wladefant/veyyon/issues/984)).
 ## [1.8.8] - 2026-11-08
 

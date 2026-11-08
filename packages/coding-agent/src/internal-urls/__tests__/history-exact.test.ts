@@ -1287,6 +1287,7 @@ describe("history exact record lookup", () => {
 			for (const damagedFirst of [
 				'"type":"session","id":"earlier"}',
 				'"\\u0074ype":"session","id":"earlier"}',
+				'["type":"session","id":"earlier"}',
 				'"id":"earlier"}',
 			]) {
 				await fs.writeFile(file, Buffer.concat([Buffer.from(damagedFirst + "\n\n"), header, root]));
