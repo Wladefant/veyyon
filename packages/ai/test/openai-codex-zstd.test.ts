@@ -10,7 +10,7 @@ import {
 	restoreDirOverrides,
 	setAgentDir,
 } from "@veyyon/utils/dirs";
-import { withEnv } from "./helpers";
+import { withEnv } from "../../utils/test/helpers/restore-global";
 
 const { TempDir } = piUtils;
 const TEST_INSTALLATION_ID = "00000000-0000-4000-8000-000000000001";
