@@ -191,6 +191,16 @@ function scanTopLevelMembers(raw: string): { duplicates: ReadonlySet<string>; se
 	};
 }
 
+/** Refuse cut-off JSONL identity fields masquerading as an optional plain title. */
+function resemblesBrokenHeader(line: string): boolean {
+	const trimmed = line.trimStart();
+	if (!trimmed.startsWith('"')) return false;
+	// A missing opening brace must not make a former session header trustworthy.
+	// The existing bounded member scanner also recognizes JSON-escaped keys.
+	const candidate = scanTopLevelMembers(`{${trimmed}`);
+	return candidate.sessionTypeMember || candidate.claimedId !== undefined;
+}
+
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	let sessionTypeMember = false;
 	let malformedClaimedId: string | undefined;
@@ -492,8 +502,9 @@ export async function readStoredHistoryEntry(
 			}
 			if (!line.trimStart().startsWith("{")) {
 				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
-					if (initialPlainTitle) {
+					if (initialPlainTitle || resemblesBrokenHeader(line)) {
 						admission.invalidIdentity = true;
+						incomplete = true;
 					} else {
 						initialPlainTitle = true;
 					}
@@ -510,16 +521,9 @@ export async function readStoredHistoryEntry(
 			sessionId = admission.sessionId;
 			if (decoded.kind === "invalid") {
 				incomplete = true;
-				const parentIdIsStructurallyInvalid = decoded.claimedId && (() => {
-					try {
-						const value = JSON.parse(line) as StoredEntryShape;
-						return value.parentId !== undefined && value.parentId !== null &&
-							typeof value.parentId !== "string";
-					} catch {
-						return false;
-					}
-				})();
-				if (decoded.claimedId && !parentIdIsStructurallyInvalid) {
+				// All addressable physical ID claims count, even when a sibling's
+				// parent field is otherwise invalid.
+				if (decoded.claimedId) {
 					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
 					if (detail) return {
 						status: "unavailable",
@@ -784,7 +788,7 @@ export async function searchStoredHistoryEntries(
 			}
 			if (!line.trimStart().startsWith("{")) {
 				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
-					if (initialPlainTitle) {
+					if (initialPlainTitle || resemblesBrokenHeader(line)) {
 						admission.invalidIdentity = true;
 						unreadable = true;
 					} else {
@@ -810,22 +814,10 @@ export async function searchStoredHistoryEntries(
 				} catch {
 					// A malformed row cannot locate its corruption outside the selected branch.
 				}
-				const parentIdIsStructurallyInvalid =
-					rejectedParentId !== undefined && rejectedParentId !== null && typeof rejectedParentId !== "string";
 				if (!(decoded.claimedId && !parents.has(decoded.claimedId) && rejectedParentId === "")) {
 					unlocatedUnreadable = true;
 				}
-				if (decoded.claimedId && parents.has(decoded.claimedId) && !parentIdIsStructurallyInvalid) {
-					return {
-						status: "unavailable",
-						sessionId,
-						query: request.query,
-						source: "stored-jsonl",
-						matches: [],
-						detail: DUPLICATE_ID_DETAIL,
-					};
-				}
-				if (decoded.claimedId && !parents.has(decoded.claimedId)) {
+				if (decoded.claimedId) {
 					const detail = claimedIdError(decoded.claimedId, parents, malformedClaims);
 					if (detail) return {
 						status: "unavailable",

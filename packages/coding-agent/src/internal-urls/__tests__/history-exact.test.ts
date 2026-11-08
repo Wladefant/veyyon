@@ -540,23 +540,23 @@ describe("history exact record lookup", () => {
 					offset: 0,
 					limit: 256,
 				});
-				expect(exact.status).toBe("ok");
-				expect(exact.fragment).toBe(JSON.stringify(root));
+				// Invalid-parent siblings are still physical duplicate ID claims.
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
 				const forged = await searchStoredHistoryEntries(file, {
 					query: "forged needle",
 					leafId: "leaf",
 					limit: 5,
 				});
-				expect(forged.status).toBe("partial");
+				expect(forged.status).toBe("unavailable");
 				expect(forged.matches).toEqual([]);
 				const trusted = await searchStoredHistoryEntries(file, {
 					query: "trusted atlas",
 					leafId: "leaf",
 					limit: 5,
 				});
-				expect(trusted.status).toBe("partial");
-				expect(trusted.matches.map(match => match.entryId)).toEqual(["root"]);
-				expect(trusted.matches[0]!.revision).toBe(exact.revision!);
+				expect(trusted.status).toBe("unavailable");
+				expect(trusted.matches).toEqual([]);
 			}
 
 			// The first-pass title-slot exception must also apply to matching.
@@ -1283,6 +1283,34 @@ describe("history exact record lookup", () => {
 				expect(archivedSearch.status).toBe("partial");
 				expect(archivedSearch.matches.map(match => match.entryId)).toEqual(["root"]);
 			}
+			// A blank separator cannot reclassify a damaged header as a title.
+			for (const damagedFirst of [
+				'"type":"session","id":"earlier"}',
+				'"\\u0074ype":"session","id":"earlier"}',
+				'"id":"earlier"}',
+			]) {
+				await fs.writeFile(file, Buffer.concat([Buffer.from(damagedFirst + "\n\n"), header, root]));
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, { query: "needle", leafId: "root", limit: 3 });
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+			}
+			// Genuine legacy plain titles with separators must remain readable.
+			await fs.writeFile(file, Buffer.concat([Buffer.from("Optional title\n\n"), header, root]));
+			const titledExact = await readStoredHistoryEntry(file, {
+				entryId: "root", leafId: "root", offset: 0, limit: 256,
+			});
+			expect(titledExact.status).toBe("ok");
+			const titledSearch = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "root", limit: 3,
+			});
+			expect(titledSearch.status).toBe("ok");
+			expect(titledSearch.matches.map(match => match.entryId)).toEqual(["root"]);
+
 			// Blank delimiters preceding a valid header remain accepted.
 			await fs.writeFile(file, Buffer.concat([Buffer.from("\n \t\n"), header, root]));
 			const blankExact = await readStoredHistoryEntry(file, {
@@ -1491,6 +1519,8 @@ describe("history exact record lookup", () => {
 			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle healthy" });
 			for (const malformedRecord of [
 				{ type: "message", id: "root", parentId: "invalid/parent", message: "needle forged" },
+				{ type: "message", id: "root", parentId: 42, message: "needle forged" },
+				{ type: "message", id: "root", parentId: [], message: "needle forged" },
 				{ type: "", id: "root", parentId: null, message: "needle forged" },
 				// A benign duplicated metadata key must not conceal a repeated record ID.
 				'{"type":"message","id":"root","note":1,"note":2,"parentId":null,"message":"needle forged"}',
