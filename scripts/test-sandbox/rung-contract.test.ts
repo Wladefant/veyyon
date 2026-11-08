@@ -465,14 +465,14 @@ describe("the guest this suite is running in", () => {
  */
 describe("the files the remote rung puts back after honouring .gitignore", () => {
 	/** The `+ /path` rsync include lines `remote_sync` prepends to its filter chain. */
-	function includeLines(): string[] {
+	function includeLines(repoRoot: string): string[] {
 		const child = Bun.spawnSync({
 			cmd: [
 				"bash",
 				"-c",
-				`REPO_ROOT=${JSON.stringify(REPO_ROOT)}; . ${JSON.stringify(path.join(REPO_ROOT, "scripts", "test-sandbox", "rungs", "remote.sh"))}; remote_generated_sources_filter`,
+				`REPO_ROOT=${JSON.stringify(repoRoot)}; . ${JSON.stringify(path.join(REPO_ROOT, "scripts", "test-sandbox", "rungs", "remote.sh"))}; remote_generated_sources_filter`,
 			],
-			cwd: REPO_ROOT,
+			cwd: repoRoot,
 			stdout: "pipe",
 			stderr: "pipe",
 		});
@@ -481,29 +481,52 @@ describe("the files the remote rung puts back after honouring .gitignore", () =>
 	}
 
 	/**
-	 * The reported outage. Every coding-agent suite died on the remote rung with
-	 * "Cannot find module './tool-views.generated.js'", which reads like a broken
-	 * import and is really a file rsync declined to ship. The file is generated, so
-	 * it is gitignored, so the gitignore filter dropped it.
+	 * The generated tool-view bundle is gitignored and absent until its generator runs.
+	 * Give the real filter a tiny git repo with that path so the contract is independent
+	 * of build artifacts left by another suite or developer command.
 	 */
+	function withGeneratedSourceFixture(assert: (repoRoot: string) => void): void {
+		const repoRoot = mkdtempSync(path.join(os.tmpdir(), "remote-generated-source-filter-"));
+		try {
+			const generatedSource = path.join(
+				repoRoot,
+				"packages",
+				"coding-agent",
+				"src",
+				"export",
+				"html",
+				"tool-views.generated.js",
+			);
+			const otherBuildFile = path.join(repoRoot, "packages", "coding-agent", "build", "output.js");
+			mkdirSync(path.dirname(generatedSource), { recursive: true });
+			mkdirSync(path.dirname(otherBuildFile), { recursive: true });
+			writeFileSync(generatedSource, "/* generated source fixture */\n");
+			writeFileSync(otherBuildFile, "/* unrelated build fixture */\n");
+			writeFileSync(
+				path.join(repoRoot, ".gitignore"),
+				"/packages/coding-agent/src/export/html/tool-views.generated.js\n/packages/coding-agent/build/\n",
+			);
+			const init = Bun.spawnSync({
+				cmd: ["git", "init", "--quiet", "--initial-branch=main"],
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(init.exitCode).toBe(0);
+			assert(repoRoot);
+		} finally {
+			rmSync(repoRoot, { recursive: true, force: true });
+		}
+	}
+
 	it("carries a generated source that a package imports at runtime", () => {
-		expect(includeLines()).toContain("+ /packages/coding-agent/src/export/html/tool-views.generated.js");
+		withGeneratedSourceFixture((repoRoot) => {
+			expect(includeLines(repoRoot)).toEqual([
+				"+ /packages/coding-agent/src/export/html/tool-views.generated.js",
+			]);
+		});
 	});
 
-	/**
-	 * The safety rail on the fix. `git ls-files --others --ignored` collapses a wholly
-	 * ignored directory into one entry and disregards the pathspec when it does, so
-	 * the unfiltered answer offers to re-include `tests/evals/datasets/repo-cache`:
-	 * thousands of cloned repositories, tens of gigabytes, on every test run over the
-	 * LAN. Nothing that is not a regular file under a package's own src is put back.
-	 */
-	it("puts back nothing but regular files under a package's own src", () => {
-		for (const line of includeLines()) {
-			expect(line).toMatch(
-				/^\+ \/((packages|contracts|hosts|apps|clients|plugins|natives)\/[^/]+|kernel)\/src\/[^\n]*[^/]$/,
-			);
-		}
-	});
 });
 
 describe("the external node_modules mount", () => {

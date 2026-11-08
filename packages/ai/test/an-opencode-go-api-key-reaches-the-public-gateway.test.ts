@@ -42,11 +42,11 @@ function wireApis(): Map<Api, Model<Api>> {
 	return models;
 }
 
-function recordingFetch(sent: RecordedRequest[], modelsDev: Response = Response.json({ data: [] })): FetchImpl {
+function recordingFetch(sent: RecordedRequest[]): FetchImpl {
 	return async (input, init) => {
 		const request = input instanceof Request ? new Request(input, init) : new Request(String(input), init);
 		const url = new URL(request.url);
-		if (url.origin === "https://models.dev") return modelsDev.clone();
+		if (url.origin === "https://models.dev") return Response.json({ data: [] });
 		sent.push({ url: `${url.origin}${url.pathname}${url.search}`, headers: request.headers });
 		if (url.pathname === MODELS_PATH) return Response.json({ data: [{ id: "listed-model" }] });
 		return Response.json({ error: { message: "stubbed request ended" } }, { status: 400 });
@@ -125,7 +125,7 @@ describe("an OpenCode Go API key reaches the public gateway", () => {
 		const sent: RecordedRequest[] = [];
 		const options = opencodeGoModelManagerOptions({
 			apiKey: "sk-go-discovery",
-			fetch: recordingFetch(sent, Response.json({ data: [] })),
+			fetch: recordingFetch(sent),
 		});
 		await options.fetchDynamicModels?.();
 		expect(
