@@ -528,6 +528,8 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	readonly #path: string;
 	readonly #appendMode: boolean;
 	readonly #sessionIdAtOpen: string | undefined;
+	/** Bytes appended to the pinned descriptor since its last verified durable sync. */
+	#hasUnsyncedAppend = false;
 
 	constructor(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
 		super(options);
@@ -553,6 +555,11 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		const current = fs.statSync(this.#path);
 		if (fileObjectIdentity(current) === pinnedIdentity) return;
 		if (!this.#appendMode) throw new Error("Session writer target was replaced");
+		// Rebinding after writing to the old inode can hide unsynced entries:
+		// sync() would then certify only the replacement, not the missing tail.
+		if (this.#hasUnsyncedAppend) {
+			throw new Error("Session writer target changed with unsynced appends");
+		}
 		const entry = fs.lstatSync(this.#path);
 		if (!entry.isFile() || entry.isSymbolicLink()) {
 			throw new Error("Session writer target is not a regular file");
@@ -600,6 +607,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 				}
 				offset += written;
 			}
+			this.#hasUnsyncedAppend = true;
 		} catch (err) {
 			throw this.recordError(err);
 		}
@@ -624,6 +632,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			// Detect replacement during fsync too. This remains observational,
 			// not a cross-process lock or guarantee against a subsequent rename.
 			assertCurrentTarget();
+			this.#hasUnsyncedAppend = false;
 		} catch (error) {
 			throw this.recordError(error);
 		}

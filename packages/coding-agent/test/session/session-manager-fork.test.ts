@@ -2869,6 +2869,63 @@ describe("AgentSession fork pre-switch writer-close failure", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "refuses rebinding after unsynced append bytes would be lost on a same-session replacement",
+    async () => {
+      using temp = TempDir.createSync("@veyyon-session-unsynced-rebind-");
+      const journal = path.join(temp.path(), "synthetic-journal.jsonl");
+      const displaced = path.join(temp.path(), "synthetic-displaced.jsonl");
+      const archive = path.join(temp.path(), "synthetic-archive.bin");
+      const archiveBytes = Buffer.from("synthetic retained artifact bytes");
+      const header = `${JSON.stringify({
+        type: "session", version: 3, id: "synthetic-unsynced-writer",
+        timestamp: new Date().toISOString(), cwd: temp.path(),
+      })}\n`;
+      const first = `${JSON.stringify({
+        type: "message", id: "synthetic-unsynced-first", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "First line must remain recoverable", timestamp: Date.now() },
+      })}\n`;
+      const second = `${JSON.stringify({
+        type: "message", id: "synthetic-unsynced-second", parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "Second line must not be appended if first is missing", timestamp: Date.now() },
+      })}\n`;
+      await fs.writeFile(journal, header);
+      await fs.writeFile(archive, archiveBytes);
+      const writer = new FileSessionStorage().openWriter(journal);
+      try {
+        await writer.append(first);
+        const oldInode = nodeFs.statSync(journal).ino;
+        await fs.rename(journal, displaced);
+        await fs.writeFile(journal, header);
+        expect(nodeFs.statSync(journal).ino).not.toBe(oldInode);
+
+        // The replacement has the same valid session header, so a header-only
+        // rebind would accept it even though the first unsynced line is absent.
+        await expect(writer.append(second)).rejects.toThrow(/unsynced appends/);
+        expect(writer.getError()?.message).toMatch(/unsynced appends/);
+        await expect(writer.sync()).rejects.toThrow(/unsynced appends/);
+        expect(await fs.readFile(journal, "utf8")).toBe(header);
+        expect(await fs.readFile(displaced, "utf8")).toBe(header + first);
+        expect(await fs.readFile(archive)).toEqual(archiveBytes);
+
+        // A fresh writer owns the current inode and retains ordinary sync.
+        const fresh = new FileSessionStorage().openWriter(journal);
+        try {
+          await fresh.append(second);
+          await fresh.sync();
+          expect(await fs.readFile(journal, "utf8")).toBe(header + second);
+          expect(await fs.readFile(displaced, "utf8")).toBe(header + first);
+        } finally {
+          await fresh.close();
+        }
+      } finally {
+        await writer.close();
+      }
+    },
+  );
+
   // POSIX rename keeps an independent O_APPEND descriptor on the displaced
   // original inode. Windows may refuse the replacement while that handle is
   // open; the separate EPERM tests cover its distinct path behavior.
