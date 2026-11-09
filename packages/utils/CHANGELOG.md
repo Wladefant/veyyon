@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.8.20] - 2026-11-09
+
 ### Added
 
 - `fsyncDirEntry` and `fsyncDirEntrySync` expose the atomic writer's existing directory-entry flush semantics for callers that must persist a newly created parent before publishing references.
