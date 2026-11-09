@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.8.21] - 2026-11-09
+
+### Fixed
+
+- Send empty object for antigravity fetchAvailableModels ([PR #1061](https://github.com/Wladefant/veyyon/pull/1061)).
+
 ## [1.8.20] - 2026-11-09
 
 ### Added
