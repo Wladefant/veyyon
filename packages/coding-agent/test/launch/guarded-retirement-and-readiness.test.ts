@@ -258,14 +258,17 @@ describe("guarded retirement and readiness regressions", () => {
 		const logTarget = managedDaemonLogPath(path.join(runtimeDir, "daemons", "detached-service"));
 		const statHold = Promise.withResolvers<void>();
 		const statEntered = Promise.withResolvers<void>();
-		const realStat = fs.stat;
-		const statSpy = spyOn(fs, "stat").mockImplementation(async (...args) => {
-			if (path.resolve(String(args[0])) === path.resolve(logTarget)) {
+		const realStat = fs.stat.bind(fs);
+		const statSpy = spyOn(fs, "stat").mockImplementation((async (
+			targetPath: Parameters<typeof fs.stat>[0],
+			opts?: Parameters<typeof fs.stat>[1],
+		) => {
+			if (path.resolve(String(targetPath)) === path.resolve(logTarget)) {
 				statEntered.resolve();
 				await statHold.promise;
 			}
-			return realStat(...args);
-		});
+			return opts === undefined ? realStat(targetPath) : realStat(targetPath, opts);
+		}) as typeof fs.stat);
 		try {
 			const sendReqId = `req-${crypto.randomUUID()}`;
 			const operation = encodeDaemonOperation({
