@@ -67,6 +67,8 @@ const launchSchema = toolSchema("launch", () =>
 		"keys?": type("string[]").describe("send: terminal keys after text"),
 		"signal?": type("'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGQUIT' | 'SIGKILL'").describe("send: process-tree signal"),
 		"timeout?": type("number > 0").describe("logs/wait/stop: max seconds; default 30 (stop: 5)"),
+		"expectedId?": type("string > 0").describe("guard: expected daemon launch id"),
+		"expectedGeneration?": type("number >= 1").describe("guard: expected daemon generation (positive safe integer)"),
 	}),
 );
 
@@ -91,6 +93,8 @@ export interface LaunchToolDetails {
 	daemons?: DaemonSnapshot[];
 	/** list: retained completion records alongside the active daemons. */
 	completions?: DaemonCompletionRecord[];
+	/** list: optional capabilities reported by the broker. */
+	capabilities?: { guardedIdentity?: 1 };
 	cursor?: number;
 	timedOut?: boolean;
 	/** logs: daemon lifecycle state at read time. */
@@ -155,7 +159,31 @@ function sendData(params: LaunchParams): string | undefined {
 	return data || undefined;
 }
 
+function validateGuards(params: LaunchParams): { expectedId: string; expectedGeneration: number } | undefined {
+	const hasId = params.expectedId !== undefined;
+	const hasGen = params.expectedGeneration !== undefined;
+	if (!hasId && !hasGen) return undefined;
+	if (!hasId || !hasGen) {
+		throw new ToolError("expectedId and expectedGeneration must be supplied together");
+	}
+	if (params.op !== "send" && params.op !== "stop" && params.op !== "wait" && params.op !== "restart") {
+		throw new ToolError(`Guarded identity is not supported for ${params.op}`);
+	}
+	if (typeof params.expectedId !== "string" || params.expectedId.length === 0) {
+		throw new ToolError("expectedId must be a non-empty string");
+	}
+	if (
+		typeof params.expectedGeneration !== "number" ||
+		!Number.isSafeInteger(params.expectedGeneration) ||
+		params.expectedGeneration <= 0
+	) {
+		throw new ToolError("expectedGeneration must be a positive safe integer");
+	}
+	return { expectedId: params.expectedId, expectedGeneration: params.expectedGeneration };
+}
+
 function operationFor(params: LaunchParams, session: ToolSession): DaemonOperation {
+	const guards = validateGuards(params);
 	switch (params.op) {
 		case "start":
 			return { op: "start", spec: commandSpec(params, session), owner: session.getSessionId?.() ?? undefined };
@@ -179,6 +207,7 @@ function operationFor(params: LaunchParams, session: ToolSession): DaemonOperati
 				for: params.for ?? "exit",
 				pattern: params.pattern,
 				timeoutMs: timeoutMs(params.timeout, 30),
+				...(guards ? guards : {}),
 			};
 		case "send":
 			return {
@@ -186,11 +215,17 @@ function operationFor(params: LaunchParams, session: ToolSession): DaemonOperati
 				name: requiredName(params),
 				data: sendData(params),
 				signal: params.signal,
+				...(guards ? guards : {}),
 			};
 		case "stop":
-			return { op: "stop", name: requiredName(params), timeoutMs: timeoutMs(params.timeout, 5) };
+			return {
+				op: "stop",
+				name: requiredName(params),
+				timeoutMs: timeoutMs(params.timeout, 5),
+				...(guards ? guards : {}),
+			};
 		case "restart":
-			return { op: "restart", name: requiredName(params) };
+			return { op: "restart", name: requiredName(params), ...(guards ? guards : {}) };
 		case "describe":
 			return { op: "describe", name: requiredName(params) };
 	}
@@ -342,7 +377,12 @@ async function toolDetails(result: DaemonRpcResult, params: LaunchParams): Promi
 		case "start":
 			return { op: "start", daemon: result.daemon, timedOut: result.readyTimedOut };
 		case "list":
-			return { op: "list", daemons: result.daemons, completions: result.completions };
+			return {
+				op: "list",
+				daemons: result.daemons,
+				completions: result.completions,
+				...(result.capabilities ? { capabilities: result.capabilities } : {}),
+			};
 		case "logs": {
 			const terminalRows =
 				result.terminalText === undefined

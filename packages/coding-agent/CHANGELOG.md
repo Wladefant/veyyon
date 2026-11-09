@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The `launch` tool and daemon broker support incarnation guards (`expectedId` and `expectedGeneration`) to prevent stale operations from targeting replaced daemons or newer generations ([Refs #1071](https://github.com/Wladefant/veyyon/issues/1071)).
+
 ## [1.8.17] - 2026-11-09
 
 ### Fixed
