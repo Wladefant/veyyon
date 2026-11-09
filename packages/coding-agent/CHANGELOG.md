@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Retained IRC turns ignore message IDs already present in durable context. Unseen late instructions still run and identify newer input from the same sender ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+
 ## [1.8.17] - 2026-11-09
 
 ### Fixed

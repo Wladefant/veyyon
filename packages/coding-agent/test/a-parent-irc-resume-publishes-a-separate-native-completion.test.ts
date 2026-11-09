@@ -204,10 +204,11 @@ describe("native retained child resume", () => {
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
 		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		const originalTs = 1700000000000;
 		const oldPhase = {
 			role: "custom" as const, customType: "irc:incoming", content: "Resume older phase B",
-			display: true, timestamp: Date.now(), attribution: "agent" as const,
-			details: { id: "resume-B", from: "owner", source: "agent", relation: "parent" },
+			display: true, timestamp: originalTs, attribution: "agent" as const,
+			details: { id: "resume-B", from: "owner", source: "agent", relation: "parent", sentAt: originalTs },
 		};
 		new IrcContinuationOutbox(child.store).begin("resume-B", oldPhase);
 		await child.store.ensureOnDisk();
@@ -228,6 +229,12 @@ describe("native retained child resume", () => {
 			expect.stringContaining('"value":"B"'), expect.stringContaining('"value":"C"'),
 		]);
 		expect(recovered.mock.calls).toHaveLength(2);
+		const resumed = recovered.instance.agent.state.messages.find(m =>
+			m.role === "custom" && Reflect.get(m.details ?? {}, "id") === "resume-B",
+		);
+		if (resumed?.role !== "custom") throw new Error("Expected recovered input");
+		expect(resumed?.timestamp).toBe(originalTs);
+		expect(Reflect.get(resumed?.details ?? {}, "sentAt")).toBe(originalTs);
 	});
 
 	it("replays a durable root continuation after reopen without duplicating its receipt", async () => {
@@ -321,5 +328,163 @@ describe("native retained child resume", () => {
 		expect(completion.details).toMatchObject({ resultSource: source });
 		expect(completion.content).toContain(`"source":"${source}"`);
 		expect(child.instance.agent.state.systemPrompt).toEqual(["Operator: production writes are forbidden."]);
+	});
+
+	it("does not create a turn or completion when replaying an already delivered parent message missing a continuation phase", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Received newer"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("newer-result")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		const oldRecord = {
+			role: "custom" as const,
+			customType: "irc:incoming",
+			content: "Already delivered old instruction",
+			display: true,
+			timestamp: 1000,
+			attribution: "agent" as const,
+			details: { id: "old", from: "owner", source: "agent", relation: "parent" },
+		};
+		child.store.appendCustomMessageEntry(
+			oldRecord.customType,
+			oldRecord.content,
+			oldRecord.display,
+			oldRecord.details,
+			oldRecord.attribution,
+		);
+		child.instance.agent.state.messages.push(oldRecord);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+
+		await child.instance.deliverIrcMessage({
+			id: "newer",
+			from: "owner",
+			to: "worker",
+			body: "Execute newer instruction",
+			ts: 2000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		await child.instance.dispose();
+		const reopened = await SessionManager.open(child.store.getSessionFile()!);
+		const recovered = await session("worker", [], reopened);
+		registry.attachSession("worker", recovered.instance, reopened.getSessionFile()!);
+
+		await recovered.instance.deliverIrcMessage({
+			id: "old",
+			from: "owner",
+			to: "worker",
+			body: "Replayed old instruction",
+			ts: 1000,
+		});
+		await recovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		expect(child.mock.calls).toHaveLength(1);
+		expect(recovered.mock.calls).toHaveLength(0);
+		const completions = parent.store.getEntries().flatMap(entry =>
+			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		expect(completions).toHaveLength(1);
+		expect(Reflect.get(completions[0]!.details ?? {}, "phaseId")).toBe("newer");
+		expect(completions[0]!.content).toContain('"value":"newer-result"');
+	});
+
+	it("executes out-of-order parent messages and marks late record with arrived-after metadata", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Handled both"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("newer-result"), yielded("late-result")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		await child.instance.deliverIrcMessage({
+			id: "newer-message",
+			from: "owner",
+			to: "worker",
+			body: "Execute newer instruction",
+			ts: 2000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		await child.instance.deliverIrcMessage({
+			id: "late-message",
+			from: "owner",
+			to: "worker",
+			body: "Execute older instruction",
+			ts: 1000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		expect(child.mock.calls).toHaveLength(2);
+		const completions = parent.store.getEntries().flatMap(entry =>
+			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		expect(completions).toHaveLength(2);
+		expect(completions.map(entry => Reflect.get(entry.details ?? {}, "phaseId"))).toEqual([
+			"newer-message",
+			"late-message",
+		]);
+
+		const lateRecord = child.instance.agent.state.messages.find(m =>
+			m.role === "custom" &&
+			(Reflect.get(m.details ?? {}, "phaseId") === "late-message" ||
+				Reflect.get(m.details ?? {}, "id") === "late-message"),
+		);
+		expect(lateRecord).toBeDefined();
+		if (lateRecord?.role !== "custom") throw new Error("Expected late input");
+		expect(lateRecord!.content).toContain("arrived after newer newer-message from same sender");
+		expect(lateRecord!.details).toMatchObject({
+			sentAt: 1000,
+			phaseId: "late-message",
+			arrivedAfter: "newer-message",
+		});
+	});
+
+	it("does not apply late marker when out-of-order timestamps come from different senders", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Result received"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("owner-result"), yielded("peer-result")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "peer", displayName: "Peer", kind: "sub", parentId: "owner", scope: "test", session: null });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		await child.instance.deliverIrcMessage({
+			id: "owner-msg-1",
+			from: "owner",
+			to: "worker",
+			body: "Instruction from owner",
+			ts: 2000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		await child.instance.deliverIrcMessage({
+			id: "peer-msg-2",
+			from: "peer",
+			to: "worker",
+			body: "Note from peer",
+			ts: 1000,
+		});
+		await child.instance.waitForIdle();
+
+		const peerRecord = child.instance.agent.state.messages.find(m =>
+			m.role === "custom" &&
+			(Reflect.get(m.details ?? {}, "id") === "peer-msg-2" ||
+				Reflect.get(m.details ?? {}, "phaseId") === "peer-msg-2"),
+		);
+		expect(peerRecord).toBeDefined();
+		if (peerRecord?.role !== "custom") throw new Error("Expected peer input");
+		expect(peerRecord!.content).not.toContain("arrived after newer");
+		expect(Reflect.get(peerRecord!.details ?? {}, "arrivedAfter")).toBeUndefined();
 	});
 });

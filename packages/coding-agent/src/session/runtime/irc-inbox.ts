@@ -160,6 +160,39 @@ export class IrcContinuationOutbox {
 		});
 	}
 
+	/** Describe late continuation input without treating independent instructions as replacements. */
+	withOrdering(record: CustomMessage): CustomMessage {
+		const from = Reflect.get(record.details ?? {}, "from");
+		const id = Reflect.get(record.details ?? {}, "id");
+		if (typeof from !== "string" || typeof id !== "string") return record;
+		let newerId: string | undefined;
+		let newerTimestamp = record.timestamp;
+		for (const entry of this.#store.getEntries()) {
+			if (entry.type !== "custom_message" ||
+				(entry.customType !== "irc:incoming" && entry.customType !== "task:continuation") ||
+				Reflect.get(entry.details ?? {}, "from") !== from) continue;
+			const candidateId = Reflect.get(entry.details ?? {}, "id");
+			const timestamp = Reflect.get(entry.details ?? {}, "sentAt") ?? new Date(entry.timestamp).getTime();
+			if (typeof candidateId === "string" && candidateId !== id &&
+				typeof timestamp === "number" && timestamp > newerTimestamp) {
+				newerId = candidateId;
+				newerTimestamp = timestamp;
+			}
+		}
+		return {
+			...record,
+			content: newerId
+				? `${record.content}\n[IRC ordering: sent at ${record.timestamp}; phase ${id}; arrived after newer ${newerId} from same sender. This does not establish supersession.]`
+				: record.content,
+			details: {
+				...(record.details && typeof record.details === "object" ? record.details : {}),
+				sentAt: record.timestamp,
+				phaseId: Reflect.get(record.details ?? {}, "phaseId") ?? id,
+				...(newerId ? { arrivedAfter: newerId } : {}),
+			},
+		};
+	}
+
 	#results(): IrcContinuation[] {
 		const results = new Map<string, IrcContinuation>();
 		for (const entry of this.#store.getEntries()) {

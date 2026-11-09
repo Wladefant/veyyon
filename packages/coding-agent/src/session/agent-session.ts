@@ -1018,6 +1018,16 @@ export class AgentSession {
 	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
 	 *  in effect, even though the wake left a provider-valid tail. */
 	#wakeForIrc(records: CustomMessage[], recovering = false): Promise<void> {
+		if (!this.#ircContinuations) {
+			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+		}
+		const outbox = this.#ircContinuations;
+		records = records.map(record =>
+			record.customType === "task:continuation" ||
+			Reflect.get(record.details ?? {}, "relation") === "parent"
+				? outbox.withOrdering(record)
+				: record,
+		);
 		const selfId = this.#config.agentId;
 		const parentRecord = records.find(
 			record =>
@@ -1040,10 +1050,6 @@ export class AgentSession {
 				: parentRecord
 					? Reflect.get(parentRecord.details ?? {}, "from")
 					: undefined;
-		if (!this.#ircContinuations) {
-			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
-		}
-		const outbox = this.#ircContinuations;
 		if (typeof phaseId === "string" && selfId) {
 			if (this.#ircActivePhase === phaseId) return Promise.resolve();
 			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord))
@@ -5813,7 +5819,16 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		const registry = AgentRegistry.global();
 		const identity = registry.actorContext(msg.to);
 		const relation = registry.relationTo(msg.to, msg.from);
-		const record: CustomMessage = {
+		if (!msg.completion && relation === "parent" && this.sessionManager.getEntries().some(entry =>
+			entry.type === "custom_message" && entry.customType === "irc:incoming" &&
+			Reflect.get(entry.details ?? {}, "from") === msg.from &&
+			Reflect.get(entry.details ?? {}, "id") === msg.id)) {
+			// Context is a durable delivery receipt even when no continuation phase was claimed.
+			await this.sessionManager.ensureOnDisk();
+			await this.sessionManager.sync();
+			return "injected";
+		}
+		let record: CustomMessage = {
 			role: "custom",
 			customType: msg.completion ? "task:continuation" : "irc:incoming",
 			content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
@@ -5837,6 +5852,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				id: msg.id,
 				from: msg.from,
 				message: msg.body,
+				sentAt: msg.ts,
+				phaseId: msg.id,
 				source: "agent",
 				relation,
 				...identity,
@@ -5855,6 +5872,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			timestamp: msg.ts,
 		};
 		if (msg.completion) {
+			record = this.#ircContinuations.withOrdering(record);
 			// Persist before acknowledging delivery. A sender crash may replay the same result.
 			this.#appendCustomMessageToContext(record);
 			this.sessionManager.flushSync();
