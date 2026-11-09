@@ -26,10 +26,10 @@ Use `bash` for commands that finish. Async bash remains appropriate for finite c
 | `start` | Launch a named process. | `name`, `application`, `args`, `env`, `cwd`, `pty`, `ready`, `restart`, `persist`, `detached` |
 | `list` | Snapshot every managed process in the current project scope. | none |
 | `logs` | Read, filter, or follow captured combined output. | `name`, `lines`, `head`, `grep`, `follow`, `cursor`, `timeout` |
-| `wait` | Wait for readiness, exit, or an output regex. | `name`, `for`, `pattern`, `timeout` |
-| `send` | Write stdin, terminal keys, or a process signal. | `name`, `text`, `enter`, `keys`, `signal` |
-| `stop` | Gracefully terminate the managed process tree, then hard-kill if needed. | `name`, `timeout` |
-| `restart` | Stop and relaunch using the retained launch specification. | `name` |
+| `wait` | Wait for readiness, exit, or an output regex. | `name`, `for`, `pattern`, `timeout`, `expectedId`, `expectedGeneration` |
+| `send` | Write stdin, terminal keys, or a process signal. | `name`, `text`, `enter`, `keys`, `signal`, `expectedId`, `expectedGeneration` |
+| `stop` | Gracefully terminate the managed process tree, then hard-kill if needed. | `name`, `timeout`, `expectedId`, `expectedGeneration` |
+| `restart` | Stop and relaunch using the retained launch specification. | `name`, `expectedId`, `expectedGeneration` |
 | `describe` | Show the retained launch specification and live state. | `name` |
 
 Names are stable and unique within one profile's project directory. Two profiles in the same directory have separate brokers and separate names. A live name must be stopped or restarted; starting a completed name creates a new launch and rotates its prior output log.
@@ -131,6 +131,41 @@ A process that dies to a signal nothing in veyyon sent is recorded as `terminate
 
 Automatic restarts use bounded exponential backoff up to 30 seconds. Explicit `stop` suppresses restart. `restart` always reuses the retained application, arguments, environment, working directory, PTY, readiness, persistence, and detached settings.
 
+## Guarded identity and incarnation control
+Control operations (`send`, `stop`, `wait`, `restart`) accept optional incarnation guards to guarantee operations act only on the intended daemon instance:
+- `expectedId`: the expected launch UUID (`id` from `DaemonSnapshot` / `DaemonCompletionRecord`).
+- `expectedGeneration`: the expected monotonic incarnation counter (`generation` from `DaemonSnapshot`, a positive safe integer).
+
+### Guard rules and validation
+- `expectedId` and `expectedGeneration` must be supplied together. Omitting either while supplying the other throws `expectedId and expectedGeneration must be supplied together`.
+- `expectedId` must be a non-empty string.
+- `expectedGeneration` must be a positive safe integer ($\ge 1$).
+- Other operations (`start`, `logs`, `list`, `describe`, `shutdown`) do not support guarded identity; supplying guard parameters to them throws an error.
+- When guards are present, the broker verifies both `snapshot.id === expectedId` and `snapshot.generation === expectedGeneration` (and that the live record has not been replaced). Any mismatch rejects the operation with `Daemon identity mismatch`.
+
+### Incarnation generation and restart behavior
+Each launch tracks a monotonic `daemon.generation` counter:
+- When admitted and spawned initially, a daemon starts at `generation: 1`.
+- When a live daemon restarts (via explicit `restart` or automatic restart policies `on-failure` / `always`), it retains its launch `id` but increments its `generation` ($N \to N+1$).
+- Guarded operations specifying the older generation $N$ fail with `Daemon identity mismatch`.
+- In-flight or pending guarded `wait` operations targeting generation $N$ reject with `Daemon identity mismatch` upon restart rather than following or waiting on the new generation.
+- When a daemon terminates and a replacement is started under the same name via `start`, the replacement receives a fresh launch `id` (at `generation: 1`). Guarded operations targeting the prior `id` fail with `Daemon identity mismatch`, preventing stale callers from signaling, stopping, waiting on, or restarting the replacement.
+
+### Probing capabilities before spawn
+A live broker supporting guarded identity announces the capability in the `list` response:
+- `list` tool details return `capabilities: { guardedIdentity: 1 }` (mirrored in wire `DaemonRpcResult` for `list`).
+- Callers should call `list` before spawn to inspect `details.capabilities.guardedIdentity === 1`.
+- This probe discovers whether the active running broker supports guarded identity before callers depend on it. Do not rely on an unverified claim about an installed runtime version: an existing background broker started before an update remains on its older binary until stopped; checking `capabilities.guardedIdentity` confirms live broker support.
+
+### Legacy snapshots and compatibility
+- Snapshots and completion records persisted before incarnation support was introduced lack the `generation` field (`generation` is `undefined`).
+- Legacy snapshots missing `generation` are unguardable: they cannot satisfy guarded control operations (which require a positive safe integer `expectedGeneration`) and can only be controlled using unguarded operations.
+
+### Wire protocol and fail-closed mechanism
+- On the socket wire, guarded operations are serialized inside a discriminator envelope: `{ op: "guarded", operation: ... }` (`DaemonGuardedWireOperation`).
+- Guard fields are forbidden on ordinary top-level wire operations; supplying them throws `Guard fields are not allowed on ordinary wire operations`.
+- When a guarded operation is sent to an older or unpatched broker daemon that lacks incarnation guard support, the legacy broker's operation dispatcher rejects the request with `Unknown daemon operation: guarded`. This guarantees that legacy brokers fail closed immediately, rather than silently stripping the guard fields and executing an unguarded operation against an unintended process.
+
 ## Errors and limits
 - Names must be 1-48 letters, numbers, dots, underscores, or hyphens.
 - `ready.port` must be an integer from 1 through 65535.
@@ -138,3 +173,6 @@ Automatic restarts use bounded exponential backoff up to 30 seconds. Explicit `s
 - Sending to a stopped managed process or to unavailable stdin is an error.
 - `logs`, `wait`, and `stop` timeouts are capped at one hour by the tool.
 - PTY process-group signaling is POSIX-native. Windows ConPTY accepts input and Ctrl-C; other POSIX signals become hard termination because Windows has no equivalent signal model.
+- Guarded operations require both `expectedId` (non-empty string) and `expectedGeneration` (positive safe integer) together.
+- Guarded identity or generation mismatch between expected parameters and the live/retained daemon throws `Daemon identity mismatch`.
+- Legacy daemon snapshots missing `generation` are unguardable.
