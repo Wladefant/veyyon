@@ -439,4 +439,132 @@ describe("a launched process that ends reports its exit", () => {
 		expect(await manager.drainDeliveries({ timeoutMs: 5_000 })).toBeTrue();
 		expect(delivered).toEqual([]);
 	}, 30_000);
+
+	it("retains exit watch when broker rejects guarded stop after external incarnation replacement", async () => {
+		const { dir, scriptPath } = await projectWith("setInterval(() => {}, 1000);\n");
+		const { tool, manager } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "external-replacement-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Simulate broker having replaced the daemon incarnation while local watch still references the old daemon.
+		// The broker rejects the guarded stop with an identity mismatch error.
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && "expectedId" in op && op.expectedId === daemon!.id) {
+				throw new Error(`Daemon identity mismatch: expected ${daemon!.id}:1, found ${daemon!.id}:2`);
+			}
+			return origRequest(op, signal);
+		};
+
+		// Now the tool attempts a guarded stop targeting the old incarnation which matches the local watcher
+		await expect(
+			tool.execute("call-2", {
+				op: "stop",
+				name: "external-replacement-mismatch",
+				expectedId: daemon!.id,
+				expectedGeneration: daemon!.generation,
+				timeout: 5,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The original watcher job MUST NOT have been cancelled by the rejected stop
+		expect(manager.getRunningJobs()).toHaveLength(1);
+	}, 30_000);
+
+	it("retains exit watch when broker rejects guarded restart after external incarnation replacement", async () => {
+		const { dir, scriptPath } = await projectWith("setInterval(() => {}, 1000);\n");
+		const { tool, manager } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "external-replacement-restart-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Simulate broker having replaced the daemon incarnation while local watch still references the old daemon.
+		// The broker rejects the guarded restart with an identity mismatch error.
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+		client.request = async (op, signal) => {
+			if (op.op === "restart" && "expectedId" in op && op.expectedId === daemon!.id) {
+				throw new Error(`Daemon identity mismatch: expected ${daemon!.id}:1, found ${daemon!.id}:2`);
+			}
+			return origRequest(op, signal);
+		};
+
+		// Now the tool attempts a guarded restart targeting the old incarnation which matches the local watcher
+		await expect(
+			tool.execute("call-2", {
+				op: "restart",
+				name: "external-replacement-restart-mismatch",
+				expectedId: daemon!.id,
+				expectedGeneration: daemon!.generation,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The original watcher job MUST NOT have been cancelled by the rejected restart
+		expect(manager.getRunningJobs()).toHaveLength(1);
+	}, 30_000);
+
+	it("watches the process a guarded restart put in place and does not cancel replacement watch", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("RUN " + (process.env.LAUNCH_RUN ?? "?"));\nsetInterval(() => {}, 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-cycled",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemonA = started.details?.daemon;
+		expect(daemonA?.id).toBeDefined();
+		expect(daemonA?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		const restarted = await tool.execute("call-2", {
+			op: "restart",
+			name: "guarded-cycled",
+			expectedId: daemonA!.id,
+			expectedGeneration: daemonA!.generation,
+		});
+		const daemonB = restarted.details?.daemon;
+		expect(daemonB?.id).toBeDefined();
+		expect(daemonB?.generation).not.toBe(daemonA!.generation);
+
+		// The restart itself is intentional: silent.
+		expect(delivered).toEqual([]);
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// The replacement watcher is intact: external kill reports exit
+		const described = await tool.execute("call-3", { op: "describe", name: "guarded-cycled" });
+		const pid = described.details?.daemon?.pid;
+		expect(typeof pid).toBe("number");
+		if (typeof pid === "number") {
+			process.kill(pid, "SIGTERM");
+		}
+
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]?.text).toContain("was terminated by SIGTERM");
+	}, 40_000);
 });

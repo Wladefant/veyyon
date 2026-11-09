@@ -30,7 +30,12 @@ import { resolveToCwd } from "../core/path-utils";
 import { checkPolysimMainArgv, checkPolysimMainDenial, type PolysimDenialResult } from "../core/polysim-main-guard";
 import { previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
-import { releaseLaunchExitWatch, watchLaunchedProcessExit } from "./launch-exit-watch";
+import {
+	cancelCapturedLaunchExitWatch,
+	type LaunchExitWatchPause,
+	pauseLaunchExitWatch,
+	watchLaunchedProcessExit,
+} from "./launch-exit-watch";
 import { readyPendingSummary } from "./launch-view";
 
 const launchSchema = toolSchema("launch", () =>
@@ -513,28 +518,38 @@ export class LaunchTool implements AgentTool<typeof launchSchema.value, LaunchTo
 			cleanupWaitMs: this.session.settings.get("launch.cleanupWaitMs"),
 		});
 		const operation = operationFor(params, this.session);
+		let watchPause: LaunchExitWatchPause | undefined;
 		if (params.op === "stop" || params.op === "restart") {
-			// The end of a process the caller asked to end is not news. Drop the
-			// watch before the request, so the exit it causes reports nothing.
-			// If guards are supplied, only drop if they target the watched incarnation.
+			// The end of a process the caller asked to end is not news. Pause watcher
+			// notification until broker outcome so intentional stop/restart stays silent.
+			// If guards are supplied, only pause/capture if they target the watched incarnation.
 			const expected =
 				params.expectedId !== undefined || params.expectedGeneration !== undefined
 					? { expectedId: params.expectedId, expectedGeneration: params.expectedGeneration }
 					: undefined;
-			releaseLaunchExitWatch(this.session, client.projectDir, requiredName(params), expected);
+			watchPause = pauseLaunchExitWatch(this.session, client.projectDir, requiredName(params), expected);
 		}
-		const result = await client.request(operation, signal);
-		if (result.op === "start" || result.op === "restart") {
-			watchLaunchedProcessExit({ session: this.session, client, daemon: result.daemon });
+		let success = false;
+		try {
+			const result = await client.request(operation, signal);
+			success = true;
+			if (watchPause?.captured) {
+				cancelCapturedLaunchExitWatch(this.session, client.projectDir, requiredName(params), watchPause.captured);
+			}
+			if (result.op === "start" || result.op === "restart") {
+				watchLaunchedProcessExit({ session: this.session, client, daemon: result.daemon });
+			}
+			return {
+				// Folded for the same reason bash and eval are: a test suite streamed
+				// through a launched process lands in context identically, and its
+				// per-test bookkeeping is re-read on every later turn. A no-op unless
+				// the output carries a real run's worth of pass/skip lines.
+				content: [{ type: "text", text: replaceTabs(foldToolOutputBookkeeping(toolContent(result, params)).text) }],
+				details: await toolDetails(result, params),
+			};
+		} finally {
+			watchPause?.resume();
 		}
-		return {
-			// Folded for the same reason bash and eval are: a test suite streamed
-			// through a launched process lands in context identically, and its
-			// per-test bookkeeping is re-read on every later turn. A no-op unless
-			// the output carries a real run's worth of pass/skip lines.
-			content: [{ type: "text", text: replaceTabs(foldToolOutputBookkeeping(toolContent(result, params)).text) }],
-			details: await toolDetails(result, params),
-		};
 	}
 }
 

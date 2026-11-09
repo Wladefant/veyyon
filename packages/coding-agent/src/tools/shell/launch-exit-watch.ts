@@ -27,10 +27,20 @@ const EXIT_WAIT_WINDOW_MS = 5 * 60_000;
 const EXIT_TAIL_LINES = 60;
 const EXIT_TAIL_BYTES = 8_000;
 
-interface LaunchWatchEntry {
+export interface LaunchWatchIdentity {
 	jobId: string;
 	id: string;
 	generation?: number;
+}
+
+interface LaunchWatchEntry extends LaunchWatchIdentity {
+	readonly gates: Set<Promise<void>>;
+	cancelled: boolean;
+}
+
+export interface LaunchExitWatchPause {
+	readonly captured?: LaunchWatchIdentity;
+	resume(): void;
 }
 
 /** `${projectDir}\0${name}` → watch entry, so a stop can find the watch to cancel. */
@@ -101,6 +111,7 @@ export function watchLaunchedProcessExit(options: {
 	const existing = watches.get(key);
 	if (existing && existing.id === daemon.id && existing.generation === daemon.generation) return;
 	if (existing) {
+		existing.cancelled = true;
 		watches.delete(key);
 		session.asyncJobManager?.cancel(existing.jobId);
 	}
@@ -108,19 +119,35 @@ export function watchLaunchedProcessExit(options: {
 	// manager and a broker that goes away all leave the process running and the
 	// caller able to reach it by name.
 	try {
+		const entry: LaunchWatchEntry = {
+			jobId: "",
+			id: daemon.id,
+			generation: daemon.generation,
+			gates: new Set(),
+			cancelled: false,
+		};
 		const jobId = manager.register(
 			"launch",
 			`${daemon.name} (launched process)`,
 			async ({ jobId, signal }) => {
 				try {
-					while (!signal.aborted) {
+					while (!signal.aborted && !entry.cancelled) {
 						const result = await client.request(
 							{ op: "wait", name: daemon.name, for: "exit", timeoutMs: EXIT_WAIT_WINDOW_MS },
 							signal,
 						);
 						if (result.op !== "wait") break;
 						if (result.timedOut) continue;
+
+						// Await outstanding notification gates before publishing and respect cancellation
+						while (entry.gates.size > 0 && !signal.aborted && !entry.cancelled) {
+							await Promise.allSettled(Array.from(entry.gates));
+						}
+						if (signal.aborted || entry.cancelled) break;
+
 						const notice = await exitNotice(client, result.daemon, signal);
+						if (signal.aborted || entry.cancelled) break;
+
 						// A process that did not end cleanly is a failed job, the same as a
 						// backgrounded command with a non-zero exit: the text is identical,
 						// the status is what a reader scanning the job list sees.
@@ -145,10 +172,71 @@ export function watchLaunchedProcessExit(options: {
 			},
 			{ ownerId: session.getAgentId?.() ?? undefined },
 		);
-		watches.set(key, { jobId, id: daemon.id, generation: daemon.generation });
+		entry.jobId = jobId;
+		watches.set(key, entry);
 	} catch (error) {
 		logger.debug("Launch exit watch not registered", { name: daemon.name, error: errorMessage(error) });
 	}
+}
+
+/**
+ * Pause watcher notification for an in-flight stop or restart until broker outcome.
+ * Captures matching watch identity and registers a pending gate. Returns a resume callback.
+ */
+export function pauseLaunchExitWatch(
+	session: ToolSession,
+	projectDir: string,
+	name: string,
+	expected?: { expectedId?: string; expectedGeneration?: number },
+): LaunchExitWatchPause {
+	const key = watchKey(projectDir, name);
+	const watch = watches.get(key);
+	if (!watch) {
+		return { resume: () => {} };
+	}
+	if (expected?.expectedId !== undefined && expected.expectedId !== watch.id) {
+		return { resume: () => {} };
+	}
+	if (expected?.expectedGeneration !== undefined && expected.expectedGeneration !== watch.generation) {
+		return { resume: () => {} };
+	}
+	const captured: LaunchWatchIdentity = {
+		jobId: watch.jobId,
+		id: watch.id,
+		generation: watch.generation,
+	};
+	let resolveGate: () => void = () => {};
+	const gate = new Promise<void>(resolve => {
+		resolveGate = resolve;
+	});
+	watch.gates.add(gate);
+	let resumed = false;
+	const resume = () => {
+		if (resumed) return;
+		resumed = true;
+		watch.gates.delete(gate);
+		resolveGate();
+	};
+	return { captured, resume };
+}
+
+/**
+ * Cancel only the captured matching watcher upon successful stop/restart.
+ * Avoids name-only cancellation of replacement watchers.
+ */
+export function cancelCapturedLaunchExitWatch(
+	session: ToolSession,
+	projectDir: string,
+	name: string,
+	captured: LaunchWatchIdentity,
+): void {
+	const key = watchKey(projectDir, name);
+	const watch = watches.get(key);
+	if (watch && watch.jobId === captured.jobId) {
+		watch.cancelled = true;
+		watches.delete(key);
+	}
+	session.asyncJobManager?.cancel(captured.jobId);
 }
 
 /** Drop the watch on `name`: its end was asked for, so it is not reported. */
@@ -163,6 +251,7 @@ export function releaseLaunchExitWatch(
 	if (watch === undefined) return;
 	if (expected?.expectedId !== undefined && expected.expectedId !== watch.id) return;
 	if (expected?.expectedGeneration !== undefined && expected.expectedGeneration !== watch.generation) return;
+	watch.cancelled = true;
 	watches.delete(key);
 	session.asyncJobManager?.cancel(watch.jobId);
 }
