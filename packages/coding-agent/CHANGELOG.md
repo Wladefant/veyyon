@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+## [1.8.22] - 2026-11-09
+
+### Fixed
+
+- Retained IRC turns ignore message IDs already present in durable context. Unseen late instructions still run and identify newer input from the same sender ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+- Parent IRC steering survives a restart before consumption, and continuation retries retain their durable recipient instead of duplicating delivery across ancestors ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+
+## [1.8.21] - 2026-11-09
+
+### Fixed
+
+- Send empty object for antigravity fetchAvailableModels ([PR #1061](https://github.com/Wladefant/veyyon/pull/1061)).
+
+## [1.8.20] - 2026-11-09
+
+### Added
+
+- `fsyncDirEntry` and `fsyncDirEntrySync` expose the atomic writer's existing directory-entry flush semantics for callers that must persist a newly created parent before publishing references.
+
+### Fixed
+
+- First-use session artifact storage flushes the parent session directory before reserving IDs or returning file-backed artifact references, refusing supported flush failures ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+## [1.8.19] - 2026-11-09
+
+### Fixed
+
+- The `launch` tool and daemon broker support incarnation guards (`expectedId` and `expectedGeneration`) to prevent stale operations from targeting replaced daemons or newer generations ([Refs #1071](https://github.com/Wladefant/veyyon/issues/1071)).
+
+## [1.8.18] - 2026-11-09
+
+### Fixed
+
+- Fixed the task-spawn executor cwd test fixture so the coding-agent type check reports no TS18048 errors ([PR #1075](https://github.com/Wladefant/veyyon/pull/1075)).
+
+## [1.8.17] - 2026-11-09
+
+### Fixed
+
+- The `read` tool verifies whether an NTFS alternate data stream exists before treating a selector-shaped Windows path as a literal file ([PR #1059](https://github.com/Wladefant/veyyon/pull/1059)).
+
 ## [1.8.16] - 2026-11-08
 
 ### Changed

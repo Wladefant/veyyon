@@ -18,10 +18,13 @@ import {
 	type DaemonOperation,
 	type DaemonRpcResult,
 	type DaemonWireResponse,
+	encodeDaemonOperation,
 	parseDaemonRetiringNotice,
 	parseDaemonRpcResult,
 	parseDaemonWireResponse,
 } from "./protocol";
+
+export { encodeDaemonOperation } from "./protocol";
 
 // How long a client waits to reach the LOCAL broker over its unix socket,
 // including spawning one if none is live. A loopback budget, unrelated to the
@@ -167,6 +170,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	async request(operation: DaemonOperation, signal?: AbortSignal): Promise<DaemonRpcResult> {
 		if (this.#closed) throw new Error("Daemon broker client is closed");
 		if (signal?.aborted) throw new Error("Daemon broker request aborted");
+		const wireOperation = encodeDaemonOperation(operation);
 		clearTimeout(this.#idleTimer);
 		this.#requestsInFlight++;
 		try {
@@ -184,7 +188,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				pending.removeAbort?.();
 				reject(new Error(`Daemon ${operation.op} request timed out`));
 			}, requestTimeoutMs(operation));
-			const line = `${JSON.stringify({ id, token: this.#token, operation })}\n`;
+			const line = `${JSON.stringify({ id, token: this.#token, operation: wireOperation })}\n`;
 			const pending: PendingRequest = { operation, line, resolve, reject, timer };
 			if (signal) {
 				const abort = (): void => {
