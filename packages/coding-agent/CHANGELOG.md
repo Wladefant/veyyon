@@ -12,6 +12,28 @@
 - Caller-bound archived-history index pages are byte- and entry-bounded, revision-pinned across continuation, and fail closed when the parked roster changes ([Refs #774]).
 - Archived-history capabilities are bound to the exact live AgentSession that owns the minting ToolSession, so a stale tool session cannot mint authority after same-transcript revival ([Refs #774]).
 - Archived-history indexes stop collecting at the first eligible ref beyond 100,000 before sorting or hashing the roster ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+## [1.8.22] - 2026-11-09
+
+### Fixed
+
+- Retained IRC turns ignore message IDs already present in durable context. Unseen late instructions still run and identify newer input from the same sender ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+- Parent IRC steering survives a restart before consumption, and continuation retries retain their durable recipient instead of duplicating delivery across ancestors ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+
+## [1.8.21] - 2026-11-09
+
+### Fixed
+
+- Send empty object for antigravity fetchAvailableModels ([PR #1061](https://github.com/Wladefant/veyyon/pull/1061)).
+
+## [1.8.20] - 2026-11-09
+
+### Added
+
+- `fsyncDirEntry` and `fsyncDirEntrySync` expose the atomic writer's existing directory-entry flush semantics for callers that must persist a newly created parent before publishing references.
+
+### Fixed
+
+- First-use session artifact storage flushes the parent session directory before reserving IDs or returning file-backed artifact references, refusing supported flush failures ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.8.19] - 2026-11-09
 
