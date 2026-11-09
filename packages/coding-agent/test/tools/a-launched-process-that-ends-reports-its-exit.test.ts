@@ -567,4 +567,187 @@ describe("a launched process that ends reports its exit", () => {
 		expect(delivered).toHaveLength(1);
 		expect(delivered[0]?.text).toContain("was terminated by SIGTERM");
 	}, 40_000);
+
+	it("suppresses exit notice when guarded stop succeeds while notice preparation logs RPC is delayed", async () => {
+		const { dir, scriptPath } = await projectWith('console.log("EXIT_OUTPUT");\nprocess.exit(0);\n');
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "delayed-logs-stop-race",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+
+		const logsStarted = Promise.withResolvers<void>();
+		const logsRelease = Promise.withResolvers<void>();
+		let logsIntercepted = false;
+
+		client.request = async (op, signal) => {
+			if (op.op === "logs" && op.name === "delayed-logs-stop-race" && !logsIntercepted) {
+				logsIntercepted = true;
+				logsStarted.resolve();
+				await logsRelease.promise;
+			}
+			return origRequest(op, signal);
+		};
+
+		// Intercept before starting or right after? If we intercept before, we must make sure logs intercept triggers
+		await logsStarted.promise;
+		expect(logsIntercepted).toBeTrue();
+		// Delay the stop result so stop pause gate is active while logs RPC finishes.
+		const stopEntered = Promise.withResolvers<void>();
+		const stopRelease = Promise.withResolvers<void>();
+
+		const preStopRequest = client.request;
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && op.name === "delayed-logs-stop-race") {
+				stopEntered.resolve();
+				await stopRelease.promise;
+			}
+			return preStopRequest(op, signal);
+		};
+
+		const stopPromise = tool.execute("call-2", {
+			op: "stop",
+			name: "delayed-logs-stop-race",
+			expectedId: daemon!.id,
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+
+		await stopEntered.promise;
+
+		// 1. Release the logs RPC first. The watcher finishes exitNotice while stop is still in flight.
+		logsRelease.resolve();
+
+		// Yield microtasks so the logs RPC response is processed by exitNotice and reaches the gate check
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// The notice must not be delivered yet while the stop gate is active
+		expect(delivered).toEqual([]);
+
+		// 2. Now let the stop complete successfully
+		stopRelease.resolve();
+		await stopPromise;
+		expect(manager.getRunningJobs()).toHaveLength(0);
+		await manager.waitForAll();
+		expect(await manager.drainDeliveries({ timeoutMs: 2_000 })).toBeTrue();
+		expect(delivered).toEqual([]);
+	}, 30_000);
+
+	it("delivers exit notice when rejected guarded stop is followed by logs resolution, but suppresses on overlapping successful control", async () => {
+		const { dir, scriptPath } = await projectWith('console.log("EXIT_OUTPUT_2");\nprocess.exit(0);\n');
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "delayed-logs-overlapping-controls",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+
+		const logsStarted = Promise.withResolvers<void>();
+		const logsRelease = Promise.withResolvers<void>();
+		let logsIntercepted = false;
+
+		client.request = async (op, signal) => {
+			if (op.op === "logs" && op.name === "delayed-logs-overlapping-controls" && !logsIntercepted) {
+				logsIntercepted = true;
+				logsStarted.resolve();
+				await logsRelease.promise;
+			}
+			return origRequest(op, signal);
+		};
+
+		await logsStarted.promise;
+
+		// Part A: Overlap an invalid/rejected guarded control while logs is in-flight.
+		// A rejected control should pause the gate, then resume it without cancelling the watch.
+		const rejectedEntered = Promise.withResolvers<void>();
+		const rejectedRelease = Promise.withResolvers<void>();
+
+		const preRejectedRequest = client.request;
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && op.name === "delayed-logs-overlapping-controls" && "expectedId" in op && op.expectedId === "wrong-id") {
+				rejectedEntered.resolve();
+				await rejectedRelease.promise;
+				throw new Error("Daemon identity mismatch: expected wrong-id:1, found actual");
+			}
+			return preRejectedRequest(op, signal);
+		};
+
+		const rejectedStopPromise = tool.execute("call-2", {
+			op: "stop",
+			name: "delayed-logs-overlapping-controls",
+			expectedId: "wrong-id",
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+
+		await rejectedEntered.promise;
+
+		// Also overlap a subsequent matching/successful guarded stop while logs is STILL in flight
+		const successEntered = Promise.withResolvers<void>();
+		const successRelease = Promise.withResolvers<void>();
+
+		const preSuccessRequest = client.request;
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && op.name === "delayed-logs-overlapping-controls" && "expectedId" in op && op.expectedId === daemon!.id) {
+				successEntered.resolve();
+				await successRelease.promise;
+			}
+			return preSuccessRequest(op, signal);
+		};
+
+		const successStopPromise = tool.execute("call-3", {
+			op: "stop",
+			name: "delayed-logs-overlapping-controls",
+			expectedId: daemon!.id,
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+
+		await successEntered.promise;
+
+		// Release the rejected stop first: it throws, resuming its gate
+		rejectedRelease.resolve();
+		await expect(rejectedStopPromise).rejects.toThrow(/Daemon identity mismatch/);
+
+		// Now release logs RPC while the successful stop is still pending
+		logsRelease.resolve();
+
+		// Yield microtasks so the logs RPC response is processed by exitNotice and reaches the gate check
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// No notice should be delivered because the successful stop's pause gate is still active!
+		expect(delivered).toEqual([]);
+
+		// Now let the successful stop complete
+		successRelease.resolve();
+		await successStopPromise;
+
+		// The successful control cancelled the watch, suppressing notice completely
+		expect(manager.getRunningJobs()).toHaveLength(0);
+		await manager.waitForAll();
+		expect(await manager.drainDeliveries({ timeoutMs: 2_000 })).toBeTrue();
+		expect(delivered).toEqual([]);
+	}, 30_000);
 });

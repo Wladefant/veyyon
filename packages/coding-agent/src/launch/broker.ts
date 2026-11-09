@@ -712,18 +712,31 @@ export class DaemonBroker {
 	}
 
 	async #start(spec: DaemonSpec, owner?: string): Promise<DaemonRpcResult> {
-		const record = await this.#serialized(spec.name, () => this.#admit(spec, owner));
+		const { record, expectedId, expectedGeneration } = await this.#serialized(spec.name, async () => {
+			const admitted = await this.#admit(spec, owner);
+			return {
+				record: admitted,
+				expectedId: admitted.snapshot.id,
+				expectedGeneration: admitted.generation,
+			};
+		});
+		const expectedGuard = { name: spec.name, expectedId, expectedGeneration };
 		let readyTimedOut = false;
 		if (spec.ready && !terminalState(record.snapshot.state)) {
 			await this.#waitUntil(
 				record,
-				() => record.snapshot.state === "ready" || this.#shuttingDown,
+				() => {
+					this.#assertExpected(expectedGuard, record);
+					return record.snapshot.state === "ready" || this.#shuttingDown;
+				},
 				spec.ready.timeoutMs,
 			);
+			this.#assertExpected(expectedGuard, record);
 			readyTimedOut = record.snapshot.state !== "ready" && !terminalState(record.snapshot.state);
 		}
 		await record.persistQueue;
-		return { op: "start", daemon: record.snapshot, readyTimedOut };
+		this.#assertExpected(expectedGuard, record);
+		return { op: "start", daemon: { ...record.snapshot }, readyTimedOut };
 	}
 
 	/** Validate `spec`, register a fresh record under its name, and launch its first generation. */
@@ -794,6 +807,10 @@ export class DaemonBroker {
 			}
 		}
 		syncReadyPending(record);
+		if (this.#shuttingDown) {
+			await record.log?.close();
+			throw new Error(DAEMON_BROKER_RETIRING_ERROR);
+		}
 		this.#records.set(spec.name, record);
 		await this.#launch(record);
 		return record;
@@ -1527,7 +1544,7 @@ export class DaemonBroker {
 			// The purged generation is over, so there is nothing to stop: launch its spec again.
 			const relaunched = await this.#admit(found.spec, found.owner);
 			await relaunched.persistQueue;
-			return { op: "restart", daemon: relaunched.snapshot };
+			return { op: "restart", daemon: { ...relaunched.snapshot } };
 		}
 		const record = found;
 		await this.#stopRecord(record, 2_000, {
@@ -1552,9 +1569,14 @@ export class DaemonBroker {
 			}
 		}
 		record.stopRequested = false;
+		if (this.#shuttingDown) {
+			await record.log?.close();
+			record.log = undefined;
+			throw new Error(DAEMON_BROKER_RETIRING_ERROR);
+		}
 		await this.#launch(record);
 		await record.persistQueue;
-		return { op: "restart", daemon: record.snapshot };
+		return { op: "restart", daemon: { ...record.snapshot } };
 	}
 
 	/**

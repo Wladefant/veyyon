@@ -139,15 +139,13 @@ export function watchLaunchedProcessExit(options: {
 						if (result.op !== "wait") break;
 						if (result.timedOut) continue;
 
+						const notice = await exitNotice(client, result.daemon, signal);
+
 						// Await outstanding notification gates before publishing and respect cancellation
 						while (entry.gates.size > 0 && !signal.aborted && !entry.cancelled) {
 							await Promise.allSettled(Array.from(entry.gates));
 						}
 						if (signal.aborted || entry.cancelled) break;
-
-						const notice = await exitNotice(client, result.daemon, signal);
-						if (signal.aborted || entry.cancelled) break;
-
 						// A process that did not end cleanly is a failed job, the same as a
 						// backgrounded command with a non-zero exit: the text is identical,
 						// the status is what a reader scanning the job list sees.
