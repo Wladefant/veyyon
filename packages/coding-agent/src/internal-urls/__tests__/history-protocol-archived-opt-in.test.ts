@@ -69,7 +69,7 @@ function makeToolSession(
   getSessionId: () => string | null,
   registry: AgentRegistry = AgentRegistry.global(),
 ): ToolSession {
-  const ownerSession = registry.get(id)?.session ?? undefined;
+  const ownerSession = registry.get?.(id)?.session ?? undefined;
   return {
     cwd: process.cwd(),
     settings: { get: () => undefined },
@@ -152,7 +152,14 @@ async function archive(
   const file = path.join(dir, id + ".jsonl");
   const lines = [
     JSON.stringify({ type: "session", id: sessionId }),
-    ...entries.map(entry => JSON.stringify({ type: "message", ...entry })),
+    ...entries.map(entry =>
+      JSON.stringify({
+        type: "message",
+        id: entry.id,
+        parentId: entry.parentId,
+        message: { role: "user", content: [{ type: "text", text: entry.message }] },
+      }),
+    ),
   ];
   await fs.writeFile(file, lines.join("\n") + "\n");
   return file;
@@ -528,17 +535,26 @@ describe("history:// caller-bound archived opt-in", () => {
       authStorage = await AuthStorage.create(temp.join("testauth.db"));
       authStorage.setRuntimeApiKey("openai", "test-key");
 
+      const sessionFile = SessionManager.createEmptySessionFile(cwd);
       first = await createSessionWithReadTool(
         cwd,
         temp.path(),
         authStorage,
-        SessionManager.create(cwd, temp.join("sessions")),
+        await SessionManager.open(sessionFile, undefined, undefined, {
+          initialCwd: cwd,
+          suppressBreadcrumb: true,
+        }),
       );
       const sessionId = first.result.session.sessionManager.getSessionId();
-      const sessionFile = first.result.session.sessionManager.getSessionFile();
+      expect(first.result.session.sessionManager.getSessionFile()).toBe(sessionFile);
       expect(sessionId).toBeTruthy();
       expect(sessionFile).toBeTruthy();
       expect(first.toolSession.getOwningAgentSession?.()).toBe(first.result.session);
+      first.result.session.sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: "same-transcript revival marker" }],
+      });
+      await first.result.session.sessionManager.flush();
       const beforeRevival = createHistoryCallerCapability(first.toolSession);
       expect(beforeRevival).toBeDefined();
 
@@ -647,6 +663,60 @@ describe("history:// caller-bound archived opt-in", () => {
       expect(exact.fragment).toContain("same-scope evidence");
     } finally {
       await temp.remove();
+    }
+  });
+
+  it("accepts an exact limit roster of 100,000 eligible parked same-scope refs", async () => {
+    registerLiveRef("main:a", "session-a", "session-a");
+    const caller = makeToolSession("main:a", () => "session-a");
+
+    for (let i = 0; i < 100_000; i++) {
+      registerArchivedRef("Archived-" + String(i).padStart(6, "0"), "session-a", "/synthetic/" + i + ".jsonl");
+    }
+
+    const firstPage = await read(caller, "history://?archived=1");
+    expect(firstPage).toContain("Showing 50 of 100000 parked agents (offset 0).");
+  });
+
+  it("rejects a roster with 100,001 eligible parked same-scope refs before sorting/digest and forbids eager registry.list", async () => {
+    registerLiveRef("main:a", "session-a", "session-a");
+    const caller = makeToolSession("main:a", () => "session-a");
+
+    for (let i = 0; i < 100_001; i++) {
+      registerArchivedRef("Archived-" + String(i).padStart(6, "0"), "session-a", "/synthetic/" + i + ".jsonl");
+    }
+    const firstRef = AgentRegistry.global().get("Archived-000000")!;
+    Object.defineProperty(firstRef, "id", {
+      get() {
+        throw new Error("Overflow roster sorted or hashed before refusal");
+      },
+    });
+
+    const poisonRef = AgentRegistry.global().register({
+      id: "zzz-poison-tail",
+      displayName: "zzz-poison-tail",
+      kind: "sub",
+      session: null,
+      sessionFile: "/synthetic/poison.jsonl",
+      scope: "session-a",
+      status: "parked",
+    });
+    for (const prop of ["kind", "status", "scope", "sessionFile", "id", "lastActivity"] as const) {
+      Object.defineProperty(poisonRef, prop, {
+        get() {
+          throw new Error(`Poison-tail ref inspected property '${prop}' after cap`);
+        },
+      });
+    }
+
+    const listSpy = spyOn(AgentRegistry.prototype, "list").mockImplementation(() => {
+      throw new Error("Eager registry.list() snapshot is forbidden; use lazy iteration");
+    });
+
+    try {
+      await expect(read(caller, "history://?archived=1")).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+    } finally {
+      listSpy.mockRestore();
     }
   });
 

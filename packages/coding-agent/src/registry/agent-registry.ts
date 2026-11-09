@@ -687,6 +687,11 @@ export class AgentRegistry {
 		return Array.from(this.#refs.values());
 	}
 
+	/** Iterate the current registry without allocating a complete roster snapshot. */
+	values(): IterableIterator<AgentRef> {
+		return this.#refs.values();
+	}
+
 	/**
 	 * Number of spawned task agents with a turn currently executing in `scope`, and,
 	 * when `under` is given, below that agent in the spawn tree.

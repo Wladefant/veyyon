@@ -47,6 +47,9 @@ unscoped, or unregistered disk-only targets fail with the same unavailable
 diagnostic. A case-folded alias is refused when more than one registered
 identity matches; an exact ID in the caller's scope remains usable.
 
+The index iterates the registry without copying the full roster.
+It refuses the first eligible ref beyond 100,000 before sorting or hashing the collected refs.
+
 This is a per-read capability, not a settings change or default. Ordinary
 `history://` behavior and its multi-conversation refusal remain unchanged, as
 do context-free completions when multiple scopes survive. The separate #780

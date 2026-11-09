@@ -25,6 +25,8 @@ import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 import {
+	type ExactHistoryRequest,
+	type HistorySearchRequest,
 	parseExactHistoryRequest,
 	parseHistorySearchRequest,
 	readLiveHistoryEntry,
@@ -33,7 +35,7 @@ import {
 	searchStoredHistoryEntries,
 } from "./history-exact";
 import { ambiguousSessionFileIds, sessionFilesFromDisk } from "./registry-helpers";
-import { resolveHistoryCallerCapability } from "./history-caller";
+import { resolveHistoryCallerCapability, type ResolvedHistoryCaller } from "./history-caller";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 /** Humanize a last-activity timestamp as `Ns/Nm/Nh/Nd ago`. */
@@ -83,12 +85,11 @@ const MAX_ARCHIVED_INDEX_ENTRIES = 100_000;
 const MAX_ARCHIVED_INDEX_ID_BYTES = 1_024;
 const MAX_ARCHIVED_INDEX_PAGE_BYTES = 24_000;
 
-type ResolvedHistoryCaller = NonNullable<ReturnType<typeof resolveHistoryCallerCapability>>;
 type ArchivedIndexRequest = { offset: number; limit: number; revision?: string };
 type ArchivedHistoryMode =
   | { kind: "index"; request: ArchivedIndexRequest }
-  | { kind: "exact"; request: NonNullable<ReturnType<typeof parseExactHistoryRequest>> }
-  | { kind: "search"; request: NonNullable<ReturnType<typeof parseHistorySearchRequest>> };
+  | { kind: "exact"; request: ExactHistoryRequest }
+  | { kind: "search"; request: HistorySearchRequest };
 
 function archivedUnavailable(): never {
   throw new Error(ARCHIVED_HISTORY_UNAVAILABLE);
@@ -199,20 +200,22 @@ function archivedTargetForCaller(caller: ResolvedHistoryCaller, agentId: string)
 }
 
 /** A bounded, revision-pinned same-scope parked-agent index. */
-function renderArchivedIndex(refs: AgentRef[], scope: string, request: ArchivedIndexRequest): string {
-  const entries = refs
-    .filter(
-      ref =>
-        ref.kind !== "advisor" &&
-        ref.scope === scope &&
-        ref.status === "parked" &&
-        ref.session === null &&
-        typeof ref.sessionFile === "string" &&
-        ref.sessionFile.trim().length > 0,
-    )
-    .sort((a, b) => a.id.localeCompare(b.id));
-
-  if (entries.length > MAX_ARCHIVED_INDEX_ENTRIES) return archivedUnavailable();
+function renderArchivedIndex(refs: Iterable<AgentRef>, scope: string, request: ArchivedIndexRequest): string {
+  const entries: AgentRef[] = [];
+  for (const ref of refs) {
+    if (
+      ref.kind === "advisor" ||
+      ref.scope !== scope ||
+      ref.status !== "parked" ||
+      ref.session !== null ||
+      typeof ref.sessionFile !== "string" ||
+      ref.sessionFile.trim().length === 0
+    ) continue;
+    // Refuse the first excess entry before retaining, sorting, or hashing it.
+    if (entries.length === MAX_ARCHIVED_INDEX_ENTRIES) return archivedUnavailable();
+    entries.push(ref);
+  }
+  entries.sort((a, b) => a.id.localeCompare(b.id));
   if (entries.some(ref => Buffer.byteLength(ref.id, "utf-8") > MAX_ARCHIVED_INDEX_ID_BYTES)) {
     return archivedUnavailable();
   }
@@ -284,7 +287,7 @@ async function resolveArchivedHistory(
   if (!caller) return archivedUnavailable();
 
   if (mode.kind === "index") {
-    const content = renderArchivedIndex(caller.registry.list(), caller.scope, mode.request);
+    const content = renderArchivedIndex(caller.registry.values(), caller.scope, mode.request);
     return {
       url: url.href,
       content,
