@@ -150,12 +150,17 @@ export class IrcContinuationOutbox {
 	/** Retained native input lets activation recover a phase interrupted before its result was saved. */
 	unfinished(): CustomMessage[] {
 		const completed = new Set(this.#results().map(result => result.phaseId));
+		const consumedSteers = new Set(this.#store.getEntries().flatMap(entry =>
+			entry.type === "custom_message" && entry.customType === "irc:incoming" &&
+			Reflect.get(entry.details ?? {}, "streamingSteer") === true
+				? [Reflect.get(entry.details ?? {}, "id")] : []));
 		return this.#store.getEntries().flatMap(entry => {
 			if (entry.type !== "custom" || entry.customType !== "irc:continuation-phase" ||
 				!entry.data || typeof entry.data !== "object" || Reflect.get(entry.data, "version") !== 1) return [];
 			const phaseId = Reflect.get(entry.data, "phaseId");
 			const record = Reflect.get(entry.data, "record") as CustomMessage | undefined;
-			return typeof phaseId === "string" && !completed.has(phaseId) && record?.role === "custom" &&
+			return typeof phaseId === "string" && !completed.has(phaseId) && !consumedSteers.has(phaseId) &&
+				record?.role === "custom" &&
 				(record.customType === "irc:incoming" || record.customType === "task:continuation") ? [record] : [];
 		});
 	}
@@ -264,6 +269,34 @@ export class IrcContinuationOutbox {
 			entry.type === "custom" && entry.customType === "irc:continuation-delivered" &&
 			typeof entry.data === "string" ? [entry.data] : []));
 		return this.#results().filter(result => !acknowledged.has(result.id));
+	}
+
+	/** A recipient owns an attempted delivery even if its acknowledgement is lost.
+	 * Failover is safe only before sending; an unavailable owner leaves the result pending. */
+	deliveryTarget(completionId: string): string | undefined {
+		for (const entry of this.#store.getEntries()) {
+			if (entry.type !== "custom" || entry.customType !== "irc:continuation-target" ||
+				!entry.data || typeof entry.data !== "object" ||
+				Reflect.get(entry.data, "version") !== 1 ||
+				Reflect.get(entry.data, "completionId") !== completionId) continue;
+			const target = Reflect.get(entry.data, "parentId");
+			if (typeof target === "string") return target;
+		}
+		return undefined;
+	}
+
+	async claimDeliveryTarget(completionId: string, parentId: string): Promise<string> {
+		const existing = this.deliveryTarget(completionId);
+		if (existing) {
+			await this.#store.ensureOnDisk();
+			await this.#store.sync();
+			return existing;
+		}
+		this.#store.appendCustomEntry("irc:continuation-target", { version: 1, completionId, parentId });
+		this.#store.flushSync();
+		await this.#store.ensureOnDisk();
+		await this.#store.sync();
+		return parentId;
 	}
 
 	/** The receiver durably deduplicates before accepting; a crash before this ack safely replays. */
