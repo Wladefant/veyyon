@@ -5,6 +5,13 @@
 ### Fixed
 
 - Exact stored-history reads and searches reject JSON-structural fragments before session headers, including identity-bearing object suffixes after unmatched closers or metadata prefixes and nested array/scalar prefixes after malformed non-JSON framing, and reject duplicate entry-ID claims regardless of malformed parent type or record order. They preserve punctuation-bearing legacy title lines, plain non-JSON siblings and malformed nested metadata once a root entry type disambiguates it; repeated identity fields, unaddressable IDs, oversized session-ID or record-type metadata, and implicit branch selection after unreadable records still fail closed.
+## [1.8.22] - 2026-11-09
+
+### Fixed
+
+- Retained IRC turns ignore message IDs already present in durable context. Unseen late instructions still run and identify newer input from the same sender ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+- Parent IRC steering survives a restart before consumption, and continuation retries retain their durable recipient instead of duplicating delivery across ancestors ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+
 ## [1.8.21] - 2026-11-09
 
 ### Fixed

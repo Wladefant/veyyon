@@ -2,7 +2,7 @@
  * The A artifact below is manually seeded; this suite does not test the initial executor fixture.
  * Exercise real Agent, native YieldTool, session persistence and IrcBus. Only the provider is scripted.
  * Gap: this proves transport, not a live model's interpretation of operational instructions. */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
@@ -23,12 +23,13 @@ import { YieldTool } from "../src/tools/agent/yield";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
-const resources: { session: AgentSession; auth: AuthStorage; temp: TempDir }[] = [];
+const resources: { session?: AgentSession; auth?: AuthStorage; temp: TempDir }[] = [];
 afterEach(async () => {
+	vi.restoreAllMocks();
 	const completed = resources.splice(0);
 	for (const resource of completed) {
-		await resource.session.dispose();
-		resource.auth.close();
+		if (resource.session) await resource.session.dispose();
+		if (resource.auth) resource.auth.close();
 	}
 	for (const resource of completed) resource.temp.removeSync();
 	AgentRegistry.resetGlobalForTests();
@@ -204,10 +205,11 @@ describe("native retained child resume", () => {
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
 		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		const originalTs = 1700000000000;
 		const oldPhase = {
 			role: "custom" as const, customType: "irc:incoming", content: "Resume older phase B",
-			display: true, timestamp: Date.now(), attribution: "agent" as const,
-			details: { id: "resume-B", from: "owner", source: "agent", relation: "parent" },
+			display: true, timestamp: originalTs, attribution: "agent" as const,
+			details: { id: "resume-B", from: "owner", source: "agent", relation: "parent", sentAt: originalTs },
 		};
 		new IrcContinuationOutbox(child.store).begin("resume-B", oldPhase);
 		await child.store.ensureOnDisk();
@@ -228,6 +230,12 @@ describe("native retained child resume", () => {
 			expect.stringContaining('"value":"B"'), expect.stringContaining('"value":"C"'),
 		]);
 		expect(recovered.mock.calls).toHaveLength(2);
+		const resumed = recovered.instance.agent.state.messages.find(m =>
+			m.role === "custom" && Reflect.get(m.details ?? {}, "id") === "resume-B",
+		);
+		if (resumed?.role !== "custom") throw new Error("Expected recovered input");
+		expect(resumed?.timestamp).toBe(originalTs);
+		expect(Reflect.get(resumed?.details ?? {}, "sentAt")).toBe(originalTs);
 	});
 
 	it("replays a durable root continuation after reopen without duplicating its receipt", async () => {
@@ -321,5 +329,353 @@ describe("native retained child resume", () => {
 		expect(completion.details).toMatchObject({ resultSource: source });
 		expect(completion.content).toContain(`"source":"${source}"`);
 		expect(child.instance.agent.state.systemPrompt).toEqual(["Operator: production writes are forbidden."]);
+	});
+
+	it("does not create a turn or completion when replaying an already delivered parent message missing a continuation phase", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Received newer"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("newer-result")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		const oldRecord = {
+			role: "custom" as const,
+			customType: "irc:incoming",
+			content: "Already delivered old instruction",
+			display: true,
+			timestamp: 1000,
+			attribution: "agent" as const,
+			details: { id: "old", from: "owner", source: "agent", relation: "parent" },
+		};
+		child.store.appendCustomMessageEntry(
+			oldRecord.customType,
+			oldRecord.content,
+			oldRecord.display,
+			oldRecord.details,
+			oldRecord.attribution,
+		);
+		child.instance.agent.state.messages.push(oldRecord);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+
+		await child.instance.deliverIrcMessage({
+			id: "newer",
+			from: "owner",
+			to: "worker",
+			body: "Execute newer instruction",
+			ts: 2000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		await child.instance.dispose();
+		const reopened = await SessionManager.open(child.store.getSessionFile()!);
+		const recovered = await session("worker", [], reopened);
+		registry.attachSession("worker", recovered.instance, reopened.getSessionFile()!);
+
+		await recovered.instance.deliverIrcMessage({
+			id: "old",
+			from: "owner",
+			to: "worker",
+			body: "Replayed old instruction",
+			ts: 1000,
+		});
+		await recovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		expect(child.mock.calls).toHaveLength(1);
+		expect(recovered.mock.calls).toHaveLength(0);
+		const completions = parent.store.getEntries().flatMap(entry =>
+			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		expect(completions).toHaveLength(1);
+		expect(Reflect.get(completions[0]!.details ?? {}, "phaseId")).toBe("newer");
+		expect(completions[0]!.content).toContain('"value":"newer-result"');
+	});
+
+	it("executes out-of-order parent messages and marks late record with arrived-after metadata", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Handled both"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("newer-result"), yielded("late-result")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		await child.instance.deliverIrcMessage({
+			id: "newer-message",
+			from: "owner",
+			to: "worker",
+			body: "Execute newer instruction",
+			ts: 2000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		await child.instance.deliverIrcMessage({
+			id: "late-message",
+			from: "owner",
+			to: "worker",
+			body: "Execute older instruction",
+			ts: 1000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		expect(child.mock.calls).toHaveLength(2);
+		const completions = parent.store.getEntries().flatMap(entry =>
+			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		expect(completions).toHaveLength(2);
+		expect(completions.map(entry => Reflect.get(entry.details ?? {}, "phaseId"))).toEqual([
+			"newer-message",
+			"late-message",
+		]);
+
+		const lateRecord = child.instance.agent.state.messages.find(m =>
+			m.role === "custom" &&
+			(Reflect.get(m.details ?? {}, "phaseId") === "late-message" ||
+				Reflect.get(m.details ?? {}, "id") === "late-message"),
+		);
+		expect(lateRecord).toBeDefined();
+		if (lateRecord?.role !== "custom") throw new Error("Expected late input");
+		expect(lateRecord!.content).toContain("arrived after newer newer-message from same sender");
+		expect(lateRecord!.details).toMatchObject({
+			sentAt: 1000,
+			phaseId: "late-message",
+			arrivedAfter: "newer-message",
+		});
+	});
+
+	it("does not apply late marker when out-of-order timestamps come from different senders", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Result received"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("owner-result"), yielded("peer-result")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "peer", displayName: "Peer", kind: "sub", parentId: "owner", scope: "test", session: null });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		await child.instance.deliverIrcMessage({
+			id: "owner-msg-1",
+			from: "owner",
+			to: "worker",
+			body: "Instruction from owner",
+			ts: 2000,
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		await child.instance.deliverIrcMessage({
+			id: "peer-msg-2",
+			from: "peer",
+			to: "worker",
+			body: "Note from peer",
+			ts: 1000,
+		});
+		await child.instance.waitForIdle();
+
+		const peerRecord = child.instance.agent.state.messages.find(m =>
+			m.role === "custom" &&
+			(Reflect.get(m.details ?? {}, "id") === "peer-msg-2" ||
+				Reflect.get(m.details ?? {}, "phaseId") === "peer-msg-2"),
+		);
+		expect(peerRecord).toBeDefined();
+		if (peerRecord?.role !== "custom") throw new Error("Expected peer input");
+		expect(peerRecord!.content).not.toContain("arrived after newer");
+		expect(Reflect.get(peerRecord!.details ?? {}, "arrivedAfter")).toBeUndefined();
+	});
+	it("claims a durable phase before streaming steer and recovers unconsumed steer without duplicate execution", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Handled B"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		child.instance.agent.state.isStreaming = true;
+		const heldSteers: unknown[] = [];
+		spyOn(child.instance.agent, "steer").mockImplementation((record: unknown) => {
+			heldSteers.push(record);
+		});
+
+		const resume = {
+			id: "streaming-resume-1",
+			from: "owner",
+			to: "worker",
+			body: "Phase two streaming instruction",
+			ts: 1700000001000,
+		};
+
+		await Promise.all([
+			child.instance.deliverIrcMessage(resume),
+			child.instance.deliverIrcMessage(resume),
+		]);
+
+		expect(heldSteers).toHaveLength(1);
+		const outbox = new IrcContinuationOutbox(child.store);
+		expect(outbox.hasPhase("streaming-resume-1")).toBe(true);
+
+		const phaseEntry = child.store.getEntries().find(entry =>
+			entry.type === "custom" &&
+			entry.customType === "irc:continuation-phase" &&
+			Reflect.get(entry.data ?? {}, "phaseId") === "streaming-resume-1",
+		);
+		expect(phaseEntry).toBeDefined();
+		if (!phaseEntry || phaseEntry.type !== "custom") throw new Error("Expected custom phase entry");
+		const phaseData = phaseEntry.data;
+		const record = phaseData ? Reflect.get(phaseData, "record") : undefined;
+		expect(record).toBeDefined();
+		const details = record ? Reflect.get(record, "details") : undefined;
+		expect(details ? Reflect.get(details, "streamingSteer") : undefined).toBe(true);
+
+		await child.instance.dispose();
+		const reopened = await SessionManager.open(child.store.getSessionFile()!);
+		const recovered = await session("worker", [yielded("B")], reopened);
+		registry.attachSession("worker", recovered.instance, reopened.getSessionFile()!);
+
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		expect(recovered.mock.calls).toHaveLength(1);
+		await recovered.instance.deliverIrcMessage(resume);
+		await recovered.instance.waitForIdle();
+		expect(recovered.mock.calls).toHaveLength(1);
+
+		const completions = parent.store.getEntries().filter(entry =>
+			entry.type === "custom_message" && entry.customType === "task:continuation",
+		);
+		expect(completions).toHaveLength(1);
+		const firstCompletion = completions[0];
+		if (!firstCompletion || firstCompletion.type !== "custom_message") throw new Error("Expected completion entry");
+		expect(Reflect.get(firstCompletion.details ?? {}, "phaseId")).toBe("streaming-resume-1");
+	});
+
+	it("ignores streamingSteer phase claim during replay when matching custom_message receipt exists", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Parent ack"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+
+		const outbox = new IrcContinuationOutbox(child.store);
+		const phaseId = "stream-consumed-phase";
+		const record = {
+			role: "custom" as const,
+			customType: "irc:incoming" as const,
+			content: "Steered content",
+			display: true,
+			timestamp: Date.now(),
+			attribution: "agent" as const,
+			details: { id: phaseId, from: "owner", source: "agent", streamingSteer: true },
+		};
+		outbox.begin(phaseId, record);
+
+		child.store.appendCustomMessageEntry(
+			"irc:incoming",
+			"Steered content",
+			true,
+			{ id: phaseId, from: "owner", source: "agent", streamingSteer: true },
+			"agent",
+		);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+
+		const unfinished = outbox.unfinished();
+		expect(unfinished.map(m => Reflect.get(m.details ?? {}, "id"))).not.toContain(phaseId);
+
+		await child.instance.replayIrcContinuations();
+		await child.instance.waitForIdle();
+		expect(child.mock.calls).toHaveLength(0);
+	});
+
+	it("pins continuation delivery target to initial parent and avoids reassigning to root after crash", async () => {
+		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		const root = await session("root", [{ content: ["Root response"], stopReason: "stop" }]);
+		const parent = await session("parent", [{ content: ["Parent received"], stopReason: "stop" }]);
+		const child = await session("child", [yielded("child-completion")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({ id: "parent", displayName: "Parent", kind: "sub", parentId: "root", scope: "tree", session: parent.instance });
+		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "tree", session: child.instance });
+
+		const outbox = new IrcContinuationOutbox(child.store);
+		const completion = await outbox.complete("child", "parent", "p2-phase-1", JSON.stringify({ value: "child-completion" }));
+
+		const originalAppend = child.store.appendCustomEntry.bind(child.store);
+		const appendSpy = spyOn(child.store, "appendCustomEntry").mockImplementation((type: string, data: unknown) => {
+			if (type === "irc:continuation-delivered") {
+				throw new Error("Simulated disk error while recording delivery ack");
+			}
+			return originalAppend(type, data);
+		});
+
+		await expect(child.instance.replayIrcContinuations()).rejects.toThrow("Simulated disk error");
+
+		const reopenedParent = await SessionManager.open(parent.store.getSessionFile()!);
+		const parentCompletions = reopenedParent.getEntries().filter(e =>
+			e.type === "custom_message" && e.customType === "task:continuation",
+		);
+		expect(parentCompletions).toHaveLength(1);
+
+		appendSpy.mockRestore();
+
+		await child.instance.dispose();
+		const reopened = await SessionManager.open(child.store.getSessionFile()!);
+		const recoveredChild = await session("child", [], reopened);
+		registry.attachSession("child", recoveredChild.instance, reopened.getSessionFile()!);
+
+		const parentEntry = registry.get("parent");
+		if (parentEntry) parentEntry.status = "aborted";
+
+		await recoveredChild.instance.replayIrcContinuations();
+		await root.instance.waitForIdle();
+
+		const rootCompletionsFromChild = root.store.getEntries().filter(e =>
+			e.type === "custom_message" && e.customType === "task:continuation" &&
+			(Reflect.get(e.details ?? {}, "from") === "child" ||
+				Reflect.get(e.details ?? {}, "completionId") === completion.id),
+		);
+		expect(rootCompletionsFromChild).toHaveLength(0);
+
+		const reopenedOutbox = new IrcContinuationOutbox(recoveredChild.store);
+		expect(reopenedOutbox.deliveryTarget(completion.id)).toBe("parent");
+		expect(reopenedOutbox.pending().some(item => item.id === completion.id)).toBe(true);
+	});
+
+	it("does not annotate arrivedAfter in withOrdering when newer entry is from a different sender", async () => {
+		const temp = TempDir.createSync("ordering-sender-isolation-");
+		const store = SessionManager.create(temp.path(), temp.path());
+		resources.push({ temp });
+
+		store.appendCustomMessageEntry(
+			"irc:incoming",
+			"Message from peer",
+			true,
+			{ from: "peer", id: "peer-newer", sentAt: 5000 },
+			"agent",
+		);
+		await store.ensureOnDisk();
+		await store.sync();
+
+		const outbox = new IrcContinuationOutbox(store);
+		const record = {
+			role: "custom" as const,
+			customType: "irc:incoming" as const,
+			content: "Message from owner",
+			display: true,
+			timestamp: 1000,
+			attribution: "agent" as const,
+			details: { from: "owner", id: "owner-older", sentAt: 1000 },
+		};
+
+		const ordered = outbox.withOrdering(record);
+		expect(ordered.content).not.toContain("arrived after newer");
+		expect(Reflect.get(ordered.details ?? {}, "arrivedAfter")).toBeUndefined();
 	});
 });
