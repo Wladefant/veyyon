@@ -144,6 +144,7 @@ export async function ambiguousSessionFileIds(signal?: AbortSignal): Promise<Set
 }
 
 const ARTIFACT_RESERVATION_DIR_PATTERN = /^\.artifact-id-\d+$/;
+const ARTIFACT_ID_DATABASE_PATTERN = /^\.artifact-ids\.sqlite.*$/;
 
 async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<{ files: Map<string, string>; ambiguous: Set<string> }> {
 	const found = new Map<string, string>();
@@ -172,8 +173,8 @@ async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<{ files: 
 		}
 		for (const entry of entries) {
 			if (signal?.aborted) signal.throwIfAborted();
+			if (ARTIFACT_RESERVATION_DIR_PATTERN.test(entry.name) || ARTIFACT_ID_DATABASE_PATTERN.test(entry.name)) continue;
 			if (entry.isDirectory()) {
-				if (ARTIFACT_RESERVATION_DIR_PATTERN.test(entry.name)) continue;
 				await scan(path.join(dir, entry.name), depth + 1);
 				continue;
 			}

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- History transcript resolution ignores `.artifact-id-<digits>` reservation markers during filesystem scans, supports nested dotted identifiers, and applies a 5-second deadline with actionable diagnostics ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- History transcript resolution ignores `.artifact-id-<digits>` reservation markers and `.artifact-ids.sqlite*` metadata during filesystem scans, supports nested dotted identifiers, and applies a 5-second deadline with actionable diagnostics ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
 ## [1.8.18] - 2026-11-09
 
 ### Fixed

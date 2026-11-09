@@ -137,6 +137,35 @@ describe("history read bounded regressions", () => {
 		});
 	});
 
+	// Artifact metadata must never become history, even when it looks like a transcript.
+	// This covers reserved names, not arbitrary hidden directories.
+	it.each([
+		".artifact-ids.sqlite",
+		".artifact-ids.sqlite-wal",
+		".artifact-ids.sqlite-shm",
+		".artifact-ids.sqlite-journal",
+		".artifact-ids.sqlite.jsonl",
+	])("excludes %s files and directories from history discovery", async name => {
+		await withTempDir(async dir => {
+			const artifactsDir = path.join(dir, "artifacts");
+			const metadataDir = path.join(artifactsDir, "Nested", name);
+			await fs.mkdir(metadataDir, { recursive: true });
+			await fs.writeFile(path.join(metadataDir, "MetadataTrap.jsonl"), sessionFixtureJsonl("metadata trap"));
+			await fs.writeFile(path.join(artifactsDir, name), sessionFixtureJsonl("metadata file trap"));
+			const normalDir = path.join(artifactsDir, ".artifact-ids-sqlite");
+			await fs.mkdir(normalDir);
+			await fs.writeFile(path.join(normalDir, "VisibleAgent.jsonl"), sessionFixtureJsonl("visible transcript"));
+			registerArtifactsDir(artifactsDir);
+
+			const files = await sessionFilesFromDisk();
+			expect([...files.keys()]).toEqual(["VisibleAgent"]);
+			const index = await InternalUrlRouter.instance().resolve("history://");
+			expect(index.content).toContain("VisibleAgent");
+			expect(index.content).not.toContain("MetadataTrap");
+			expect(index.content).not.toContain("metadata file trap");
+		});
+	});
+
 	it("resolves nested dotted IDs and reports missing IDs with actionable diagnostic", async () => {
 		await withTempDir(async dir => {
 			const artifactsDir = path.join(dir, "artifacts");
