@@ -162,8 +162,9 @@ describe("guarded retirement and readiness regressions", () => {
 		const admitted = await waitUntil(async () => {
 			try {
 				const result = await client.request({ op: "list" });
-				const daemon = result.op === "list" && result.daemons.find(item => item.name === spec.name);
-				if (daemon?.state !== "starting") return false;
+				if (result.op !== "list") return false;
+				const daemon = result.daemons.find(item => item.name === spec.name);
+				if (!daemon || daemon.state !== "starting") return false;
 				daemonId = daemon.id;
 				daemonGen = daemon.generation;
 				return true;
@@ -206,7 +207,7 @@ describe("guarded retirement and readiness regressions", () => {
 				application: process.execPath,
 				args: ["-e", `
 					const fs = require("node:fs");
-					process.on("SIGHUP", () => fs.appendFileSync(${JSON.stringify(marker)}, "signal\\\\n"));
+					process.on("SIGHUP", () => fs.appendFileSync(${JSON.stringify(marker)}, "signal\\n"));
 					process.stdout.write("started\\\\n");
 					setInterval(() => {}, 1000);
 				`],
