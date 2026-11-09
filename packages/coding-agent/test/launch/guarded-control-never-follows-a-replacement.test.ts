@@ -608,7 +608,9 @@ describe("guarded control never follows a replacement", () => {
 				expectedGeneration: neighbourGen,
 			});
 			expect(waitNeighbour.op).toBe("wait");
-			expect(waitNeighbour.timedOut).toBeFalse();
+			if (waitNeighbour.op === "wait") {
+				expect(waitNeighbour.timedOut).toBeFalse();
+			}
 
 			// Clean stop neighbour
 			await client.request({ op: "stop", name: "neighbour", timeoutMs: 2000 });
