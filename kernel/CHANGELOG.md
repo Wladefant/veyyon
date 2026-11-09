@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- First-use session artifact storage flushes the parent session directory before reserving IDs or returning file-backed artifact references, refusing supported flush failures ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.8.0] - 2026-11-05
 
 ### Breaking Changes
