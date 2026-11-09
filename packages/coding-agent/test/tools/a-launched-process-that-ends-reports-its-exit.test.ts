@@ -290,4 +290,464 @@ describe("a launched process that ends reports its exit", () => {
 
 		await tool.execute("call-2", { op: "stop", name: "outliving", timeout: 5 });
 	}, 30_000);
+
+	it("retains exit watch when a guarded stop is rejected with identity mismatch", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("EXIT_MARKER_STOP_FAIL");\nsetTimeout(() => process.exit(0), 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-stop-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		expect(textOf(started)).toContain("Started guarded-stop-mismatch");
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Attempt a guarded stop with stale/wrong expectedId and expectedGeneration
+		await expect(
+			tool.execute("call-2", {
+				op: "stop",
+				name: "guarded-stop-mismatch",
+				expectedId: "stale-nonexistent-id",
+				expectedGeneration: 999,
+				timeout: 5,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The watcher job MUST still be alive and watching
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Process should naturally exit and the exit watch must deliver its report
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		const [notice] = delivered;
+		expect(notice?.type).toBe("launch");
+		expect(notice?.status).toBe("completed");
+		expect(notice?.text).toContain("Launched process guarded-stop-mismatch exited 0");
+		expect(notice?.text).toContain("EXIT_MARKER_STOP_FAIL");
+		expect(manager.getRunningJobs()).toHaveLength(0);
+	}, 30_000);
+
+	it("retains exit watch when a guarded restart is rejected with identity mismatch", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("EXIT_MARKER_RESTART_FAIL");\nsetTimeout(() => process.exit(0), 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-restart-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		expect(textOf(started)).toContain("Started guarded-restart-mismatch");
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Attempt a guarded restart with stale/wrong expectedId and expectedGeneration
+		await expect(
+			tool.execute("call-2", {
+				op: "restart",
+				name: "guarded-restart-mismatch",
+				expectedId: "stale-nonexistent-id",
+				expectedGeneration: 999,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The watcher job MUST still be alive and watching
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Process should naturally exit and the exit watch must deliver its report
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		const [notice] = delivered;
+		expect(notice?.type).toBe("launch");
+		expect(notice?.status).toBe("completed");
+		expect(notice?.text).toContain("Launched process guarded-restart-mismatch exited 0");
+		expect(notice?.text).toContain("EXIT_MARKER_RESTART_FAIL");
+		expect(manager.getRunningJobs()).toHaveLength(0);
+	}, 30_000);
+
+	it("retains exit watch when a stop with locally invalid guards is rejected", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("EXIT_MARKER_LOCAL_FAIL");\nsetTimeout(() => process.exit(0), 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "locally-invalid-guards",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		expect(textOf(started)).toContain("Started locally-invalid-guards");
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Supplying expectedId without expectedGeneration triggers local ToolError in operationFor/validateGuards
+		await expect(
+			tool.execute("call-2", {
+				op: "stop",
+				name: "locally-invalid-guards",
+				expectedId: "some-id-without-generation",
+				timeout: 5,
+			}),
+		).rejects.toThrow(/expectedId and expectedGeneration must be supplied together/);
+
+		// Watcher must still be intact
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]?.text).toContain("Launched process locally-invalid-guards exited 0");
+		expect(delivered[0]?.text).toContain("EXIT_MARKER_LOCAL_FAIL");
+		expect(manager.getRunningJobs()).toHaveLength(0);
+	}, 30_000);
+
+	it("says nothing about an exit when a guarded stop matches the watched incarnation", async () => {
+		const { dir, scriptPath } = await projectWith("setInterval(() => {}, 1000);\n");
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-match-stop",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		const stopped = await tool.execute("call-2", {
+			op: "stop",
+			name: "guarded-match-stop",
+			expectedId: daemon!.id,
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+		expect(textOf(stopped)).toContain("Stopped guarded-match-stop");
+
+		// The watch was released because the stop was intentional and matched: silent
+		expect(manager.getRunningJobs()).toHaveLength(0);
+		await manager.waitForAll();
+		expect(await manager.drainDeliveries({ timeoutMs: 5_000 })).toBeTrue();
+		expect(delivered).toEqual([]);
+	}, 30_000);
+
+	it("retains exit watch when broker rejects guarded stop after external incarnation replacement", async () => {
+		const { dir, scriptPath } = await projectWith("setInterval(() => {}, 1000);\n");
+		const { tool, manager } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "external-replacement-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Simulate broker having replaced the daemon incarnation while local watch still references the old daemon.
+		// The broker rejects the guarded stop with an identity mismatch error.
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && "expectedId" in op && op.expectedId === daemon!.id) {
+				throw new Error(`Daemon identity mismatch: expected ${daemon!.id}:1, found ${daemon!.id}:2`);
+			}
+			return origRequest(op, signal);
+		};
+
+		// Now the tool attempts a guarded stop targeting the old incarnation which matches the local watcher
+		await expect(
+			tool.execute("call-2", {
+				op: "stop",
+				name: "external-replacement-mismatch",
+				expectedId: daemon!.id,
+				expectedGeneration: daemon!.generation,
+				timeout: 5,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The original watcher job MUST NOT have been cancelled by the rejected stop
+		expect(manager.getRunningJobs()).toHaveLength(1);
+	}, 30_000);
+
+	it("retains exit watch when broker rejects guarded restart after external incarnation replacement", async () => {
+		const { dir, scriptPath } = await projectWith("setInterval(() => {}, 1000);\n");
+		const { tool, manager } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "external-replacement-restart-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Simulate broker having replaced the daemon incarnation while local watch still references the old daemon.
+		// The broker rejects the guarded restart with an identity mismatch error.
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+		client.request = async (op, signal) => {
+			if (op.op === "restart" && "expectedId" in op && op.expectedId === daemon!.id) {
+				throw new Error(`Daemon identity mismatch: expected ${daemon!.id}:1, found ${daemon!.id}:2`);
+			}
+			return origRequest(op, signal);
+		};
+
+		// Now the tool attempts a guarded restart targeting the old incarnation which matches the local watcher
+		await expect(
+			tool.execute("call-2", {
+				op: "restart",
+				name: "external-replacement-restart-mismatch",
+				expectedId: daemon!.id,
+				expectedGeneration: daemon!.generation,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The original watcher job MUST NOT have been cancelled by the rejected restart
+		expect(manager.getRunningJobs()).toHaveLength(1);
+	}, 30_000);
+
+	it("watches the process a guarded restart put in place and does not cancel replacement watch", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("RUN " + (process.env.LAUNCH_RUN ?? "?"));\nsetInterval(() => {}, 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-cycled",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemonA = started.details?.daemon;
+		expect(daemonA?.id).toBeDefined();
+		expect(daemonA?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		const restarted = await tool.execute("call-2", {
+			op: "restart",
+			name: "guarded-cycled",
+			expectedId: daemonA!.id,
+			expectedGeneration: daemonA!.generation,
+		});
+		const daemonB = restarted.details?.daemon;
+		expect(daemonB?.id).toBeDefined();
+		expect(daemonB?.generation).not.toBe(daemonA!.generation);
+
+		// The restart itself is intentional: silent.
+		expect(delivered).toEqual([]);
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// The replacement watcher is intact: external kill reports exit
+		const described = await tool.execute("call-3", { op: "describe", name: "guarded-cycled" });
+		const pid = described.details?.daemon?.pid;
+		expect(typeof pid).toBe("number");
+		if (typeof pid === "number") {
+			process.kill(pid, "SIGTERM");
+		}
+
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]?.text).toContain("was terminated by SIGTERM");
+	}, 40_000);
+
+	it("suppresses exit notice when guarded stop succeeds while notice preparation logs RPC is delayed", async () => {
+		const { dir, scriptPath } = await projectWith('console.log("EXIT_OUTPUT");\nprocess.exit(0);\n');
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "delayed-logs-stop-race",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+
+		const logsStarted = Promise.withResolvers<void>();
+		const logsRelease = Promise.withResolvers<void>();
+		let logsIntercepted = false;
+
+		client.request = async (op, signal) => {
+			if (op.op === "logs" && op.name === "delayed-logs-stop-race" && !logsIntercepted) {
+				logsIntercepted = true;
+				logsStarted.resolve();
+				await logsRelease.promise;
+			}
+			return origRequest(op, signal);
+		};
+
+		// Intercept before starting or right after? If we intercept before, we must make sure logs intercept triggers
+		await logsStarted.promise;
+		expect(logsIntercepted).toBeTrue();
+		// Delay the stop result so stop pause gate is active while logs RPC finishes.
+		const stopEntered = Promise.withResolvers<void>();
+		const stopRelease = Promise.withResolvers<void>();
+
+		const preStopRequest = client.request;
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && op.name === "delayed-logs-stop-race") {
+				stopEntered.resolve();
+				await stopRelease.promise;
+			}
+			return preStopRequest(op, signal);
+		};
+
+		const stopPromise = tool.execute("call-2", {
+			op: "stop",
+			name: "delayed-logs-stop-race",
+			expectedId: daemon!.id,
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+
+		await stopEntered.promise;
+
+		// 1. Release the logs RPC first. The watcher finishes exitNotice while stop is still in flight.
+		logsRelease.resolve();
+
+		// Yield microtasks so the logs RPC response is processed by exitNotice and reaches the gate check
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// The notice must not be delivered yet while the stop gate is active
+		expect(delivered).toEqual([]);
+
+		// 2. Now let the stop complete successfully
+		stopRelease.resolve();
+		await stopPromise;
+		expect(manager.getRunningJobs()).toHaveLength(0);
+		await manager.waitForAll();
+		expect(await manager.drainDeliveries({ timeoutMs: 2_000 })).toBeTrue();
+		expect(delivered).toEqual([]);
+	}, 30_000);
+
+	it("delivers exit notice when rejected guarded stop is followed by logs resolution, but suppresses on overlapping successful control", async () => {
+		const { dir, scriptPath } = await projectWith('console.log("EXIT_OUTPUT_2");\nprocess.exit(0);\n');
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "delayed-logs-overlapping-controls",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		const client = await daemonClientForProject(dir);
+		const origRequest = client.request.bind(client);
+
+		const logsStarted = Promise.withResolvers<void>();
+		const logsRelease = Promise.withResolvers<void>();
+		let logsIntercepted = false;
+
+		client.request = async (op, signal) => {
+			if (op.op === "logs" && op.name === "delayed-logs-overlapping-controls" && !logsIntercepted) {
+				logsIntercepted = true;
+				logsStarted.resolve();
+				await logsRelease.promise;
+			}
+			return origRequest(op, signal);
+		};
+
+		await logsStarted.promise;
+
+		// Part A: Overlap an invalid/rejected guarded control while logs is in-flight.
+		// A rejected control should pause the gate, then resume it without cancelling the watch.
+		const rejectedEntered = Promise.withResolvers<void>();
+		const rejectedRelease = Promise.withResolvers<void>();
+
+		const preRejectedRequest = client.request;
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && op.name === "delayed-logs-overlapping-controls" && "expectedId" in op && op.expectedId === "wrong-id") {
+				rejectedEntered.resolve();
+				await rejectedRelease.promise;
+				throw new Error("Daemon identity mismatch: expected wrong-id:1, found actual");
+			}
+			return preRejectedRequest(op, signal);
+		};
+
+		const rejectedStopPromise = tool.execute("call-2", {
+			op: "stop",
+			name: "delayed-logs-overlapping-controls",
+			expectedId: "wrong-id",
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+
+		await rejectedEntered.promise;
+
+		// Also overlap a subsequent matching/successful guarded stop while logs is STILL in flight
+		const successEntered = Promise.withResolvers<void>();
+		const successRelease = Promise.withResolvers<void>();
+
+		const preSuccessRequest = client.request;
+		client.request = async (op, signal) => {
+			if (op.op === "stop" && op.name === "delayed-logs-overlapping-controls" && "expectedId" in op && op.expectedId === daemon!.id) {
+				successEntered.resolve();
+				await successRelease.promise;
+			}
+			return preSuccessRequest(op, signal);
+		};
+
+		const successStopPromise = tool.execute("call-3", {
+			op: "stop",
+			name: "delayed-logs-overlapping-controls",
+			expectedId: daemon!.id,
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+
+		await successEntered.promise;
+
+		// Release the rejected stop first: it throws, resuming its gate
+		rejectedRelease.resolve();
+		await expect(rejectedStopPromise).rejects.toThrow(/Daemon identity mismatch/);
+
+		// Now release logs RPC while the successful stop is still pending
+		logsRelease.resolve();
+
+		// Yield microtasks so the logs RPC response is processed by exitNotice and reaches the gate check
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// No notice should be delivered because the successful stop's pause gate is still active!
+		expect(delivered).toEqual([]);
+
+		// Now let the successful stop complete
+		successRelease.resolve();
+		await successStopPromise;
+
+		// The successful control cancelled the watch, suppressing notice completely
+		expect(manager.getRunningJobs()).toHaveLength(0);
+		await manager.waitForAll();
+		expect(await manager.drainDeliveries({ timeoutMs: 2_000 })).toBeTrue();
+		expect(delivered).toEqual([]);
+	}, 30_000);
 });

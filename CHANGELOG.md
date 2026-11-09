@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [1.8.19] - 2026-11-09
+
+### Fixed
+
+- The `launch` tool and daemon broker support incarnation guards (`expectedId` and `expectedGeneration`) to prevent stale operations from targeting replaced daemons or newer generations ([Refs #1071](https://github.com/Wladefant/veyyon/issues/1071)).
+
+## [1.8.18] - 2026-11-09
+
+### Fixed
+
+- Fixed the task-spawn executor cwd test fixture so the coding-agent type check reports no TS18048 errors ([PR #1075](https://github.com/Wladefant/veyyon/pull/1075)).
+
+## [1.8.17] - 2026-11-09
+
+### Fixed
+
+- The `read` tool verifies whether an NTFS alternate data stream exists before treating a selector-shaped Windows path as a literal file ([PR #1059](https://github.com/Wladefant/veyyon/pull/1059)).
+
 ## [1.8.16] - 2026-11-08
 
 ### Changed
