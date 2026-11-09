@@ -16,7 +16,7 @@ import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
-import { BUILTIN_TOOLS, createAgentSession } from "../../sdk";
+import { BUILTIN_TOOLS, createAgentSession, type CreateAgentSessionResult } from "../../sdk";
 import type { ToolSession } from "../../tools";
 import { handleInternalUrl } from "../../tools/fs/read-internal-url";
 import type { ReadContext } from "../../tools/fs/read-types";
@@ -81,19 +81,25 @@ function makeToolSession(
   } as unknown as ToolSession;
 }
 
+interface SessionWithReadTool {
+  result: CreateAgentSessionResult;
+  toolSession: ToolSession;
+  agentId: string;
+}
+
 async function createSessionWithReadTool(
   cwd: string,
   agentDir: string,
   authStorage: AuthStorage,
   sessionManager: SessionManager,
-) {
+): Promise<SessionWithReadTool> {
   const captured: ToolSession[] = [];
   const buildRead = BUILTIN_TOOLS.read;
   const readFactory = spyOn(BUILTIN_TOOLS, "read").mockImplementation(session => {
     captured.push(session);
     return buildRead(session);
   });
-  let result: Awaited<ReturnType<typeof createAgentSession>> | undefined;
+  let result: CreateAgentSessionResult | undefined;
   try {
     const settings = Settings.isolated({ "async.enabled": false, "advisor.enabled": false });
     result = await createAgentSession({
@@ -527,8 +533,8 @@ describe("history:// caller-bound archived opt-in", () => {
   it("does not let a stale ToolSession mint archived authority after same-transcript revival", async () => {
     const temp = TempDir.createSync("@veyyon-history-stale-tool-session-");
     let authStorage: AuthStorage | undefined;
-    let first: Awaited<ReturnType<typeof createSessionWithReadTool>> | undefined;
-    let revived: Awaited<ReturnType<typeof createSessionWithReadTool>> | undefined;
+    let first: SessionWithReadTool | undefined;
+    let revived: SessionWithReadTool | undefined;
     try {
       const cwd = temp.join("project");
       await Bun.write(`${cwd}/.keep`, "");
