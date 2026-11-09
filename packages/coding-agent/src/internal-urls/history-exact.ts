@@ -125,14 +125,16 @@ function claimedRecordId(value: unknown): string | undefined {
 	return typeof entry.id === "string" && ADDRESSABLE_HISTORY_ID.test(entry.id) ? entry.id : undefined;
 }
 
-function scanTopLevelMembers(raw: string): {
+interface TopLevelMemberScan {
 	duplicates: ReadonlySet<string>;
 	sessionTypeMember: boolean;
 	identityAmbiguous: boolean;
 	arrayIdentityCandidate: boolean;
 	nestedIdentityCandidate: boolean;
 	claimedId?: string;
-} {
+}
+
+function scanTopLevelMembers(raw: string): TopLevelMemberScan {
 	const keys = new Set<string>();
 	const duplicates = new Set<string>();
 	let sessionTypeMember = false;
@@ -306,7 +308,7 @@ function inspectMalformedIdentitySuffix(line: string): { invalidIdentity: boolea
 }
 
 /** Whether a bounded structural scan found an identity-bearing claim. */
-function hasBrokenIdentity(scanned: ReturnType<typeof scanTopLevelMembers>): boolean {
+function hasBrokenIdentity(scanned: TopLevelMemberScan): boolean {
 	return scanned.sessionTypeMember ||
 		scanned.arrayIdentityCandidate ||
 		scanned.duplicates.has("type") ||
