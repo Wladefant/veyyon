@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.17] - 2026-11-09
+
 ### Fixed
 
 - The `read` tool verifies whether an NTFS alternate data stream exists before treating a selector-shaped Windows path as a literal file ([PR #1059](https://github.com/Wladefant/veyyon/pull/1059)).

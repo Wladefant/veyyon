@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@veyyon/stats",
-  "version": "1.8.16",
+  "version": "1.8.17",
   "description": "Local observability dashboard for Veyyon AI usage statistics",
   "homepage": "https://veyyon.dev",
   "author": "santhreal",
