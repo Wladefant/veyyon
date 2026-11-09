@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.8.22] - 2026-11-09
+
+### Fixed
+
+- Retained IRC turns ignore message IDs already present in durable context. Unseen late instructions still run and identify newer input from the same sender ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+- Parent IRC steering survives a restart before consumption, and continuation retries retain their durable recipient instead of duplicating delivery across ancestors ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+
 ## [1.8.21] - 2026-11-09
 
 ### Fixed
