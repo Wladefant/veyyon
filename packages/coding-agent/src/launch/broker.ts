@@ -485,6 +485,8 @@ export class DaemonBroker {
 	#shuttingDown = false;
 	/** Requests being acted on. The broker does not retire under one. */
 	#inFlight = 0;
+	/** Accepted controls must reply before retirement makes pending requests safe to replay. */
+	readonly #controls = new Set<Promise<void>>();
 
 	constructor(
 		projectDir: string,
@@ -526,8 +528,8 @@ export class DaemonBroker {
 	): Promise<void> {
 		if (this.#shuttingDown) return this.#finished.promise;
 		this.#shuttingDown = true;
-		// From here no request is acted on. Every connection is told before anything awaits, so a
-		// client sends what it has pending to the next broker instead of losing it with this one.
+		// Stop admission first, then finish accepted controls and their replies before allowing replay.
+		await Promise.all(this.#controls);
 		const notice = daemonBrokerRetiringNotice(process.pid);
 		for (const socket of this.#sockets) socket.write(notice);
 		clearTimeout(this.#idleTimer);
@@ -607,12 +609,17 @@ export class DaemonBroker {
 
 	async #handleLine(socket: net.Socket, line: string, onAuthenticated: () => void): Promise<void> {
 		let id = "unknown";
+		let control: { promise: Promise<void>; resolve: () => void } | undefined;
 		try {
 			const decoded: unknown = JSON.parse(line);
 			const request = parseDaemonWireRequest(decoded);
 			id = request.id;
 			if (request.token !== this.#token) throw new Error("Daemon broker authentication failed");
 			if (this.#shuttingDown) throw new Error(DAEMON_BROKER_RETIRING_ERROR);
+			if (["start", "send", "stop", "restart"].includes(request.operation.op)) {
+				control = Promise.withResolvers<void>();
+				this.#controls.add(control.promise);
+			}
 			onAuthenticated();
 			this.#inFlight++;
 			let result: DaemonRpcResult;
@@ -637,6 +644,11 @@ export class DaemonBroker {
 		} catch (error) {
 			const message = errorMessage(error);
 			socket.write(`${JSON.stringify({ id, ok: false, error: message })}\n`);
+		} finally {
+			if (control) {
+				this.#controls.delete(control.promise);
+				control.resolve();
+			}
 		}
 	}
 
@@ -659,7 +671,7 @@ export class DaemonBroker {
 			case "ping":
 				return { op: "ping", projectDir: this.#projectDir, pid: process.pid };
 			case "start":
-				return this.#serialized(operation.spec.name, () => this.#start(operation.spec, operation.owner));
+				return this.#start(operation.spec, operation.owner);
 			case "list": {
 				await Promise.all(Array.from(this.#records.values()).map(record => this.#refreshDetached(record)));
 				return {
@@ -700,11 +712,15 @@ export class DaemonBroker {
 	}
 
 	async #start(spec: DaemonSpec, owner?: string): Promise<DaemonRpcResult> {
-		const record = await this.#admit(spec, owner);
+		const record = await this.#serialized(spec.name, () => this.#admit(spec, owner));
 		let readyTimedOut = false;
 		if (spec.ready && !terminalState(record.snapshot.state)) {
-			const ready = await this.#waitUntil(record, () => record.snapshot.state === "ready", spec.ready.timeoutMs);
-			readyTimedOut = !ready && !terminalState(record.snapshot.state);
+			await this.#waitUntil(
+				record,
+				() => record.snapshot.state === "ready" || this.#shuttingDown,
+				spec.ready.timeoutMs,
+			);
+			readyTimedOut = record.snapshot.state !== "ready" && !terminalState(record.snapshot.state);
 		}
 		await record.persistQueue;
 		return { op: "start", daemon: record.snapshot, readyTimedOut };

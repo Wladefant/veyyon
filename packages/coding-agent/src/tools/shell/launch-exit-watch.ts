@@ -27,9 +27,14 @@ const EXIT_WAIT_WINDOW_MS = 5 * 60_000;
 const EXIT_TAIL_LINES = 60;
 const EXIT_TAIL_BYTES = 8_000;
 
-/** `${projectDir}\0${name}` → job id, so a stop can find the watch to cancel. */
-const watches = new Map<string, string>();
+interface LaunchWatchEntry {
+	jobId: string;
+	id: string;
+	generation?: number;
+}
 
+/** `${projectDir}\0${name}` → watch entry, so a stop can find the watch to cancel. */
+const watches = new Map<string, LaunchWatchEntry>();
 /** Carries a completed exit notice out of the watch as a failed job. */
 class LaunchExitFailure extends Error {}
 
@@ -93,7 +98,12 @@ export function watchLaunchedProcessExit(options: {
 	if (!manager) return;
 	if (daemon.detached) return;
 	const key = watchKey(client.projectDir, daemon.name);
-	if (watches.has(key)) return;
+	const existing = watches.get(key);
+	if (existing && existing.id === daemon.id && existing.generation === daemon.generation) return;
+	if (existing) {
+		watches.delete(key);
+		session.asyncJobManager?.cancel(existing.jobId);
+	}
 	// A watch must never be the reason a start fails: the job cap, a disposed
 	// manager and a broker that goes away all leave the process running and the
 	// caller able to reach it by name.
@@ -130,24 +140,31 @@ export function watchLaunchedProcessExit(options: {
 					manager.cancel(jobId);
 					return "";
 				} finally {
-					if (watches.get(key) === jobId) watches.delete(key);
+					if (watches.get(key)?.jobId === jobId) watches.delete(key);
 				}
 			},
 			{ ownerId: session.getAgentId?.() ?? undefined },
 		);
-		watches.set(key, jobId);
+		watches.set(key, { jobId, id: daemon.id, generation: daemon.generation });
 	} catch (error) {
 		logger.debug("Launch exit watch not registered", { name: daemon.name, error: errorMessage(error) });
 	}
 }
 
 /** Drop the watch on `name`: its end was asked for, so it is not reported. */
-export function releaseLaunchExitWatch(session: ToolSession, projectDir: string, name: string): void {
+export function releaseLaunchExitWatch(
+	session: ToolSession,
+	projectDir: string,
+	name: string,
+	expected?: { expectedId?: string; expectedGeneration?: number },
+): void {
 	const key = watchKey(projectDir, name);
-	const jobId = watches.get(key);
-	if (jobId === undefined) return;
+	const watch = watches.get(key);
+	if (watch === undefined) return;
+	if (expected?.expectedId !== undefined && expected.expectedId !== watch.id) return;
+	if (expected?.expectedGeneration !== undefined && expected.expectedGeneration !== watch.generation) return;
 	watches.delete(key);
-	session.asyncJobManager?.cancel(jobId);
+	session.asyncJobManager?.cancel(watch.jobId);
 }
 
 /** Test seam: forget every watch this process is holding. */

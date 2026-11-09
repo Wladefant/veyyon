@@ -290,4 +290,153 @@ describe("a launched process that ends reports its exit", () => {
 
 		await tool.execute("call-2", { op: "stop", name: "outliving", timeout: 5 });
 	}, 30_000);
+
+	it("retains exit watch when a guarded stop is rejected with identity mismatch", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("EXIT_MARKER_STOP_FAIL");\nsetTimeout(() => process.exit(0), 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-stop-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		expect(textOf(started)).toContain("Started guarded-stop-mismatch");
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Attempt a guarded stop with stale/wrong expectedId and expectedGeneration
+		await expect(
+			tool.execute("call-2", {
+				op: "stop",
+				name: "guarded-stop-mismatch",
+				expectedId: "stale-nonexistent-id",
+				expectedGeneration: 999,
+				timeout: 5,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The watcher job MUST still be alive and watching
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Process should naturally exit and the exit watch must deliver its report
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		const [notice] = delivered;
+		expect(notice?.type).toBe("launch");
+		expect(notice?.status).toBe("completed");
+		expect(notice?.text).toContain("Launched process guarded-stop-mismatch exited 0");
+		expect(notice?.text).toContain("EXIT_MARKER_STOP_FAIL");
+		expect(manager.getRunningJobs()).toHaveLength(0);
+	}, 30_000);
+
+	it("retains exit watch when a guarded restart is rejected with identity mismatch", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("EXIT_MARKER_RESTART_FAIL");\nsetTimeout(() => process.exit(0), 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-restart-mismatch",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		expect(textOf(started)).toContain("Started guarded-restart-mismatch");
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Attempt a guarded restart with stale/wrong expectedId and expectedGeneration
+		await expect(
+			tool.execute("call-2", {
+				op: "restart",
+				name: "guarded-restart-mismatch",
+				expectedId: "stale-nonexistent-id",
+				expectedGeneration: 999,
+			}),
+		).rejects.toThrow(/Daemon identity mismatch/);
+
+		// The watcher job MUST still be alive and watching
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Process should naturally exit and the exit watch must deliver its report
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		const [notice] = delivered;
+		expect(notice?.type).toBe("launch");
+		expect(notice?.status).toBe("completed");
+		expect(notice?.text).toContain("Launched process guarded-restart-mismatch exited 0");
+		expect(notice?.text).toContain("EXIT_MARKER_RESTART_FAIL");
+		expect(manager.getRunningJobs()).toHaveLength(0);
+	}, 30_000);
+
+	it("retains exit watch when a stop with locally invalid guards is rejected", async () => {
+		const { dir, scriptPath } = await projectWith(
+			'console.log("EXIT_MARKER_LOCAL_FAIL");\nsetTimeout(() => process.exit(0), 1000);\n',
+		);
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "locally-invalid-guards",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		expect(textOf(started)).toContain("Started locally-invalid-guards");
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		// Supplying expectedId without expectedGeneration triggers local ToolError in operationFor/validateGuards
+		await expect(
+			tool.execute("call-2", {
+				op: "stop",
+				name: "locally-invalid-guards",
+				expectedId: "some-id-without-generation",
+				timeout: 5,
+			}),
+		).rejects.toThrow(/expectedId and expectedGeneration must be supplied together/);
+
+		// Watcher must still be intact
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		expect(await until(() => delivered.length > 0, 20_000)).toBeTrue();
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]?.text).toContain("Launched process locally-invalid-guards exited 0");
+		expect(delivered[0]?.text).toContain("EXIT_MARKER_LOCAL_FAIL");
+		expect(manager.getRunningJobs()).toHaveLength(0);
+	}, 30_000);
+
+	it("says nothing about an exit when a guarded stop matches the watched incarnation", async () => {
+		const { dir, scriptPath } = await projectWith("setInterval(() => {}, 1000);\n");
+		const { tool, manager, delivered } = harness(dir);
+
+		const started = await tool.execute("call-1", {
+			op: "start",
+			name: "guarded-match-stop",
+			application: process.execPath,
+			args: [scriptPath],
+			pty: false,
+		});
+		const daemon = started.details?.daemon;
+		expect(daemon?.id).toBeDefined();
+		expect(daemon?.generation).toBeDefined();
+		expect(manager.getRunningJobs()).toHaveLength(1);
+
+		const stopped = await tool.execute("call-2", {
+			op: "stop",
+			name: "guarded-match-stop",
+			expectedId: daemon!.id,
+			expectedGeneration: daemon!.generation,
+			timeout: 5,
+		});
+		expect(textOf(stopped)).toContain("Stopped guarded-match-stop");
+
+		// The watch was released because the stop was intentional and matched: silent
+		expect(manager.getRunningJobs()).toHaveLength(0);
+		await manager.waitForAll();
+		expect(await manager.drainDeliveries({ timeoutMs: 5_000 })).toBeTrue();
+		expect(delivered).toEqual([]);
+	}, 30_000);
 });

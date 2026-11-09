@@ -512,12 +512,18 @@ export class LaunchTool implements AgentTool<typeof launchSchema.value, LaunchTo
 			adoptSpawnedPid: sessionCpuAdoption(getSessionId),
 			cleanupWaitMs: this.session.settings.get("launch.cleanupWaitMs"),
 		});
+		const operation = operationFor(params, this.session);
 		if (params.op === "stop" || params.op === "restart") {
 			// The end of a process the caller asked to end is not news. Drop the
 			// watch before the request, so the exit it causes reports nothing.
-			releaseLaunchExitWatch(this.session, client.projectDir, requiredName(params));
+			// If guards are supplied, only drop if they target the watched incarnation.
+			const expected =
+				params.expectedId !== undefined || params.expectedGeneration !== undefined
+					? { expectedId: params.expectedId, expectedGeneration: params.expectedGeneration }
+					: undefined;
+			releaseLaunchExitWatch(this.session, client.projectDir, requiredName(params), expected);
 		}
-		const result = await client.request(operationFor(params, this.session), signal);
+		const result = await client.request(operation, signal);
 		if (result.op === "start" || result.op === "restart") {
 			watchLaunchedProcessExit({ session: this.session, client, daemon: result.daemon });
 		}
