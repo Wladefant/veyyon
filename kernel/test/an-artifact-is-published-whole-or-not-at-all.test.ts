@@ -124,8 +124,8 @@ describe("artifact publication is whole-or-nothing", () => {
 			const parent = await freshDir();
 			const artifactsDir = path.join(parent, "session-artifacts");
 			const manager = new ArtifactManager(artifactsDir);
-			const realOpen = nodeFs.promises.open.bind(nodeFs.promises);
-			const openSpy = vi.spyOn(nodeFs.promises, "open").mockImplementation(async (file, flags, mode) => {
+			const realOpen = fs.open.bind(fs);
+			const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
 				const handle = await realOpen(file, flags, mode);
 				if (String(file) === parent) {
 					Object.defineProperty(handle, "sync", {
