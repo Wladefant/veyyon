@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.18] - 2026-11-09
+
 ### Fixed
 
 - Fixed the task-spawn executor cwd test fixture so the coding-agent type check reports no TS18048 errors ([PR #1075](https://github.com/Wladefant/veyyon/pull/1075)).
