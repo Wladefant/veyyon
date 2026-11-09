@@ -5,6 +5,11 @@
 ### Fixed
 
 - Retained IRC turns ignore message IDs already present in durable context. Unseen late instructions still run and identify newer input from the same sender ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+## [1.8.18] - 2026-11-09
+
+### Fixed
+
+- Fixed the task-spawn executor cwd test fixture so the coding-agent type check reports no TS18048 errors ([PR #1075](https://github.com/Wladefant/veyyon/pull/1075)).
 
 ## [1.8.17] - 2026-11-09
 
