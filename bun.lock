@@ -22,7 +22,7 @@
     },
     "apps/stats": {
       "name": "@veyyon/stats",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "bin": {
         "veyyon-stats": "./src/index.ts",
       },
@@ -82,28 +82,28 @@
     },
     "contracts/host": {
       "name": "@veyyon/host",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
     },
     "contracts/model": {
       "name": "@veyyon/model",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
     },
     "contracts/plugin": {
       "name": "@veyyon/plugin",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
     },
     "contracts/session": {
       "name": "@veyyon/session",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/model": "workspace:*",
       },
@@ -113,14 +113,14 @@
     },
     "contracts/settings": {
       "name": "@veyyon/settings",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
     },
     "contracts/tool": {
       "name": "@veyyon/tool",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/model": "workspace:*",
       },
@@ -130,14 +130,14 @@
     },
     "contracts/view": {
       "name": "@veyyon/view",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
     },
     "contracts/wire": {
       "name": "@veyyon/wire",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/model": "workspace:*",
         "@veyyon/view": "workspace:*",
@@ -161,7 +161,7 @@
     },
     "hosts/terminal/engine": {
       "name": "@veyyon/tui",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/host": "workspace:*",
         "@veyyon/natives": "workspace:*",
@@ -176,7 +176,7 @@
     },
     "kernel": {
       "name": "@veyyon/kernel",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/agent-core": "workspace:*",
         "@veyyon/ai": "workspace:*",
@@ -193,7 +193,7 @@
     },
     "natives/bridge/bindings": {
       "name": "@veyyon/natives",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -201,7 +201,7 @@
     },
     "packages/agent": {
       "name": "@veyyon/agent-core",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@opentelemetry/api": "catalog:",
         "@veyyon/ai": "workspace:*",
@@ -221,7 +221,7 @@
     },
     "packages/ai": {
       "name": "@veyyon/ai",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@veyyon/catalog": "workspace:*",
@@ -240,7 +240,7 @@
     },
     "packages/catalog": {
       "name": "@veyyon/catalog",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@veyyon/model": "workspace:*",
@@ -257,7 +257,7 @@
     },
     "packages/coding-agent": {
       "name": "@veyyon/coding-agent",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "bin": {
         "veyyon": "src/cli.ts",
       },
@@ -327,7 +327,7 @@
     },
     "packages/tool-render": {
       "name": "@veyyon/tool-render",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/utils": "workspace:*",
         "@veyyon/view": "workspace:*",
@@ -348,7 +348,7 @@
     },
     "packages/utils": {
       "name": "@veyyon/utils",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/host": "workspace:*",
         "@veyyon/natives": "workspace:*",
@@ -365,7 +365,7 @@
     },
     "plugins/argot": {
       "name": "argot",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "smol-toml": "catalog:",
       },
@@ -375,7 +375,7 @@
     },
     "plugins/hashline": {
       "name": "@veyyon/hashline",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/utils": "workspace:*",
         "diff": "catalog:",
@@ -388,7 +388,7 @@
     },
     "plugins/mnemopi": {
       "name": "@veyyon/mnemopi",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -415,7 +415,7 @@
     },
     "plugins/mode-swarm": {
       "name": "@veyyon/swarm-extension",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "bin": {
         "veyyon-swarm": "src/cli.ts",
       },
@@ -426,12 +426,12 @@
         "@types/bun": "catalog:",
       },
       "peerDependencies": {
-        "@veyyon/coding-agent": "1.8.15",
+        "@veyyon/coding-agent": "1.8.19",
       },
     },
     "plugins/web": {
       "name": "@veyyon/web",
-      "version": "1.8.16",
+      "version": "1.8.19",
       "dependencies": {
         "@veyyon/ai": "workspace:*",
         "@veyyon/utils": "workspace:*",

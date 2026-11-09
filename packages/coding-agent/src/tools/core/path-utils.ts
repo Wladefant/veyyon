@@ -417,7 +417,20 @@ export async function probeLiteralPathExists(filePath: string, cwd: string): Pro
 		throw err;
 	}
 	try {
-		await fs.promises.lstat(resolved);
+		const stat = await fs.promises.lstat(resolved);
+		// Windows can report the base file for a missing NTFS stream. Confirm
+		// selector-shaped streams with an open before treating them as literal.
+		if (CURRENT_PLATFORM === "win32" && stat.isFile() && splitPathAndSel(filePath).sel !== undefined) {
+			let handle: fs.promises.FileHandle | undefined;
+			try {
+				handle = await fs.promises.open(resolved, "r");
+			} catch (openErr) {
+				if (isMissingPath(openErr)) return "missing";
+				return "unknown";
+			} finally {
+				await handle?.close();
+			}
+		}
 		return "exists";
 	} catch (err) {
 		if (isMissingPath(err)) return "missing";
