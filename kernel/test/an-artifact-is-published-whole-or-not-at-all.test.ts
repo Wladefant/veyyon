@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeWithRetries } from "@veyyon/utils";
@@ -118,4 +119,114 @@ describe("artifact publication is whole-or-nothing", () => {
 		expect((await fs.readdir(dir)).filter(name => !name.startsWith(".artifact-ids.sqlite")).sort()).toEqual([`.artifact-id-${id}`, "7.task.log", "8.task.log"].sort());
 		expect((await listPublished(dir, [id])).sort()).toEqual(["7.task.log", "8.task.log"]);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"refuses async artifact publication when the session directory entry cannot be flushed",
+		async () => {
+			const parent = await freshDir();
+			const artifactsDir = path.join(parent, "session-artifacts");
+			const manager = new ArtifactManager(artifactsDir);
+			const realOpen = fs.open.bind(fs);
+			const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+				const handle = await realOpen(file, flags, mode);
+				if (String(file) === parent) {
+					Object.defineProperty(handle, "sync", {
+						configurable: true,
+						value: async () => {
+							const error = new Error("synthetic session-directory fsync failure") as NodeJS.ErrnoException;
+							error.code = "EIO";
+							throw error;
+						},
+					});
+				}
+				return handle;
+			});
+			try {
+				await expect(manager.save("SYNTHETIC FIRST ARTIFACT", "task")).rejects.toThrow(
+					/synthetic session-directory fsync failure/,
+				);
+			} finally {
+				openSpy.mockRestore();
+			}
+
+			// The sidecar directory may exist in this process, but no ID reservation
+			// or artifact file may be published after the parent flush failed.
+			expect(await fs.readdir(artifactsDir)).toEqual([]);
+			expect(await manager.getPath("0")).toBeNull();
+
+			// The failed first-use attempt must remain retryable after the I/O fault clears.
+			const id = await manager.save("SYNTHETIC RETRY ARTIFACT", "task");
+			expect(id).toBe("0");
+			expect(await fs.readFile(path.join(artifactsDir, "0.task.log"), "utf8")).toBe("SYNTHETIC RETRY ARTIFACT");
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"refuses synchronous artifact ID allocation when the session directory entry cannot be flushed",
+		async () => {
+			const parent = await freshDir();
+			const artifactsDir = path.join(parent, "session-artifacts");
+			const manager = new ArtifactManager(artifactsDir);
+			const parentStat = nodeFs.statSync(parent);
+			const realFsync = nodeFs.fsyncSync.bind(nodeFs);
+			const fsyncSpy = vi.spyOn(nodeFs, "fsyncSync").mockImplementation(fd => {
+				const opened = nodeFs.fstatSync(fd);
+				if (opened.dev === parentStat.dev && opened.ino === parentStat.ino) {
+					const error = new Error("synthetic session-directory fsync failure") as NodeJS.ErrnoException;
+					error.code = "EIO";
+					throw error;
+				}
+				return realFsync(fd);
+			});
+			try {
+				expect(() => manager.allocateId()).toThrow(/synthetic session-directory fsync failure/);
+			} finally {
+				fsyncSpy.mockRestore();
+			}
+
+			expect(await fs.readdir(artifactsDir)).toEqual([]);
+			expect(manager.allocateId()).toBe(0);
+			expect(await fs.readdir(artifactsDir)).toEqual([".artifact-id-0"]);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"refuses synchronous artifact save when the session directory entry cannot be flushed",
+		async () => {
+			const parent = await freshDir();
+			const artifactsDir = path.join(parent, "session-artifacts");
+			const manager = new ArtifactManager(artifactsDir);
+			const parentStat = nodeFs.statSync(parent);
+			const realFsync = nodeFs.fsyncSync.bind(nodeFs);
+			const fsyncSpy = vi.spyOn(nodeFs, "fsyncSync").mockImplementation(fd => {
+				const opened = nodeFs.fstatSync(fd);
+				if (opened.dev === parentStat.dev && opened.ino === parentStat.ino) {
+					const error = new Error("synthetic session-directory fsync failure") as NodeJS.ErrnoException;
+					error.code = "EIO";
+					throw error;
+				}
+				return realFsync(fd);
+			});
+			try {
+				expect(() => manager.saveSync("SYNTHETIC FIRST ARTIFACT", "task")).toThrow(
+					/synthetic session-directory fsync failure/,
+				);
+			} finally {
+				fsyncSpy.mockRestore();
+			}
+
+			// The public sync path must fail before reserving an ID or publishing a file.
+			expect(await fs.readdir(artifactsDir)).toEqual([]);
+			expect(await manager.getPath("0")).toBeNull();
+
+			// Clearing the synthetic fault leaves first use retryable with exact bytes.
+			const id = manager.saveSync("SYNTHETIC RETRY ARTIFACT", "task");
+			expect(id).toBe("0");
+			expect(await fs.readFile(path.join(artifactsDir, "0.task.log"), "utf8")).toBe(
+				"SYNTHETIC RETRY ARTIFACT",
+			);
+			expect((await fs.readdir(artifactsDir)).sort()).toEqual([".artifact-id-0", "0.task.log"]);
+		},
+	);
+
 });

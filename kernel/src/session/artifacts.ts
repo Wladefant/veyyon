@@ -9,7 +9,7 @@ import { Database } from "bun:sqlite";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { atomicWriteFileSync, atomicWriteFileWith } from "@veyyon/utils/atomic-write";
+import { atomicWriteFileSync, atomicWriteFileWith, fsyncDirEntry, fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -88,6 +88,7 @@ export function writeArtifactAtomicallySync(path: string, content: string): numb
 export class ArtifactManager {
 	readonly #dir: string;
 	#cachedScanMax: number | null = null;
+	#dirCreated = false;
 
 	/**
 	 * @param dir Directory that will hold artifact files. Created lazily on first save.
@@ -102,6 +103,15 @@ export class ArtifactManager {
 	 */
 	get dir(): string {
 		return this.#dir;
+	}
+
+	async #ensureDir(): Promise<void> {
+		if (!this.#dirCreated) {
+			await fs.mkdir(this.#dir, { recursive: true });
+			// Persist the sidecar entry before reserving an ID or publishing a ref.
+			await fsyncDirEntry(path.dirname(this.#dir));
+			this.#dirCreated = true;
+		}
 	}
 
 	#scanDirectoryMax(): number {
@@ -134,7 +144,11 @@ export class ArtifactManager {
 	 * reservation after publication: a failed save must not recycle its ID.
 	 */
 	allocateId(): number {
-		fsSync.mkdirSync(this.#dir, { recursive: true });
+		if (!this.#dirCreated) {
+			fsSync.mkdirSync(this.#dir, { recursive: true });
+			fsyncDirEntrySync(path.dirname(this.#dir));
+			this.#dirCreated = true;
+		}
 
 		const dbPath = path.join(this.#dir, DB_FILENAME);
 		const db = new Database(dbPath);
@@ -195,6 +209,7 @@ export class ArtifactManager {
 	 * @param toolType Tool name for file extension (e.g., "bash", "read")
 	 */
 	async allocatePath(toolType: string): Promise<{ id: string; path: string }> {
+		await this.#ensureDir();
 		const id = String(this.allocateId());
 		const filename = `${id}.${sanitizeToolType(toolType)}.log`;
 		return { id, path: path.join(this.#dir, filename) };

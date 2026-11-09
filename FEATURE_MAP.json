@@ -19,6 +19,26 @@
       "owning_issue": "2397",
       "risk": "high",
       "components": ["coding-agent", "SageOx"]
+    },
+    "launch-incarnation-guard": {
+      "name": "Launch incarnation guard",
+      "description": "Daemon process supervision and incarnation-guarded lifecycle controls preventing stale operations on replaced or restarted daemons.",
+      "entry_files": [
+        "packages/coding-agent/src/tools/shell/launch.ts",
+        "packages/coding-agent/src/launch/broker.ts",
+        "packages/coding-agent/src/launch/client.ts",
+        "packages/coding-agent/src/launch/protocol.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/launch/guarded-protocol.test.ts",
+        "packages/coding-agent/test/launch/guarded-control-never-follows-a-replacement.test.ts"
+      ],
+      "owning_issue": "1071",
+      "risk": "medium",
+      "components": ["coding-agent", "launch"],
+      "docs": [
+        "docs/tools/launch.md"
+      ]
     }
   }
 }
