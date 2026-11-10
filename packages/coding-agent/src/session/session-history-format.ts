@@ -154,9 +154,7 @@ function* scanTextLines(text: string): Generator<void, number> {
 	return count;
 }
 
-function* summarizeToolResult(
-	result: ToolResultMessage,
-): Generator<void, { lines: number; firstLine?: string }> {
+function* summarizeToolResult(result: ToolResultMessage): Generator<void, { lines: number; firstLine?: string }> {
 	const content = result.content;
 	if (!content) return { lines: 0 };
 	let lines = 0;
@@ -290,7 +288,8 @@ async function preflightArgumentBytes(value: unknown, signal?: AbortSignal): Pro
 			bytes += 2;
 			if (Array.isArray(item)) {
 				bytes += Math.max(0, item.length - 1);
-				if (bytes > MAX_RECORD_BYTES) throw new Error("Session history formatting exceeded the tool argument byte cap");
+				if (bytes > MAX_RECORD_BYTES)
+					throw new Error("Session history formatting exceeded the tool argument byte cap");
 				for (const child of item) yield* walk(child, depth + 1);
 			} else {
 				for (const key in item) {
@@ -474,7 +473,7 @@ function customOneLiner(msg: CustomMessage | HookMessage): string {
  * equivalent loaded from a session file) — the same shapes
  * `session-dump-format.ts` consumes.
  */
-function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions): Generator<string | void, void> {
+function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions): Generator<string | undefined, void> {
 	const typed = (messages ?? []) as AgentMessage[];
 	if (opts?.title) {
 		yield `# ${opts.title}`;
@@ -563,7 +562,13 @@ function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions)
 			}
 			case "toolResult": {
 				if (consumed.has(msg.toolCallId)) break;
-				const line = yield* toolCallLine(msg.toolName, undefined, msg, opts?.includeToolIntent, opts?.expandEditDiffs);
+				const line = yield* toolCallLine(
+					msg.toolName,
+					undefined,
+					msg,
+					opts?.includeToolIntent,
+					opts?.expandEditDiffs,
+				);
 				yield line;
 				yield "";
 				lastWatchedLabel = undefined;
@@ -661,7 +666,12 @@ export async function formatSessionHistoryMarkdownAsync(
 	let msgCount = 0;
 	if (Array.isArray(rawMessages)) {
 		msgCount = rawMessages.length;
-	} else if (rawMessages && typeof rawMessages === "object" && "length" in rawMessages && typeof rawMessages.length === "number") {
+	} else if (
+		rawMessages &&
+		typeof rawMessages === "object" &&
+		"length" in rawMessages &&
+		typeof rawMessages.length === "number"
+	) {
 		msgCount = rawMessages.length;
 	}
 	if (msgCount > MAX_INDEX_ENTRIES) {

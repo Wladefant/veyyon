@@ -670,4 +670,99 @@ describe("formatSessionHistoryMarkdown", () => {
 		);
 	});
 
+	it("aborts formatSessionHistoryMarkdownAsync during preflight of million-ops nested argument", async () => {
+		const ops: unknown[] = new Array(1_000_000);
+		ops[0] = { pat: "bounded_pattern($$$A)", out: "replacement($$$A)" };
+		const controller = new AbortController();
+		const callerReason = new Error("aborted during nested argument preflight");
+
+		// Schedule abort after preflight starts via accessor near first element
+		Object.defineProperty(ops, 1, {
+			get() {
+				setImmediate(() => {
+					controller.abort(callerReason);
+				});
+				return { pat: "next_pattern($$$B)", out: "replacement($$$B)" };
+			},
+			configurable: true,
+			enumerable: true,
+		});
+
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-nested-abort",
+						name: "ast_edit",
+						arguments: { ops, paths: ["src/file.ts"] },
+					},
+				],
+				timestamp: 1,
+			},
+		];
+
+		let error: unknown;
+		try {
+			await formatSessionHistoryMarkdownAsync(messages, undefined, controller.signal);
+		} catch (err) {
+			error = err;
+		}
+		expect(error).toBe(callerReason);
+	});
+
+	it("rejects nested oversized string exceeding the tool argument byte cap (>8MiB)", async () => {
+		// 8MiB + 1024 bytes string inside nested arguments
+		const oversizedString = "x".repeat(8 * 1024 * 1024 + 1024);
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-nested-oversized-string",
+						name: "write",
+						arguments: {
+							path: "file.txt",
+							content: oversizedString,
+						},
+					},
+				],
+				timestamp: 1,
+			},
+		];
+
+		await expect(formatSessionHistoryMarkdownAsync(messages)).rejects.toThrow(
+			"Session history formatting exceeded the 8388608 byte output cap",
+		);
+	});
+
+	it("rejects nested structure exceeding depth cap (depth > 64)", async () => {
+		// Build deeply nested object exceeding depth 64
+		let current: Record<string, unknown> = { leaf: "val" };
+		for (let d = 0; d < 70; d++) {
+			current = { nested: current };
+		}
+
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-deep-nesting",
+						name: "custom_tool",
+						arguments: current,
+					},
+				],
+				timestamp: 1,
+			},
+		];
+
+		await expect(formatSessionHistoryMarkdownAsync(messages)).rejects.toThrow(
+			"Session history formatting exceeded the tool argument complexity cap",
+		);
+	});
+
 });

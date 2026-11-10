@@ -483,18 +483,8 @@ export function resolveImageDataUrlSync(blobStore: BlobStore, data: string): str
  * If the data is not a blob reference, returns it unchanged.
  * If the blob is missing, logs a warning and returns a placeholder.
  */
-export async function resolveImageData(
-	blobStore: BlobStore,
-	data: string,
-	options?: BlobGetOptions,
-): Promise<string> {
-	const buffer = await resolveBlobBuffer(
-		blobStore,
-		data,
-		parseBlobRef,
-		"Blob not found for image reference",
-		options,
-	);
+export async function resolveImageData(blobStore: BlobStore, data: string, options?: BlobGetOptions): Promise<string> {
+	const buffer = await resolveBlobBuffer(blobStore, data, parseBlobRef, "Blob not found for image reference", options);
 	return buffer ? buffer.toString("base64") : data;
 }
 
