@@ -211,7 +211,9 @@ describe("history exact record lookup", () => {
 			const records = [
 				{ type: "session", id: "s-preview" },
 				{
-					type: "message", id: "unicode", parentId: null,
+					type: "message",
+					id: "unicode",
+					parentId: null,
 					message: "İ".repeat(100) + " NeedLe archived",
 				},
 				{ type: "message", id: "plain", parentId: "unicode", message: "Plain ASCII NeedLe" },
@@ -228,7 +230,10 @@ describe("history exact record lookup", () => {
 			}
 			// Search previews are not evidence substitutions; exact reads remain byte-preserving.
 			const exact = await readStoredHistoryEntry(file, {
-				entryId: "unicode", leafId: "plain", offset: 0, limit: 1000,
+				entryId: "unicode",
+				leafId: "plain",
+				offset: 0,
+				limit: 1000,
 			});
 			expect(exact.status).toBe("ok");
 			expect(exact.fragment).toBe(JSON.stringify(records[1]));
@@ -240,11 +245,15 @@ describe("history exact record lookup", () => {
 	it("keeps Unicode and ordinary mixed-case matches visible in live branch previews", () => {
 		const branch = [
 			{
-				type: "message", id: "unicode", parentId: null,
+				type: "message",
+				id: "unicode",
+				parentId: null,
 				message: { role: "user", content: "İ".repeat(100) + " NeedLe live" },
 			},
 			{
-				type: "message", id: "plain", parentId: "unicode",
+				type: "message",
+				id: "plain",
+				parentId: "unicode",
 				message: { role: "assistant", content: "ASCII NeedLe live" },
 			},
 		] as unknown as SessionEntry[];
@@ -265,7 +274,9 @@ describe("history exact record lookup", () => {
 		for (const { before, after } of cases) {
 			const branch = [
 				{
-					type: "message", id: "boundary", parentId: null,
+					type: "message",
+					id: "boundary",
+					parentId: null,
 					message: { role: "user", content: before + "N".repeat(80) + after },
 				},
 			] as unknown as SessionEntry[];
@@ -282,12 +293,13 @@ describe("history exact record lookup", () => {
 		}
 	});
 
-
 	it("shows the entire allowed 180-character query without exceeding the preview cap", () => {
 		const match = "N".repeat(180);
 		const branch = [
 			{
-				type: "message", id: "long-query", parentId: null,
+				type: "message",
+				id: "long-query",
+				parentId: null,
 				message: { role: "user", content: "prefix ".repeat(18) + match + " suffix" },
 			},
 		] as unknown as SessionEntry[];
@@ -847,7 +859,7 @@ describe("history exact record lookup", () => {
 		} finally {
 			await dir.remove();
 		}
-	});
+	}, 30_000);
 
 	it("does not return explicit archived content from a 128 MiB truncated scan", async () => {
 		const dir = TempDir.createSync("@veyyon-history-byte-bound-");
@@ -1135,6 +1147,173 @@ describe("history exact record lookup", () => {
 			});
 			expect(healthySearch.status).toBe("partial");
 			expect(healthySearch.matches.map(match => match.entryId)).toEqual(["healthy"]);
+		} finally {
+			await dir.remove();
+		}
+	});
+	it("rejects non-object JSON and repeated or unseparated plain pre-header titles", async () => {
+		const dir = TempDir.createSync("@veyyon-history-prefix-shapes-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "trusted" });
+			const entry = JSON.stringify({ type: "message", id: "entry-one", parentId: null, message: "needle" });
+
+			for (const invalidPrefix of [
+				'[{"type":"session","id":"foreign"}]',
+				'"quoted title"',
+				"[]",
+				"First Plain Title\nSecond Plain Title\n",
+				"Unseparated Plain Title",
+			]) {
+				await fs.writeFile(file, `${invalidPrefix}\n${header}\n${entry}\n`);
+
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "entry-one",
+					leafId: "entry-one",
+					offset: 0,
+					limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				expect(exact.sessionId).toBeUndefined();
+
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle",
+					leafId: "entry-one",
+					limit: 5,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+				expect(search.sessionId).toBeUndefined();
+			}
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("rejects JSON-array identity-bearing pre-header for default and explicit leaf in both exact and search", async () => {
+		const dir = TempDir.createSync("@veyyon-history-json-array-pre-header-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(
+				file,
+				[
+					'[{"type":"session","id":"foreign"}]',
+					JSON.stringify({ type: "session", id: "trusted" }),
+					JSON.stringify({ type: "message", id: "entry-one", parentId: null, message: "needle" }),
+				].join("\n") + "\n",
+			);
+
+			// Default leaf exact read
+			const defaultExact = await readStoredHistoryEntry(file, { entryId: "entry-one", offset: 0, limit: 256 });
+			expect(defaultExact.status).toBe("unavailable");
+			expect(defaultExact.fragment).toBeUndefined();
+			expect(defaultExact.sessionId).toBeUndefined();
+
+			// Explicit leaf exact read
+			const explicitExact = await readStoredHistoryEntry(file, {
+				entryId: "entry-one",
+				leafId: "entry-one",
+				offset: 0,
+				limit: 256,
+			});
+			expect(explicitExact.status).toBe("unavailable");
+			expect(explicitExact.fragment).toBeUndefined();
+			expect(explicitExact.sessionId).toBeUndefined();
+
+			// Default leaf search
+			const defaultSearch = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+			expect(defaultSearch.status).toBe("unavailable");
+			expect(defaultSearch.matches).toEqual([]);
+			expect(defaultSearch.sessionId).toBeUndefined();
+
+			// Explicit leaf search
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "needle",
+				leafId: "entry-one",
+				limit: 5,
+			});
+			expect(explicitSearch.status).toBe("unavailable");
+			expect(explicitSearch.matches).toEqual([]);
+			expect(explicitSearch.sessionId).toBeUndefined();
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("admits benign plain initial title separated by a blank line", async () => {
+		const dir = TempDir.createSync("@veyyon-history-plain-title-sep-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(
+				file,
+				[
+					"Benign Initial Plain Title",
+					"",
+					JSON.stringify({ type: "session", id: "trusted" }),
+					JSON.stringify({ type: "message", id: "entry-one", parentId: null, message: "needle in haystack" }),
+				].join("\n") + "\n",
+			);
+
+			const exact = await readStoredHistoryEntry(file, { entryId: "entry-one", offset: 0, limit: 256 });
+			expect(exact.status).toBe("ok");
+			expect(exact.fragment).toContain("needle in haystack");
+			expect(exact.sessionId).toBe("trusted");
+
+			const search = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+			expect(search.status).toBe("ok");
+			expect(search.matches.map(m => m.entryId)).toEqual(["entry-one"]);
+			expect(search.sessionId).toBe("trusted");
+		} finally {
+			await dir.remove();
+		}
+	});
+
+	it("rejects duplicate-key second session header with explicit leaf for exact and search", async () => {
+		const dir = TempDir.createSync("@veyyon-history-dup-second-header-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			await fs.writeFile(
+				file,
+				[
+					JSON.stringify({ type: "session", id: "trusted" }),
+					'{"type":"session","id":"foreign","id":"trusted"}',
+					JSON.stringify({ type: "message", id: "entry-one", parentId: null, message: "needle" }),
+				].join("\n") + "\n",
+			);
+
+			// Explicit leaf exact read
+			const explicitExact = await readStoredHistoryEntry(file, {
+				entryId: "entry-one",
+				leafId: "entry-one",
+				offset: 0,
+				limit: 256,
+			});
+			expect(explicitExact.status).toBe("unavailable");
+			expect(explicitExact.fragment).toBeUndefined();
+			expect(explicitExact.sessionId).toBeUndefined();
+
+			// Explicit leaf search
+			const explicitSearch = await searchStoredHistoryEntries(file, {
+				query: "needle",
+				leafId: "entry-one",
+				limit: 5,
+			});
+			expect(explicitSearch.status).toBe("unavailable");
+			expect(explicitSearch.matches).toEqual([]);
+			expect(explicitSearch.sessionId).toBeUndefined();
+
+			// Default leaf exact read
+			const defaultExact = await readStoredHistoryEntry(file, { entryId: "entry-one", offset: 0, limit: 256 });
+			expect(defaultExact.status).toBe("unavailable");
+			expect(defaultExact.fragment).toBeUndefined();
+			expect(defaultExact.sessionId).toBeUndefined();
+
+			// Default leaf search
+			const defaultSearch = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+			expect(defaultSearch.status).toBe("unavailable");
+			expect(defaultSearch.matches).toEqual([]);
+			expect(defaultSearch.sessionId).toBeUndefined();
 		} finally {
 			await dir.remove();
 		}

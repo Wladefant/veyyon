@@ -108,9 +108,13 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean };
 
-function hasDuplicateTopLevelKeys(raw: string): boolean {
+function scanTopLevelMembers(raw: string): { hasDuplicateKeys: boolean; sessionTypeMember: boolean } {
 	const keys = new Set<string>();
+	let hasDuplicateKeys = false;
+	let sessionTypeMember = false;
 	let depth = 0;
+	// JSON array string elements are never root-level object member names.
+	let arrayDepth = 0;
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
 		if (char === '"') {
@@ -122,50 +126,99 @@ function hasDuplicateTopLevelKeys(raw: string): boolean {
 				}
 				if (raw[i++] === '"') break;
 			}
-			if (depth === 1) {
+			// A root string *value* followed by malformed `:` is not a member key.
+			// The full JSON parser still rejects the row; do not invent a duplicate
+			// ID or session boundary from a value that happens to spell "id"/"type".
+			let previous = start - 1;
+			while (previous >= 0 && /\s/.test(raw[previous]!)) previous--;
+			if (depth === 1 && arrayDepth === 0 && raw[previous] !== ":") {
 				let next = i;
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
-					const key = JSON.parse(raw.slice(start, i)) as string;
-					if (keys.has(key)) return true;
-					keys.add(key);
+					let key: string;
+					try {
+						key = JSON.parse(raw.slice(start, i)) as string;
+					} catch {
+						// A malformed member name must not hide a later session type.
+						// The complete record will still fail JSON.parse below.
+						continue;
+					}
+					if (keys.has(key)) hasDuplicateKeys = true;
+					else keys.add(key);
+					if (key === "type") {
+						let valueCursor = next + 1;
+						while (/\s/.test(raw[valueCursor] ?? "")) valueCursor++;
+						if (raw[valueCursor] === '"') {
+							const valueStart = valueCursor++;
+							while (valueCursor < raw.length) {
+								if (raw[valueCursor] === "\\") {
+									valueCursor += 2;
+									continue;
+								}
+								if (raw[valueCursor++] === '"') break;
+							}
+							if (raw[valueCursor - 1] === '"') {
+								try {
+									const member = JSON.parse(raw.slice(valueStart, valueCursor)) as unknown;
+									if (member === "session") sessionTypeMember = true;
+								} catch {
+									// An invalid string member cannot establish a session boundary.
+								}
+							}
+						}
+					}
 				}
 			}
 			continue;
 		}
 		if (char === "{") depth++;
 		else if (char === "}") depth--;
+		else if (char === "[") arrayDepth++;
+		else if (char === "]") arrayDepth = Math.max(0, arrayDepth - 1);
 		i++;
 	}
-	return false;
+	return { hasDuplicateKeys, sessionTypeMember };
 }
 
-function invalidStoredRecord(state: StoredAdmissionState): StoredRecordResult {
-	if (!state.headerSeen) state.invalidIdentity = true;
+function invalidStoredRecord(state: StoredAdmissionState, sessionTypeMember = false): StoredRecordResult {
+	if (!state.headerSeen || sessionTypeMember) {
+		state.invalidIdentity = true;
+		state.sessionId = undefined;
+	}
 	return { kind: "invalid", invalidIdentity: state.invalidIdentity };
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
+	let sessionTypeMember = false;
 	try {
-		if (hasDuplicateTopLevelKeys(raw)) return invalidStoredRecord(state);
+		const scanned = scanTopLevelMembers(raw);
+		sessionTypeMember = scanned.sessionTypeMember;
+		if (scanned.hasDuplicateKeys) return invalidStoredRecord(state, sessionTypeMember);
 	} catch {
-		return invalidStoredRecord(state);
+		return invalidStoredRecord(state, sessionTypeMember);
 	}
 	let value: unknown;
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		return invalidStoredRecord(state);
+		return invalidStoredRecord(state, sessionTypeMember);
 	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) return invalidStoredRecord(state);
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return invalidStoredRecord(state, sessionTypeMember);
 	const entry = value as StoredEntryShape;
 	if (entry.type === "session") {
 		if (state.headerSeen || state.entrySeen) {
 			state.invalidIdentity = true;
+			state.sessionId = undefined;
+			return { kind: "invalid", invalidIdentity: true };
 		} else if (typeof entry.id !== "string") {
-			return invalidStoredRecord(state);
+			state.invalidIdentity = true;
+			state.sessionId = undefined;
+			return invalidStoredRecord(state, true);
 		} else if (!entry.id.trim()) {
 			state.invalidIdentity = true;
+			state.sessionId = undefined;
+			return { kind: "invalid", invalidIdentity: true };
 		} else {
 			state.headerSeen = true;
 			state.sessionId = entry.id;
@@ -180,6 +233,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 	}
 	if (!state.headerSeen) {
 		state.invalidIdentity = true;
+		state.sessionId = undefined;
 		return { kind: "invalid", invalidIdentity: true };
 	}
 	if (!isStoredEntry(entry)) return { kind: "invalid", invalidIdentity: state.invalidIdentity };
@@ -364,7 +418,8 @@ export async function readStoredHistoryEntry(
 	let raw: string | undefined;
 	let recordType: string | undefined;
 	let incomplete = false;
-	let startedJsonl = false;
+	let initialPlainTitle = false;
+	let initialTitleSeparated = false;
 	try {
 		for await (const line of storedLines(filePath, handle)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
@@ -378,16 +433,39 @@ export async function readStoredHistoryEntry(
 			}
 			if (line === undefined) {
 				incomplete = true;
-				if (!admission.headerSeen) admission.invalidIdentity = true;
+				if (!admission.headerSeen) {
+					admission.invalidIdentity = true;
+					admission.sessionId = undefined;
+				}
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (startedJsonl && line.trim().length > 0) incomplete = true;
+				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
+					if (initialPlainTitle || /["{}[\]]/.test(line)) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+						incomplete = true;
+					} else {
+						initialPlainTitle = true;
+					}
+				} else if (line.trim().length > 0) {
+					incomplete = true;
+					if (!admission.headerSeen) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+					}
+				} else if (initialPlainTitle) {
+					initialTitleSeparated = true;
+				}
 				continue;
 			}
-			startedJsonl = true;
+			if (initialPlainTitle && !initialTitleSeparated) {
+				admission.invalidIdentity = true;
+				admission.sessionId = undefined;
+			}
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
+			if (admission.invalidIdentity) sessionId = undefined;
 			if (decoded.kind === "invalid") {
 				incomplete = true;
 				continue;
@@ -618,7 +696,8 @@ export async function searchStoredHistoryEntries(
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
 	let unreadable = false;
-	let startedJsonl = false;
+	let initialPlainTitle = false;
+	let initialTitleSeparated = false;
 	const topologyHash = createHash("sha256");
 	try {
 		for await (const line of storedLines(filePath, handle)) {
@@ -635,16 +714,39 @@ export async function searchStoredHistoryEntries(
 			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
 				unreadable = true;
-				if (!admission.headerSeen) admission.invalidIdentity = true;
+				if (!admission.headerSeen) {
+					admission.invalidIdentity = true;
+					admission.sessionId = undefined;
+				}
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (startedJsonl && line.trim().length > 0) unreadable = true;
+				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
+					if (initialPlainTitle || /["{}[\]]/.test(line)) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+						unreadable = true;
+					} else {
+						initialPlainTitle = true;
+					}
+				} else if (line.trim().length > 0) {
+					unreadable = true;
+					if (!admission.headerSeen) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+					}
+				} else if (initialPlainTitle) {
+					initialTitleSeparated = true;
+				}
 				continue;
 			}
-			startedJsonl = true;
+			if (initialPlainTitle && !initialTitleSeparated) {
+				admission.invalidIdentity = true;
+				admission.sessionId = undefined;
+			}
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
+			if (admission.invalidIdentity) sessionId = undefined;
 			if (decoded.kind === "invalid") {
 				unreadable = true;
 				continue;
