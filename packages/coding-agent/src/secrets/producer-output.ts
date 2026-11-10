@@ -10,7 +10,7 @@ const MAX_RECORD_CHARS = 64 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
-	/(?<boundary>^|[\s"'{,.?-])(?<key>(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?\s*(?:[=:]|\s{2,})/i;
+	/(?<boundary>^|[\s"'{,.?-])(?<key>(?:[A-Za-z0-9]+[_-])*(?:auth|token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?\s*(?:[=:]|\s{2,})/i;
 const CREDENTIAL_KEY_PREFIX =
 	/(?:^|\s+export\s+|[?.,{"'-])(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|pin|cookie|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
 
@@ -59,7 +59,7 @@ function classifyCredentialText(text: string, redact?: (text: string) => string)
 			return BLOCKED_OUTPUT_RECORD;
 		}
 		if (NUMERIC_METADATA_KEY.test(match.groups!.key) && NUMERIC_METADATA_VALUE.test(tail)) continue;
-		if (REDACTION_MARKER.test(tail)) continue;
+		if (REDACTION_MARKER.test(tail) || /^<redacted \d+ chars>(?=$|[ \t])/.test(tail) || /^#[A-Za-z0-9_]+#(?=$|[ \t])/.test(tail)) continue;
 		if (/^[{[|>]/.test(tail)) return BLOCKED_OUTPUT_RECORD;
 		const quoted = isQuote(tail[0]);
 		const quoteEnd = quoted ? quotedEnd(tail, 0) : -1;
@@ -133,7 +133,13 @@ function classifyCredentialText(text: string, redact?: (text: string) => string)
 		const owned = redact(text);
 		// Masking must not split a registered literal or change its owner context.
 		if (rawProjection === owned && normalizedProjection === redact(sanitizeText(owned))) {
-			return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+			const ownerKeptCredential = spans.some(span =>
+				owned.includes(text.slice(span.valueStart, span.end)),
+			);
+			if (ownerKeptCredential) return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+			const ownerMasked = sanitizeText(owned);
+			const safe = classifyCredentialText(ownerMasked);
+			return safe === BLOCKED_OUTPUT_RECORD ? safe : sanitizeText(safe);
 		}
 		let extended = false;
 		for (const span of spans) {
@@ -145,7 +151,9 @@ function classifyCredentialText(text: string, redact?: (text: string) => string)
 		}
 		if (!extended) break;
 	}
-	return BLOCKED_OUTPUT_RECORD;
+	const ownerMasked = sanitizeText(redact(text));
+	const safe = classifyCredentialText(ownerMasked);
+	return safe === BLOCKED_OUTPUT_RECORD ? safe : sanitizeText(safe);
 }
 
 function isQuote(character: string): boolean {
@@ -270,6 +278,7 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 					if (NUMERIC_METADATA_KEY.test(key) && NUMERIC_METADATA_VALUE.exec(nested)?.[0] === nested) return nested;
 					return "[REDACTED]";
 				} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {
+					if (/^(?:auth|authorization)$/i.test(key)) return nested;
 					return BLOCKED_OUTPUT_RECORD;
 				}
 			}

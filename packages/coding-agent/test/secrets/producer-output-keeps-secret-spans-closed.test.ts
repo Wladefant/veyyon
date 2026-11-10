@@ -49,6 +49,25 @@ describe("producer output keeps complete credential spans closed", () => {
 		expect(output).not.toContain("registered-value");
 	});
 
+	it("preserves a record when owner masking crosses a credential span", () => {
+		const token = `ghp_${"A".repeat(36)}`;
+		const composite = `${token} opaqueSuffix`;
+		const owner = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: composite, name: "COMPOSITE_CANARY" },
+		]);
+		const output = runWithProducerSecretOwner(
+			{
+				redact: text => owner.obfuscate(text),
+				pendingPrefixLength: text => owner.pendingRedactionPrefixLength(text),
+			},
+			() => new ProducerOutputGuard().sanitize(`before token=${composite} after\n`),
+		);
+		expect(output).toContain("#COMPOSITE_CANARY#");
+		expect(output).toContain(" after");
+		expect(output).not.toContain(token);
+		expect(output).not.toContain("opaqueSuffix");
+	});
+
 	it.each([
 		"private_key: -----BEGIN PRIVATE KEY-----\nQ29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==\n-----END PRIVATE KEY-----\n",
 		"private_key=-----BEGIN PRIVATE KEY-----\nQ29uc2VydmF0aXZlU3ludGhldGljRGF0YQ==\n-----END PRIVATE KEY-----\n",

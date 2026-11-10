@@ -35,6 +35,27 @@ describe("producer output keeps benign metadata", () => {
 		expect(parsed.commit).toBe(commit);
 	});
 
+	it("keeps gcloud log fields readable while masking auth values", () => {
+		const token = "opaqueAuthToken1234567890";
+		const input = JSON.stringify({
+			timestamp: "2026-01-02T03:04:05Z",
+			severity: "ERROR",
+			message: "request failed",
+			jsonPayload: {
+				auth: token,
+				authorization: { principal: "alice@example.test", token },
+			},
+		});
+		const output = guard.sanitize(input);
+		expect(output).not.toContain(token);
+		expect(output).toContain('"auth":"[REDACTED]"');
+		expect(output).toContain('"principal":"alice@example.test"');
+		expect(output).toContain('"token":"[REDACTED]"');
+		expect(output).toContain('"timestamp"');
+		expect(output).toContain('"severity":"ERROR"');
+		expect(output).toContain('"message":"request failed"');
+	});
+
 	it("keeps plain defs-style metadata unchanged", () => {
 		const text = "figma_secret: str";
 
