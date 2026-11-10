@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -103,6 +105,40 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 		const freshMgr = new ArtifactManager(dir);
 		const id2 = await freshMgr.allocatePath("bash");
 		expect(Number(id2.id)).toBeGreaterThanOrEqual(2);
+	});
+
+	// Existing counters must work without enumerating a large legacy directory.
+	// Collisions still need a scan to catch legacy reservations beyond the counter.
+	it("uses the persisted counter when directory enumeration is unavailable", () => {
+		const dir = freshDir();
+		expect(new ArtifactManager(dir).allocateId()).toBe(0);
+		const scan = spyOn(fsSync, "readdirSync").mockImplementation(() => {
+			throw Object.assign(new Error("Directory enumeration denied"), { code: "EACCES" });
+		});
+		try {
+			expect(new ArtifactManager(dir).allocateId()).toBe(1);
+		} finally {
+			scan.mockRestore();
+		}
+	});
+
+	it("persists WAL mode for the artifact counter", () => {
+		const dir = freshDir();
+		new ArtifactManager(dir).allocateId();
+		const db = new Database(path.join(dir, ".artifact-ids.sqlite"));
+		try {
+			expect(db.query("PRAGMA journal_mode;").get()).toEqual({ journal_mode: "wal" });
+		} finally {
+			db.close();
+		}
+	});
+
+	it("rescans legacy reservations after a persisted counter collides", async () => {
+		const dir = freshDir();
+		expect(new ArtifactManager(dir).allocateId()).toBe(0);
+		await fs.mkdir(path.join(dir, ".artifact-id-1"));
+		await fs.mkdir(path.join(dir, ".artifact-id-20"));
+		expect(new ArtifactManager(dir).allocateId()).toBe(21);
 	});
 
 	it("excludes hidden database and sidecars from listFiles", async () => {

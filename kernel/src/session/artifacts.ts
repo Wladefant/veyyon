@@ -87,7 +87,6 @@ export function writeArtifactAtomicallySync(path: string, content: string): numb
  */
 export class ArtifactManager {
 	readonly #dir: string;
-	#cachedScanMax: number | null = null;
 	#dirCreated = false;
 
 	/**
@@ -154,18 +153,18 @@ export class ArtifactManager {
 		const db = new Database(dbPath);
 		try {
 			db.run("PRAGMA busy_timeout = 5000;");
+			db.run("PRAGMA journal_mode = WAL;");
 			db.run("CREATE TABLE IF NOT EXISTS counter (key TEXT PRIMARY KEY, next_id INTEGER NOT NULL);");
 
+			let rescan = false;
 			for (;;) {
 				let claimedId = -1;
 				const tx = db.transaction(() => {
-					// Initial scan is cached; only re-scan if #cachedScanMax is null (first run or after marker collision).
-					if (this.#cachedScanMax === null) {
-						this.#cachedScanMax = this.#scanDirectoryMax();
-					}
-					const maxScanId = this.#cachedScanMax;
-
 					const row = db.query("SELECT next_id FROM counter WHERE key = 'artifacts';").get() as { next_id: number } | null;
+					// The durable counter avoids enumerating legacy markers on each fresh manager.
+					// Scan only to seed it or recover from a legacy allocator collision.
+					const maxScanId = !row || rescan ? this.#scanDirectoryMax() : -1;
+					rescan = false;
 					let nextVal: number;
 					if (!row) {
 						nextVal = Math.max(0, maxScanId + 1);
@@ -177,20 +176,17 @@ export class ArtifactManager {
 						db.run("UPDATE counter SET next_id = ? WHERE key = 'artifacts';", [nextVal + 1]);
 						claimedId = nextVal;
 					}
-					if (claimedId > this.#cachedScanMax) {
-						this.#cachedScanMax = claimedId;
-					}
 				});
 				tx.immediate();
 
 				// Atomically reserve legacy marker directory.
 				// On EEXIST (another process or legacy allocator already claimed this marker),
-				// invalidate cached scan so we re-scan the directory on the next iteration.
+				// re-scan the directory on the next iteration.
 				try {
 					fsSync.mkdirSync(path.join(this.#dir, `.artifact-id-${claimedId}`));
 				} catch (err) {
 					if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-						this.#cachedScanMax = null;
+						rescan = true;
 						continue;
 					}
 					throw err;

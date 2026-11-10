@@ -872,6 +872,146 @@ def test_same_pid_set_lock_change_aborts_deletion_per_marker():
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+def test_non_positive_pid_locks_invalid_unsafe():
+    """Non-positive PID locks (<= 0) must be treated as invalid/unsafe and fail closed (active)."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_non_pos_pid_"))
+    try:
+        for bad_pid in (0, -1, -999):
+            lock_dir = temp_dir / f"test_bad_{abs(bad_pid)}.lock"
+            lock_dir.mkdir()
+            info_file = lock_dir / "info"
+            info_file.write_text(json.dumps({
+                "version": 1,
+                "pid": bad_pid,
+                "token": "safe-token-val",
+            }), encoding="utf-8")
+
+            assert mod.is_lock_active(lock_dir) is True, f"PID {bad_pid} lock must fail closed as active/unsafe"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_validate_min_age_hours():
+    """min_age_hours must be finite and >= 0, rejecting negative, nan, and inf."""
+    import math
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_min_age_val_"))
+    try:
+        # Test validation helper if exposed or direct run_cleanup
+        validate_fn = getattr(mod, "validate_min_age_hours", None)
+        if validate_fn is not None:
+            for bad_val in (-1, -0.001, float("nan"), float("inf"), float("-inf")):
+                try:
+                    validate_fn(bad_val)
+                    assert False, f"Expected ValueError for min_age_hours={bad_val}"
+                except ValueError:
+                    pass
+
+            for good_val in (0, 0.0, 1.5, 24, 24.0):
+                assert validate_fn(good_val) == float(good_val)
+
+        # run_cleanup directly
+        for bad_val in (-1.0, float("nan"), float("inf"), float("-inf")):
+            try:
+                mod.run_cleanup(profiles_root=temp_dir, min_age_hours=bad_val)
+                assert False, f"run_cleanup must raise ValueError for min_age_hours={bad_val}"
+            except ValueError:
+                pass
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal_locks():
+    """Per-deletion recheck must check the full lock set including active.lock and internal locks."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_per_del_full_lock_"))
+    try:
+        session_dir = temp_dir / "profiles" / "default" / "agent" / "sessions" / "sess-per-del"
+        session_dir.mkdir(parents=True)
+
+        # Published log 10 and older marker 1
+        (session_dir / "10.task.log").write_text("done")
+        marker1 = session_dir / ".artifact-id-1"
+        marker1.mkdir()
+        old_time = time.time() - 100000
+        os.utime(marker1, (old_time, old_time))
+
+        cache = mod.ProcessSnapshotCache()
+        cache.is_valid = True
+        cache.command_lines = ["node worker.js"]
+        cache.active_tokens = set()
+        cache.fingerprint = frozenset([(12345, 67890, "node.exe")])
+
+        # Hook check_fn so right after emptiness check passes, an internal lock or active.lock appears
+        # Hook cache.ensure_current so before deletion recheck, an internal active.lock appears
+        def hook_ensure_current():
+            act_lock = session_dir / "active.lock"
+            act_lock.mkdir(exist_ok=True)
+            (act_lock / "info").write_text(json.dumps({
+                "version": 1,
+                "pid": os.getpid(),
+                "token": "tok123",
+            }), encoding="utf-8")
+            return True
+
+        cache.ensure_current = hook_ensure_current
+
+        metrics = mod.CleanupMetrics()
+        with patch.object(mod, "get_native_process_identities", return_value=cache.fingerprint):
+            mod.process_session_markers(
+                session_dir=session_dir,
+                active_tokens=cache.active_tokens,
+                command_lines=cache.command_lines,
+                cutoff_time=time.time() - 86400,
+                metrics=metrics,
+                execute=True,
+                snapshot_cache=cache,
+            )
+
+        assert marker1.exists(), "Marker must not be deleted when active.lock appeared before deletion"
+        assert metrics.deleted == 0
+        assert metrics.skipped_locked >= 1
+        # Subcase 2: Arbitrary internal lock (e.g. worker_sub.lock) appearing before deletion
+        session_dir2 = temp_dir / "profiles" / "default" / "agent" / "sessions" / "sess-per-del-internal"
+        session_dir2.mkdir(parents=True)
+        (session_dir2 / "10.task.log").write_text("done")
+        marker2 = session_dir2 / ".artifact-id-2"
+        marker2.mkdir()
+        os.utime(marker2, (old_time, old_time))
+
+        cache2 = mod.ProcessSnapshotCache()
+        cache2.is_valid = True
+        cache2.command_lines = ["node worker.js"]
+        cache2.active_tokens = set()
+        cache2.fingerprint = frozenset([(12345, 67890, "node.exe")])
+
+        def hook_ensure_current2():
+            cust_lock = session_dir2 / "worker_job.lock"
+            cust_lock.mkdir(exist_ok=True)
+            (cust_lock / "info").write_text(json.dumps({
+                "version": 1,
+                "pid": os.getpid(),
+                "token": "tok456",
+            }), encoding="utf-8")
+            return True
+
+        cache2.ensure_current = hook_ensure_current2
+        metrics2 = mod.CleanupMetrics()
+        with patch.object(mod, "get_native_process_identities", return_value=cache2.fingerprint):
+            mod.process_session_markers(
+                session_dir=session_dir2,
+                active_tokens=cache2.active_tokens,
+                command_lines=cache2.command_lines,
+                cutoff_time=time.time() - 86400,
+                metrics=metrics2,
+                execute=True,
+                snapshot_cache=cache2,
+            )
+
+        assert marker2.exists(), "Marker must not be deleted when internal worker_job.lock appeared before deletion"
+        assert metrics2.deleted == 0
+        assert metrics2.skipped_locked >= 1
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
 if __name__ == "__main__":
     test_regex_matching()
     test_dry_run_preserves_everything()
@@ -900,4 +1040,7 @@ if __name__ == "__main__":
     test_max_deletions_bounded_chunking()
     test_reused_pid_creation_time_transition_triggers_refresh()
     test_same_pid_set_lock_change_aborts_deletion_per_marker()
-    print("All comprehensive tests passed successfully (27 test suites).")
+    test_non_positive_pid_locks_invalid_unsafe()
+    test_validate_min_age_hours()
+    test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal_locks()
+    print("All comprehensive tests passed successfully (30 test suites).")

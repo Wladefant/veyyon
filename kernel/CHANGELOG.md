@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Artifact counters use WAL and skip directory scans when already initialized, while marker cleanup rechecks all session locks and rejects unsafe PIDs and age limits ([#1057](https://github.com/Wladefant/veyyon/issues/1057)).
+
 ## [1.8.20] - 2026-11-09
 
 ### Fixed

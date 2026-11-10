@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import math
 import re
 import subprocess
 import stat
@@ -435,8 +436,8 @@ def is_lock_active(lock_path: Path) -> bool:
                 version = data.get("version")
                 pid = data.get("pid")
                 token = data.get("token")
-                if version != 1 or not isinstance(pid, int) or not isinstance(token, str):
-                    # Invalid/unrecognized format: fail closed
+                if version != 1 or not isinstance(pid, int) or pid <= 0 or not isinstance(token, str):
+                    # Invalid/unrecognized format or non-positive PID: fail closed (unsafe)
                     return True
 
                 # If the owner PID is alive, lock is active.
@@ -507,6 +508,8 @@ def is_session_directory_locked(session_dir: Path, check_internal: bool = True) 
         internal_candidates = [
             session_dir / ".lock",
             session_dir / ".lock.transition",
+            session_dir / "active.lock",
+            session_dir / "active.lock.transition",
             session_dir / "artifacts.lock",
             session_dir / "session.lock",
         ]
@@ -533,13 +536,6 @@ def is_session_directory_locked(session_dir: Path, check_internal: bool = True) 
 
     return False
 
-def has_active_direct_locks(session_dir: Path) -> bool:
-    """Cheap non-recursive lock check for session directory.
-
-    Checks direct candidate locks (siblings and direct known internal lock paths)
-    without scanning directories or performing recursive searches.
-    """
-    return is_session_directory_locked(session_dir, check_internal=False)
 
 
 def find_session_directories(profiles_root: Path) -> list[Path]:
@@ -603,8 +599,8 @@ def process_session_markers(
             metrics.error_details.append(f"Scan error in live session {session_dir}: {ex}")
         return
 
-    # 2. Check if session directory is locked via sibling and direct internal locks (cheap candidate check)
-    if has_active_direct_locks(session_dir):
+    # 2. Check if session directory is locked via full lock set including active.lock and internal locks
+    if is_session_directory_locked(session_dir, check_internal=True):
         metrics.sessions_skipped_live += 1
         try:
             with os.scandir(session_dir) as it:
@@ -741,8 +737,12 @@ def process_session_markers(
                 continue
             fresh_tokens = extract_active_session_identifiers(fresh_cmdlines)
 
-        if is_session_directory_live(session_dir, fresh_tokens, fresh_cmdlines) or has_active_direct_locks(session_dir):
+        if is_session_directory_live(session_dir, fresh_tokens, fresh_cmdlines):
             metrics.skipped_live += 1
+            metrics.remaining += 1
+            continue
+        if is_session_directory_locked(session_dir, check_internal=True):
+            metrics.skipped_locked += 1
             metrics.remaining += 1
             continue
         if not is_directory_empty(marker_path):
@@ -757,6 +757,15 @@ def process_session_markers(
             metrics.errors += 1
             metrics.remaining += 1
             metrics.error_details.append(f"Failed rmdir {marker_path}: {ex}")
+
+
+def validate_min_age_hours(val: float | int) -> float:
+    """Validate that min_age_hours is a finite non-negative number."""
+    if not isinstance(val, (int, float)) or not math.isfinite(val) or val < 0:
+        raise ValueError(f"min_age_hours must be a finite non-negative number, got {val!r}")
+    return float(val)
+
+
 def run_cleanup(
     profiles_root: Path,
     min_age_hours: float = 24.0,
@@ -765,6 +774,7 @@ def run_cleanup(
     max_deletions: int | None = None,
 ) -> CleanupMetrics:
     metrics = CleanupMetrics()
+    min_age_hours = validate_min_age_hours(min_age_hours)
 
     # Step 1: Initialize reusable process snapshot cache
     snapshot_cache = ProcessSnapshotCache()
@@ -821,7 +831,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--min-age-hours",
-        type=float,
+        type=validate_min_age_hours,
         default=24.0,
         help="Minimum age in hours to qualify for cleanup (default: 24.0)",
     )
