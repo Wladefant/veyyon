@@ -9,13 +9,16 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { isAbortError } from "@veyyon/utils";
 
 const DEFAULT_PAGE_CHARACTERS = 8_000;
 const MAX_PAGE_CHARACTERS = 12_000;
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const MAX_INDEX_ENTRIES = 100_000;
 const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
+const RECORD_YIELD_INTERVAL = 256;
 // Unlike an isolated malformed line, a hard scan cap leaves unseen IDs behind.
 const SCAN_BOUND_EXCEEDED = Symbol("stored-history-scan-bound");
 const HARD_BOUND_DETAIL =
@@ -31,14 +34,19 @@ function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
 }
 
 /** Discard an oversized line while streaming, before allocating its full text. */
-async function* storedLines(filePath: string): AsyncGenerator<string | undefined | typeof SCAN_BOUND_EXCEEDED> {
-	const input = createReadStream(filePath, { highWaterMark: 64 * 1024 });
+async function* storedLines(
+	filePath: string,
+	signal?: AbortSignal,
+): AsyncGenerator<string | undefined | typeof SCAN_BOUND_EXCEEDED> {
+	signal?.throwIfAborted();
+	const input = createReadStream(filePath, { highWaterMark: 64 * 1024, signal });
 	let parts: Buffer[] = [];
 	let bytes = 0;
 	let oversized = false;
 	let scannedBytes = 0;
 	try {
 		for await (const chunk of input) {
+			signal?.throwIfAborted();
 			const buffer = chunk as Buffer;
 			scannedBytes += buffer.length;
 			if (scannedBytes > MAX_SCANNED_BYTES) {
@@ -59,6 +67,7 @@ async function* storedLines(filePath: string): AsyncGenerator<string | undefined
 					}
 				}
 				if (newline >= 0) {
+					signal?.throwIfAborted();
 					yield oversized ? undefined : decodeRecord(parts, bytes);
 					parts = [];
 					bytes = 0;
@@ -67,6 +76,7 @@ async function* storedLines(filePath: string): AsyncGenerator<string | undefined
 				start = newline < 0 ? buffer.length : newline + 1;
 			}
 		}
+		signal?.throwIfAborted();
 		if (oversized || bytes > 0) yield oversized ? undefined : decodeRecord(parts, bytes);
 	} finally {
 		input.destroy();
@@ -328,7 +338,9 @@ function selectedBranchIds(parents: ReadonlyMap<string, string | undefined>, lea
 export async function readStoredHistoryEntry(
 	filePath: string,
 	request: ExactHistoryRequest,
+	signal?: AbortSignal,
 ): Promise<ExactHistoryResult> {
+	signal?.throwIfAborted();
 	const parents = new Map<string, string | undefined>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
@@ -342,8 +354,15 @@ export async function readStoredHistoryEntry(
 	let recordType: string | undefined;
 	let incomplete = false;
 	let startedJsonl = false;
+	let recordCount = 0;
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, signal)) {
+			signal?.throwIfAborted();
+			recordCount++;
+			if (recordCount % RECORD_YIELD_INTERVAL === 0) {
+				await yieldToEventLoop();
+				signal?.throwIfAborted();
+			}
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -400,6 +419,7 @@ export async function readStoredHistoryEntry(
 			}
 		}
 	} catch (error) {
+		if (signal?.aborted || isAbortError(error)) throw error;
 		if (!isFileReadError(error)) throw error;
 		return {
 			status: "unavailable",
@@ -581,7 +601,9 @@ function previewAt(raw: string, term: string): string {
 export async function searchStoredHistoryEntries(
 	filePath: string,
 	request: HistorySearchRequest,
+	signal?: AbortSignal,
 ): Promise<HistorySearchResult> {
+	signal?.throwIfAborted();
 	const parents = new Map<string, string | undefined>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
@@ -595,8 +617,15 @@ export async function searchStoredHistoryEntries(
 	let unreadable = false;
 	let startedJsonl = false;
 	const topologyHash = createHash("sha256");
+	let recordCount = 0;
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, signal)) {
+			signal?.throwIfAborted();
+			recordCount++;
+			if (recordCount % RECORD_YIELD_INTERVAL === 0) {
+				await yieldToEventLoop();
+				signal?.throwIfAborted();
+			}
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -653,6 +682,7 @@ export async function searchStoredHistoryEntries(
 			lastId = entry.id;
 		}
 	} catch (error) {
+		if (signal?.aborted || isAbortError(error)) throw error;
 		if (!isFileReadError(error)) throw error;
 		return {
 			status: "unavailable",
@@ -721,8 +751,15 @@ export async function searchStoredHistoryEntries(
 		titleSeen: false,
 		invalidIdentity: false,
 	};
+	let replayCount = 0;
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, signal)) {
+			signal?.throwIfAborted();
+			replayCount++;
+			if (replayCount % RECORD_YIELD_INTERVAL === 0) {
+				await yieldToEventLoop();
+				signal?.throwIfAborted();
+			}
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -753,6 +790,7 @@ export async function searchStoredHistoryEntries(
 			});
 		}
 	} catch (error) {
+		if (signal?.aborted || isAbortError(error)) throw error;
 		if (!isFileReadError(error)) throw error;
 		return {
 			status: "unavailable",

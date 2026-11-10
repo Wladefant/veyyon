@@ -146,7 +146,12 @@ export async function ambiguousSessionFileIds(signal?: AbortSignal): Promise<Set
 const ARTIFACT_RESERVATION_DIR_PATTERN = /^\.artifact-id-\d+$/;
 const ARTIFACT_ID_DATABASE_PATTERN = /^\.artifact-ids\.sqlite.*$/;
 
-async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<{ files: Map<string, string>; ambiguous: Set<string> }> {
+export interface SessionFileScan {
+	files: Map<string, string>;
+	ambiguous: Set<string>;
+}
+
+export async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<SessionFileScan> {
 	const found = new Map<string, string>();
 	const ambiguous = new Set<string>();
 	// Preserve public display casing, but compare the same folded IDs as history://.

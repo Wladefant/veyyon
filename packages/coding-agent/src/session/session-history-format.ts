@@ -6,6 +6,7 @@
  * result pairs collapsed to single lines, thinking elided, custom messages
  * as one-liners. No system prompt, no tool catalog, no config sections.
  */
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage, VideoContent } from "@veyyon/ai";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
@@ -258,7 +259,7 @@ function customOneLiner(msg: CustomMessage | HookMessage): string {
  * equivalent loaded from a session file) — the same shapes
  * `session-dump-format.ts` consumes.
  */
-export function formatSessionHistoryMarkdown(messages: unknown[], opts?: HistoryFormatOptions): string {
+function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions): Generator<void, string> {
 	const typed = messages as AgentMessage[];
 	const lines: string[] = [];
 	if (opts?.title) {
@@ -268,6 +269,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 	// Index tool results by call id so each toolCall collapses to one line.
 	const resultsByCallId = new Map<string, ToolResultMessage>();
 	for (const msg of typed) {
+		yield;
 		if (msg.role === "toolResult") {
 			resultsByCallId.set(msg.toolCallId, msg);
 		}
@@ -280,6 +282,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 	let lastWatchedLabel: string | undefined;
 
 	for (const msg of typed) {
+		yield;
 		switch (msg.role) {
 			case "user":
 			case "developer": {
@@ -302,6 +305,7 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 				const assistantMsg = msg as AssistantMessage;
 				const body: string[] = [];
 				for (const block of assistantMsg.content) {
+					yield;
 					if (block.type === "text") {
 						if (block.text.trim()) body.push(block.text);
 					} else if (block.type === "toolCall") {
@@ -403,4 +407,30 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 	}
 
 	return `${lines.join("\n").trim()}\n`;
+}
+
+export function formatSessionHistoryMarkdown(messages: unknown[], opts?: HistoryFormatOptions): string {
+	const steps = historyMarkdownSteps(messages, opts);
+	let step = steps.next();
+	while (!step.done) step = steps.next();
+	return step.value;
+}
+
+/** Yield between rendering batches so cancellation and deadline timers can run. */
+export async function formatSessionHistoryMarkdownAsync(
+	messages: unknown[],
+	opts?: HistoryFormatOptions,
+	signal?: AbortSignal,
+): Promise<string> {
+	signal?.throwIfAborted();
+	const steps = historyMarkdownSteps(messages, opts);
+	let count = 0;
+	let step = steps.next();
+	while (!step.done) {
+		if (++count % 64 === 0) await yieldToEventLoop(undefined, { signal });
+		signal?.throwIfAborted();
+		step = steps.next();
+	}
+	signal?.throwIfAborted();
+	return step.value;
 }

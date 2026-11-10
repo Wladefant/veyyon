@@ -22,7 +22,7 @@
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
-import { formatSessionHistoryMarkdown } from "../session/session-history-format";
+import { formatSessionHistoryMarkdownAsync } from "../session/session-history-format";
 import {
 	parseExactHistoryRequest,
 	parseHistorySearchRequest,
@@ -31,8 +31,8 @@ import {
 	searchLiveHistoryEntries,
 	searchStoredHistoryEntries,
 } from "./history-exact";
-import { ambiguousSessionFileIds, sessionFilesFromDisk } from "./registry-helpers";
-import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
+import { scanSessionFilesFromDisk, type SessionFileScan, sessionFilesFromDisk } from "./registry-helpers";
+import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
 /** Humanize a last-activity timestamp as `Ns/Nm/Nh/Nd ago`. */
 function formatAgo(timestamp: number): string {
@@ -85,29 +85,33 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	readonly scheme = "history";
 	readonly immutable = false;
 
-	async resolve(url: InternalUrl): Promise<InternalResource> {
+	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		context?.signal?.throwIfAborted();
 		const controller = new AbortController();
-		let timer: NodeJS.Timeout | undefined;
+		const signal = context?.signal ? AbortSignal.any([controller.signal, context.signal]) : controller.signal;
+		const { promise: aborted, reject } = Promise.withResolvers<never>();
+		const onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		const timer = setTimeout(() => {
+			controller.abort(
+				new Error(
+					`history:// timed out after 5s resolving '${url.href}'.\n` +
+						"Reading or rendering agent history took too long. Use a bounded search or exact record page.",
+				),
+			);
+		}, HISTORY_RESOLVE_DEADLINE_MS);
 		try {
-			const { promise: timeoutPromise, reject: rejectTimeout } = Promise.withResolvers<never>();
-			timer = setTimeout(() => {
-				controller.abort();
-				rejectTimeout(
-					new Error(
-						`history:// timed out after 5s resolving '${url.href}'.\n` +
-							`Scanning agent session files on disk took too long. Check for deep or circular directory structures under registered artifact paths.`,
-					),
-				);
-			}, HISTORY_RESOLVE_DEADLINE_MS);
-			const resolvePromise = this.#resolve(url, controller.signal);
-			resolvePromise.catch(() => {});
-			return await Promise.race([resolvePromise, timeoutPromise]);
+			return await Promise.race([this.#resolve(url, signal), aborted]);
 		} finally {
 			clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
 		}
 	}
 
 	async #resolve(url: InternalUrl, signal?: AbortSignal): Promise<InternalResource> {
+		signal?.throwIfAborted();
+		let diskScan: Promise<SessionFileScan> | undefined;
+		const scanDisk = () => (diskScan ??= scanSessionFilesFromDisk(signal));
 		const agentId = url.rawHost || url.hostname;
 		const registry = AgentRegistry.global();
 		// The disk fallback already refuses an id that names a transcript in two
@@ -195,8 +199,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			}
 			let sessionFile = ref?.session?.sessionManager.getSessionFile() ?? ref?.sessionFile ?? undefined;
 			if (!sessionFile && !ref?.session && diskFallbackSafe) {
-				const disk = await sessionFilesFromDisk(signal);
-				const found = Array.from(disk).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
+				const { files } = await scanDisk();
+				const found = Array.from(files).find(([id]) => id.toLowerCase() === agentId.toLowerCase());
 				sessionFile = found?.[1];
 			}
 			if (sessionFile) {
@@ -204,8 +208,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					throw new Error("history:// active session has no branch leaf; pass leaf= to select stored history");
 				}
 				const result = exactRequest
-					? await readStoredHistoryEntry(sessionFile, exactRequest)
-					: await searchStoredHistoryEntries(sessionFile, searchRequest!);
+					? await readStoredHistoryEntry(sessionFile, exactRequest, signal)
+					: await searchStoredHistoryEntries(sessionFile, searchRequest!, signal);
 				const content = JSON.stringify(result, null, 2);
 				return {
 					url: url.href,
@@ -236,14 +240,15 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		if (!ref) {
 			// Registry miss — the agent may have been unregistered or lost on resume.
 			// Serve its transcript straight from disk if the session file persists.
-			const disk = await resolveFromDisk(agentId, signal);
+			const scan = await scanDisk();
+			const disk = await resolveFromDisk(agentId, scan.files, signal);
 			if (disk) return { ...disk, url: url.href };
 
 			// AMBIGUOUS is not UNKNOWN, and saying the wrong one sends the operator
 			// looking for a lost transcript that is not lost. Two conversations in this
 			// process each ran an agent by this name, so `sessionFilesFromDisk` dropped
 			// it rather than hand back whichever dir was enumerated first.
-			const ambiguous = await ambiguousSessionFileIds(signal);
+			const { ambiguous } = scan;
 			const collided = ambiguous.has(agentId)
 				? agentId
 				: Array.from(ambiguous).find(id => id.toLowerCase() === agentId.toLowerCase());
@@ -267,19 +272,19 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			messages = ref.session.messages;
 			notes.push("Source: live session");
 		} else if (ref.sessionFile) {
-			messages = await loadSessionMessagesReadOnly(ref.sessionFile);
+			messages = await loadSessionMessagesReadOnly(ref.sessionFile, signal);
 			notes.push(`Source: session file (read-only, ${ref.status})`);
 		} else {
 			// No live session and no retained sessionFile — try the disk scan before
 			// giving up, in case the transcript lingers under an artifacts dir.
 			if (diskFallbackSafe) {
-				const disk = await resolveFromDisk(ref.id, signal);
+				const disk = await resolveFromDisk(ref.id, (await scanDisk()).files, signal);
 				if (disk) return { ...disk, url: url.href };
 			}
 			throw new Error(`Agent ${ref.id} has no transcript: session is gone and no session file was retained`);
 		}
 
-		const content = formatSessionHistoryMarkdown(messages, { title: `${ref.id} (${ref.status})` });
+		const content = await formatSessionHistoryMarkdownAsync(messages, { title: `${ref.id} (${ref.status})` }, signal);
 		return {
 			url: url.href,
 			content,
@@ -329,8 +334,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
  * Load a transcript for `agentId` from an on-disk `.jsonl` session file,
  * matched case-insensitively. Returns `undefined` when no file is found.
  */
-async function resolveFromDisk(agentId: string, signal?: AbortSignal): Promise<InternalResource | undefined> {
-	const files = await sessionFilesFromDisk(signal);
+async function resolveFromDisk(
+	agentId: string,
+	files: ReadonlyMap<string, string>,
+	signal?: AbortSignal,
+): Promise<InternalResource | undefined> {
 	const lower = agentId.toLowerCase();
 	let matchedId: string | undefined;
 	let sessionFile: string | undefined;
@@ -342,8 +350,8 @@ async function resolveFromDisk(agentId: string, signal?: AbortSignal): Promise<I
 		}
 	}
 	if (!matchedId || !sessionFile) return undefined;
-	const messages = await loadSessionMessagesReadOnly(sessionFile);
-	const content = formatSessionHistoryMarkdown(messages, { title: `${matchedId} (on disk)` });
+	const messages = await loadSessionMessagesReadOnly(sessionFile, signal);
+	const content = await formatSessionHistoryMarkdownAsync(messages, { title: `${matchedId} (on disk)` }, signal);
 	return {
 		url: "",
 		content,
