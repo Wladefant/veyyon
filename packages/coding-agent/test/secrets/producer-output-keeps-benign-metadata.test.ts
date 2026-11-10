@@ -381,7 +381,7 @@ describe("producer output keeps benign metadata", () => {
 	// These cases exercise owner and unowned paths, not encoded exfiltration.
 	it("fails closed on opaque compound authorization values across every split", () => {
 		for (const label of ["- **Driver & Native Authorization:**", "- **Driver & Native Authorization**:"]) {
-			for (const value of ["arbitraryCredentialABC123", "Native drivers require kernel approval."]) {
+			for (const value of ["arbitraryCredentialABC123"]) {
 				const input = `${label} ${value}\n`;
 				for (const owner of [undefined, redactProviderSecrets]) {
 					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
@@ -395,10 +395,10 @@ describe("producer output keeps benign metadata", () => {
 		}
 	});
 
-	it("retains empty authorization heading context until the next physical value", () => {
+	it("protects the immediate physical value after an empty authorization heading", () => {
 		const value = "arbitraryCredentialABC123";
 		for (const label of ["### Authorization:", "- **Authorization:**", "- **Driver & Native Authorization**:"]) {
-			for (const separator of ["\n", "\r\n", "\n\n"]) {
+			for (const separator of ["\n", "\r\n"]) {
 				const input = `${label}${separator}  ${value}\n`;
 				for (const owner of [undefined, redactProviderSecrets]) {
 					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
@@ -426,6 +426,46 @@ describe("producer output keeps benign metadata", () => {
 			const stream = new ProducerOutputGuard(rewrite);
 			expect(stream.sanitize(input)).not.toMatch(/[\uE000-\uE0FF]/);
 			expect(stream.push(input) + stream.finish()).not.toMatch(/[\uE000-\uE0FF]/);
+		}
+	});
+
+	it("preserves benign authorization headings, prose continuations, and resets across splits", () => {
+		const benignInputs = [
+			"### Authorization:\n\n## Next steps\nReview the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n  Native drivers require kernel approval.\n",
+			"### Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- Authorization:\n\n  arbitraryCredentialABC123\n",
+			"### Authorization:\n## Next steps\nReview the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n- Next bullet item\n",
+			"- Authorization:\n- Next bullet item\n",
+			"### Authorization:\n- Next bullet item\n",
+		];
+
+		for (const input of benignInputs) {
+			for (const owner of [undefined, redactProviderSecrets]) {
+				const sanitized = new ProducerOutputGuard(owner).sanitize(input);
+				expect(sanitized).toBe(input);
+
+				const lineStream = new ProducerOutputGuard(owner);
+				const lines = input.split(/(?<=\n)/);
+				let lineOutput = "";
+				for (const line of lines) {
+					lineOutput += lineStream.push(line);
+				}
+				lineOutput += lineStream.finish();
+				expect(lineOutput).toBe(input);
+
+				for (let split = 0; split <= input.length; split++) {
+					const splitStream = new ProducerOutputGuard(owner);
+					const streamed =
+						splitStream.push(input.slice(0, split)) +
+						splitStream.push(input.slice(split)) +
+						splitStream.finish();
+					expect(streamed).toBe(input);
+				}
+			}
 		}
 	});
 

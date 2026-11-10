@@ -1,8 +1,8 @@
 import { PROVIDER_SECRET_FAMILIES, redactProviderSecrets } from "@veyyon/ai/error/error-body";
-import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
-import { currentProducerSecretOwner } from "./producer-owner";
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { sanitizeJsonValue } from "../eval/json-sanitizer";
+import { currentProducerSecretOwner } from "./producer-owner";
 
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
@@ -21,7 +21,8 @@ const ENV_MAP_KEY = /^(?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)$/;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
 
 /** A defs() entry names a variable and its shape, never the variable's value. */
-const DEFINITION_SHAPE = /^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|\r?\n|["'](?:\s*[,)\]]|\s*$)|(?<sourceDelimiter>[ \t]*[,;}]))/;
+const DEFINITION_SHAPE =
+	/^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|\r?\n|["'](?:\s*[,)\]]|\s*$)|(?<sourceDelimiter>[ \t]*[,;}]))/;
 
 const PEM_BLOCK = /-----BEGIN ([A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g;
 const PEM_START = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
@@ -46,6 +47,17 @@ function pickSentinel(text: string): string | null {
 function wrapRedact(redact: (text: string) => string): (text: string) => string {
 	return (text: string): string => {
 		const direct = redact(text);
+		if (direct === redactProviderSecrets(text) && text.split("\n").some(isAuthorizationHeading)) {
+			const sentinel = pickSentinel(text);
+			if (!sentinel) return BLOCKED_OUTPUT_RECORD;
+			// Provider header patterns cross newlines. The continuation classifier,
+			// not that header pattern, owns the record after a Markdown label.
+			const protectedText = text
+				.split("\n")
+				.map(record => (isAuthorizationHeading(record) ? record.replace(":", sentinel) : record))
+				.join("\n");
+			return redact(protectedText).replaceAll(sentinel, ":");
+		}
 		if (!text.includes(":*") && !text.includes(":_") && !text.includes(":`")) {
 			return direct;
 		}
@@ -78,10 +90,38 @@ function knownCredentialLength(text: string): number {
 	return extra?.index === 0 ? extra[0].length : 0;
 }
 
+function isAuthorizationHeading(record: string): boolean {
+	return (
+		/\bauthori[sz]ation(?:[ \t]*(?:\*\*|\*|__|_|`))?:[ \t]*(?:\*\*|\*|__|_|`)?[ \t]*\r?$/i.test(record) &&
+		/^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+|(?:\*\*|\*|__|_|`))/.test(record)
+	);
+}
+
+function isAuthorizationContinuation(record: string): boolean {
+	const value = record.trim();
+	// Blank records and new Markdown sections end the one-record context.
+	if (!value || /^(?:#{1,6}[ \t]+|[-*+][ \t]+)/.test(value)) return false;
+	// Only ordinary multiword prose is unambiguous here. Opaque values and
+	// authentication schemes remain sensitive even without a provider prefix.
+	return (
+		/^(?:Bearer|Basic|Digest|Negotiate|NTLM|Token|OAuth)\b/i.test(value) ||
+		!/^[A-Za-z]+(?:['-][A-Za-z]+)*(?:[ \t]+[A-Za-z]+(?:['-][A-Za-z]+)*)+[.!?]?$/.test(value)
+	);
+}
+
 function classifyCredentialText(text: string, rawRedact?: (text: string) => string): string {
 	const redact = rawRedact ? wrapRedact(rawRedact) : undefined;
 	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
 	const spans: { start: number; valueStart: number; end: number; extendToLine: boolean }[] = [];
+	let authorizationHeading = false;
+	let offset = 0;
+	for (const record of text.split("\n")) {
+		if (authorizationHeading && isAuthorizationContinuation(record)) {
+			spans.push({ start: offset, valueStart: offset, end: offset + record.length, extendToLine: false });
+		}
+		authorizationHeading = isAuthorizationHeading(record);
+		offset += record.length + 1;
+	}
 	for (let match = labels.exec(text); match; match = labels.exec(text)) {
 		const start = labels.lastIndex + /^[ \t]*/.exec(text.slice(labels.lastIndex))![0].length;
 		const tail = text.slice(start);
@@ -95,7 +135,6 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		const isHeading = /^[ \t]*#{1,6}[ \t]+/.test(lineBefore);
 		const hasEmptyTail = !tail || /^[ \t]*(?:\r?\n|$)/.test(tail);
 		if ((isHeading || match.groups?.mdOpen || (isAuth && /^[ \t]*[-*+][ \t]+/.test(lineBefore))) && hasEmptyTail) {
-			if (isAuth && tail.trim()) return BLOCKED_OUTPUT_RECORD;
 			continue;
 		}
 		if (isAuth) {
@@ -108,7 +147,6 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 					const effectiveTail = (closedAfterColon ? tail.slice(outerMd.length) : tail).replace(/^[ \t]*/, "");
 					const effectiveEmpty = !effectiveTail || /^(?:\r?\n|$)/.test(effectiveTail);
 					if (effectiveEmpty) {
-						if (effectiveTail.trim()) return BLOCKED_OUTPUT_RECORD;
 						continue;
 					}
 				}
@@ -383,8 +421,8 @@ export class ProducerOutputGuard {
 			// Classify labels before an owner can rename them. Normalization must not
 			// reveal a label that was missed while retaining raw literal secret bytes.
 			const classified = classifyCredentialText(text);
-			if (classified === BLOCKED_OUTPUT_RECORD ||
-				sanitizeText(classified) !== classifyCredentialText(original)) return BLOCKED_OUTPUT_RECORD;
+			if (classified === BLOCKED_OUTPUT_RECORD || sanitizeText(classified) !== classifyCredentialText(original))
+				return BLOCKED_OUTPUT_RECORD;
 			const filtered = classifyCredentialText(text, this.#redact);
 			if (filtered === BLOCKED_OUTPUT_RECORD) return filtered;
 			const sanitized = sanitizeText(filtered);
@@ -434,17 +472,15 @@ export class ProducerOutputGuard {
 	}
 
 	#record(record: string, newline: string): string {
-		if (this.#authorizationHeading && record.trim()) return this.#block() + newline;
-		// Keep heading context even after its safe label has been emitted.
-		// A later physical line can be an opaque credential with no label of its own.
-		if (/\bauthori[sz]ation(?:[ \t]*(?:\*\*|\*|__|_|`))?:[ \t]*(?:\*\*|\*|__|_|`)?[ \t]*\r?$/i.test(record) &&
-			/^[ \t]*(?:#{1,6}[ \t]+|(?:[-*+][ \t]+)?(?:\*\*|\*|__|_|`))/.test(record)) {
-			this.#authorizationHeading = true;
+		const continuation = this.#authorizationHeading && isAuthorizationContinuation(record);
+		this.#authorizationHeading = isAuthorizationHeading(record);
+		if (continuation) {
+			// Replace only this record; unrelated output must not enter withholding.
+			return this.#flushCandidate() + BLOCKED_OUTPUT_RECORD + newline;
 		}
 		const normalized = sanitizeText(record);
 		const safe = this.sanitize(record + newline);
-		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD)
-			return this.#block(safe) + newline;
+		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD) return this.#block(safe) + newline;
 		// A registered literal can hold several physical records together. Classify every
 		// raw line, but keep the group intact until redaction can see the complete literal.
 		const lines = normalized.split("\n");
