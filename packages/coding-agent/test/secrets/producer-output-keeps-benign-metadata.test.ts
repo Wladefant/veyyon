@@ -55,6 +55,18 @@ describe("producer output keeps benign metadata", () => {
 		expect(output).toContain('"message":"request failed"');
 	});
 
+	it("keeps structured UTC window metadata outside environment inventory matching", () => {
+		const record = {
+			until: "2026-11-10T13:34:56Z",
+			since15: "2026-11-10T13:19:56Z",
+			since60: "2026-11-10T12:34:56Z",
+		};
+
+		expect(guard.sanitize(JSON.stringify(record))).toBe(JSON.stringify(record));
+		expect(guard.sanitize("T=2026-11-10T13:34:56Z\nSTART15=2026-11-10T13:19:56Z\nSTART60=2026-11-10T12:34:56Z\n"))
+			.toBe("[credential output withheld]");
+	});
+
 	it("keeps plain defs-style metadata unchanged", () => {
 		const text = "figma_secret: str";
 
