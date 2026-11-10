@@ -797,7 +797,12 @@ export async function loadSessionFile(
 		loaded =
 			storage instanceof FileSessionStorage && before.size >= STREAM_LOAD_THRESHOLD_BYTES
 				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath }, storage)
-				: parseSessionContent(await storage.readText(filePath), { ...options, source: options.source ?? filePath });
+				: parseSessionContent(
+						await (storage instanceof FileSessionStorage && options.signal
+							? fs.promises.readFile(filePath, { encoding: "utf8", signal: options.signal })
+							: storage.readText(filePath)),
+						{ ...options, source: options.source ?? filePath },
+					);
 	} catch (err) {
 		if (isEnoent(err)) return { entries: [], layout: undefined, endsMidLine: false };
 		throw err;

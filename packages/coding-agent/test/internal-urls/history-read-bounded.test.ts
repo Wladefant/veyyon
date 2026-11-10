@@ -28,7 +28,12 @@ import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
-import { STREAM_LOAD_THRESHOLD_BYTES } from "@veyyon/kernel/session/session-loader";
+import {
+	STREAM_LOAD_THRESHOLD_BYTES,
+	loadSessionMessagesReadOnly,
+	parseSessionContent,
+} from "@veyyon/kernel/session/session-loader";
+import * as sessionLoaderModule from "@veyyon/kernel/session/session-loader";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { removeWithRetries } from "@veyyon/utils";
 import { toolResultText } from "../helpers/tool-result-text";
@@ -659,14 +664,19 @@ describe("history read bounded regressions", () => {
 			const callerReason = new Error("caller aborted parked transcript load mid-flight");
 			const controller = new AbortController();
 
-			let readTextCalled = false;
-			const origReadText = FileSessionStorage.prototype.readText;
-			const readTextSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (this: FileSessionStorage, ...args) {
-				readTextCalled = true;
+			let readFileCalled = false;
+			let parseCalled = false;
+			const origReadFile = nodeFs.promises.readFile;
+			const readFileSpy = spyOn(nodeFs.promises, "readFile").mockImplementation(async (...args) => {
+				readFileCalled = true;
 				controller.abort(callerReason);
-				return origReadText.apply(this, args);
+				return origReadFile(...args);
 			});
-
+			const origParse = sessionLoaderModule.parseSessionContent;
+			const parseSpy = spyOn(sessionLoaderModule, "parseSessionContent").mockImplementation((...args) => {
+				parseCalled = true;
+				return origParse(...args);
+			});
 			try {
 				let error: unknown;
 				try {
@@ -678,9 +688,50 @@ describe("history read bounded regressions", () => {
 				}
 
 				expect(error).toBe(callerReason);
-				expect(readTextCalled).toBe(true);
+				expect(readFileCalled).toBe(true);
+				expect(parseCalled).toBe(false);
 			} finally {
-				readTextSpy.mockRestore();
+				readFileSpy.mockRestore();
+				parseSpy.mockRestore();
+			}
+		});
+	});
+
+	it("aborts loadSessionMessagesReadOnly directly during readFile and prevents parse when signal fires", async () => {
+		await withTempDir(async dir => {
+			const sessionFilePath = path.join(dir, "DirectReadAbortAgent.jsonl");
+			await fs.writeFile(sessionFilePath, sessionFixtureJsonl("direct abort transcript"));
+
+			const callerReason = new Error("direct readFile aborted");
+			const controller = new AbortController();
+			let readFileStarted = false;
+			let parseCalled = false;
+			const origReadFile = nodeFs.promises.readFile;
+			const readFileSpy = spyOn(nodeFs.promises, "readFile").mockImplementation(async (...args) => {
+				readFileStarted = true;
+				controller.abort(callerReason);
+				return origReadFile(...args);
+			});
+			const origParse = sessionLoaderModule.parseSessionContent;
+			const parseSpy = spyOn(sessionLoaderModule, "parseSessionContent").mockImplementation((...args) => {
+				parseCalled = true;
+				return origParse(...args);
+			});
+			try {
+				let error: unknown;
+				try {
+					await loadSessionMessagesReadOnly(sessionFilePath, controller.signal);
+				} catch (err) {
+					error = err;
+				}
+				expect(error instanceof Error ? error.name : undefined).toBe("AbortError");
+				const errorCause = error instanceof Error && "cause" in error ? error.cause : undefined;
+				expect(errorCause ?? error).toBe(callerReason);
+				expect(readFileStarted).toBe(true);
+				expect(parseCalled).toBe(false);
+			} finally {
+				readFileSpy.mockRestore();
+				parseSpy.mockRestore();
 			}
 		});
 	});
