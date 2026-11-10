@@ -133,6 +133,69 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 		}
 	});
 
+	it("retries transient SQLITE_BUSY during WAL setup and completes allocation", () => {
+		const dir = freshDir();
+		let busyAttempts = 0;
+		const origRun = Database.prototype.run;
+		const spy = spyOn(Database.prototype, "run").mockImplementation(function (this: Database, sql: string, ...args: unknown[]) {
+			if (typeof sql === "string" && sql.includes("PRAGMA journal_mode = WAL") && busyAttempts < 2) {
+				busyAttempts++;
+				const busyErr = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+				throw busyErr;
+			}
+			return origRun.call(this, sql, ...(args as []));
+		});
+		try {
+			const mgr = new ArtifactManager(dir);
+			expect(mgr.allocateId()).toBe(0);
+			expect(busyAttempts).toBe(2);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("terminates after 4 attempts on persistent SQLITE_BUSY during WAL setup and surfaces error", () => {
+		const dir = freshDir();
+		let busyAttempts = 0;
+		const origRun = Database.prototype.run;
+		const spy = spyOn(Database.prototype, "run").mockImplementation(function (this: Database, sql: string, ...args: unknown[]) {
+			if (typeof sql === "string" && sql.includes("PRAGMA journal_mode = WAL")) {
+				busyAttempts++;
+				const busyErr = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+				throw busyErr;
+			}
+			return origRun.call(this, sql, ...(args as []));
+		});
+		try {
+			const mgr = new ArtifactManager(dir);
+			expect(() => mgr.allocateId()).toThrow("database is locked");
+			expect(busyAttempts).toBe(4);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("surfaces non-SQLITE_BUSY error during WAL setup without retrying", () => {
+		const dir = freshDir();
+		let attempts = 0;
+		const origRun = Database.prototype.run;
+		const spy = spyOn(Database.prototype, "run").mockImplementation(function (this: Database, sql: string, ...args: unknown[]) {
+			if (typeof sql === "string" && sql.includes("PRAGMA journal_mode = WAL")) {
+				attempts++;
+				const err = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+				throw err;
+			}
+			return origRun.call(this, sql, ...(args as []));
+		});
+		try {
+			const mgr = new ArtifactManager(dir);
+			expect(() => mgr.allocateId()).toThrow("disk I/O error");
+			expect(attempts).toBe(1);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
 	it("rescans legacy reservations after a persisted counter collides", async () => {
 		const dir = freshDir();
 		expect(new ArtifactManager(dir).allocateId()).toBe(0);

@@ -12,6 +12,8 @@ import * as path from "node:path";
 import { atomicWriteFileSync, atomicWriteFileWith, fsyncDirEntry, fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
+import { sleepSync } from "@veyyon/utils/sleep";
+import { isSqliteBusyError } from "@veyyon/utils/sqlite";
 import { errorMessage } from "@veyyon/utils/type-guards";
 
 const DB_FILENAME = ".artifact-ids.sqlite";
@@ -153,7 +155,17 @@ export class ArtifactManager {
 		const db = new Database(dbPath);
 		try {
 			db.run("PRAGMA busy_timeout = 5000;");
-			db.run("PRAGMA journal_mode = WAL;");
+			// WAL setup can return BUSY during another connection's final checkpoint,
+			// even with busy_timeout. Bound retries like the other SQLite stores.
+			for (let attempt = 0; ; attempt++) {
+				try {
+					db.run("PRAGMA journal_mode = WAL;");
+					break;
+				} catch (err) {
+					if (!isSqliteBusyError(err) || attempt >= 3) throw err;
+					sleepSync(100 * 2 ** attempt);
+				}
+			}
 			db.run("CREATE TABLE IF NOT EXISTS counter (key TEXT PRIMARY KEY, next_id INTEGER NOT NULL);");
 
 			let rescan = false;
