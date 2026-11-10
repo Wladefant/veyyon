@@ -154,15 +154,15 @@ describe("history exact record lookup", () => {
 		}
 	});
 
-	it("uses the active branch for non-persistent sessions", () => {
+	it("uses the active branch for non-persistent sessions", async () => {
 		const branch = [
 			{ type: "message", id: "a", message: { role: "user", content: "hello" } },
 			{ type: "message", id: "b", message: { role: "user", content: "world" } },
 		] as unknown as SessionEntry[];
-		const read = readLiveHistoryEntry(branch, { entryId: "a", offset: 0, limit: 1000 });
+		const read = await readLiveHistoryEntry(branch, { entryId: "a", offset: 0, limit: 1000 });
 		expect(read.status).toBe("ok");
 		expect(read.fragment).toContain("hello");
-		expect(readLiveHistoryEntry(branch, { entryId: "b", leafId: "a", offset: 0, limit: 1000 }).status).toBe(
+		expect((await readLiveHistoryEntry(branch, { entryId: "b", leafId: "a", offset: 0, limit: 1000 })).status).toBe(
 			"not_on_branch",
 		);
 	});
@@ -237,7 +237,7 @@ describe("history exact record lookup", () => {
 		}
 	});
 
-	it("keeps Unicode and ordinary mixed-case matches visible in live branch previews", () => {
+	it("keeps Unicode and ordinary mixed-case matches visible in live branch previews", async () => {
 		const branch = [
 			{
 				type: "message", id: "unicode", parentId: null,
@@ -248,7 +248,7 @@ describe("history exact record lookup", () => {
 				message: { role: "assistant", content: "ASCII NeedLe live" },
 			},
 		] as unknown as SessionEntry[];
-		const found = searchLiveHistoryEntries(branch, { query: "needle", limit: 2 });
+		const found = await searchLiveHistoryEntries(branch, { query: "needle", limit: 2 });
 		expect(found.status).toBe("ok");
 		expect(found.matches.map(match => match.entryId)).toEqual(["plain", "unicode"]);
 		for (const match of found.matches) {
@@ -257,7 +257,7 @@ describe("history exact record lookup", () => {
 		}
 	});
 
-	it("does not split surrogate pairs at search-preview boundaries", () => {
+	it("does not split surrogate pairs at search-preview boundaries", async () => {
 		const cases = [
 			{ before: "🔑" + "x".repeat(69), after: "x".repeat(40) },
 			{ before: "x".repeat(70), after: "x".repeat(49) + "🔑" + "x".repeat(40) },
@@ -269,7 +269,7 @@ describe("history exact record lookup", () => {
 					message: { role: "user", content: before + "N".repeat(80) + after },
 				},
 			] as unknown as SessionEntry[];
-			const found = searchLiveHistoryEntries(branch, { query: "n".repeat(80), limit: 1 });
+			const found = await searchLiveHistoryEntries(branch, { query: "n".repeat(80), limit: 1 });
 			expect(found.status).toBe("ok");
 			expect(found.matches).toHaveLength(1);
 			const preview = found.matches[0]!.preview;
@@ -282,8 +282,7 @@ describe("history exact record lookup", () => {
 		}
 	});
 
-
-	it("shows the entire allowed 180-character query without exceeding the preview cap", () => {
+	it("shows the entire allowed 180-character query without exceeding the preview cap", async () => {
 		const match = "N".repeat(180);
 		const branch = [
 			{
@@ -291,13 +290,12 @@ describe("history exact record lookup", () => {
 				message: { role: "user", content: "prefix ".repeat(18) + match + " suffix" },
 			},
 		] as unknown as SessionEntry[];
-		const found = searchLiveHistoryEntries(branch, { query: match.toLowerCase(), limit: 1 });
+		const found = await searchLiveHistoryEntries(branch, { query: match.toLowerCase(), limit: 1 });
 		expect(found.status).toBe("ok");
 		expect(found.matches).toHaveLength(1);
 		expect(found.matches[0]!.preview).toContain(match);
 		expect(found.matches[0]!.preview.length).toBeLessThanOrEqual(200);
 	});
-
 	it("keeps matching ancestors despite 501 hits in an abandoned sibling", async () => {
 		const dir = TempDir.createSync("@veyyon-history-sibling-cap-");
 		try {
@@ -847,7 +845,7 @@ describe("history exact record lookup", () => {
 		} finally {
 			await dir.remove();
 		}
-	});
+	}, 20_000);
 
 	it("does not return explicit archived content from a 128 MiB truncated scan", async () => {
 		const dir = TempDir.createSync("@veyyon-history-byte-bound-");

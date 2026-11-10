@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- History transcript resolution and stored history reading honor caller abort signals, combine caller cancellation with the 5-second deadline, reuse single-pass session file scans, and yield between markdown formatting batches ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- History transcript resolution ignores `.artifact-id-<digits>` reservation markers and `.artifact-ids.sqlite*` metadata during filesystem scans, supports nested dotted identifiers, and applies a 5-second deadline with actionable diagnostics ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Live history entry reads and live history search enforce memory and entry count bounds with cancelable operations ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Bounded history previews cap nested tool arguments, preserve accurate block line counts, and prioritize cancellation over a missing fallback ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+
 ## [1.8.22] - 2026-11-09
 
 ### Fixed

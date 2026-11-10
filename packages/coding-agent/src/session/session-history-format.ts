@@ -6,6 +6,7 @@
  * result pairs collapsed to single lines, thinking elided, custom messages
  * as one-liners. No system prompt, no tool catalog, no config sections.
  */
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage, VideoContent } from "@veyyon/ai";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
@@ -22,6 +23,8 @@ import type {
 	FileMentionMessage,
 	HookMessage,
 } from "./messages";
+export const MAX_RECORD_BYTES = 8 * 1024 * 1024;
+export const MAX_INDEX_ENTRIES = 100_000;
 
 export interface HistoryFormatOptions {
 	/** Optional H1 prepended to the transcript. */
@@ -75,6 +78,14 @@ const PRIMARY_ARG_KEYS = [
 
 /** Collapse whitespace runs and truncate to `max` chars with an ellipsis. */
 function oneLine(text: string, max = PRIMARY_ARG_MAX): string {
+	if (text.length > max * 4) {
+		let start = 0;
+		const searchLimit = Math.min(text.length, 1024);
+		while (start < searchLimit && text.charCodeAt(start) <= 32) {
+			start++;
+		}
+		text = text.slice(start, start + max * 4);
+	}
 	return truncate(collapseWhitespace(text), max);
 }
 
@@ -84,17 +95,223 @@ function oneLine(text: string, max = PRIMARY_ARG_MAX): string {
 const contentToText = (content: string | readonly (TextContent | ImageContent | VideoContent)[]): string =>
 	contentText(content, { image: "[image]" });
 
-function lineCount(text: string): number {
-	if (!text) return 0;
-	return text.split("\n").length;
+async function preflightContentBytes(
+	content: unknown,
+	maxBytes = MAX_RECORD_BYTES,
+	signal?: AbortSignal,
+): Promise<void> {
+	signal?.throwIfAborted();
+	if (typeof content === "string") {
+		if (content.length > maxBytes) {
+			throw new Error(`Session history formatting exceeded the ${maxBytes} byte output cap`);
+		}
+	} else if (Array.isArray(content)) {
+		let total = 0;
+		for (let i = 0; i < content.length; i++) {
+			if ((i & 255) === 0) {
+				await yieldToEventLoop();
+				signal?.throwIfAborted();
+			}
+			const part = content[i];
+			if (part && typeof part === "object" && "text" in part && typeof part.text === "string") {
+				total += part.text.length + 1;
+				if (total > maxBytes) {
+					throw new Error(`Session history formatting exceeded the ${maxBytes} byte output cap`);
+				}
+			}
+		}
+	}
 }
 
-function primaryArgValue(value: unknown): string {
-	if (typeof value === "string" && value.length > 0) return value;
-	if (Array.isArray(value) && value.length > 0 && value.every(v => typeof v === "string")) {
-		return value.join(", ");
+function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generator<void, string> {
+	let start = 0;
+	let scanned = 0;
+	const CHUNK = 32_768;
+	while (start < text.length && text.charCodeAt(start) <= 32) {
+		if (text.charCodeAt(start) === 10) break;
+		start++;
+		scanned++;
+		if ((scanned & (CHUNK - 1)) === 0) yield;
+	}
+	if (start >= text.length || text.charCodeAt(start) === 10) {
+		return "";
+	}
+	let end = start;
+	while (end < text.length && text.charCodeAt(end) !== 10 && end - start < max * 4) {
+		end++;
+	}
+	return oneLine(text.slice(start, end), max);
+}
+
+function* scanTextLines(text: string): Generator<void, number> {
+	if (!text) return 0;
+	let count = 1;
+	const CHUNK_SIZE = 32_768;
+	for (let i = 0; i < text.length; i++) {
+		if (text.charCodeAt(i) === 10) count++;
+		if (((i + 1) & (CHUNK_SIZE - 1)) === 0) yield;
+	}
+	return count;
+}
+
+function* summarizeToolResult(result: ToolResultMessage): Generator<void, { lines: number; firstLine?: string }> {
+	const content = result.content;
+	if (!content) return { lines: 0 };
+	let lines = 0;
+	let firstLine: string | undefined;
+	const CHUNK_SIZE = 32_768;
+	let scanned = 0;
+
+	const rawContent: unknown = result.content;
+	if (typeof rawContent === "string") {
+		lines = rawContent.length ? 1 : 0;
+		if (result.isError) {
+			firstLine = yield* extractFirstLinePreview(rawContent);
+		}
+		for (let i = 0; i < rawContent.length; i++) {
+			if (rawContent.charCodeAt(i) === 10) lines++;
+			scanned++;
+			if ((scanned & (CHUNK_SIZE - 1)) === 0) yield;
+		}
+		return { lines, firstLine };
+	}
+
+	let firstLineFound = !result.isError;
+	let emitted = 0;
+	let hasText = false;
+	for (const block of content) {
+		if (block.type === "text") {
+			const text = block.text;
+			if (emitted++ > 0) lines++;
+			hasText ||= text.length > 0;
+			if (!firstLineFound) {
+				firstLine = yield* extractFirstLinePreview(text);
+				firstLineFound = true;
+			}
+			for (let i = 0; i < text.length; i++) {
+				if (text.charCodeAt(i) === 10) lines++;
+				scanned++;
+				if ((scanned & (CHUNK_SIZE - 1)) === 0) yield;
+			}
+		} else if (block.type === "image") {
+			if (emitted++ > 0) lines++;
+			hasText = true;
+			if (!firstLineFound) {
+				firstLine = "[image]";
+				firstLineFound = true;
+			}
+		}
+	}
+	if (hasText || emitted > 1) lines++;
+	return { lines, firstLine };
+}
+
+function primaryArgValue(value: unknown, maxChars = PRIMARY_ARG_MAX * 4): string {
+	if (typeof value === "string" && value.length > 0) {
+		return value.length > maxChars ? value.slice(0, maxChars) : value;
+	}
+	if (Array.isArray(value) && value.length > 0) {
+		let joined = "";
+		for (let i = 0; i < Math.min(value.length, 32) && joined.length < maxChars; i++) {
+			const item = value[i];
+			if (typeof item !== "string") return "";
+			const slice = item.length > maxChars ? item.slice(0, maxChars) : item;
+			joined = joined ? `${joined}, ${slice}` : slice;
+		}
+		return joined;
 	}
 	return "";
+}
+
+/** Preview only: never visit a whole nested argument or invoke its JSON hooks. */
+function argumentPreview(value: unknown): string {
+	let output = "";
+	let nodes = 0;
+	const append = (text: string) => {
+		output += text.slice(0, 256 - output.length);
+	};
+	const visit = (item: unknown, depth: number): void => {
+		if (output.length >= 256) return;
+		if (++nodes > 64 || depth > 4) {
+			append("…");
+			return;
+		}
+		if (typeof item === "string") {
+			append(JSON.stringify(item.slice(0, 256 - output.length)));
+		} else if (item === null || typeof item !== "object") {
+			append(typeof item === "number" || typeof item === "boolean" ? String(item) : "null");
+		} else if (Array.isArray(item)) {
+			append("[");
+			for (let i = 0; i < item.length && output.length < 256 && nodes < 64; i++) {
+				if (i) append(",");
+				visit(item[i], depth + 1);
+			}
+			append("]");
+		} else {
+			append("{");
+			let keys = 0;
+			for (const key in item) {
+				if (output.length >= 256 || nodes >= 64 || keys >= 16) break;
+				if (!Object.hasOwn(item, key)) continue;
+				if (keys++) append(",");
+				append(JSON.stringify(key.slice(0, 256 - output.length)));
+				append(":");
+				visit((item as Record<string, unknown>)[key], depth + 1);
+			}
+			append("}");
+		}
+	};
+	visit(value, 0);
+	return output;
+}
+
+/** Count nested argument bytes cooperatively; reject excessive depth or work too. */
+async function preflightArgumentBytes(value: unknown, signal?: AbortSignal): Promise<number> {
+	let bytes = 0;
+	let nodes = 0;
+	function* walk(item: unknown, depth: number): Generator<void> {
+		if (++nodes > 65_536 || depth > 64) {
+			throw new Error("Session history formatting exceeded the tool argument complexity cap");
+		}
+		if ((nodes & 255) === 0) yield;
+		if (typeof item === "string") {
+			// Each UTF-16 unit requires at least one JSON byte. Bound the scan first.
+			if (item.length > MAX_RECORD_BYTES) bytes = MAX_RECORD_BYTES + 1;
+			else {
+				bytes += 2;
+				for (let i = 0; i < item.length && bytes <= MAX_RECORD_BYTES; i += 4096) {
+					bytes += Buffer.byteLength(JSON.stringify(item.slice(i, i + 4096)), "utf8") - 2;
+					yield;
+				}
+			}
+		} else if (item && typeof item === "object") {
+			bytes += 2;
+			if (Array.isArray(item)) {
+				bytes += Math.max(0, item.length - 1);
+				if (bytes > MAX_RECORD_BYTES)
+					throw new Error("Session history formatting exceeded the tool argument byte cap");
+				for (const child of item) yield* walk(child, depth + 1);
+			} else {
+				for (const key in item) {
+					if (!Object.hasOwn(item, key)) continue;
+					yield* walk(key, depth + 1);
+					bytes += 2;
+					yield* walk((item as Record<string, unknown>)[key], depth + 1);
+				}
+			}
+		} else {
+			bytes += typeof item === "number" ? 24 : 5;
+		}
+		if (bytes > MAX_RECORD_BYTES) {
+			throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
+		}
+	}
+	for (const _step of walk(value, 0)) {
+		await yieldToEventLoop();
+		signal?.throwIfAborted();
+	}
+	signal?.throwIfAborted();
+	return bytes;
 }
 
 /** Pick the most informative scalar argument of a tool call. */
@@ -102,8 +319,8 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 	if (!args || typeof args !== "object") return "";
 	// Advisor note is the most informative summary; preserve severity too.
 	if (name === "advise") {
-		const note = typeof args.note === "string" ? args.note : "";
-		const severity = typeof args.severity === "string" ? args.severity : "";
+		const note = primaryArgValue(args.note);
+		const severity = primaryArgValue(args.severity);
 		if (note && severity) return oneLine(`${severity}: ${note}`);
 		if (note) return oneLine(note);
 		if (severity) return oneLine(severity);
@@ -127,18 +344,18 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 	for (const key in args) {
 		if (key === INTENT_FIELD) continue;
 		const value = args[key];
-		if (typeof value === "string" && value.length > 0) return oneLine(value);
-		rest[key] = value;
+		if (typeof value === "string" && value.length > 0) return oneLine(primaryArgValue(value));
+		if (restCount < 16) {
+			rest[key] = typeof value === "string" && value.length > 256 ? value.slice(0, 256) : value;
+		}
 		restCount++;
+		if (restCount > 32) break;
 	}
 	if (restCount === 0) return "{}";
 	try {
-		return oneLine(JSON.stringify(rest));
+		return oneLine(argumentPreview(rest));
 	} catch {
-		// A circular reference or a BigInt makes the args unserializable. Returning "" here rendered the
-		// call as if it took no arguments at all, which is a false reading of the transcript; naming the
-		// keys keeps the row honest and still tells you which arguments were there.
-		return oneLine(`{unserializable: ${Object.keys(rest).join(", ")}}`);
+		return oneLine(`{unserializable: ${Object.keys(rest).slice(0, 8).join(", ")}}`);
 	}
 }
 
@@ -154,23 +371,21 @@ function fenceDiff(diff: string): string {
 }
 
 /** One line per tool call: `→ read(src/foo.ts:50-80) ⇒ ok · 31 lines`. */
-function toolCallLine(
+function* toolCallLine(
 	name: string,
 	args: Record<string, unknown> | undefined,
 	result: ToolResultMessage | undefined,
 	includeToolIntent?: boolean,
 	expandEditDiffs?: boolean,
-): string {
+): Generator<void, string> {
 	const head = `→ ${name}(${primaryArg(name, args)})`;
 	let base: string;
 	if (!result) {
 		base = `${head} ⇒ pending`;
 	} else {
-		const text = contentToText(result.content);
-		const lines = lineCount(text);
+		const { lines, firstLine } = yield* summarizeToolResult(result);
 		const count = formatCount("line", lines);
 		if (result.isError) {
-			const firstLine = oneLine(text.split("\n", 1)[0] ?? "");
 			base = firstLine ? `${head} ⇒ error · ${count} — ${firstLine}` : `${head} ⇒ error · ${count}`;
 		} else {
 			base = `${head} ⇒ ok · ${count}`;
@@ -193,17 +408,17 @@ function toolCallLine(
 }
 
 /** One line for a user-initiated `!`/`$` execution. */
-function executionLine(
+function* executionLine(
 	kind: "bash" | "python",
 	source: string,
 	msg: BashExecutionMessage | PythonExecutionMessage,
-): string {
+): Generator<void, string> {
 	const status = msg.cancelled
 		? "cancelled"
 		: msg.exitCode !== undefined && msg.exitCode !== 0
 			? `error · exit ${msg.exitCode}`
 			: "ok";
-	const lines = lineCount(msg.output);
+	const lines = yield* scanTextLines(msg.output);
 	return `→ ${kind}! ${oneLine(source)} ⇒ ${status} · ${formatCount("line", lines)}`;
 }
 
@@ -258,28 +473,26 @@ function customOneLiner(msg: CustomMessage | HookMessage): string {
  * equivalent loaded from a session file) — the same shapes
  * `session-dump-format.ts` consumes.
  */
-export function formatSessionHistoryMarkdown(messages: unknown[], opts?: HistoryFormatOptions): string {
-	const typed = messages as AgentMessage[];
-	const lines: string[] = [];
+function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions): Generator<string | undefined, void> {
+	const typed = (messages ?? []) as AgentMessage[];
 	if (opts?.title) {
-		lines.push(`# ${opts.title}`, "");
+		yield `# ${opts.title}`;
+		yield "";
 	}
 
 	// Index tool results by call id so each toolCall collapses to one line.
 	const resultsByCallId = new Map<string, ToolResultMessage>();
 	for (const msg of typed) {
+		yield;
 		if (msg.role === "toolResult") {
 			resultsByCallId.set(msg.toolCallId, msg);
 		}
 	}
 	const consumed = new Set<string>();
-	// In watched mode, consecutive same-role messages collapse under one label
-	// (the watched agent emits one assistant message per tool call, so otherwise
-	// every call repeats `**agent**:`). Cleared whenever a
-	// non-role-labeled line is emitted so the next turn re-labels.
 	let lastWatchedLabel: string | undefined;
 
 	for (const msg of typed) {
+		yield;
 		switch (msg.role) {
 			case "user":
 			case "developer": {
@@ -288,70 +501,94 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 				if (opts?.watchedRoles) {
 					const label = `**${msg.role}**:`;
 					if (lastWatchedLabel === label) {
-						lines.push(text, "");
+						yield text;
+						yield "";
 					} else {
-						lines.push(label, text, "");
+						yield label;
+						yield text;
+						yield "";
 						lastWatchedLabel = label;
 					}
 				} else {
-					lines.push(`## ${msg.role}`, "", text, "");
+					yield `## ${msg.role}`;
+					yield "";
+					yield text;
+					yield "";
 				}
 				break;
 			}
 			case "assistant": {
 				const assistantMsg = msg as AssistantMessage;
-				const body: string[] = [];
+				let headerEmitted = false;
 				for (const block of assistantMsg.content) {
+					yield;
+					let line: string | undefined;
 					if (block.type === "text") {
-						if (block.text.trim()) body.push(block.text);
+						if (block.text.trim()) line = block.text;
 					} else if (block.type === "toolCall") {
 						const result = resultsByCallId.get(block.id);
 						if (result) consumed.add(block.id);
-						body.push(
-							toolCallLine(block.name, block.arguments, result, opts?.includeToolIntent, opts?.expandEditDiffs),
+						line = yield* toolCallLine(
+							block.name,
+							block.arguments,
+							result,
+							opts?.includeToolIntent,
+							opts?.expandEditDiffs,
 						);
 					} else if (opts?.includeThinking && block.type === "thinking" && block.thinking.trim()) {
-						body.push(`_thinking:_ ${block.thinking}`);
+						line = `_thinking:_ ${block.thinking}`;
 					}
-					// redactedThinking elided entirely (no readable text)
+					if (line) {
+						if (!headerEmitted) {
+							headerEmitted = true;
+							if (opts?.watchedRoles) {
+								const label = "**agent**:";
+								if (lastWatchedLabel !== label) {
+									yield label;
+									lastWatchedLabel = label;
+								}
+							} else {
+								yield "## assistant";
+								yield "";
+							}
+						}
+						yield line;
+					}
 				}
-				if (body.length === 0) break;
-				if (opts?.watchedRoles) {
-					const label = "**agent**:";
-					if (lastWatchedLabel === label) {
-						for (let bi = 0; bi < body.length; bi++) lines.push(body[bi]!);
-						lines.push("");
-					} else {
-						lines.push(label);
-						for (let bi = 0; bi < body.length; bi++) lines.push(body[bi]!);
-						lines.push("");
-						lastWatchedLabel = label;
-					}
-				} else {
-					lines.push("## assistant", "");
-					for (let bi = 0; bi < body.length; bi++) lines.push(body[bi]!);
-					lines.push("");
+				if (headerEmitted) {
+					yield "";
 				}
 				break;
 			}
 			case "toolResult": {
-				// Normally consumed by its toolCall; orphans (e.g. truncated history) get their own line.
 				if (consumed.has(msg.toolCallId)) break;
-				lines.push(toolCallLine(msg.toolName, undefined, msg, opts?.includeToolIntent, opts?.expandEditDiffs), "");
+				const line = yield* toolCallLine(
+					msg.toolName,
+					undefined,
+					msg,
+					opts?.includeToolIntent,
+					opts?.expandEditDiffs,
+				);
+				yield line;
+				yield "";
 				lastWatchedLabel = undefined;
 				break;
 			}
 			case "bashExecution": {
 				const bashMsg = msg as BashExecutionMessage;
 				if (bashMsg.excludeFromContext) break;
-				lines.push(executionLine("bash", bashMsg.command, bashMsg), "");
+				const line = yield* executionLine("bash", bashMsg.command, bashMsg);
+				yield line;
+				yield "";
 				lastWatchedLabel = undefined;
 				break;
 			}
 			case "pythonExecution": {
 				const pythonMsg = msg as PythonExecutionMessage;
 				if (pythonMsg.excludeFromContext) break;
-				lines.push(executionLine("python", pythonMsg.code, pythonMsg), "");
+				const line = yield* executionLine("python", pythonMsg.code, pythonMsg);
+				yield line;
+				yield "";
 				lastWatchedLabel = undefined;
 				break;
 			}
@@ -368,39 +605,138 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 				if (opts?.expandPrimaryContext && PRIMARY_CONTEXT_CUSTOM_TYPES.has(custom.customType)) {
 					const text = contentToText(custom.content).trim();
 					if (text) {
-						lines.push(
-							`<primary-context kind="${custom.customType}">`,
-							escapeXmlText(text),
-							"</primary-context>",
-							"",
-						);
+						yield `<primary-context kind="${custom.customType}">`;
+						yield escapeXmlText(text);
+						yield "</primary-context>";
+						yield "";
 					}
 				} else {
-					lines.push(customOneLiner(custom), "");
+					yield customOneLiner(custom);
+					yield "";
 				}
 				lastWatchedLabel = undefined;
 				break;
 			}
 			case "branchSummary": {
 				const branchMsg = msg as BranchSummaryMessage;
-				lines.push(`[branch] from ${branchMsg.fromId}: ${oneLine(branchMsg.summary)}`, "");
+				yield `[branch] from ${branchMsg.fromId}: ${oneLine(branchMsg.summary)}`;
+				yield "";
 				lastWatchedLabel = undefined;
 				break;
 			}
 			case "compactionSummary": {
 				const compactMsg = msg as CompactionSummaryMessage;
-				lines.push(`[compaction] ${oneLine(compactMsg.summary)}`, "");
+				yield `[compaction] ${oneLine(compactMsg.summary)}`;
+				yield "";
 				lastWatchedLabel = undefined;
 				break;
 			}
 			case "fileMention": {
 				const fileMsg = msg as FileMentionMessage;
-				lines.push(`[file-mention] ${oneLine(fileMsg.files.map(f => f.path).join(", "))}`, "");
+				yield `[file-mention] ${oneLine(fileMsg.files.map(f => f.path).join(", "))}`;
+				yield "";
 				lastWatchedLabel = undefined;
 				break;
 			}
 		}
 	}
+}
 
+export function formatSessionHistoryMarkdown(messages: unknown[], opts?: HistoryFormatOptions): string {
+	const steps = historyMarkdownSteps(messages, opts);
+	const lines: string[] = [];
+	let step = steps.next();
+	while (!step.done) {
+		if (typeof step.value === "string") {
+			lines.push(step.value);
+		}
+		step = steps.next();
+	}
+	return `${lines.join("\n").trim()}\n`;
+}
+
+/** Yield between rendering batches so cancellation and deadline timers can run. */
+export async function formatSessionHistoryMarkdownAsync(
+	messages: unknown[],
+	opts?: HistoryFormatOptions,
+	signal?: AbortSignal,
+): Promise<string> {
+	signal?.throwIfAborted();
+	const rawMessages: unknown = messages;
+	let msgCount = 0;
+	if (Array.isArray(rawMessages)) {
+		msgCount = rawMessages.length;
+	} else if (
+		rawMessages &&
+		typeof rawMessages === "object" &&
+		"length" in rawMessages &&
+		typeof rawMessages.length === "number"
+	) {
+		msgCount = rawMessages.length;
+	}
+	if (msgCount > MAX_INDEX_ENTRIES) {
+		throw new Error(`Session history formatting exceeded the ${MAX_INDEX_ENTRIES} message entry cap`);
+	}
+
+	for (let mi = 0; mi < (Array.isArray(messages) ? messages.length : 0); mi++) {
+		if ((mi & 255) === 0) {
+			await yieldToEventLoop();
+			signal?.throwIfAborted();
+		}
+		const msg = (messages as AgentMessage[])[mi]!;
+		if (!msg || typeof msg !== "object") continue;
+		if ("content" in msg) {
+			await preflightContentBytes(msg.content, MAX_RECORD_BYTES, signal);
+		}
+		if (msg.role === "assistant" && Array.isArray((msg as AssistantMessage).content)) {
+			let totalAssistantText = 0;
+			const blocks = (msg as AssistantMessage).content;
+			for (let bi = 0; bi < blocks.length; bi++) {
+				if ((bi & 255) === 0) {
+					await yieldToEventLoop();
+					signal?.throwIfAborted();
+				}
+				const block = blocks[bi];
+				if (!block || typeof block !== "object") continue;
+				if (block.type === "text" && typeof block.text === "string") {
+					totalAssistantText += block.text.length;
+				} else if (opts?.includeThinking && block.type === "thinking" && typeof block.thinking === "string") {
+					totalAssistantText += block.thinking.length;
+				} else if (block.type === "toolCall") {
+					totalAssistantText += await preflightArgumentBytes(block.arguments, signal);
+				}
+				if (totalAssistantText > MAX_RECORD_BYTES) {
+					throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
+				}
+			}
+		}
+	}
+	const steps = historyMarkdownSteps(messages, opts);
+	const lines: string[] = [];
+	let totalOutputBytes = 0;
+	let count = 0;
+	let step = steps.next();
+	while (!step.done) {
+		signal?.throwIfAborted();
+		if (typeof step.value === "string") {
+			const line = step.value;
+			totalOutputBytes += Buffer.byteLength(line, "utf8") + 1;
+			if (totalOutputBytes > MAX_RECORD_BYTES) {
+				throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
+			}
+			lines.push(line);
+		}
+		if (++count % 64 === 0) {
+			await yieldToEventLoop();
+			signal?.throwIfAborted();
+		}
+		step = steps.next();
+	}
+	signal?.throwIfAborted();
+	await yieldToEventLoop();
+	signal?.throwIfAborted();
+	if (totalOutputBytes > MAX_RECORD_BYTES) {
+		throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
+	}
 	return `${lines.join("\n").trim()}\n`;
 }
