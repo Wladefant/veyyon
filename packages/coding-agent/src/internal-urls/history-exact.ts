@@ -463,15 +463,16 @@ export async function readStoredHistoryEntry(
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
-					if (initialPlainTitle || /["{}[\]]/.test(line)) {
+				const trimmed = line.trim();
+				if (!admission.headerSeen && !admission.entrySeen && trimmed.length > 0) {
+					if (initialPlainTitle || trimmed.startsWith("[") || trimmed.startsWith('"')) {
 						admission.invalidIdentity = true;
 						admission.sessionId = undefined;
 						incomplete = true;
 					} else {
 						initialPlainTitle = true;
 					}
-				} else if (line.trim().length > 0) {
+				} else if (trimmed.length > 0) {
 					incomplete = true;
 					if (!admission.headerSeen) {
 						admission.invalidIdentity = true;
@@ -889,15 +890,16 @@ export async function searchStoredHistoryEntries(
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (!admission.headerSeen && !admission.entrySeen && line.trim().length > 0) {
-					if (initialPlainTitle || /["{}[\]]/.test(line)) {
+				const trimmed = line.trim();
+				if (!admission.headerSeen && !admission.entrySeen && trimmed.length > 0) {
+					if (initialPlainTitle || trimmed.startsWith("[") || trimmed.startsWith('"')) {
 						admission.invalidIdentity = true;
 						admission.sessionId = undefined;
 						unreadable = true;
 					} else {
 						initialPlainTitle = true;
 					}
-				} else if (line.trim().length > 0) {
+				} else if (trimmed.length > 0) {
 					unreadable = true;
 					if (!admission.headerSeen) {
 						admission.invalidIdentity = true;

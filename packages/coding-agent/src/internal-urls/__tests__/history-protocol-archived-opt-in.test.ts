@@ -1185,35 +1185,61 @@ describe("history:// caller-bound archived opt-in", () => {
 
 			const file = path.join(temp.path(), "plain-title.jsonl");
 			archivedFixtureSessionIds.set(file, "trusted");
-			await fs.writeFile(
-				file,
-				[
-					"Benign Initial Plain Title",
-					"",
-					JSON.stringify({ type: "session", id: "trusted" }),
-					JSON.stringify({
-						type: "message",
-						id: "entry-one",
-						parentId: null,
-						message: { role: "user", content: [{ type: "text", text: "needle in plain title" }] },
-					}),
-				].join("\n") + "\n",
-			);
-			registerArchivedRef("PlainTitleTarget", "session-a", file, "parked");
+			for (const [idx, title] of [
+				"Benign Initial Plain Title",
+				"Fix [iOS] login",
+				'Fix "id" display',
+				"Handle {x} placeholders",
+			].entries()) {
+				await fs.writeFile(
+					file,
+					[
+						title,
+						"",
+						JSON.stringify({ type: "session", id: "trusted" }),
+						JSON.stringify({
+							type: "message",
+							id: "entry-one",
+							parentId: null,
+							message: { role: "user", content: [{ type: "text", text: "needle in plain title" }] },
+						}),
+					].join("\n") + "\n",
+				);
+				const targetId = `PlainTitleTarget_${idx}`;
+				registerArchivedRef(targetId, "session-a", file, "parked");
 
-			const exact = JSON.parse(await read(caller, "history://PlainTitleTarget?archived=1&entry=entry-one")) as {
-				status: string;
-				fragment?: string;
-			};
-			expect(exact.status).toBe("ok");
-			expect(exact.fragment).toContain("needle in plain title");
+				const exact = JSON.parse(await read(caller, `history://${targetId}?archived=1&entry=entry-one`)) as {
+					status: string;
+					fragment?: string;
+				};
+				expect(exact.status).toBe("ok");
+				expect(exact.fragment).toContain("needle in plain title");
 
-			const search = JSON.parse(await read(caller, "history://PlainTitleTarget?archived=1&q=needle")) as {
-				status: string;
-				matches: Array<{ entryId: string }>;
-			};
-			expect(search.status).toBe("ok");
-			expect(search.matches.map(m => m.entryId)).toContain("entry-one");
+				const explicitExact = JSON.parse(
+					await read(caller, `history://${targetId}?archived=1&entry=entry-one&leaf=entry-one`),
+				) as {
+					status: string;
+					fragment?: string;
+				};
+				expect(explicitExact.status).toBe("ok");
+				expect(explicitExact.fragment).toContain("needle in plain title");
+
+				const search = JSON.parse(await read(caller, `history://${targetId}?archived=1&q=needle`)) as {
+					status: string;
+					matches: Array<{ entryId: string }>;
+				};
+				expect(search.status).toBe("ok");
+				expect(search.matches.map(m => m.entryId)).toContain("entry-one");
+
+				const explicitSearch = JSON.parse(
+					await read(caller, `history://${targetId}?archived=1&q=needle&leaf=entry-one`),
+				) as {
+					status: string;
+					matches: Array<{ entryId: string }>;
+				};
+				expect(explicitSearch.status).toBe("ok");
+				expect(explicitSearch.matches.map(m => m.entryId)).toContain("entry-one");
+			}
 		} finally {
 			await temp.remove();
 		}

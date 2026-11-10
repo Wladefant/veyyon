@@ -1244,25 +1244,51 @@ describe("history exact record lookup", () => {
 		const dir = TempDir.createSync("@veyyon-history-plain-title-sep-");
 		try {
 			const file = path.join(dir.path(), "session.jsonl");
-			await fs.writeFile(
-				file,
-				[
-					"Benign Initial Plain Title",
-					"",
-					JSON.stringify({ type: "session", id: "trusted" }),
-					JSON.stringify({ type: "message", id: "entry-one", parentId: null, message: "needle in haystack" }),
-				].join("\n") + "\n",
-			);
+			for (const title of [
+				"Benign Initial Plain Title",
+				"Fix [iOS] login",
+				'Fix "id" display',
+				"Handle {x} placeholders",
+			]) {
+				await fs.writeFile(
+					file,
+					[
+						title,
+						"",
+						JSON.stringify({ type: "session", id: "trusted" }),
+						JSON.stringify({ type: "message", id: "entry-one", parentId: null, message: "needle in haystack" }),
+					].join("\n") + "\n",
+				);
 
-			const exact = await readStoredHistoryEntry(file, { entryId: "entry-one", offset: 0, limit: 256 });
-			expect(exact.status).toBe("ok");
-			expect(exact.fragment).toContain("needle in haystack");
-			expect(exact.sessionId).toBe("trusted");
+				const exact = await readStoredHistoryEntry(file, { entryId: "entry-one", offset: 0, limit: 256 });
+				expect(exact.status).toBe("ok");
+				expect(exact.fragment).toContain("needle in haystack");
+				expect(exact.sessionId).toBe("trusted");
 
-			const search = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
-			expect(search.status).toBe("ok");
-			expect(search.matches.map(m => m.entryId)).toEqual(["entry-one"]);
-			expect(search.sessionId).toBe("trusted");
+				const explicitExact = await readStoredHistoryEntry(file, {
+					entryId: "entry-one",
+					leafId: "entry-one",
+					offset: 0,
+					limit: 256,
+				});
+				expect(explicitExact.status).toBe("ok");
+				expect(explicitExact.fragment).toContain("needle in haystack");
+				expect(explicitExact.sessionId).toBe("trusted");
+
+				const search = await searchStoredHistoryEntries(file, { query: "needle", limit: 5 });
+				expect(search.status).toBe("ok");
+				expect(search.matches.map(m => m.entryId)).toEqual(["entry-one"]);
+				expect(search.sessionId).toBe("trusted");
+
+				const explicitSearch = await searchStoredHistoryEntries(file, {
+					query: "needle",
+					leafId: "entry-one",
+					limit: 5,
+				});
+				expect(explicitSearch.status).toBe("ok");
+				expect(explicitSearch.matches.map(m => m.entryId)).toEqual(["entry-one"]);
+				expect(explicitSearch.sessionId).toBe("trusted");
+			}
 		} finally {
 			await dir.remove();
 		}
