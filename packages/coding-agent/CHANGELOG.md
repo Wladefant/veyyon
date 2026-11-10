@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Producer output redacts opaque authorization continuations after plain or formatted Markdown labels while preserving benign prose and later sections ([Refs #1069](https://github.com/Wladefant/veyyon/issues/1069)).
 ## [1.8.23] - 2026-11-10
 
 ### Fixed
