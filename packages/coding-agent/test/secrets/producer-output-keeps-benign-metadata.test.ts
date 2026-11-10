@@ -213,6 +213,294 @@ describe("producer output keeps benign metadata", () => {
 		expect(output).not.toContain(token);
 		expect(output).toContain(" after");
 	});
+	it("preserves benign Markdown headings and labels for Driver and Native Authorization", () => {
+		const benignInputs = [
+			"- **Driver & Native Authorization:**\n",
+			"- **Driver & Native Authorization:**",
+			"- **Driver & Native Authorization**:\n",
+			"- **Driver & Native Authorization**:",
+			"## Driver & Native Authorization:\n",
+			"### Driver & Native Authorization:\n",
+			"# Driver & Native Authorization:\n",
+			"## Authorization:\n",
+			"### Authorization:\n",
+			"# Authorization:\n",
+			"- **Authorization:**\n",
+			"- **Authorization:**",
+			"- **Authorization**:\n",
+			"- **Authorization**:",
+			"**Authorization:**\n",
+			"**Authorization:**",
+			"**Authorization**:\n",
+			"**Authorization**:",
+		];
+
+		for (const input of benignInputs) {
+			expect(guard.sanitize(input)).toBe(input);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).toBe(input);
+			}
+		}
+	});
+
+	it("protects real Authorization credentials in headings and preceding prose across splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const counterexamples = [
+			`# Authorization: ${token}\n`,
+			`## Authorization: Bearer ${token}\n`,
+			`### Authorization: Basic ${basicAuth}\n`,
+			`header Authorization: ${token}\n`,
+			`sent Authorization: Bearer ${token}\n`,
+			`received Authorization: Basic ${basicAuth}\n`,
+		];
+
+		for (const input of counterexamples) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			const unownedGuard = new ProducerOutputGuard();
+			const unownedSanitized = unownedGuard.sanitize(input);
+			expect(unownedSanitized).not.toContain(token);
+			expect(unownedSanitized).not.toContain(basicAuth);
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+
+	it("preserves unrelated Markdown colon forms unchanged", () => {
+		const unrelated = [
+			"Note:**important**\n",
+			"Warning:**caution**\n",
+			"section:**title**\n",
+			"- Note:**important**\n",
+			"- Warning:**caution**\n",
+		];
+		for (const input of unrelated) {
+			expect(guard.sanitize(input)).toBe(input);
+		}
+	});
+
+	it("protects real Authorization credentials when wrapped in Markdown across splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const credentialInputs = [
+			`Authorization: Bearer ${token}\n`,
+			`Authorization: Basic ${basicAuth}\n`,
+			`Authorization: ${token}\n`,
+			`**Authorization:** Bearer ${token}\n`,
+			`**Authorization**: Bearer ${token}\n`,
+			`- **Authorization:** Bearer ${token}\n`,
+			`- **Authorization**: Bearer ${token}\n`,
+			`**Authorization:** Basic ${basicAuth}\n`,
+			`**Authorization**: Basic ${basicAuth}\n`,
+			`- **Authorization:** Basic ${basicAuth}\n`,
+			`- **Authorization**: Basic ${basicAuth}\n`,
+			`**Authorization:** ${token}\n`,
+			`**Authorization**: ${token}\n`,
+			`- **Authorization:** ${token}\n`,
+			`- **Authorization**: ${token}\n`,
+		];
+
+		for (const input of credentialInputs) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+	it("redacts mixed-form valued Markdown colon placements", () => {
+		const mixedValued = "**Authorization:** valueOne\n**Authorization**: valueTwo\n";
+		expect(guard.sanitize(mixedValued)).toBe(
+			"**Authorization:** [REDACTED]\n**Authorization**: [REDACTED]\n",
+		);
+	});
+
+	it("protects real credentials in compound labels across schemes and splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const compoundCredentials = [
+			`- **Driver & Native Authorization:** Bearer ${token}\n`,
+			`- **Driver & Native Authorization**: Bearer ${token}\n`,
+			`- **Driver & Native Authorization:** Basic ${basicAuth}\n`,
+			`- **Driver & Native Authorization**: Basic ${basicAuth}\n`,
+			`- **Driver & Native Authorization:** Digest ${token}\n`,
+			`- **Driver & Native Authorization**: Digest ${token}\n`,
+			`- **Driver & Native Authorization:** Negotiate ${token}\n`,
+			`- **Driver & Native Authorization**: Negotiate ${token}\n`,
+			`- **Driver & Native Authorization:** Token ${token}\n`,
+			`- **Driver & Native Authorization**: Token ${token}\n`,
+		];
+
+		for (const input of compoundCredentials) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+	it("retains custom owner redactions spanning Markdown authorization without sentinel interference", () => {
+		const customLiteral = "Authorization:** customSecretKey12345";
+		const customRedacted = "Authorization:** [CUSTOM_REDACTED_LITERAL]";
+		const customRedactor = (text: string) => text.replaceAll(customLiteral, customRedacted);
+		const customGuard = new ProducerOutputGuard(customRedactor);
+
+		const input = `- **Driver & Native ${customLiteral}\n`;
+		const sanitized = customGuard.sanitize(input);
+		expect(sanitized).not.toContain("customSecretKey12345");
+
+		for (let split = 0; split <= input.length; split++) {
+			const streamGuard = new ProducerOutputGuard(customRedactor);
+			const streamed =
+				streamGuard.push(input.slice(0, split)) +
+				streamGuard.push(input.slice(split)) +
+				streamGuard.finish();
+			expect(streamed).not.toContain("customSecretKey12345");
+		}
+	});
+
+	it("preserves user-supplied literal U+E000 sentinels without corruption", () => {
+		const inputWithSentinel =
+			"- **Driver & Native Authorization:** Bearer opaqueToken1234567890\n- **Authorization\uE000**: user literal \uE000 preserved\n";
+		const sanitized = guard.sanitize(inputWithSentinel);
+		expect(sanitized).toContain("\uE000");
+		expect(sanitized).toContain("**Authorization\uE000**: user literal \uE000 preserved");
+		expect(sanitized).not.toContain("opaqueToken1234567890");
+
+		for (let split = 0; split <= inputWithSentinel.length; split++) {
+			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+			const streamed =
+				streamGuard.push(inputWithSentinel.slice(0, split)) +
+				streamGuard.push(inputWithSentinel.slice(split)) +
+				streamGuard.finish();
+			expect(streamed).toContain("\uE000");
+			expect(streamed).toContain("**Authorization\uE000**: user literal \uE000 preserved");
+			expect(streamed).not.toContain("opaqueToken1234567890");
+		}
+	});
+	// WHY: Authorization context must cover unknown values and physical line breaks.
+	// These cases exercise owner and unowned paths, not encoded exfiltration.
+	it("fails closed on opaque compound authorization values across every split", () => {
+		for (const label of ["- **Driver & Native Authorization:**", "- **Driver & Native Authorization**:"]) {
+			for (const value of ["arbitraryCredentialABC123"]) {
+				const input = `${label} ${value}\n`;
+				for (const owner of [undefined, redactProviderSecrets]) {
+					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
+					for (let split = 0; split <= input.length; split++) {
+						const stream = new ProducerOutputGuard(owner);
+						const output = stream.push(input.slice(0, split)) + stream.push(input.slice(split)) + stream.finish();
+						expect(output).not.toContain(value);
+					}
+				}
+			}
+		}
+	});
+
+	it("protects the immediate physical value after an empty authorization heading", () => {
+		const value = "arbitraryCredentialABC123";
+		for (const label of ["### Authorization:", "- **Authorization:**", "- **Driver & Native Authorization**:"]) {
+			for (const separator of ["\n", "\r\n"]) {
+				const input = `${label}${separator}  ${value}\n`;
+				for (const owner of [undefined, redactProviderSecrets]) {
+					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
+					for (let split = 0; split <= input.length; split++) {
+						const stream = new ProducerOutputGuard(owner);
+						const output = stream.push(input.slice(0, split)) + stream.push(input.slice(split)) + stream.finish();
+						expect(output).not.toContain(value);
+					}
+					const stream = new ProducerOutputGuard(owner);
+					let output = "";
+					for (const character of input) output += stream.push(character);
+					output += stream.finish();
+					expect(output).not.toContain(value);
+				}
+			}
+		}
+	});
+
+	it("never emits an injected sentinel when an owner rewrites Markdown delimiters", () => {
+		for (const rewrite of [
+			(text: string) => redactProviderSecrets(text).replaceAll("**:", ":"),
+			(text: string) => redactProviderSecrets(text).replaceAll("**:", ""),
+		]) {
+			const input = "- **Driver & Native Authorization:**\n";
+			const stream = new ProducerOutputGuard(rewrite);
+			expect(stream.sanitize(input)).not.toMatch(/[\uE000-\uE0FF]/);
+			expect(stream.push(input) + stream.finish()).not.toMatch(/[\uE000-\uE0FF]/);
+		}
+	});
+
+	it("preserves benign authorization headings, prose continuations, and resets across splits", () => {
+		const benignInputs = [
+			"### Authorization:\n\n## Next steps\nReview the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n  Native drivers require kernel approval.\n",
+			"### Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- Authorization:\n\n  arbitraryCredentialABC123\n",
+			"### Authorization:\n## Next steps\nReview the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n- Next bullet item\n",
+			"- Authorization:\n- Next bullet item\n",
+			"### Authorization:\n- Next bullet item\n",
+		];
+
+		for (const input of benignInputs) {
+			for (const owner of [undefined, redactProviderSecrets]) {
+				const sanitized = new ProducerOutputGuard(owner).sanitize(input);
+				expect(sanitized).toBe(input);
+
+				const lineStream = new ProducerOutputGuard(owner);
+				const lines = input.split(/(?<=\n)/);
+				let lineOutput = "";
+				for (const line of lines) {
+					lineOutput += lineStream.push(line);
+				}
+				lineOutput += lineStream.finish();
+				expect(lineOutput).toBe(input);
+
+				for (let split = 0; split <= input.length; split++) {
+					const splitStream = new ProducerOutputGuard(owner);
+					const streamed =
+						splitStream.push(input.slice(0, split)) +
+						splitStream.push(input.slice(split)) +
+						splitStream.finish();
+					expect(streamed).toBe(input);
+				}
+			}
+		}
+	});
 
 	it("preserves PR 1699 body with Source commit pin metadata across sanitize, JSON wrapper, and stream splits", () => {
 		expect(guard.sanitize(PR1699_BODY_FIXTURE)).toBe(PR1699_BODY_FIXTURE);

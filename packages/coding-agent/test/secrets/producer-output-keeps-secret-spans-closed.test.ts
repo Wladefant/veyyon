@@ -322,4 +322,42 @@ describe("producer output keeps complete credential spans closed", () => {
 			expect(streamed).not.toContain(suffix);
 		}
 	});
+	it("redacts indented credentials after plain bullet authorization labels across splits while retaining subsequent sections", () => {
+		const bullets = ["- Authorization:", "- Driver & Native Authorization:", "- **Driver & Native Authorization:**"];
+		const credentials = ["arbitraryCredentialABC123", "Bearer secret123"];
+		const following = "\n## Next steps\nReview the documented permissions.\n";
+
+		for (const bullet of bullets) {
+			for (const credential of credentials) {
+				const secret = credential.startsWith("Bearer ") ? credential.slice("Bearer ".length) : credential;
+				const input = `${bullet}\n  ${credential}${following}`;
+
+				for (const owner of [undefined, redactProviderSecrets]) {
+					const sanitized = new ProducerOutputGuard(owner).sanitize(input);
+					expect(sanitized).not.toContain(secret);
+					expect(sanitized).toContain("\n## Next steps\nReview the documented permissions.\n");
+
+					const lineStream = new ProducerOutputGuard(owner);
+					const lines = input.split(/(?<=\n)/);
+					let lineOutput = "";
+					for (const line of lines) {
+						lineOutput += lineStream.push(line);
+					}
+					lineOutput += lineStream.finish();
+					expect(lineOutput).not.toContain(secret);
+					expect(lineOutput).toContain("\n## Next steps\nReview the documented permissions.\n");
+
+					for (let split = 0; split <= input.length; split++) {
+						const splitStream = new ProducerOutputGuard(owner);
+						const streamed =
+							splitStream.push(input.slice(0, split)) +
+							splitStream.push(input.slice(split)) +
+							splitStream.finish();
+						expect(streamed).not.toContain(secret);
+						expect(streamed).toContain("\n## Next steps\nReview the documented permissions.\n");
+					}
+				}
+			}
+		}
+	});
 });
