@@ -19,6 +19,8 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent/extensibility/active-skills";
 import { InternalUrlRouter, parseInternalUrl } from "@veyyon/coding-agent/internal-urls";
 import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";
+import { readLiveHistoryEntry, searchLiveHistoryEntries } from "@veyyon/coding-agent/internal-urls/history-exact";
+import { formatSessionHistoryMarkdown, formatSessionHistoryMarkdownAsync } from "@veyyon/coding-agent/session/session-history-format";
 import {
 	registerArtifactsDir,
 	resetRegisteredArtifactDirsForTests,
@@ -255,7 +257,6 @@ describe("history read bounded regressions", () => {
 		const url = parseInternalUrl("history://HangingAgent");
 
 		const { promise: neverResolving, resolve: cleanupNeverResolving } = Promise.withResolvers<unknown>();
-		// @ts-expect-error spyOn mockImplementation
 		const readdirSpy = spyOn(fs, "readdir").mockImplementation(async () => neverResolving as never);
 
 		try {
@@ -321,7 +322,6 @@ describe("history read bounded regressions", () => {
 			const callerReason = new Error("caller aborted mid-flight readdir");
 
 			const { promise: readdirBlocker, resolve: unblockReaddir } = Promise.withResolvers<unknown>();
-			// @ts-expect-error spyOn mockImplementation
 			const readdirSpy = spyOn(fs, "readdir").mockImplementation(async () => {
 				controller.abort(callerReason);
 				return readdirBlocker as never;
@@ -368,11 +368,10 @@ describe("history read bounded regressions", () => {
 			let readdirInvocations = 0;
 			const originalReaddir = fs.readdir;
 			// Each readdir pass advances fake time by 3000ms (> 2.5s, < 5.0s)
-			// @ts-expect-error spyOn mockImplementation
 			const readdirSpy = spyOn(fs, "readdir").mockImplementation(async (...args) => {
 				readdirInvocations++;
 				vi.advanceTimersByTime(3000);
-				return originalReaddir(...args);
+				return (originalReaddir as Function)(...args);
 			});
 
 			try {
@@ -409,10 +408,9 @@ describe("history read bounded regressions", () => {
 
 			let readdirInvocations = 0;
 			const originalReaddir = fs.readdir;
-			// @ts-expect-error spyOn mockImplementation
 			const readdirSpy = spyOn(fs, "readdir").mockImplementation(async (...args) => {
 				readdirInvocations++;
-				return originalReaddir(...args);
+				return (originalReaddir as Function)(...args);
 			});
 
 			try {
@@ -444,10 +442,9 @@ describe("history read bounded regressions", () => {
 			// Test query miss with ?q=
 			let readdirCountQ = 0;
 			const origReaddir = fs.readdir;
-			// @ts-expect-error spyOn mockImplementation
 			const readdirSpyQ = spyOn(fs, "readdir").mockImplementation(async (...args) => {
 				readdirCountQ++;
-				return origReaddir(...args);
+				return (origReaddir as Function)(...args);
 			});
 
 			try {
@@ -466,10 +463,9 @@ describe("history read bounded regressions", () => {
 
 			// Test entry miss with ?entry=
 			let readdirCountEntry = 0;
-			// @ts-expect-error spyOn mockImplementation
 			const readdirSpyEntry = spyOn(fs, "readdir").mockImplementation(async (...args) => {
 				readdirCountEntry++;
-				return origReaddir(...args);
+				return (origReaddir as Function)(...args);
 			});
 
 			try {
@@ -577,7 +573,7 @@ describe("history read bounded regressions", () => {
 			// Make readdir yield to allow resolve() timer to arm, then advance fake timer
 			const origReaddir = fs.readdir;
 			const readdirSpy = spyOn(fs, "readdir").mockImplementation(async (...args) => {
-				const res = await origReaddir(...args);
+				const res = await (origReaddir as Function)(...args);
 				// Simulate hanging search stream that runs until 5s deadline
 				await blockReadStream;
 				return res;
@@ -670,7 +666,7 @@ describe("history read bounded regressions", () => {
 			const readFileSpy = spyOn(nodeFs.promises, "readFile").mockImplementation(async (...args) => {
 				readFileCalled = true;
 				controller.abort(callerReason);
-				return origReadFile(...args);
+				return (origReadFile as Function)(...args);
 			});
 			const origParse = sessionLoaderModule.parseSessionContent;
 			const parseSpy = spyOn(sessionLoaderModule, "parseSessionContent").mockImplementation((...args) => {
@@ -710,7 +706,7 @@ describe("history read bounded regressions", () => {
 			const readFileSpy = spyOn(nodeFs.promises, "readFile").mockImplementation(async (...args) => {
 				readFileStarted = true;
 				controller.abort(callerReason);
-				return origReadFile(...args);
+				return (origReadFile as Function)(...args);
 			});
 			const origParse = sessionLoaderModule.parseSessionContent;
 			const parseSpy = spyOn(sessionLoaderModule, "parseSessionContent").mockImplementation((...args) => {
@@ -808,7 +804,7 @@ describe("history read bounded regressions", () => {
 			displayName: "task",
 			kind: "sub",
 			session: { messages } as never,
-			status: "active",
+			status: "running",
 		});
 
 		const callerReason = new Error("caller aborted live history read");
@@ -841,22 +837,245 @@ describe("history read bounded regressions", () => {
 			displayName: "task",
 			kind: "sub",
 			session: { messages } as never,
-			status: "active",
+			status: "running",
 		});
 
+		vi.useFakeTimers();
+		try {
+			const controller = new AbortController();
+			const callerReason = new Error("live formatting aborted mid-flight");
+			setTimeout(() => controller.abort(callerReason), 1);
+
+			const promise = InternalUrlRouter.instance().resolve("history://LargeLiveAgent", {
+				signal: controller.signal,
+			});
+			vi.advanceTimersByTime(1);
+
+			let error: unknown;
+			try {
+				await promise;
+			} catch (err) {
+				error = err;
+			}
+			expect(error).toBe(callerReason);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("aborts live history search promptly when signal fires mid-flight", async () => {
+		const branch: unknown[] = [];
+		for (let i = 0; i < 1000; i++) {
+			branch.push({
+				type: "message",
+				id: `entry-${i}`,
+				parentId: i === 0 ? null : `entry-${i - 1}`,
+				message: { role: "assistant", content: `message search content ${i}` },
+			});
+		}
+
 		const controller = new AbortController();
-		const callerReason = new Error("live formatting aborted");
-		controller.abort(callerReason);
+		const callerReason = new Error("live search aborted mid-flight");
+
+		// Queue abort while search is scanning through 1000 entries
+		queueMicrotask(() => {
+			controller.abort(callerReason);
+		});
 
 		let error: unknown;
 		try {
-			await InternalUrlRouter.instance().resolve("history://LargeLiveAgent", {
-				signal: controller.signal,
-			});
+			await searchLiveHistoryEntries(branch as never, { query: "nomatch", limit: 20 }, undefined, controller.signal);
 		} catch (err) {
 			error = err;
 		}
 
 		expect(error).toBe(callerReason);
+	});
+	it("aborts live exact record read mid-flight when signal fires during resolution", async () => {
+		const branch: unknown[] = [
+			{
+				type: "message",
+				id: "entry-target",
+				parentId: null,
+				message: { role: "user", content: "payload ".repeat(2000) },
+			},
+		];
+
+		const controller = new AbortController();
+		const callerReason = new Error("live exact read aborted mid-flight");
+		queueMicrotask(() => {
+			controller.abort(callerReason);
+		});
+
+		let error: unknown;
+		try {
+			await readLiveHistoryEntry(branch as never, { entryId: "entry-target", offset: 0, limit: 100 }, undefined, controller.signal);
+		} catch (err) {
+			error = err;
+		}
+
+		expect(error).toBe(callerReason);
+	});
+
+	it("rejects oversized entries with shared repeated payloads that expand beyond the record cap", async () => {
+		// A shared object of ~100 KB repeated 100 times in an array is ~10 MB when serialized,
+		// exceeding the 8 MiB cap, but would be undercounted by naive reference deduplication.
+		const sharedChild = { text: "x".repeat(100_000) };
+		const sharedItems = Array.from({ length: 100 }, () => sharedChild);
+		const branch: unknown[] = [
+			{
+				type: "message",
+				id: "entry-shared",
+				parentId: null,
+				message: { role: "assistant", items: sharedItems },
+			},
+		];
+
+		const res = await readLiveHistoryEntry(
+			branch as never,
+			{ entryId: "entry-shared", offset: 0, limit: 100 },
+			undefined,
+		);
+
+		expect(res.status).toBe("unavailable");
+		expect(res.detail).toContain("8 MiB");
+	});
+
+	it("handles huge arrays with iterator frames without blowing stack or memory and enforces node cap", async () => {
+		// 120,000 array elements exceed MAX_TRAVERSAL_NODES (100,000)
+		const hugeArray = Array.from({ length: 120_000 }, (_, i) => i);
+		const branch: unknown[] = [
+			{
+				type: "message",
+				id: "entry-huge-array",
+				parentId: null,
+				message: { role: "assistant", numbers: hugeArray },
+			},
+		];
+
+		const res = await readLiveHistoryEntry(
+			branch as never,
+			{ entryId: "entry-huge-array", offset: 0, limit: 100 },
+			undefined,
+		);
+
+		expect(res.status).toBe("unavailable");
+		expect(res.detail).toContain("8 MiB");
+	});
+
+	it("refuses oversized live entry exceeding 8 MiB record cap without full string allocation", async () => {
+		const oversizedContent = "x".repeat(9 * 1024 * 1024);
+		const branch: unknown[] = [
+			{
+				type: "message",
+				id: "oversized-entry",
+				parentId: null,
+				message: { role: "user", content: oversizedContent },
+			},
+		];
+
+		const result = await readLiveHistoryEntry(branch as never, { entryId: "oversized-entry", offset: 0, limit: 100 });
+		expect(result.status).toBe("unavailable");
+		expect(result.detail).toContain("8 MiB");
+	});
+
+	it("marks live search partial when encountering oversized records without unbounded stringify", async () => {
+		const oversizedContent = "x".repeat(9 * 1024 * 1024);
+		const branch: unknown[] = [
+			{
+				type: "message",
+				id: "normal-entry",
+				parentId: null,
+				message: { role: "user", content: "matching needle here" },
+			},
+			{
+				type: "message",
+				id: "oversized-entry",
+				parentId: "normal-entry",
+				message: { role: "user", content: oversizedContent },
+			},
+		];
+
+		const result = await searchLiveHistoryEntries(branch as never, { query: "needle", limit: 10 });
+		expect(result.status).toBe("partial");
+		expect(result.matches).toHaveLength(1);
+		expect(result.matches[0]!.entryId).toBe("normal-entry");
+	});
+
+	it("returns unavailable when live search cumulative scanned bytes exceeds 128 MiB", async () => {
+		const branch: unknown[] = [];
+		const chunk = "y".repeat(7_900_000);
+		for (let i = 0; i < 18; i++) {
+			branch.push({
+				type: "message",
+				id: `entry-${i}`,
+				parentId: i === 0 ? null : `entry-${i - 1}`,
+				message: { role: "user", content: chunk },
+			});
+		}
+
+		const result = await searchLiveHistoryEntries(branch as never, { query: "needle", limit: 10 });
+		expect(result.status).toBe("unavailable");
+		expect(result.detail).toContain("128 MiB");
+	});
+
+	it("rejects in async formatter when output exceeds 8 MiB output cap while sync formatter preserves behavior", async () => {
+		const hugeText = "a".repeat(9 * 1024 * 1024);
+		const messages = [
+			{ role: "user", content: hugeText, timestamp: 1 },
+		];
+
+		let error: unknown;
+		try {
+			await formatSessionHistoryMarkdownAsync(messages);
+		} catch (err) {
+			error = err;
+		}
+
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain("output cap");
+
+		// Sync formatter preserves normal formatting without throwing output cap error
+		const syncResult = formatSessionHistoryMarkdown(messages);
+		expect(syncResult).toContain("## user");
+	});
+
+	it("returns unavailable when live branch exceeds 100,000 entry cap in exact read and search", async () => {
+		// Mock branch with length > 100,000
+		const branch = new Proxy([], {
+			get(target, prop) {
+				if (prop === "length") return 100_001;
+				if (prop === "findIndex") return () => 0;
+				return Reflect.get(target, prop);
+			},
+		});
+
+		const exact = await readLiveHistoryEntry(branch as never, { entryId: "any", offset: 0, limit: 100 });
+		expect(exact.status).toBe("unavailable");
+		expect(exact.detail).toContain("100,000-entry");
+
+		const search = await searchLiveHistoryEntries(branch as never, { query: "needle", limit: 10 });
+		expect(search.status).toBe("unavailable");
+		expect(search.detail).toContain("100,000-entry");
+	});
+
+	it("rejects in async formatter when messages array exceeds 100,000 entry cap", async () => {
+		const origIsArray = Array.isArray;
+		const messages = { length: 100_001 } as unknown[];
+		Array.isArray = (arg: unknown): arg is unknown[] => arg === messages || origIsArray(arg);
+
+		try {
+			let error: unknown;
+			try {
+				await formatSessionHistoryMarkdownAsync(messages);
+			} catch (err) {
+				error = err;
+			}
+
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).message).toContain("entry cap");
+		} finally {
+			Array.isArray = origIsArray;
+		}
 	});
 });

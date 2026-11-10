@@ -7,6 +7,7 @@
 ### Added
 
 - `loadSessionMessagesReadOnly` and read-only session loading interfaces accept an optional `AbortSignal` for cooperative transcript loading cancellation ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- `BlobStore.get` and session blob reference resolution accept an optional `AbortSignal` for abortable history blob reads ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
 
 ## [1.8.20] - 2026-11-09
 

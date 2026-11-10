@@ -223,8 +223,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				const requestedLeaf = exactRequest ? exactRequest.leafId : searchRequest!.leafId;
 				const branch = requestedLeaf === null ? [] : ref.session.sessionManager.getBranch(requestedLeaf);
 				const result = exactRequest
-					? readLiveHistoryEntry(branch, exactRequest, ref.session.sessionManager.getSessionId())
-					: searchLiveHistoryEntries(branch, searchRequest!, ref.session.sessionManager.getSessionId());
+					? await readLiveHistoryEntry(branch, exactRequest, ref.session.sessionManager.getSessionId(), signal)
+					: await searchLiveHistoryEntries(branch, searchRequest!, ref.session.sessionManager.getSessionId(), signal);
 				const content = JSON.stringify(result, null, 2);
 				return {
 					url: url.href,

@@ -9,7 +9,7 @@
  * - No system prompt / tool catalog sections.
  */
 import { describe, expect, it } from "bun:test";
-import { formatSessionHistoryMarkdown } from "@veyyon/coding-agent/session/session-history-format";
+import { formatSessionHistoryMarkdown, formatSessionHistoryMarkdownAsync } from "@veyyon/coding-agent/session/session-history-format";
 import { INTENT_FIELD } from "@veyyon/wire";
 
 function buildMessages(): unknown[] {
@@ -315,5 +315,100 @@ describe("formatSessionHistoryMarkdown", () => {
 		const output = formatSessionHistoryMarkdown(messages);
 		expect(output).toContain("→ advise(concern: Avoid shadowing the outer variable.) ⇒ ok · 1 line");
 		expect(output).not.toContain("Recorded.");
+	});
+
+	it("summarizes huge tool results without splitting text into line arrays", () => {
+		const hugeContent = "line\n".repeat(100_000);
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc-huge", name: "bash", arguments: { command: "generate" } }],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-huge",
+				toolName: "bash",
+				content: hugeContent,
+				isError: false,
+				timestamp: 2,
+			},
+		];
+
+		let hugeSplitCalled = false;
+		const origSplit = String.prototype.split;
+		String.prototype.split = (function (this: unknown, ...args: Parameters<typeof origSplit>) {
+			if (this === hugeContent || (typeof this === "string" && this.length >= 500_000)) {
+				hugeSplitCalled = true;
+			}
+			return (origSplit as Function).apply(this, args);
+		}) as typeof origSplit;
+
+		try {
+			const output = formatSessionHistoryMarkdown(messages);
+			expect(output).toContain("→ bash(generate) ⇒ ok · 100001 lines");
+			expect(hugeSplitCalled).toBe(false);
+		} finally {
+			String.prototype.split = origSplit;
+		}
+	});
+
+	it("summarizes massive newline-free tool errors without traversing entire string for first line", () => {
+		const hugeError = "error_header " + "x".repeat(2_000_000);
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc-err", name: "bash", arguments: { command: "failing" } }],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-err",
+				toolName: "bash",
+				content: hugeError,
+				isError: true,
+				timestamp: 2,
+			},
+		];
+
+		const output = formatSessionHistoryMarkdown(messages);
+		expect(output).toContain("→ bash(failing) ⇒ error · 1 line — error_header xxxx");
+	});
+
+	it("bounds primaryArg without unbounded scanning or string allocations on giant inputs", () => {
+		const giantCommand = "echo " + "y".repeat(1_000_000);
+		const messages = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc-giant", name: "bash", arguments: { command: giantCommand } }],
+				timestamp: 1,
+			},
+		];
+
+		const output = formatSessionHistoryMarkdown(messages);
+		expect(output).toContain("→ bash(echo yyyy");
+		expect(output.length).toBeLessThan(1000);
+	});
+
+	it("aborts formatSessionHistoryMarkdownAsync during preflight of huge content arrays", async () => {
+		// Array with 5,000 text parts
+		const parts = Array.from({ length: 5000 }, (_, i) => ({ type: "text", text: `part ${i}` }));
+		const messages = [
+			{ role: "user", content: parts, timestamp: 1 },
+		];
+
+		const controller = new AbortController();
+		const callerReason = new Error("aborted during preflight");
+		queueMicrotask(() => {
+			controller.abort(callerReason);
+		});
+
+		let error: unknown;
+		try {
+			await formatSessionHistoryMarkdownAsync(messages, undefined, controller.signal);
+		} catch (err) {
+			error = err;
+		}
+		expect(error).toBe(callerReason);
 	});
 });

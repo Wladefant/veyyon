@@ -1138,17 +1138,23 @@ interface BlobReads {
 	text: Map<string, Promise<string>>;
 }
 
-function readBlobSite(site: BlobSite, reference: string, blobStore: BlobStore, reads: BlobReads): Promise<string> {
+function readBlobSite(
+	site: BlobSite,
+	reference: string,
+	blobStore: BlobStore,
+	reads: BlobReads,
+	signal?: AbortSignal,
+): Promise<string> {
 	const started =
 		site.kind === "image-data" ? reads.imageData : site.kind === "image-url" ? reads.imageUrl : reads.text;
 	let read = started.get(reference);
 	if (read === undefined) {
 		read =
 			site.kind === "image-data"
-				? resolveImageData(blobStore, reference)
+				? resolveImageData(blobStore, reference, { signal })
 				: site.kind === "image-url"
-					? resolveImageDataUrl(blobStore, reference)
-					: resolveTextBlobRef(blobStore, reference);
+					? resolveImageDataUrl(blobStore, reference, { signal })
+					: resolveTextBlobRef(blobStore, reference, { signal });
 		started.set(reference, read);
 	}
 	return read;
@@ -1160,10 +1166,13 @@ async function resolveBlobSite(
 	lost: LostPayloads,
 	strings: StringPool,
 	reads: BlobReads,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const reference = siteReference(site);
 	if (reference === undefined) return;
-	settleBlobSite(site, reference, await readBlobSite(site, reference, blobStore, reads), lost, strings);
+	const resolved = await readBlobSite(site, reference, blobStore, reads, signal);
+	signal?.throwIfAborted();
+	settleBlobSite(site, reference, resolved, lost, strings);
 }
 
 function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPayloads, strings: StringPool): void {
@@ -1189,7 +1198,7 @@ async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: Los
 			for (let index = next++; index < sites.length; index = next++) {
 				signal?.throwIfAborted();
 				const site = sites[index];
-				if (site) await resolveBlobSite(site, blobStore, lost, strings, reads);
+				if (site) await resolveBlobSite(site, blobStore, lost, strings, reads, signal);
 			}
 		}),
 	);
