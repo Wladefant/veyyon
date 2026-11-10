@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.8.23] - 2026-11-10
+
 ### Fixed
 
 - History transcript resolution and stored history reading honor caller abort signals, combine caller cancellation with the 5-second deadline, reuse single-pass session file scans, and yield between markdown formatting batches ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).

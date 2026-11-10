@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.8.23] - 2026-11-10
+
 ### Added
 
 - `loadSessionMessagesReadOnly` and read-only session loading interfaces accept an optional `AbortSignal` for cooperative transcript loading cancellation ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
