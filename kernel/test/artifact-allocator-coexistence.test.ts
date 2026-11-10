@@ -91,20 +91,61 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 		const dir = freshDir();
 		const mgr = new ArtifactManager(dir);
 
-		// Allocate ID 0 and 1
 		const id0 = await mgr.allocatePath("bash");
 		const id1 = await mgr.allocatePath("bash");
 		expect(id0.id).toBe("0");
 		expect(id1.id).toBe("1");
 
-		// Sibling script cleans up empty marker directories .artifact-id-*
 		await fs.rm(path.join(dir, ".artifact-id-0"), { recursive: true, force: true });
 		await fs.rm(path.join(dir, ".artifact-id-1"), { recursive: true, force: true });
 
-		// Even after markers are deleted and no output files exist, durable counter in .artifact-ids.sqlite must prevent reusing 0 or 1!
 		const freshMgr = new ArtifactManager(dir);
 		const id2 = await freshMgr.allocatePath("bash");
 		expect(Number(id2.id)).toBeGreaterThanOrEqual(2);
+	});
+
+	it("reconciles the counter before cleanup deletes legacy-published markers", async () => {
+		const dir = freshDir();
+		await fs.mkdir(dir, { recursive: true });
+		const rollbackManager = new ArtifactManager(dir);
+
+		expect(await rollbackManager.save("content-0", "bash")).toBe("0");
+		expect(await rollbackManager.save("content-1", "bash")).toBe("1");
+		expect(await rollbackManager.save("content-2", "bash")).toBe("2");
+		for (let id = 3; id <= 5; id++) {
+			fsSync.mkdirSync(path.join(dir, `.artifact-id-${id}`));
+			fsSync.writeFileSync(path.join(dir, `${id}.legacy.log`), `legacy-${id}`);
+		}
+		fsSync.mkdirSync(path.join(dir, ".artifact-id-6"));
+		fsSync.mkdirSync(path.join(dir, ".artifact-id-7"));
+
+		const script = path.resolve(import.meta.dirname, "../../scripts/cleanup-artifact-markers.py");
+		const pyBin = Bun.which("python3") ?? Bun.which("python") ?? "python3";
+		const result = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
+			const proc = spawn(pyBin, [script, "--session-dir", dir, "--execute", "--min-age-hours", "0", "--json"], {
+				stdio: ["ignore", "pipe", "inherit"],
+			});
+			let stdout = "";
+			proc.stdout.on("data", chunk => {
+				stdout += chunk;
+			});
+			proc.on("error", reject);
+			proc.on("close", code => resolve({ code, stdout }));
+		});
+		expect(result.code).toBe(0);
+		const parsed: unknown = JSON.parse(result.stdout);
+		const deleted = parsed && typeof parsed === "object" && "deleted" in parsed ? parsed.deleted : undefined;
+		expect(deleted).toBe(6);
+
+		const freshManager = new ArtifactManager(dir);
+		const next = await freshManager.allocatePath("bash");
+		expect(Number(next.id)).toBeGreaterThanOrEqual(8);
+		for (const id of [0, 1, 2]) {
+			expect(await fs.readFile(path.join(dir, `${id}.bash.log`), "utf8")).toBe(`content-${id}`);
+		}
+		for (let id = 3; id <= 5; id++) {
+			expect(await fs.readFile(path.join(dir, `${id}.legacy.log`), "utf8")).toBe(`legacy-${id}`);
+		}
 	});
 
 	// Existing counters must work without enumerating a large legacy directory.
@@ -519,5 +560,77 @@ process.stdout.write(JSON.stringify(ids));
 		expect(file0).toBe("content-0");
 		expect(file1).toBe("content-1");
 		expect(file2).toBe("content-2");
+
+		// 3. Age all markers (>24h) and run cleanup-artifact-markers.py --execute
+		const oldEpoch = Math.floor(Date.now() / 1000) - 48 * 3600;
+		for (const name of await fs.readdir(dir)) {
+			if (name.startsWith(".artifact-id-")) {
+				await fs.utimes(path.join(dir, name), oldEpoch, oldEpoch);
+			}
+		}
+		const cleanupScript = path.resolve(import.meta.dirname, "../../scripts/cleanup-artifact-markers.py");
+		const pyBin = Bun.which("python3") ?? Bun.which("python") ?? "python3";
+		await new Promise<void>((resolve, reject) => {
+			const proc = spawn(
+				pyBin,
+				[cleanupScript, "--session-dir", dir, "--execute", "--min-age-hours", "24"],
+				{ stdio: ["ignore", "pipe", "pipe"] },
+			);
+			let stderr = "";
+			proc.stderr.on("data", chunk => {
+				stderr += chunk;
+			});
+			proc.on("close", code => {
+				if (code === 0) resolve();
+				else reject(new Error(`Cleanup script exited with ${code}: ${stderr}`));
+			});
+		});
+
+		// Verify markers 5, 6, 7 (<= max_published_id 7) were cleaned up
+		const entriesAfterCleanup = await fs.readdir(dir);
+		expect(entriesAfterCleanup).not.toContain(".artifact-id-5");
+		expect(entriesAfterCleanup).not.toContain(".artifact-id-6");
+		expect(entriesAfterCleanup).not.toContain(".artifact-id-7");
+
+		// 4. Third fresh SQLite allocator resumes after cleanup removed collision sentinels 5..7
+		const resumeNewScript = `
+import { ArtifactManager } from "${path.resolve(import.meta.dirname, "../src/session/artifacts").replace(/\\/g, "/")}";
+const dir = process.argv[2];
+const mgr = new ArtifactManager(dir);
+async function run() {
+  const saved8 = await mgr.save("content-8", "bash");
+  const saved9 = await mgr.save("content-9", "bash");
+  process.stdout.write(JSON.stringify([saved8, saved9]));
+}
+run().catch(err => { console.error(err); process.exit(1); });
+`;
+		const resumeNewScriptPath = path.join(dir, "resume_new_worker.ts");
+		await fs.writeFile(resumeNewScriptPath, resumeNewScript, "utf8");
+		const resumedNewIds: string[] = await runProcess(resumeNewScriptPath, [dir]);
+		expect(Number(resumedNewIds[0])).toBeGreaterThanOrEqual(8);
+		expect(resumedNewIds).toEqual(["8", "9"]);
+
+		// Verify legacy published files 5, 6, 7 are completely intact
+		expect(await fs.readFile(path.join(dir, "5.legacy.log"), "utf8")).toBe("legacy-content-5");
+		expect(await fs.readFile(path.join(dir, "6.legacy.log"), "utf8")).toBe("legacy-content-6");
+		expect(await fs.readFile(path.join(dir, "7.legacy.log"), "utf8")).toBe("legacy-content-7");
+	});
+
+	it("scans legacy directory outside SQLite write transaction during initial and EEXIST recovery", async () => {
+		const dir = freshDir();
+		await fs.mkdir(dir, { recursive: true });
+		// Pre-create legacy artifacts 0..99 and a gap marker at 150
+		for (let i = 0; i < 100; i++) {
+			await fs.mkdir(path.join(dir, `.artifact-id-${i}`));
+			await fs.writeFile(path.join(dir, `${i}.legacy.log`), `legacy-${i}`, "utf8");
+		}
+		await fs.mkdir(path.join(dir, ".artifact-id-150"));
+
+		const mgrA = new ArtifactManager(dir);
+		const mgrB = new ArtifactManager(dir);
+		const idA = mgrA.allocateId();
+		const idB = mgrB.allocateId();
+		expect(idA).toBe(151);
+		expect(idB).toBe(152);
 	});
 });

@@ -11,6 +11,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFileSync, atomicWriteFileWith, fsyncDirEntry, fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { withFileLockSync } from "@veyyon/utils/file-lock";
 import * as logger from "@veyyon/utils/logger";
 import { sleepSync } from "@veyyon/utils/sleep";
 import { isSqliteBusyError } from "@veyyon/utils/sqlite";
@@ -151,64 +152,75 @@ export class ArtifactManager {
 			this.#dirCreated = true;
 		}
 
-		const dbPath = path.join(this.#dir, DB_FILENAME);
-		const db = new Database(dbPath);
-		try {
-			db.run("PRAGMA busy_timeout = 5000;");
-			// WAL setup can return BUSY during another connection's final checkpoint,
-			// even with busy_timeout. Bound retries like the other SQLite stores.
-			for (let attempt = 0; ; attempt++) {
+		return withFileLockSync(
+			path.join(this.#dir, "artifacts"),
+			() => {
+				const dbPath = path.join(this.#dir, DB_FILENAME);
+				const db = new Database(dbPath);
 				try {
-					db.run("PRAGMA journal_mode = WAL;");
-					break;
-				} catch (err) {
-					if (!isSqliteBusyError(err) || attempt >= 3) throw err;
-					sleepSync(100 * 2 ** attempt);
-				}
-			}
-			db.run("CREATE TABLE IF NOT EXISTS counter (key TEXT PRIMARY KEY, next_id INTEGER NOT NULL);");
-
-			let rescan = false;
-			for (;;) {
-				let claimedId = -1;
-				const tx = db.transaction(() => {
-					const row = db.query("SELECT next_id FROM counter WHERE key = 'artifacts';").get() as { next_id: number } | null;
-					// The durable counter avoids enumerating legacy markers on each fresh manager.
-					// Scan only to seed it or recover from a legacy allocator collision.
-					const maxScanId = !row || rescan ? this.#scanDirectoryMax() : -1;
-					rescan = false;
-					let nextVal: number;
-					if (!row) {
-						nextVal = Math.max(0, maxScanId + 1);
-						db.run("INSERT INTO counter (key, next_id) VALUES ('artifacts', ?);", [nextVal + 1]);
-						claimedId = nextVal;
-					} else {
-						const current = row.next_id;
-						nextVal = Math.max(current, maxScanId + 1);
-						db.run("UPDATE counter SET next_id = ? WHERE key = 'artifacts';", [nextVal + 1]);
-						claimedId = nextVal;
+					db.run("PRAGMA busy_timeout = 5000;");
+					// WAL setup can return BUSY during another connection's final checkpoint,
+					// even with busy_timeout. Bound retries like the other SQLite stores.
+					for (let attempt = 0; ; attempt++) {
+						try {
+							db.run("PRAGMA journal_mode = WAL;");
+							break;
+						} catch (err) {
+							if (!isSqliteBusyError(err) || attempt >= 3) throw err;
+							sleepSync(100 * 2 ** attempt);
+						}
 					}
-				});
-				tx.immediate();
+					db.run("CREATE TABLE IF NOT EXISTS counter (key TEXT PRIMARY KEY, next_id INTEGER NOT NULL);");
 
-				// Atomically reserve legacy marker directory.
-				// On EEXIST (another process or legacy allocator already claimed this marker),
-				// re-scan the directory on the next iteration.
-				try {
-					fsSync.mkdirSync(path.join(this.#dir, `.artifact-id-${claimedId}`));
-				} catch (err) {
-					if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-						rescan = true;
-						continue;
+					const initialRow = db.query("SELECT next_id FROM counter WHERE key = 'artifacts';").get() as { next_id: number } | null;
+					let seeded = initialRow !== null;
+					let rescan = false;
+
+					for (;;) {
+						let claimedId = -1;
+						// The durable counter avoids enumerating legacy markers on each fresh manager.
+						// Scan only to seed it or recover from a legacy allocator collision outside the write transaction.
+						const maxScanId = !seeded || rescan ? this.#scanDirectoryMax() : -1;
+						rescan = false;
+						seeded = true;
+
+						const tx = db.transaction(() => {
+							const row = db.query("SELECT next_id FROM counter WHERE key = 'artifacts';").get() as { next_id: number } | null;
+							let nextVal: number;
+							if (!row) {
+								nextVal = Math.max(0, maxScanId + 1);
+								db.run("INSERT INTO counter (key, next_id) VALUES ('artifacts', ?);", [nextVal + 1]);
+								claimedId = nextVal;
+							} else {
+								const current = row.next_id;
+								nextVal = Math.max(current, maxScanId + 1);
+								db.run("UPDATE counter SET next_id = ? WHERE key = 'artifacts';", [nextVal + 1]);
+								claimedId = nextVal;
+							}
+						});
+						tx.immediate();
+
+						// Atomically reserve legacy marker directory.
+						// On EEXIST (another process or legacy allocator already claimed this marker),
+						// re-scan the directory on the next iteration.
+						try {
+							fsSync.mkdirSync(path.join(this.#dir, `.artifact-id-${claimedId}`));
+						} catch (err) {
+							if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+								rescan = true;
+								continue;
+							}
+							throw err;
+						}
+
+						return claimedId;
 					}
-					throw err;
+				} finally {
+					db.close();
 				}
-
-				return claimedId;
-			}
-		} finally {
-			db.close();
-		}
+			},
+			{ staleMs: 30_000, retries: 300, retryDelayMs: 50 },
+		);
 	}
 
 	/**

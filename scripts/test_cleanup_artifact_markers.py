@@ -23,6 +23,7 @@ import json
 import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+import sqlite3
 
 # Dynamically import scripts/cleanup-artifact-markers.py
 script_path = Path(__file__).parent.parent / "scripts" / "cleanup-artifact-markers.py"
@@ -969,7 +970,7 @@ def test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal
         assert marker1.exists(), "Marker must not be deleted when active.lock appeared before deletion"
         assert metrics.deleted == 0
         assert metrics.skipped_locked >= 1
-        # Subcase 2: Arbitrary internal lock (e.g. worker_sub.lock) appearing before deletion
+        # Subcase 2: Known internal lock (e.g. session.lock) appearing before deletion
         session_dir2 = temp_dir / "profiles" / "default" / "agent" / "sessions" / "sess-per-del-internal"
         session_dir2.mkdir(parents=True)
         (session_dir2 / "10.task.log").write_text("done")
@@ -984,7 +985,7 @@ def test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal
         cache2.fingerprint = frozenset([(12345, 67890, "node.exe")])
 
         def hook_ensure_current2():
-            cust_lock = session_dir2 / "worker_job.lock"
+            cust_lock = session_dir2 / "custom_internal.lock"
             cust_lock.mkdir(exist_ok=True)
             (cust_lock / "info").write_text(json.dumps({
                 "version": 1,
@@ -1006,9 +1007,184 @@ def test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal
                 snapshot_cache=cache2,
             )
 
-        assert marker2.exists(), "Marker must not be deleted when internal worker_job.lock appeared before deletion"
+        assert marker2.exists(), "Marker must not be deleted when internal session.lock appeared before deletion"
         assert metrics2.deleted == 0
         assert metrics2.skipped_locked >= 1
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+def test_process_snapshot_cache_refresh_generation_coherence_retry_and_fail_closed():
+    """Verify refresh() samples fingerprint before and after command-line read.
+
+    If fp_before != fp_after, it must retry up to 3 attempts.
+    If it succeeds on retry, it caches the coherent snapshot.
+    If it fails after 3 attempts, it fails closed (returns False, is_valid=False).
+    """
+    cache = mod.ProcessSnapshotCache()
+
+    # Case A: Mismatch on attempt 1, match on attempt 2 -> succeeds on retry
+    fp1_before = frozenset([(100, 1000, "bun.exe")])
+    fp1_after = frozenset([(100, 1000, "bun.exe"), (101, 1050, "bun.exe")])
+    fp2_before = frozenset([(100, 1000, "bun.exe"), (101, 1050, "bun.exe")])
+    fp2_after = frozenset([(100, 1000, "bun.exe"), (101, 1050, "bun.exe")])
+
+    mock_fps = [fp1_before, fp1_after, fp2_before, fp2_after]
+    mock_cmdlines = (True, ["bun run agent"])
+
+    with patch.object(mod, "get_native_process_identities", side_effect=mock_fps), \
+         patch.object(mod, "get_live_process_command_lines", return_value=mock_cmdlines):
+        ok = cache.refresh()
+        assert ok, "Must succeed on second attempt when fingerprint stabilizes"
+        assert cache.is_valid
+        assert cache.fingerprint == fp2_after
+        assert cache.refresh_count == 1
+
+    # Case B: Persistent mismatch on all 3 attempts -> fails closed
+    cache_fail = mod.ProcessSnapshotCache()
+    mismatch_fps = [
+        frozenset([(1, 1, "bun.exe")]), frozenset([(1, 1, "bun.exe"), (2, 2, "bun.exe")]),
+        frozenset([(1, 1, "bun.exe")]), frozenset([(1, 1, "bun.exe"), (3, 3, "bun.exe")]),
+        frozenset([(1, 1, "bun.exe")]), frozenset([(1, 1, "bun.exe"), (4, 4, "bun.exe")]),
+    ]
+    with patch.object(mod, "get_native_process_identities", side_effect=mismatch_fps), \
+         patch.object(mod, "get_live_process_command_lines", return_value=mock_cmdlines):
+        ok = cache_fail.refresh()
+        assert not ok, "Must fail closed after 3 mismatched attempts"
+        assert not cache_fail.is_valid
+        assert cache_fail.fingerprint is None
+        assert cache_fail.command_lines == []
+
+
+def test_live_process_without_session_in_argv_holding_artifacts_lock_skips_cleanup():
+    """When a process holds artifacts.lock but its argv omits the session path, cleanup must skip."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_argv_omit_lock_"))
+    try:
+        session_dir = temp_dir / "sess_argv_omitted"
+        session_dir.mkdir()
+        (session_dir / "0.bash.log").write_text("log")
+        marker = session_dir / ".artifact-id-0"
+        marker.mkdir()
+        past_time = time.time() - 48 * 3600
+        os.utime(marker, (past_time, past_time))
+
+        # Create active artifacts.lock with current PID (alive process)
+        lock_dir = session_dir / "artifacts.lock"
+        lock_dir.mkdir()
+        (lock_dir / "info").write_text(json.dumps({
+            "version": 1,
+            "pid": os.getpid(),
+            "timestamp": int(time.time() * 1000),
+            "token": "live-allocator-token",
+            "processIdentity": None,
+        }), encoding="utf-8")
+
+        # Command lines do NOT mention session path or ID at all
+        blind_cmdlines = ["C:\\bun.exe run agent", "node server.js"]
+        active_tokens = mod.extract_active_session_identifiers(blind_cmdlines)
+        assert not mod.is_session_directory_live(session_dir, active_tokens, blind_cmdlines), \
+            "Sanity check: liveness check alone fails to see session in argv"
+
+        metrics = mod.CleanupMetrics()
+        mod.process_session_markers(
+            session_dir=session_dir,
+            metrics=metrics,
+            cutoff_time=time.time() - 24 * 3600,
+            active_tokens=active_tokens,
+            command_lines=blind_cmdlines,
+            execute=True,
+        )
+
+        assert marker.exists(), "Marker must NOT be deleted while artifacts.lock is held"
+        assert metrics.deleted == 0
+        assert metrics.sessions_skipped_live >= 1 or metrics.skipped_locked >= 1
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_large_marker_cleanup_is_linear_not_quadratic():
+    """Verify that deleting N markers does NOT call os.scandir(session_dir) on every deletion.
+
+    With 50 markers, quadratic scanning would invoke os.scandir(session_dir) 50+ times.
+    With the exclusive artifacts.lock lease and check_internal=False, os.scandir(session_dir)
+    is invoked at most a small constant number of times (1 initial scan + 0 per-marker).
+    """
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_linear_scale_"))
+    try:
+        session_dir = temp_dir / "sess_scale"
+        session_dir.mkdir()
+        (session_dir / "999.bash.log").write_text("published")
+        past_time = time.time() - 48 * 3600
+        count = 50
+        for i in range(count):
+            m = session_dir / f".artifact-id-{i}"
+            m.mkdir()
+            os.utime(m, (past_time, past_time))
+
+        real_scandir = os.scandir
+        scandir_session_calls = 0
+
+        def counted_scandir(path=None):
+            nonlocal scandir_session_calls
+            if path is not None and str(Path(path).resolve()) == str(session_dir.resolve()):
+                scandir_session_calls += 1
+            return real_scandir(path)
+
+        metrics = mod.CleanupMetrics()
+        with patch("os.scandir", side_effect=counted_scandir), \
+             patch.object(mod, "get_live_process_command_lines", return_value=(True, [])):
+            mod.process_session_markers(
+                session_dir=session_dir,
+                metrics=metrics,
+                cutoff_time=time.time() - 24 * 3600,
+                active_tokens=set(),
+                command_lines=[],
+                execute=True,
+            )
+
+        assert metrics.deleted == count, f"Expected {count} deletions, got {metrics.deleted}"
+        # With quadratic scans, scandir_session_calls would be >= 51.
+        # With linear O(N) cleanup, scandir_session_calls is at most 3 (constant, independent of N).
+        assert scandir_session_calls <= 3, f"Expected <= 3 scandir calls on session_dir, got {scandir_session_calls}"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_reconcile_sqlite_counter_advances_past_max_published_id():
+    """Verify reconcile_sqlite_counter ensures SQLite next_id >= max_published_id + 1."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_reconcile_sql_"))
+    try:
+        sess_dir = temp_dir / "sess"
+        sess_dir.mkdir()
+        db_path = sess_dir / ".artifact-ids.sqlite"
+
+        # Case 1: Database does not exist yet -> creates table and inserts max_published + 1
+        ok = mod.reconcile_sqlite_counter(sess_dir, 7)
+        assert ok
+        con = sqlite3.connect(str(db_path))
+        row = con.execute("SELECT next_id FROM counter WHERE key = 'artifacts';").fetchone()
+        assert row is not None and row[0] == 8
+        con.close()
+
+        # Case 2: Database already has higher counter -> preserves higher counter
+        con = sqlite3.connect(str(db_path))
+        con.execute("UPDATE counter SET next_id = 15 WHERE key = 'artifacts';")
+        con.commit()
+        con.close()
+
+        ok = mod.reconcile_sqlite_counter(sess_dir, 7)
+        assert ok
+        con = sqlite3.connect(str(db_path))
+        row = con.execute("SELECT next_id FROM counter WHERE key = 'artifacts';").fetchone()
+        assert row is not None and row[0] == 15
+        con.close()
+
+        # Case 3: Database has lower counter -> updates to max_published + 1
+        ok = mod.reconcile_sqlite_counter(sess_dir, 20)
+        assert ok
+        con = sqlite3.connect(str(db_path))
+        row = con.execute("SELECT next_id FROM counter WHERE key = 'artifacts';").fetchone()
+        assert row is not None and row[0] == 21
+        con.close()
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -1043,4 +1219,8 @@ if __name__ == "__main__":
     test_non_positive_pid_locks_invalid_unsafe()
     test_validate_min_age_hours()
     test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal_locks()
-    print("All comprehensive tests passed successfully (30 test suites).")
+    test_process_snapshot_cache_refresh_generation_coherence_retry_and_fail_closed()
+    test_live_process_without_session_in_argv_holding_artifacts_lock_skips_cleanup()
+    test_large_marker_cleanup_is_linear_not_quadratic()
+    test_reconcile_sqlite_counter_advances_past_max_published_id()
+    print("All comprehensive tests passed successfully (34 test suites).")

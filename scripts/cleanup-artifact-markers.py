@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cleanup artifact reservation markers (.artifact-id-<N>).
+r"""Cleanup artifact reservation markers (.artifact-id-<N>).
 
 Implements guarded empty artifact-marker cleanup for issue #1057.
 Safety invariants:
@@ -24,10 +24,12 @@ import json
 import os
 import math
 import re
+import sqlite3
 import subprocess
 import stat
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -160,6 +162,28 @@ def get_native_process_identities() -> frozenset[tuple[int, int, str]] | None:
     Returns None if enumeration fails or is unsupported.
     """
     if sys.platform != "win32" or _kernel32 is None:
+        proc_root = Path("/proc")
+        if proc_root.is_dir():
+            try:
+                identities = set()
+                for entry in proc_root.iterdir():
+                    if not entry.name.isdigit():
+                        continue
+                    pid = int(entry.name)
+                    try:
+                        stat_text = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+                        end_paren = stat_text.rfind(")")
+                        if end_paren > 0:
+                            name = stat_text[stat_text.find("(") + 1 : end_paren].lower()
+                            fields = stat_text[end_paren + 2 :].split()
+                            ctime = int(fields[19]) if len(fields) > 19 and fields[19].isdigit() else 0
+                            if is_potential_veyyon_executable(name):
+                                identities.add((pid, ctime, name))
+                    except Exception:
+                        continue
+                return frozenset(identities)
+            except Exception:
+                return None
         return None
     try:
         snap = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
@@ -214,21 +238,28 @@ class ProcessSnapshotCache:
         self.is_valid: bool = False
         self.refresh_count: int = 0
 
-    def refresh(self) -> bool:
-        """Force refresh of Win32_Process command line snapshot."""
-        success, cmdlines = get_live_process_command_lines()
-        if not success:
-            self.is_valid = False
-            self.command_lines = []
-            self.active_tokens = set()
-            self.fingerprint = None
-            return False
-        self.command_lines = cmdlines
-        self.active_tokens = extract_active_session_identifiers(cmdlines)
-        self.fingerprint = get_native_process_identities()
-        self.is_valid = True
-        self.refresh_count += 1
-        return True
+    def refresh(self, max_attempts: int = 3) -> bool:
+        """Force refresh of Win32_Process command line snapshot with generation coherence."""
+        for _ in range(max_attempts):
+            fp_before = get_native_process_identities()
+            success, cmdlines = get_live_process_command_lines()
+            if not success:
+                break
+            fp_after = get_native_process_identities()
+            if fp_before != fp_after:
+                continue
+            self.command_lines = cmdlines
+            self.active_tokens = extract_active_session_identifiers(cmdlines)
+            self.fingerprint = fp_after
+            self.is_valid = True
+            self.refresh_count += 1
+            return True
+
+        self.is_valid = False
+        self.command_lines = []
+        self.active_tokens = set()
+        self.fingerprint = None
+        return False
 
     def ensure_current(self) -> bool:
         """Re-evaluate native process identity set. Refresh Win32 snapshot if set changed.
@@ -258,6 +289,26 @@ def get_live_process_command_lines() -> tuple[bool, list[str]]:
     (e.g. System, Registry, svchost.exe) do not block since they cannot host Veyyon.
     """
     current_pid = os.getpid()
+    if sys.platform != "win32" and Path("/proc").is_dir():
+        try:
+            cmdlines_posix: list[str] = []
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                proc_pid = int(entry.name)
+                if proc_pid == current_pid:
+                    continue
+                try:
+                    raw = (entry / "cmdline").read_bytes()
+                    cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+                    if cmdline:
+                        cmdlines_posix.append(cmdline)
+                except Exception:
+                    continue
+            return True, cmdlines_posix
+        except Exception:
+            pass
+
     cmd = [
         "powershell",
         "-NoProfile",
@@ -404,7 +455,7 @@ def is_pid_alive(pid: int) -> bool:
         return True
 
 
-def is_lock_active(lock_path: Path) -> bool:
+def is_lock_active(lock_path: Path, ignore_lock_token: str | None = None) -> bool:
     """Evaluate whether a lock path (file or directory) represents an active lock.
 
     Follows repository @veyyon/utils/file-lock protocol:
@@ -440,10 +491,12 @@ def is_lock_active(lock_path: Path) -> bool:
                     # Invalid/unrecognized format or non-positive PID: fail closed (unsafe)
                     return True
 
+                if ignore_lock_token is not None and token == ignore_lock_token and pid == os.getpid():
+                    return False
+
                 # If the owner PID is alive, lock is active.
                 if is_pid_alive(pid):
                     return True
-
                 # Owner PID is proven dead.
                 # Check if there is an active transition lock alongside it.
                 trans = lock_path.with_name(f"{lock_path.name}.transition")
@@ -462,7 +515,7 @@ def is_lock_active(lock_path: Path) -> bool:
         return True
 
 
-def is_session_directory_locked(session_dir: Path, check_internal: bool = True) -> bool:
+def is_session_directory_locked(session_dir: Path, check_internal: bool = True, ignore_lock_token: str | None = None) -> bool:
     """Check if session directory or its parent holds any active file locks.
 
     Checks:
@@ -488,7 +541,7 @@ def is_session_directory_locked(session_dir: Path, check_internal: bool = True) 
         ]
         for lock_cand in sibling_lock_candidates:
             if lock_cand.exists() or is_reparse_point(lock_cand):
-                if is_lock_active(lock_cand):
+                if is_lock_active(lock_cand, ignore_lock_token=ignore_lock_token):
                     return True
 
         # Check candidate locks in parent directory
@@ -499,7 +552,7 @@ def is_session_directory_locked(session_dir: Path, check_internal: bool = True) 
                     if (en_name.startswith(f".{name}") or en_name.startswith(name)) and (
                         ".candidate-" in en_name or en_name.endswith(".lock") or en_name.endswith(".lock.transition")
                     ):
-                        if is_lock_active(entry):
+                        if is_lock_active(entry, ignore_lock_token=ignore_lock_token):
                             return True
             except Exception:
                 return True
@@ -515,7 +568,7 @@ def is_session_directory_locked(session_dir: Path, check_internal: bool = True) 
         ]
         for lock_cand in internal_candidates:
             if lock_cand.exists() or is_reparse_point(lock_cand):
-                if is_lock_active(lock_cand):
+                if is_lock_active(lock_cand, ignore_lock_token=ignore_lock_token):
                     return True
 
         # If check_internal is True, scan entries inside session_dir
@@ -528,7 +581,7 @@ def is_session_directory_locked(session_dir: Path, check_internal: bool = True) 
                         or en_name.endswith(".lock.transition")
                         or ".candidate-" in en_name
                     ):
-                        if is_lock_active(Path(entry.path)):
+                        if is_lock_active(Path(entry.path), ignore_lock_token=ignore_lock_token):
                             return True
     except Exception:
         # Failing closed on uncertainty
@@ -536,6 +589,117 @@ def is_session_directory_locked(session_dir: Path, check_internal: bool = True) 
 
     return False
 
+
+
+def _current_process_identity() -> str | None:
+    """Return @veyyon/utils/file-lock compatible processIdentity string."""
+    if sys.platform == "win32" and _kernel32 is not None:
+        try:
+            h = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, os.getpid())
+            if h:
+                try:
+                    times = [wintypes.FILETIME() for _ in range(4)]
+                    byref_times = [ctypes.byref(t) for t in times]
+                    if _kernel32.GetProcessTimes(h, *byref_times):
+                        ctime = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+                        if ctime > 0:
+                            return f"win32:{ctime}"
+                finally:
+                    _kernel32.CloseHandle(h)
+        except Exception:
+            pass
+    return None
+
+
+def acquire_artifacts_lock(session_dir: Path) -> tuple[Path, str] | None:
+    """Acquire exclusive advisory lock at session_dir / 'artifacts.lock' in @veyyon/utils/file-lock format."""
+    if not session_dir.exists() or is_reparse_point(session_dir):
+        return None
+    lock_dir = session_dir / "artifacts.lock"
+    trans_dir = session_dir / "artifacts.lock.transition"
+    if lock_dir.exists() or is_reparse_point(lock_dir) or trans_dir.exists() or is_reparse_point(trans_dir):
+        if is_lock_active(lock_dir) or is_lock_active(trans_dir):
+            return None
+        return None
+    cand_token = str(uuid.uuid4())
+    cand_dir = session_dir / f".artifacts.candidate-{os.getpid()}-{cand_token}"
+    try:
+        cand_dir.mkdir(mode=0o700)
+        info_payload = {
+            "version": 1,
+            "pid": os.getpid(),
+            "timestamp": int(time.time() * 1000),
+            "token": cand_token,
+            "processIdentity": _current_process_identity(),
+        }
+        info_path = cand_dir / "info"
+        info_path.write_text(json.dumps(info_payload), encoding="utf-8")
+        os.replace(cand_dir, lock_dir)
+        return lock_dir, cand_token
+    except Exception:
+        try:
+            info_p = cand_dir / "info"
+            if info_p.exists() and not is_reparse_point(info_p):
+                info_p.unlink()
+            if cand_dir.exists() and not is_reparse_point(cand_dir):
+                cand_dir.rmdir()
+        except Exception:
+            pass
+        return None
+
+
+def release_artifacts_lock(lock_dir: Path, expected_token: str) -> None:
+    """Safely release an acquired artifacts.lock directory without recursive deletion."""
+    try:
+        if not lock_dir.exists() or is_reparse_point(lock_dir):
+            return
+        info_file = lock_dir / "info"
+        if info_file.exists() and not is_reparse_point(info_file):
+            data = json.loads(info_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("token") == expected_token and data.get("pid") == os.getpid():
+                info_file.unlink()
+                lock_dir.rmdir()
+    except Exception:
+        pass
+
+
+def reconcile_sqlite_counter(session_dir: Path, max_published_id: int) -> bool:
+    """Ensure .artifact-ids.sqlite counter next_id is at least max_published_id + 1."""
+    if max_published_id < 0:
+        return True
+    db_path = session_dir / ".artifact-ids.sqlite"
+    if is_reparse_point(db_path):
+        return False
+    required_next = max_published_id + 1
+    con = None
+    try:
+        con = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
+        con.execute("PRAGMA busy_timeout = 5000;")
+        con.execute("PRAGMA journal_mode = WAL;")
+        con.execute("BEGIN IMMEDIATE;")
+        con.execute("CREATE TABLE IF NOT EXISTS counter (key TEXT PRIMARY KEY, next_id INTEGER NOT NULL);")
+        row = con.execute("SELECT next_id FROM counter WHERE key = 'artifacts';").fetchone()
+        if row is None:
+            con.execute("INSERT INTO counter (key, next_id) VALUES ('artifacts', ?);", (required_next,))
+        else:
+            current_val = int(row[0])
+            if current_val < required_next:
+                con.execute("UPDATE counter SET next_id = ? WHERE key = 'artifacts';", (required_next,))
+        con.execute("COMMIT;")
+        return True
+    except Exception:
+        if con is not None:
+            try:
+                con.execute("ROLLBACK;")
+            except Exception:
+                pass
+        return False
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
 
 
 def find_session_directories(profiles_root: Path) -> list[Path]:
@@ -703,67 +867,102 @@ def process_session_markers(
 
     # Step 5: Check emptiness and perform deletion for eligible non-tail markers.
     check_fn = _win_is_dir_empty if _win_is_dir_empty is not None else is_directory_empty
+    verified_candidates: list[tuple[int, str]] = []
     for m_id, m_path_str in eligible_candidates:
         if not check_fn(m_path_str):
             metrics.skipped_nonempty += 1
             metrics.remaining += 1
             continue
-
         metrics.eligible_markers += 1
+        verified_candidates.append((m_id, m_path_str))
 
-        if not execute:
-            metrics.remaining += 1
-            continue
+    if not verified_candidates:
+        return
 
-        if max_deletions is not None and metrics.deleted >= max_deletions:
-            metrics.remaining += 1
-            continue
+    if not execute:
+        metrics.remaining += len(verified_candidates)
+        return
 
-        marker_path = Path(m_path_str)
-        if snapshot_cache is not None:
-            if not snapshot_cache.ensure_current():
-                metrics.errors += 1
-                metrics.remaining += 1
-                metrics.error_details.append(f"Aborting deletion for {marker_path}: process enumeration failed")
-                continue
-            fresh_cmdlines = snapshot_cache.command_lines
-            fresh_tokens = snapshot_cache.active_tokens
-        else:
-            success, fresh_cmdlines = get_live_process_command_lines()
-            if not success:
-                metrics.errors += 1
-                metrics.remaining += 1
-                metrics.error_details.append(f"Aborting deletion for {marker_path}: process enumeration failed")
-                continue
-            fresh_tokens = extract_active_session_identifiers(fresh_cmdlines)
+    # Acquire exclusive artifacts.lock lease before reconciling counter or deleting markers
+    lease = acquire_artifacts_lock(session_dir)
+    if lease is None:
+        metrics.skipped_locked += len(verified_candidates)
+        metrics.remaining += len(verified_candidates)
+        return
 
-        if is_session_directory_live(session_dir, fresh_tokens, fresh_cmdlines):
-            metrics.skipped_live += 1
-            metrics.remaining += 1
-            continue
-        if is_session_directory_locked(session_dir, check_internal=True):
-            metrics.skipped_locked += 1
-            metrics.remaining += 1
-            continue
-        if not is_directory_empty(marker_path):
-            metrics.skipped_nonempty += 1
-            metrics.remaining += 1
-            continue
-
-        try:
-            os.rmdir(marker_path)
-            metrics.deleted += 1
-        except Exception as ex:
+    lock_dir, lock_token = lease
+    try:
+        if not reconcile_sqlite_counter(session_dir, max_published_id):
             metrics.errors += 1
-            metrics.remaining += 1
-            metrics.error_details.append(f"Failed rmdir {marker_path}: {ex}")
+            metrics.remaining += len(verified_candidates)
+            metrics.error_details.append(f"Failed reconciling SQLite counter in {session_dir}")
+            return
 
+        checked_custom_internal = False
+        for m_id, m_path_str in verified_candidates:
+            if max_deletions is not None and metrics.deleted >= max_deletions:
+                metrics.remaining += 1
+                continue
+            marker_path = Path(m_path_str)
+            if snapshot_cache is not None:
+                if not snapshot_cache.ensure_current():
+                    metrics.errors += 1
+                    metrics.remaining += 1
+                    metrics.error_details.append(f"Aborting deletion for {marker_path}: process enumeration failed")
+                    continue
+                fresh_cmdlines = snapshot_cache.command_lines
+                fresh_tokens = snapshot_cache.active_tokens
+            else:
+                success, fresh_cmdlines = get_live_process_command_lines()
+                if not success:
+                    metrics.errors += 1
+                    metrics.remaining += 1
+                    metrics.error_details.append(f"Aborting deletion for {marker_path}: process enumeration failed")
+                    continue
+                fresh_tokens = extract_active_session_identifiers(fresh_cmdlines)
+
+            if is_session_directory_live(session_dir, fresh_tokens, fresh_cmdlines):
+                metrics.skipped_live += 1
+                metrics.remaining += 1
+                continue
+            if is_session_directory_locked(
+                session_dir,
+                check_internal=not checked_custom_internal,
+                ignore_lock_token=lock_token,
+            ):
+                metrics.skipped_locked += 1
+                metrics.remaining += 1
+                continue
+            checked_custom_internal = True
+            if not is_directory_empty(marker_path):
+                metrics.skipped_nonempty += 1
+                metrics.remaining += 1
+                continue
+
+            try:
+                os.rmdir(marker_path)
+                metrics.deleted += 1
+            except Exception as ex:
+                metrics.errors += 1
+                metrics.remaining += 1
+                metrics.error_details.append(f"Failed rmdir {marker_path}: {ex}")
+    finally:
+        release_artifacts_lock(lock_dir, lock_token)
 
 def validate_min_age_hours(val: float | int) -> float:
     """Validate that min_age_hours is a finite non-negative number."""
-    if not isinstance(val, (int, float)) or not math.isfinite(val) or val < 0:
+    if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val) or val < 0:
         raise ValueError(f"min_age_hours must be a finite non-negative number, got {val!r}")
     return float(val)
+
+
+def parse_min_age_hours_arg(raw: str) -> float:
+    """Parse and validate --min-age-hours CLI string."""
+    try:
+        val = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"min_age_hours must be a finite non-negative number, got {raw!r}") from exc
+    return validate_min_age_hours(val)
 
 
 def run_cleanup(
@@ -831,7 +1030,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--min-age-hours",
-        type=validate_min_age_hours,
+        type=parse_min_age_hours_arg,
         default=24.0,
         help="Minimum age in hours to qualify for cleanup (default: 24.0)",
     )
