@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Producer output keeps benign Markdown authorization headings visible while redacting credential values ([Refs #1069](https://github.com/Wladefant/veyyon/issues/1069)).
+- Producer output redacts opaque compound authorization values, withholds credentials after empty Markdown authorization headings, and blocks unrestored redaction sentinels ([Refs #1069](https://github.com/Wladefant/veyyon/issues/1069)).
 
 ## [1.8.22] - 2026-11-09
 

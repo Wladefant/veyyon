@@ -186,9 +186,6 @@ describe("producer output keeps benign metadata", () => {
 			"- **Driver & Native Authorization:**",
 			"- **Driver & Native Authorization**:\n",
 			"- **Driver & Native Authorization**:",
-			"- **Driver & Native Authorization:**\n  Native drivers require kernel approval.\n",
-			"- **Driver & Native Authorization:** Native drivers require kernel approval.\n",
-			"- **Driver & Native Authorization**: Native drivers require kernel approval.\n",
 			"## Driver & Native Authorization:\n",
 			"### Driver & Native Authorization:\n",
 			"# Driver & Native Authorization:\n",
@@ -302,24 +299,11 @@ describe("producer output keeps benign metadata", () => {
 			}
 		}
 	});
-	it("preserves mixed-form single-record Markdown colon placements without altering either", () => {
-		const mixedBenign =
-			"**Authorization:**\n**Authorization**:\n- **Driver & Native Authorization:** Native drivers require kernel approval.\n- **Driver & Native Authorization**: Native drivers require kernel approval.\n";
-		expect(guard.sanitize(mixedBenign)).toBe(mixedBenign);
-
-		const mixedValued =
-			"**Authorization:** valueOne\n**Authorization**: valueTwo\n";
-		const sanitizedValued = guard.sanitize(mixedValued);
-		expect(sanitizedValued).toBe("**Authorization:** [REDACTED]\n**Authorization**: [REDACTED]\n");
-
-		for (let split = 0; split <= mixedBenign.length; split++) {
-			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
-			const streamed =
-				streamGuard.push(mixedBenign.slice(0, split)) +
-				streamGuard.push(mixedBenign.slice(split)) +
-				streamGuard.finish();
-			expect(streamed).toBe(mixedBenign);
-		}
+	it("redacts mixed-form valued Markdown colon placements", () => {
+		const mixedValued = "**Authorization:** valueOne\n**Authorization**: valueTwo\n";
+		expect(guard.sanitize(mixedValued)).toBe(
+			"**Authorization:** [REDACTED]\n**Authorization**: [REDACTED]\n",
+		);
 	});
 
 	it("protects real credentials in compound labels across schemes and splits", () => {
@@ -362,7 +346,6 @@ describe("producer output keeps benign metadata", () => {
 
 		const input = `- **Driver & Native ${customLiteral}\n`;
 		const sanitized = customGuard.sanitize(input);
-		expect(sanitized).toContain("[CUSTOM_REDACTED_LITERAL]");
 		expect(sanitized).not.toContain("customSecretKey12345");
 
 		for (let split = 0; split <= input.length; split++) {
@@ -371,7 +354,6 @@ describe("producer output keeps benign metadata", () => {
 				streamGuard.push(input.slice(0, split)) +
 				streamGuard.push(input.slice(split)) +
 				streamGuard.finish();
-			expect(streamed).toContain("[CUSTOM_REDACTED_LITERAL]");
 			expect(streamed).not.toContain("customSecretKey12345");
 		}
 	});
@@ -393,6 +375,57 @@ describe("producer output keeps benign metadata", () => {
 			expect(streamed).toContain("\uE000");
 			expect(streamed).toContain("**Authorization\uE000**: user literal \uE000 preserved");
 			expect(streamed).not.toContain("opaqueToken1234567890");
+		}
+	});
+	// WHY: Authorization context must cover unknown values and physical line breaks.
+	// These cases exercise owner and unowned paths, not encoded exfiltration.
+	it("fails closed on opaque compound authorization values across every split", () => {
+		for (const label of ["- **Driver & Native Authorization:**", "- **Driver & Native Authorization**:"]) {
+			for (const value of ["arbitraryCredentialABC123", "Native drivers require kernel approval."]) {
+				const input = `${label} ${value}\n`;
+				for (const owner of [undefined, redactProviderSecrets]) {
+					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
+					for (let split = 0; split <= input.length; split++) {
+						const stream = new ProducerOutputGuard(owner);
+						const output = stream.push(input.slice(0, split)) + stream.push(input.slice(split)) + stream.finish();
+						expect(output).not.toContain(value);
+					}
+				}
+			}
+		}
+	});
+
+	it("retains empty authorization heading context until the next physical value", () => {
+		const value = "arbitraryCredentialABC123";
+		for (const label of ["### Authorization:", "- **Authorization:**", "- **Driver & Native Authorization**:"]) {
+			for (const separator of ["\n", "\r\n", "\n\n"]) {
+				const input = `${label}${separator}  ${value}\n`;
+				for (const owner of [undefined, redactProviderSecrets]) {
+					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
+					for (let split = 0; split <= input.length; split++) {
+						const stream = new ProducerOutputGuard(owner);
+						const output = stream.push(input.slice(0, split)) + stream.push(input.slice(split)) + stream.finish();
+						expect(output).not.toContain(value);
+					}
+					const stream = new ProducerOutputGuard(owner);
+					let output = "";
+					for (const character of input) output += stream.push(character);
+					output += stream.finish();
+					expect(output).not.toContain(value);
+				}
+			}
+		}
+	});
+
+	it("never emits an injected sentinel when an owner rewrites Markdown delimiters", () => {
+		for (const rewrite of [
+			(text: string) => redactProviderSecrets(text).replaceAll("**:", ":"),
+			(text: string) => redactProviderSecrets(text).replaceAll("**:", ""),
+		]) {
+			const input = "- **Driver & Native Authorization:**\n";
+			const stream = new ProducerOutputGuard(rewrite);
+			expect(stream.sanitize(input)).not.toMatch(/[\uE000-\uE0FF]/);
+			expect(stream.push(input) + stream.finish()).not.toMatch(/[\uE000-\uE0FF]/);
 		}
 	});
 

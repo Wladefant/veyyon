@@ -59,7 +59,8 @@ function wrapRedact(redact: (text: string) => string): (text: string) => string 
 		const swapped = text.replace(MD_AUTH_COLON_SUFFIX, (_match, auth, md) => `${auth}${sentinel}${md}:`);
 		const redacted = redact(swapped);
 		const restoreRegex = new RegExp(`\\b(authori[sz]ation)${sentinel}(\\*\\*|\\*|__|_|\`):`, "gi");
-		return redacted.replace(restoreRegex, "$1:$2");
+		const restored = redacted.replace(restoreRegex, "$1:$2");
+		return restored.includes(sentinel) ? BLOCKED_OUTPUT_RECORD : restored;
 	};
 }
 
@@ -93,10 +94,8 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		const lineBefore = preceding.slice(lineStart) + match.groups!.boundary;
 		const isHeading = /^[ \t]*#{1,6}[ \t]+/.test(lineBefore);
 		const hasEmptyTail = !tail || /^[ \t]*(?:\r?\n|$)/.test(tail);
-		if (isHeading && hasEmptyTail) {
-			continue;
-		}
-		if ((match.groups?.mdOpen || (isAuth && /^[ \t]*[-*+][ \t]+/.test(lineBefore))) && hasEmptyTail) {
+		if ((isHeading || match.groups?.mdOpen || (isAuth && /^[ \t]*[-*+][ \t]+/.test(lineBefore))) && hasEmptyTail) {
+			if (isAuth && tail.trim()) return BLOCKED_OUTPUT_RECORD;
 			continue;
 		}
 		if (isAuth) {
@@ -106,12 +105,10 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 				const closedAfterColon = tail.startsWith(outerMd);
 				const closedBeforeColon = match[0].includes(outerMd);
 				if (closedAfterColon || closedBeforeColon) {
-					const effectiveTail = closedAfterColon ? tail.slice(outerMd.length).trimStart() : tail.trimStart();
+					const effectiveTail = (closedAfterColon ? tail.slice(outerMd.length) : tail).replace(/^[ \t]*/, "");
 					const effectiveEmpty = !effectiveTail || /^(?:\r?\n|$)/.test(effectiveTail);
-					const hasRealCredential =
-						/^(?:bearer|basic|digest|negotiate|token)\s+/i.test(effectiveTail) ||
-						knownCredentialLength(effectiveTail) > 0;
-					if (effectiveEmpty || !hasRealCredential) {
+					if (effectiveEmpty) {
+						if (effectiveTail.trim()) return BLOCKED_OUTPUT_RECORD;
 						continue;
 					}
 				}
@@ -359,6 +356,7 @@ export class ProducerOutputGuard {
 	#depth = 0;
 	#quote = "";
 	#escaped = false;
+	#authorizationHeading = false;
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
@@ -436,6 +434,13 @@ export class ProducerOutputGuard {
 	}
 
 	#record(record: string, newline: string): string {
+		if (this.#authorizationHeading && record.trim()) return this.#block() + newline;
+		// Keep heading context even after its safe label has been emitted.
+		// A later physical line can be an opaque credential with no label of its own.
+		if (/\bauthori[sz]ation(?:[ \t]*(?:\*\*|\*|__|_|`))?:[ \t]*(?:\*\*|\*|__|_|`)?[ \t]*\r?$/i.test(record) &&
+			/^[ \t]*(?:#{1,6}[ \t]+|(?:[-*+][ \t]+)?(?:\*\*|\*|__|_|`))/.test(record)) {
+			this.#authorizationHeading = true;
+		}
 		const normalized = sanitizeText(record);
 		const safe = this.sanitize(record + newline);
 		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD)
@@ -581,5 +586,6 @@ export class ProducerOutputGuard {
 		this.#depth = 0;
 		this.#quote = "";
 		this.#escaped = false;
+		this.#authorizationHeading = false;
 	}
 }
