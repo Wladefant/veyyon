@@ -203,4 +203,123 @@ describe("producer output keeps complete credential spans closed", () => {
 			expect(output).not.toContain(token);
 		}
 	});
+	it("P1: does not leak opaque credential suffix when value begins with fake redaction marker", () => {
+		const suffix = "opaqueCredentialSuffixP1";
+		const testCases = [
+			`token=#NOT_A_REAL_MARKER# ${suffix}\n`,
+			`token=<redacted 12 chars> ${suffix}\n`,
+		];
+		for (const input of testCases) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(suffix);
+
+			const jsonObject = { message: input, sibling: "safe" };
+			const sanitizedJson = sanitizeProducerJson(jsonObject, guard) as typeof jsonObject;
+			expect(sanitizedJson.message).not.toContain(suffix);
+
+			const jsonString = JSON.stringify(jsonObject);
+			const sanitizedJsonStr = guard.sanitize(jsonString);
+			expect(sanitizedJsonStr).not.toContain(suffix);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard();
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(suffix);
+			}
+		}
+	});
+
+	it("P1: does not publish PEM body when SecretObfuscator matches only PEM header or prefix", () => {
+		const pemBody = "Q29uc2VydmF0aXZlU3ludGhldGljRGF0YVBPTUU=";
+		const pemText = `-----BEGIN PRIVATE KEY-----\n${pemBody}\n-----END PRIVATE KEY-----\n`;
+
+		const headerOnlyObfuscator = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: "-----BEGIN PRIVATE KEY-----", name: "PEM_HEADER_CANARY" },
+		]);
+		const headerOwner = {
+			redact: (text: string) => headerOnlyObfuscator.obfuscate(text),
+			pendingPrefixLength: (text: string) => headerOnlyObfuscator.pendingRedactionPrefixLength(text),
+		};
+
+		const directOutput = runWithProducerSecretOwner(headerOwner, () => new ProducerOutputGuard().sanitize(pemText));
+		expect(directOutput).not.toContain(pemBody);
+
+		const jsonMsg = { message: pemText, status: "ok" };
+		const jsonOutput = runWithProducerSecretOwner(headerOwner, () => sanitizeProducerJson(jsonMsg, new ProducerOutputGuard()) as typeof jsonMsg);
+		expect(jsonOutput.message).not.toContain(pemBody);
+
+		const jsonStrOutput = runWithProducerSecretOwner(headerOwner, () => new ProducerOutputGuard().sanitize(JSON.stringify(jsonMsg)));
+		expect(jsonStrOutput).not.toContain(pemBody);
+
+		for (let split = 0; split <= pemText.length; split++) {
+			const streamed = runWithProducerSecretOwner(headerOwner, () => {
+				const streamGuard = new ProducerOutputGuard();
+				return streamGuard.push(pemText.slice(0, split)) +
+					streamGuard.push(pemText.slice(split)) +
+					streamGuard.finish();
+			});
+			expect(streamed).not.toContain(pemBody);
+		}
+
+		const prefixContent = `-----BEGIN PRIVATE KEY-----\n${pemBody.slice(0, 10)}`;
+		const prefixObfuscator = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: prefixContent, name: "PEM_PREFIX_CANARY" },
+		]);
+		const prefixOwner = {
+			redact: (text: string) => prefixObfuscator.obfuscate(text),
+			pendingPrefixLength: (text: string) => prefixObfuscator.pendingRedactionPrefixLength(text),
+		};
+
+		const directPrefixOutput = runWithProducerSecretOwner(prefixOwner, () => new ProducerOutputGuard().sanitize(pemText));
+		expect(directPrefixOutput).not.toContain(pemBody.slice(10));
+
+		const jsonPrefixOutput = runWithProducerSecretOwner(prefixOwner, () => sanitizeProducerJson(jsonMsg, new ProducerOutputGuard()) as typeof jsonMsg);
+		expect(jsonPrefixOutput.message).not.toContain(pemBody.slice(10));
+
+		for (let split = 0; split <= pemText.length; split++) {
+			const streamed = runWithProducerSecretOwner(prefixOwner, () => {
+				const streamGuard = new ProducerOutputGuard();
+				return streamGuard.push(pemText.slice(0, split)) +
+					streamGuard.push(pemText.slice(split)) +
+					streamGuard.finish();
+			});
+			expect(streamed).not.toContain(pemBody.slice(10));
+		}
+	});
+
+	it("P1: does not emit suffix when registered literal crosses label boundary prefix token=opaque", () => {
+		const suffix = "OpaqueSuffixP1Canary";
+		const registeredLiteral = "prefix token=opaque";
+		const fullInput = `prefix token=opaque${suffix}\n`;
+		const owner = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: registeredLiteral, name: "PREFIX_TOKEN_CANARY" },
+		]);
+		const secretOwner = {
+			redact: (text: string) => owner.obfuscate(text),
+			pendingPrefixLength: (text: string) => owner.pendingRedactionPrefixLength(text),
+		};
+
+		const directOutput = runWithProducerSecretOwner(secretOwner, () => new ProducerOutputGuard().sanitize(fullInput));
+		expect(directOutput).not.toContain(suffix);
+
+		const jsonMsg = { message: fullInput, safe: true };
+		const jsonOutput = runWithProducerSecretOwner(secretOwner, () => sanitizeProducerJson(jsonMsg, new ProducerOutputGuard()) as typeof jsonMsg);
+		expect(jsonOutput.message).not.toContain(suffix);
+
+		const jsonStrOutput = runWithProducerSecretOwner(secretOwner, () => new ProducerOutputGuard().sanitize(JSON.stringify(jsonMsg)));
+		expect(jsonStrOutput).not.toContain(suffix);
+
+		for (let split = 0; split <= fullInput.length; split++) {
+			const streamed = runWithProducerSecretOwner(secretOwner, () => {
+				const streamGuard = new ProducerOutputGuard();
+				return streamGuard.push(fullInput.slice(0, split)) +
+					streamGuard.push(fullInput.slice(split)) +
+					streamGuard.finish();
+			});
+			expect(streamed).not.toContain(suffix);
+		}
+	});
 });

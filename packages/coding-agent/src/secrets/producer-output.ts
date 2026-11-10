@@ -49,7 +49,7 @@ function knownCredentialLength(text: string): number {
 
 function classifyCredentialText(text: string, redact?: (text: string) => string): string {
 	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
-	const spans: { start: number; valueStart: number; end: number; extendToLine: boolean }[] = [];
+	const spans: { start: number; valueStart: number; end: number }[] = [];
 	for (let match = labels.exec(text); match; match = labels.exec(text)) {
 		const start = labels.lastIndex + /^[ \t]*/.exec(text.slice(labels.lastIndex))![0].length;
 		const tail = text.slice(start);
@@ -66,7 +66,7 @@ function classifyCredentialText(text: string, redact?: (text: string) => string)
 			return BLOCKED_OUTPUT_RECORD;
 		}
 		if (NUMERIC_METADATA_KEY.test(match.groups!.key) && NUMERIC_METADATA_VALUE.test(tail)) continue;
-		if (REDACTION_MARKER.test(tail) || /^<redacted \d+ chars>(?=$|[ \t])/.test(tail) || /^#[A-Za-z0-9_]+#(?=$|[ \t])/.test(tail)) continue;
+		if (REDACTION_MARKER.test(tail)) continue;
 		if (/^[{[|>]/.test(tail)) return BLOCKED_OUTPUT_RECORD;
 		const quoted = isQuote(tail[0]);
 		const quoteEnd = quoted ? quotedEnd(tail, 0) : -1;
@@ -80,87 +80,81 @@ function classifyCredentialText(text: string, redact?: (text: string) => string)
 			start: match.index + boundaryLength,
 			valueStart: start + (quoted ? 1 : 0),
 			end,
-			extendToLine: knownLength > 0,
 		});
 		labels.lastIndex = Math.max(end + (quoted ? 1 : 0), start + 1);
 	}
 	PEM_BLOCK.lastIndex = 0;
 	for (const pem of text.matchAll(PEM_BLOCK)) {
-		spans.push({ start: pem.index, valueStart: pem.index, end: pem.index + pem[0].length, extendToLine: true });
+		spans.push({ start: pem.index, valueStart: pem.index, end: pem.index + pem[0].length });
 	}
-	for (let attempt = 0; attempt < (redact ? 2 : 1); attempt++) {
-		spans.sort((left, right) => left.start - right.start);
-		let count = 0;
-		for (const span of spans) {
-			const previous = spans[count - 1];
-			if (previous && span.start < previous.end) {
-				if (span.end > previous.end) {
-					previous.end = span.end;
-					previous.extendToLine = span.extendToLine;
-				}
-			} else {
-				spans[count++] = span;
+	spans.sort((left, right) => left.start - right.start);
+	let count = 0;
+	for (const span of spans) {
+		const previous = spans[count - 1];
+		if (previous && span.start < previous.end) {
+			if (span.end > previous.end) {
+				previous.end = span.end;
 			}
+		} else {
+			spans[count++] = span;
 		}
-		spans.length = count;
-		let result = "";
-		let rawProjection = "";
-		let normalizedProjection = "";
-		let cursor = 0;
-		let index = 0;
-		let sensitive = false;
-		while (cursor < text.length || index < spans.length) {
-			const span = spans[index];
-			const end = sensitive ? span.end : (span?.start ?? text.length);
-			const fragment = text.slice(cursor, end);
-			if (redact) {
-				const owned = redact(fragment);
-				const normalized = redact(sanitizeText(owned));
-				rawProjection += owned;
-				normalizedProjection += normalized;
-				if (sensitive) {
-					const prefix = redact(sanitizeText(redact(text.slice(span.start, span.valueStart))));
-					// A contextual owner may change the label as well as its value.
-					result += normalized.startsWith(prefix) ? prefix + "[REDACTED]" : "[REDACTED]";
-				} else {
-					result += normalized;
-				}
-			} else {
-				result += sensitive ? text.slice(span.start, span.valueStart) + "[REDACTED]" : fragment;
-			}
-			cursor = end;
+	}
+	spans.length = count;
+	let result = "";
+	let rawProjection = "";
+	let normalizedProjection = "";
+	let cursor = 0;
+	let index = 0;
+	let sensitive = false;
+	while (cursor < text.length || index < spans.length) {
+		const span = spans[index];
+		const end = sensitive ? span.end : (span?.start ?? text.length);
+		const fragment = text.slice(cursor, end);
+		if (redact) {
+			const owned = redact(fragment);
+			const normalized = redact(sanitizeText(owned));
+			rawProjection += owned;
+			normalizedProjection += normalized;
 			if (sensitive) {
-				index++;
-				sensitive = false;
+				const prefix = redact(sanitizeText(redact(text.slice(span.start, span.valueStart))));
+				// A contextual owner may change the label as well as its value.
+				result += normalized.startsWith(prefix) ? prefix + "[REDACTED]" : "[REDACTED]";
 			} else {
-				sensitive = span !== undefined;
+				result += normalized;
 			}
+		} else {
+			result += sensitive ? text.slice(span.start, span.valueStart) + "[REDACTED]" : fragment;
 		}
-		if (!redact) return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
-		const owned = redact(text);
-		// Masking must not split a registered literal or change its owner context.
-		if (rawProjection === owned && normalizedProjection === redact(sanitizeText(owned))) {
-			const ownerKeptCredential = spans.some(span =>
-				owned.includes(text.slice(span.valueStart, span.end)),
-			);
-			if (ownerKeptCredential) return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
-			const ownerMasked = sanitizeText(owned);
-			const safe = classifyCredentialText(ownerMasked);
-			return safe === BLOCKED_OUTPUT_RECORD ? safe : sanitizeText(safe);
+		cursor = end;
+		if (sensitive) {
+			index++;
+			sensitive = false;
+		} else {
+			sensitive = span !== undefined;
 		}
-		let extended = false;
-		for (const span of spans) {
-			if (!span.extendToLine) continue;
-			const newline = text.indexOf("\n", span.end);
-			const end = newline < 0 ? text.length : newline;
-			extended ||= end > span.end;
-			span.end = end;
-		}
-		if (!extended) break;
 	}
-	const ownerMasked = sanitizeText(redact(text));
-	const safe = classifyCredentialText(ownerMasked);
-	return safe === BLOCKED_OUTPUT_RECORD ? safe : sanitizeText(safe);
+	if (!redact) return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+	const owned = redact(text);
+	// Masking must not split a registered literal or change its owner context.
+	if (rawProjection === owned && normalizedProjection === redact(sanitizeText(owned))) {
+		return PEM_START.test(result) ? BLOCKED_OUTPUT_RECORD : result;
+	}
+	// A replacement crossing a span boundary is safe only when one complete
+	// replacement covers every original credential byte. Reclassification alone
+	// cannot prove this: an owner can remove just a PEM header or a label.
+	const ownerOutput = redact(text);
+	const marker = /(?:#[A-Za-z0-9_]+#|<redacted \d+ chars>|\[REDACTED\])/g;
+	const replacement = marker.exec(ownerOutput);
+	if (!replacement || marker.exec(ownerOutput)) return BLOCKED_OUTPUT_RECORD;
+	const prefix = ownerOutput.slice(0, replacement.index);
+	const suffix = ownerOutput.slice(replacement.index + replacement[0].length);
+	const replacementEnd = text.length - suffix.length;
+	if (!text.startsWith(prefix) || !text.endsWith(suffix) ||
+		replacementEnd < prefix.length ||
+		spans.some(span => span.valueStart < prefix.length || span.end > replacementEnd)) {
+		return BLOCKED_OUTPUT_RECORD;
+	}
+	return PEM_START.test(ownerOutput) ? BLOCKED_OUTPUT_RECORD : sanitizeText(ownerOutput);
 }
 
 function isQuote(character: string): boolean {
