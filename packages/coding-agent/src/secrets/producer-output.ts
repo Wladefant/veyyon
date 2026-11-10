@@ -1,8 +1,8 @@
 import { PROVIDER_SECRET_FAMILIES, redactProviderSecrets } from "@veyyon/ai/error/error-body";
-import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
-import { currentProducerSecretOwner } from "./producer-owner";
+import { sanitizeText } from "@veyyon/utils/sanitize-text";
 import { sanitizeJsonValue } from "../eval/json-sanitizer";
+import { currentProducerSecretOwner } from "./producer-owner";
 
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
@@ -10,9 +10,9 @@ const MAX_RECORD_CHARS = 64 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
-	/(?<boundary>^|[\s"'{,.?-])(?<key>(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?\s*(?:[=:]|\s{2,})/i;
+	/(?<boundary>^|[\s"'{,.?-])(?<mdOpen>\*\*|\*|__|_|`)?["']?(?<key>(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?(?:(?:\k<mdOpen>|\*\*|\*|__|_|`)[ \t]*(?:[=:]|\s{2,})|[ \t]*(?:[=:]|\s{2,})(?:\k<mdOpen>|\*\*|\*|__|_|`)?)/i;
 const CREDENTIAL_KEY_PREFIX =
-	/(?:^|\s+export\s+|[?.,{"'-])(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|pin|cookie|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
+	/(?:^|\s+export\s+|[?.,{"'-])(?<mdOpen>\*\*|\*|__|_|`)?(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|pin|cookie|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
 
 // Two ordinary assignments remain useful; a bulk run is an inventory even when
 // none of its names says "secret". Hold the prefix until that decision is known.
@@ -21,7 +21,8 @@ const ENV_MAP_KEY = /^(?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)$/;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
 
 /** A defs() entry names a variable and its shape, never the variable's value. */
-const DEFINITION_SHAPE = /^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|\r?\n|["'](?:\s*[,)\]]|\s*$)|(?<sourceDelimiter>[ \t]*[,;}]))/;
+const DEFINITION_SHAPE =
+	/^(?:str|string|bool|boolean|int|float|number|bigint|symbol|undefined|null|NoneType|function|module|object(?:\(\d+ keys\))?|Array\(\d+\)|(?:list|tuple|dict|set|frozenset|bytes|bytearray)\(\d+\))(?=$|\r?\n|["'](?:\s*[,)\]]|\s*$)|(?<sourceDelimiter>[ \t]*[,;}]))/;
 
 const PEM_BLOCK = /-----BEGIN ([A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g;
 const PEM_START = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
@@ -30,6 +31,50 @@ const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>
 const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
 const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
+
+const MD_AUTH_COLON_SUFFIX = /\b(authori[sz]ation):[ \t]*(\*\*|\*|__|_|`)/gi;
+
+function pickSentinel(text: string): string | null {
+	for (let code = 0xe000; code <= 0xe0ff; code++) {
+		const candidate = String.fromCharCode(code);
+		if (!text.includes(candidate)) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+function wrapRedact(redact: (text: string) => string): (text: string) => string {
+	return (text: string): string => {
+		const direct = redact(text);
+		if (direct === redactProviderSecrets(text) && text.split("\n").some(isAuthorizationHeading)) {
+			const sentinel = pickSentinel(text);
+			if (!sentinel) return BLOCKED_OUTPUT_RECORD;
+			// Provider header patterns cross newlines. The continuation classifier,
+			// not that header pattern, owns the record after a Markdown label.
+			const protectedText = text
+				.split("\n")
+				.map(record => (isAuthorizationHeading(record) ? record.replace(":", sentinel) : record))
+				.join("\n");
+			return redact(protectedText).replaceAll(sentinel, ":");
+		}
+		if (!text.includes(":*") && !text.includes(":_") && !text.includes(":`")) {
+			return direct;
+		}
+		if (direct !== redactProviderSecrets(text)) {
+			return direct;
+		}
+		const sentinel = pickSentinel(text);
+		if (!sentinel) {
+			return direct;
+		}
+		const swapped = text.replace(MD_AUTH_COLON_SUFFIX, (_match, auth, md) => `${auth}${sentinel}${md}:`);
+		const redacted = redact(swapped);
+		const restoreRegex = new RegExp(`\\b(authori[sz]ation)${sentinel}(\\*\\*|\\*|__|_|\`):`, "gi");
+		const restored = redacted.replace(restoreRegex, "$1:$2");
+		return restored.includes(sentinel) ? BLOCKED_OUTPUT_RECORD : restored;
+	};
+}
 
 function knownCredentialLength(text: string): number {
 	if (text.startsWith("-----BEGIN ")) {
@@ -45,15 +90,68 @@ function knownCredentialLength(text: string): number {
 	return extra?.index === 0 ? extra[0].length : 0;
 }
 
-function classifyCredentialText(text: string, redact?: (text: string) => string): string {
+function isAuthorizationHeading(record: string): boolean {
+	return (
+		/\bauthori[sz]ation(?:[ \t]*(?:\*\*|\*|__|_|`))?:[ \t]*(?:\*\*|\*|__|_|`)?[ \t]*\r?$/i.test(record) &&
+		/^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+|(?:\*\*|\*|__|_|`))/.test(record)
+	);
+}
+
+function isAuthorizationContinuation(record: string): boolean {
+	const value = record.trim();
+	// Blank records and new Markdown sections end the one-record context.
+	if (!value || /^(?:#{1,6}[ \t]+|[-*+][ \t]+)/.test(value)) return false;
+	// Only ordinary multiword prose is unambiguous here. Opaque values and
+	// authentication schemes remain sensitive even without a provider prefix.
+	return (
+		/^(?:Bearer|Basic|Digest|Negotiate|NTLM|Token|OAuth)\b/i.test(value) ||
+		!/^[A-Za-z]+(?:['-][A-Za-z]+)*(?:[ \t]+[A-Za-z]+(?:['-][A-Za-z]+)*)+[.!?]?$/.test(value)
+	);
+}
+
+function classifyCredentialText(text: string, rawRedact?: (text: string) => string): string {
+	const redact = rawRedact ? wrapRedact(rawRedact) : undefined;
 	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
 	const spans: { start: number; valueStart: number; end: number; extendToLine: boolean }[] = [];
+	let authorizationHeading = false;
+	let offset = 0;
+	for (const record of text.split("\n")) {
+		if (authorizationHeading && isAuthorizationContinuation(record)) {
+			spans.push({ start: offset, valueStart: offset, end: offset + record.length, extendToLine: false });
+		}
+		authorizationHeading = isAuthorizationHeading(record);
+		offset += record.length + 1;
+	}
 	for (let match = labels.exec(text); match; match = labels.exec(text)) {
 		const start = labels.lastIndex + /^[ \t]*/.exec(text.slice(labels.lastIndex))![0].length;
 		const tail = text.slice(start);
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
 		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;
+		const preceding = text.slice(0, match.index);
+		const isAuth = /authori[sz]ation/i.test(match.groups!.key);
+		const lineStart = Math.max(0, preceding.lastIndexOf("\n") + 1);
+		const lineBefore = preceding.slice(lineStart) + match.groups!.boundary;
+		const isHeading = /^[ \t]*#{1,6}[ \t]+/.test(lineBefore);
+		const hasEmptyTail = !tail || /^[ \t]*(?:\r?\n|$)/.test(tail);
+		if ((isHeading || match.groups?.mdOpen || (isAuth && /^[ \t]*[-*+][ \t]+/.test(lineBefore))) && hasEmptyTail) {
+			continue;
+		}
+		if (isAuth) {
+			const compoundLabel = /^[ \t]*(?:[-*+][ \t]+)?(?<outerMd>\*\*|\*|__|_|`)[^*_`\n]+[ \t]+$/.exec(lineBefore);
+			if (compoundLabel) {
+				const outerMd = compoundLabel.groups!.outerMd;
+				const closedAfterColon = tail.startsWith(outerMd);
+				const closedBeforeColon = match[0].includes(outerMd);
+				if (closedAfterColon || closedBeforeColon) {
+					const effectiveTail = (closedAfterColon ? tail.slice(outerMd.length) : tail).replace(/^[ \t]*/, "");
+					const effectiveEmpty = !effectiveTail || /^(?:\r?\n|$)/.test(effectiveTail);
+					if (effectiveEmpty) {
+						continue;
+					}
+				}
+			}
+		}
 		const boundaryLength = match.groups!.boundary.length;
 		if (match[0].slice(boundaryLength).includes("\n") || !tail || /^[ \t]*(?:\r?\n|$)/.test(tail)) {
 			return BLOCKED_OUTPUT_RECORD;
@@ -296,12 +394,14 @@ export class ProducerOutputGuard {
 	#depth = 0;
 	#quote = "";
 	#escaped = false;
+	#authorizationHeading = false;
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
 	constructor(redact?: (text: string) => string, pendingPrefixLength?: (text: string) => number) {
 		const owner = currentProducerSecretOwner();
-		this.#redact = redact ?? owner?.redact;
+		const rawRedact = redact ?? owner?.redact;
+		this.#redact = rawRedact ? wrapRedact(rawRedact) : undefined;
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
 	sanitize(text: string): string {
@@ -321,8 +421,8 @@ export class ProducerOutputGuard {
 			// Classify labels before an owner can rename them. Normalization must not
 			// reveal a label that was missed while retaining raw literal secret bytes.
 			const classified = classifyCredentialText(text);
-			if (classified === BLOCKED_OUTPUT_RECORD ||
-				sanitizeText(classified) !== classifyCredentialText(original)) return BLOCKED_OUTPUT_RECORD;
+			if (classified === BLOCKED_OUTPUT_RECORD || sanitizeText(classified) !== classifyCredentialText(original))
+				return BLOCKED_OUTPUT_RECORD;
 			const filtered = classifyCredentialText(text, this.#redact);
 			if (filtered === BLOCKED_OUTPUT_RECORD) return filtered;
 			const sanitized = sanitizeText(filtered);
@@ -372,10 +472,15 @@ export class ProducerOutputGuard {
 	}
 
 	#record(record: string, newline: string): string {
+		const continuation = this.#authorizationHeading && isAuthorizationContinuation(record);
+		this.#authorizationHeading = isAuthorizationHeading(record);
+		if (continuation) {
+			// Replace only this record; unrelated output must not enter withholding.
+			return this.#flushCandidate() + BLOCKED_OUTPUT_RECORD + newline;
+		}
 		const normalized = sanitizeText(record);
 		const safe = this.sanitize(record + newline);
-		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD)
-			return this.#block(safe) + newline;
+		if (safe === BLOCKED_OUTPUT_RECORD || safe === OVERSIZED_OUTPUT_RECORD) return this.#block(safe) + newline;
 		// A registered literal can hold several physical records together. Classify every
 		// raw line, but keep the group intact until redaction can see the complete literal.
 		const lines = normalized.split("\n");
@@ -517,5 +622,6 @@ export class ProducerOutputGuard {
 		this.#depth = 0;
 		this.#quote = "";
 		this.#escaped = false;
+		this.#authorizationHeading = false;
 	}
 }

@@ -1258,4 +1258,36 @@ describe("history:// caller-bound archived opt-in", () => {
 			await temp.remove();
 		}
 	});
+
+	it("propagates abort signals to descriptor-bound archived exact and search reads", async () => {
+		const temp = TempDir.createSync("@veyyon-history-archived-abort-");
+		try {
+			registerLiveRef("main:a", "session-a", "session-a");
+			const caller = makeToolSession("main:a", () => "session-a");
+			const file = await archive(temp.path(), "AbortTarget", "abort-session", [
+				{ id: "e1", parentId: null, message: "needle in archived record" },
+			]);
+			registerArchivedRef("AbortTarget", "session-a", file, "parked");
+
+			const handler = new HistoryProtocolHandler();
+			const controller = new AbortController();
+			controller.abort(new Error("archived-read-cancelled"));
+
+			await expect(
+				handler.resolve(parseInternalUrl("history://AbortTarget?archived=1&entry=e1"), {
+					signal: controller.signal,
+					historyCaller: createHistoryCallerCapability(caller),
+				}),
+			).rejects.toThrow("archived-read-cancelled");
+
+			await expect(
+				handler.resolve(parseInternalUrl("history://AbortTarget?archived=1&q=needle"), {
+					signal: controller.signal,
+					historyCaller: createHistoryCallerCapability(caller),
+				}),
+			).rejects.toThrow("archived-read-cancelled");
+		} finally {
+			await temp.remove();
+		}
+	});
 });

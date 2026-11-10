@@ -14,6 +14,18 @@
 - Archived-history indexes stop collecting at the first eligible ref beyond 100,000 before sorting or hashing the roster ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Archived history resolution validates agent registry identity provenance, descriptor regular-file identity, and post-scan metadata invariants against path substitution and symlink races ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Archived-history resolution rejects same-directory session-file substitution, non-object JSON pre-header prefixes, and duplicate-key second session headers on explicit-leaf reads ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+### Fixed
+
+- Producer output redacts opaque authorization continuations after plain or formatted Markdown labels while preserving benign prose and later sections ([Refs #1069](https://github.com/Wladefant/veyyon/issues/1069)).
+## [1.8.23] - 2026-11-10
+
+### Fixed
+
+- History transcript resolution and stored history reading honor caller abort signals, combine caller cancellation with the 5-second deadline, reuse single-pass session file scans, and yield between markdown formatting batches ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- History transcript resolution ignores `.artifact-id-<digits>` reservation markers and `.artifact-ids.sqlite*` metadata during filesystem scans, supports nested dotted identifiers, and applies a 5-second deadline with actionable diagnostics ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Live history entry reads and live history search enforce memory and entry count bounds with cancelable operations ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Bounded history previews cap nested tool arguments, preserve accurate block line counts, and prioritize cancellation over a missing fallback ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+
 ## [1.8.22] - 2026-11-09
 
 ### Fixed
