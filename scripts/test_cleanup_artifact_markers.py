@@ -748,20 +748,20 @@ def test_native_process_identities_tracks_pid_and_ctime():
             assert name == name.lower()
 
 
-def test_has_active_direct_locks():
-    temp_dir = Path(tempfile.mkdtemp(prefix="test_has_direct_locks_"))
+def test_session_directory_locked_full_set():
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_sess_locked_full_"))
     try:
         sess_dir = temp_dir / "sess"
         sess_dir.mkdir()
-        assert not mod.has_active_direct_locks(sess_dir)
+        assert not mod.is_session_directory_locked(sess_dir, check_internal=True)
 
         # Direct lock inside session
         lock_cand = sess_dir / ".lock"
         lock_cand.mkdir()
         # Lock without info file fails closed as active
-        assert mod.has_active_direct_locks(sess_dir)
+        assert mod.is_session_directory_locked(sess_dir, check_internal=True)
         lock_cand.rmdir()
-        assert not mod.has_active_direct_locks(sess_dir)
+        assert not mod.is_session_directory_locked(sess_dir, check_internal=True)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -1036,7 +1036,7 @@ if __name__ == "__main__":
     test_process_snapshot_cache_refresh_on_fingerprint_change()
     test_process_snapshot_cache_fails_closed_when_enumeration_fails()
     test_native_process_identities_tracks_pid_and_ctime()
-    test_has_active_direct_locks()
+    test_session_directory_locked_full_set()
     test_max_deletions_bounded_chunking()
     test_reused_pid_creation_time_transition_triggers_refresh()
     test_same_pid_set_lock_change_aborts_deletion_per_marker()
