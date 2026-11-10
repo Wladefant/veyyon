@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-10
+
 ### Added
 
 - `history://` supports explicit per-read, caller-bound access to bounded same-conversation archived records without changing defaults ([Refs #774]).
@@ -14,9 +16,8 @@
 - Archived-history indexes stop collecting at the first eligible ref beyond 100,000 before sorting or hashing the roster ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Archived history resolution validates agent registry identity provenance, descriptor regular-file identity, and post-scan metadata invariants against path substitution and symlink races ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Archived-history resolution rejects same-directory session-file substitution, non-object JSON pre-header prefixes, and duplicate-key second session headers on explicit-leaf reads ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
-### Fixed
-
 - Producer output redacts opaque authorization continuations after plain or formatted Markdown labels while preserving benign prose and later sections ([Refs #1069](https://github.com/Wladefant/veyyon/issues/1069)).
+
 ## [1.8.23] - 2026-11-10
 
 ### Fixed
