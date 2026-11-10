@@ -1,4 +1,5 @@
-import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
+import { PR1699_BODY_FIXTURE } from "./fixtures/pr1699-body-fixture";
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 
@@ -211,6 +212,88 @@ describe("producer output keeps benign metadata", () => {
 		const output = ownerGuard.sanitize(`before token=${token} after`);
 		expect(output).not.toContain(token);
 		expect(output).toContain(" after");
+	});
+
+	it("preserves PR 1699 body with Source commit pin metadata across sanitize, JSON wrapper, and stream splits", () => {
+		expect(guard.sanitize(PR1699_BODY_FIXTURE)).toBe(PR1699_BODY_FIXTURE);
+
+		const jsonWrapped = JSON.stringify({ body: PR1699_BODY_FIXTURE });
+		expect(guard.sanitize(jsonWrapped)).toBe(jsonWrapped);
+		expect(sanitizeProducerJson({ body: PR1699_BODY_FIXTURE }, guard)).toEqual({
+			body: PR1699_BODY_FIXTURE,
+		});
+
+		const representativeDelimiters = [
+			"\n",
+			"\n\n",
+			"- Source pin:",
+			"Source pin: [",
+			"https://github.com",
+			"74e89ad9f7d2467f5449590ebe4b0b378902de45",
+			"## CI evidence",
+			"## Existing controls",
+			"## Native AFTER checklist",
+		];
+		for (const delim of representativeDelimiters) {
+			let pos = 0;
+			while (true) {
+				const idx = PR1699_BODY_FIXTURE.indexOf(delim, pos);
+				if (idx === -1) break;
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(PR1699_BODY_FIXTURE.slice(0, idx)) +
+					streamGuard.push(PR1699_BODY_FIXTURE.slice(idx)) +
+					streamGuard.finish();
+				expect(streamed).toBe(PR1699_BODY_FIXTURE);
+				pos = idx + delim.length;
+				if (delim === "\n" && pos > 500) break;
+			}
+		}
+	});
+
+	it("withholds ordinary pin bracket literals without Source commit pin context", () => {
+		const plainPin = "pin: [1234, 5678]";
+		expect(guard.sanitize(plainPin)).toBe(BLOCKED_OUTPUT_RECORD);
+
+		const bulletPin =
+			"- pin: [pinned source commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad9f7d2467f5449590ebe4b0b378902de45)\n";
+		expect(guard.sanitize(bulletPin)).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+
+	it("redacts numeric Source pin values that lack a markdown commit link", () => {
+		const bulletNumeric = "- Source pin: 123456\n";
+		expect(guard.sanitize(bulletNumeric)).toBe("- Source pin: [REDACTED]\n");
+
+		const plainNumeric = "Source pin: 987654\n";
+		expect(guard.sanitize(plainNumeric)).toBe("Source pin: [REDACTED]\n");
+	});
+
+	it("withholds Source pin links that do not link to a 40-hex commit", () => {
+		const treeLink = "- Source pin: [pinned branch](https://github.com/Wladefant/heylolo-app/tree/main)\n";
+		expect(guard.sanitize(treeLink)).toBe(BLOCKED_OUTPUT_RECORD);
+
+		const issueLink = "- Source pin: [issue](https://github.com/Wladefant/heylolo-app/issues/1224)\n";
+		expect(guard.sanitize(issueLink)).toBe(BLOCKED_OUTPUT_RECORD);
+
+		const shortCommitLink =
+			"- Source pin: [short commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad)\n";
+		expect(guard.sanitize(shortCommitLink)).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+
+	it("redacts credentials even when combined with a Source commit link", () => {
+		const text =
+			"- Source pin: [pinned source commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad9f7d2467f5449590ebe4b0b378902de45) token=ghp_syntheticOpaqueTokenVal123456789012\n";
+		const result = guard.sanitize(text);
+		expect(result).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
+		expect(result).toContain(
+			"- Source pin: [pinned source commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad9f7d2467f5449590ebe4b0b378902de45)",
+		);
+		expect(result).toContain("token=");
+	});
+
+	it("withholds output when three ENV assignments are appended to the body", () => {
+		const textWithEnv = PR1699_BODY_FIXTURE + "\nENV_A=1\nENV_B=2\nENV_C=3\n";
+		expect(guard.sanitize(textWithEnv)).toBe(BLOCKED_OUTPUT_RECORD);
 	});
 
 });
