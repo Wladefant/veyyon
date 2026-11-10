@@ -7,6 +7,13 @@
 ### Fixed
 
 - Artifact counters use WAL and skip directory scans when already initialized, while marker cleanup rechecks all session locks and rejects unsafe PIDs and age limits ([#1057](https://github.com/Wladefant/veyyon/issues/1057)).
+## [1.8.23] - 2026-11-10
+
+### Added
+
+- `loadSessionMessagesReadOnly` and read-only session loading interfaces accept an optional `AbortSignal` for cooperative transcript loading cancellation ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- `BlobStore.get` and session blob reference resolution accept an optional `AbortSignal` for abortable history blob reads ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Bounded history reads cap nested tool arguments, preserve accurate block line counts, and prioritize cancellation over a missing fallback ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
 
 ## [1.8.20] - 2026-11-09
 
