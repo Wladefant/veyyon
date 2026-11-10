@@ -186,7 +186,7 @@ describe("artifact publication is whole-or-nothing", () => {
 
 			expect(await fs.readdir(artifactsDir)).toEqual([]);
 			expect(manager.allocateId()).toBe(0);
-			expect(await fs.readdir(artifactsDir)).toEqual([".artifact-id-0"]);
+			expect((await fs.readdir(artifactsDir)).filter(name => !name.startsWith(".artifact-ids.sqlite"))).toEqual([".artifact-id-0"]);
 		},
 	);
 
@@ -225,7 +225,7 @@ describe("artifact publication is whole-or-nothing", () => {
 			expect(await fs.readFile(path.join(artifactsDir, "0.task.log"), "utf8")).toBe(
 				"SYNTHETIC RETRY ARTIFACT",
 			);
-			expect((await fs.readdir(artifactsDir)).sort()).toEqual([".artifact-id-0", "0.task.log"]);
+			expect((await fs.readdir(artifactsDir)).filter(name => !name.startsWith(".artifact-ids.sqlite")).sort()).toEqual([".artifact-id-0", "0.task.log"]);
 		},
 	);
 
