@@ -658,14 +658,22 @@ describe("history:// caller-bound archived opt-in", () => {
     try {
       registerLiveRef("main:a", "session-a", "session-a");
       const caller = makeToolSession("main:a", () => "session-a");
-      const targetFile = await archive(temp.path(), "Scout", "scout-session", [
+      const targetDir = path.join(temp.path(), "target");
+      const foreignDir = path.join(temp.path(), "foreign");
+      const targetFile = await archive(targetDir, "Scout", "scout-session", [
         { id: "record-one", parentId: null, message: "same-scope evidence" },
       ]);
-      const foreignFile = await archive(temp.path(), "SCOUT", "foreign-session", [
+      const foreignFile = await archive(foreignDir, "SCOUT", "foreign-session", [
         { id: "foreign-entry", parentId: null, message: "foreign evidence" },
       ]);
       registerArchivedRef("Scout", "session-a", targetFile);
 
+      // Positive control: exact lookup succeeds before collision is injected
+      const exactInitial = JSON.parse(
+        await read(caller, "history://Scout?archived=1&entry=record-one"),
+      ) as { status: string; fragment?: string };
+      expect(exactInitial.status).toBe("ok");
+      expect(exactInitial.fragment).toContain("same-scope evidence");
       // Inject colliding SCOUT identity during real handle.read via fs.open spy.
       // The initial alias lookup sees one target; post-scan revalidation must see the collision.
       let collisionHookFired = false;
