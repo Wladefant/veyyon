@@ -280,7 +280,7 @@ export class AgentRegistry {
 			sessionId = session.sessionManager?.getSessionId?.();
 			sessionFile = session.sessionManager?.getSessionFile?.();
 		} catch {
-			// tolerate test partial SessionManager methods (no throw)
+			// During session teardown or disposal, SessionManager getters may throw or be detached; fail closed without throwing.
 		}
 		if (
 			typeof sessionId === "string" &&

@@ -339,10 +339,11 @@ async function resolveArchivedHistory(
   }
 
   try {
+    if (!trusted.canonicalDirectory) {
+      return archivedUnavailable();
+    }
     const realpathDir = await fs.realpath(resolvedDir);
-    const expectedCanonical =
-      trusted.canonicalDirectory ?? (await fs.realpath(trusted.directory).catch(() => trusted.directory));
-    if (realpathDir !== expectedCanonical) {
+    if (realpathDir !== trusted.canonicalDirectory) {
       return archivedUnavailable();
     }
   } catch {
@@ -394,11 +395,11 @@ async function resolveArchivedHistory(
     if (
       !postTrusted ||
       postTrusted.sessionId !== trusted.sessionId ||
-      postTrusted.directory !== trusted.directory
+      postTrusted.directory !== trusted.directory ||
+      postTrusted.canonicalDirectory !== trusted.canonicalDirectory
     ) {
       return archivedUnavailable();
     }
-
     const postHandleStat = await handle.stat();
     if (
       postHandleStat.dev !== handleStat.dev ||

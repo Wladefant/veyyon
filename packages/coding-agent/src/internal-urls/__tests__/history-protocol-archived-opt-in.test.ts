@@ -22,7 +22,6 @@ import { handleInternalUrl } from "../../tools/fs/read-internal-url";
 import type { ReadContext } from "../../tools/fs/read-types";
 import { parseSel } from "../../tools/core/path-utils";
 import { createHistoryCallerCapability, resolveHistoryCallerCapability } from "../history-caller";
-import * as historyExact from "../history-exact";
 import { HistoryProtocolHandler } from "../history-protocol";
 import { parseInternalUrl } from "../parse";
 import { InternalUrlRouter } from "../router";
@@ -963,65 +962,61 @@ describe("history:// caller-bound archived opt-in", () => {
       ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
 
       // 5. Deterministic async race revalidation:
-      // 5a. File modified in-place during exact scan
+      // Use spy fs.open to wrap handle.read once and unregister/replace target during real suspended read,
+      // asserting generic refusal for both exact and search.
       const raceFile = await archive(path.join(temp.path(), "race"), "RaceTarget", "race-session", [
         { id: "record-1", parentId: null, message: "race needle" },
       ]);
       registerArchivedRef("RaceTarget", "session-a", raceFile, "parked");
 
-      const raceCheck = JSON.parse(
-        await read(caller, "history://RaceTarget?archived=1&entry=record-1"),
-      ) as { status: string; fragment?: string };
-      expect(raceCheck.status).toBe("ok");
-
-      const origReadStored = historyExact.readStoredHistoryEntry;
-      const raceExactSpy = spyOn(historyExact, "readStoredHistoryEntry").mockImplementation(async (...args) => {
-        await fs.appendFile(raceFile, JSON.stringify({ id: "mutated-entry", parentId: "record-1", message: "appended during scan" }) + "\n");
-        return origReadStored(...args);
+      // 5a. Exact: unregister target during real suspended handle.read
+      let exactRaceHookActive = true;
+      const originalFsOpen = fs.open;
+      const exactOpenSpy = spyOn(fs, "open").mockImplementation(async (...openArgs) => {
+        const handle = await originalFsOpen(...openArgs);
+        if (exactRaceHookActive) {
+          const originalRead = handle.read.bind(handle);
+          handle.read = async function (...readArgs) {
+            if (exactRaceHookActive) {
+              exactRaceHookActive = false;
+              AgentRegistry.global().unregister("RaceTarget");
+            }
+            return Reflect.apply(originalRead, handle, readArgs);
+          };
+        }
+        return handle;
       });
       try {
         await expect(
           read(caller, "history://RaceTarget?archived=1&entry=record-1"),
         ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
       } finally {
-        raceExactSpy.mockRestore();
+        exactOpenSpy.mockRestore();
       }
 
-      // 5b. File modified in-place during search scan
-      const raceSearchFile = await archive(path.join(temp.path(), "race-search"), "RaceSearchTarget", "race-search-session", [
-        { id: "record-1", parentId: null, message: "search race needle" },
-      ]);
-      registerArchivedRef("RaceSearchTarget", "session-a", raceSearchFile, "parked");
-
-      const origSearchStored = historyExact.searchStoredHistoryEntries;
-      const raceSearchSpy = spyOn(historyExact, "searchStoredHistoryEntries").mockImplementation(async (...args) => {
-        await fs.appendFile(raceSearchFile, JSON.stringify({ id: "mutated-search-entry", parentId: null, message: "search appended" }) + "\n");
-        return origSearchStored(...args);
+      // 5b. Search: replace target status during real suspended handle.read
+      registerArchivedRef("RaceSearchTarget", "session-a", raceFile, "parked");
+      let searchRaceHookActive = true;
+      const searchOpenSpy = spyOn(fs, "open").mockImplementation(async (...openArgs) => {
+        const handle = await originalFsOpen(...openArgs);
+        if (searchRaceHookActive) {
+          const originalRead = handle.read.bind(handle);
+          handle.read = async function (...readArgs) {
+            if (searchRaceHookActive) {
+              searchRaceHookActive = false;
+              AgentRegistry.global().setStatus("RaceSearchTarget", "active");
+            }
+            return Reflect.apply(originalRead, handle, readArgs);
+          };
+        }
+        return handle;
       });
       try {
         await expect(
           read(caller, "history://RaceSearchTarget?archived=1&q=needle"),
         ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
       } finally {
-        raceSearchSpy.mockRestore();
-      }
-
-      // 5c. Registry state changed during scan
-      const raceRegFile = await archive(path.join(temp.path(), "race-reg"), "RaceRegTarget", "race-reg-session", [
-        { id: "record-1", parentId: null, message: "registry race needle" },
-      ]);
-      registerArchivedRef("RaceRegTarget", "session-a", raceRegFile, "parked");
-
-      const raceRegSpy = spyOn(historyExact, "readStoredHistoryEntry").mockImplementation(async (...args) => {
-        AgentRegistry.global().setStatus("RaceRegTarget", "active");
-        return origReadStored(...args);
-      });
-      try {
-        await expect(
-          read(caller, "history://RaceRegTarget?archived=1&entry=record-1"),
-        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
-      } finally {
-        raceRegSpy.mockRestore();
+        searchOpenSpy.mockRestore();
       }
     } finally {
       await temp.remove();
