@@ -16,7 +16,8 @@ import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
-import { BUILTIN_TOOLS, createAgentSession, type CreateAgentSessionResult } from "../../sdk";
+import type { CreateAgentSessionResult } from "../../session/factory-options";
+import { BUILTIN_TOOLS, createAgentSession } from "../../sdk";
 import type { ToolSession } from "../../tools";
 import { handleInternalUrl } from "../../tools/fs/read-internal-url";
 import type { ReadContext } from "../../tools/fs/read-types";
@@ -491,7 +492,7 @@ describe("history:// caller-bound archived opt-in", () => {
       const nextOffset = Number(next[1]);
       expect(nextOffset).toBe(offset + shown);
       expect(Number(next[2])).toBe(100);
-      expect(next[3]).toBe(revision);
+      expect(next[3]).toBe(revision!);
       offset = nextOffset;
     }
 
@@ -585,6 +586,7 @@ describe("history:// caller-bound archived opt-in", () => {
       first.result.session.sessionManager.appendMessage({
         role: "user",
         content: [{ type: "text", text: "same-transcript revival marker" }],
+        timestamp: Date.now(),
       });
       await first.result.session.sessionManager.flush();
       const beforeRevival = createHistoryCallerCapability(first.toolSession);
@@ -664,30 +666,31 @@ describe("history:// caller-bound archived opt-in", () => {
       ]);
       registerArchivedRef("Scout", "session-a", targetFile);
 
-      // Inject the colliding identity immediately after the first alias snapshot.
-      // The initial lookup sees one target; post-scan revalidation must see two.
-      const registry = AgentRegistry.global();
-      const originalValues = registry.values;
-      let collisionRegistered = false;
-      registry.values = function* () {
-        for (const ref of originalValues.call(this)) {
-          yield ref;
-          if (!collisionRegistered) {
-            collisionRegistered = true;
+      // Inject colliding SCOUT identity during real handle.read via fs.open spy.
+      // The initial alias lookup sees one target; post-scan revalidation must see the collision.
+      let collisionHookFired = false;
+      const originalFsOpen = fs.open;
+      const aliasOpenSpy = spyOn(fs, "open").mockImplementation(async (...openArgs) => {
+        const handle = await originalFsOpen(...openArgs);
+        const originalRead = handle.read.bind(handle);
+        handle.read = async function (...readArgs) {
+          if (!collisionHookFired) {
+            collisionHookFired = true;
             registerArchivedRef("SCOUT", "session-b", foreignFile);
           }
-        }
-      };
+          return Reflect.apply(originalRead, handle, readArgs);
+        };
+        return handle;
+      });
       try {
         await expect(
           read(caller, "history://scout?archived=1&entry=record-one"),
         ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
       } finally {
-        registry.values = originalValues;
+        aliasOpenSpy.mockRestore();
       }
 
-      expect(collisionRegistered).toBe(true);
-
+      expect(collisionHookFired).toBe(true);
       // An exact same-scope ID remains usable despite a foreign case-fold alias.
       const exact = JSON.parse(
         await read(caller, "history://Scout?archived=1&entry=record-one"),
@@ -894,6 +897,7 @@ describe("history:// caller-bound archived opt-in", () => {
         read(caller, "history://Overwritten?archived=1&q=needle"),
       ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
 
+
       // 2. Replace file with symlink to foreign file
       const foreignDir = path.join(temp.path(), "foreign");
       const foreignFile = await archive(foreignDir, "Foreign", "foreign-session", [
@@ -994,9 +998,10 @@ describe("history:// caller-bound archived opt-in", () => {
         exactOpenSpy.mockRestore();
       }
 
-      // 5b. Search: replace target status during real suspended handle.read
+      // 5b. Search: mutate target status to running via mirrorStatus during real suspended handle.read
       registerArchivedRef("RaceSearchTarget", "session-a", raceFile, "parked");
       let searchRaceHookActive = true;
+      let searchHookFired = false;
       const searchOpenSpy = spyOn(fs, "open").mockImplementation(async (...openArgs) => {
         const handle = await originalFsOpen(...openArgs);
         if (searchRaceHookActive) {
@@ -1004,7 +1009,8 @@ describe("history:// caller-bound archived opt-in", () => {
           handle.read = async function (...readArgs) {
             if (searchRaceHookActive) {
               searchRaceHookActive = false;
-              AgentRegistry.global().setStatus("RaceSearchTarget", "active");
+              searchHookFired = true;
+              AgentRegistry.global().mirrorStatus("RaceSearchTarget", "running");
             }
             return Reflect.apply(originalRead, handle, readArgs);
           };
@@ -1015,9 +1021,112 @@ describe("history:// caller-bound archived opt-in", () => {
         await expect(
           read(caller, "history://RaceSearchTarget?archived=1&q=needle"),
         ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+        expect(searchHookFired).toBe(true);
+        expect(AgentRegistry.global().get("RaceSearchTarget")?.status).toBe("running");
       } finally {
         searchOpenSpy.mockRestore();
       }
+    } finally {
+      await temp.remove();
+    }
+  });
+
+  it("rejects same-directory substitution when mutated parked ref points to replacement file with matching session ID", async () => {
+    const temp = TempDir.createSync("@veyyon-history-same-dir-sub-");
+    try {
+      registerLiveRef("main:a", "session-a", "session-a");
+      const caller = makeToolSession("main:a", () => "session-a");
+      const validDir = path.join(temp.path(), "trusted");
+
+      const origFile = await archive(validDir, "SameDirSub", "same-dir-session", [
+        { id: "orig-entry", parentId: null, message: "orig needle" },
+      ]);
+      registerArchivedRef("SameDirSub", "session-a", origFile, "parked");
+
+      // Assert positive control for original file before mutation
+      const sameDirExactBefore = JSON.parse(
+        await read(caller, "history://SameDirSub?archived=1&entry=orig-entry"),
+      ) as { status: string; fragment?: string };
+      expect(sameDirExactBefore.status).toBe("ok");
+      expect(sameDirExactBefore.fragment).toContain("orig needle");
+      const sameDirSearchBefore = JSON.parse(
+        await read(caller, "history://SameDirSub?archived=1&q=orig"),
+      ) as { status: string; matches: Array<{ entryId: string }> };
+      expect(sameDirSearchBefore.status).toBe("ok");
+      expect(sameDirSearchBefore.matches.map(m => m.entryId)).toContain("orig-entry");
+
+      // Replacement file in the same directory sharing the exact same session header ID
+      const replacementFile = await archive(validDir, "SameDirReplacement", "same-dir-session", [
+        { id: "replacement-entry", parentId: null, message: "replacement needle" },
+      ]);
+      // Mutate the parked ref's sessionFile to point to replacement file
+      const sameDirRef = AgentRegistry.global().get("SameDirSub")!;
+      sameDirRef.sessionFile = replacementFile;
+
+      await expect(
+        read(caller, "history://SameDirSub?archived=1&entry=replacement-entry"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      await expect(
+        read(caller, "history://SameDirSub?archived=1&q=needle"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+    } finally {
+      await temp.remove();
+    }
+  });
+
+  it("rejects archived session files with malformed or duplicate-key prefix lines before valid session header", async () => {
+    const temp = TempDir.createSync("@veyyon-history-prefix-corrupt-");
+    try {
+      registerLiveRef("main:a", "session-a", "session-a");
+      const caller = makeToolSession("main:a", () => "session-a");
+
+      // 1. Malformed prefix before valid session header (both exact and search must fail closed)
+      const malformedPrefixFile = path.join(temp.path(), "malformed-prefix.jsonl");
+      archivedFixtureSessionIds.set(malformedPrefixFile, "prefix-session-1");
+      await fs.writeFile(
+        malformedPrefixFile,
+        [
+          "{ malformed json prefix line",
+          JSON.stringify({ type: "session", id: "prefix-session-1" }),
+          JSON.stringify({
+            type: "message",
+            id: "prefix-entry-1",
+            parentId: null,
+            message: { role: "user", content: [{ type: "text", text: "needle in prefix 1" }] },
+          }),
+        ].join("\n") + "\n",
+      );
+      registerArchivedRef("MalformedPrefix", "session-a", malformedPrefixFile, "parked");
+      await expect(
+        read(caller, "history://MalformedPrefix?archived=1&entry=prefix-entry-1"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      await expect(
+        read(caller, "history://MalformedPrefix?archived=1&q=needle"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+
+      // 2. Duplicate-key prefix before valid session header (both exact and search must fail closed)
+      const dupKeyPrefixFile = path.join(temp.path(), "dup-key-prefix.jsonl");
+      archivedFixtureSessionIds.set(dupKeyPrefixFile, "prefix-session-2");
+      await fs.writeFile(
+        dupKeyPrefixFile,
+        [
+          '{"key": 1, "key": 2}',
+          JSON.stringify({ type: "session", id: "prefix-session-2" }),
+          JSON.stringify({
+            type: "message",
+            id: "prefix-entry-2",
+            parentId: null,
+            message: { role: "user", content: [{ type: "text", text: "needle in prefix 2" }] },
+          }),
+        ].join("\n") + "\n",
+      );
+      registerArchivedRef("DupKeyPrefix", "session-a", dupKeyPrefixFile, "parked");
+      await expect(
+        read(caller, "history://DupKeyPrefix?archived=1&entry=prefix-entry-2"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      await expect(
+        read(caller, "history://DupKeyPrefix?archived=1&q=needle"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
     } finally {
       await temp.remove();
     }

@@ -140,25 +140,30 @@ function hasDuplicateTopLevelKeys(raw: string): boolean {
 	return false;
 }
 
+function invalidStoredRecord(state: StoredAdmissionState): StoredRecordResult {
+	if (!state.headerSeen) state.invalidIdentity = true;
+	return { kind: "invalid", invalidIdentity: state.invalidIdentity };
+}
+
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	try {
-		if (hasDuplicateTopLevelKeys(raw)) return { kind: "invalid", invalidIdentity: false };
+		if (hasDuplicateTopLevelKeys(raw)) return invalidStoredRecord(state);
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		return invalidStoredRecord(state);
 	}
 	let value: unknown;
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		return invalidStoredRecord(state);
 	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "invalid", invalidIdentity: false };
+	if (!value || typeof value !== "object" || Array.isArray(value)) return invalidStoredRecord(state);
 	const entry = value as StoredEntryShape;
 	if (entry.type === "session") {
 		if (state.headerSeen || state.entrySeen) {
 			state.invalidIdentity = true;
 		} else if (typeof entry.id !== "string") {
-			return { kind: "invalid", invalidIdentity: false };
+			return invalidStoredRecord(state);
 		} else if (!entry.id.trim()) {
 			state.invalidIdentity = true;
 		} else {
@@ -373,6 +378,7 @@ export async function readStoredHistoryEntry(
 			}
 			if (line === undefined) {
 				incomplete = true;
+				if (!admission.headerSeen) admission.invalidIdentity = true;
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
@@ -430,7 +436,7 @@ export async function readStoredHistoryEntry(
 		return {
 			status: "unavailable",
 			entryId: request.entryId,
-			sessionId,
+			sessionId: undefined,
 			source: "stored-jsonl",
 			detail: "Stored session identity is missing or ambiguous",
 		};
@@ -629,6 +635,7 @@ export async function searchStoredHistoryEntries(
 			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
 				unreadable = true;
+				if (!admission.headerSeen) admission.invalidIdentity = true;
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
@@ -684,7 +691,7 @@ export async function searchStoredHistoryEntries(
 	if (!admission.headerSeen || admission.invalidIdentity) {
 		return {
 			status: "unavailable",
-			sessionId,
+			sessionId: undefined,
 			query: request.query,
 			source: "stored-jsonl",
 			matches: [],

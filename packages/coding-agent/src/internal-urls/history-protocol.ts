@@ -318,7 +318,7 @@ async function resolveArchivedHistory(
   const rawSessionFile = target.sessionFile;
   const resolvedSessionFile = path.resolve(rawSessionFile);
   const resolvedDir = path.dirname(resolvedSessionFile);
-  if (resolvedDir !== trusted.directory) {
+  if (resolvedSessionFile !== trusted.file || resolvedDir !== trusted.directory) {
     return archivedUnavailable();
   }
 
@@ -339,11 +339,12 @@ async function resolveArchivedHistory(
   }
 
   try {
-    if (!trusted.canonicalDirectory) {
+    if (!trusted.canonicalDirectory || !trusted.canonicalFile) {
       return archivedUnavailable();
     }
     const realpathDir = await fs.realpath(resolvedDir);
-    if (realpathDir !== trusted.canonicalDirectory) {
+    const realpathFile = await fs.realpath(resolvedSessionFile);
+    if (realpathDir !== trusted.canonicalDirectory || realpathFile !== trusted.canonicalFile) {
       return archivedUnavailable();
     }
   } catch {
@@ -395,6 +396,8 @@ async function resolveArchivedHistory(
     if (
       !postTrusted ||
       postTrusted.sessionId !== trusted.sessionId ||
+      postTrusted.file !== trusted.file ||
+      postTrusted.canonicalFile !== trusted.canonicalFile ||
       postTrusted.directory !== trusted.directory ||
       postTrusted.canonicalDirectory !== trusted.canonicalDirectory
     ) {

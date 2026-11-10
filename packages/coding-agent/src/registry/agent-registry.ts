@@ -127,6 +127,8 @@ export interface PendingApproval {
 
 export interface ArchivedSessionIdentity {
 	readonly sessionId: string;
+	readonly file: string;
+	readonly canonicalFile?: string;
 	readonly directory: string;
 	readonly canonicalDirectory?: string;
 }
@@ -291,14 +293,17 @@ export class AgentRegistry {
 			const resolvedFile = path.resolve(sessionFile);
 			const directory = path.dirname(resolvedFile);
 			let canonicalDirectory: string | undefined;
+			let canonicalFile: string | undefined;
 			try {
 				canonicalDirectory = fs.realpathSync(directory);
+				canonicalFile = fs.realpathSync(resolvedFile);
 			} catch {
 				canonicalDirectory = undefined;
+				canonicalFile = undefined;
 			}
 			this.#archivedIdentities.set(
 				ref,
-				Object.freeze({ sessionId, directory, canonicalDirectory }),
+				Object.freeze({ sessionId, file: resolvedFile, canonicalFile, directory, canonicalDirectory }),
 			);
 		} else if (invalidateOnFailure) {
 			this.#archivedIdentities.delete(ref);
