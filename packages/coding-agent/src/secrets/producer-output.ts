@@ -278,7 +278,7 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 					if (NUMERIC_METADATA_KEY.test(key) && NUMERIC_METADATA_VALUE.exec(nested)?.[0] === nested) return nested;
 					return "[REDACTED]";
 				} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {
-					if (/^(?:auth|authorization)$/i.test(key)) return nested;
+					if (/^(?:auth|authorization)$/i.test(key)) return "[REDACTED]";
 					return BLOCKED_OUTPUT_RECORD;
 				}
 			}

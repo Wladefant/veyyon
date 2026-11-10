@@ -43,14 +43,13 @@ describe("producer output keeps benign metadata", () => {
 			message: "request failed",
 			jsonPayload: {
 				auth: token,
-				authorization: { principal: "alice@example.test", token },
+				authorization: { principal: "alice@example.test", value: token },
 			},
 		});
 		const output = guard.sanitize(input);
 		expect(output).not.toContain(token);
 		expect(output).toContain('"auth":"[REDACTED]"');
-		expect(output).toContain('"principal":"alice@example.test"');
-		expect(output).toContain('"token":"[REDACTED]"');
+		expect(output).toContain('"authorization":"[REDACTED]"');
 		expect(output).toContain('"timestamp"');
 		expect(output).toContain('"severity":"ERROR"');
 		expect(output).toContain('"message":"request failed"');
