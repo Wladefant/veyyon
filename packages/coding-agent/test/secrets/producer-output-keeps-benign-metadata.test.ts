@@ -180,5 +180,220 @@ describe("producer output keeps benign metadata", () => {
 		expect(output).not.toContain(token);
 		expect(output).toContain(" after");
 	});
+	it("preserves benign Markdown headings and labels for Driver and Native Authorization", () => {
+		const benignInputs = [
+			"- **Driver & Native Authorization:**\n",
+			"- **Driver & Native Authorization:**",
+			"- **Driver & Native Authorization**:\n",
+			"- **Driver & Native Authorization**:",
+			"- **Driver & Native Authorization:**\n  Native drivers require kernel approval.\n",
+			"- **Driver & Native Authorization:** Native drivers require kernel approval.\n",
+			"- **Driver & Native Authorization**: Native drivers require kernel approval.\n",
+			"## Driver & Native Authorization:\n",
+			"### Driver & Native Authorization:\n",
+			"# Driver & Native Authorization:\n",
+			"## Authorization:\n",
+			"### Authorization:\n",
+			"# Authorization:\n",
+			"- **Authorization:**\n",
+			"- **Authorization:**",
+			"- **Authorization**:\n",
+			"- **Authorization**:",
+			"**Authorization:**\n",
+			"**Authorization:**",
+			"**Authorization**:\n",
+			"**Authorization**:",
+		];
+
+		for (const input of benignInputs) {
+			expect(guard.sanitize(input)).toBe(input);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).toBe(input);
+			}
+		}
+	});
+
+	it("protects real Authorization credentials in headings and preceding prose across splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const counterexamples = [
+			`# Authorization: ${token}\n`,
+			`## Authorization: Bearer ${token}\n`,
+			`### Authorization: Basic ${basicAuth}\n`,
+			`header Authorization: ${token}\n`,
+			`sent Authorization: Bearer ${token}\n`,
+			`received Authorization: Basic ${basicAuth}\n`,
+		];
+
+		for (const input of counterexamples) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			const unownedGuard = new ProducerOutputGuard();
+			const unownedSanitized = unownedGuard.sanitize(input);
+			expect(unownedSanitized).not.toContain(token);
+			expect(unownedSanitized).not.toContain(basicAuth);
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+
+	it("preserves unrelated Markdown colon forms unchanged", () => {
+		const unrelated = [
+			"Note:**important**\n",
+			"Warning:**caution**\n",
+			"section:**title**\n",
+			"- Note:**important**\n",
+			"- Warning:**caution**\n",
+		];
+		for (const input of unrelated) {
+			expect(guard.sanitize(input)).toBe(input);
+		}
+	});
+
+	it("protects real Authorization credentials when wrapped in Markdown across splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const credentialInputs = [
+			`Authorization: Bearer ${token}\n`,
+			`Authorization: Basic ${basicAuth}\n`,
+			`Authorization: ${token}\n`,
+			`**Authorization:** Bearer ${token}\n`,
+			`**Authorization**: Bearer ${token}\n`,
+			`- **Authorization:** Bearer ${token}\n`,
+			`- **Authorization**: Bearer ${token}\n`,
+			`**Authorization:** Basic ${basicAuth}\n`,
+			`**Authorization**: Basic ${basicAuth}\n`,
+			`- **Authorization:** Basic ${basicAuth}\n`,
+			`- **Authorization**: Basic ${basicAuth}\n`,
+			`**Authorization:** ${token}\n`,
+			`**Authorization**: ${token}\n`,
+			`- **Authorization:** ${token}\n`,
+			`- **Authorization**: ${token}\n`,
+		];
+
+		for (const input of credentialInputs) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+	it("preserves mixed-form single-record Markdown colon placements without altering either", () => {
+		const mixedBenign =
+			"**Authorization:**\n**Authorization**:\n- **Driver & Native Authorization:** Native drivers require kernel approval.\n- **Driver & Native Authorization**: Native drivers require kernel approval.\n";
+		expect(guard.sanitize(mixedBenign)).toBe(mixedBenign);
+
+		const mixedValued =
+			"**Authorization:** valueOne\n**Authorization**: valueTwo\n";
+		const sanitizedValued = guard.sanitize(mixedValued);
+		expect(sanitizedValued).toBe("**Authorization:** [REDACTED]\n**Authorization**: [REDACTED]\n");
+
+		for (let split = 0; split <= mixedBenign.length; split++) {
+			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+			const streamed =
+				streamGuard.push(mixedBenign.slice(0, split)) +
+				streamGuard.push(mixedBenign.slice(split)) +
+				streamGuard.finish();
+			expect(streamed).toBe(mixedBenign);
+		}
+	});
+
+	it("protects real credentials in compound labels across schemes and splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const compoundCredentials = [
+			`- **Driver & Native Authorization:** Bearer ${token}\n`,
+			`- **Driver & Native Authorization**: Bearer ${token}\n`,
+			`- **Driver & Native Authorization:** Basic ${basicAuth}\n`,
+			`- **Driver & Native Authorization**: Basic ${basicAuth}\n`,
+			`- **Driver & Native Authorization:** Digest ${token}\n`,
+			`- **Driver & Native Authorization**: Digest ${token}\n`,
+			`- **Driver & Native Authorization:** Negotiate ${token}\n`,
+			`- **Driver & Native Authorization**: Negotiate ${token}\n`,
+			`- **Driver & Native Authorization:** Token ${token}\n`,
+			`- **Driver & Native Authorization**: Token ${token}\n`,
+		];
+
+		for (const input of compoundCredentials) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+	it("retains custom owner redactions spanning Markdown authorization without sentinel interference", () => {
+		const customLiteral = "Authorization:** customSecretKey12345";
+		const customRedacted = "Authorization:** [CUSTOM_REDACTED_LITERAL]";
+		const customRedactor = (text: string) => text.replaceAll(customLiteral, customRedacted);
+		const customGuard = new ProducerOutputGuard(customRedactor);
+
+		const input = `- **Driver & Native ${customLiteral}\n`;
+		const sanitized = customGuard.sanitize(input);
+		expect(sanitized).toContain("[CUSTOM_REDACTED_LITERAL]");
+		expect(sanitized).not.toContain("customSecretKey12345");
+
+		for (let split = 0; split <= input.length; split++) {
+			const streamGuard = new ProducerOutputGuard(customRedactor);
+			const streamed =
+				streamGuard.push(input.slice(0, split)) +
+				streamGuard.push(input.slice(split)) +
+				streamGuard.finish();
+			expect(streamed).toContain("[CUSTOM_REDACTED_LITERAL]");
+			expect(streamed).not.toContain("customSecretKey12345");
+		}
+	});
+
+	it("preserves user-supplied literal U+E000 sentinels without corruption", () => {
+		const inputWithSentinel =
+			"- **Driver & Native Authorization:** Bearer opaqueToken1234567890\n- **Authorization\uE000**: user literal \uE000 preserved\n";
+		const sanitized = guard.sanitize(inputWithSentinel);
+		expect(sanitized).toContain("\uE000");
+		expect(sanitized).toContain("**Authorization\uE000**: user literal \uE000 preserved");
+		expect(sanitized).not.toContain("opaqueToken1234567890");
+
+		for (let split = 0; split <= inputWithSentinel.length; split++) {
+			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+			const streamed =
+				streamGuard.push(inputWithSentinel.slice(0, split)) +
+				streamGuard.push(inputWithSentinel.slice(split)) +
+				streamGuard.finish();
+			expect(streamed).toContain("\uE000");
+			expect(streamed).toContain("**Authorization\uE000**: user literal \uE000 preserved");
+			expect(streamed).not.toContain("opaqueToken1234567890");
+		}
+	});
 
 });

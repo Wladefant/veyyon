@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Producer output keeps benign Markdown authorization headings visible while redacting credential values ([Refs #1069](https://github.com/Wladefant/veyyon/issues/1069)).
+
 ## [1.8.22] - 2026-11-09
 
 ### Fixed

@@ -10,9 +10,9 @@ const MAX_RECORD_CHARS = 64 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
-	/(?<boundary>^|[\s"'{,.?-])(?<key>(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?\s*(?:[=:]|\s{2,})/i;
+	/(?<boundary>^|[\s"'{,.?-])(?<mdOpen>\*\*|\*|__|_|`)?["']?(?<key>(?:[A-Za-z0-9]+[_-])*(?:token|secret|password|passwd|pin|cookie|credentials?|authorization|api[_-]?key|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)["']?(?:(?:\k<mdOpen>|\*\*|\*|__|_|`)[ \t]*(?:[=:]|\s{2,})|[ \t]*(?:[=:]|\s{2,})(?:\k<mdOpen>|\*\*|\*|__|_|`)?)/i;
 const CREDENTIAL_KEY_PREFIX =
-	/(?:^|\s+export\s+|[?.,{"'-])(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|pin|cookie|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
+	/(?:^|\s+export\s+|[?.,{"'-])(?<mdOpen>\*\*|\*|__|_|`)?(?:[A-Za-z0-9]+[_-])*(?:tok(?:en)?|sec(?:ret)?|pass(?:wd|word)?|pin|cookie|credentials?|authori[sz]ation|api[_-]?(?:k(?:e(?:y)?)?)?|private[_-]?k(?:e(?:y)?)?|access[_-]?k(?:e(?:y)?)?)(?:[_-][A-Za-z0-9]*)?$/i;
 
 // Two ordinary assignments remain useful; a bulk run is an inventory even when
 // none of its names says "secret". Hold the prefix until that decision is known.
@@ -31,6 +31,38 @@ const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
 const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
 
+const MD_AUTH_COLON_SUFFIX = /\b(authori[sz]ation):[ \t]*(\*\*|\*|__|_|`)/gi;
+
+function pickSentinel(text: string): string | null {
+	for (let code = 0xe000; code <= 0xe0ff; code++) {
+		const candidate = String.fromCharCode(code);
+		if (!text.includes(candidate)) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+function wrapRedact(redact: (text: string) => string): (text: string) => string {
+	return (text: string): string => {
+		const direct = redact(text);
+		if (!text.includes(":*") && !text.includes(":_") && !text.includes(":`")) {
+			return direct;
+		}
+		if (direct !== redactProviderSecrets(text)) {
+			return direct;
+		}
+		const sentinel = pickSentinel(text);
+		if (!sentinel) {
+			return direct;
+		}
+		const swapped = text.replace(MD_AUTH_COLON_SUFFIX, (_match, auth, md) => `${auth}${sentinel}${md}:`);
+		const redacted = redact(swapped);
+		const restoreRegex = new RegExp(`\\b(authori[sz]ation)${sentinel}(\\*\\*|\\*|__|_|\`):`, "gi");
+		return redacted.replace(restoreRegex, "$1:$2");
+	};
+}
+
 function knownCredentialLength(text: string): number {
 	if (text.startsWith("-----BEGIN ")) {
 		PEM_BLOCK.lastIndex = 0;
@@ -45,7 +77,8 @@ function knownCredentialLength(text: string): number {
 	return extra?.index === 0 ? extra[0].length : 0;
 }
 
-function classifyCredentialText(text: string, redact?: (text: string) => string): string {
+function classifyCredentialText(text: string, rawRedact?: (text: string) => string): string {
+	const redact = rawRedact ? wrapRedact(rawRedact) : undefined;
 	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
 	const spans: { start: number; valueStart: number; end: number; extendToLine: boolean }[] = [];
 	for (let match = labels.exec(text); match; match = labels.exec(text)) {
@@ -54,6 +87,36 @@ function classifyCredentialText(text: string, redact?: (text: string) => string)
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
 		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;
+		const preceding = text.slice(0, match.index);
+		const isAuth = /authori[sz]ation/i.test(match.groups!.key);
+		const lineStart = Math.max(0, preceding.lastIndexOf("\n") + 1);
+		const lineBefore = preceding.slice(lineStart) + match.groups!.boundary;
+		const isHeading = /^[ \t]*#{1,6}[ \t]+/.test(lineBefore);
+		const hasEmptyTail = !tail || /^[ \t]*(?:\r?\n|$)/.test(tail);
+		if (isHeading && hasEmptyTail) {
+			continue;
+		}
+		if ((match.groups?.mdOpen || (isAuth && /^[ \t]*[-*+][ \t]+/.test(lineBefore))) && hasEmptyTail) {
+			continue;
+		}
+		if (isAuth) {
+			const compoundLabel = /^[ \t]*(?:[-*+][ \t]+)?(?<outerMd>\*\*|\*|__|_|`)[^*_`\n]+[ \t]+$/.exec(lineBefore);
+			if (compoundLabel) {
+				const outerMd = compoundLabel.groups!.outerMd;
+				const closedAfterColon = tail.startsWith(outerMd);
+				const closedBeforeColon = match[0].includes(outerMd);
+				if (closedAfterColon || closedBeforeColon) {
+					const effectiveTail = closedAfterColon ? tail.slice(outerMd.length).trimStart() : tail.trimStart();
+					const effectiveEmpty = !effectiveTail || /^(?:\r?\n|$)/.test(effectiveTail);
+					const hasRealCredential =
+						/^(?:bearer|basic|digest|negotiate|token)\s+/i.test(effectiveTail) ||
+						knownCredentialLength(effectiveTail) > 0;
+					if (effectiveEmpty || !hasRealCredential) {
+						continue;
+					}
+				}
+			}
+		}
 		const boundaryLength = match.groups!.boundary.length;
 		if (match[0].slice(boundaryLength).includes("\n") || !tail || /^[ \t]*(?:\r?\n|$)/.test(tail)) {
 			return BLOCKED_OUTPUT_RECORD;
@@ -301,7 +364,8 @@ export class ProducerOutputGuard {
 
 	constructor(redact?: (text: string) => string, pendingPrefixLength?: (text: string) => number) {
 		const owner = currentProducerSecretOwner();
-		this.#redact = redact ?? owner?.redact;
+		const rawRedact = redact ?? owner?.redact;
+		this.#redact = rawRedact ? wrapRedact(rawRedact) : undefined;
 		this.#pendingPrefixLength = pendingPrefixLength ?? owner?.pendingPrefixLength;
 	}
 	sanitize(text: string): string {
