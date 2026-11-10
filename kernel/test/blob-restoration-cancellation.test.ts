@@ -46,16 +46,48 @@ describe("blob restoration cancellation", () => {
 		const put = store.putSync(Buffer.from("pending read data"));
 
 		const origReadFile = fsp.readFile;
-		let readFileStarted = false;
+		const readStarted = Promise.withResolvers<void>();
+		const readCanContinue = Promise.withResolvers<void>();
 		const readFileSpy = spyOn(fsp, "readFile").mockImplementation((async (...args: Parameters<typeof fsp.readFile>) => {
-			readFileStarted = true;
-			controller.abort();
+			readStarted.resolve();
+			await readCanContinue.promise;
 			return (origReadFile as Function)(...args);
 		}) as typeof fsp.readFile);
 
 		try {
-			await expect(store.get(put.hash, { signal: controller.signal })).rejects.toThrow();
-			expect(readFileStarted).toBe(true);
+			const getPromise = store.get(put.hash, { signal: controller.signal });
+			await readStarted.promise;
+			controller.abort();
+			readCanContinue.resolve();
+			await expect(getPromise).rejects.toThrow();
+		} finally {
+			readFileSpy.mockRestore();
+		}
+	});
+
+	it("BlobStore.get rejects when pending read rejects ENOENT after abort", async () => {
+		const controller = new AbortController();
+		const put = store.putSync(Buffer.from("pending read data"));
+
+		const readStarted = Promise.withResolvers<void>();
+		const readCanReject = Promise.withResolvers<void>();
+		const readFileSpy = spyOn(fsp, "readFile").mockImplementation((async (...args: Parameters<typeof fsp.readFile>) => {
+			readStarted.resolve();
+			await readCanReject.promise;
+			const enoent = new Error(`ENOENT: no such file or directory, open '${String(args[0])}'`) as NodeJS.ErrnoException;
+			enoent.code = "ENOENT";
+			enoent.errno = -2;
+			enoent.syscall = "open";
+			throw enoent;
+		}) as typeof fsp.readFile);
+
+		try {
+			const getPromise = store.get(put.hash, { signal: controller.signal });
+			await readStarted.promise;
+			controller.abort();
+			readCanReject.resolve();
+
+			await expect(getPromise).rejects.toThrow();
 		} finally {
 			readFileSpy.mockRestore();
 		}
@@ -122,13 +154,66 @@ describe("blob restoration cancellation", () => {
 		};
 
 		const origReadFile = fsp.readFile;
-		let abortTriggered = false;
+		const readStarted = Promise.withResolvers<void>();
+		const readCanContinue = Promise.withResolvers<void>();
 		const readFileSpy = spyOn(fsp, "readFile").mockImplementation((async (...args: Parameters<typeof fsp.readFile>) => {
-			if (!abortTriggered) {
-				abortTriggered = true;
-				controller.abort();
-			}
+			readStarted.resolve();
+			await readCanContinue.promise;
 			return (origReadFile as Function)(...args);
+		}) as typeof fsp.readFile);
+		let warnCalled = false;
+		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {
+			warnCalled = true;
+		});
+
+		try {
+			const loadPromise = resolveBlobRefsInEntries([entry], store, { signal: controller.signal });
+			await readStarted.promise;
+			controller.abort();
+			readCanContinue.resolve();
+			await expect(loadPromise).rejects.toThrow();
+			expect(warnCalled).toBe(false);
+			// Post-abort mutation check: target property must not have been mutated into restored content
+			const contentBlock = toolMessage.content?.[0];
+			expect(contentBlock && "text" in contentBlock ? contentBlock.text : "").toBe(ref);
+		} finally {
+			readFileSpy.mockRestore();
+			warnSpy.mockRestore();
+		}
+	});
+
+	it("resolveBlobRefsInEntries aborts and suppresses missing-blob warning when pending read rejects ENOENT after abort", async () => {
+		const controller = new AbortController();
+		const put = store.putSync(Buffer.from("payload subject to abort/missing race"));
+		const ref = `blobtext:sha256:${put.hash}`;
+
+		const toolMessage: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "read",
+			content: [{ type: "text", text: ref }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+
+		const entry: SessionMessageEntry = {
+			type: "message",
+			id: "msg-1",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: toolMessage,
+		};
+
+		const readStarted = Promise.withResolvers<void>();
+		const readCanReject = Promise.withResolvers<void>();
+		const readFileSpy = spyOn(fsp, "readFile").mockImplementation((async (...args: Parameters<typeof fsp.readFile>) => {
+			readStarted.resolve();
+			await readCanReject.promise;
+			const enoent = new Error(`ENOENT: no such file or directory, open '${String(args[0])}'`) as NodeJS.ErrnoException;
+			enoent.code = "ENOENT";
+			enoent.errno = -2;
+			enoent.syscall = "open";
+			throw enoent;
 		}) as typeof fsp.readFile);
 
 		let warnCalled = false;
@@ -137,10 +222,12 @@ describe("blob restoration cancellation", () => {
 		});
 
 		try {
-			await expect(
-				resolveBlobRefsInEntries([entry], store, { signal: controller.signal }),
-			).rejects.toThrow();
-			expect(abortTriggered).toBe(true);
+			const loadPromise = resolveBlobRefsInEntries([entry], store, { signal: controller.signal });
+			await readStarted.promise;
+			controller.abort();
+			readCanReject.resolve();
+
+			await expect(loadPromise).rejects.toThrow();
 			expect(warnCalled).toBe(false);
 			// Post-abort mutation check: target property must not have been mutated into restored content
 			const contentBlock = toolMessage.content?.[0];

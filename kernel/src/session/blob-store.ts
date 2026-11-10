@@ -201,6 +201,7 @@ export class BlobStore {
 		try {
 			return await fsp.readFile(blobPath, { signal: options?.signal });
 		} catch (err) {
+			options?.signal?.throwIfAborted();
 			if (isEnoent(err)) return null;
 			throw err;
 		}
@@ -354,6 +355,7 @@ async function resolveBlobBuffer(
 	const hash = parser(data);
 	if (!hash) return null;
 	const buffer = await blobStore.get(hash, options);
+	options?.signal?.throwIfAborted();
 	if (!buffer) reportMissingBlob(blobStore, hash, warningMessage);
 	return buffer;
 }

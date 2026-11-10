@@ -411,4 +411,263 @@ describe("formatSessionHistoryMarkdown", () => {
 		}
 		expect(error).toBe(callerReason);
 	});
+
+	describe("sync/async line-count parity for block content variants", () => {
+		it("maintains line-count parity for two text blocks (2 lines)", async () => {
+			const messages = [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tc-line-1", name: "read", arguments: { path: "sample.txt" } }],
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tc-line-1",
+					toolName: "read",
+					content: [
+						{ type: "text", text: "first text block" },
+						{ type: "text", text: "second text block" },
+					],
+					isError: false,
+					timestamp: 2,
+				},
+			];
+
+			const syncOutput = formatSessionHistoryMarkdown(messages);
+			const asyncOutput = await formatSessionHistoryMarkdownAsync(messages);
+
+			expect(syncOutput).toBe(asyncOutput);
+			expect(syncOutput).toContain("→ read(sample.txt) ⇒ ok · 2 lines");
+		});
+
+		it("maintains line-count parity for text/image/text blocks (3 lines)", async () => {
+			const messages = [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tc-line-2", name: "read", arguments: { path: "sample.txt" } }],
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tc-line-2",
+					toolName: "read",
+					content: [
+						{ type: "text", text: "header block" },
+						{ type: "image", data: "fakeImageData", mimeType: "image/png" },
+						{ type: "text", text: "footer block" },
+					],
+					isError: false,
+					timestamp: 2,
+				},
+			];
+
+			const syncOutput = formatSessionHistoryMarkdown(messages);
+			const asyncOutput = await formatSessionHistoryMarkdownAsync(messages);
+
+			expect(syncOutput).toBe(asyncOutput);
+			expect(syncOutput).toContain("→ read(sample.txt) ⇒ ok · 3 lines");
+		});
+
+		it("maintains line-count parity for empty content array (0 lines)", async () => {
+			const messages = [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tc-line-3", name: "read", arguments: { path: "sample.txt" } }],
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tc-line-3",
+					toolName: "read",
+					content: [],
+					isError: false,
+					timestamp: 2,
+				},
+			];
+
+			const syncOutput = formatSessionHistoryMarkdown(messages);
+			const asyncOutput = await formatSessionHistoryMarkdownAsync(messages);
+
+			expect(syncOutput).toBe(asyncOutput);
+			expect(syncOutput).toContain("→ read(sample.txt) ⇒ ok · 0 lines");
+		});
+
+		it("maintains line-count parity for single empty text block (0 lines)", async () => {
+			const messages = [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tc-line-4", name: "read", arguments: { path: "sample.txt" } }],
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tc-line-4",
+					toolName: "read",
+					content: [{ type: "text", text: "" }],
+					isError: false,
+					timestamp: 2,
+				},
+			];
+
+			const syncOutput = formatSessionHistoryMarkdown(messages);
+			const asyncOutput = await formatSessionHistoryMarkdownAsync(messages);
+
+			expect(syncOutput).toBe(asyncOutput);
+			expect(syncOutput).toContain("→ read(sample.txt) ⇒ ok · 0 lines");
+		});
+
+		it("maintains line-count parity for two empty text blocks (2 lines from joined newline)", async () => {
+			const messages = [
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "tc-line-5", name: "read", arguments: { path: "sample.txt" } }],
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "tc-line-5",
+					toolName: "read",
+					content: [
+						{ type: "text", text: "" },
+						{ type: "text", text: "" },
+					],
+					isError: false,
+					timestamp: 2,
+				},
+			];
+
+			const syncOutput = formatSessionHistoryMarkdown(messages);
+			const asyncOutput = await formatSessionHistoryMarkdownAsync(messages);
+
+			expect(syncOutput).toBe(asyncOutput);
+			expect(syncOutput).toContain("→ read(sample.txt) ⇒ ok · 2 lines");
+		});
+	});
+
+	it("bounds sync nested preview of million-element ops array without traversing distant accessor", () => {
+		const ops: unknown[] = new Array(1_000_000);
+		ops[0] = { pat: "bounded_pattern($$$A)", out: "replacement($$$A)" };
+		let traversedIndex1000 = false;
+		Object.defineProperty(ops, 1000, {
+			get() {
+				traversedIndex1000 = true;
+				throw new Error("traversed beyond bounded limit at index 1000");
+			},
+			configurable: true,
+			enumerable: true,
+		});
+
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-ast-huge",
+						name: "ast_edit",
+						arguments: {
+							ops,
+							paths: ["src/file.ts"],
+						},
+					},
+				],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-ast-huge",
+				toolName: "ast_edit",
+				content: [{ type: "text", text: "1 change" }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+
+		const syncOutput = formatSessionHistoryMarkdown(messages);
+
+		expect(traversedIndex1000).toBe(false);
+		expect(syncOutput).toContain("bounded_pattern($$$A)");
+		expect(syncOutput.length).toBeLessThan(1000);
+	});
+
+	it("rejects async nested preview above the argument complexity cap", async () => {
+		const ops: unknown[] = new Array(1_000_000);
+		ops[0] = { pat: "bounded_pattern($$$A)", out: "replacement($$$A)" };
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-ast-huge-async",
+						name: "ast_edit",
+						arguments: { ops, paths: ["src/file.ts"] },
+					},
+				],
+				timestamp: 1,
+			},
+		];
+
+		await expect(formatSessionHistoryMarkdownAsync(messages)).rejects.toThrow(
+			"Session history formatting exceeded the tool argument complexity cap",
+		);
+	});
+
+	it("bounds sync primary-arg preview on large array of empty strings without traversing guarded distant accessor", () => {
+		const emptyStringsArray: unknown[] = new Array(2000).fill("");
+		let traversedDistantAccessor = false;
+		Object.defineProperty(emptyStringsArray, 1000, {
+			get() {
+				traversedDistantAccessor = true;
+				throw new Error("index 1000 reached in unbounded iteration");
+			},
+			configurable: true,
+			enumerable: true,
+		});
+
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-empty-strings",
+						name: "read",
+						arguments: {
+							path: emptyStringsArray,
+						},
+					},
+				],
+				timestamp: 1,
+			},
+		];
+
+		const syncOutput = formatSessionHistoryMarkdown(messages);
+
+		expect(traversedDistantAccessor).toBe(false);
+		expect(syncOutput.length).toBeLessThan(1000);
+	});
+
+	it("rejects async primary-arg preview above the argument complexity cap", async () => {
+		const emptyStringsArray: unknown[] = new Array(70_000).fill("");
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-empty-strings-async",
+						name: "read",
+						arguments: { path: emptyStringsArray },
+					},
+				],
+				timestamp: 1,
+			},
+		];
+
+		await expect(formatSessionHistoryMarkdownAsync(messages)).rejects.toThrow(
+			"Session history formatting exceeded the tool argument complexity cap",
+		);
+	});
+
 });

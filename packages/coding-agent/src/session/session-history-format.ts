@@ -95,14 +95,6 @@ function oneLine(text: string, max = PRIMARY_ARG_MAX): string {
 const contentToText = (content: string | readonly (TextContent | ImageContent | VideoContent)[]): string =>
 	contentText(content, { image: "[image]" });
 
-function lineCount(text: string): number {
-	if (!text) return 0;
-	let count = 1;
-	for (let i = 0; i < text.length; i++) {
-		if (text.charCodeAt(i) === 10) count++;
-	}
-	return count;
-}
 async function preflightContentBytes(
 	content: unknown,
 	maxBytes = MAX_RECORD_BYTES,
@@ -151,7 +143,6 @@ function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generato
 	return oneLine(text.slice(start, end), max);
 }
 
-
 function* scanTextLines(text: string): Generator<void, number> {
 	if (!text) return 0;
 	let count = 1;
@@ -168,13 +159,14 @@ function* summarizeToolResult(
 ): Generator<void, { lines: number; firstLine?: string }> {
 	const content = result.content;
 	if (!content) return { lines: 0 };
-	let lines = 1;
+	let lines = 0;
 	let firstLine: string | undefined;
 	const CHUNK_SIZE = 32_768;
 	let scanned = 0;
 
 	const rawContent: unknown = result.content;
 	if (typeof rawContent === "string") {
+		lines = rawContent.length ? 1 : 0;
 		if (result.isError) {
 			firstLine = yield* extractFirstLinePreview(rawContent);
 		}
@@ -187,9 +179,13 @@ function* summarizeToolResult(
 	}
 
 	let firstLineFound = !result.isError;
+	let emitted = 0;
+	let hasText = false;
 	for (const block of content) {
 		if (block.type === "text") {
 			const text = block.text;
+			if (emitted++ > 0) lines++;
+			hasText ||= text.length > 0;
 			if (!firstLineFound) {
 				firstLine = yield* extractFirstLinePreview(text);
 				firstLineFound = true;
@@ -200,12 +196,15 @@ function* summarizeToolResult(
 				if ((scanned & (CHUNK_SIZE - 1)) === 0) yield;
 			}
 		} else if (block.type === "image") {
+			if (emitted++ > 0) lines++;
+			hasText = true;
 			if (!firstLineFound) {
 				firstLine = "[image]";
 				firstLineFound = true;
 			}
 		}
 	}
+	if (hasText || emitted > 1) lines++;
 	return { lines, firstLine };
 }
 
@@ -215,7 +214,7 @@ function primaryArgValue(value: unknown, maxChars = PRIMARY_ARG_MAX * 4): string
 	}
 	if (Array.isArray(value) && value.length > 0) {
 		let joined = "";
-		for (let i = 0; i < value.length && joined.length < maxChars; i++) {
+		for (let i = 0; i < Math.min(value.length, 32) && joined.length < maxChars; i++) {
 			const item = value[i];
 			if (typeof item !== "string") return "";
 			const slice = item.length > maxChars ? item.slice(0, maxChars) : item;
@@ -224,6 +223,96 @@ function primaryArgValue(value: unknown, maxChars = PRIMARY_ARG_MAX * 4): string
 		return joined;
 	}
 	return "";
+}
+
+/** Preview only: never visit a whole nested argument or invoke its JSON hooks. */
+function argumentPreview(value: unknown): string {
+	let output = "";
+	let nodes = 0;
+	const append = (text: string) => {
+		output += text.slice(0, 256 - output.length);
+	};
+	const visit = (item: unknown, depth: number): void => {
+		if (output.length >= 256) return;
+		if (++nodes > 64 || depth > 4) {
+			append("…");
+			return;
+		}
+		if (typeof item === "string") {
+			append(JSON.stringify(item.slice(0, 256 - output.length)));
+		} else if (item === null || typeof item !== "object") {
+			append(typeof item === "number" || typeof item === "boolean" ? String(item) : "null");
+		} else if (Array.isArray(item)) {
+			append("[");
+			for (let i = 0; i < item.length && output.length < 256 && nodes < 64; i++) {
+				if (i) append(",");
+				visit(item[i], depth + 1);
+			}
+			append("]");
+		} else {
+			append("{");
+			let keys = 0;
+			for (const key in item) {
+				if (output.length >= 256 || nodes >= 64 || keys >= 16) break;
+				if (!Object.hasOwn(item, key)) continue;
+				if (keys++) append(",");
+				append(JSON.stringify(key.slice(0, 256 - output.length)));
+				append(":");
+				visit((item as Record<string, unknown>)[key], depth + 1);
+			}
+			append("}");
+		}
+	};
+	visit(value, 0);
+	return output;
+}
+
+/** Count nested argument bytes cooperatively; reject excessive depth or work too. */
+async function preflightArgumentBytes(value: unknown, signal?: AbortSignal): Promise<number> {
+	let bytes = 0;
+	let nodes = 0;
+	function* walk(item: unknown, depth: number): Generator<void> {
+		if (++nodes > 65_536 || depth > 64) {
+			throw new Error("Session history formatting exceeded the tool argument complexity cap");
+		}
+		if ((nodes & 255) === 0) yield;
+		if (typeof item === "string") {
+			// Each UTF-16 unit requires at least one JSON byte. Bound the scan first.
+			if (item.length > MAX_RECORD_BYTES) bytes = MAX_RECORD_BYTES + 1;
+			else {
+				bytes += 2;
+				for (let i = 0; i < item.length && bytes <= MAX_RECORD_BYTES; i += 4096) {
+					bytes += Buffer.byteLength(JSON.stringify(item.slice(i, i + 4096)), "utf8") - 2;
+					yield;
+				}
+			}
+		} else if (item && typeof item === "object") {
+			bytes += 2;
+			if (Array.isArray(item)) {
+				bytes += Math.max(0, item.length - 1);
+				if (bytes > MAX_RECORD_BYTES) throw new Error("Session history formatting exceeded the tool argument byte cap");
+				for (const child of item) yield* walk(child, depth + 1);
+			} else {
+				for (const key in item) {
+					if (!Object.hasOwn(item, key)) continue;
+					yield* walk(key, depth + 1);
+					bytes += 2;
+					yield* walk((item as Record<string, unknown>)[key], depth + 1);
+				}
+			}
+		} else {
+			bytes += typeof item === "number" ? 24 : 5;
+		}
+		if (bytes > MAX_RECORD_BYTES) {
+			throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
+		}
+	}
+	for (const _step of walk(value, 0)) {
+		await yieldToEventLoop();
+		signal?.throwIfAborted();
+	}
+	signal?.throwIfAborted();
+	return bytes;
 }
 
 /** Pick the most informative scalar argument of a tool call. */
@@ -265,7 +354,7 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 	}
 	if (restCount === 0) return "{}";
 	try {
-		return oneLine(JSON.stringify(rest));
+		return oneLine(argumentPreview(rest));
 	} catch {
 		return oneLine(`{unserializable: ${Object.keys(rest).slice(0, 8).join(", ")}}`);
 	}
@@ -603,6 +692,8 @@ export async function formatSessionHistoryMarkdownAsync(
 					totalAssistantText += block.text.length;
 				} else if (opts?.includeThinking && block.type === "thinking" && typeof block.thinking === "string") {
 					totalAssistantText += block.thinking.length;
+				} else if (block.type === "toolCall") {
+					totalAssistantText += await preflightArgumentBytes(block.arguments, signal);
 				}
 				if (totalAssistantText > MAX_RECORD_BYTES) {
 					throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
