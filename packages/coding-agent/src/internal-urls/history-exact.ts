@@ -9,6 +9,7 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 
 const DEFAULT_PAGE_CHARACTERS = 8_000;
@@ -30,9 +31,25 @@ function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
 	}
 }
 
+/** Positional reads keep both search passes on the caller-owned descriptor. */
+async function* descriptorChunks(handle: FileHandle): AsyncGenerator<Buffer> {
+	let position = 0;
+	while (true) {
+		const buffer = Buffer.allocUnsafe(64 * 1024);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+		if (bytesRead === 0) return;
+		position += bytesRead;
+		yield buffer.subarray(0, bytesRead);
+	}
+}
+
 /** Discard an oversized line while streaming, before allocating its full text. */
-async function* storedLines(filePath: string): AsyncGenerator<string | undefined | typeof SCAN_BOUND_EXCEEDED> {
-	const input = createReadStream(filePath, { highWaterMark: 64 * 1024 });
+async function* storedLines(
+	filePath: string,
+	handle?: FileHandle,
+): AsyncGenerator<string | undefined | typeof SCAN_BOUND_EXCEEDED> {
+	const stream = handle ? undefined : createReadStream(filePath, { highWaterMark: 64 * 1024 });
+	const input = handle ? descriptorChunks(handle) : stream!;
 	let parts: Buffer[] = [];
 	let bytes = 0;
 	let oversized = false;
@@ -69,7 +86,7 @@ async function* storedLines(filePath: string): AsyncGenerator<string | undefined
 		}
 		if (oversized || bytes > 0) yield oversized ? undefined : decodeRecord(parts, bytes);
 	} finally {
-		input.destroy();
+		stream?.destroy();
 	}
 }
 
@@ -328,6 +345,7 @@ function selectedBranchIds(parents: ReadonlyMap<string, string | undefined>, lea
 export async function readStoredHistoryEntry(
 	filePath: string,
 	request: ExactHistoryRequest,
+	handle?: FileHandle,
 ): Promise<ExactHistoryResult> {
 	const parents = new Map<string, string | undefined>();
 	const admission: StoredAdmissionState = {
@@ -343,7 +361,7 @@ export async function readStoredHistoryEntry(
 	let incomplete = false;
 	let startedJsonl = false;
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, handle)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -581,6 +599,7 @@ function previewAt(raw: string, term: string): string {
 export async function searchStoredHistoryEntries(
 	filePath: string,
 	request: HistorySearchRequest,
+	handle?: FileHandle,
 ): Promise<HistorySearchResult> {
 	const parents = new Map<string, string | undefined>();
 	const admission: StoredAdmissionState = {
@@ -596,7 +615,7 @@ export async function searchStoredHistoryEntries(
 	let startedJsonl = false;
 	const topologyHash = createHash("sha256");
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, handle)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -722,7 +741,7 @@ export async function searchStoredHistoryEntries(
 		invalidIdentity: false,
 	};
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, handle)) {
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",

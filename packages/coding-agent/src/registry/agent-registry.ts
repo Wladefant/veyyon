@@ -13,6 +13,8 @@
 // `tools/fs/read.ts` reaches that barrel, and the barrel brings 23 modules onto the file-read
 // closure that nothing there asks for. See the barrel absence in
 // `test/architecture/leveraged-imports-stay-cut.test.ts`.
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { AgentSession } from "../session/agent-session";
@@ -121,6 +123,12 @@ export interface PendingApproval {
 	reason?: string;
 	/** When the wait began, so a consumer can subtract the interval it must not charge. */
 	since: number;
+}
+
+export interface ArchivedSessionIdentity {
+	readonly sessionId: string;
+	readonly directory: string;
+	readonly canonicalDirectory?: string;
 }
 
 export interface AgentRef {
@@ -254,6 +262,48 @@ export class AgentRegistry {
 	readonly #listeners = new Set<RegistryListener>();
 	/** Every approval wait open on an agent, oldest first. Absent while it has none. */
 	readonly #approvalWaits = new WeakMap<AgentRef, PendingApproval[]>();
+	readonly #archivedIdentities = new WeakMap<AgentRef, ArchivedSessionIdentity>();
+
+	/**
+	 * Read-only archived session identity captured while the session was live.
+	 * Requires the current ref object.
+	 */
+	archivedSessionIdentity(ref: AgentRef): ArchivedSessionIdentity | undefined {
+		if (this.#refs.get(ref.id) !== ref) return undefined;
+		return this.#archivedIdentities.get(ref);
+	}
+
+	#captureIdentity(ref: AgentRef, session: AgentSession, invalidateOnFailure: boolean): void {
+		let sessionId: string | undefined;
+		let sessionFile: string | undefined;
+		try {
+			sessionId = session.sessionManager?.getSessionId?.();
+			sessionFile = session.sessionManager?.getSessionFile?.();
+		} catch {
+			// tolerate test partial SessionManager methods (no throw)
+		}
+		if (
+			typeof sessionId === "string" &&
+			sessionId.trim().length > 0 &&
+			typeof sessionFile === "string" &&
+			sessionFile.trim().length > 0
+		) {
+			const resolvedFile = path.resolve(sessionFile);
+			const directory = path.dirname(resolvedFile);
+			let canonicalDirectory: string | undefined;
+			try {
+				canonicalDirectory = fs.realpathSync(directory);
+			} catch {
+				canonicalDirectory = undefined;
+			}
+			this.#archivedIdentities.set(
+				ref,
+				Object.freeze({ sessionId, directory, canonicalDirectory }),
+			);
+		} else if (invalidateOnFailure) {
+			this.#archivedIdentities.delete(ref);
+		}
+	}
 
 	/**
 	 * Register an agent, deriving its conversation {@link AgentRef.scope} when the
@@ -279,6 +329,9 @@ export class AgentRegistry {
 			model: input.model,
 			scope: input.scope ?? this.#deriveScope(input),
 		};
+		if (input.session) {
+			this.#captureIdentity(ref, input.session, true);
+		}
 		// An id is the key, so registering one twice REPLACES the earlier agent.
 		// That is legitimate when the same agent re-registers (a revive re-attaches
 		// its own row), and it is data loss when two different agents claim one id:
@@ -288,13 +341,16 @@ export class AgentRegistry {
 		// refused, because dropping the new ref would leave the live agent with no
 		// row at all, and a roster missing a running agent is the worse of the two.
 		const displaced = this.#refs.get(ref.id);
-		if (displaced && displaced.sessionFile !== ref.sessionFile) {
-			logger.error("Agent registry id reused by a different agent; the displaced agent loses its row", {
-				id: ref.id,
-				displacedSessionFile: displaced.sessionFile,
-				displacedStatus: displaced.status,
-				sessionFile: ref.sessionFile,
-			});
+		if (displaced) {
+			this.#archivedIdentities.delete(displaced);
+			if (displaced.sessionFile !== ref.sessionFile) {
+				logger.error("Agent registry id reused by a different agent; the displaced agent loses its row", {
+					id: ref.id,
+					displacedSessionFile: displaced.sessionFile,
+					displacedStatus: displaced.status,
+					sessionFile: ref.sessionFile,
+				});
+			}
 		}
 		this.#refs.set(ref.id, ref);
 		this.#emit({ type: "registered", ref });
@@ -521,18 +577,23 @@ export class AgentRegistry {
 		ref.session = session;
 		if (sessionFile !== undefined) ref.sessionFile = sessionFile;
 		ref.lastActivity = Date.now();
+		this.#captureIdentity(ref, session, true);
 	}
 
 	detachSession(id: string): void {
 		const ref = this.#refs.get(id);
 		if (!ref) return;
-		ref.session = null;
+		if (ref.session) {
+			this.#captureIdentity(ref, ref.session, false);
+			ref.session = null;
+		}
 	}
 
 	unregister(id: string): void {
 		const ref = this.#refs.get(id);
 		if (!ref) return;
 		this.#refs.delete(id);
+		this.#archivedIdentities.delete(ref);
 		this.#emit({ type: "removed", ref });
 	}
 

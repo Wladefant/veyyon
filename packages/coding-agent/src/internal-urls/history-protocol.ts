@@ -19,6 +19,10 @@
  * - history://<agentId>?entry=<entryId>&offset=0&limit=8000 - Exact stored record page
  */
 
+import { constants as fsConstants, type Stats } from "node:fs";
+import * as fs from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
 import type { AgentRef } from "../registry/agent-registry";
@@ -176,12 +180,21 @@ function parseArchivedHistoryMode(url: InternalUrl, agentId: string): ArchivedHi
  * that spelling. No disk-only or unknown-scope fallback exists in this mode.
  */
 function archivedTargetForCaller(caller: ResolvedHistoryCaller, agentId: string): AgentRef | undefined {
+  if (Buffer.byteLength(agentId, "utf-8") > MAX_ARCHIVED_INDEX_ID_BYTES) return undefined;
   const exact = caller.registry.get(agentId);
   let target = exact;
   if (!target) {
-    const matches = caller.registry.list().filter(ref => ref.id.toLowerCase() === agentId.toLowerCase());
-    if (matches.length !== 1) return undefined;
-    target = matches[0];
+    const lower = agentId.toLowerCase();
+    let scanned = 0;
+    for (const ref of caller.registry.values()) {
+      if (scanned === MAX_ARCHIVED_INDEX_ENTRIES) return undefined;
+      scanned++;
+      if (ref.id.toLowerCase() === lower) {
+        if (target) return undefined;
+        target = ref;
+      }
+    }
+    if (!target) return undefined;
   }
 
   if (
@@ -213,12 +226,10 @@ function renderArchivedIndex(refs: Iterable<AgentRef>, scope: string, request: A
     ) continue;
     // Refuse the first excess entry before retaining, sorting, or hashing it.
     if (entries.length === MAX_ARCHIVED_INDEX_ENTRIES) return archivedUnavailable();
+    if (Buffer.byteLength(ref.id, "utf-8") > MAX_ARCHIVED_INDEX_ID_BYTES) return archivedUnavailable();
     entries.push(ref);
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
-  if (entries.some(ref => Buffer.byteLength(ref.id, "utf-8") > MAX_ARCHIVED_INDEX_ID_BYTES)) {
-    return archivedUnavailable();
-  }
 
   const digest = createHash("sha256").update(JSON.stringify(["archived-index-v1", scope])).update("\n");
   for (const ref of entries) {
@@ -300,40 +311,130 @@ async function resolveArchivedHistory(
   if (!agentId) return archivedUnavailable();
   const target = archivedTargetForCaller(caller, agentId);
   if (!target || !target.sessionFile) return archivedUnavailable();
-  const sessionFile = target.sessionFile;
 
-  const result =
-    mode.kind === "exact"
-      ? await readStoredHistoryEntry(sessionFile, mode.request)
-      : await searchStoredHistoryEntries(sessionFile, mode.request);
+  const trusted = caller.registry.archivedSessionIdentity(target);
+  if (!trusted) return archivedUnavailable();
 
-  // The scan is bounded but asynchronous. Do not return its content if the
-  // caller was disposed/rescoped or the target was revived/replaced mid-read.
-  const currentCaller = resolveHistoryCallerCapability(capability);
-  if (
-    !currentCaller ||
-    currentCaller.registry !== caller.registry ||
-    currentCaller.actor !== caller.actor ||
-    currentCaller.scope !== caller.scope ||
-    caller.registry.get(target.id) !== target ||
-    archivedTargetForCaller(currentCaller, agentId) !== target ||
-    target.kind === "advisor" ||
-    target.scope !== caller.scope ||
-    (target.status !== "parked" && target.status !== "aborted") ||
-    target.session !== null ||
-    target.sessionFile !== sessionFile
-  ) {
+  const rawSessionFile = target.sessionFile;
+  const resolvedSessionFile = path.resolve(rawSessionFile);
+  const resolvedDir = path.dirname(resolvedSessionFile);
+  if (resolvedDir !== trusted.directory) {
     return archivedUnavailable();
   }
 
-  const content = JSON.stringify(result, null, 2);
-  return {
-    url: url.href,
-    content,
-    contentType: "application/json",
-    size: Buffer.byteLength(content, "utf-8"),
-    notes: ["Read-only bounded archived records in the caller's conversation; externalized blobs are not expanded or searched"],
-  };
+  try {
+    const { root } = path.parse(resolvedSessionFile);
+    const relative = path.relative(root, resolvedSessionFile);
+    const segments = relative.split(/[/\\]+/).filter(Boolean);
+    let current = root;
+    for (const segment of segments) {
+      current = path.join(current, segment);
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink()) {
+        return archivedUnavailable();
+      }
+    }
+  } catch {
+    return archivedUnavailable();
+  }
+
+  try {
+    const realpathDir = await fs.realpath(resolvedDir);
+    const expectedCanonical =
+      trusted.canonicalDirectory ?? (await fs.realpath(trusted.directory).catch(() => trusted.directory));
+    if (realpathDir !== expectedCanonical) {
+      return archivedUnavailable();
+    }
+  } catch {
+    return archivedUnavailable();
+  }
+
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+  let handle: FileHandle | undefined;
+  let handleStat: Stats;
+  try {
+    const initialLstat = await fs.lstat(resolvedSessionFile);
+    if (initialLstat.isSymbolicLink() || !initialLstat.isFile()) {
+      return archivedUnavailable();
+    }
+    handle = await fs.open(resolvedSessionFile, flags);
+    handleStat = await handle.stat();
+    if (!handleStat.isFile()) {
+      return archivedUnavailable();
+    }
+    if (initialLstat.dev !== handleStat.dev || initialLstat.ino !== handleStat.ino) {
+      return archivedUnavailable();
+    }
+    const result =
+      mode.kind === "exact"
+        ? await readStoredHistoryEntry(resolvedSessionFile, mode.request, handle)
+        : await searchStoredHistoryEntries(resolvedSessionFile, mode.request, handle);
+    if (result.sessionId !== trusted.sessionId) {
+      return archivedUnavailable();
+    }
+
+    const currentCaller = resolveHistoryCallerCapability(capability);
+    if (
+      !currentCaller ||
+      currentCaller.registry !== caller.registry ||
+      currentCaller.actor !== caller.actor ||
+      currentCaller.scope !== caller.scope ||
+      caller.registry.get(target.id) !== target ||
+      archivedTargetForCaller(currentCaller, agentId) !== target ||
+      target.kind === "advisor" ||
+      target.scope !== caller.scope ||
+      (target.status !== "parked" && target.status !== "aborted") ||
+      target.session !== null ||
+      target.sessionFile !== rawSessionFile
+    ) {
+      return archivedUnavailable();
+    }
+
+    const postTrusted = caller.registry.archivedSessionIdentity(target);
+    if (
+      !postTrusted ||
+      postTrusted.sessionId !== trusted.sessionId ||
+      postTrusted.directory !== trusted.directory
+    ) {
+      return archivedUnavailable();
+    }
+
+    const postHandleStat = await handle.stat();
+    if (
+      postHandleStat.dev !== handleStat.dev ||
+      postHandleStat.ino !== handleStat.ino ||
+      postHandleStat.size !== handleStat.size ||
+      postHandleStat.mtimeMs !== handleStat.mtimeMs ||
+      postHandleStat.ctimeMs !== handleStat.ctimeMs
+    ) {
+      return archivedUnavailable();
+    }
+    const postLstat = await fs.lstat(resolvedSessionFile);
+    if (
+      postLstat.isSymbolicLink() ||
+      postLstat.dev !== handleStat.dev ||
+      postLstat.ino !== handleStat.ino
+    ) {
+      return archivedUnavailable();
+    }
+
+    const content = JSON.stringify(result, null, 2);
+    return {
+      url: url.href,
+      content,
+      contentType: "application/json",
+      size: Buffer.byteLength(content, "utf-8"),
+      notes: [
+        "Read-only bounded archived records in the caller's conversation; externalized blobs are not expanded or searched",
+      ],
+    };
+  } catch {
+    return archivedUnavailable();
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => {});
+    }
+  }
 }
 
 

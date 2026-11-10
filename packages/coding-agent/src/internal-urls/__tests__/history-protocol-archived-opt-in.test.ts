@@ -22,14 +22,17 @@ import { handleInternalUrl } from "../../tools/fs/read-internal-url";
 import type { ReadContext } from "../../tools/fs/read-types";
 import { parseSel } from "../../tools/core/path-utils";
 import { createHistoryCallerCapability, resolveHistoryCallerCapability } from "../history-caller";
+import * as historyExact from "../history-exact";
 import { HistoryProtocolHandler } from "../history-protocol";
 import { parseInternalUrl } from "../parse";
 import { InternalUrlRouter } from "../router";
 import { registerArtifactsDir, resetRegisteredArtifactDirsForTests } from "../registry-helpers";
 
 const ARCHIVED_UNAVAILABLE = "Archived history is unavailable for this caller and request.";
+const archivedFixtureSessionIds = new Map<string, string>();
 
 afterEach(() => {
+  archivedFixtureSessionIds.clear();
   AgentRegistry.resetGlobalForTests();
   InternalUrlRouter.resetForTests();
   resetRegisteredArtifactDirsForTests();
@@ -156,6 +159,8 @@ async function archive(
 ): Promise<string> {
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, id + ".jsonl");
+  archivedFixtureSessionIds.set(file, sessionId);
+  archivedFixtureSessionIds.set(path.resolve(file), sessionId);
   const lines = [
     JSON.stringify({ type: "session", id: sessionId }),
     ...entries.map(entry =>
@@ -178,15 +183,37 @@ function registerArchivedRef(
   status: "parked" | "aborted" = "parked",
   kind: "main" | "sub" | "advisor" = "sub",
 ): void {
-  AgentRegistry.global().register({
-    id,
-    displayName: id,
-    kind,
-    session: null,
-    sessionFile,
-    scope,
-    status,
-  });
+  const sessionId =
+    archivedFixtureSessionIds.get(sessionFile) ??
+    archivedFixtureSessionIds.get(path.resolve(sessionFile));
+  if (sessionId) {
+    const sessionManager = {
+      getSessionId: () => sessionId,
+      getSessionFile: () => sessionFile,
+    };
+    const session = { sessionManager } as unknown as AgentSession;
+    AgentRegistry.global().register({
+      id,
+      displayName: id,
+      kind,
+      session,
+      sessionFile,
+      scope,
+      status: "idle",
+    });
+    AgentRegistry.global().detachSession(id);
+    AgentRegistry.global().setStatus(id, status);
+  } else {
+    AgentRegistry.global().register({
+      id,
+      displayName: id,
+      kind,
+      session: null,
+      sessionFile,
+      scope,
+      status,
+    });
+  }
 }
 
 describe("history:// caller-bound archived opt-in", () => {
@@ -641,22 +668,23 @@ describe("history:// caller-bound archived opt-in", () => {
       // Inject the colliding identity immediately after the first alias snapshot.
       // The initial lookup sees one target; post-scan revalidation must see two.
       const registry = AgentRegistry.global();
-      const originalList = registry.list;
+      const originalValues = registry.values;
       let collisionRegistered = false;
-      registry.list = function () {
-        const snapshot = originalList.call(this);
-        if (!collisionRegistered) {
-          collisionRegistered = true;
-          registerArchivedRef("SCOUT", "session-b", foreignFile);
+      registry.values = function* () {
+        for (const ref of originalValues.call(this)) {
+          yield ref;
+          if (!collisionRegistered) {
+            collisionRegistered = true;
+            registerArchivedRef("SCOUT", "session-b", foreignFile);
+          }
         }
-        return snapshot;
       };
       try {
         await expect(
           read(caller, "history://scout?archived=1&entry=record-one"),
         ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
       } finally {
-        registry.list = originalList;
+        registry.values = originalValues;
       }
 
       expect(collisionRegistered).toBe(true);
@@ -692,10 +720,13 @@ describe("history:// caller-bound archived opt-in", () => {
       registerArchivedRef("Archived-" + String(i).padStart(6, "0"), "session-a", "/synthetic/" + i + ".jsonl");
     }
     const firstRef = AgentRegistry.global().get("Archived-000000")!;
-    Object.defineProperty(firstRef, "id", {
+    Object.defineProperty(firstRef, "lastActivity", {
       get() {
-        throw new Error("Overflow roster sorted or hashed before refusal");
+        throw new Error("Overflow roster hashed before refusal");
       },
+    });
+    const localeCompareSpy = spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+      throw new Error("Overflow roster sorted before refusal");
     });
 
     const poisonRef = AgentRegistry.global().register({
@@ -722,8 +753,278 @@ describe("history:// caller-bound archived opt-in", () => {
     try {
       await expect(read(caller, "history://?archived=1")).rejects.toThrow(ARCHIVED_UNAVAILABLE);
     } finally {
+      localeCompareSpy.mockRestore();
+      listSpy.mockRestore();
+    }
+  });
+  it("refuses an eligible parked same-scope ref with oversized ID before sort or digest", async () => {
+    registerLiveRef("main:a", "session-a", "session-a");
+    const caller = makeToolSession("main:a", () => "session-a");
+
+    registerArchivedRef("Archived-valid", "session-a", "/synthetic/valid.jsonl");
+    const oversizedId = "Archived-" + "x".repeat(1025);
+    const oversizedRef = AgentRegistry.global().register({
+      id: oversizedId,
+      displayName: oversizedId,
+      kind: "sub",
+      session: null,
+      sessionFile: "/synthetic/oversized.jsonl",
+      scope: "session-a",
+      status: "parked",
+    });
+
+    Object.defineProperty(oversizedRef, "lastActivity", {
+      get() {
+        throw new Error("Oversized ID hashed before refusal");
+      },
+    });
+
+    const localeCompareSpy = spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+      throw new Error("Oversized ID sorted before refusal");
+    });
+
+    try {
+      await expect(read(caller, "history://?archived=1")).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+    } finally {
+      localeCompareSpy.mockRestore();
+    }
+  });
+
+  it("refuses an incoming host ID exceeding 1024 UTF-8 bytes before registry lookup", async () => {
+    const temp = TempDir.createSync("@veyyon-history-oversized-host-");
+    try {
+      registerLiveRef("main:a", "session-a", "session-a");
+      const caller = makeToolSession("main:a", () => "session-a");
+      const oversizedId = "Archived-" + "y".repeat(1025);
+      const targetFile = await archive(temp.path(), "oversized-target", "oversized-session", [
+        { id: "record-one", parentId: null, message: "oversized record" },
+      ]);
+      registerArchivedRef(oversizedId, "session-a", targetFile);
+
+      let getCalledForOversized = false;
+      const originalGet = AgentRegistry.prototype.get;
+      const getSpy = spyOn(AgentRegistry.prototype, "get").mockImplementation(function (this: AgentRegistry, id: string) {
+        if (Buffer.byteLength(id, "utf-8") > 1024) {
+          getCalledForOversized = true;
+          throw new Error("registry.get called for oversized incoming agentId");
+        }
+        return originalGet.call(this, id);
+      });
+
+      try {
+        await expect(
+          read(caller, `history://${oversizedId}?archived=1&entry=record-one`),
+        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      } finally {
+        getSpy.mockRestore();
+      }
+
+      expect(getCalledForOversized).toBe(false);
+    } finally {
+      await temp.remove();
+    }
+  });
+
+  it("never calls registry.list for large missing or ambiguous alias lookups and enforces scan bounds", async () => {
+    registerLiveRef("main:a", "session-a", "session-a");
+    const caller = makeToolSession("main:a", () => "session-a");
+
+    for (let i = 0; i < 100_001; i++) {
+      registerArchivedRef("Archived-" + String(i).padStart(6, "0"), "session-a", "/synthetic/" + i + ".jsonl");
+    }
+    registerArchivedRef("Ambiguous-Target", "session-a", "/synthetic/ambig1.jsonl");
+    registerArchivedRef("AMBIGUOUS-TARGET", "session-a", "/synthetic/ambig2.jsonl");
+
+    const listSpy = spyOn(AgentRegistry.prototype, "list").mockImplementation(() => {
+      throw new Error("registry.list() must not be called during alias lookup");
+    });
+
+    try {
+      await expect(
+        read(caller, "history://missing-agent-alias?archived=1&entry=record-one"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+
+      await expect(
+        read(caller, "history://ambiguous-target?archived=1&entry=record-one"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+    } finally {
       listSpy.mockRestore();
     }
   });
 
+  it("enforces provenance: rejects overwritten header ID, symlinks, foreign path, restored ref with no live identity, and async race mutations", async () => {
+    const temp = TempDir.createSync("@veyyon-history-p1-provenance-");
+    try {
+      registerLiveRef("main:a", "session-a", "session-a");
+      const caller = makeToolSession("main:a", () => "session-a");
+
+      const validDir = path.join(temp.path(), "trusted");
+      const validFile = await archive(validDir, "Target", "trusted-session", [
+        { id: "record-1", parentId: null, message: "trusted content needle" },
+      ]);
+      registerArchivedRef("Target", "session-a", validFile, "parked");
+
+      // Positive controls: exact and search work before any mutation
+      const exactBefore = JSON.parse(
+        await read(caller, "history://Target?archived=1&entry=record-1"),
+      ) as { status: string; fragment?: string; sessionId?: string };
+      expect(exactBefore.status).toBe("ok");
+      expect(exactBefore.fragment).toContain("trusted content needle");
+      expect(exactBefore.sessionId).toBe("trusted-session");
+
+      const searchBefore = JSON.parse(
+        await read(caller, "history://Target?archived=1&q=needle"),
+      ) as { status: string; matches: Array<{ entryId: string }> };
+      expect(searchBefore.status).toBe("ok");
+      expect(searchBefore.matches.map(m => m.entryId)).toContain("record-1");
+
+      // 1. Overwrite header with foreign ID (both exact and search must fail)
+      const overwrittenFile = await archive(path.join(temp.path(), "overwritten"), "Overwritten", "trusted-session", [
+        { id: "record-1", parentId: null, message: "needle content" },
+      ]);
+      registerArchivedRef("Overwritten", "session-a", overwrittenFile, "parked");
+      const content = await fs.readFile(overwrittenFile, "utf-8");
+      const lines = content.split("\n");
+      lines[0] = JSON.stringify({ type: "session", id: "foreign-session-id" });
+      await fs.writeFile(overwrittenFile, lines.join("\n"));
+
+      await expect(
+        read(caller, "history://Overwritten?archived=1&entry=record-1"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      await expect(
+        read(caller, "history://Overwritten?archived=1&q=needle"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+
+      // 2. Replace file with symlink to foreign file
+      const foreignDir = path.join(temp.path(), "foreign");
+      const foreignFile = await archive(foreignDir, "Foreign", "foreign-session", [
+        { id: "record-foreign", parentId: null, message: "foreign needle" },
+      ]);
+      const symlinkTargetFile = await archive(path.join(temp.path(), "symlink-src"), "SymlinkTarget", "symlink-session", [
+        { id: "record-1", parentId: null, message: "symlink needle" },
+      ]);
+      registerArchivedRef("SymlinkTarget", "session-a", symlinkTargetFile, "parked");
+
+      let symlinkCreated = false;
+      try {
+        await fs.unlink(symlinkTargetFile);
+        await fs.symlink(foreignFile, symlinkTargetFile);
+        symlinkCreated = true;
+      } catch (err: unknown) {
+        let isPermissionDenial = false;
+        if (typeof err === "object" && err !== null && "code" in err) {
+          const code = Reflect.get(err, "code");
+          if (code === "EPERM" || code === "EACCES") {
+            isPermissionDenial = true;
+          }
+        }
+        if (!isPermissionDenial) {
+          throw err;
+        }
+      }
+      if (symlinkCreated) {
+        await expect(
+          read(caller, "history://SymlinkTarget?archived=1&entry=record-foreign"),
+        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+        await expect(
+          read(caller, "history://SymlinkTarget?archived=1&q=needle"),
+        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      } else {
+        // Unprivileged Windows environments without Developer Mode cannot create symlinks
+        expect(process.platform).toBe("win32");
+      }
+
+      // 3. Path string changed to foreign directory
+      const foreignPathFile = await archive(path.join(temp.path(), "orig-dir"), "ForeignPathTarget", "foreign-path-session", [
+        { id: "record-1", parentId: null, message: "foreign path needle" },
+      ]);
+      registerArchivedRef("ForeignPathTarget", "session-a", foreignPathFile, "parked");
+      const targetRef = AgentRegistry.global().get("ForeignPathTarget")!;
+      targetRef.sessionFile = foreignFile;
+      await expect(
+        read(caller, "history://ForeignPathTarget?archived=1&entry=record-foreign"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+
+      // 4. Restored ref with no live identity refused
+      const restoredFile = await archive(path.join(temp.path(), "restored"), "RestoredNoLive", "restored-session", [
+        { id: "record-1", parentId: null, message: "restored needle" },
+      ]);
+      AgentRegistry.global().register({
+        id: "RestoredNoLive",
+        displayName: "RestoredNoLive",
+        kind: "sub",
+        session: null,
+        sessionFile: restoredFile,
+        scope: "session-a",
+        status: "parked",
+      });
+      await expect(
+        read(caller, "history://RestoredNoLive?archived=1&entry=record-1"),
+      ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+
+      // 5. Deterministic async race revalidation:
+      // 5a. File modified in-place during exact scan
+      const raceFile = await archive(path.join(temp.path(), "race"), "RaceTarget", "race-session", [
+        { id: "record-1", parentId: null, message: "race needle" },
+      ]);
+      registerArchivedRef("RaceTarget", "session-a", raceFile, "parked");
+
+      const raceCheck = JSON.parse(
+        await read(caller, "history://RaceTarget?archived=1&entry=record-1"),
+      ) as { status: string; fragment?: string };
+      expect(raceCheck.status).toBe("ok");
+
+      const origReadStored = historyExact.readStoredHistoryEntry;
+      const raceExactSpy = spyOn(historyExact, "readStoredHistoryEntry").mockImplementation(async (...args) => {
+        await fs.appendFile(raceFile, JSON.stringify({ id: "mutated-entry", parentId: "record-1", message: "appended during scan" }) + "\n");
+        return origReadStored(...args);
+      });
+      try {
+        await expect(
+          read(caller, "history://RaceTarget?archived=1&entry=record-1"),
+        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      } finally {
+        raceExactSpy.mockRestore();
+      }
+
+      // 5b. File modified in-place during search scan
+      const raceSearchFile = await archive(path.join(temp.path(), "race-search"), "RaceSearchTarget", "race-search-session", [
+        { id: "record-1", parentId: null, message: "search race needle" },
+      ]);
+      registerArchivedRef("RaceSearchTarget", "session-a", raceSearchFile, "parked");
+
+      const origSearchStored = historyExact.searchStoredHistoryEntries;
+      const raceSearchSpy = spyOn(historyExact, "searchStoredHistoryEntries").mockImplementation(async (...args) => {
+        await fs.appendFile(raceSearchFile, JSON.stringify({ id: "mutated-search-entry", parentId: null, message: "search appended" }) + "\n");
+        return origSearchStored(...args);
+      });
+      try {
+        await expect(
+          read(caller, "history://RaceSearchTarget?archived=1&q=needle"),
+        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      } finally {
+        raceSearchSpy.mockRestore();
+      }
+
+      // 5c. Registry state changed during scan
+      const raceRegFile = await archive(path.join(temp.path(), "race-reg"), "RaceRegTarget", "race-reg-session", [
+        { id: "record-1", parentId: null, message: "registry race needle" },
+      ]);
+      registerArchivedRef("RaceRegTarget", "session-a", raceRegFile, "parked");
+
+      const raceRegSpy = spyOn(historyExact, "readStoredHistoryEntry").mockImplementation(async (...args) => {
+        AgentRegistry.global().setStatus("RaceRegTarget", "active");
+        return origReadStored(...args);
+      });
+      try {
+        await expect(
+          read(caller, "history://RaceRegTarget?archived=1&entry=record-1"),
+        ).rejects.toThrow(ARCHIVED_UNAVAILABLE);
+      } finally {
+        raceRegSpy.mockRestore();
+      }
+    } finally {
+      await temp.remove();
+    }
+  });
 });

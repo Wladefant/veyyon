@@ -47,6 +47,14 @@ unscoped, or unregistered disk-only targets fail with the same unavailable
 diagnostic. A case-folded alias is refused when more than one registered
 identity matches; an exact ID in the caller's scope remains usable.
 
+Archived content also requires a session ID and canonical transcript directory
+captured from the target's live SessionManager before parking.
+Restored refs without this trusted identity remain in the index but cannot serve content.
+The scanner uses the validated open descriptor for both search passes and checks
+the stored header against the captured session ID before returning bytes.
+Symlink paths, foreign directories, and detected changes during a scan fail closed.
+These checks do not provide a filesystem sandbox against arbitrary in-process code.
+
 The index iterates the registry without copying the full roster.
 It refuses the first eligible ref beyond 100,000 before sorting or hashing the collected refs.
 
