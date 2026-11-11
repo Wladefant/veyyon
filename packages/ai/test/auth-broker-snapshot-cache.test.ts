@@ -236,6 +236,8 @@ describe("auth-broker snapshot cache", () => {
 	});
 
 	test("rejects cyclic symlinks and nonregular cache targets without replacing them", async () => {
+		// Keep the cyclic links inside their own disposable directory. Avoid direct
+		// unlink of even synthetic symlinks: the safety tripwire correctly rejects it.
 		await withCachePath(async cachePath => {
 			const otherPath = path.join(path.dirname(cachePath), "cycle.enc");
 			await fs.symlink(path.basename(otherPath), cachePath);
@@ -244,8 +246,11 @@ describe("auth-broker snapshot cache", () => {
 				path: cachePath, token: TOKEN, url: URL, snapshot: makeSnapshot(1_000_000),
 			})).rejects.toMatchObject({ code: "ELOOP" });
 			expect((await fs.lstat(cachePath)).isSymbolicLink()).toBe(true);
-			await fs.unlink(cachePath);
-			await fs.unlink(otherPath);
+			expect((await fs.lstat(otherPath)).isSymbolicLink()).toBe(true);
+		});
+		// Exercise a directory target in a second isolated root instead of
+		// mutating a symlink fixture. The same nonregular-target refusal still runs.
+		await withCachePath(async cachePath => {
 			await fs.mkdir(cachePath);
 			await expect(writeAuthBrokerSnapshotCache({
 				path: cachePath, token: TOKEN, url: URL, snapshot: makeSnapshot(1_000_000),
