@@ -360,4 +360,42 @@ describe("producer output keeps complete credential spans closed", () => {
 			}
 		}
 	});
+
+	it("P1: redacts multiline JSON auth values starting with a terminal-looking marker", () => {
+		const suffix = "482916";
+		const inputs = [
+			{ auth: `<redacted 8 chars>\n${suffix}`, sibling: "safe" },
+			{ auth: `[REDACTED]\n${suffix}`, sibling: "safe" },
+			{ auth: `#CANARY#\n${suffix}`, sibling: "safe" },
+		];
+		for (const obj of inputs) {
+			const sanitizedObj = sanitizeProducerJson(obj, guard) as typeof obj;
+			expect(sanitizedObj.auth).toBe("[REDACTED]");
+			expect(sanitizedObj.sibling).toBe("safe");
+
+			const serialized = guard.sanitize(JSON.stringify(obj));
+			expect(serialized).not.toContain(suffix);
+			expect(JSON.parse(serialized)).toEqual({ auth: "[REDACTED]", sibling: "safe" });
+		}
+	});
+
+	it("P2: fails closed on multiword passphrases directly after an empty Authorization heading", () => {
+		const passphrase = "correct horse battery staple";
+		const input = `### Authorization:\n${passphrase}\n## Next steps\nReview permissions.\n`;
+		for (const owner of [undefined, redactProviderSecrets]) {
+			const sanitized = new ProducerOutputGuard(owner).sanitize(input);
+			expect(sanitized).not.toContain(passphrase);
+			expect(sanitized).toContain("## Next steps\nReview permissions.\n");
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(owner);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(passphrase);
+				expect(streamed).toContain("## Next steps\nReview permissions.\n");
+			}
+		}
+	});
 });

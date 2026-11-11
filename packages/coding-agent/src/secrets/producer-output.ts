@@ -28,10 +28,12 @@ const PEM_BLOCK = /-----BEGIN ([A-Z ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/
 const PEM_START = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const EXTRA_PREFIXED_KEY = /\b(?:github_pat_[A-Za-z0-9_]{22,}|figd_[A-Za-z0-9_-]{16,})/g;
 const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>|#[A-Za-z0-9_]+#)(?=[ \t]*(?:\r?\n|$))/;
+const JSON_REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>|#[A-Za-z0-9_]+#)[ \t]*$/;
 const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
 const SOURCE_COMMIT_PIN = /^[ \t]*(?:-[ \t]+)?Source $/i;
-const MARKDOWN_COMMIT_LINK = /^\[[^\]\r\n]+\]\(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/commit\/[a-f0-9]{40}\)(?=$|[\s.])/i;
+const MARKDOWN_COMMIT_LINK =
+	/^\[(?:pinned )?source commit\]\(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/commit\/[a-f0-9]{40}\)(?:\.[ \t]+This PR head is `[a-f0-9]{40}`\.)?(?=[ \t]*(?:\r?\n|$))/i;
 const BARE_PROVIDER_SECRET_FAMILIES = PROVIDER_SECRET_FAMILIES.filter(family => !family.name.startsWith("labelled-"));
 
 const MD_AUTH_COLON_SUFFIX = /\b(authori[sz]ation):[ \t]*(\*\*|\*|__|_|`)/gi;
@@ -103,12 +105,7 @@ function isAuthorizationContinuation(record: string): boolean {
 	const value = record.trim();
 	// Blank records and new Markdown sections end the one-record context.
 	if (!value || /^(?:#{1,6}[ \t]+|[-*+][ \t]+)/.test(value)) return false;
-	// Only ordinary multiword prose is unambiguous here. Opaque values and
-	// authentication schemes remain sensitive even without a provider prefix.
-	return (
-		/^(?:Bearer|Basic|Digest|Negotiate|NTLM|Token|OAuth)\b/i.test(value) ||
-		!/^[A-Za-z]+(?:['-][A-Za-z]+)*(?:[ \t]+[A-Za-z]+(?:['-][A-Za-z]+)*)+[.!?]?$/.test(value)
-	);
+	return true;
 }
 
 function classifyCredentialText(text: string, rawRedact?: (text: string) => string): string {
@@ -372,7 +369,7 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 				if (typeof nested === "number" || typeof nested === "bigint") {
 					if (!NUMERIC_METADATA_KEY.test(key)) return "[REDACTED]";
 				} else if (typeof nested === "string") {
-					if (REDACTION_MARKER.test(nested)) return nested;
+					if (JSON_REDACTION_MARKER.test(nested)) return nested;
 					if (NUMERIC_METADATA_KEY.test(key) && NUMERIC_METADATA_VALUE.exec(nested)?.[0] === nested) return nested;
 					return "[REDACTED]";
 				} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {

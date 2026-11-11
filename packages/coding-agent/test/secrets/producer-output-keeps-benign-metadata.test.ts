@@ -462,10 +462,10 @@ describe("producer output keeps benign metadata", () => {
 		}
 	});
 
-	it("preserves benign authorization headings, prose continuations, and resets across splits", () => {
+	it("preserves benign authorization headings and resets across splits", () => {
 		const benignInputs = [
 			"### Authorization:\n\n## Next steps\nReview the documented permissions.\n",
-			"- **Driver & Native Authorization:**\n  Native drivers require kernel approval.\n",
+			"- **Driver & Native Authorization:**\n\n  Native drivers require kernel approval.\n",
 			"### Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
 			"- **Driver & Native Authorization:**\n\n- Next steps:\n  Review the documented permissions.\n",
 			"- Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
@@ -475,7 +475,6 @@ describe("producer output keeps benign metadata", () => {
 			"- Authorization:\n- Next bullet item\n",
 			"### Authorization:\n- Next bullet item\n",
 		];
-
 		for (const input of benignInputs) {
 			for (const owner of [undefined, redactProviderSecrets]) {
 				const sanitized = new ProducerOutputGuard(owner).sanitize(input);
@@ -568,17 +567,34 @@ describe("producer output keeps benign metadata", () => {
 		expect(guard.sanitize(shortCommitLink)).toBe(BLOCKED_OUTPUT_RECORD);
 	});
 
-	it("redacts credentials even when combined with a Source commit link", () => {
-		const text =
-			"- Source pin: [pinned source commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad9f7d2467f5449590ebe4b0b378902de45) token=ghp_syntheticOpaqueTokenVal123456789012\n";
-		const result = guard.sanitize(text);
-		expect(result).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
-		expect(result).toContain(
-			"- Source pin: [pinned source commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad9f7d2467f5449590ebe4b0b378902de45)",
-		);
-		expect(result).toContain("token=");
-	});
+	it("redacts Source pin values when a PIN appears in the link label or after the commit link", () => {
+		const commitUrl = "https://github.com/Wladefant/veyyon/commit/1a99fe8224c857bc61c18c136a134e59f4dd9ca2";
+		const trailingPin = `- Source pin: [pinned source commit](${commitUrl}) 843219\n`;
+		const labelPin = `- Source pin: [843219](${commitUrl})\n`;
+		const trailingToken = `- Source pin: [pinned source commit](${commitUrl}) token=ghp_syntheticOpaqueTokenVal123456789012\n`;
 
+		for (const input of [trailingPin, labelPin, trailingToken]) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain("843219");
+			expect(sanitized).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
+
+			const jsonWrapped = { message: input, sibling: "safe" };
+			const sanitizedJson = sanitizeProducerJson(jsonWrapped, guard) as typeof jsonWrapped;
+			expect(sanitizedJson.message).not.toContain("843219");
+			expect(sanitizedJson.message).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
+			expect(guard.sanitize(JSON.stringify(jsonWrapped))).not.toContain("843219");
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain("843219");
+				expect(streamed).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
+			}
+		}
+	});
 	it("withholds output when three ENV assignments are appended to the body", () => {
 		const textWithEnv = PR1699_BODY_FIXTURE + "\nENV_A=1\nENV_B=2\nENV_C=3\n";
 		expect(guard.sanitize(textWithEnv)).toBe(BLOCKED_OUTPUT_RECORD);
