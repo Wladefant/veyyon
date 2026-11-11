@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-11
+
+### Fixed
+
+- Preserve readable auth log records ([PR #1079](https://github.com/Wladefant/veyyon/pull/1079)).
+
 ## [1.9.0] - 2026-11-10
 
 ### Added
