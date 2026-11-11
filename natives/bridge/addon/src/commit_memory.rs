@@ -23,6 +23,8 @@ pub struct CommitMemory {
 	pub commit_limit_bytes:   f64,
 	/// Private committed bytes of this process (`PrivateUsage`).
 	pub process_commit_bytes: f64,
+	/// Total open handles in this process.
+	pub handle_count:         Option<u32>,
 }
 
 /// Read system commit charge and limit and this process's private commit.
@@ -42,7 +44,7 @@ mod platform {
 			K32GetPerformanceInfo, K32GetProcessMemoryInfo, PERFORMANCE_INFORMATION,
 			PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
 		},
-		Threading::GetCurrentProcess,
+		Threading::{GetCurrentProcess, GetProcessHandleCount},
 	};
 
 	use super::CommitMemory;
@@ -82,10 +84,20 @@ mod platform {
 			return None;
 		}
 
+		let mut handle_count: u32 = 0;
+		// SAFETY: `GetCurrentProcess` returns the pseudo-handle for the current process.
+		// `handle_count` is a live, writable u32.
+		let handle_count = if unsafe { GetProcessHandleCount(GetCurrentProcess(), &raw mut handle_count) } != 0 {
+			Some(handle_count)
+		} else {
+			None
+		};
+
 		Some(CommitMemory {
 			commit_charge_bytes:  bytes(perf.CommitTotal.saturating_mul(perf.PageSize)),
 			commit_limit_bytes:   bytes(perf.CommitLimit.saturating_mul(perf.PageSize)),
 			process_commit_bytes: bytes(process.PrivateUsage),
+			handle_count,
 		})
 	}
 }
@@ -109,6 +121,7 @@ mod tests {
 		assert!(commit.process_commit_bytes > 0.0);
 		assert!(commit.commit_charge_bytes >= commit.process_commit_bytes);
 		assert!(commit.commit_limit_bytes >= commit.commit_charge_bytes);
+		assert!(commit.handle_count.unwrap_or(0) > 0);
 	}
 }
 

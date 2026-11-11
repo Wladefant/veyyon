@@ -33,6 +33,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "./atomic-write";
 import { type MemoryLimits, readMemoryLimits } from "./commit-memory";
+import { installConsoleCtrlHandler, removeConsoleCtrlHandler } from "@veyyon/natives";
 import { getLogsDir } from "./dirs";
 import { isMissingPath } from "./fs-error";
 import * as logger from "./logger";
@@ -55,6 +56,38 @@ export type SessionPhase = "provider" | "tool" | "compaction" | "idle";
  */
 export const HEARTBEAT_INTERVAL_MS = 5_000;
 
+/** Maximum number of historical resource snapshots retained in the heartbeat. */
+export const MAX_RESOURCE_SAMPLES = 12;
+
+/**
+ * A point-in-time snapshot of memory and handle resources for trend analysis.
+ */
+export interface HeartbeatResourceSample {
+	/** When this sample was recorded (ISO-8601 string). */
+	at: string;
+	/** Resident set size in bytes. */
+	rssBytes: number;
+	/** Free physical memory on the host in bytes. */
+	freeMemBytes?: number;
+	/** Allocated JavaScript heap in bytes. */
+	heapTotal?: number;
+	/** Actively used JavaScript heap in bytes. */
+	heapUsed?: number;
+	/** Memory allocated outside JavaScript tracking in bytes. */
+	external?: number;
+	/** Windows: committed bytes across the system. */
+	commitChargeBytes?: number;
+	/** Windows: system commit limit in bytes. */
+	commitLimitBytes?: number;
+	/** Windows: private committed bytes of this process (`PrivateUsage`). */
+	processCommitBytes?: number;
+	/** Open handle count for this process. */
+	handleCount?: number;
+	/** Linux: cgroup current memory usage in bytes. */
+	cgroupMemoryBytes?: number;
+	/** Linux: cgroup memory limit in bytes. */
+	cgroupMemoryMaxBytes?: number;
+}
 /** A session taking part in its process's heartbeat. */
 export interface HeartbeatParticipant {
 	/** Current session id; read at write time because a session can change it. */
@@ -135,6 +168,16 @@ export interface SessionHeartbeat {
 	commitLimitBytes?: number;
 	/** Windows: private committed bytes of the writing process (`PrivateUsage`). */
 	processCommitBytes?: number;
+	/** Open handle count for the writing process when this file was written. */
+	handleCount?: number;
+	/** File path where console control events are logged, if installed. */
+	consoleLogPath?: string;
+	/** Status of console control handler installation. */
+	consoleCtrlStatus?: string;
+	/** Whether the native console control handler is currently installed. */
+	consoleCtrlInstalled?: boolean;
+	/** Bounded periodic memory and handle snapshots recording resource trends over time. */
+	resourceHistory?: HeartbeatResourceSample[];
 	/**
 	 * Linux: `memory.current` of the cgroup closest to its `memory.max`, the
 	 * limit the kernel kills a process at. Absent without cgroup v2.
@@ -155,8 +198,65 @@ let startIdentity: string | null | undefined;
 let interval: NodeJS.Timeout | undefined;
 let writing = false;
 let dirty = false;
+let flushPromise: Promise<void> | undefined;
 
-function heartbeatDir(): string {
+const resourceHistory: HeartbeatResourceSample[] = [];
+
+interface ConsoleCtrlState {
+	installed: boolean;
+	status: string;
+	path?: string;
+}
+
+let consoleCtrlState: ConsoleCtrlState | undefined;
+let consoleCtrlAttempted = false;
+
+let nativeInstallConsoleCtrl: typeof installConsoleCtrlHandler = installConsoleCtrlHandler;
+let nativeRemoveConsoleCtrl: typeof removeConsoleCtrlHandler = removeConsoleCtrlHandler;
+
+function ensureConsoleCtrlHandler(): ConsoleCtrlState | undefined {
+	if (consoleCtrlAttempted) return consoleCtrlState;
+	consoleCtrlAttempted = true;
+	try {
+		const logPath = path.join(heartbeatDir(), `${process.pid}.console.log`);
+		try {
+			fs.mkdirSync(heartbeatDir(), { recursive: true });
+		} catch {}
+		const res = nativeInstallConsoleCtrl(logPath);
+		if (res && typeof res === "object") {
+			consoleCtrlState = {
+				installed: Boolean(res.installed),
+				status: typeof res.status === "string" ? res.status : "unknown",
+				path: res.path ?? (res.installed ? logPath : undefined),
+			};
+		}
+	} catch (error) {
+		logger.debug("Could not install console control handler", { error: errorMessage(error) });
+		consoleCtrlState = {
+			installed: false,
+			status: "unavailable",
+		};
+	}
+	return consoleCtrlState;
+}
+
+function safeRemoveConsoleCtrlHandler(): void {
+	if (!consoleCtrlState?.installed) {
+		consoleCtrlState = undefined;
+		consoleCtrlAttempted = false;
+		return;
+	}
+	try {
+		nativeRemoveConsoleCtrl();
+	} catch (error) {
+		logger.debug("Could not remove console control handler", { error: errorMessage(error) });
+	} finally {
+		consoleCtrlState = undefined;
+		consoleCtrlAttempted = false;
+	}
+}
+/** Directory where session heartbeat files are recorded. */
+export function heartbeatDir(): string {
 	return path.join(getLogsDir(), "heartbeat");
 }
 
@@ -192,23 +292,56 @@ function snapshot(limits: MemoryLimits): SessionHeartbeat | undefined {
 	}
 	startIdentity ??= getProcessStartIdentity(process.pid);
 	const mem = process.memoryUsage();
+	const freeMem = os.freemem();
+	const now = new Date().toISOString();
+	const nowMs = Date.parse(now);
+
+	const sample: HeartbeatResourceSample = {
+		at: now,
+		rssBytes: mem.rss,
+		freeMemBytes: freeMem,
+		heapTotal: mem.heapTotal,
+		heapUsed: mem.heapUsed,
+		external: mem.external,
+		...(limits.commitChargeBytes !== undefined ? { commitChargeBytes: limits.commitChargeBytes } : {}),
+		...(limits.commitLimitBytes !== undefined ? { commitLimitBytes: limits.commitLimitBytes } : {}),
+		...(limits.processCommitBytes !== undefined ? { processCommitBytes: limits.processCommitBytes } : {}),
+		...(limits.handleCount !== undefined ? { handleCount: limits.handleCount } : {}),
+		...(limits.cgroupMemoryBytes !== undefined ? { cgroupMemoryBytes: limits.cgroupMemoryBytes } : {}),
+		...(limits.cgroupMemoryMaxBytes !== undefined ? { cgroupMemoryMaxBytes: limits.cgroupMemoryMaxBytes } : {}),
+	};
+
+	const lastSample = resourceHistory[resourceHistory.length - 1];
+	if (!lastSample || nowMs - Date.parse(lastSample.at) >= HEARTBEAT_INTERVAL_MS) {
+		resourceHistory.push(sample);
+		if (resourceHistory.length > MAX_RESOURCE_SAMPLES) {
+			resourceHistory.splice(0, resourceHistory.length - MAX_RESOURCE_SAMPLES);
+		}
+	} else {
+		resourceHistory[resourceHistory.length - 1] = sample;
+	}
+	const historyCopy = [...resourceHistory];
 	return {
 		pid: process.pid,
 		startIdentity,
 		sessionId: head.source.sessionId(),
 		phase: head.phase,
 		startedAt: head.since,
-		heartbeatAt: new Date().toISOString(),
+		heartbeatAt: now,
 		activeLanes,
 		lanes,
 		rssBytes: mem.rss,
-		freeMemBytes: os.freemem(),
+		freeMemBytes: freeMem,
 		heapTotal: mem.heapTotal,
 		heapUsed: mem.heapUsed,
 		external: mem.external,
 		...(startupSmol ? { smol: true } : {}),
 		...(startupForceRAMSize !== undefined ? { forceRAMSize: startupForceRAMSize } : {}),
 		...limits,
+		...(consoleCtrlState?.path ? { consoleLogPath: consoleCtrlState.path } : {}),
+		...(consoleCtrlState?.status ? { consoleCtrlStatus: consoleCtrlState.status } : {}),
+		...(consoleCtrlState?.installed !== undefined ? { consoleCtrlInstalled: consoleCtrlState.installed } : {}),
+		resourceHistory: historyCopy,
 	};
 }
 
@@ -245,7 +378,21 @@ async function flush(): Promise<void> {
 
 function scheduleWrite(): void {
 	dirty = true;
-	if (!writing) void flush();
+	if (!writing) {
+		flushPromise = flush();
+	}
+}
+
+/** Await completion of all pending heartbeat writes for test synchrony. */
+export async function _flushHeartbeatForTest(): Promise<void> {
+	while (dirty || writing) {
+		if (flushPromise) {
+			await flushPromise;
+		} else if (dirty) {
+			flushPromise = flush();
+			await flushPromise;
+		}
+	}
 }
 
 function refresh(participant: Participant): boolean {
@@ -275,6 +422,7 @@ export function joinHeartbeat(source: HeartbeatParticipant): HeartbeatHandle {
 		} catch (error) {
 			logger.debug("Could not remove session heartbeat tombstone", { error: errorMessage(error) });
 		}
+		ensureConsoleCtrlHandler();
 	}
 	participants.add(participant);
 	if (!interval) {
@@ -309,6 +457,9 @@ export function joinHeartbeat(source: HeartbeatParticipant): HeartbeatHandle {
 				fs.rmSync(heartbeatPath(process.pid), { force: true });
 			} catch (error) {
 				logger.debug("Could not remove session heartbeat", { error: errorMessage(error) });
+			} finally {
+				safeRemoveConsoleCtrlHandler();
+				resourceHistory.length = 0;
 			}
 		},
 	};
@@ -347,6 +498,40 @@ function readHeartbeat(file: string): SessionHeartbeat | undefined {
 		if (typeof beat.commitChargeBytes !== "number") delete beat.commitChargeBytes;
 		if (typeof beat.commitLimitBytes !== "number") delete beat.commitLimitBytes;
 		if (typeof beat.processCommitBytes !== "number") delete beat.processCommitBytes;
+		if (typeof beat.handleCount !== "number") delete beat.handleCount;
+		if (typeof beat.consoleLogPath !== "string") delete beat.consoleLogPath;
+		if (typeof beat.consoleCtrlStatus !== "string") delete beat.consoleCtrlStatus;
+		if (typeof beat.consoleCtrlInstalled !== "boolean") delete beat.consoleCtrlInstalled;
+
+		const rawHistory = Array.isArray(beat.resourceHistory) ? beat.resourceHistory : undefined;
+
+		if (rawHistory) {
+			const sanitized: HeartbeatResourceSample[] = [];
+			for (const item of rawHistory) {
+				if (typeof item !== "object" || item === null) continue;
+				const sample = item as Partial<HeartbeatResourceSample>;
+				if (typeof sample.at !== "string" || typeof sample.rssBytes !== "number") continue;
+				const clean: HeartbeatResourceSample = {
+					at: sample.at,
+					rssBytes: sample.rssBytes,
+				};
+				if (typeof sample.freeMemBytes === "number") clean.freeMemBytes = sample.freeMemBytes;
+				if (typeof sample.heapTotal === "number") clean.heapTotal = sample.heapTotal;
+				if (typeof sample.heapUsed === "number") clean.heapUsed = sample.heapUsed;
+				if (typeof sample.external === "number") clean.external = sample.external;
+				if (typeof sample.commitChargeBytes === "number") clean.commitChargeBytes = sample.commitChargeBytes;
+				if (typeof sample.commitLimitBytes === "number") clean.commitLimitBytes = sample.commitLimitBytes;
+				if (typeof sample.processCommitBytes === "number") clean.processCommitBytes = sample.processCommitBytes;
+				if (typeof sample.handleCount === "number") clean.handleCount = sample.handleCount;
+				if (typeof sample.cgroupMemoryBytes === "number") clean.cgroupMemoryBytes = sample.cgroupMemoryBytes;
+				if (typeof sample.cgroupMemoryMaxBytes === "number") clean.cgroupMemoryMaxBytes = sample.cgroupMemoryMaxBytes;
+				sanitized.push(clean);
+			}
+			beat.resourceHistory = sanitized;
+		} else {
+			delete beat.resourceHistory;
+		}
+
 		if (typeof beat.cgroupMemoryBytes !== "number") delete beat.cgroupMemoryBytes;
 		if (typeof beat.cgroupMemoryMaxBytes !== "number") delete beat.cgroupMemoryMaxBytes;
 		return beat as SessionHeartbeat;
@@ -410,6 +595,11 @@ export function reportSilentDeaths(): SessionHeartbeat[] {
 					processCommitBytes: beat.processCommitBytes,
 					cgroupMemoryBytes: beat.cgroupMemoryBytes,
 					cgroupMemoryMaxBytes: beat.cgroupMemoryMaxBytes,
+					handleCount: beat.handleCount,
+					consoleLogPath: beat.consoleLogPath,
+					consoleCtrlStatus: beat.consoleCtrlStatus,
+					consoleCtrlInstalled: beat.consoleCtrlInstalled,
+					resourceHistory: beat.resourceHistory,
 				});
 			} catch (error) {
 				// Keep the evidence for a launch that can log it.
@@ -440,4 +630,30 @@ export function reportSilentDeaths(): SessionHeartbeat[] {
 		}
 	}
 	return dead;
+}
+
+/** Override native console control functions for deterministic testing. */
+export function _setConsoleCtrlHandlerForTest(
+	installer: typeof installConsoleCtrlHandler = installConsoleCtrlHandler,
+	remover: typeof removeConsoleCtrlHandler = removeConsoleCtrlHandler,
+): void {
+	nativeInstallConsoleCtrl = installer;
+	nativeRemoveConsoleCtrl = remover;
+}
+
+/** Reset in-memory heartbeat state for test isolation. */
+export function _resetHeartbeatStateForTest(): void {
+	participants.clear();
+	if (interval) {
+		clearInterval(interval);
+		interval = undefined;
+	}
+	resourceHistory.length = 0;
+	dirty = false;
+	flushPromise = undefined;
+	startIdentity = undefined;
+	consoleCtrlState = undefined;
+	consoleCtrlAttempted = false;
+	nativeInstallConsoleCtrl = installConsoleCtrlHandler;
+	nativeRemoveConsoleCtrl = removeConsoleCtrlHandler;
 }
