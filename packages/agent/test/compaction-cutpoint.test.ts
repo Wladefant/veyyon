@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { SessionEntry, SessionMessageEntry } from "@veyyon/agent-core/compaction";
 import {
+	type CompactionSettings,
 	compactionContextTokens,
+	createCompactionSummaryMessage,
 	estimateTokens,
 	findCutPoint,
 	findTurnStartIndex,
 	getLastAssistantUsage,
+	prepareCompaction,
+	REMOTE_COMPACTION_PRESERVE_KEY,
+	remoteCompactionProviderPayload,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage, ImageContent, ToolResultMessage, Usage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -122,6 +127,49 @@ describe("estimateTokens — role branches", () => {
 			blocks: [{ type: "text", text: "archived body" }, IMAGE],
 		};
 		expect(estimateTokens(withImageBlock) - estimateTokens(textBlockOnly)).toBe(FRAME_TOKEN_ESTIMATE);
+	});
+
+	test("compactionSummary counts openaiResponsesHistory providerPayload items and images", () => {
+		const preserveData = {
+			[REMOTE_COMPACTION_PRESERVE_KEY]: {
+				version: 1,
+				provider: "openai-codex",
+				api: "openai-codex-responses",
+				model: "gpt-5.4",
+				compactedAt: "2026-07-19T00:01:00.000Z",
+				window: [
+					{ type: "message", role: "user", content: [{ type: "input_text", text: "alpha ".repeat(500) }] },
+					{ type: "function_call", call_id: "fc1", name: "read_file", arguments: '{"path":"src/index.ts"}' },
+					{ type: "function_call_output", call_id: "fc1", output: "export const x = 1;\n".repeat(200) },
+					{
+						type: "reasoning",
+						id: "rs1",
+						summary: [{ type: "summary_text", text: "checked index" }],
+						encrypted_content: "REASONING_BLOB_".repeat(200),
+					},
+					{ type: "compaction", encrypted_content: "COMPACTED_HISTORY_".repeat(800) },
+				],
+			},
+		};
+		const payload = remoteCompactionProviderPayload(preserveData);
+		expect(payload).toBeDefined();
+		const summaryMsg = createCompactionSummaryMessage("", 200_000, 1, undefined, payload);
+		const withReasoning = estimateTokens(summaryMsg);
+		const withoutReasoning = estimateTokens(summaryMsg, { excludeEncryptedReasoning: true });
+		expect(withReasoning).toBeGreaterThan(2_000);
+		expect(withoutReasoning).toBeGreaterThan(1_500);
+		expect(withReasoning).toBeGreaterThan(withoutReasoning);
+
+		const withInputImage = createCompactionSummaryMessage("", 200_000, 1, undefined, {
+			type: "openaiResponsesHistory",
+			provider: "openai-codex",
+			dt: true,
+			items: [
+				...payload!.items,
+				{ type: "message", role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AA" }] },
+			],
+		});
+		expect(estimateTokens(withInputImage) - withReasoning).toBe(IMAGE_TOKEN_ESTIMATE);
 	});
 
 	test("branchSummary counts its summary text", () => {
@@ -338,5 +386,99 @@ describe("findCutPoint", () => {
 		expect(result.firstKeptEntryIndex).toBe(2);
 		expect(result.isSplitTurn).toBe(true);
 		expect(result.turnStartIndex).toBe(0);
+	});
+});
+
+describe("prepareCompaction — scaleKeepRecentTokens with active compaction", () => {
+	test("includes active remote compaction window tokens so keepRecentTokens is not falsely shrunk", () => {
+		const turnText = "alpha beta gamma delta ".repeat(400); // ~1600 tokens per message
+		const e0 = messageEntry(userMessage(turnText));
+		const e1 = messageEntry(assistant([{ type: "text", text: turnText }]));
+		const preserveData = {
+			[REMOTE_COMPACTION_PRESERVE_KEY]: {
+				version: 1,
+				provider: "openai-codex",
+				api: "openai-codex-responses",
+				model: "gpt-5.4",
+				compactedAt: "2026-07-19T00:01:00.000Z",
+				window: [{ type: "compaction", encrypted_content: "COMPACTED_WINDOW_".repeat(8_000) }],
+			},
+		};
+		const compactionEntry: SessionEntry = {
+			type: "compaction",
+			id: "comp-1",
+			parentId: e1.id,
+			timestamp: "2026-07-19T00:01:00.000Z",
+			summary: "",
+			firstKeptEntryId: e0.id,
+			tokensBefore: 180_000,
+			preserveData,
+		};
+		const e2 = messageEntry(userMessage(turnText));
+		const activeWindowMsg = createCompactionSummaryMessage(
+			"",
+			180_000,
+			1,
+			undefined,
+			remoteCompactionProviderPayload(preserveData),
+		);
+		const windowTokens = estimateTokens(activeWindowMsg);
+		const entryTokens =
+			estimateTokens(e0.message) +
+			estimateTokens(e1.message) +
+			estimateTokens(e2.message) +
+			estimateTokens(assistant([{ type: "text", text: turnText }]));
+		const nonMessageTokens = 10_000;
+		// Provider prompt usage equals nonMessageTokens + active remote window + kept entries (1:1 ratio).
+		const e3 = messageEntry(
+			assistant([{ type: "text", text: turnText }], {
+				usage: usage({ input: nonMessageTokens + windowTokens + entryTokens }),
+			}),
+		);
+		const entries: SessionEntry[] = [e0, e1, compactionEntry, e2, e3];
+		// Keep budget is crossed at e2 (e3 alone < keepBudget < e2 + e3), cutting at e2 while summarizing e0 + e1.
+		// Without counting windowTokens in the denominator, ratio would look ~6x and crush keepRecentTokens
+		// below e3's size so even e2 gets summarized away (cutting at e3 instead of e2).
+		const keepBudget = estimateTokens(e3.message) + 100;
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 10_000,
+			keepRecentTokens: keepBudget,
+		};
+		const prep = prepareCompaction(entries, settings, { nonMessageTokens });
+		expect(prep).toBeDefined();
+		expect(prep!.firstKeptEntryId).toBe(e2.id);
+	});
+
+	test("ignores stale pre-compaction assistant usage when no assistant turn followed the active compaction", () => {
+		const turnText = "alpha beta gamma delta ".repeat(400);
+		const e0 = messageEntry(userMessage(turnText));
+		// Huge pre-compaction prompt usage recorded before compactionEntry.
+		const e1 = messageEntry(
+			assistant([{ type: "text", text: turnText }], {
+				usage: usage({ input: 200_000 }),
+			}),
+		);
+		const compactionEntry: SessionEntry = {
+			type: "compaction",
+			id: "comp-1",
+			parentId: e1.id,
+			timestamp: "2026-07-19T00:01:00.000Z",
+			summary: "Earlier summary",
+			firstKeptEntryId: e0.id,
+			tokensBefore: 200_000,
+		};
+		const e2 = messageEntry(userMessage(turnText));
+		const e3 = messageEntry(userMessage(turnText));
+		const entries: SessionEntry[] = [e0, e1, compactionEntry, e2, e3];
+		const keepBudget = estimateTokens(e3.message) + 100;
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 10_000,
+			keepRecentTokens: keepBudget,
+		};
+		const prep = prepareCompaction(entries, settings, { nonMessageTokens: 10_000 });
+		expect(prep).toBeDefined();
+		expect(prep!.firstKeptEntryId).toBe(e2.id);
 	});
 });

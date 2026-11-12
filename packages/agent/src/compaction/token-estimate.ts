@@ -15,6 +15,7 @@
  */
 
 import type { AssistantMessage, ImageContent, TextContent, VideoContent } from "@veyyon/ai";
+import { isRecord } from "@veyyon/utils";
 import { stringifyJson } from "@veyyon/utils/json";
 import { countTokens } from "../tokenizer";
 import type { AgentMessage } from "../types";
@@ -239,11 +240,88 @@ function walkAssistant(
 	}
 }
 
-/** A compaction summary's text blocks, and a fixed charge for each legacy snapcompact frame. */
-function walkCompactionSummary(message: CompactionSummaryMessage, sink: (text: string) => void): number {
+/**
+ * Content parts inside an OpenAI Responses history item (`content`, `output`,
+ * `summary`). Text and refusal fragments go to `sink`; image parts carry the
+ * fixed image estimate.
+ */
+function walkOpenAIResponsesParts(parts: unknown, sink: (text: string) => void): number {
+	if (typeof parts === "string") {
+		if (parts.length > 0) sink(parts);
+		return 0;
+	}
+	if (!Array.isArray(parts)) return 0;
+	let extra = 0;
+	for (const part of parts) {
+		if (typeof part === "string") {
+			if (part.length > 0) sink(part);
+			continue;
+		}
+		if (!isRecord(part)) continue;
+		if (typeof part.text === "string" && part.text.length > 0) sink(part.text);
+		if (typeof part.refusal === "string" && part.refusal.length > 0) sink(part.refusal);
+		if (part.type === "input_image" || part.type === "image") extra += IMAGE_TOKEN_ESTIMATE;
+	}
+	return extra;
+}
+
+/**
+ * A server-side compaction entry carries an empty `summary` and puts its whole
+ * replacement window — every preserved user message, tool item, reasoning item,
+ * and the provider's encrypted `compaction` item — on `message.providerPayload`
+ * (`openaiResponsesHistory`). Counting only `message.summary` priced the entire
+ * 50k–90k-token window at zero, so post-compaction residual/guard checks and
+ * `scaleKeepRecentTokens` missed half the live prompt.
+ */
+function walkOpenAIResponsesHistoryPayload(
+	payload: unknown,
+	options: { excludeEncryptedReasoning?: boolean } | undefined,
+	sink: (text: string) => void,
+): number {
+	if (!isRecord(payload) || payload.type !== "openaiResponsesHistory" || !Array.isArray(payload.items)) {
+		return 0;
+	}
+	let extra = 0;
+	for (const item of payload.items) {
+		if (!isRecord(item)) continue;
+		extra += walkOpenAIResponsesParts(item.content, sink);
+		switch (item.type) {
+			case "function_call":
+				if (typeof item.name === "string" && item.name.length > 0) sink(item.name);
+				if (typeof item.arguments === "string" && item.arguments.length > 0) sink(item.arguments);
+				break;
+			case "function_call_output":
+				extra += walkOpenAIResponsesParts(item.output, sink);
+				break;
+			case "reasoning":
+				extra += walkOpenAIResponsesParts(item.summary, sink);
+				if (
+					!options?.excludeEncryptedReasoning &&
+					typeof item.encrypted_content === "string" &&
+					item.encrypted_content.length > 0
+				) {
+					sink(item.encrypted_content);
+				}
+				break;
+			case "compaction":
+				if (typeof item.encrypted_content === "string" && item.encrypted_content.length > 0) {
+					sink(item.encrypted_content);
+				}
+				break;
+		}
+	}
+	return extra;
+}
+
+/** A compaction summary's text blocks, provider-compacted history window, and legacy snapcompact frames. */
+function walkCompactionSummary(
+	message: CompactionSummaryMessage,
+	options: { excludeEncryptedReasoning?: boolean } | undefined,
+	sink: (text: string) => void,
+): number {
 	sink(message.summary);
+	let extra = walkOpenAIResponsesHistoryPayload(message.providerPayload, options, sink);
 	if (message.blocks) {
-		let extra = 0;
 		for (const block of message.blocks) {
 			if (block.type === "text") sink(block.text);
 			else extra += LEGACY_FRAME_TOKEN_ESTIMATE;
@@ -252,7 +330,7 @@ function walkCompactionSummary(message: CompactionSummaryMessage, sink: (text: s
 	}
 	// Legacy snapcompact frames rendered at large sizes; providers bill the
 	// downscaled cap. Only old persisted summaries still carry these.
-	return (message.images?.length ?? 0) * LEGACY_FRAME_TOKEN_ESTIMATE;
+	return extra + (message.images?.length ?? 0) * LEGACY_FRAME_TOKEN_ESTIMATE;
 }
 
 /**
@@ -311,7 +389,7 @@ function walkCountedFragments(
 			sink(message.summary);
 			return 0;
 		case "compactionSummary":
-			return walkCompactionSummary(message, sink);
+			return walkCompactionSummary(message, options, sink);
 		default:
 			return 0;
 	}

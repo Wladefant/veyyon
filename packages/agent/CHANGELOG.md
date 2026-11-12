@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `estimateTokens` counts the `openaiResponsesHistory` provider payload of a server-side `compactionSummary` message, and `prepareCompaction` includes the active compaction entry's tokens and post-compaction usage anchor when scaling `keepRecentTokens`, so server-side compactions neither report a zero-token window to the post-compaction guard nor shrink the retained tail budget on subsequent passes.
+
 ## [1.8.0] - 2026-11-05
 
 ### Added
