@@ -348,7 +348,7 @@ veyyon config get compaction.threshold
 
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
-| `memory.backend` | Memory Backend | enum | `off` | Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory. Values: `off`, `local`, `hindsight`, `mnemopi`. |
+| `memory.backend` | Memory Backend | enum | `off` | Off, local summary pipeline, Mnemopi SQLite, Hindsight remote memory, or Basic Memory. Values: `off`, `local`, `hindsight`, `mnemopi`, `basic-memory`. |
 | `providers.memoryModel` | Memory Model | enum | `online` | Model Mnemopi uses to extract and consolidate facts. Online: the memory helper (Roster > Helpers), else the session's model. Local: an on-device model. Values: `online`, `qwen3-1.7b`, `llama3.2:3b`, `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`. |
 
 ### Mnemopi
@@ -798,6 +798,7 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `autolearn.minToolCalls` | number | `5` |  |
 | `bashInterceptor.patterns` | array | `[{"pattern":"^\\s*(cat\|head\|tail\|less\|more)\\s+","tool":"read","message":"Use the `read` tool instead of cat/head/tail. It provides better context and handles binary files."},{"pattern":"^\\s*(grep\|rg\|ripgrep\|ag\|ack)\\s+","tool":"search","message":"Use `search` with `type: \"text\"` instead of shell grep/rg."},{"pattern":"^\\s*(find\|fd\|locate)\\s+.*(-name\|-iname\|-type\|--type\|-glob)","tool":"search","message":"Use `search` with `type: \"files\"` instead of shell find/fd."},{"pattern":"^\\s*sed\\s+(-i\|--in-place)","tool":"edit","message":"Use the `edit` tool instead of sed -i. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*perl\\s+.*-[pn]?i","tool":"edit","message":"Use the `edit` tool instead of perl -i. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*awk\\s+.*-i\\s+inplace","tool":"edit","message":"Use the `edit` tool instead of awk -i inplace. It provides diff preview and fuzzy matching."},{"pattern":"^\\s*(echo\|printf\|cat\\s*\<\<)\\s+(?:(?:[^\"'>]\|\"[^\"]*\"\|'[^']*')\|(?\<!\\\|)>{1,2}\\\|?\\s*(?:\"/dev/(?:null\|tty\|stdout\|stderr)\"\|'/dev/(?:null\|tty\|stdout\|stderr)'\|/dev/(?:null\|tty\|stdout\|stderr))(?:[\\s;&\|]\|$))*(?\<!\\\|)>{1,2}\\\|?\\s*(?!(?:\"/dev/(?:null\|tty\|stdout\|stderr)\"\|'/dev/(?:null\|tty\|stdout\|stderr)'\|/dev/(?:null\|tty\|stdout\|stderr))(?:[\\s;&\|]\|$))[$\\w./~\"'-]","tool":"write","message":"Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation."},{"pattern":"^\\s*nohup\\s+\|(?\<!&)\\&\\s*$","tool":"launch","message":"Use the `launch` tool instead of nohup or background shell syntax so the process stays observable and managed."},{"pattern":"^\\s*(?:(?:bun\|npm\|pnpm\|yarn)\\s+(?:run\\s+)?(?:dev\|start)(?:\\s\|$)\|(?:vite\|next\\s+dev\|nuxt\\s+dev\|nodemon\|lldb\|gdb\|tail\\s+-f)(?:\\s\|$)\|docker\\s+compose\\s+up(?!.*(?:\\s-d(?:\\s\|$)\|--detach))(?:\\s\|$))","tool":"launch","message":"Use the `launch` tool for services, watchers, and debuggers so other veyyon instances can observe and control them."},{"pattern":"^\\s*(?:(?:bun\|npm\|pnpm\|yarn)\\s+(?:run\\s+)?\\S+\|cargo\\s+watch\|watchexec\|pytest\|vitest\|jest\|tsc)(?:.\|\\n)*(?:--watch\|-w)(?:\\s\|$)","tool":"launch","message":"Use the `launch` tool for watch mode so its output, input, and lifecycle stay managed."}]` |  |
 | `branchSummary.reserveTokens` | number | `16384` |  |
+| `checkpoints.enabled` | boolean | `false` |  |
 | `commit.changelogMaxDiffChars` | number | `120000` |  |
 | `commit.mapReduceEnabled` | boolean | `true` |  |
 | `commit.mapReduceMaxConcurrency` | number | `5` |  |
@@ -816,6 +817,7 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `compaction.remoteEndpoint` | string | _(unset)_ |  |
 | `compaction.reserveTokens` | number | _(unset)_ |  |
 | `compaction.supersedeReads` | boolean | `true` |  |
+| `compaction.thresholdByModel` | record | `{}` |  |
 | `compaction.thresholdPercent` | number | `-1` | Retired: use `compaction.threshold` instead. |
 | `compaction.thresholdTokens` | number | `-1` | Retired: use `compaction.threshold` instead. |
 | `defaultModel` | modelChain | _(unset)_ |  |
@@ -869,6 +871,10 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `memories.stage1RetryDelaySeconds` | number | `120` |  |
 | `memories.summaryInjectionTokenLimit` | number | `5000` |  |
 | `memories.threadScanLimit` | number | `300` |  |
+| `memory.basicMemory.command` | string | `bm` |  |
+| `memory.basicMemory.configDir` | string | _(empty)_ |  |
+| `memory.basicMemory.project` | string | `main` |  |
+| `memory.basicMemory.timeoutMs` | number | `60000` |  |
 | `mnemopi.debug` | boolean | `false` |  |
 | `mnemopi.injectionTokenLimit` | number | `5000` |  |
 | `mnemopi.recallContextTurns` | number | `3` |  |
@@ -883,6 +889,7 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `searxng.categories` | string | _(unset)_ |  |
 | `searxng.language` | string | _(unset)_ |  |
 | `searxng.token` | string | _(unset)_ |  |
+| `secrets.protectedCredentialMetadataIndexes` | array | `[]` |  |
 | `settingsMigrationVersion` | number | `0` |  |
 | `setupVersion` | number | `0` | Retired: use `onboardingVersion` instead. |
 | `shellMinimizer.except` | array | `[]` |  |
@@ -904,9 +911,10 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `thinkingBudgets.medium` | number | `8192` |  |
 | `thinkingBudgets.minimal` | number | `1024` |  |
 | `thinkingBudgets.xhigh` | number | `32768` |  |
+| `tools.maxDiscoveredTools` | number | `40` |  |
 | `ttsr.experimentalRules` | array | `[]` |  |
 | `tui.maxInlineImageColumns` | number | `100` |  |
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-364 settings in /settings, 118 configuration-file keys, 482 in all.
+365 settings in /settings, 126 configuration-file keys, 491 in all.

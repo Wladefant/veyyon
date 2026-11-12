@@ -16,16 +16,37 @@ Primary compaction knobs (settings → Models → Compaction, or `config.yml`):
   - `85%` is a percent of the current model's window, so the trigger moves with
     the model.
   - `170000` is an absolute token amount and triggers at the same point on every
-    model. When the amount is larger than the current model's window it is
-    honored up to one token below the window and you get a warning (once per
-    model context window, so switching to a smaller-window model warns again).
+    model. When the amount exceeds what the current model can reach, the resolver
+    caps it at the auto threshold (window minus reserve) and warns once per model
+    context window.
 
   You can also compact on demand with `/compact`.
+- **Per-model thresholds** (`compaction.thresholdByModel`): a configuration-file map
+  from `provider/model` IDs or glob patterns to the same threshold values.
+  An exact ID wins over a glob. Among matching globs, the pattern with the most
+  literal characters wins; equal specificity uses lexical pattern order.
+  Models without a match use `compaction.threshold`.
 - **Type** (`compaction.strategy`): `summary`, the sole strategy. It rewrites old
   history into an in-place LLM summary on the current branch.
 - **Model** (`compaction.model`): the models that perform LLM compaction, tried
   in order. Unset uses your interactive model. See [Fallback models](#fallback-models)
   and [Models, helpers, and profiles](../using/roles-and-profiles.md).
+
+For example:
+
+```yaml
+compaction:
+  threshold: auto
+  thresholdByModel:
+    "openai-codex/*": "75%"
+    "openai-codex/gpt-6-luna": "200000"
+    "anthropic/claude-opus-5-5": "400000"
+```
+
+Existing configurations need no migration: an empty override map keeps the base threshold unchanged.
+Both threshold settings use the existing live configuration reload.
+The next threshold check uses the current model and the reloaded values.
+Invalid override entries produce a load diagnostic and do not enter the effective map.
 
 `/compact <focus>` steers a run with an "Additional focus:" directive. The most
 recent user, assistant, and tool messages stay verbatim up to

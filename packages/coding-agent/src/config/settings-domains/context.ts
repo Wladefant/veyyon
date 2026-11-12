@@ -1,7 +1,7 @@
 // The owner of the trigger sentinel, not the `@veyyon/agent-core` barrel: one string against 406 modules.
 // This is a settings DOMAIN, reached from `config/settings-schema.ts`, so the barrel arrived on the graph of
 // the most imported module in this package.
-import { AUTO_COMPACTION_THRESHOLD } from "@veyyon/agent-core/compaction/threshold";
+import { AUTO_COMPACTION_THRESHOLD, parseCompactionThreshold } from "@veyyon/agent-core/compaction/threshold";
 import { INSTRUMENTATION_LEVELS } from "@veyyon/ai/instrumentation";
 import type { Dialect } from "@veyyon/catalog/identity/dialect";
 import { unsetNumberOption } from "@veyyon/kernel/settings/optional-number";
@@ -184,6 +184,24 @@ export const CONTEXT_SETTINGS = {
 		},
 	},
 
+	"compaction.thresholdByModel": {
+		type: "record",
+		default: {} as Record<string, string>,
+		validateEntry: (key: string, value: unknown): string | undefined => {
+			const name = `compaction.thresholdByModel[${JSON.stringify(key)}]`;
+			if (typeof value !== "string") return `${name}: expected a threshold string`;
+			const spec = parseCompactionThreshold(value);
+			if (spec.kind === "auto" && spec.invalidRaw !== undefined) {
+				return `${name}: expected auto, a percent, or a token amount`;
+			}
+			try {
+				new Bun.Glob(key);
+			} catch {
+				return `${name}: invalid model glob`;
+			}
+			return undefined;
+		},
+	},
 	// Retired: superseded by `compaction.threshold` (an absolute amount is now
 	// written there as a bare token count). Kept valid so an existing config keeps
 	// compacting at the same point, read ONLY by withLegacyCompactionThreshold.

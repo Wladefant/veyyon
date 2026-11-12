@@ -248,7 +248,10 @@ export class TurnContextCheck {
 		if (!model) return;
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = {
+			...this.#session.settings.getGroup("compaction"),
+			activeModelId: `${model.provider}/${model.id}`,
+		};
 		// The local-estimate floor is applied in getContextBreakdown, so this is the exact number the
 		// footline gauge shows.
 		const contextTokens =
@@ -304,7 +307,10 @@ export class TurnContextCheck {
 		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
 
-		const compactionSettings = session.settings.getGroup("compaction");
+		const compactionSettings = {
+			...session.settings.getGroup("compaction"),
+			activeModelId: model ? `${model.provider}/${model.id}` : undefined,
+		};
 		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
 			return;
 		}

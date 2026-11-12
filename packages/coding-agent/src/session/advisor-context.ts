@@ -117,7 +117,10 @@ export async function maintainAdvisorContext(
 ): Promise<boolean> {
 	const agent = advisor.agent;
 
-	const compactionSettings = env.settings.getGroup("compaction");
+	const compactionSettings = {
+		...env.settings.getGroup("compaction"),
+		activeModelId: `${advisor.agent.state.model.provider}/${advisor.agent.state.model.id}`,
+	};
 	if (!compactionSettings.enabled) return false;
 
 	const advisorModel = agent.state.model;
@@ -140,7 +143,10 @@ export async function maintainAdvisorContext(
 		const newModel = agent.state.model;
 		const newWindow = newModel.contextWindow ?? 0;
 		if (newWindow > 0) {
-			const stillNeedsCompaction = shouldCompact(contextTokens, newWindow, compactionSettings);
+			const stillNeedsCompaction = shouldCompact(contextTokens, newWindow, {
+				...compactionSettings,
+				activeModelId: `${newModel.provider}/${newModel.id}`,
+			});
 			if (!stillNeedsCompaction) return false;
 		}
 	}
@@ -174,8 +180,9 @@ export async function maintainAdvisorContext(
 		} satisfies SessionMessageEntry;
 	});
 
+	const currentModel = agent.state.model;
 	const availableModels = env.modelRegistry.getAvailable();
-	const candidates = compactionModelCandidates(env.settings, advisorModel, availableModels);
+	const candidates = compactionModelCandidates(env.settings, currentModel, availableModels);
 	if (candidates.length === 0) {
 		// No compaction candidates, fallback to re-prime
 		return true;
@@ -183,7 +190,10 @@ export async function maintainAdvisorContext(
 	const sessionId = providerSessionId();
 	const preparation = prepareCompaction(
 		pathEntries,
-		toAgentCompactionSettings(compactionSettings),
+		toAgentCompactionSettings({
+			...compactionSettings,
+			activeModelId: `${currentModel.provider}/${currentModel.id}`,
+		}),
 		env.primaryContextBudget(),
 	);
 	if (!preparation) {

@@ -138,9 +138,13 @@ export class CompactionRecovery {
 	 * reserved on purpose.
 	 */
 	#compactionBudget(bar: CompactionBar): CompactionBudget | undefined {
-		const contextWindow = this.#session.model?.contextWindow ?? 0;
+		const model = this.#session.model;
+		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = {
+			...this.#session.settings.getGroup("compaction"),
+			activeModelId: model ? `${model.provider}/${model.id}` : undefined,
+		};
 		const residualTokens = this.#residualContextTokens(contextWindow);
 		if (bar === "fit") {
 			const reserve = resolveBudgetReserveTokens(contextWindow, compactionSettings);
@@ -178,9 +182,13 @@ export class CompactionRecovery {
 	 * unnecessary.
 	 */
 	thresholdStillTrips(compactionSettings: Parameters<typeof shouldCompact>[2]): boolean {
-		const contextWindow = this.#session.model?.contextWindow ?? 0;
+		const model = this.#session.model;
+		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return true;
-		return shouldCompact(this.#residualContextTokens(contextWindow), contextWindow, compactionSettings);
+		return shouldCompact(this.#residualContextTokens(contextWindow), contextWindow, {
+			...compactionSettings,
+			activeModelId: model ? `${model.provider}/${model.id}` : undefined,
+		});
 	}
 
 	/**

@@ -239,7 +239,10 @@ export function computeContextBreakdown(session: AgentSession): ContextBreakdown
 	// line, which denominates against the whole window when compaction is off.
 	let autoCompactBufferTokens = 0;
 	if (contextWindow > 0) {
-		const compactionSettings = session.settings.getGroup("compaction") as CompactionSettings;
+		const compactionSettings = {
+			...session.settings.getGroup("compaction"),
+			activeModelId: model ? `${model.provider}/${model.id}` : undefined,
+		} as CompactionSettings;
 		const limit = resolveContextLimit(contextWindow, compactionSettings);
 		autoCompactBufferTokens = limit.kind === "compaction" ? Math.max(0, contextWindow - limit.tokens) : 0;
 	}
