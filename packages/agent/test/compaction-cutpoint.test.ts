@@ -153,14 +153,14 @@ describe("estimateTokens — role branches", () => {
 		};
 		const payload = remoteCompactionProviderPayload(preserveData);
 		expect(payload).toBeDefined();
-		const summaryMsg = createCompactionSummaryMessage("", 200_000, 1, undefined, payload);
+		const summaryMsg = createCompactionSummaryMessage("", 200_000, "2026-07-19T00:01:00.000Z", undefined, payload);
 		const withReasoning = estimateTokens(summaryMsg);
 		const withoutReasoning = estimateTokens(summaryMsg, { excludeEncryptedReasoning: true });
 		expect(withReasoning).toBeGreaterThan(2_000);
 		expect(withoutReasoning).toBeGreaterThan(1_500);
 		expect(withReasoning).toBeGreaterThan(withoutReasoning);
 
-		const withInputImage = createCompactionSummaryMessage("", 200_000, 1, undefined, {
+		const withInputImage = createCompactionSummaryMessage("", 200_000, "2026-07-19T00:01:00.000Z", undefined, {
 			type: "openaiResponsesHistory",
 			provider: "openai-codex",
 			dt: true,
@@ -418,7 +418,7 @@ describe("prepareCompaction — scaleKeepRecentTokens with active compaction", (
 		const activeWindowMsg = createCompactionSummaryMessage(
 			"",
 			180_000,
-			1,
+			"2026-07-19T00:01:00.000Z",
 			undefined,
 			remoteCompactionProviderPayload(preserveData),
 		);
@@ -448,6 +448,44 @@ describe("prepareCompaction — scaleKeepRecentTokens with active compaction", (
 		const prep = prepareCompaction(entries, settings, { nonMessageTokens });
 		expect(prep).toBeDefined();
 		expect(prep!.firstKeptEntryId).toBe(e2.id);
+	});
+
+	test("uses a per-model absolute threshold instead of the base auto threshold for the retained tail", () => {
+		const entries = Array.from({ length: 12 }, () => messageEntry(userMessage("tail ".repeat(800))));
+		const prep = prepareCompaction(
+			entries,
+			{
+				enabled: true,
+				reserveTokens: 1_500,
+				keepRecentTokens: 8_000,
+				threshold: "auto",
+				activeModelId: "model-absolute",
+				thresholdByModel: { "model-absolute": "3000" },
+			},
+			{ contextWindow: 10_000, nonMessageTokens: 1_000 },
+		);
+
+		expect(prep).toBeDefined();
+		expect(prep!.recentMessages.length).toBeGreaterThan(3);
+	});
+
+	test("uses a per-model auto threshold to cap the retained tail over a base absolute threshold", () => {
+		const entries = Array.from({ length: 12 }, () => messageEntry(userMessage("tail ".repeat(800))));
+		const prep = prepareCompaction(
+			entries,
+			{
+				enabled: true,
+				reserveTokens: 1_500,
+				keepRecentTokens: 8_000,
+				threshold: "3000",
+				activeModelId: "model-auto",
+				thresholdByModel: { "model-auto": "auto" },
+			},
+			{ contextWindow: 10_000, nonMessageTokens: 1_000 },
+		);
+
+		expect(prep).toBeDefined();
+		expect(prep!.recentMessages.length).toBeLessThan(4);
 	});
 
 	test("ignores stale pre-compaction assistant usage when no assistant turn followed the active compaction", () => {

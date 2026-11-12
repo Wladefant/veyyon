@@ -336,7 +336,7 @@ export function shouldCompact(
 	contextTokens: number,
 	contextWindow: number,
 	settings: CompactionSettings,
-	model = settings.model,
+	model = settings.activeModelId,
 ): boolean {
 	if (!settings.enabled || contextWindow <= 0) return false;
 	const thresholdTokens = resolveThresholdWithOrigin(contextWindow, settings, model).tokens;

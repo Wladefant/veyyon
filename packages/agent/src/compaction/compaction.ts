@@ -78,10 +78,9 @@ import { measureSummarySource, type SummarySource } from "./summary-source";
 // The trigger decision is in `./threshold` and the estimator in `./token-estimate`. What is left here
 // is the ENGINE: the summarizer, the cut point, the provider round trip.
 import {
-	AUTO_COMPACTION_THRESHOLD,
 	type CompactionSettings,
 	DEFAULT_RESERVE_TOKENS,
-	resolveThresholdTokens,
+	resolveThresholdWithOrigin,
 } from "./threshold";
 import { estimateTokens } from "./token-estimate";
 import { collectToolCallsById, isSkillReadToolResult } from "./tool-protection";
@@ -2443,14 +2442,15 @@ function capKeepRecentTokens(settings: CompactionSettings, options: CompactionPr
 	const nonMessageTokens = options?.nonMessageTokens;
 	const contextWindow = options?.contextWindow;
 	if (
-		settings.threshold !== AUTO_COMPACTION_THRESHOLD ||
 		nonMessageTokens === undefined ||
 		contextWindow === undefined ||
 		contextWindow <= 0
 	) {
 		return settings.keepRecentTokens;
 	}
-	const conversationBudget = resolveThresholdTokens(contextWindow, settings) - nonMessageTokens;
+	const threshold = resolveThresholdWithOrigin(contextWindow, settings);
+	if (threshold.origin !== "auto") return settings.keepRecentTokens;
+	const conversationBudget = threshold.tokens - nonMessageTokens;
 	return conversationBudget > 0 ? Math.min(settings.keepRecentTokens, conversationBudget) : settings.keepRecentTokens;
 }
 
