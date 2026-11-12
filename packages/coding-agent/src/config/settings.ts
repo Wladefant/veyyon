@@ -49,6 +49,7 @@ import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import { JSONC } from "bun";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { readLegacyAgentDbSettings } from "./legacy-agent-db-settings";
+import { CONTEXT_SETTINGS } from "./settings-domains/context";
 import { GLOBAL_SETTING_BINDINGS } from "./settings-domains/global";
 // The slot, not a second copy of it: this module FILLS the slot that `./settings-instance.ts` owns, and
 // that leaf is what a caller reads when it wants a value rather than the store. See its doc for the split.
@@ -223,6 +224,10 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 	}
 
 	resolveForCwd(path: SettingPath, value: unknown, cwd: string): unknown {
+		if (path === "compaction.thresholdByModel" && isRecord(value)) {
+			const validate = CONTEXT_SETTINGS["compaction.thresholdByModel"].validateEntry;
+			return Object.fromEntries(Object.entries(value).filter(([key, entry]) => validate(key, entry) === undefined));
+		}
 		return resolvePathScopedStringArray(path, value, cwd);
 	}
 

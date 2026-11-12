@@ -103,10 +103,16 @@ export interface AtRestLaunchReading {
 /** Measure the at-rest reading of a top-level session. */
 function measureAtRestLaunch(session: AgentSession, settings: Settings): AtRestLaunchReading {
 	const usage = session.getContextUsage();
+	const model = session.model;
 	const gauge = measureContextGauge(
 		usage?.tokens ?? null,
-		usage?.contextWindow ?? session.model?.contextWindow ?? 0,
-		session.autoCompactionEnabled ? settings.getGroup("compaction") : undefined,
+		usage?.contextWindow ?? model?.contextWindow ?? 0,
+		session.autoCompactionEnabled
+			? {
+					...settings.getGroup("compaction"),
+					activeModelId: model ? `${model.provider}/${model.id}` : undefined,
+				}
+			: undefined,
 	);
 	return {
 		model: session.state.model,

@@ -5366,7 +5366,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		if (!model) return;
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
-		const compactionSettings = this.settings.getGroup("compaction");
+		const compactionSettings = { ...this.settings.getGroup("compaction"), activeModelId: `${model.provider}/${model.id}` };
 		// The local-estimate floor is applied in getContextBreakdown, so this is the exact number the
 		// footline gauge shows.
 		const contextTokens = this.getContextBreakdown({ contextWindow, pendingMessages: messages })?.usedTokens ?? 0;
@@ -5431,7 +5431,10 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		const model = this.model;
 		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
-		const compactionSettings = this.settings.getGroup("compaction");
+		const compactionSettings = {
+			...this.settings.getGroup("compaction"),
+			activeModelId: model ? `${model.provider}/${model.id}` : undefined,
+		};
 		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) return;
 
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);

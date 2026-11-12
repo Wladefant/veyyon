@@ -252,6 +252,10 @@ export interface CompactionSettings {
 	 * threshold surface — see {@link resolveCompactionThreshold}.
 	 */
 	threshold?: string;
+	/** Model-specific values keyed by exact provider/model IDs or glob patterns. */
+	thresholdByModel?: Record<string, string>;
+	/** Active session model, distinct from the configured summarizer. */
+	activeModelId?: string;
 	/** Retired; read only by the migration in {@link withLegacyCompactionThreshold}. */
 	thresholdPercent?: number;
 	/** Retired; read only by the migration in {@link withLegacyCompactionThreshold}. */
@@ -328,12 +332,14 @@ export function resolveBudgetReserveTokens(contextWindow: number, settings: Comp
 /**
  * Check if compaction should trigger based on context usage.
  */
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	// `enabled` is the only off switch. The `strategy === "off"` clause that also
-	// stood here was the second one, and two fields that can each disable a
-	// feature can disagree about whether it is disabled.
+export function shouldCompact(
+	contextTokens: number,
+	contextWindow: number,
+	settings: CompactionSettings,
+	model = settings.activeModelId,
+): boolean {
 	if (!settings.enabled || contextWindow <= 0) return false;
-	const thresholdTokens = resolveThresholdTokens(contextWindow, settings);
+	const thresholdTokens = resolveThresholdWithOrigin(contextWindow, settings, model).tokens;
 	return contextTokens > thresholdTokens;
 }
 
@@ -351,12 +357,34 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 export function resolveThresholdWithOrigin(
 	contextWindow: number,
 	settings: CompactionSettings,
+	model = settings.activeModelId,
 ): ResolvedCompactionThreshold {
+	const override = model ? resolveModelThreshold(model, settings.thresholdByModel) : undefined;
 	return resolveCompactionThreshold(
 		contextWindow,
-		settings,
+		override === undefined ? settings : { threshold: override },
 		() => contextWindow - resolveBudgetReserveTokens(contextWindow, settings),
 	);
+}
+
+function resolveModelThreshold(
+	model: string,
+	thresholds: Record<string, string> | undefined,
+): string | undefined {
+	if (!thresholds) return undefined;
+	const exact = thresholds[model];
+	if (exact !== undefined) return exact;
+	let selected: string | undefined;
+	let specificity = -1;
+	for (const pattern of Object.keys(thresholds)) {
+		if (!new Bun.Glob(pattern).match(model)) continue;
+		const literalCount = pattern.replace(/[*?[\]{}!,]/g, "").length;
+		if (literalCount > specificity || (literalCount === specificity && (selected === undefined || pattern < selected))) {
+			selected = pattern;
+			specificity = literalCount;
+		}
+	}
+	return selected === undefined ? undefined : thresholds[selected];
 }
 
 /** Context tokens above which compaction triggers. See {@link resolveThresholdWithOrigin}. */
@@ -370,7 +398,11 @@ export function resolveThresholdTokens(contextWindow: number, settings: Compacti
  * reserve). Callers report it once per window: the amount is never silently
  * reinterpreted, and a model with a larger window still uses the full value.
  */
-export function isThresholdTokensClampedForWindow(contextWindow: number, settings: CompactionSettings): boolean {
-	const resolved = resolveThresholdWithOrigin(contextWindow, settings);
+export function isThresholdTokensClampedForWindow(
+	contextWindow: number,
+	settings: CompactionSettings,
+	model = settings.activeModelId,
+): boolean {
+	const resolved = resolveThresholdWithOrigin(contextWindow, settings, model);
 	return resolved.origin === "tokens" && resolved.clamped;
 }

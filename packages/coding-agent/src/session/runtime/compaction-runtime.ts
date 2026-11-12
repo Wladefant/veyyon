@@ -210,29 +210,33 @@ export class CompactionRuntime {
 
 		try {
 			await this.#session.abort({ goalReason: "internal", preserveCompaction: true });
-			if (!this.#session.model) {
+			const model = this.#session.model;
+			if (!model) {
 				throw new Error(
 					"No model selected, so compaction has nothing to summarize with. Fix: in an interactive veyyon session run /model to choose one; from a terminal pass `--model <provider>/<id>`, or set `compaction.model` so compaction uses its own model regardless of the session's.",
 				);
 			}
 
-			const compactionSettings = this.#session.settings.getGroup("compaction");
+			const compactionSettings = {
+				...this.#session.settings.getGroup("compaction"),
+				activeModelId: `${model.provider}/${model.id}`,
+			};
 			// The optional `/compact summary` token resolves before this point and
 			// pins the sole strategy for this invocation.
 			const effectiveSettings = compactMode
-				? { ...compactionSettings, ...compactMode.overrides }
+				? { ...compactionSettings, ...compactMode.overrides, model: compactionSettings.model }
 				: compactionSettings;
 			const availableModels = this.#session.modelRegistry.getAvailable();
 			const compactionCandidates = compactionModelCandidates(
 				this.#session.settings,
-				this.#session.model,
+				model,
 				availableModels,
 			);
 			const pathEntries = this.#session.sessionManager.getBranch();
 			preparation = prepareCompaction(pathEntries, toAgentCompactionSettings(effectiveSettings), {
 				excludedCustomMessageTypes: RESTATED_BLOCK_TYPES,
 				nonMessageTokens: this.#host.nonMessageTokens(),
-				contextWindow: declaredContextWindow(this.#session.model),
+				contextWindow: declaredContextWindow(model),
 			});
 			if (!preparation) {
 				// Check why we can't compact
@@ -357,7 +361,10 @@ export class CompactionRuntime {
 			return false;
 		}
 
-		const compactionSettings = this.#session.settings.getGroup("compaction");
+		const compactionSettings = {
+			...this.#session.settings.getGroup("compaction"),
+			activeModelId: `${model.provider}/${model.id}`,
+		};
 		const action = resolveCompactionEngineAction(compactionSettings.strategy);
 		const controller = new AbortController();
 		this.#autoCompactionAbortController = controller;
@@ -450,7 +457,11 @@ export class CompactionRuntime {
 	 * and a value that parsed as nothing and therefore fell back to auto.
 	 */
 	noticeCompactionThresholdClamp(contextWindow: number, compactionSettings: CompactionSettings): void {
-		const resolved = resolveThresholdWithOrigin(contextWindow, compactionSettings);
+		const model = this.#session.model;
+		const resolved = resolveThresholdWithOrigin(contextWindow, {
+			...compactionSettings,
+			activeModelId: model ? `${model.provider}/${model.id}` : undefined,
+		});
 		const surprising = resolved.clamped || resolved.legacyKey !== undefined || resolved.invalidRaw !== undefined;
 		if (!surprising) return;
 		if (this.#compactionClampNoticeWindow === contextWindow) return;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	compactionStrategyToEngineAction,
+	measureContextGauge,
 	migrateCompactionStrategyValue,
 	normalizeCompactionStrategy,
 	resolveCompactionEngineAction,
@@ -74,5 +75,33 @@ describe("toAgentCompactionSettings", () => {
 		expect(result).toMatchObject({ laneHandoffThresholdTokens: 150_000 });
 		expect(result.keepRecentTokens).toBe(200);
 		expect(result.enabled).toBe(true);
+	});
+});
+
+describe("model-specific context gauge thresholds", () => {
+	it("uses the current model override and switches when the active model changes", () => {
+		const settings = {
+			enabled: true,
+			strategy: "summary" as const,
+			threshold: "80%",
+			thresholdByModel: {
+				"anthropic/claude-sonnet": "25%",
+				"openai/gpt-5": "50%",
+			},
+			keepRecentTokens: 0,
+		};
+
+		expect(
+			measureContextGauge(10_000, 100_000, {
+				...settings,
+				activeModelId: "anthropic/claude-sonnet",
+			}),
+		).toMatchObject({ contextLimit: 25_000, contextPercent: 40, contextLimitKind: "compaction" });
+		expect(
+			measureContextGauge(10_000, 100_000, {
+				...settings,
+				activeModelId: "openai/gpt-5",
+			}),
+		).toMatchObject({ contextLimit: 50_000, contextPercent: 20, contextLimitKind: "compaction" });
 	});
 });

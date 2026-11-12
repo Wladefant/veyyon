@@ -316,6 +316,7 @@ Compaction compresses older history instead of truncating it. Common keys:
 | Goal | What to set |
 | --- | --- |
 | Auto-compaction threshold | `compaction.threshold`: `auto`, a percent (`85%`), or a token amount (`170000`) |
+| Per-model auto-compaction threshold | `compaction.thresholdByModel`: map exact `provider/model` IDs or globs to threshold values |
 | Compaction type | `compaction.strategy: summary`, the sole strategy |
 | Compaction model | `compaction.model` (unset = interactive model) |
 | Cross-session memory backend | `memory.backend`: `off` (default), `local`, `hindsight`, `mnemopi` |
@@ -323,12 +324,20 @@ Compaction compresses older history instead of truncating it. Common keys:
 ```yaml
 compaction:
   threshold: "80%"
+  thresholdByModel:
+    "openai-codex/*": "75%"
+    "openai-codex/gpt-6-luna": "200000"
+    "anthropic/claude-opus-5-5": "400000"
   strategy: summary
   model: openai/gpt-5-mini
 
 memory:
   backend: mnemopi
 ```
+
+Exact model IDs win over globs. The matching glob with the most literal characters wins.
+Lexical pattern order breaks ties. Unmatched models use `compaction.threshold`.
+Existing configurations need no migration.
 
 See [Compaction and project memory](../context/compaction-memory.md) and
 [Memory](../features/memory.md).

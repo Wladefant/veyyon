@@ -84,6 +84,13 @@ Compaction/context maintenance can run in six ways:
 5. **Mid-turn threshold maintenance**: before the next provider request when a tool-loop turn crosses the threshold and `compaction.midTurnEnabled !== false`.
 6. **Idle maintenance**: `runIdleCompaction()` can invoke the same auto-maintenance path with reason `"idle"`.
 
+Threshold resolution uses the active session model's `provider/id`.
+`compaction.thresholdByModel` supplies exact-ID or glob overrides using the same values as
+`compaction.threshold`. Exact matches win. Matching globs rank by literal-character count.
+Lexical pattern order breaks ties. Without a match, the resolver uses the base threshold.
+All trigger paths, notices and context gauges share this resolution.
+Absolute values retain the existing reserve-aware clamp.
+
 ### Compaction shape (visual)
 
 ```text

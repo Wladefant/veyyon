@@ -484,7 +484,11 @@ export class StatusPresentationProducer implements StatusDataSource {
 
 	getContextBreakdown(session: AgentSession, autoCompactEnabled: boolean): StatusContextBreakdown {
 		const modelContextWindow = session.model?.contextWindow ?? session.state?.model?.contextWindow ?? 0;
-		const compactionSettings = autoCompactEnabled ? session.settings?.getGroup?.("compaction") : undefined;
+		const activeModel = session.state?.model ?? session.model;
+		const storedCompactionSettings = autoCompactEnabled ? session.settings?.getGroup?.("compaction") : undefined;
+		const compactionSettings = storedCompactionSettings
+			? { ...storedCompactionSettings, activeModelId: activeModel ? `${activeModel.provider}/${activeModel.id}` : undefined }
+			: undefined;
 		if (restsWithReadingHeld(session)) {
 			const gauge = measureContextGauge(null, modelContextWindow, compactionSettings);
 			gauge.contextPercent = recordedRestingGauge(session.state?.model ?? session.model ?? null);

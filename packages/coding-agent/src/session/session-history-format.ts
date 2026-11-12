@@ -123,7 +123,7 @@ async function preflightContentBytes(
 	}
 }
 
-function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generator<void, string> {
+function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generator<undefined, string> {
 	let start = 0;
 	let scanned = 0;
 	const CHUNK = 32_768;
@@ -143,7 +143,7 @@ function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generato
 	return oneLine(text.slice(start, end), max);
 }
 
-function* scanTextLines(text: string): Generator<void, number> {
+function* scanTextLines(text: string): Generator<undefined, number> {
 	if (!text) return 0;
 	let count = 1;
 	const CHUNK_SIZE = 32_768;
@@ -154,7 +154,7 @@ function* scanTextLines(text: string): Generator<void, number> {
 	return count;
 }
 
-function* summarizeToolResult(result: ToolResultMessage): Generator<void, { lines: number; firstLine?: string }> {
+function* summarizeToolResult(result: ToolResultMessage): Generator<undefined, { lines: number; firstLine?: string }> {
 	const content = result.content;
 	if (!content) return { lines: 0 };
 	let lines = 0;
@@ -377,7 +377,7 @@ function* toolCallLine(
 	result: ToolResultMessage | undefined,
 	includeToolIntent?: boolean,
 	expandEditDiffs?: boolean,
-): Generator<void, string> {
+): Generator<undefined, string> {
 	const head = `→ ${name}(${primaryArg(name, args)})`;
 	let base: string;
 	if (!result) {
@@ -412,7 +412,7 @@ function* executionLine(
 	kind: "bash" | "python",
 	source: string,
 	msg: BashExecutionMessage | PythonExecutionMessage,
-): Generator<void, string> {
+): Generator<undefined, string> {
 	const status = msg.cancelled
 		? "cancelled"
 		: msg.exitCode !== undefined && msg.exitCode !== 0
