@@ -187,17 +187,20 @@ describe("run monitor phase supervision", () => {
 		monitor.finish();
 	});
 
-	it("keeps a foreground bash tool alive past startup and streaming, then cancels at its tool deadline", () => {
-		vi.useFakeTimers();
-		const { monitor, emit } = createMonitor();
-		emit(event("tool_execution_start", { toolName: "bash", toolCallId: "bash-1", args: { command: "sleep" } }));
-		vi.advanceTimersByTime(899_999);
-		expect(monitor.abortSignal.aborted).toBe(false);
-		vi.advanceTimersByTime(1);
-		expect(monitor.abortSignal.aborted).toBe(true);
-		expect(monitor.abortKind()).toBe("stalled");
-		monitor.finish();
-	});
+	it.each(["bash", "eval"])(
+		"keeps a foreground %s tool alive past startup and streaming, then cancels at its tool deadline",
+		toolName => {
+			vi.useFakeTimers();
+			const { monitor, emit } = createMonitor();
+			emit(event("tool_execution_start", { toolName, toolCallId: `${toolName}-1`, args: { command: "sleep" } }));
+			vi.advanceTimersByTime(899_999);
+			expect(monitor.abortSignal.aborted).toBe(false);
+			vi.advanceTimersByTime(1);
+			expect(monitor.abortSignal.aborted).toBe(true);
+			expect(monitor.abortKind()).toBe("stalled");
+			monitor.finish();
+		},
+	);
 
 	it("gives a nested task child the thirty-minute wait window", () => {
 		vi.useFakeTimers();
