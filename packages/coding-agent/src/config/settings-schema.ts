@@ -280,7 +280,7 @@ export interface CompactionSettings
 	/** The one compaction-trigger value, unit included: `auto`, `85%`, or `170000`. */
 	threshold: string;
 	model?: string;
-	thresholdByModel: Record<string, string>;
+	thresholdByModel?: Record<string, string>;
 }
 
 export interface RecapSettings extends GroupSettings<"recap"> {}

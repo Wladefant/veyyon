@@ -462,7 +462,7 @@ describe("prepareCompaction — scaleKeepRecentTokens with active compaction", (
 				activeModelId: "model-absolute",
 				thresholdByModel: { "model-absolute": "3000" },
 			},
-			{ contextWindow: 10_000, nonMessageTokens: 1_000 },
+			{ contextWindow: 10_000, nonMessageTokens: 6_000 },
 		);
 
 		expect(prep).toBeDefined();
@@ -481,7 +481,7 @@ describe("prepareCompaction — scaleKeepRecentTokens with active compaction", (
 				activeModelId: "model-auto",
 				thresholdByModel: { "model-auto": "auto" },
 			},
-			{ contextWindow: 10_000, nonMessageTokens: 1_000 },
+			{ contextWindow: 10_000, nonMessageTokens: 6_000 },
 		);
 
 		expect(prep).toBeDefined();

@@ -106,6 +106,7 @@ export function toAgentCompactionSettings(
 	settings: Omit<SchemaCompactionSettings, "strategy" | "model"> & {
 		strategy?: string;
 		model?: string;
+		activeModelId?: string;
 	},
 ): CoreCompactionSettings {
 	const strategy = normalizeCompactionStrategy(settings.strategy);
