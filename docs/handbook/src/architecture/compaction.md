@@ -86,8 +86,8 @@ Compaction/context maintenance can run in six ways:
 
 Threshold resolution uses the active session model's `provider/id`.
 `compaction.thresholdByModel` supplies exact-ID or glob overrides using the same values as
-`compaction.threshold`. Exact matches win; matching globs rank by literal-character count,
-then lexical pattern order. Without a match, the resolver uses the base threshold.
+`compaction.threshold`. Exact matches win. Matching globs rank by literal-character count.
+Lexical pattern order breaks ties. Without a match, the resolver uses the base threshold.
 All trigger paths, notices and context gauges share this resolution.
 Absolute values retain the existing reserve-aware clamp.
 

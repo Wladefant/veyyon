@@ -335,8 +335,8 @@ memory:
   backend: mnemopi
 ```
 
-Exact model IDs win over globs. The matching glob with the most literal characters wins;
-equal specificity uses lexical pattern order. Unmatched models use `compaction.threshold`.
+Exact model IDs win over globs. The matching glob with the most literal characters wins.
+Lexical pattern order breaks ties. Unmatched models use `compaction.threshold`.
 Existing configurations need no migration.
 
 See [Compaction and project memory](../context/compaction-memory.md) and

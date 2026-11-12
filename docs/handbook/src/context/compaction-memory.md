@@ -24,7 +24,7 @@ Primary compaction knobs (settings → Models → Compaction, or `config.yml`):
 - **Per-model thresholds** (`compaction.thresholdByModel`): a configuration-file map
   from `provider/model` IDs or glob patterns to the same threshold values.
   An exact ID wins over a glob. Among matching globs, the pattern with the most
-  literal characters wins; equal specificity uses lexical pattern order.
+  literal characters wins. Lexical pattern order breaks ties.
   Models without a match use `compaction.threshold`.
 - **Type** (`compaction.strategy`): `summary`, the sole strategy. It rewrites old
   history into an in-place LLM summary on the current branch.
