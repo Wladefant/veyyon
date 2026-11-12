@@ -144,4 +144,23 @@ describe("agent nested spawn depth policy", () => {
 		expect(options.taskDepth).toBe(1);
 		expect(options.maxNestedSpawnDepth).toBe(2);
 	});
+
+	it("keeps a real child alive while session creation takes longer than the startup window", async () => {
+		vi.useFakeTimers();
+		let markCreationStarted!: () => void;
+		const creationStarted = new Promise<void>(resolve => {
+			markCreationStarted = resolve;
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			markCreationStarted();
+			await new Promise<void>(resolve => setTimeout(resolve, 120_001));
+			return createSessionResult(yieldingSession());
+		});
+
+		const run = runSubprocess(baseExecutorOptions);
+		await creationStarted;
+		vi.advanceTimersByTime(120_001);
+		const result = await run;
+		expect(result.exitCode).toBe(0);
+	});
 });
