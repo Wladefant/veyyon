@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Task-run watchdogs allow bounded session initialization before restoring the normal startup deadline on attachment, without extending later running phases.
+
 ## [1.9.2] - 2026-11-12
 
 ### Fixed

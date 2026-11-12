@@ -2616,6 +2616,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 		softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice") ?? false,
 		maxRuntimeMs: nonNegativeInt(options.maxRuntimeMs ?? settings.get("agent.maxRuntimeMs")),
 	});
+	monitor.beginSessionInitialization();
 
 	const done = await driveChildRun(
 		{
