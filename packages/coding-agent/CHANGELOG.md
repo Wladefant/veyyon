@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `compaction.thresholdByModel` sets auto-compaction thresholds per active model, with exact IDs before glob patterns and the existing base threshold as fallback. Existing configurations need no migration.
+
 ## [1.9.2] - 2026-11-12
 
 ### Fixed
