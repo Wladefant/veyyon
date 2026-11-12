@@ -91,6 +91,33 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		expect(result.terminalOutcome).toBe("completed");
 	});
 
+	it("keeps a child alive when SDK session creation exceeds the startup watchdog", async () => {
+		vi.useFakeTimers();
+		let markCreationStarted!: () => void;
+		const creationStarted = new Promise<void>(resolve => {
+			markCreationStarted = resolve;
+		});
+		const session = createMockSession(({ emit }) => {
+			emit(yieldSuccessEvent({ ok: true }, "slow-session-create"));
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			markCreationStarted();
+			await new Promise<void>(resolve => setTimeout(resolve, 120_001));
+			return createSessionResult(session);
+		});
+
+		const run = runSubprocess({
+			...baseOptions,
+			id: "agent-slow-session-create",
+			settings: Settings.isolated({ "agent.maxRuntimeMs": 0 }),
+		});
+		await creationStarted;
+		await advanceTimersAndFlush(120_001);
+		const result = await run;
+
+		expect(result.exitCode).toBe(0);
+	});
+
 	it("records a failed terminal outcome", async () => {
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		const session = createMockSession(() => {

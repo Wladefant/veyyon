@@ -144,4 +144,5 @@ describe("agent nested spawn depth policy", () => {
 		expect(options.taskDepth).toBe(1);
 		expect(options.maxNestedSpawnDepth).toBe(2);
 	});
+
 });

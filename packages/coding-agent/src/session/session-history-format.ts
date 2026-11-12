@@ -473,7 +473,7 @@ function customOneLiner(msg: CustomMessage | HookMessage): string {
  * equivalent loaded from a session file) — the same shapes
  * `session-dump-format.ts` consumes.
  */
-function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions): Generator<string | undefined, void> {
+function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions): Generator<string | void, void> {
 	const typed = (messages ?? []) as AgentMessage[];
 	if (opts?.title) {
 		yield `# ${opts.title}`;

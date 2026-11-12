@@ -67,6 +67,35 @@ describe("run monitor phase supervision", () => {
 		monitor.finish();
 	});
 
+	it("keeps slow session initialization alive, then gives attachment a fresh startup window", () => {
+		vi.useFakeTimers();
+		const { monitor } = createMonitor();
+		monitor.beginSessionInitialization();
+
+		vi.advanceTimersByTime(120_001);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		expect(monitor.watchdogPhase()).toBe("session-initializing");
+		monitor.attach({ subscribe: vi.fn(() => vi.fn()) } as unknown as AgentSession);
+		vi.advanceTimersByTime(119_999);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		expect(monitor.watchdogPhase()).toBe("startup");
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		monitor.finish();
+	});
+
+	it("cancels an initialization that hangs at its bounded deadline", () => {
+		vi.useFakeTimers();
+		const { monitor } = createMonitor();
+		monitor.beginSessionInitialization();
+		vi.advanceTimersByTime(899_999);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
+	});
+
 	it("does not renew the streaming watchdog for unchanged non-text updates", () => {
 		vi.useFakeTimers();
 		const { monitor, emit } = createMonitor();
@@ -157,6 +186,21 @@ describe("run monitor phase supervision", () => {
 		expect(monitor.abortKind()).toBe("stalled");
 		monitor.finish();
 	});
+
+	it.each(["bash", "eval"])(
+		"keeps a foreground %s tool alive past startup and streaming, then cancels at its tool deadline",
+		toolName => {
+			vi.useFakeTimers();
+			const { monitor, emit } = createMonitor();
+			emit(event("tool_execution_start", { toolName, toolCallId: `${toolName}-1`, args: { command: "sleep" } }));
+			vi.advanceTimersByTime(899_999);
+			expect(monitor.abortSignal.aborted).toBe(false);
+			vi.advanceTimersByTime(1);
+			expect(monitor.abortSignal.aborted).toBe(true);
+			expect(monitor.abortKind()).toBe("stalled");
+			monitor.finish();
+		},
+	);
 
 	it("gives a nested task child the thirty-minute wait window", () => {
 		vi.useFakeTimers();
