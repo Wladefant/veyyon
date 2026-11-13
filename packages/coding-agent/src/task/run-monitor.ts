@@ -243,8 +243,9 @@ export interface RunMonitorArgs {
 export type WatchdogPhase = "startup" | "streaming" | "tool-running" | "waiting-child";
 
 export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> = {
-	startup: 120_000,
-	streaming: 180_000,
+	// Do not pre-empt the transport's five-minute default first-event/idle budget.
+	startup: 300_000,
+	streaming: 300_000,
 	"tool-running": 900_000,
 	"waiting-child": 1_800_000,
 };
@@ -1050,7 +1051,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			event.type === "tool_execution_end" ||
 			event.type === "agent_end" ||
 			(event.type === "message_update" &&
-				((assistantEvent?.type === "text_delta" &&
+				(((assistantEvent?.type === "text_delta" || assistantEvent?.type === "thinking_delta") &&
 					typeof assistantEvent.delta === "string" &&
 					assistantEvent.delta.length > 0) ||
 					recentOutputTail !== previousOutput)) ||
@@ -1068,7 +1069,8 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			abortReason !== "stalled" ||
 			stallRecoveries >= 1 ||
 			!abortSignal.aborted ||
-			!abortCleanupSettled
+			!abortCleanupSettled ||
+			activeSession?.isStreaming
 		)
 			return false;
 		activeWatchdogTools.clear();
@@ -1089,6 +1091,8 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		const unsubscribe = session.subscribe(event => {
 			emitAgentEvent(event);
 			if (applyRetryEvent(event)) {
+				lastProgressEventAt = Date.now();
+				armPhaseWatchdog();
 				scheduleProgress(true);
 				return;
 			}
