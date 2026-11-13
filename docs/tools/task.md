@@ -31,7 +31,7 @@
 
 ### Phase watchdog
 
-The run monitor measures progress from session events, not transcript age or display refreshes. Its no-progress limits are 120 seconds during startup, 180 seconds while streaming, 15 minutes while a tool runs, and 30 minutes while waiting for a child. A first stall aborts the same session and permits one recovery only after the abort settles. A second stall ends the run with the `stalled` terminal outcome. A pending or unresolved abort never permits recovery.
+The run monitor measures progress from session events, not transcript age or display refreshes. Its no-progress limits are five minutes during startup and streaming, 15 minutes while a tool runs, and 30 minutes while waiting for a child. Nonempty text and thinking deltas renew the clock, as do retry lifecycle changes. The startup and streaming limits match the provider transport's default five-minute wait; they do not inherit longer custom transport overrides. A first stall aborts the same session and permits one recovery only after the abort settles and the session stops streaming. A second stall ends the run with the `stalled` terminal outcome. A pending or unresolved abort never permits recovery.
 ### Parked-agent retention
 
 Parked terminal agents remain registered for five minutes, then lifecycle releases the live ref while preserving the transcript for `history://`. A parked task whose recorded parent no longer exists is released on the bounded 30-second orphan recheck. An unfinished task receives a persisted `stalled` outcome before release. Parentless root sessions are not treated as orphans.

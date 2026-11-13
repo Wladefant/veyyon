@@ -165,13 +165,13 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		try {
 			await firstPrompt;
-			await advanceTimersAndFlush(120_001);
+			await advanceTimersAndFlush(300_001);
 			expect(handle.abortCalls()).toBe(1);
 			await secondPrompt;
 			await flushAsync();
 			expect(handle.prompts).toHaveLength(2);
 			expect(handle.prompts[1]?.text).toContain("Continue the same assignment from your existing session state.");
-			await advanceTimersAndFlush(120_001);
+			await advanceTimersAndFlush(300_001);
 			expect(handle.abortCalls()).toBe(2);
 			const result = await resultPromise;
 			expect(result.abortReason).toContain("stalled");
@@ -245,7 +245,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		try {
 			await firstPrompt;
-			await advanceTimersAndFlush(120_001);
+			await advanceTimersAndFlush(300_001);
 			await abortHasStarted;
 			await flushAsync();
 			await advanceTimersAndFlush(5_001);
@@ -296,7 +296,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		try {
 			await started;
 			await flushAsync();
-			await advanceTimersAndFlush(180_001);
+			await advanceTimersAndFlush(300_001);
 			await flushAsync();
 			expect(handle.abortCalls()).toBe(1);
 			const result = await resultPromise;

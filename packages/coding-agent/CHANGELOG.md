@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Give child startup and streaming the provider's default five-minute response window, count reasoning and retry progress, and refuse stall recovery while the session remains busy.
+
 ## [1.9.3] - 2026-11-13
 
 ### Fixed
