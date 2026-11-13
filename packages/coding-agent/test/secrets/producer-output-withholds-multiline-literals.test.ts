@@ -198,6 +198,28 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(cancelled.push("synthetic-second-line\n")).toBe("");
 	});
 
+	it("segments a long structured-looking stream without splitting registered multiline secrets", () => {
+		const lines = ["prefix {"];
+		let length = lines[0]!.length + 1;
+		for (let index = 0; length < 65_500; index++) {
+			const line = `row-${index.toString().padStart(4, "0")}: ${"x".repeat(80)}`;
+			lines.push(line);
+			length += line.length + 1;
+		}
+		const prefix = `${lines.join("\n")}\n`;
+		expect(prefix.length).toBeGreaterThan(65_400);
+		expect(prefix.length).toBeLessThan(65_600);
+		const input = `${prefix}${SECRET}\n}\nError: long checkout failed\n`;
+		const start = input.indexOf(SECRET);
+		for (let split = start; split <= start + SECRET.length; split++) {
+			const guard = guardFor();
+			const streamed = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
+			const leaked = streamed.includes(SECRET);
+			expect(leaked, `split=${split} leaked a registered literal`).toBe(false);
+			expect(streamed.includes("[line over 65,536 chars, not scanned]"), `split=${split} did not mask the oversized candidate`).toBe(true);
+			expect(streamed.includes("Error: long checkout failed\n"), `split=${split} lost the final diagnostic`).toBe(true);
+		}
+	});
 	it("labels oversized GitHub JSON lines without releasing planted credentials", () => {
 		const longLine = `{"payload":"${"x".repeat(65_537)}","token":"ghs_planted_fake_value"}`;
 		const direct = new ProducerOutputGuard().sanitize(longLine);
@@ -205,10 +227,11 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(direct).not.toContain("ghs_");
 
 		const guard = new ProducerOutputGuard();
-		const streamed = guard.push(`${longLine}\n`) + guard.finish();
-		expect(streamed).toBe("[line over 65,536 chars, not scanned]\n");
+		const later = "Error: later safe diagnostic\n";
+		const streamed = guard.push(`${longLine}\n${later}`) + guard.finish();
+		expect(streamed).toBe(`[line over 65,536 chars, not scanned]\n${later}`);
 		expect(streamed).not.toContain("ghs_");
-		expect(guard.push('{"later":"safe"}\n')).toBe("");
+		expect(guard.push('{"later":"safe"}\n')).toBe('{"later":"safe"}\n');
 	});
 	it("withholds a known multiline literal that exceeds the bounded pending record", () => {
 		const longSecret = `${"a".repeat(32 * 1024)}\n${"b".repeat(32 * 1024)}`;
@@ -220,7 +243,24 @@ describe("producer output withholds multiline registered literals", () => {
 		const blocked = guard.push(secondRecord);
 		expect(blocked).toBe("[line over 65,536 chars, not scanned]\n");
 		expect(blocked).not.toContain(longSecret);
-		expect(guard.push("after\n")).toBe("");
+		expect(guard.push("after\n")).toBe("after\n");
+	});
+	it("carries a registered literal through the record cap before resuming", () => {
+		const partLength = 25 * 1024;
+		const longSecret = `${"a".repeat(partLength)}\n${"b".repeat(partLength)}\n${"c".repeat(partLength)}\n${"d".repeat(partLength)}`;
+		const guard = guardFor(longSecret);
+		const first = `${"a".repeat(partLength)}\n`;
+		const second = `${"b".repeat(partLength)}\n`;
+		const third = `${"c".repeat(partLength)}\n`;
+		const fourth = `${"d".repeat(partLength)}\n`;
+
+		expect(guard.push(first)).toBe("");
+		expect(guard.push(second)).toBe("");
+		expect(guard.push(third.slice(0, 16 * 1024))).toBe("");
+		expect(guard.push(third.slice(16 * 1024))).toBe("");
+		expect(guard.push(fourth)).toBe("[line over 65,536 chars, not scanned]\n");
+		expect(guard.push("after\n")).toBe("after\n");
+		expect(guard.finish()).toBe("");
 	});
 	it("matches multiline literals after supported ANSI normalization", () => {
 		const guard = guardFor();

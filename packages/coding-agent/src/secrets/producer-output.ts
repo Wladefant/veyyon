@@ -32,7 +32,9 @@ const JSON_REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ cha
 const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
 const PERSIST_CREDENTIALS_BOOLEAN =
-	/^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|\\n))/;
+	/^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|(?:\\r)?\\n))/;
+const PERSIST_CREDENTIALS_LABEL = /(?:^|[^A-Za-z0-9_-])["']?persist-credentials["']?[ \t]*:[ \t]*$/i;
+const EMPTY_CREDENTIAL_VALUE_AT_EOF = /^[ \t]*(?:\r?\n[ \t]*)?$/;
 const SOURCE_COMMIT_PIN = /^[ \t]*(?:-[ \t]+)?Source $/i;
 const MARKDOWN_COMMIT_LINK =
 	/^\[(?:pinned )?source commit\]\(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/commit\/[a-f0-9]{40}\)(?:\.[ \t]+This PR head is `[a-f0-9]{40}`\.)?(?=[ \t]*(?:\r?\n|$))/i;
@@ -133,8 +135,12 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		if (match.groups!.key.toLowerCase() === "pin" &&
 			SOURCE_COMMIT_PIN.test(text.slice(sourceLineStart, match.index + match.groups!.boundary.length)) &&
 			MARKDOWN_COMMIT_LINK.test(tail)) continue;
-		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
-			continue;
+		const escapedBreak = text.lastIndexOf("\\n", match.index);
+		const logicalLineStart = Math.max(text.lastIndexOf("\n", match.index) + 1, escapedBreak >= 0 ? escapedBreak + 2 : 0);
+		if (
+			PERSIST_CREDENTIALS_LABEL.test(text.slice(logicalLineStart, start)) &&
+			PERSIST_CREDENTIALS_BOOLEAN.test(tail)
+		) continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
 		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;
@@ -162,6 +168,8 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 				}
 			}
 		}
+		// A key with no value at end-of-output contains no credential to redact.
+		if (EMPTY_CREDENTIAL_VALUE_AT_EOF.test(tail)) continue;
 		const boundaryLength = match.groups!.boundary.length;
 		if (match[0].slice(boundaryLength).includes("\n") || !tail || /^[ \t]*(?:\r?\n|$)/.test(tail)) {
 			return BLOCKED_OUTPUT_RECORD;
@@ -270,11 +278,28 @@ function quotedEnd(text: string, start: number): number {
 	return text.length;
 }
 
-function structuredStart(text: string): number {
+const PRINTED_ANSI_SGR = /^\^\[\[[0-9;]*m/;
+
+function structuredStart(text: string, skipInlineCode = false): number {
 	// Only a complete scalar record owns its quotes. Quotes in raw labels must
 	// not consume delimiters belonging to a later structured argument.
 	for (let start = 0; start < text.length; start++) {
 		const character = text[start];
+		// Inline suggestions can contain unmatched braces; inventory scanning still examines their contents.
+		if (skipInlineCode && character === "`") {
+			const end = quotedEnd(text, start);
+			if (end < text.length && !text.slice(start, end).includes("\n")) {
+				start = end;
+				continue;
+			}
+		}
+		if (character === "^") {
+			const sgr = PRINTED_ANSI_SGR.exec(text.slice(start));
+			if (sgr) {
+				start += sgr[0].length - 1;
+				continue;
+			}
+		}
 		if (character === '"' && !text.slice(0, start).trim()) {
 			const end = quotedEnd(text, start);
 			const lineEnd = text.indexOf("\n", end);
@@ -399,14 +424,20 @@ export class ProducerOutputGuard {
 	#recordLength = 0;
 	#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 	#dropping = false;
+	#oversizedPending = false;
 	#withholding = false;
 	#candidate = "";
 	#assignments = 0;
+	#candidateOversized = false;
+	#candidateEndsWithNewline = false;
 	#structured = false;
 	#depth = 0;
 	#quote = "";
 	#escaped = false;
 	#authorizationHeading = false;
+	#scalarProbe = "";
+	#scalarParts: string[] | null = null;
+	#scalarModeDecided = false;
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
@@ -418,6 +449,18 @@ export class ProducerOutputGuard {
 	}
 	sanitize(text: string): string {
 		try {
+			const first = text.search(/\S/);
+			if (first >= 0 && text[first] === '"') {
+				try {
+					const value: unknown = JSON.parse(text);
+					if (typeof value === "string") {
+						const safe = this.sanitize(value);
+						return safe === value ? text : text.slice(0, first) + JSON.stringify(safe);
+					}
+				} catch {
+					// A non-JSON quoted log remains ordinary producer text.
+				}
+			}
 			const original = sanitizeText(text);
 			if (isInventory(original)) return BLOCKED_OUTPUT_RECORD;
 			if (original.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return OVERSIZED_OUTPUT_RECORD;
@@ -465,30 +508,82 @@ export class ProducerOutputGuard {
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#candidate = "";
+		this.#candidateOversized = false;
+		this.#candidateEndsWithNewline = false;
 		this.#dropping = false;
+		this.#oversizedPending = false;
 		return label;
 	}
 
 	#flushCandidate(): string {
 		const candidate = this.#candidate;
+		const oversized = this.#candidateOversized;
+		const endsWithNewline = this.#candidateEndsWithNewline;
 		this.#candidate = "";
+		this.#candidateOversized = false;
+		this.#candidateEndsWithNewline = false;
 		this.#assignments = 0;
 		this.#structured = false;
 		this.#depth = 0;
 		this.#quote = "";
 		this.#escaped = false;
+		if (oversized) return `${OVERSIZED_OUTPUT_RECORD}${endsWithNewline ? "\n" : ""}`;
 		const filtered = this.sanitize(candidate);
 		return filtered === BLOCKED_OUTPUT_RECORD || filtered === OVERSIZED_OUTPUT_RECORD
 			? this.#block(filtered)
 			: filtered;
 	}
 
+	// A logging label can precede the object. Ignore its quotes and braces before tracking delimiters.
+	#scanStructuredLine(line: string): void {
+		let start = 0;
+		if (!this.#structured) {
+			start = structuredStart(line, true);
+			if (start < 0) return;
+			this.#structured = true;
+		}
+		for (let index = start; index < line.length; index++) {
+			const character = line[index];
+			if (!this.#quote && character === "^") {
+				const sgr = PRINTED_ANSI_SGR.exec(line.slice(index));
+				if (sgr) {
+					index += sgr[0].length - 1;
+					continue;
+				}
+			}
+			if (this.#escaped) this.#escaped = false;
+			else if (this.#quote) {
+				if (character === "\\") this.#escaped = true;
+				else if (character === this.#quote) this.#quote = "";
+			} else if (isQuote(character)) this.#quote = character;
+			else if (character === "/") index += regexLiteralLength(line, index, this.#depth);
+			else if (character === "{" || character === "[") this.#depth++;
+			else if (character === "}" || character === "]") this.#depth--;
+		}
+		if (this.#depth <= 0) {
+			this.#structured = false;
+			this.#depth = 0;
+			this.#quote = "";
+			this.#escaped = false;
+		}
+	}
+
 	#record(record: string, newline: string): string {
+		if (this.#candidateOversized && this.#structured) {
+			for (const line of sanitizeText(record).split("\n")) this.#scanStructuredLine(line);
+			this.#candidateEndsWithNewline = newline.length > 0;
+			return this.#structured ? "" : this.#flushCandidate();
+		}
 		const continuation = this.#authorizationHeading && isAuthorizationContinuation(record);
 		this.#authorizationHeading = isAuthorizationHeading(record);
 		if (continuation) {
 			// Replace only this record; unrelated output must not enter withholding.
 			return this.#flushCandidate() + BLOCKED_OUTPUT_RECORD + newline;
+		}
+		const emptyLabel = CREDENTIAL_RECORD.exec(record);
+		if (emptyLabel && !emptyLabel.groups?.mdOpen && !isAuthorizationHeading(record) &&
+			!record.slice(emptyLabel.index + emptyLabel[0].length).trim()) {
+			return this.#block() + newline;
 		}
 		const normalized = sanitizeText(record);
 		const safe = this.sanitize(record + newline);
@@ -499,49 +594,23 @@ export class ProducerOutputGuard {
 		const assignment = lines.some(line => ENV_ASSIGNMENT.test(line));
 		const separator = this.#candidate.length > 0 && !normalized.trim();
 		let prefix = "";
-		if (this.#candidate && !this.#structured && !assignment && !separator) prefix = this.#flushCandidate();
+		if (this.#candidateOversized && !this.#structured && !assignment) prefix = this.#flushCandidate();
+		else if (this.#candidate && !this.#structured && !assignment && !separator) prefix = this.#flushCandidate();
 		if (this.#withholding) return prefix;
-		const structured = this.#structured || lines.some(line => structuredStart(line) >= 0);
+		const structured = this.#structured || lines.some(line => structuredStart(line, true) >= 0);
 		if (structured || assignment || separator) {
-			if (this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS)
-				return prefix + this.#block(OVERSIZED_OUTPUT_RECORD) + newline;
-			this.#candidate += record + newline;
+			if (!this.#candidateOversized && this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS) {
+				this.#candidate = "";
+				this.#candidateOversized = true;
+			}
+			if (!this.#candidateOversized) this.#candidate += record + newline;
+			this.#candidateEndsWithNewline = newline.length > 0;
 			for (const line of lines) {
 				if (line.trim()) {
 					this.#assignments = ENV_ASSIGNMENT.test(line) ? this.#assignments + 1 : 0;
 					if (this.#assignments >= 3) return prefix + this.#block() + newline;
 				}
-				let start = 0;
-				if (!this.#structured) {
-					start = structuredStart(line);
-					if (start < 0) continue;
-					this.#structured = true;
-				}
-				// A logging label can precede the object. Ignore its quotes and braces
-				// before tracking every delimiter util.inspect uses for string values.
-				for (let index = start; index < line.length; index++) {
-					const character = line[index];
-					if (this.#escaped) {
-						this.#escaped = false;
-					} else if (this.#quote) {
-						if (character === "\\") this.#escaped = true;
-						else if (character === this.#quote) this.#quote = "";
-					} else if (isQuote(character)) {
-						this.#quote = character;
-					} else if (character === "/") {
-						index += regexLiteralLength(line, index, this.#depth);
-					} else if (character === "{" || character === "[") {
-						this.#depth++;
-					} else if (character === "}" || character === "]") {
-						this.#depth--;
-					}
-				}
-				if (this.#depth <= 0) {
-					this.#structured = false;
-					this.#depth = 0;
-					this.#quote = "";
-					this.#escaped = false;
-				}
+				this.#scanStructuredLine(line);
 			}
 			return prefix + (this.#structured || this.#assignments > 0 ? "" : this.#flushCandidate());
 		}
@@ -550,31 +619,105 @@ export class ProducerOutputGuard {
 
 	push(chunk: string): string {
 		if (this.#withholding) return "";
+		if (this.#scalarParts) {
+			if (chunk) this.#scalarParts.push(chunk);
+			return "";
+		}
+		if (!this.#scalarModeDecided) {
+			const probe = this.#scalarProbe + chunk;
+			const first = probe.search(/\S/);
+			if (first < 0) {
+				this.#scalarProbe = probe;
+				return "";
+			}
+			this.#scalarModeDecided = true;
+			this.#scalarProbe = "";
+			if (probe[first] === '"') {
+				this.#scalarParts = [probe];
+				return "";
+			}
+			return this.#pushRecords(probe);
+		}
+		return this.#pushRecords(chunk);
+	}
+
+	#pushRecords(chunk: string): string {
+		if (this.#withholding) return "";
 		const output: string[] = [];
 		let offset = 0;
 		while (offset < chunk.length) {
 			const newline = chunk.indexOf("\n", offset);
 			const end = newline < 0 ? chunk.length : newline;
 			const separator = newline < 0 ? "" : "\n";
+			const segment = chunk.slice(offset, end);
+			let scannedDroppedSegment = false;
 			if (!this.#dropping) {
 				const segmentLength = end - offset;
-				if (
+				if (this.#oversizedPending) {
+					this.#pending += segment + separator;
+					this.#recordLength += segmentLength;
+				} else if (
 					this.#recordLength + segmentLength + separator.length > MAX_RECORD_CHARS ||
 					this.#pending.length + segmentLength + separator.length > MAX_RECORD_CHARS
 				) {
-					this.#pending = "";
-					this.#dropping = true;
-					this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+					const buffered = this.#pending;
+					const prospective = buffered + segment + separator;
+					let pendingPrefix = 0;
+					try {
+						pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(prospective)) ?? 0;
+					} catch {
+						this.#block();
+						break;
+					}
+					const hasStructure = this.#structured || prospective.split("\n").some(line => structuredStart(line) >= 0);
+					if (pendingPrefix > 0 && !hasStructure) {
+						this.#pending = prospective;
+						this.#recordLength += segmentLength;
+						this.#oversizedPending = true;
+					} else {
+						this.#pending = "";
+						this.#dropping = true;
+						this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+						this.#candidate = "";
+						this.#candidateOversized = true;
+						for (const line of buffered.split("\n")) this.#scanStructuredLine(line);
+						this.#scanStructuredLine(segment);
+						scannedDroppedSegment = true;
+					}
 				} else {
-					this.#pending += chunk.slice(offset, end) + separator;
+					this.#pending += segment + separator;
 					this.#recordLength += segmentLength;
 				}
 			}
+			if (this.#dropping && !scannedDroppedSegment) this.#scanStructuredLine(segment);
 			if (newline < 0) break;
 			this.#recordLength = 0;
+			if (this.#oversizedPending) {
+				let pendingPrefix = 0;
+				try {
+					pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(this.#pending)) ?? 0;
+				} catch {
+					this.#block();
+					break;
+				}
+				if (pendingPrefix > 0) {
+					offset = newline + 1;
+					continue;
+				}
+				this.#pending = "";
+				this.#oversizedPending = false;
+				output.push(`${OVERSIZED_OUTPUT_RECORD}\n`);
+				offset = newline + 1;
+				continue;
+			}
 			if (this.#dropping) {
-				output.push(`${this.#block(this.#droppingLabel)}\n`);
-				break;
+				this.#pending = "";
+				this.#dropping = false;
+				this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+				this.#candidateEndsWithNewline = true;
+				if (!this.#structured) output.push(this.#flushCandidate());
+				offset = newline + 1;
+				continue;
 			}
 			let pendingPrefix = 0;
 			try {
@@ -598,7 +741,29 @@ export class ProducerOutputGuard {
 	}
 
 	finish(): string {
+		if (this.#scalarParts) {
+			const serialized = this.#scalarParts.join("");
+			this.#scalarParts = null;
+			this.#scalarModeDecided = true;
+			return this.sanitize(serialized);
+		}
+		if (!this.#scalarModeDecided && this.#scalarProbe) {
+			const probe = this.#scalarProbe;
+			this.#scalarProbe = "";
+			this.#scalarModeDecided = true;
+			return this.#pushRecords(probe) + this.#finishRecords();
+		}
+		return this.#finishRecords();
+	}
+
+	#finishRecords(): string {
 		if (this.#withholding) return "";
+		if (this.#oversizedPending) {
+			this.#pending = "";
+			this.#recordLength = 0;
+			this.#oversizedPending = false;
+			return OVERSIZED_OUTPUT_RECORD;
+		}
 		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) {
 			return "";
 		}
@@ -627,13 +792,19 @@ export class ProducerOutputGuard {
 		this.#recordLength = 0;
 		this.#dropping = false;
 		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+		this.#oversizedPending = false;
 		this.#withholding = false;
 		this.#candidate = "";
+		this.#candidateOversized = false;
+		this.#candidateEndsWithNewline = false;
 		this.#assignments = 0;
 		this.#structured = false;
 		this.#depth = 0;
 		this.#quote = "";
 		this.#escaped = false;
 		this.#authorizationHeading = false;
+		this.#scalarProbe = "";
+		this.#scalarParts = null;
+		this.#scalarModeDecided = false;
 	}
 }

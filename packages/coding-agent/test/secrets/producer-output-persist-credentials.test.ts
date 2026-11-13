@@ -1,15 +1,32 @@
 import { describe, expect, it } from "bun:test";
+import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 import { ProducerOutputGuard } from "../../src/secrets/producer-output";
 
 const guard = new ProducerOutputGuard();
 const sentinel = "Error: checkout failed\n";
 
-function stream(input: string, split = input.length): string {
-	const output = new ProducerOutputGuard();
+function stream(input: string, split = input.length, redact?: (text: string) => string): string {
+	const output = new ProducerOutputGuard(redact);
 	return output.push(input.slice(0, split)) + output.push(input.slice(split)) + output.finish();
 }
 
 describe("producer output treats persist-credentials booleans as metadata", () => {
+	it("does not group printed ANSI colour codes as an unterminated JSON array", () => {
+		const input = `job\tstep\t2026-01-01T00:00:00Z ^[[36;1mnode check^[[0m\n${"safe build output\n".repeat(4000)}${sentinel}`;
+		expect(input.length).toBeGreaterThan(65536);
+		expect(stream(input)).toBe(input);
+		for (let split = 0; split <= input.indexOf("node"); split++) expect(stream(input, split)).toBe(input);
+	});
+	it("keeps later diagnostics after unmatched braces inside complete inline code suggestions", () => {
+		const suggestion = "##[error] Replace `field: string; item: string` with `{ field: string;`.\n";
+		const input = `${suggestion}${"safe diagnostic\n".repeat(5000)}${sentinel}`;
+		expect(stream(input)).toBe(input);
+	});
+	it("still masks credential inventories inside inline code", () => {
+		const input = '`{"ALPHA":"opaque-one","BRAVO":"opaque-two","CHARLIE":"opaque-three"}`\n';
+		expect(stream(input)).not.toContain("opaque-one");
+		expect(stream(input)).not.toContain("opaque-three");
+	});
 	it.each([
 		"persist-credentials: false",
 		'"persist-credentials": false',
@@ -20,6 +37,21 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		const input = `checkout ${setting}\n${sentinel}`;
 		expect(guard.sanitize(input) === input).toBe(true);
 		for (let split = 0; split <= input.length; split++) expect(stream(input, split) === input).toBe(true);
+	});
+	it("preserves a label-only token record at end-of-output without corrupting JSON framing", () => {
+		const value = "TOKEN:\n";
+		const input = JSON.stringify(value);
+		expect(input).toBe('"TOKEN:\\n"');
+		expect(guard.sanitize(value)).toBe(value);
+		expect(guard.sanitize(input)).toBe(input);
+		for (let split = 0; split <= input.length; split++) expect(stream(input, split)).toBe(input);
+	});
+	it("does not exempt token labels with a multiline value continuation", () => {
+		const secret = `ghp_${"E".repeat(36)}`;
+		const value = `TOKEN:\n  ${secret}\n${sentinel}`;
+		const input = JSON.stringify(value);
+		const sanitized = JSON.parse(guard.sanitize(input)) as string;
+		expect(sanitized).not.toContain(secret);
 	});
 	it.each(['{"persist-credentials":false}', '{"persist-credentials":true}'])(
 		"preserves valid JSON boolean metadata and its quoted key: %s",
@@ -33,6 +65,63 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		const input = JSON.stringify({ message: `checkout persist-credentials: false\n${sentinel}` });
 		expect(guard.sanitize(input) === input).toBe(true);
 		for (let split = 0; split <= input.length; split++) expect(stream(input, split) === input).toBe(true);
+	});
+	it("preserves a top-level JSON string log with an escaped newline", () => {
+		const input = JSON.stringify(`checkout persist-credentials: false\n${sentinel}`);
+		expect(guard.sanitize(input) === input).toBe(true);
+		for (let split = 0; split <= input.length; split++) {
+			const output = stream(input, split);
+			if (output !== input) throw new Error(`JSON string LF stream failed at split ${split} (${output.length}/${input.length})`);
+		}
+	});
+
+	it("preserves a top-level JSON string log with an escaped CRLF boundary", () => {
+		const input = JSON.stringify(`checkout persist-credentials: false\r\n${sentinel}`);
+		const expected = JSON.parse(input).replace(/\r\n/g, "\n");
+		expect(JSON.parse(guard.sanitize(input))).toBe(expected);
+		for (let split = 0; split <= input.length; split++) expect(JSON.parse(stream(input, split))).toBe(expected);
+	});
+
+	it("keeps an escaped JSON log below the output-record limit intact", () => {
+		const lines = Array.from({ length: 716 }, (_, index) =>
+			`row-${index.toString().padStart(3, "0")}: ${'"'.repeat(4)}`.padEnd(85, "x"),
+		);
+		lines[25] = `${" ".repeat(50)}persist-credentials: false`;
+		lines[715] = "Error: checkout failed";
+		const input = JSON.stringify(`\ufeff${lines.join("\n")}`);
+		expect(input.length).toBeGreaterThan(65000);
+		expect(input.length).toBeLessThan(65536);
+		expect(guard.sanitize(input) === input).toBe(true);
+		expect(new ProducerOutputGuard(redactProviderSecrets).sanitize(input) === input).toBe(true);
+		const split = input.indexOf("persist-credentials: false") + "persist-credentials: ".length;
+		expect(stream(input, split) === input).toBe(true);
+		expect(stream(input, split, redactProviderSecrets) === input).toBe(true);
+	});
+	it("redacts long top-level JSON string logs across every credential split and keeps the final error", () => {
+		const secret = `ghp_${"D".repeat(36)}`;
+		const lines = Array.from({ length: 800 }, (_, index) =>
+			`row-${index.toString().padStart(4, "0")}: ${"x".repeat(80)}`,
+		);
+		lines[0] = "persist-credentials: false";
+		lines[731] = `persist-credentials: ${secret} following text`;
+		lines[799] = sentinel.trimEnd();
+		const input = JSON.stringify(`\ufeff${lines.join("\n")}\n`);
+		expect(input.length).toBeGreaterThan(65536);
+		const payload = JSON.parse(guard.sanitize(input)) as string;
+		expect(payload).not.toContain(secret);
+		expect(payload).toContain("persist-credentials: false");
+		expect(payload).toContain("following text\n");
+		expect(payload).toContain(sentinel);
+		const tokenStart = input.indexOf(secret);
+		for (let split = tokenStart; split <= tokenStart + secret.length; split++) {
+			const streamed = JSON.parse(stream(input, split)) as string;
+			expect(streamed).not.toContain(secret);
+			expect(streamed).toContain("following text\n");
+			expect(streamed).toContain(sentinel);
+		}
+		const streamedAtRecordLimit = JSON.parse(stream(input, 65536)) as string;
+		expect(streamedAtRecordLimit).not.toContain(secret);
+		expect(streamedAtRecordLimit).toContain(sentinel);
 	});
 
 	it.each([
