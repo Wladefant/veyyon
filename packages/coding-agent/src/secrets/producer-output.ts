@@ -7,6 +7,7 @@ import { currentProducerSecretOwner } from "./producer-owner";
 // Hold a complete record before publishing it: a pipe can split a credential at any byte.
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
 const MAX_RECORD_CHARS = 64 * 1024;
+const MAX_SCALAR_CHARS = 16 * 1024 * 1024;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
@@ -437,6 +438,7 @@ export class ProducerOutputGuard {
 	#authorizationHeading = false;
 	#scalarProbe = "";
 	#scalarParts: string[] | null = null;
+	#scalarLength = 0;
 	#scalarModeDecided = false;
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
@@ -451,6 +453,7 @@ export class ProducerOutputGuard {
 		try {
 			const first = text.search(/\S/);
 			if (first >= 0 && text[first] === '"') {
+				if (text.length > MAX_SCALAR_CHARS) return OVERSIZED_OUTPUT_RECORD;
 				try {
 					const value: unknown = JSON.parse(text);
 					if (typeof value === "string") {
@@ -463,7 +466,7 @@ export class ProducerOutputGuard {
 			}
 			const original = sanitizeText(text);
 			if (isInventory(original)) return BLOCKED_OUTPUT_RECORD;
-			if (original.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return OVERSIZED_OUTPUT_RECORD;
+			if (original.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return this.#sanitizeOversizedRecords(text);
 			if (/^\s*[{[]/.test(text)) {
 				try {
 					const value = JSON.parse(text);
@@ -492,6 +495,15 @@ export class ProducerOutputGuard {
 		}
 	}
 
+	// Scan records separately so a dropped long line cannot hide later diagnostics.
+	#sanitizeOversizedRecords(text: string): string {
+		const guard = new ProducerOutputGuard(
+			this.#redact ? value => this.#redact!(value) : undefined,
+			this.#pendingPrefixLength ? value => this.#pendingPrefixLength!(value) : undefined,
+		);
+		return guard.#pushRecords(text) + guard.#finishRecords();
+	}
+
 	/** Validate a separate, complete payload without reopening this producer stream. */
 	sanitizeComplete(text: string): string {
 		const sanitized = this.sanitize(text);
@@ -506,6 +518,9 @@ export class ProducerOutputGuard {
 	#block(label = BLOCKED_OUTPUT_RECORD): string {
 		this.#withholding = true;
 		this.#pending = "";
+		this.#scalarParts = null;
+		this.#scalarLength = 0;
+		this.#scalarProbe = "";
 		this.#recordLength = 0;
 		this.#candidate = "";
 		this.#candidateOversized = false;
@@ -620,6 +635,8 @@ export class ProducerOutputGuard {
 	push(chunk: string): string {
 		if (this.#withholding) return "";
 		if (this.#scalarParts) {
+			if (chunk.length > MAX_SCALAR_CHARS - this.#scalarLength) return this.#block(OVERSIZED_OUTPUT_RECORD);
+			this.#scalarLength += chunk.length;
 			if (chunk) this.#scalarParts.push(chunk);
 			return "";
 		}
@@ -627,13 +644,16 @@ export class ProducerOutputGuard {
 			const probe = this.#scalarProbe + chunk;
 			const first = probe.search(/\S/);
 			if (first < 0) {
+				if (probe.length > MAX_SCALAR_CHARS) return this.#block(OVERSIZED_OUTPUT_RECORD);
 				this.#scalarProbe = probe;
 				return "";
 			}
 			this.#scalarModeDecided = true;
 			this.#scalarProbe = "";
 			if (probe[first] === '"') {
+				if (probe.length > MAX_SCALAR_CHARS) return this.#block(OVERSIZED_OUTPUT_RECORD);
 				this.#scalarParts = [probe];
+				this.#scalarLength = probe.length;
 				return "";
 			}
 			return this.#pushRecords(probe);
@@ -744,6 +764,7 @@ export class ProducerOutputGuard {
 		if (this.#scalarParts) {
 			const serialized = this.#scalarParts.join("");
 			this.#scalarParts = null;
+			this.#scalarLength = 0;
 			this.#scalarModeDecided = true;
 			return this.sanitize(serialized);
 		}

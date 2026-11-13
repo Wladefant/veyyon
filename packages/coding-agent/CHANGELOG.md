@@ -5,6 +5,7 @@
 ### Fixed
 
 - Keep serialized CI logs and later diagnostic records complete while redacting credentials, including printed ANSI codes and inline code suggestions.
+- Bound producer-output scalar serialization and diagnose oversized records without exposing credential-bearing lines.
 
 ## [1.9.3] - 2026-11-13
 
