@@ -124,6 +124,61 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		expect(streamedAtRecordLimit).toContain(sentinel);
 	});
 
+	it("bounds serialized scalar buffering without exposing a credential beyond the bound", () => {
+		const secret = `ghp_${"E".repeat(36)}`;
+		const input = JSON.stringify(`${`${"x".repeat(60000)}\n`.repeat(300)}${secret}\n`);
+		expect(guard.sanitize(input) === "[line over 65,536 chars, not scanned]").toBe(true);
+		const bounded = new ProducerOutputGuard();
+		let output = "";
+		for (let offset = 0; offset < input.length; offset += 8192) output += bounded.push(input.slice(offset, offset + 8192));
+		output += bounded.finish();
+		expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
+		expect(output).not.toContain(secret);
+	});
+	it.each([
+		["Bearer", `Bearer ${"F".repeat(36)}`],
+		["github_pat_", `github_pat_${"G".repeat(40)}`],
+		["ghp_", `ghp_${"H".repeat(36)}`],
+		["password=value", `password=${"I".repeat(40)}`],
+	])("fails closed when %s credential offsets meet the serialized scalar boundary", (_label, secret) => {
+		for (let interiorOffset = 0; interiorOffset < secret.length; interiorOffset++) {
+			const prefixLength = 65536 - interiorOffset;
+			const prefix = `${"x".repeat(prefixLength - 3)}\n`;
+			const input = JSON.stringify(`${prefix}${secret}${"z".repeat(30)}`);
+			const bounded = new ProducerOutputGuard();
+			let output = "";
+			for (let offset = 0; offset < input.length; offset += 8192) output += bounded.push(input.slice(offset, offset + 8192));
+			output += bounded.finish();
+			expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
+			expect(output.includes(secret) === false).toBe(true);
+			expect(output.includes(secret.slice(-12)) === false).toBe(true);
+		}
+	});
+	it.each([
+		["Bearer", `Bearer ${"J".repeat(36)}`],
+		["github_pat_", `github_pat_${"K".repeat(40)}`],
+		["ghp_", `ghp_${"L".repeat(36)}`],
+		["password=value", `password=${"M".repeat(40)}`],
+	])("fails closed for raw oversized %s credential offsets at the record boundary", (_label, secret) => {
+		for (let interiorOffset = 0; interiorOffset < secret.length; interiorOffset++) {
+			const prefixLength = 65536 - interiorOffset;
+			const input = `${"x".repeat(prefixLength)}${secret}${"z".repeat(65536)}`;
+			const bounded = new ProducerOutputGuard();
+			let output = "";
+			for (let offset = 0; offset < input.length; offset += 8192) output += bounded.push(input.slice(offset, offset + 8192));
+			output += bounded.finish();
+			expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
+			expect(output.includes(secret) === false).toBe(true);
+			expect(output.includes(secret.slice(-12)) === false).toBe(true);
+		}
+	});
+	it("does not expose the tail of an oversized unterminated structured record", () => {
+		const rawTail = `unique-raw-tail-${"N".repeat(48)}`;
+		const input = `{"unclosed":"${"x".repeat(65536)}${rawTail}`;
+		const output = new ProducerOutputGuard().sanitize(input);
+		expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
+		expect(output.includes(rawTail) === false).toBe(true);
+	});
 	it.each([
 		"persist-credentials: falseish",
 		"persist-credentials: false0",
