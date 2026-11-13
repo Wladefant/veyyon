@@ -112,6 +112,7 @@ export interface KernelExecutionResult {
 	outputBytes: number;
 	displayOutputs: KernelDisplayOutput[];
 	stdinRequested: boolean;
+	cancellationPending?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +394,14 @@ export function formatTimeoutAnnotation(timeoutMs?: number): string {
  * Richer annotation for a kernel-level timeout that distinguishes a killed
  * kernel (state gone, will be recreated) from an interrupted-but-alive kernel.
  */
-export function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean): string {
+export function formatKernelTimeoutAnnotation(
+	timeoutMs: number | undefined,
+	kernelKilled: boolean,
+	cancellationPending = false,
+): string {
+	if (cancellationPending) {
+		return "eval cell cancellation is pending; the request may still be running and may still change kernel state. The kernel remains running.";
+	}
 	if (kernelKilled) {
 		return "eval cell timed out and the kernel was unresponsive to interrupt; the kernel has been killed and will be recreated on the next call.";
 	}
@@ -454,7 +462,7 @@ export function buildManagedKernelEnv(options: ManagedKernelEnvOptions): Record<
 }
 
 export function attachSessionOwner(
-	session: { ownerIds: Set<string>; hasFallbackOwner: boolean },
+	session: { ownerIds: Set<string>; hasFallbackOwner: boolean; primaryOwnerId?: string },
 	sessionId: string,
 	ownerId: string | undefined,
 ): void {
@@ -462,13 +470,27 @@ export function attachSessionOwner(
 		if (session.hasFallbackOwner) {
 			session.ownerIds.delete(sessionId);
 			session.hasFallbackOwner = false;
+			if (session.primaryOwnerId === sessionId) session.primaryOwnerId = ownerId;
 		}
 		session.ownerIds.add(ownerId);
+		if (session.primaryOwnerId === undefined) session.primaryOwnerId = ownerId;
 		return;
 	}
 	if (session.hasFallbackOwner || session.ownerIds.size === 0) {
 		session.ownerIds.add(sessionId);
 		session.hasFallbackOwner = true;
+		if (session.primaryOwnerId === undefined) session.primaryOwnerId = sessionId;
+	}
+}
+
+export function detachSessionOwner(
+	session: { ownerIds: Set<string>; hasFallbackOwner?: boolean; primaryOwnerId?: string },
+	ownerId: string,
+): void {
+	session.ownerIds.delete(ownerId);
+	if (session.primaryOwnerId === ownerId) {
+		const next = session.ownerIds.values().next().value;
+		session.primaryOwnerId = next;
 	}
 }
 
@@ -494,7 +516,7 @@ export interface ExecuteWithKernelBaseParams<
 	isJulia?: boolean;
 	cancelledErrorClass: CancelledErrorClass;
 	buildKernelEnvPatch: (options: TOptions) => TEnv;
-	formatKernelTimeoutAnnotation: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
+	formatKernelTimeoutAnnotation: (executionTimeoutMs: number | undefined, kernelKilled: boolean, cancellationPending?: boolean) => string;
 	formatTimeoutAnnotation: (executionTimeoutMs: number | undefined) => string | undefined;
 	/**
 	 * Override how the wall-clock deadline is derived from options. Defaults to
@@ -630,8 +652,12 @@ export async function executeWithKernelBase<
 
 		if (result.cancelled || abortShield.abortRequested) {
 			const timedOut = result.timedOut || abortShield.timedOut;
-			const annotation = timedOut
-				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
+			const annotation = timedOut || result.cancellationPending
+				? formatKernelTimeoutAnnotation(
+					timedOut ? executionTimeoutMs ?? options?.idleTimeoutMs : undefined,
+					result.kernelKilled ?? false,
+					result.cancellationPending ?? false,
+				)
 				: undefined;
 			const dumped = await sink.dumpWithArtifactStatus(annotation);
 			return {
@@ -648,6 +674,7 @@ export async function executeWithKernelBase<
 				outputBytes: dumped.outputBytes,
 				displayOutputs,
 				stdinRequested: !!result.stdinRequested,
+				cancellationPending: result.cancellationPending,
 			};
 		}
 
@@ -723,6 +750,7 @@ export async function executeWithKernelBase<
 export interface SessionOwnerState {
 	ownerIds: Set<string>;
 	hasFallbackOwner: boolean;
+	primaryOwnerId: string | undefined;
 }
 
 export interface ManagedKernelSession<TKernel extends SessionKernel = SessionKernel> extends SessionOwnerState {
@@ -761,6 +789,7 @@ export class KernelSessionPool<
 	readonly #sessions = new Map<string, ManagedKernelSession<TKernel>>();
 	readonly #startingSessions = new Map<string, StartingManagedKernelSession<TKernel>>();
 	readonly #resettingSessions = new Map<string, Promise<void>>();
+	readonly #resettingOwners = new Map<string, string>();
 	readonly #transitions = new Map<string, Promise<void>>();
 	readonly #retiring = new Set<ManagedKernelSession<TKernel>>();
 	readonly #failedStartups = new Map<string, ManagedKernelSession<SessionKernel>>();
@@ -844,6 +873,7 @@ export class KernelSessionPool<
 				kernel,
 				ownerIds: startingSession.ownerIds,
 				hasFallbackOwner: startingSession.hasFallbackOwner,
+				primaryOwnerId: startingSession.primaryOwnerId,
 			};
 			if (startingSession.ownerIds.size === 0) {
 				// Keep the old runner discoverable until its OS exit is confirmed.
@@ -863,6 +893,7 @@ export class KernelSessionPool<
 		startingSession = {
 			ownerIds: new Set(),
 			hasFallbackOwner: false,
+			primaryOwnerId: undefined,
 			promise: startPromise,
 			startupAbort,
 			waiters: new Map(),
@@ -900,11 +931,11 @@ export class KernelSessionPool<
 			if (starting.disposedOwnerIds.has(ownerKey)) throw new this.#cancelledErrorClass(false);
 			return session;
 		} catch (error) {
-			if (leave() === 0) starting.ownerIds.delete(ownerKey);
+			if (leave() === 0) detachSessionOwner(starting, ownerKey);
 			if (starting.ownerIds.size === 0) starting.startupAbort.abort(error);
 			const session = this.#sessions.get(sessionKey);
 			if (session?.ownerIds === starting.ownerIds && session.ownerIds.size === 0 && starting.waiters.size === 0) {
-				await this.resetSession(sessionKey);
+				await this.#resetOrphanSession(sessionKey);
 			}
 			throw error;
 		} finally {
@@ -978,6 +1009,7 @@ export class KernelSessionPool<
 			kernel: error.kernel,
 			ownerIds: new Set(owners.ownerIds),
 			hasFallbackOwner: owners.hasFallbackOwner,
+			primaryOwnerId: owners.primaryOwnerId,
 		});
 		return error.cause;
 	}
@@ -1038,13 +1070,41 @@ export class KernelSessionPool<
 		}
 	}
 
-	async resetSession(sessionKey: string): Promise<void> {
-		const session =
-			this.#sessions.get(sessionKey) ??
-			(await this.#startingSessions.get(sessionKey)?.promise.catch(() => undefined));
-		if (this.#failedStartups.has(sessionKey)) await this.#retireFailedStartup(sessionKey);
-		if (!session) return;
+	async #resetOrphanSession(sessionKey: string): Promise<void> {
+		const session = this.#sessions.get(sessionKey);
+		if (!session || session.ownerIds.size !== 0) return;
 		await this.#retireSession(session);
+	}
+
+	assertResetOwner(sessionKey: string, ownerId: string): void {
+		const owner =
+			this.#sessions.get(sessionKey) ?? this.#startingSessions.get(sessionKey) ?? this.#failedStartups.get(sessionKey);
+		const resettingOwner = this.#resettingOwners.get(sessionKey);
+		if (owner && (!owner.ownerIds.has(ownerId) || owner.primaryOwnerId !== ownerId)) {
+			throw new Error("Only the primary kernel owner may reset this session");
+		}
+		if (!owner && resettingOwner !== undefined && resettingOwner !== ownerId) {
+			throw new Error("Only the primary kernel owner may reset this session");
+		}
+	}
+
+	async resetSession(sessionKey: string, ownerId: string): Promise<void> {
+		this.assertResetOwner(sessionKey, ownerId);
+		const active = this.#sessions.get(sessionKey);
+		const starting = this.#startingSessions.get(sessionKey);
+		const failed = this.#failedStartups.get(sessionKey);
+		if (!active && !starting && !failed) return;
+		this.#resettingOwners.set(sessionKey, ownerId);
+		try {
+			if (failed) {
+				await this.#retireFailedStartup(sessionKey);
+			}
+			const session = active ?? (await starting?.promise.catch(() => undefined));
+			if (!session) return;
+			await this.#retireSession(session);
+		} finally {
+			if (this.#resettingOwners.get(sessionKey) === ownerId) this.#resettingOwners.delete(sessionKey);
+		}
 	}
 
 	async disposeAll(): Promise<void> {
@@ -1082,12 +1142,12 @@ export class KernelSessionPool<
 				toShutdown.push(session);
 				continue;
 			}
-			session.ownerIds.delete(ownerId);
+			detachSessionOwner(session, ownerId);
 			this.#logOwnership(session, "owned");
 		}
 		for (const [sessionKey, starting] of [...this.#startingSessions.entries()]) {
 			if (this.#sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
-			starting.ownerIds.delete(ownerId);
+			detachSessionOwner(starting, ownerId);
 			starting.disposedOwnerIds.add(ownerId);
 			if (starting.ownerIds.size === 0) starting.startupAbort.abort(new this.#cancelledErrorClass(false));
 			// Keep startup visible until its eventual runner exits. Another live
@@ -1098,7 +1158,7 @@ export class KernelSessionPool<
 			const session = toShutdown[i];
 			const result = results[i];
 			if (result.status === "fulfilled") {
-				session.ownerIds.delete(ownerId);
+				detachSessionOwner(session, ownerId);
 				continue;
 			}
 			const reason = result.status === "rejected" ? result.reason : "not confirmed";
@@ -1129,7 +1189,7 @@ export interface KernelExecutionDriverOptions<
 	/** See `buildEvalSessionKey`: what in a cwd selects the default runtime, when anything does. */
 	resolveDefaultRuntimeScope?: (cwd: string) => string;
 	buildKernelEnvPatch?: (options: TOptions) => Record<string, string | null | undefined>;
-	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean) => string;
+	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean, cancellationPending?: boolean) => string;
 	formatTimeoutAnnotation?: (executionTimeoutMs: number | undefined) => string | undefined;
 	createCancelledResult?: (timedOut: boolean, timeoutMs?: number) => KernelExecutionResult;
 	resolveDeadlineMs?: (options?: TOptions) => number | undefined;
@@ -1268,10 +1328,12 @@ export function createKernelExecutionDriver<
 			options.bridgeSessionId = sessionId;
 		}
 		if (options.reset) {
+			const resetOwnerId = options.kernelOwnerId ?? sessionId;
+			pool.assertResetOwner(sessionKey, resetOwnerId);
 			const inFlight = pool.resettingSessions.get(sessionKey);
 			if (inFlight) await inFlight;
 			else {
-				const resetPromise = pool.resetSession(sessionKey);
+				const resetPromise = pool.resetSession(sessionKey, resetOwnerId);
 				pool.resettingSessions.set(sessionKey, resetPromise);
 				try {
 					await resetPromise;
