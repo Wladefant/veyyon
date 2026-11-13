@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve exact `persist-credentials` boolean metadata in producer output without exposing credential values or truncating following log text.
+
 ## [1.9.2] - 2026-11-12
 
 ### Fixed
