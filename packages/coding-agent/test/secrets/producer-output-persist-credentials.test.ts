@@ -140,7 +140,7 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		["github_pat_", `github_pat_${"G".repeat(40)}`],
 		["ghp_", `ghp_${"H".repeat(36)}`],
 		["password=value", `password=${"I".repeat(40)}`],
-	])("fails closed when %s credential offsets meet the serialized scalar boundary", (_label, secret) => {
+	])("redacts %s at every offset across the serialized scalar chunk boundary", (_label, secret) => {
 		for (let interiorOffset = 0; interiorOffset < secret.length; interiorOffset++) {
 			const prefixLength = 65536 - interiorOffset;
 			const prefix = `${"x".repeat(prefixLength - 3)}\n`;
@@ -149,7 +149,7 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 			let output = "";
 			for (let offset = 0; offset < input.length; offset += 8192) output += bounded.push(input.slice(offset, offset + 8192));
 			output += bounded.finish();
-			expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
+			expect(typeof JSON.parse(output) === "string").toBe(true);
 			expect(output.includes(secret) === false).toBe(true);
 			expect(output.includes(secret.slice(-12)) === false).toBe(true);
 		}
