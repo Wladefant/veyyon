@@ -52,6 +52,8 @@ export interface HistoryFormatOptions {
 	 * this so it sees what changed without re-reading the file.
 	 */
 	expandEditDiffs?: boolean;
+	/** Stop after this many markdown lines without rendering later messages. */
+	maxLines?: number;
 }
 
 /** Max length of the primary-arg summary inside `→ tool(...)` lines. */
@@ -473,7 +475,10 @@ function customOneLiner(msg: CustomMessage | HookMessage): string {
  * equivalent loaded from a session file) — the same shapes
  * `session-dump-format.ts` consumes.
  */
-function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions): Generator<string | undefined, void> {
+function* historyMarkdownSteps(
+	messages: unknown[],
+	opts?: HistoryFormatOptions,
+): Generator<string | AgentMessage | void, void> {
 	const typed = (messages ?? []) as AgentMessage[];
 	if (opts?.title) {
 		yield `# ${opts.title}`;
@@ -492,7 +497,7 @@ function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions)
 	let lastWatchedLabel: string | undefined;
 
 	for (const msg of typed) {
-		yield;
+		yield msg;
 		switch (msg.role) {
 			case "user":
 			case "developer": {
@@ -527,7 +532,10 @@ function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions)
 						if (block.text.trim()) line = block.text;
 					} else if (block.type === "toolCall") {
 						const result = resultsByCallId.get(block.id);
-						if (result) consumed.add(block.id);
+						if (result) {
+							consumed.add(block.id);
+							yield result;
+						}
 						line = yield* toolCallLine(
 							block.name,
 							block.arguments,
@@ -655,6 +663,78 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 	return `${lines.join("\n").trim()}\n`;
 }
 
+async function preflightHistoryMessage(
+	msg: AgentMessage,
+	opts?: HistoryFormatOptions,
+	signal?: AbortSignal,
+): Promise<void> {
+	if (!msg || typeof msg !== "object") return;
+	if ("content" in msg) await preflightContentBytes(msg.content, MAX_RECORD_BYTES, signal);
+	if (msg.role !== "assistant" || !Array.isArray(msg.content)) return;
+	let totalAssistantText = 0;
+	for (let bi = 0; bi < msg.content.length; bi++) {
+		if ((bi & 255) === 0) {
+			await yieldToEventLoop();
+			signal?.throwIfAborted();
+		}
+		const block = msg.content[bi];
+		if (!block || typeof block !== "object") continue;
+		if (block.type === "text" && typeof block.text === "string") {
+			totalAssistantText += block.text.length;
+		} else if (opts?.includeThinking && block.type === "thinking" && typeof block.thinking === "string") {
+			totalAssistantText += block.thinking.length;
+		} else if (block.type === "toolCall") {
+			totalAssistantText += await preflightArgumentBytes(block.arguments, signal);
+		}
+		if (totalAssistantText > MAX_RECORD_BYTES) {
+			throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
+		}
+	}
+}
+
+async function formatHistoryPrefix(
+	messages: unknown[],
+	opts: HistoryFormatOptions,
+	signal?: AbortSignal,
+): Promise<string> {
+	const limit = opts.maxLines!;
+	if (messages.length > MAX_INDEX_ENTRIES) {
+		throw new Error(`Session history formatting exceeded the ${MAX_INDEX_ENTRIES} message entry cap`);
+	}
+	if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid history line limit");
+	const parts: string[] = [];
+	let lines = 0;
+	let bytes = 0;
+	let started = false;
+	let steps = 0;
+	for (const part of historyMarkdownSteps(messages, opts)) {
+		signal?.throwIfAborted();
+		if (++steps % 64 === 0) await yieldToEventLoop();
+		if (part === undefined) continue;
+		if (typeof part !== "string") {
+			if (part) await preflightHistoryMessage(part, opts, signal);
+			continue;
+		}
+		const text = started ? part : part.trimStart();
+		if (!started && !text) continue;
+		started = true;
+		let from = 0;
+		for (;;) {
+			const newline = text.indexOf("\n", from);
+			const end = newline === -1 ? text.length : newline;
+			const line = text.slice(from, end);
+			bytes += Buffer.byteLength(line, "utf8") + 1;
+			if (bytes > MAX_RECORD_BYTES)
+				throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
+			parts.push(line);
+			if (++lines >= limit) return `${parts.join("\n")}\n`;
+			if (newline === -1) break;
+			from = newline + 1;
+		}
+	}
+	return `${parts.join("\n").trimEnd()}\n`;
+}
+
 /** Yield between rendering batches so cancellation and deadline timers can run. */
 export async function formatSessionHistoryMarkdownAsync(
 	messages: unknown[],
@@ -662,6 +742,7 @@ export async function formatSessionHistoryMarkdownAsync(
 	signal?: AbortSignal,
 ): Promise<string> {
 	signal?.throwIfAborted();
+	if (opts?.maxLines !== undefined) return formatHistoryPrefix(messages, opts, signal);
 	const rawMessages: unknown = messages;
 	let msgCount = 0;
 	if (Array.isArray(rawMessages)) {
@@ -684,32 +765,7 @@ export async function formatSessionHistoryMarkdownAsync(
 			signal?.throwIfAborted();
 		}
 		const msg = (messages as AgentMessage[])[mi]!;
-		if (!msg || typeof msg !== "object") continue;
-		if ("content" in msg) {
-			await preflightContentBytes(msg.content, MAX_RECORD_BYTES, signal);
-		}
-		if (msg.role === "assistant" && Array.isArray((msg as AssistantMessage).content)) {
-			let totalAssistantText = 0;
-			const blocks = (msg as AssistantMessage).content;
-			for (let bi = 0; bi < blocks.length; bi++) {
-				if ((bi & 255) === 0) {
-					await yieldToEventLoop();
-					signal?.throwIfAborted();
-				}
-				const block = blocks[bi];
-				if (!block || typeof block !== "object") continue;
-				if (block.type === "text" && typeof block.text === "string") {
-					totalAssistantText += block.text.length;
-				} else if (opts?.includeThinking && block.type === "thinking" && typeof block.thinking === "string") {
-					totalAssistantText += block.thinking.length;
-				} else if (block.type === "toolCall") {
-					totalAssistantText += await preflightArgumentBytes(block.arguments, signal);
-				}
-				if (totalAssistantText > MAX_RECORD_BYTES) {
-					throw new Error(`Session history formatting exceeded the ${MAX_RECORD_BYTES} byte output cap`);
-				}
-			}
-		}
+		await preflightHistoryMessage(msg, opts, signal);
 	}
 	const steps = historyMarkdownSteps(messages, opts);
 	const lines: string[] = [];

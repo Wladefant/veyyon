@@ -108,4 +108,27 @@ describe("internal URL schemes are classified", () => {
 		expect(text).not.toContain("Unknown agent");
 		expect(text).toContain("Scout");
 	});
+	it("passes a bounded selector to history before rendering the transcript tail", async () => {
+		const tail = {
+			role: "user",
+			get content(): never {
+				throw new Error("tail rendered");
+			},
+		};
+		AgentRegistry.global().register({
+			id: "Scout",
+			displayName: "scout",
+			kind: "sub",
+			status: "running",
+			session: {
+				messages: [{ role: "user", content: "one\ntwo\nthree\nfour\nfive\nsix\nseven" }, tail],
+				sessionManager: { getArtifactsDir: () => null },
+			} as unknown as AgentSession,
+		});
+		const result = await new ReadTool(makeToolSession()).execute("bounded", { path: "history://Scout:raw:5-7" });
+		const text = toolResultText(result);
+		expect(text).toContain("one\ntwo\nthree");
+		expect(text).toContain("total line count is unknown");
+		expect(text).not.toContain("tail rendered");
+	});
 });

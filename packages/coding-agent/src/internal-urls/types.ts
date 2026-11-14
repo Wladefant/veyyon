@@ -41,6 +41,8 @@ export interface InternalResource {
 	 * must never be mistaken for the directory's contents.
 	 */
 	isDirectory?: boolean;
+	/** The handler stopped after a prefix; the transcript's total line count is unknown. */
+	contentIncomplete?: boolean;
 }
 
 /**
@@ -119,6 +121,8 @@ export interface ResolveContext {
 	 * ignore the flag.
 	 */
 	pathOnly?: boolean;
+	/** Concise history prefix required by a bounded read, including display context. */
+	historyMaxLines?: number;
 }
 
 /**
