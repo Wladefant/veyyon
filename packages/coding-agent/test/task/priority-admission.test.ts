@@ -34,10 +34,20 @@ describe("priority spawn admission", () => {
 			semaphore.acquire(undefined, "normal").then(() => admitted.push("normal2")),
 			semaphore.acquire(undefined, "high").then(() => admitted.push("high2")),
 		];
-		semaphore.resize(5);
-		await Promise.all(pending);
+		semaphore.resize(2);
+		await pending[1];
+		expect(admitted).toEqual(["high1"]);
+		semaphore.release();
+		await pending[3];
+		expect(admitted).toEqual(["high1", "high2"]);
+		semaphore.release();
+		await pending[0];
+		expect(admitted).toEqual(["high1", "high2", "normal1"]);
+		semaphore.release();
+		await pending[2];
 		expect(admitted).toEqual(["high1", "high2", "normal1", "normal2"]);
-		for (let i = 0; i < 5; i++) semaphore.release();
+		semaphore.release();
+		semaphore.release();
 	});
 
 	it("removes cancelled high-priority waiters without losing the released slot", async () => {
@@ -46,9 +56,9 @@ describe("priority spawn admission", () => {
 		const controller = new AbortController();
 		const normal = semaphore.acquire();
 		const high = semaphore.acquire(controller.signal, "high");
-		const rejected = expect(high).rejects.toThrow("cancel priority");
+		const rejected = high.catch(error => error);
 		controller.abort(new Error("cancel priority"));
-		await rejected;
+		expect(await rejected).toMatchObject({ message: "cancel priority" });
 		semaphore.release();
 		await normal;
 		semaphore.release();
