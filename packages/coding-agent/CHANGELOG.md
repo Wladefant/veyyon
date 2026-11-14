@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-14
+
+### Fixed
+
+- Add explicit priority slot admission ([PR #1108](https://github.com/Wladefant/veyyon/pull/1108)).
+
 ## [1.9.4] - 2026-11-14
 
 ### Fixed
