@@ -2282,6 +2282,48 @@ describe("ModelRegistry", () => {
 			expect(registry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
 			expect(registry.isSelectorSuppressed("openai/gpt-4.1")).toBe(true);
 		});
+		test("a forced refresh does not join a weaker in-flight spawn refresh", async () => {
+			writeRawModelsJson({
+				"spawn-race": {
+					baseUrl: "https://spawn-race.example/v1",
+					auth: "none",
+					api: "openai-responses",
+					discovery: { type: "openai-models-list" },
+					models: [{ id: "configured" }],
+				},
+			});
+			const targetStarted = Promise.withResolvers<void>();
+			const releaseFirstTarget = Promise.withResolvers<void>();
+			let targetRequests = 0;
+			const fetchMock: FetchImpl = async input => {
+				const url = input instanceof Request ? input.url : String(input);
+				if (url !== "https://spawn-race.example/v1/models") {
+					throw new Error(`Unexpected URL: ${url}`);
+				}
+				targetRequests++;
+				if (targetRequests === 1) {
+					targetStarted.resolve();
+					await releaseFirstTarget.promise;
+				}
+				return new Response(JSON.stringify({ data: [{ id: "discovered" }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			try {
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				const preflight = registry.refreshForSpawn();
+				await targetStarted.promise;
+				const forced = registry.refreshForSpawn({ force: true });
+				releaseFirstTarget.resolve();
+				await Promise.all([preflight, forced]);
+				expect(targetRequests).toBe(2);
+			} finally {
+				releaseFirstTarget.resolve();
+				setSystemTime();
+			}
+		});
 	});
 	});
 });
