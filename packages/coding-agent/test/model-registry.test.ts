@@ -2212,11 +2212,52 @@ describe("ModelRegistry", () => {
 				registry.suppressSelector("spawn-probe/configured", Date.now() + 60_000);
 
 				await Promise.all([registry.refreshForSpawn(), registry.refreshForSpawn(), registry.refreshForSpawn()]);
-				await registry.refreshForSpawn({ force: true });
-				await registry.refreshForSpawn({ force: true });
-				expect(requests).toBe(2);
+				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/configured"] } as never);
+				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/discovered"] } as never);
+				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/configured:high"] } as never);
+				expect(requests).toBe(4);
 				expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
 				expect(registry.find("spawn-probe", "discovered")).toBeDefined();
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+			}
+		});
+
+		test("runs a forced online refresh after an in-flight non-forced preflight", async () => {
+			vi.useFakeTimers();
+			try {
+				writeRawModelsJson({
+					"spawn-race": {
+						baseUrl: "https://spawn-race.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "configured" }],
+					},
+				});
+				const started = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				let requests = 0;
+				const fetchMock: FetchImpl = async () => {
+					requests++;
+					if (requests === 1) {
+						started.resolve();
+						await release.promise;
+					}
+					return new Response(JSON.stringify({ data: [{ id: "configured" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				const preflight = registry.refreshForSpawn();
+				await started.promise;
+				const forced = registry.refreshForSpawn({ force: true });
+				release.resolve();
+				await Promise.all([preflight, forced]);
+				expect(requests).toBe(2);
 			} finally {
 				setSystemTime();
 				vi.useRealTimers();

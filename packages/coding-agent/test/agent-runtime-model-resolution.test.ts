@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { Api, Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -201,9 +203,10 @@ describe("agent runtime model resolution", () => {
 		expect(childFallbackChains?.["openrouter/z-ai/glm-4.7@cerebras"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
 	});
 
-	it("persists a safe skip reason when the first configured member is unavailable", async () => {
+	it("does not persist a recovered selected model as skipped", async () => {
 		const unavailable = model("primary", "unavailable-model");
 		const available = model("fallback", "working-model");
+		let models = [available];
 		let persistedEntries: Array<{ type: string; data: unknown }> = [];
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
 			const session = createYieldingSession();
@@ -228,22 +231,24 @@ describe("agent runtime model resolution", () => {
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
-				getAll: () => [unavailable, available],
-				getAvailable: () => [available],
+				getAll: () => models,
+				getAvailable: () => models,
 				getApiKey: async () => "test-key",
+				refreshForSpawn: async (options?: { force?: boolean }) => {
+					if (options?.force) models = [unavailable, available];
+					return undefined;
+				},
 			} as never,
 			enableLsp: false,
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		expect(result.resolvedModel).toBe("fallback/working-model");
+		expect(result.resolvedModel).toBe("primary/unavailable-model");
 		expect(persistedEntries).toEqual([
 			{
 				type: "agent-model-resolution",
 				data: {
-					skipped: [
-						"primary/unavailable-model: primary/unavailable-model is unavailable in the model registry",
-					],
+					skipped: [],
 				},
 			},
 		]);
@@ -253,6 +258,7 @@ describe("agent runtime model resolution", () => {
 	});
 
 	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
+
 		const defaultModel = model("anthropic", "claude-opus-5-5");
 		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
 			async () =>
@@ -293,5 +299,34 @@ describe("agent runtime model resolution", () => {
 		expect(result.error).toContain("google-antigravity/gemini-3.8-flash:high: not found in the model catalog");
 		expect(result.error).toContain("anthropic/claude-haiku-5-5:max: not found in the model catalog");
 		expect(createSessionSpy).not.toHaveBeenCalled();
+	});
+	it("surfaces authenticated built-in discovery failures as safe spawn errors", async () => {
+		const authStorage = await AuthStorage.create(":memory:");
+		try {
+			authStorage.setRuntimeApiKey("openai", "sk-test-secret");
+			const registry = new ModelRegistry(authStorage, path.join(isolatedArtifactsDir(), "models.json"), {
+				fetch: async () => {
+					throw new Error("credential=provider-secret");
+				},
+				snapshotIo: false,
+			});
+			const result = await runSubprocess({
+				cwd: "/tmp",
+				agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
+				task: "work",
+				index: 0,
+				id: "builtin-discovery-failure",
+				modelOverride: ["openai/model-that-does-not-exist"],
+				settings: Settings.isolated(),
+				modelRegistry: registry,
+				enableLsp: false,
+				artifactsDir: isolatedArtifactsDir(),
+			});
+			expect(result.error).toContain("Model discovery failed");
+			expect(result.error).not.toContain("provider-secret");
+			expect(result.error).not.toContain("sk-test-secret");
+		} finally {
+			authStorage.close();
+		}
 	});
 });
