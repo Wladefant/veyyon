@@ -982,11 +982,12 @@ describe("Antigravity predicted vs confirmed block reconciliation", () => {
 
 	test("rechecks stale predicted blocks with bounded cadence and skips recheck for confirmed429 holds", async () => {
 		if (!store) throw new Error("test setup failed");
-		let summaryCalls = 0;
+		const summaryTokens: string[] = [];
 		const countingFetch: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
 			const url = String(input);
 			if (url.includes("retrieveUserQuotaSummary")) {
-				summaryCalls += 1;
+				const token = (new Headers(init?.headers).get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+				summaryTokens.push(token);
 			}
 			return makeFetch()(input, init);
 		}) as typeof fetch;
@@ -1021,20 +1022,21 @@ describe("Antigravity predicted vs confirmed block reconciliation", () => {
 			now += 10 * MINUTE_MS;
 			responsesByToken.set("access-acct-b", { summary: { status: 503, body: { error: "unavailable" } } });
 			await storage.invalidateUsageCache(PROVIDER);
-			summaryCalls = 0;
+			summaryTokens.length = 0;
 			await storage.getApiKey(PROVIDER, "recheck-1", { modelId: "gemini-3.8-flash" });
-			expect(summaryCalls).toBe(1);
+			// 503 probes both Antigravity endpoints for predicted acct-b, never confirmed acct-a.
+			expect(summaryTokens).toEqual(["access-acct-b", "access-acct-b"]);
 
 			await storage.getApiKey(PROVIDER, "recheck-2", { modelId: "gemini-3.8-flash" });
-			expect(summaryCalls).toBe(1);
+			expect(summaryTokens).toEqual(["access-acct-b", "access-acct-b"]);
 
 			// Once the 5-minute recheck cooldown elapses and summary recovers, acct-b heals cleanly.
 			now += 6 * MINUTE_MS;
 			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.9)]) });
 			await storage.invalidateUsageCache(PROVIDER);
-			summaryCalls = 0;
+			summaryTokens.length = 0;
 			expect(await storage.getApiKey(PROVIDER, "recheck-3", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
-			expect(summaryCalls).toBe(1);
+			expect(summaryTokens).toEqual(["access-acct-b"]);
 			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeUndefined();
 			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBeDefined();
 		} finally {

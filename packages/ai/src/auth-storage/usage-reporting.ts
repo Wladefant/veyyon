@@ -518,6 +518,7 @@ export class UsageReporting {
 				fetchedAt: now,
 				limits,
 				metadata: {
+					...(report.metadata ?? {}),
 					...stripOverlaidAuthoritativeCounters(prior.metadata, report.limits),
 					headersUpdatedAt: now,
 				},
