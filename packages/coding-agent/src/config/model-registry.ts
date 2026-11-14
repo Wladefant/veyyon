@@ -503,7 +503,10 @@ export class ModelRegistry {
 		key: string;
 		promise: Promise<string | undefined>;
 	};
-	#forcedSpawnRefreshes = new Map<string, { refreshedAt: number; failure: string | undefined }>();
+	#forcedSpawnRefreshes = new Map<
+		string,
+		{ refreshedAt: number; failure: string | undefined; catalogStamp: string }
+	>();
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
 	// Runtime extension model overlays — persist across refresh() cycles so that
 	// models registered by extensions survive the model selector's offline reload.
@@ -601,15 +604,13 @@ export class ModelRegistry {
 
 	async #withSerializedRefresh<T>(operation: () => Promise<T>): Promise<T> {
 		const previous = this.#refreshQueue;
-		let release!: () => void;
-		this.#refreshQueue = new Promise<void>(resolve => {
-			release = resolve;
-		});
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#refreshQueue = promise;
 		await previous;
 		try {
 			return await operation();
 		} finally {
-			release();
+			resolve();
 		}
 	}
 
@@ -669,14 +670,22 @@ export class ModelRegistry {
 		}
 		if (forced) {
 			const cached = this.#forcedSpawnRefreshes.get(key);
-			if (cached) return cached.failure;
+			if (cached) {
+				const currentStamp = modelCacheStamp(this.#cacheDbPath ?? getModelDbPath(), { ttlMs: DAY_MS });
+				if (currentStamp !== "unreadable" && currentStamp === cached.catalogStamp) return cached.failure;
+				this.#forcedSpawnRefreshes.delete(key);
+			}
 		} else if (now - this.#lastSpawnPreflightAt < ttl) {
 			return this.#lastSpawnPreflightFailure;
 		}
 		const mode = forced ? "forced" : "preflight";
 		const refreshPromise = this.#refreshForSpawnNow(forced).then(failure => {
 			if (forced) {
-				this.#forcedSpawnRefreshes.set(key, { refreshedAt: Date.now(), failure });
+				this.#forcedSpawnRefreshes.set(key, {
+					refreshedAt: Date.now(),
+					failure,
+					catalogStamp: modelCacheStamp(this.#cacheDbPath ?? getModelDbPath(), { ttlMs: DAY_MS }),
+				});
 			} else {
 				this.#lastSpawnPreflightAt = Date.now();
 				this.#lastSpawnPreflightFailure = failure;
