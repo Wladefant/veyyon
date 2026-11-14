@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Native `BashTool` commands attest the live main or subagent caller through `VEYYON_CALLER_URL` and `VEYYON_CALLER_TOKEN` over a lazy loopback HTTP endpoint, rejecting user `env` overrides and clearing inherited receipt variables when no live actor owns the session.
+
 ## [1.9.4] - 2026-11-14
 
 ### Fixed

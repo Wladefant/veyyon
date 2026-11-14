@@ -51,6 +51,7 @@ import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
 import { bashApprovalPattern } from "./bash-approval-pattern";
 import { registerForegroundBashWait } from "./bash-foreground-registry";
+import { RESERVED_CALLER_ENV_KEYS, resolveBashCallerEnv } from "./bash-caller-attestation";
 import {
 	bashCredentialTargets,
 	findCriticalBashRisk,
@@ -436,6 +437,9 @@ function normalizeBashEnv(env: Record<string, string> | undefined): Record<strin
 	for (const [key, value] of Object.entries(env)) {
 		if (!BASH_ENV_NAME_PATTERN.test(key)) {
 			throw new ToolError(`Invalid bash env name: ${key}`);
+		}
+		if (Object.hasOwn(RESERVED_CALLER_ENV_KEYS, key.toUpperCase())) {
+			throw new ToolError(`Bash env override refused: ${key} is reserved for host caller attestation.`);
 		}
 		normalized[key] = value;
 	}
@@ -1132,10 +1136,14 @@ export class BashTool
 			if (timeoutClampNotice) notices.push(timeoutClampNotice);
 		}
 		if (skillScopeUnresolved) notices.push(SKILL_SCOPE_UNRESOLVED_NOTICE);
+		const resolvedEnv = {
+			...expanded.env,
+			...resolveBashCallerEnv(this.session),
+		};
 		return {
 			command: expanded.command,
 			commandCwd,
-			resolvedEnv: expanded.env,
+			resolvedEnv,
 			requestedTimeoutSec,
 			timeoutSec,
 			timeoutMs: timeoutSec === undefined ? undefined : timeoutSec * 1000,
