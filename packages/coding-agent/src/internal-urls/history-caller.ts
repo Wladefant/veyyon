@@ -28,7 +28,7 @@ const capabilities = new WeakMap<object, CapabilityBinding>();
  * registry. Unknown, advisor, parked, unscoped, or mismatched sessions fail
  * closed; URL fields never participate in this decision.
  */
-function currentCaller(session: ToolSession): ResolvedHistoryCaller | undefined {
+export function resolveLiveToolCaller(session: ToolSession): ResolvedHistoryCaller | undefined {
   try {
     const ownerSession = session.getOwningAgentSession?.();
     if (!ownerSession || ownerSession.isDisposed) return undefined;
@@ -73,7 +73,7 @@ function currentCaller(session: ToolSession): ResolvedHistoryCaller | undefined 
 
 /** Mint a one-read capability from the actual host-owned ToolSession. */
 export function createHistoryCallerCapability(session: ToolSession): HistoryCallerCapability | undefined {
-  const caller = currentCaller(session);
+  const caller = resolveLiveToolCaller(session);
   if (!caller) return undefined;
 
   const capability = Object.freeze(Object.create(null)) as HistoryCallerCapability;
@@ -91,7 +91,7 @@ export function resolveHistoryCallerCapability(candidate: unknown): ResolvedHist
   const binding = capabilities.get(candidate);
   if (!binding) return undefined;
 
-  const current = currentCaller(binding.session);
+  const current = resolveLiveToolCaller(binding.session);
   if (
     !current ||
     current.registry !== binding.caller.registry ||
