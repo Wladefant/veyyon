@@ -233,7 +233,6 @@ describe("task spawn routing", () => {
 			nativeDispatchBound: true,
 		} as TaskParams);
 
-
 		expect(result.details?.results[0]?.agent).toBe("reviewer");
 		expect(runSpy).toHaveBeenCalledTimes(1);
 		expect(events).toEqual(["start", "execute", "complete"]);
