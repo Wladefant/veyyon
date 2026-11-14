@@ -34,6 +34,7 @@ const ROUTE_BODIES: Record<string, string | undefined> = {
 	"POST /v1/credential/:id/refresh": undefined,
 	"POST /v1/credential/:id/disable": undefined,
 	"POST /v1/credential/:id/block": blockBody,
+	"DELETE /v1/credential/:id/block": JSON.stringify({ providerKey: "anthropic", blockScope: "global" }),
 	"DELETE /v1/credential/:id/blocks": undefined,
 };
 

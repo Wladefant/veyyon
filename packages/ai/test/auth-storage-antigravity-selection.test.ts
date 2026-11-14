@@ -9,16 +9,23 @@
  * credentials and could pin a session to the exhausted account.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { withAuth } from "@veyyon/ai/auth-retry";
+import {
+	AuthBrokerClient,
+	type AuthBrokerServerHandle,
+	RemoteAuthCredentialStore,
+	startAuthBroker,
+} from "@veyyon/ai/auth-broker";
 import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import type { OAuthCredentials } from "@veyyon/ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@veyyon/ai/usage";
-import { antigravityRankingStrategy } from "@veyyon/ai/usage/google-antigravity";
+import { antigravityRankingStrategy, antigravityUsageProvider } from "@veyyon/ai/usage/google-antigravity";
 import { removeWithRetries } from "../../utils/src/temp";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -516,5 +523,524 @@ describe("AuthStorage google-antigravity oauth ranking", () => {
 		releaseReport();
 		await shortRefusal;
 		expect(await authStorage.getApiKey(provider, sessionId, { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+	});
+});
+
+describe("Antigravity predicted vs confirmed block reconciliation", () => {
+	const PROVIDER = "google-antigravity";
+	const PROVIDER_KEY = "google-antigravity:oauth";
+	const MINUTE_MS = 60_000;
+
+	let tempDir = "";
+	let dbPath = "";
+	let store: SqliteAuthCredentialStore | null = null;
+	let now = Date.now();
+
+	type EndpointResponse = {
+		summary?: { status: number; body: unknown };
+		listing?: { status: number; body: unknown };
+	};
+
+	const responsesByToken = new Map<string, EndpointResponse>();
+
+	function makeFetch(): typeof fetch {
+		return (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			const headers = new Headers(init?.headers);
+			const auth = headers.get("authorization") ?? "";
+			const token = auth.replace(/^Bearer\s+/i, "");
+			const config = responsesByToken.get(token);
+			if (url.includes("retrieveUserQuotaSummary")) {
+				const reply = config?.summary ?? { status: 503, body: { error: "unavailable" } };
+				return new Response(JSON.stringify(reply.body), {
+					status: reply.status,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			if (url.includes("fetchAvailableModels")) {
+				const reply = config?.listing ?? { status: 503, body: { error: "unavailable" } };
+				return new Response(JSON.stringify(reply.body), {
+					status: reply.status,
+					headers: { "content-type": "application/json" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+	}
+
+	function summaryResponse(groups: Array<{ displayName: string; buckets: Array<{ bucketId: string; window: string; remainingFraction: number; resetTime?: string }> }>) {
+		return { status: 200, body: { groups } };
+	}
+
+	function geminiSummary(remainingFraction: number, resetTime?: string) {
+		return {
+			displayName: "Gemini Models",
+			buckets: [
+				{ bucketId: "gemini-5h", window: "5h", remainingFraction, ...(resetTime ? { resetTime } : {}) },
+				{ bucketId: "gemini-weekly", window: "weekly", remainingFraction, ...(resetTime ? { resetTime } : {}) },
+			],
+		};
+	}
+
+	function claudeSummary(remainingFraction: number, resetTime?: string) {
+		return {
+			displayName: "Claude and GPT models",
+			buckets: [
+				{ bucketId: "3p-5h", window: "5h", remainingFraction, ...(resetTime ? { resetTime } : {}) },
+				{ bucketId: "3p-weekly", window: "weekly", remainingFraction, ...(resetTime ? { resetTime } : {}) },
+			],
+		};
+	}
+
+	function openStorage(backingStore: AuthCredentialStore): AuthStorage {
+		return new AuthStorage(backingStore, {
+			loadBalancing: true,
+			usageProviderResolver: provider => (provider === PROVIDER ? antigravityUsageProvider : undefined),
+			rankingStrategyResolver: provider => (provider === PROVIDER ? antigravityRankingStrategy : undefined),
+			usageFetch: makeFetch(),
+		});
+	}
+
+	beforeEach(async () => {
+		now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-antigravity-reconcile-"));
+		dbPath = path.join(tempDir, "agent.db");
+		store = await SqliteAuthCredentialStore.open(dbPath);
+		responsesByToken.clear();
+		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (_provider, credentials) => {
+			const credential = credentials[PROVIDER] as OAuthCredentials | undefined;
+			if (!credential?.accountId) return null;
+			return { apiKey: `api-${credential.accountId}`, newCredentials: credential };
+		});
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		store?.close();
+		store = null;
+		if (tempDir) {
+			await removeWithRetries(tempDir);
+			tempDir = "";
+		}
+	});
+
+	test("heals a stale predicted counter:google block after reconcileAfter when live summary is healthy", async () => {
+		if (!store) throw new Error("test setup failed");
+		const storage = openStorage(store);
+		try {
+			await storage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [rowA, rowB] = storage.listStoredCredentials(PROVIDER);
+			if (!rowA || !rowB) throw new Error("expected stored rows");
+
+			const resetIso = new Date(now + 24 * HOUR_MS).toISOString();
+			// Ranking observes acct-b Gemini exhausted and writes a predicted counter:google block;
+			// acct-a is confirmed 429 so later selection has every candidate blocked on counter:google.
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.2)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+
+			expect(await storage.getApiKey(PROVIDER, "seed-predicted", { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeDefined();
+
+			await storage.markUsageLimitReached(PROVIDER, "seed-confirmed", {
+				credentialId: rowA.id,
+				modelId: "gemini-3.8-flash",
+				retryAfterMs: 12 * HOUR_MS,
+			});
+			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBeDefined();
+
+			// Inside the 5-minute reconcileAfter window, a healthy live summary must NOT clear the block.
+			now += 2 * MINUTE_MS;
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.95)]) });
+			await storage.invalidateUsageCache(PROVIDER);
+			await storage.fetchUsageReports();
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeDefined();
+
+			// Past reconcileAfter, live authoritative summary heals acct-b even while all candidates are blocked.
+			now += 5 * MINUTE_MS;
+			await storage.invalidateUsageCache(PROVIDER);
+			expect(await storage.getApiKey(PROVIDER, "after-reconcile", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeUndefined();
+			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBeDefined();
+		} finally {
+			storage.close();
+		}
+	});
+
+	test("keeps a confirmed429 counter:google block on low summary, including across a fresh peer reload", async () => {
+		if (!store) throw new Error("test setup failed");
+		const storage = openStorage(store);
+		const peerStore = await SqliteAuthCredentialStore.open(dbPath);
+		const peerStorage = openStorage(peerStore);
+		try {
+			await storage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [rowA] = storage.listStoredCredentials(PROVIDER);
+			if (!rowA) throw new Error("expected stored row");
+
+			// Simulate cred13: real 429 with low 5h/weekly summary hiding a daily cap.
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.994)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.95)]) });
+
+			expect(storage.pinSessionCredential(PROVIDER, "pinned-orig", rowA.id)).toBe(true);
+			await storage.markUsageLimitReached(PROVIDER, "pinned-orig", {
+				credentialId: rowA.id,
+				modelId: "gemini-3.8-flash",
+				retryAfterMs: 12 * HOUR_MS,
+			});
+			const blockedUntil = store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google");
+			expect(blockedUntil).toBeDefined();
+
+			now += 10 * MINUTE_MS;
+			await storage.invalidateUsageCache(PROVIDER);
+			await storage.fetchUsageReports();
+			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBe(blockedUntil);
+			expect(await storage.getApiKey(PROVIDER, "pinned-orig", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+
+			// Fresh peer process reloads from SQLite: must still keep the confirmed429 hold and rotate off pin.
+			await peerStorage.reload();
+			expect(peerStorage.pinSessionCredential(PROVIDER, "pinned-peer", rowA.id)).toBe(true);
+			await peerStorage.fetchUsageReports();
+			expect(peerStore.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBe(blockedUntil);
+			expect(await peerStorage.getApiKey(PROVIDER, "pinned-peer", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+		} finally {
+			peerStorage.close();
+			peerStore.close();
+			storage.close();
+		}
+	});
+
+	test("treats legacy untagged blocks conservatively and leaves them intact on healthy summary", async () => {
+		if (!store) throw new Error("test setup failed");
+		const storage = openStorage(store);
+		try {
+			await storage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [rowA] = storage.listStoredCredentials(PROVIDER);
+			if (!rowA) throw new Error("expected stored row");
+
+			const legacyUntil = now + 12 * HOUR_MS;
+			// Simulate a pre-provenance (untagged) row written before provenance tracking existed.
+			const db = new Database(dbPath);
+			try {
+				db.prepare(
+					"INSERT INTO auth_credential_blocks (credential_id, provider_key, block_scope, blocked_until_ms, updated_at) VALUES (?, ?, ?, ?, ?)",
+				).run(rowA.id, PROVIDER_KEY, "counter:google", legacyUntil, Math.floor(now / 1000) - 600);
+			} finally {
+				db.close();
+			}
+
+			now += 10 * MINUTE_MS;
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.95)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.9)]) });
+			await storage.fetchUsageReports();
+
+			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBe(legacyUntil);
+		} finally {
+			storage.close();
+		}
+	});
+
+	test("does not heal predicted block from fetchAvailableModels fallback or summary omitting that counter", async () => {
+		if (!store) throw new Error("test setup failed");
+		const storage = openStorage(store);
+		try {
+			await storage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [, rowB] = storage.listStoredCredentials(PROVIDER);
+			if (!rowB) throw new Error("expected stored row");
+
+			const resetIso = new Date(now + 24 * HOUR_MS).toISOString();
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.8)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+			await storage.getApiKey(PROVIDER, "seed-fallback", { modelId: "gemini-3.8-flash" });
+			const predictedUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google");
+			expect(predictedUntil).toBeDefined();
+
+			now += 10 * MINUTE_MS;
+			// Case A: summary fails (503) and listing fallback claims Gemini is 90% remaining.
+			responsesByToken.set("access-acct-b", {
+				summary: { status: 503, body: { error: "unavailable" } },
+				listing: {
+					status: 200,
+					body: {
+						models: {
+							"gemini-3-flash": {
+								modelProvider: "MODEL_PROVIDER_GOOGLE",
+								quotaInfos: [{ remainingFraction: 0.9, windowId: "5h" }],
+							},
+						},
+					},
+				},
+			});
+			await storage.invalidateUsageCache(PROVIDER);
+			await storage.fetchUsageReports();
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBe(predictedUntil);
+
+			// Case B: summary names only claude-gpt, while Gemini comes from fetchAvailableModels fallback.
+			responsesByToken.set("access-acct-b", {
+				summary: summaryResponse([claudeSummary(0.9)]),
+				listing: {
+					status: 200,
+					body: {
+						models: {
+							"gemini-3-flash": {
+								modelProvider: "MODEL_PROVIDER_GOOGLE",
+								quotaInfos: [{ remainingFraction: 0.95, windowId: "5h" }],
+							},
+						},
+					},
+				},
+			});
+			await storage.invalidateUsageCache(PROVIDER);
+			await storage.fetchUsageReports();
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBe(predictedUntil);
+		} finally {
+			storage.close();
+		}
+	});
+
+	test("reconciling counter:google preserves counter:claude-gpt, model blocks, counter:unknown, and sibling blocks", async () => {
+		if (!store) throw new Error("test setup failed");
+		const storage = openStorage(store);
+		try {
+			await storage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [rowA, rowB] = storage.listStoredCredentials(PROVIDER);
+			if (!rowA || !rowB) throw new Error("expected stored rows");
+
+			const resetIso = new Date(now + 24 * HOUR_MS).toISOString();
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+
+			// Trigger predicted counter:google on acct-b via ranking.
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.5)]) });
+			await storage.getApiKey(PROVIDER, "seed-b-gemini", { modelId: "gemini-3.8-flash" });
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeDefined();
+
+			// Set confirmed counter:claude-gpt on acct-b, model:gemini-3.8-flash on acct-b,
+			// counter:unknown on acct-b, and predicted counter:google on acct-a.
+			expect(storage.pinSessionCredential(PROVIDER, "pinned-b-claude", rowB.id)).toBe(true);
+			await storage.markUsageLimitReached(PROVIDER, "pinned-b-claude", {
+				credentialId: rowB.id,
+				modelId: "claude-sonnet-4-5",
+				retryAfterMs: 6 * HOUR_MS,
+			});
+			await storage.markUsageLimitReached(PROVIDER, undefined, {
+				credentialId: rowB.id,
+				modelId: "gemini-3.8-flash",
+				modelNotInPlan: true,
+			});
+			const unknownUntil = now + 4 * HOUR_MS;
+			storage.upsertCredentialBlock({
+				credentialId: rowB.id,
+				providerKey: PROVIDER_KEY,
+				blockScope: "counter:unknown",
+				blockedUntilMs: unknownUntil,
+			});
+			const siblingUntil = now + 8 * HOUR_MS;
+			storage.upsertCredentialBlock({
+				credentialId: rowA.id,
+				providerKey: PROVIDER_KEY,
+				blockScope: "counter:google",
+				blockedUntilMs: siblingUntil,
+			});
+
+			const claudeUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:claude-gpt");
+			const modelUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "model-not-in-plan:gemini-3.8-flash");
+			expect(claudeUntil).toBeDefined();
+			expect(modelUntil).toBeDefined();
+
+			now += 10 * MINUTE_MS;
+			// acct-b Gemini summary is now healthy, Claude+GPT is omitted/exhausted, acct-a Gemini stays exhausted.
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.92), claudeSummary(0, resetIso)]) });
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+			await storage.invalidateUsageCache(PROVIDER);
+			await storage.fetchUsageReports();
+
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeUndefined();
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:claude-gpt")).toBe(claudeUntil);
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "model-not-in-plan:gemini-3.8-flash")).toBe(modelUntil);
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:unknown")).toBe(unknownUntil);
+			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBe(siblingUntil);
+
+			// Confirmed Claude+GPT pin rotation on acct-b must still work after counter:google healed.
+			expect(await storage.getApiKey(PROVIDER, "pinned-b-claude", { modelId: "claude-sonnet-4-5" })).toBe("api-acct-a");
+		} finally {
+			storage.close();
+		}
+	});
+
+	test("remote broker heals only stale predicted scope and ignores header overlays", async () => {
+		if (!store) throw new Error("test setup failed");
+		const brokerStorage = openStorage(store);
+		let handle: AuthBrokerServerHandle | undefined;
+		let remote: RemoteAuthCredentialStore | undefined;
+		let remoteStorage: AuthStorage | undefined;
+		try {
+			await brokerStorage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [, rowB] = brokerStorage.listStoredCredentials(PROVIDER);
+			if (!rowB) throw new Error("expected stored row");
+
+			handle = startAuthBroker({
+				storage: brokerStorage,
+				bind: "127.0.0.1:0",
+				bearerTokens: ["test-token"],
+				disableRefresher: true,
+			});
+			const pendingBlockRequests: Promise<unknown>[] = [];
+			const trackingFetch: typeof fetch = ((input: string | URL | Request, init?: RequestInit) => {
+				const pending = fetch(input, init);
+				const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+				if (url.includes("/block")) {
+					pendingBlockRequests.push(pending);
+				}
+				return pending;
+			}) as typeof fetch;
+			const client = new AuthBrokerClient({ url: handle.url, token: "test-token", fetchImpl: trackingFetch });
+			const initial = await client.fetchSnapshot();
+			if (initial.status !== 200) throw new Error("expected initial snapshot");
+
+			remote = new RemoteAuthCredentialStore({
+				client,
+				initialSnapshot: initial.snapshot,
+				streamSnapshots: false,
+			});
+			remoteStorage = new AuthStorage(remote, {
+				loadBalancing: true,
+				usageProviderResolver: provider => (provider === PROVIDER ? antigravityUsageProvider : undefined),
+				rankingStrategyResolver: provider => (provider === PROVIDER ? antigravityRankingStrategy : undefined),
+			});
+			await remoteStorage.reload();
+
+			const resetIso = new Date(now + 24 * HOUR_MS).toISOString();
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.5)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+
+			// Remote ranking writes predicted counter:google on acct-b, plus unrelated counter:claude-gpt.
+			expect(await remoteStorage.getApiKey(PROVIDER, "remote-seed", { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+			await remoteStorage.markUsageLimitReached(PROVIDER, "remote-claude", {
+				credentialId: rowB.id,
+				modelId: "claude-sonnet-4-5",
+				retryAfterMs: 6 * HOUR_MS,
+			});
+
+			await Promise.all(pendingBlockRequests);
+			pendingBlockRequests.length = 0;
+			const predictedUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google");
+			const claudeUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:claude-gpt");
+			expect(predictedUntil).toBeDefined();
+			expect(claudeUntil).toBeDefined();
+
+			// Past reconcileAfter, header-ingested overlay alone must NOT heal the predicted block.
+			now += 10 * MINUTE_MS;
+			const bCred = remoteStorage.listStoredCredentials(PROVIDER).find(entry => entry.id === rowB.id)?.credential;
+			if (!bCred || bCred.type !== "oauth") throw new Error("expected oauth credential");
+			expect(
+				remote.ingestUsageReport(PROVIDER, bCred, {
+					provider: PROVIDER,
+					fetchedAt: now,
+					limits: [createAntigravityLimit({ counter: "google", usedFraction: 0.05, resetInMs: HOUR_MS }, "proj-b")],
+					metadata: { accountId: "acct-b", projectId: "proj-b", headersUpdatedAt: now },
+				}),
+			).toBe(true);
+			await remoteStorage.getApiKey(PROVIDER, "remote-header-check", { modelId: "gemini-3.8-flash" });
+			await Promise.all(pendingBlockRequests);
+			pendingBlockRequests.length = 0;
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBe(predictedUntil);
+
+			// Now authoritative broker /v1/usage reports Gemini healthy and Claude+GPT exhausted.
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.95), claudeSummary(0, resetIso)]) });
+			await brokerStorage.invalidateUsageCache(PROVIDER);
+			await remote.invalidateUsageCache();
+			await remoteStorage.fetchUsageReports();
+			await Promise.all(pendingBlockRequests);
+
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeUndefined();
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:claude-gpt")).toBe(claudeUntil);
+		} finally {
+			remoteStorage?.close();
+			remote?.close();
+			await handle?.close();
+			brokerStorage.close();
+		}
+	});
+
+	test("rechecks stale predicted blocks with bounded cadence and skips recheck for confirmed429 holds", async () => {
+		if (!store) throw new Error("test setup failed");
+		const summaryTokens: string[] = [];
+		const countingFetch: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("retrieveUserQuotaSummary")) {
+				const token = (new Headers(init?.headers).get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+				summaryTokens.push(token);
+			}
+			return makeFetch()(input, init);
+		}) as typeof fetch;
+		const storage = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: provider => (provider === PROVIDER ? antigravityUsageProvider : undefined),
+			rankingStrategyResolver: provider => (provider === PROVIDER ? antigravityRankingStrategy : undefined),
+			usageFetch: countingFetch,
+		});
+		try {
+			await storage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [rowA, rowB] = storage.listStoredCredentials(PROVIDER);
+			if (!rowA || !rowB) throw new Error("expected stored rows");
+
+			const resetIso = new Date(now + 24 * HOUR_MS).toISOString();
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.4)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+
+			// Seed predicted counter:google on acct-b, then confirmed429 counter:google on acct-a.
+			expect(await storage.getApiKey(PROVIDER, "recheck-seed", { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+			await storage.markUsageLimitReached(PROVIDER, "recheck-seed", {
+				credentialId: rowA.id,
+				modelId: "gemini-3.8-flash",
+				retryAfterMs: 12 * HOUR_MS,
+			});
+
+			// Past reconcileAfter while summary is temporarily unavailable (503) — only the predicted
+			// acct-b is probed, never confirmed acct-a; a second immediate getApiKey is throttled.
+			now += 10 * MINUTE_MS;
+			responsesByToken.set("access-acct-b", { summary: { status: 503, body: { error: "unavailable" } } });
+			await storage.invalidateUsageCache(PROVIDER);
+			summaryTokens.length = 0;
+			await storage.getApiKey(PROVIDER, "recheck-1", { modelId: "gemini-3.8-flash" });
+			// 503 probes both Antigravity endpoints for predicted acct-b, never confirmed acct-a.
+			expect(summaryTokens).toEqual(["access-acct-b", "access-acct-b"]);
+
+			await storage.getApiKey(PROVIDER, "recheck-2", { modelId: "gemini-3.8-flash" });
+			expect(summaryTokens).toEqual(["access-acct-b", "access-acct-b"]);
+
+			// Once the 5-minute recheck cooldown elapses and summary recovers, acct-b heals cleanly.
+			now += 6 * MINUTE_MS;
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.9)]) });
+			await storage.invalidateUsageCache(PROVIDER);
+			summaryTokens.length = 0;
+			expect(await storage.getApiKey(PROVIDER, "recheck-3", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+			expect(summaryTokens).toEqual(["access-acct-b"]);
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeUndefined();
+			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBeDefined();
+		} finally {
+			storage.close();
+		}
 	});
 });

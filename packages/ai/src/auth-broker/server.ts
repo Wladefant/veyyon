@@ -665,6 +665,7 @@ async function blockCredential(
 		providerKey: parsed.data.providerKey,
 		blockScope: parsed.data.blockScope,
 		blockedUntilMs: parsed.data.blockedUntilMs,
+		...(parsed.data.provenance ? { provenance: parsed.data.provenance } : {}),
 	};
 	try {
 		storage.upsertCredentialBlock(block);
@@ -695,6 +696,30 @@ function deleteCredentialBlocks({ storage }: BrokerContext, { peer }: BrokerRequ
 	}
 }
 
+async function deleteCredentialBlock(
+	{ storage }: BrokerContext,
+	{ req, peer }: BrokerRequest,
+	id: number,
+): Promise<Response> {
+	const parsed = await parseBody(req, wireSchemas().credentialBlockDeleteRequestSchema);
+	if (!parsed.ok) return parsed.response;
+	const unknown = unknownCredential(storage, id, peer, "auth-broker credential block delete miss");
+	if (unknown) return unknown;
+	try {
+		storage.deleteCredentialBlock(id, parsed.data.providerKey, parsed.data.blockScope);
+		logger.info("auth-broker credential block deleted", {
+			id,
+			peer,
+			providerKey: parsed.data.providerKey,
+			blockScope: parsed.data.blockScope,
+		});
+		const response: CredentialBlockResponse = { ok: true };
+		return json(200, response);
+	} catch (error) {
+		return credentialWriteFailed("auth-broker credential block delete failed", id, peer, error);
+	}
+}
+
 /** Routes that require a bearer, keyed `METHOD /path`. */
 const ROUTES: Record<string, BrokerHandler> = {
 	"GET /v1/snapshot/stream": (ctx, { req, peer }) =>
@@ -711,6 +736,7 @@ const CREDENTIAL_ROUTES: Record<string, CredentialHandler> = {
 	"POST disable": disableCredential,
 	"POST block": blockCredential,
 	"DELETE blocks": deleteCredentialBlocks,
+	"DELETE block": deleteCredentialBlock,
 };
 
 /**

@@ -52,6 +52,7 @@ import {
 	getUsageReportScopeAccountId,
 	isUsageLimitExhausted,
 	mergeUsageReportGroup,
+	stripOverlaidAuthoritativeCounters,
 } from "./usage-reports";
 import type { UsageRequestDescriptor } from "./usage-requests";
 import {
@@ -140,11 +141,10 @@ export interface UsageReportingHost {
 		expected: AuthCredential,
 		cause: string,
 	): boolean;
-	/** Lift a stale Codex usage-limit block that a healthy report contradicts. */
-	reconcileCodexUsageBlock(request: UsageRequestDescriptor, report: UsageReport): void;
+	/** Lift a stale usage-limit block that a live authoritative report contradicts. */
+	reconcileUsageBlock(request: UsageRequestDescriptor, report: UsageReport): void;
 	/** The same reconciliation for reports the store hook returned without a request. */
-	reconcileCodexUsageBlocksFromReports(reports: UsageReport[]): void;
-	/** Resolve a stored API key value (an env var name or a literal). */
+	reconcileUsageBlocksFromReports(reports: UsageReport[]): void;
 	resolveConfigValue(config: string): Promise<string | undefined>;
 	/** Record that the provider refused row `credentialId`'s grant. */
 	markAuthDead(credentialId: number): void;
@@ -337,7 +337,7 @@ export class UsageReporting {
 				// times decorrelate within a few cycles.
 				this.#cache.set(cacheKey, { value: report, expiresAt: Date.now() + USAGE_REPORT_TTL_MS + ttlJitter });
 				this.#recordHistory(request, report);
-				this.#host.reconcileCodexUsageBlock(request, report);
+				this.#host.reconcileUsageBlock(request, report);
 				return report;
 			}
 			// Failure: apply a short jittered cool-down so the credential doesn't
@@ -519,7 +519,7 @@ export class UsageReporting {
 				limits,
 				metadata: {
 					...(report.metadata ?? {}),
-					...(prior.metadata ?? {}),
+					...stripOverlaidAuthoritativeCounters(prior.metadata, report.limits),
 					headersUpdatedAt: now,
 				},
 			};
@@ -631,7 +631,7 @@ export class UsageReporting {
 			if (storeHook) {
 				const report = await withAuthHttpConcurrency(() => storeHook(provider, credential, options?.signal));
 				if (report) {
-					this.#host.reconcileCodexUsageBlock(
+					this.#host.reconcileUsageBlock(
 						buildUsageRequestForOauth(provider, credential, options?.baseUrl),
 						report,
 					);
@@ -678,7 +678,7 @@ export class UsageReporting {
 				this.#reportsInFlight.set(OVERRIDE_KEY, shared);
 			}
 			const reports = await raceWithSignal(shared, options?.signal, "usage fetch aborted");
-			if (shouldReconcileStoreHookReports && reports) this.#host.reconcileCodexUsageBlocksFromReports(reports);
+			if (shouldReconcileStoreHookReports && reports) this.#host.reconcileUsageBlocksFromReports(reports);
 			return reports;
 		}
 

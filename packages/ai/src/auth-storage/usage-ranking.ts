@@ -229,7 +229,8 @@ export interface CredentialRankingRequest<S> {
 }
 
 /** The block reads and writes a ranking pass makes. */
-export type RankingBlocks = Pick<CredentialBlocks, "getCredentialBlockedUntil" | "markCredentialBlocked">;
+export type RankingBlocks = Pick<CredentialBlocks, "getCredentialBlockedUntil" | "markCredentialBlocked"> &
+	Partial<Pick<CredentialBlocks, "canRecheckPredictedBlock" | "notePredictedBlockRecheck">>;
 
 /** The usage fetch a ranking pass makes, and the per-request deadline it is given. */
 export type RankingUsage = Pick<UsageReporting, "reportFor" | "requestTimeoutMs">;
@@ -286,6 +287,24 @@ export class CredentialRanking {
 				usage = await this.#reportFor(request, selection.credential);
 				usageChecked = true;
 				blockedUntil = this.#blockedUntil(request, selection.index);
+			} else if (
+				blockedUntil !== undefined &&
+				request.provider === "google-antigravity" &&
+				request.blockScope &&
+				this.#blocks.canRecheckPredictedBlock?.(
+					request.provider,
+					request.providerKey,
+					selection.index,
+					request.blockScope,
+					nowMs,
+				)
+			) {
+				usage = await this.#reportFor(request, selection.credential);
+				usageChecked = true;
+				blockedUntil = this.#blockedUntil(request, selection.index);
+				if (blockedUntil !== undefined) {
+					this.#blocks.notePredictedBlockRecheck?.(request.providerKey, request.blockScope, selection.index, nowMs);
+				}
 			}
 			if (blockedUntil !== undefined) return { selection, usage, usageChecked, blockedUntil };
 			if (!usageChecked && request.sessionPreferredUsage && selection.index === request.sessionPreferredUsage.index) {
@@ -370,6 +389,7 @@ export class CredentialRanking {
 					selection.index,
 					blockedUntil,
 					request.blockScope,
+					"predicted",
 				);
 				blocked = true;
 			}

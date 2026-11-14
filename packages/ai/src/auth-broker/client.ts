@@ -13,6 +13,7 @@ import { AuthBrokerError, AuthBrokerStreamUnsupportedError } from "../error/clas
 import { type } from "../utils/schema/arktype";
 import { formatGenerationTag, parseGenerationTag } from "./generation-tag";
 import type {
+	CredentialBlockDeleteRequest,
 	CredentialBlockRequest,
 	CredentialBlockResponse,
 	CredentialBlocksDeleteResponse,
@@ -238,6 +239,19 @@ export class AuthBrokerClient {
 	): Promise<CredentialBlockResponse> {
 		const body: CredentialBlockRequest = block;
 		return this.#request<CredentialBlockResponse>("POST", `/v1/credential/${id}/block`, {
+			body,
+			schema: wireSchemas().credentialBlockResponseSchema,
+			signal,
+		});
+	}
+
+	async deleteCredentialBlock(
+		id: number,
+		block: CredentialBlockDeleteRequest,
+		signal?: AbortSignal,
+	): Promise<CredentialBlockResponse> {
+		const body: CredentialBlockDeleteRequest = block;
+		return this.#request<CredentialBlockResponse>("DELETE", `/v1/credential/${id}/block`, {
 			body,
 			schema: wireSchemas().credentialBlockResponseSchema,
 			signal,

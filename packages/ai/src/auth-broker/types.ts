@@ -65,6 +65,12 @@ export interface CredentialDisableResponse {
 /** POST /v1/credential/:id/block request body. */
 export type CredentialBlockRequest = CredentialBlockSnapshot;
 
+/** DELETE /v1/credential/:id/block request body. */
+export interface CredentialBlockDeleteRequest {
+	providerKey: string;
+	blockScope: string;
+}
+
 /** POST /v1/credential/:id/block response body. */
 export interface CredentialBlockResponse {
 	ok: boolean;

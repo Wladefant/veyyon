@@ -22,7 +22,12 @@ import { readCodexClaimsFromPayload } from "@veyyon/catalog/wire/codex";
 import { tryParseJson } from "@veyyon/utils/json";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import { isRecord } from "@veyyon/utils/type-guards";
-import type { AuthCredential, OAuthCredential, StoredAuthCredential } from "./auth-storage";
+import type {
+	AuthCredential,
+	CredentialBlockProvenance,
+	OAuthCredential,
+	StoredAuthCredential,
+} from "./auth-storage";
 import { providerSharesProjectAcrossAccounts } from "./shared-project-providers";
 export type AuthRow = {
 	id: number;
@@ -39,6 +44,7 @@ export type CredentialBlockRow = {
 	block_scope: string;
 	blocked_until_ms: number;
 	updated_at: number;
+	provenance?: string | null;
 };
 
 export type SerializedCredentialRecord = {
@@ -47,7 +53,26 @@ export type SerializedCredentialRecord = {
 	identityKey: string | null;
 };
 
-export const AUTH_SCHEMA_VERSION = 6;
+export const AUTH_SCHEMA_VERSION = 7;
+
+/** Normalizes persisted provenance strings to the known union or undefined for legacy/untagged rows. */
+export function normalizeCredentialBlockProvenance(value: unknown): CredentialBlockProvenance | undefined {
+	if (value === "confirmed" || value === "predicted") return value;
+	return undefined;
+}
+
+/**
+ * Merges provenance when a block write conflicts with an active existing block.
+ * Confirmed holds always win, and untagged legacy rows remain conservative against predictions.
+ */
+export function mergeCredentialBlockProvenance(
+	existing: CredentialBlockProvenance | undefined,
+	incoming: CredentialBlockProvenance | undefined,
+): CredentialBlockProvenance | undefined {
+	if (existing === "confirmed" || incoming === "confirmed") return "confirmed";
+	if (existing === "predicted" && incoming === "predicted") return "predicted";
+	return existing;
+}
 
 /**
  * SQLite's busy result code family — base `SQLITE_BUSY` plus the extended

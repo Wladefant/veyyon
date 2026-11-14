@@ -84,6 +84,38 @@ export function getUsageReportIdentifiers(report: UsageReport): string[] {
 	return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 }
 
+function readAuthoritativeCounters(metadata: Record<string, unknown> | undefined): string[] {
+	const raw = metadata?.authoritativeCounters;
+	if (!Array.isArray(raw)) return [];
+	return raw.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+/**
+ * Removes any Antigravity counter keys touched by a non-authoritative overlay (e.g. response
+ * header ingestion) so overlaid values can never masquerade as live summary readings.
+ */
+export function stripOverlaidAuthoritativeCounters(
+	metadata: Record<string, unknown> | undefined,
+	overlayLimits: readonly UsageLimit[],
+): Record<string, unknown> | undefined {
+	if (!metadata) return undefined;
+	const existing = readAuthoritativeCounters(metadata);
+	if (existing.length === 0) return metadata;
+	const overlaidCounters = new Set<string>();
+	for (const limit of overlayLimits) {
+		if (limit.scope.provider !== "google-antigravity") continue;
+		const parts = limit.id.toLowerCase().split(":");
+		const counterKey = parts[1]?.trim();
+		if (counterKey) overlaidCounters.add(counterKey);
+	}
+	if (overlaidCounters.size === 0) return metadata;
+	const retained = existing.filter(counter => !overlaidCounters.has(counter.trim().toLowerCase()));
+	const next = { ...metadata };
+	if (retained.length > 0) next.authoritativeCounters = retained;
+	else delete next.authoritativeCounters;
+	return next;
+}
+
 export function mergeUsageReportGroup(reports: UsageReport[]): UsageReport {
 	if (reports.length === 1) return reports[0];
 	const sorted = [...reports].sort((a, b) => {
@@ -107,6 +139,14 @@ export function mergeUsageReportGroup(reports: UsageReport[]): UsageReport {
 		}
 		if (report.metadata) {
 			for (const [key, value] of Object.entries(report.metadata)) {
+				if (key === "authoritativeCounters") {
+					const combined = new Set([
+						...readAuthoritativeCounters(mergedMetadata),
+						...readAuthoritativeCounters(report.metadata),
+					]);
+					if (combined.size > 0) mergedMetadata.authoritativeCounters = [...combined];
+					continue;
+				}
 				if (mergedMetadata[key] === undefined) {
 					mergedMetadata[key] = value;
 				}

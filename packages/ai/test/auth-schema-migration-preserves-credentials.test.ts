@@ -300,7 +300,7 @@ describe("opening an older credential store preserves every credential", () => {
 				// Pinned to the exact number: if the constant moves, a new migration step
 				// was added and this suite must be extended to cover it rather than
 				// silently continuing to test the old chain.
-				expect(row?.version).toBe(6);
+				expect(row?.version).toBe(7);
 			} finally {
 				db.close();
 			}
