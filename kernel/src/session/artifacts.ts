@@ -5,14 +5,19 @@
  * accessible via artifact:// URLs.
  */
 
+import { Database } from "bun:sqlite";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFileSync, atomicWriteFileWith, fsyncDirEntry, fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { withFileLockSync } from "@veyyon/utils/file-lock";
 import * as logger from "@veyyon/utils/logger";
+import { sleepSync } from "@veyyon/utils/sleep";
+import { isSqliteBusyError } from "@veyyon/utils/sqlite";
 import { errorMessage } from "@veyyon/utils/type-guards";
 
+const DB_FILENAME = ".artifact-ids.sqlite";
 /**
  * Sanitize a tool name for safe use as the middle segment of the artifact
  * filename (`${id}.${toolType}.log`). Built-in tool names are fixed, but MCP,
@@ -84,11 +89,8 @@ export function writeArtifactAtomicallySync(path: string, content: string): numb
  * agent tree shares one ID space and one directory.
  */
 export class ArtifactManager {
-	#nextId = 0;
 	readonly #dir: string;
 	#dirCreated = false;
-	#initPromise: Promise<void> | null = null;
-	#idsInitialized = false;
 
 	/**
 	 * @param dir Directory that will hold artifact files. Created lazily on first save.
@@ -108,71 +110,35 @@ export class ArtifactManager {
 	async #ensureDir(): Promise<void> {
 		if (!this.#dirCreated) {
 			await fs.mkdir(this.#dir, { recursive: true });
-			// The session directory names this sidecar. Persist that entry before
-			// allocating an ID or allowing a caller to publish an artifact:// ref.
+			// Persist the sidecar entry before reserving an ID or publishing a ref.
 			await fsyncDirEntry(path.dirname(this.#dir));
 			this.#dirCreated = true;
 		}
-		// Memoize the first-use scan so it runs exactly once. Concurrent callers
-		// share the in-flight promise instead of each re-seeding #nextId across
-		// the readdir yield in #scanExistingIds (which would hand duplicate ids).
-		this.#initPromise ??= this.#scanExistingIds();
-		await this.#initPromise;
-		this.#idsInitialized = true;
 	}
 
-	#ensureDirSync(): void {
-		if (!this.#dirCreated) {
-			fsSync.mkdirSync(this.#dir, { recursive: true });
-			// Keep the synchronous allocation path under the same publication order.
-			fsyncDirEntrySync(path.dirname(this.#dir));
-			this.#dirCreated = true;
-		}
-		if (!this.#idsInitialized) {
-			this.#scanExistingIdsSync();
-			this.#idsInitialized = true;
-			this.#initPromise ??= Promise.resolve();
-		}
-	}
-
-	#scanExistingIdsSync(): void {
-		let maxId = -1;
+	#scanDirectoryMax(): number {
+		let maxScanId = -1;
 		try {
-			const files = fsSync.readdirSync(this.#dir);
-			for (const file of files) {
-				const match = file.match(/^(\d+)\..*\.log$/);
-				if (match) {
-					const id = parseInt(match[1], 10);
-					if (id > maxId) maxId = id;
+			const entries = fsSync.readdirSync(this.#dir);
+			for (const entry of entries) {
+				const outputMatch = entry.match(/^(\d+)\..*\.log$/);
+				if (outputMatch) {
+					const num = parseInt(outputMatch[1], 10);
+					if (num > maxScanId) maxScanId = num;
+					continue;
+				}
+				const markerMatch = entry.match(/^\.artifact-id-(\d+)$/);
+				if (markerMatch) {
+					const num = parseInt(markerMatch[1], 10);
+					if (num > maxScanId) maxScanId = num;
 				}
 			}
 		} catch (err) {
 			if (!isEnoent(err)) {
-				logger.warn("Artifact directory could not be read; truncated tool outputs are unreachable", {
-					dir: this.#dir,
-					error: errorMessage(err),
-				});
+				throw err;
 			}
 		}
-		this.#nextId = Math.max(this.#nextId, maxId + 1);
-	}
-
-	/**
-	 * Scan existing artifact files to find the next available ID.
-	 * This ensures we don't overwrite artifacts when resuming a session.
-	 */
-	async #scanExistingIds(): Promise<void> {
-		const files = await this.listFiles();
-		let maxId = -1;
-		for (const file of files) {
-			// Files are named: {id}.{toolType}.log
-			const match = file.match(/^(\d+)\..*\.log$/);
-			if (match) {
-				const id = parseInt(match[1], 10);
-				if (id > maxId) maxId = id;
-			}
-		}
-		this.#nextId = Math.max(this.#nextId, maxId + 1);
+		return maxScanId;
 	}
 
 	/**
@@ -185,16 +151,76 @@ export class ArtifactManager {
 			fsyncDirEntrySync(path.dirname(this.#dir));
 			this.#dirCreated = true;
 		}
-		for (;;) {
-			const id = this.#nextId++;
-			try {
-				fsSync.mkdirSync(path.join(this.#dir, `.artifact-id-${id}`));
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-				throw error;
-			}
-			return id;
-		}
+
+		return withFileLockSync(
+			path.join(this.#dir, "artifacts"),
+			() => {
+				const dbPath = path.join(this.#dir, DB_FILENAME);
+				const db = new Database(dbPath);
+				try {
+					db.run("PRAGMA busy_timeout = 5000;");
+					// WAL setup can return BUSY during another connection's final checkpoint,
+					// even with busy_timeout. Bound retries like the other SQLite stores.
+					for (let attempt = 0; ; attempt++) {
+						try {
+							db.run("PRAGMA journal_mode = WAL;");
+							break;
+						} catch (err) {
+							if (!isSqliteBusyError(err) || attempt >= 3) throw err;
+							sleepSync(100 * 2 ** attempt);
+						}
+					}
+					db.run("CREATE TABLE IF NOT EXISTS counter (key TEXT PRIMARY KEY, next_id INTEGER NOT NULL);");
+
+					const initialRow = db.query("SELECT next_id FROM counter WHERE key = 'artifacts';").get() as { next_id: number } | null;
+					let seeded = initialRow !== null;
+					let rescan = false;
+
+					for (;;) {
+						let claimedId = -1;
+						// The durable counter avoids enumerating legacy markers on each fresh manager.
+						// Scan only to seed it or recover from a legacy allocator collision outside the write transaction.
+						const maxScanId = !seeded || rescan ? this.#scanDirectoryMax() : -1;
+						rescan = false;
+						seeded = true;
+
+						const tx = db.transaction(() => {
+							const row = db.query("SELECT next_id FROM counter WHERE key = 'artifacts';").get() as { next_id: number } | null;
+							let nextVal: number;
+							if (!row) {
+								nextVal = Math.max(0, maxScanId + 1);
+								db.run("INSERT INTO counter (key, next_id) VALUES ('artifacts', ?);", [nextVal + 1]);
+								claimedId = nextVal;
+							} else {
+								const current = row.next_id;
+								nextVal = Math.max(current, maxScanId + 1);
+								db.run("UPDATE counter SET next_id = ? WHERE key = 'artifacts';", [nextVal + 1]);
+								claimedId = nextVal;
+							}
+						});
+						tx.immediate();
+
+						// Atomically reserve legacy marker directory.
+						// On EEXIST (another process or legacy allocator already claimed this marker),
+						// re-scan the directory on the next iteration.
+						try {
+							fsSync.mkdirSync(path.join(this.#dir, `.artifact-id-${claimedId}`));
+						} catch (err) {
+							if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+								rescan = true;
+								continue;
+							}
+							throw err;
+						}
+
+						return claimedId;
+					}
+				} finally {
+					db.close();
+				}
+			},
+			{ staleMs: 30_000, retries: 300, retryDelayMs: 50 },
+		);
 	}
 
 	/**
@@ -226,7 +252,6 @@ export class ArtifactManager {
 	 * Synchronously allocate a new artifact path and ID without writing content.
 	 */
 	allocatePathSync(toolType: string): { id: string; path: string } {
-		this.#ensureDirSync();
 		const id = String(this.allocateId());
 		const filename = `${id}.${sanitizeToolType(toolType)}.log`;
 		return { id, path: path.join(this.#dir, filename) };
@@ -260,7 +285,9 @@ export class ArtifactManager {
 	 */
 	async listFiles(): Promise<string[]> {
 		try {
-			return (await fs.readdir(this.#dir)).filter(file => !file.startsWith(".artifact-id-"));
+			return (await fs.readdir(this.#dir)).filter(
+				file => !file.startsWith(".artifact-id-") && !file.startsWith(DB_FILENAME),
+			);
 		} catch (err) {
 			if (!isEnoent(err)) {
 				logger.warn("Artifact directory could not be read; truncated tool outputs are unreachable", {
