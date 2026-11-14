@@ -10,6 +10,7 @@ import type { AgentTerminalOutcome } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { OwnershipLeaseRequest } from "./ownership-lease";
+import type { SpawnPriority } from "./parallel";
 import { DEFAULT_SPAWN_AGENT } from "./spawn-policy";
 import type { NestedRepoPatch, TaskIsolationMode } from "./worktree";
 
@@ -82,6 +83,7 @@ export const taskItemSchema = lazy(() =>
 		task: "string",
 		"cwd?": "string",
 		"successorOf?": "string",
+		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
 		"+": "delete",
 	}),
@@ -94,6 +96,7 @@ const taskItemSchemaIsolated = lazy(() =>
 		"isolated?": "boolean",
 		"cwd?": "string",
 		"successorOf?": "string",
+		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
 		"+": "delete",
 	}),
@@ -113,6 +116,8 @@ export interface TaskItem {
 	cwd?: string;
 	/** Predecessor agent ID when this spawn is an explicit successor. */
 	successorOf?: string;
+	/** High priority takes the next free permit before normal queued work, without preemption. */
+	priority?: SpawnPriority;
 	/** Explicit ancestor handoff of dirty paths, bounded by its expiry. */
 	ownershipLease?: OwnershipLeaseRequest;
 }
@@ -125,6 +130,7 @@ export const taskSchema = toolSchema("task", () =>
 		"isolated?": "boolean",
 		"cwd?": "string",
 		"successorOf?": "string",
+		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
 		"+": "delete",
 	}),
@@ -136,6 +142,7 @@ const taskSchemaNoIsolation = toolSchema("task:flat", () =>
 		task: "string",
 		"cwd?": "string",
 		"successorOf?": "string",
+		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
 		"+": "delete",
 	}),
@@ -192,6 +199,7 @@ function createTaskSchema(options: {
 				"isolated?": "boolean",
 				"cwd?": "string",
 				"successorOf?": "string",
+				"priority?": "'normal' | 'high'",
 				"ownershipLease?": ownershipLeaseRule,
 				"+": "delete",
 			});
@@ -207,6 +215,7 @@ function createTaskSchema(options: {
 			task: "string",
 			"cwd?": "string",
 			"successorOf?": "string",
+			"priority?": "'normal' | 'high'",
 			"ownershipLease?": ownershipLeaseRule,
 			"+": "delete",
 		});
@@ -224,6 +233,7 @@ function createTaskSchema(options: {
 			"isolated?": "boolean",
 			"cwd?": "string",
 			"successorOf?": "string",
+			"priority?": "'normal' | 'high'",
 			"ownershipLease?": ownershipLeaseRule,
 			"+": "delete",
 		});
@@ -234,6 +244,7 @@ function createTaskSchema(options: {
 		task: "string",
 		"cwd?": "string",
 		"successorOf?": "string",
+		"priority?": "'normal' | 'high'",
 		"ownershipLease?": ownershipLeaseRule,
 		"+": "delete",
 	});
@@ -318,6 +329,8 @@ export interface TaskParams {
 	cwd?: string;
 	/** Predecessor agent ID for an explicit successor spawn. */
 	successorOf?: string;
+	/** Per-spawn admission priority; omitted values keep normal FIFO order. */
+	priority?: SpawnPriority;
 	/** Explicit ancestor handoff; per-item in batch form. */
 	ownershipLease?: OwnershipLeaseRequest;
 	/** Internal native-ledger ticket identity; never exposed by the model-facing schema. */

@@ -14,6 +14,29 @@ import { makeToolSession } from "../helpers/tool-session";
 // by test/task/task-batch.test.ts), and a per-call `schema` input no longer
 // exists at all; follow-ups go through `irc` messaging.
 
+describe("task admission priority schema", () => {
+	for (const isolationEnabled of [false, true]) {
+		for (const batchEnabled of [false, true]) {
+			for (const defaultAgent of [undefined, "task"]) {
+				it(`validates priority with isolation=${isolationEnabled}, batch=${batchEnabled}, default=${defaultAgent}`, () => {
+					const schema = getTaskSchema({ isolationEnabled, batchEnabled, defaultAgent });
+					const item = { agent: "task", task: "Priority work.", priority: "high" };
+					const input = batchEnabled ? { context: "Shared.", tasks: [item] } : item;
+					const parsed = schema(input);
+					expect(parsed instanceof type.errors).toBe(false);
+					expect(parsed).toMatchObject(
+						batchEnabled ? { tasks: [{ priority: "high" }] } : { priority: "high" },
+					);
+					const invalid = { ...item, priority: "urgent" };
+					expect(
+						schema(batchEnabled ? { context: "Shared.", tasks: [invalid] } : invalid) instanceof type.errors,
+					).toBe(true);
+				});
+			}
+		}
+	}
+});
+
 describe("task schema (single-spawn)", () => {
 	it("accepts {agent, task}", () => {
 		const parsed = taskSchema.value({ agent: "explore", task: "Map the auth module." });
