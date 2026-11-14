@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setSystemTime, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2204,7 +2204,7 @@ describe("ModelRegistry", () => {
 					});
 				};
 				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
-				vi.setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
 				registry.suppressSelector("spawn-probe/configured", Date.now() + 60_000);
 
 				await Promise.all([registry.refreshForSpawn(), registry.refreshForSpawn(), registry.refreshForSpawn()]);
@@ -2214,6 +2214,7 @@ describe("ModelRegistry", () => {
 				expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
 				expect(registry.find("spawn-probe", "discovered")).toBeDefined();
 			} finally {
+				setSystemTime();
 				vi.useRealTimers();
 			}
 		});
@@ -2221,7 +2222,7 @@ describe("ModelRegistry", () => {
 		test("refreshes an expired snapshot even when existing models remain usable", async () => {
 			vi.useFakeTimers();
 			try {
-				vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+				setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
 				writeModelsJson({
 					"spawn-fallback": providerConfig("https://spawn-fallback.example/v1", [{ id: "known" }]),
 				});
@@ -2234,12 +2235,13 @@ describe("ModelRegistry", () => {
 				});
 				const nextTime = new Date(Date.now() + 5 * 60 * 1000 + 1);
 				fs.utimesSync(modelsJsonPath, nextTime, nextTime);
-				vi.setSystemTime(nextTime);
+				setSystemTime(nextTime);
 
 				await registry.refreshForSpawn();
 
 				expect(registry.find("spawn-fresh", "new-preferred")).toBeDefined();
 			} finally {
+				setSystemTime();
 				vi.useRealTimers();
 			}
 		});

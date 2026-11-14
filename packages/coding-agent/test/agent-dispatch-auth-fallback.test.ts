@@ -139,7 +139,7 @@ describe("ordered agent model auth resolution", () => {
 		);
 		expect(result.model?.provider).toBe("preferred");
 		expect(result.thinkingLevel).toBe("high");
-		expect(result.skipped).toContain("preferred/new-model: not found in the model catalog");
+		expect(result.skipped).toContain("preferred/new-model:high: not found in the model catalog");
 		expect(refreshes).toBe(2);
 	});
 
