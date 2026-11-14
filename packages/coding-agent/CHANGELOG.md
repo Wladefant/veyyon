@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
+
 ## [1.9.3] - 2026-11-13
 
 ### Fixed
