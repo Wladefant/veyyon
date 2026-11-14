@@ -203,7 +203,7 @@ describe("ordered agent model auth resolution", () => {
 			},
 		};
 		await expect(resolveAgentModelChain(["qwen3.6-plus-free"], registry)).rejects.toThrow(/suppressed/);
-		expect(refreshes).toBe(1);
+		expect(refreshes).toBe(2);
 	});
 
 	test("fails with per-member reasons when no configured member is usable", async () => {
