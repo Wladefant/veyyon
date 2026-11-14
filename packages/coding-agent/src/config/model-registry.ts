@@ -494,6 +494,10 @@ export class ModelRegistry {
 	#snapshotIo: boolean;
 	#suppressedSelectors: Map<string, number> = new Map();
 	#backgroundRefresh?: Promise<void>;
+	#lastSpawnPreflightAt = 0;
+	#spawnPreflight?: Promise<string | undefined>;
+	#lastForcedSpawnRefreshAt = 0;
+	#lastSpawnRefreshFailure: string | undefined;
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
 	// Runtime extension model overlays — persist across refresh() cycles so that
 	// models registered by extensions survive the model selector's offline reload.
@@ -572,6 +576,8 @@ export class ModelRegistry {
 		);
 		// Load models synchronously in constructor.
 		this.#loadModels();
+		// This snapshot is current until the spawn freshness TTL elapses.
+		this.#lastSpawnPreflightAt = Date.now();
 	}
 
 	/**
@@ -581,6 +587,7 @@ export class ModelRegistry {
 		this.#reloadStaticModels();
 		this.#suppressedSelectors.clear();
 		await this.#refreshRuntimeDiscoveries(strategy);
+		this.#lastSpawnPreflightAt = Date.now();
 	}
 
 	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
@@ -609,6 +616,61 @@ export class ModelRegistry {
 			}
 		}
 		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+	}
+
+	/**
+	 * Refresh discovery state for long-lived child resolution without clearing
+	 * active cooldowns. A short interval also bounds repeated absent-model probes.
+	 */
+	async refreshForSpawn(options?: { force?: boolean }): Promise<string | undefined> {
+		const now = Date.now();
+		for (const [selector, until] of this.#suppressedSelectors) {
+			if (until <= now) this.#suppressedSelectors.delete(selector);
+		}
+		if (this.#spawnPreflight) return this.#spawnPreflight;
+		const ttl = 5 * 60 * 1000;
+		const forced = options?.force === true;
+		if (forced) {
+			if (now - this.#lastForcedSpawnRefreshAt < ttl) return this.#lastSpawnRefreshFailure;
+			this.#lastForcedSpawnRefreshAt = now;
+		} else if (now - this.#lastSpawnPreflightAt < ttl) {
+			return this.#lastSpawnRefreshFailure;
+		}
+		const refreshPromise = this.#refreshForSpawnNow(forced).finally(() => {
+			if (this.#spawnPreflight === refreshPromise) this.#spawnPreflight = undefined;
+		});
+		this.#spawnPreflight = refreshPromise;
+		return refreshPromise;
+	}
+
+	async #refreshForSpawnNow(force: boolean): Promise<string | undefined> {
+		this.#lastSpawnPreflightAt = Date.now();
+		this.#lastSpawnRefreshFailure = undefined;
+		const previousModels = this.#models;
+		const previousProviderModels = new Map(
+			[...this.#providerModels].map(([provider, models]) => [provider, [...models]] as const),
+		);
+		const previousStandard = new Map(
+			[...this.#cachedStandardByProvider].map(([provider, models]) => [provider, [...models]] as const),
+		);
+		const previousDiscoveries = new Map(
+			[...this.#cachedDiscoveriesByProvider].map(([provider, models]) => [provider, [...models]] as const),
+		);
+		try {
+			this.#reloadStaticModels();
+			await this.#refreshRuntimeDiscoveries(force ? "online" : "online-if-uncached");
+			if ([...this.#providerDiscoveryStates.values()].some(state => state.error !== undefined)) {
+				this.#lastSpawnRefreshFailure = "Model discovery failed; cached catalog data was retained.";
+			}
+		} catch {
+			this.#models = previousModels;
+			this.#providerModels = previousProviderModels;
+			this.#cachedStandardByProvider = previousStandard;
+			this.#cachedDiscoveriesByProvider = previousDiscoveries;
+			this.#lastSpawnRefreshFailure = "Model discovery failed; the previous catalog snapshot was retained.";
+			logger.warn("spawn model discovery refresh failed; keeping the previous catalog snapshot");
+		}
+		return this.#lastSpawnRefreshFailure;
 	}
 
 	/**
