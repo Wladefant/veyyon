@@ -9,6 +9,7 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { resolveAgentModelChain } from "@veyyon/coding-agent/config/model-resolver";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
@@ -2222,6 +2223,43 @@ describe("ModelRegistry", () => {
 				setSystemTime();
 				vi.useRealTimers();
 			}
+		});
+		test("revalidates a cached missing chain after another registry updates the shared catalog", async () => {
+			writeRawModelsJson({
+				"spawn-shared": {
+					baseUrl: "https://spawn-shared.example/v1",
+					auth: "none",
+					api: "openai-responses",
+					discovery: { type: "openai-models-list" },
+				},
+			});
+			const targetUrl = "https://spawn-shared.example/v1/models";
+			let targetRequests = 0;
+			let catalogUpdated = false;
+			const fetchMock: FetchImpl = async input => {
+				const url = input instanceof Request ? input.url : String(input);
+				if (url !== targetUrl) throw new Error(`Unexpected URL: ${url}`);
+				targetRequests++;
+				const modelIds = catalogUpdated ? ["new-preferred", "fallback"] : ["fallback"];
+				return new Response(JSON.stringify({ data: modelIds.map(id => ({ id })) }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			};
+			const registryA = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			const registryB = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			const chain = ["spawn-shared/new-preferred", "spawn-shared/fallback"];
+
+			const first = await resolveAgentModelChain(chain, registryA);
+			expect(first.model?.id).toBe("fallback");
+			expect(targetRequests).toBe(1);
+
+			catalogUpdated = true;
+			await registryB.refresh("online");
+
+			const second = await resolveAgentModelChain(chain, registryA);
+			expect(second.model?.id).toBe("new-preferred");
+			expect(targetRequests).toBe(3);
 		});
 
 		test("runs a forced online refresh after an in-flight non-forced preflight", async () => {
