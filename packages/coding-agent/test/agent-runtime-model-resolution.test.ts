@@ -201,6 +201,57 @@ describe("agent runtime model resolution", () => {
 		expect(childFallbackChains?.["openrouter/z-ai/glm-4.7@cerebras"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
 	});
 
+	it("persists a safe skip reason when the first configured member is unavailable", async () => {
+		const unavailable = model("primary", "unavailable-model");
+		const available = model("fallback", "working-model");
+		let persistedEntries: Array<{ type: string; data: unknown }> = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			const session = createYieldingSession();
+			session.sessionManager.appendCustomEntry = ((type: string, data: unknown) => {
+				persistedEntries.push({ type, data });
+			}) as never;
+			return {
+				session,
+				extensionsResult: {},
+				setToolUIContext: () => {},
+				setToolNotifier: () => {},
+			} as never;
+		});
+
+		const result = await runSubprocess({
+			cwd: "/tmp",
+			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
+			task: "work",
+			index: 0,
+			id: "skipped-model-resolution",
+			modelOverride: ["primary/unavailable-model", "fallback/working-model"],
+			settings: Settings.isolated(),
+			modelRegistry: {
+				refresh: async () => {},
+				getAll: () => [unavailable, available],
+				getAvailable: () => [available],
+				getApiKey: async () => "test-key",
+			} as never,
+			enableLsp: false,
+			artifactsDir: isolatedArtifactsDir(),
+		});
+
+		expect(result.resolvedModel).toBe("fallback/working-model");
+		expect(persistedEntries).toEqual([
+			{
+				type: "agent-model-resolution",
+				data: {
+					skipped: [
+						"primary/unavailable-model: primary/unavailable-model is unavailable in the model registry",
+					],
+				},
+			},
+		]);
+		const persistedText = JSON.stringify(persistedEntries);
+		expect(persistedText).not.toContain("test-key");
+		expect(persistedText).not.toMatch(/provider error|secret/i);
+	});
+
 	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
 		const defaultModel = model("anthropic", "claude-opus-5-5");
 		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
