@@ -94,10 +94,12 @@ export function normalizeConcurrencyLimit(max: number): number {
 	return normalizedMax > 0 ? normalizedMax : 0;
 }
 
+export type SpawnPriority = "normal" | "high";
+
 export class Semaphore {
 	#max: number;
 	#current = 0;
-	#queue: Array<() => void> = [];
+	#queue: Array<{ admit: () => void; priority: SpawnPriority }> = [];
 
 	constructor(max: number) {
 		const normalizedMax = normalizeConcurrencyLimit(max);
@@ -110,8 +112,10 @@ export class Semaphore {
 	 * occupying a queue slot — otherwise a later `release()` would resolve the
 	 * abandoned waiter, permanently shrinking effective concurrency for the
 	 * remaining lifetime of the process (issue #3464 review feedback).
+	 * High-priority waiters precede normal waiters; each priority keeps FIFO
+	 * order. Priority never preempts a holder or raises the concurrency ceiling.
 	 */
-	async acquire(signal?: AbortSignal): Promise<void> {
+	async acquire(signal?: AbortSignal, priority: SpawnPriority = "normal"): Promise<void> {
 		if (signal?.aborted) {
 			throw semaphoreAbortReason(signal);
 		}
@@ -121,20 +125,26 @@ export class Semaphore {
 		}
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 		const queue = this.#queue;
-		let waiter: () => void = resolve;
+		const waiter = { admit: resolve, priority };
 		if (signal) {
 			const onAbort = () => {
 				const index = queue.indexOf(waiter);
 				if (index >= 0) queue.splice(index, 1);
 				reject(semaphoreAbortReason(signal));
 			};
-			waiter = () => {
+			waiter.admit = () => {
 				signal.removeEventListener("abort", onAbort);
 				resolve();
 			};
 			signal.addEventListener("abort", onAbort, { once: true });
 		}
-		queue.push(waiter);
+		if (priority === "high") {
+			const firstNormal = queue.findIndex(entry => entry.priority === "normal");
+			if (firstNormal >= 0) queue.splice(firstNormal, 0, waiter);
+			else queue.push(waiter);
+		} else {
+			queue.push(waiter);
+		}
 		return promise;
 	}
 
@@ -145,7 +155,7 @@ export class Semaphore {
 			const next = this.#queue.shift();
 			if (next) {
 				this.#current++;
-				next();
+				next.admit();
 			}
 		}
 	}
@@ -165,7 +175,7 @@ export class Semaphore {
 			const next = this.#queue.shift();
 			if (!next) break;
 			this.#current++;
-			next();
+			next.admit();
 		}
 	}
 }

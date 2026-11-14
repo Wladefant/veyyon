@@ -21,6 +21,7 @@ import { TaskTool } from "@veyyon/coding-agent/task";
 import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
 import * as isolationRunner from "@veyyon/coding-agent/task/isolation-runner";
+import { Semaphore } from "@veyyon/coding-agent/task/parallel";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -414,6 +415,70 @@ describe("task spawn routing", () => {
 		expect(delivered).toContain("Task isolation is disabled");
 		expect(delivered).not.toContain("ran isolated");
 	});
+
+	for (const background of [false, true]) {
+		for (const batch of [false, true]) {
+			it(`admits priority before normal queued work (background=${background}, batch=${batch})`, async () => {
+				vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+					agents: [taskAgent],
+					projectAgentsDir: null,
+				});
+				const started: string[] = [];
+				const queued = Promise.withResolvers<void>();
+				const acquire = Semaphore.prototype.acquire;
+				let requests = 0;
+				vi.spyOn(Semaphore.prototype, "acquire").mockImplementation(function (this: Semaphore, signal, priority) {
+					const pending = acquire.call(this, signal, priority);
+					if (++requests === 3) queued.resolve();
+					return pending;
+				});
+				const gates = new Map<string, PromiseWithResolvers<void>>();
+				vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+					const id = options.id ?? "?";
+					started.push(id);
+					const gate = Promise.withResolvers<void>();
+					gates.set(id, gate);
+					await gate.promise;
+					return makeResult(id);
+				});
+				const manager = createManager();
+				const tool = await TaskTool.create(
+					createSession({
+						manager,
+						settings: {
+							"agent.maxConcurrency": 1,
+							"async.enabled": background,
+							"agent.batch": batch,
+						},
+					}),
+				);
+				const run = async (name: string, priority?: "high") => {
+					const item = { agent: "task", name, task: "Work.", priority };
+					const result = await tool.execute(
+						`tc-priority-${name}`,
+						batch ? { context: "Shared.", tasks: [item] } : item,
+					);
+					if (background) await manager.getJob(result.details!.async!.jobId)!.promise;
+				};
+				const first = run("Holder");
+				await pollUntil(() => started.length === 1);
+				const normal = run("Normal");
+				const high = run("Priority", "high");
+				await queued.promise;
+				expect(started).toEqual(["Holder"]);
+				gates.get("Holder")!.resolve();
+				await first;
+				await pollUntil(() => started.length === 2);
+				expect(started).toEqual(["Holder", "Priority"]);
+				gates.get("Priority")!.resolve();
+				await high;
+				await pollUntil(() => started.length === 3);
+				expect(started).toEqual(["Holder", "Priority", "Normal"]);
+				gates.get("Normal")!.resolve();
+				await normal;
+			});
+		}
+	}
 
 	it("bounds concurrent job bodies with the session spawn semaphore", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
