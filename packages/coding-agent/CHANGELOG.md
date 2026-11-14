@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bounded `history://` reads stop markdown rendering after the requested prefix and keep later messages untouched. History discovery reads child directories in bounded concurrent batches and deduplicates registry roots without quadratic scans ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+
 ## [1.9.3] - 2026-11-13
 
 ### Fixed
