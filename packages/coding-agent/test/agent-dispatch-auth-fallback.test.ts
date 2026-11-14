@@ -141,6 +141,35 @@ describe("ordered agent model auth resolution", () => {
 		expect(refreshes).toBe(2);
 	});
 
+	test("concurrent resolutions share freshness and both see the refreshed model", async () => {
+		const preferred = buildModel({ ...parentModel, provider: "preferred", id: "new-model" });
+		const gate = Promise.withResolvers<void>();
+		let refreshPromise: Promise<void> | undefined;
+		let models: Model<Api>[] = [];
+		let refreshes = 0;
+		const registry = {
+			getAll: () => models,
+			getAvailable: () => models,
+			getApiKey: async () => "sk-test-token",
+			refreshForSpawn: async () => {
+				if (!refreshPromise) {
+					refreshes++;
+					refreshPromise = gate.promise;
+				}
+				await refreshPromise;
+			},
+		};
+		const first = resolveAgentModelChain(["preferred/new-model"], registry);
+		const second = resolveAgentModelChain(["preferred/new-model"], registry);
+		models = [preferred];
+		gate.resolve();
+
+		const results = await Promise.all([first, second]);
+
+		expect(results.map(result => result.model?.id)).toEqual(["new-model", "new-model"]);
+		expect(refreshes).toBe(1);
+	});
+
 	test("persistent missing chains refresh once and terminate", async () => {
 		let refreshes = 0;
 		const registry = {
