@@ -234,7 +234,7 @@ describe("agent runtime model resolution", () => {
 				getAll: () => models,
 				getAvailable: () => models,
 				getApiKey: async () => "test-key",
-				refreshForSpawn: async (options?: { force?: boolean }) => {
+				refreshForSpawn: async (_selectors: readonly string[], options?: { force?: boolean }) => {
 					if (options?.force) models = [unavailable, available];
 					return undefined;
 				},

@@ -329,6 +329,7 @@ function mergeByModelKey<T extends { provider: string; id: string }>(
 interface BuiltInDiscoveryResult {
 	models: Model<Api>[];
 	authoritativeProviders: Set<string>;
+	hardFailure: boolean;
 }
 
 export type ProviderDiscoveryStatus = "idle" | "ok" | "empty" | "cached" | "unavailable" | "unauthenticated";
@@ -494,10 +495,15 @@ export class ModelRegistry {
 	#snapshotIo: boolean;
 	#suppressedSelectors: Map<string, number> = new Map();
 	#backgroundRefresh?: Promise<void>;
+	#refreshQueue: Promise<void> = Promise.resolve();
 	#lastSpawnPreflightAt = 0;
-	#spawnPreflight?: Promise<string | undefined>;
-	#lastForcedSpawnRefreshAt = 0;
-	#lastSpawnRefreshFailure: string | undefined;
+	#lastSpawnPreflightFailure: string | undefined;
+	#spawnRefreshFlight?: {
+		mode: "preflight" | "forced";
+		key: string;
+		promise: Promise<string | undefined>;
+	};
+	#forcedSpawnRefreshes = new Map<string, { refreshedAt: number; failure: string | undefined }>();
 	#lastDiscoveryWarnings: Map<string, string> = new Map();
 	// Runtime extension model overlays — persist across refresh() cycles so that
 	// models registered by extensions survive the model selector's offline reload.
@@ -584,10 +590,27 @@ export class ModelRegistry {
 	 * Reload models from disk (built-in + custom config).
 	 */
 	async refresh(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
-		this.#reloadStaticModels();
-		this.#suppressedSelectors.clear();
-		await this.#refreshRuntimeDiscoveries(strategy);
-		this.#lastSpawnPreflightAt = Date.now();
+		await this.#withSerializedRefresh(async () => {
+			this.#reloadStaticModels();
+			this.#suppressedSelectors.clear();
+			await this.#refreshRuntimeDiscoveries(strategy);
+			this.#lastSpawnPreflightAt = Date.now();
+			this.#lastSpawnPreflightFailure = undefined;
+		});
+	}
+
+	async #withSerializedRefresh<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.#refreshQueue;
+		let release!: () => void;
+		this.#refreshQueue = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		await previous;
+		try {
+			return await operation();
+		} finally {
+			release();
+		}
 	}
 
 	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
@@ -609,69 +632,96 @@ export class ModelRegistry {
 	}
 
 	async refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
-		this.#reloadStaticModels();
-		for (const selector of this.#suppressedSelectors.keys()) {
-			if (selector.startsWith(`${providerId}/`)) {
-				this.#suppressedSelectors.delete(selector);
+		await this.#withSerializedRefresh(async () => {
+			this.#reloadStaticModels();
+			for (const selector of this.#suppressedSelectors.keys()) {
+				if (selector.startsWith(`${providerId}/`)) {
+					this.#suppressedSelectors.delete(selector);
+				}
 			}
-		}
-		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+			await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		});
 	}
 
 	/**
 	 * Refresh discovery state for long-lived child resolution without clearing
 	 * active cooldowns. A short interval also bounds repeated absent-model probes.
 	 */
-	async refreshForSpawn(options?: { force?: boolean }): Promise<string | undefined> {
+	async refreshForSpawn(
+		selectors: readonly string[],
+		options?: { force?: boolean },
+	): Promise<string | undefined> {
 		const now = Date.now();
 		for (const [selector, until] of this.#suppressedSelectors) {
 			if (until <= now) this.#suppressedSelectors.delete(selector);
 		}
-		if (this.#spawnPreflight) return this.#spawnPreflight;
 		const ttl = 5 * 60 * 1000;
-		const forced = options?.force === true;
-		if (forced) {
-			if (now - this.#lastForcedSpawnRefreshAt < ttl) return this.#lastSpawnRefreshFailure;
-			this.#lastForcedSpawnRefreshAt = now;
-		} else if (now - this.#lastSpawnPreflightAt < ttl) {
-			return this.#lastSpawnRefreshFailure;
+		for (const [key, result] of this.#forcedSpawnRefreshes) {
+			if (now - result.refreshedAt >= ttl) this.#forcedSpawnRefreshes.delete(key);
 		}
-		const refreshPromise = this.#refreshForSpawnNow(forced).finally(() => {
-			if (this.#spawnPreflight === refreshPromise) this.#spawnPreflight = undefined;
+		const forced = options?.force === true;
+		const key = [...new Set(selectors.map(stripThinkingSelector))].sort().join("\u0000");
+		const flight = this.#spawnRefreshFlight;
+		if (flight) {
+			if (!forced || (flight.mode === "forced" && flight.key === key)) return flight.promise;
+			await flight.promise;
+			return this.refreshForSpawn(selectors, options);
+		}
+		if (forced) {
+			const cached = this.#forcedSpawnRefreshes.get(key);
+			if (cached) return cached.failure;
+		} else if (now - this.#lastSpawnPreflightAt < ttl) {
+			return this.#lastSpawnPreflightFailure;
+		}
+		const mode = forced ? "forced" : "preflight";
+		const refreshPromise = this.#refreshForSpawnNow(forced).then(failure => {
+			if (forced) {
+				this.#forcedSpawnRefreshes.set(key, { refreshedAt: Date.now(), failure });
+			} else {
+				this.#lastSpawnPreflightAt = Date.now();
+				this.#lastSpawnPreflightFailure = failure;
+			}
+			return failure;
+		}).finally(() => {
+			if (this.#spawnRefreshFlight?.promise === refreshPromise) this.#spawnRefreshFlight = undefined;
 		});
-		this.#spawnPreflight = refreshPromise;
+		this.#spawnRefreshFlight = { mode, key, promise: refreshPromise };
 		return refreshPromise;
 	}
 
 	async #refreshForSpawnNow(force: boolean): Promise<string | undefined> {
-		this.#lastSpawnPreflightAt = Date.now();
-		this.#lastSpawnRefreshFailure = undefined;
-		const previousModels = this.#models;
-		const previousProviderModels = new Map(
-			[...this.#providerModels].map(([provider, models]) => [provider, [...models]] as const),
-		);
-		const previousStandard = new Map(
-			[...this.#cachedStandardByProvider].map(([provider, models]) => [provider, [...models]] as const),
-		);
-		const previousDiscoveries = new Map(
-			[...this.#cachedDiscoveriesByProvider].map(([provider, models]) => [provider, [...models]] as const),
-		);
-		try {
-			this.#reloadStaticModels();
-			await this.#refreshRuntimeDiscoveries(force ? "online" : "online-if-uncached");
-			if ([...this.#providerDiscoveryStates.values()].some(state => state.error !== undefined)) {
-				this.#lastSpawnRefreshFailure = "Model discovery failed; cached catalog data was retained.";
+		return this.#withSerializedRefresh(async () => {
+			const previousModels = this.#models;
+			const previousProviderModels = new Map(
+				[...this.#providerModels].map(([provider, models]) => [provider, [...models]] as const),
+			);
+			const previousStandard = new Map(
+				[...this.#cachedStandardByProvider].map(([provider, models]) => [provider, [...models]] as const),
+			);
+			const previousDiscoveries = new Map(
+				[...this.#cachedDiscoveriesByProvider].map(([provider, models]) => [provider, [...models]] as const),
+			);
+			try {
+				this.#reloadStaticModels();
+				const builtInFailure = await this.#refreshRuntimeDiscoveries(force ? "online" : "online-if-uncached");
+				if (
+					builtInFailure ||
+					[...this.#providerDiscoveryStates.values()].some(state => state.error !== undefined)
+				) {
+					return "Model discovery failed; cached catalog data was retained.";
+				}
+			} catch {
+				this.#models = previousModels;
+				this.#providerModels = previousProviderModels;
+				this.#cachedStandardByProvider = previousStandard;
+				this.#cachedDiscoveriesByProvider = previousDiscoveries;
+				logger.warn("spawn model discovery refresh failed; keeping the previous catalog snapshot");
+				return "Model discovery failed; the previous catalog snapshot was retained.";
 			}
-		} catch {
-			this.#models = previousModels;
-			this.#providerModels = previousProviderModels;
-			this.#cachedStandardByProvider = previousStandard;
-			this.#cachedDiscoveriesByProvider = previousDiscoveries;
-			this.#lastSpawnRefreshFailure = "Model discovery failed; the previous catalog snapshot was retained.";
-			logger.warn("spawn model discovery refresh failed; keeping the previous catalog snapshot");
-		}
-		return this.#lastSpawnRefreshFailure;
+			return undefined;
+		});
 	}
+
 
 	/**
 	 * Refresh dynamic metadata that can appear only after a local model loads.
@@ -768,7 +818,9 @@ export class ModelRegistry {
 				: new Set<string>()
 			: new Set(this.#runtimeModelManagers.keys());
 		if (providerIds.size === 0) return;
-		await this.#refreshRuntimeDiscoveries(strategy, providerIds);
+		await this.#withSerializedRefresh(async () => {
+			await this.#refreshRuntimeDiscoveries(strategy, providerIds);
+		});
 	}
 
 	#reloadStaticModels(): void {
@@ -1241,7 +1293,7 @@ export class ModelRegistry {
 	async #refreshRuntimeDiscoveries(
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
-	): Promise<void> {
+	): Promise<boolean> {
 		const disabledProviders = disabledProviderIds();
 		const selectedDiscoverableProviders = (
 			providerFilter
@@ -1260,7 +1312,7 @@ export class ModelRegistry {
 		]);
 		const discovered = configuredDiscovered.concat(builtInDiscovery.models);
 		if (discovered.length === 0 && builtInDiscovery.authoritativeProviders.size === 0) {
-			return;
+			return builtInDiscovery.hardFailure;
 		}
 		const discoveredModels = this.#applyHardcodedModelPolicies(
 			discovered.map(model =>
@@ -1284,7 +1336,7 @@ export class ModelRegistry {
 			const withOverrides = applyModelOverrides(collapseBuiltModelVariants(combined), this.#modelOverrides);
 			this.#models = this.#applyProviderReportedWindows(this.#applyRuntimeProviderOverrides(withOverrides));
 			this.#reindexProviderModelsFromGlobal();
-			return;
+			return builtInDiscovery.hardFailure;
 		}
 		for (const provider of authoritativeProviders) {
 			this.#cachedAuthoritativeProviders.add(provider);
@@ -1307,6 +1359,7 @@ export class ModelRegistry {
 			this.#providerModels.delete(model.provider);
 		}
 		this.#models = undefined;
+		return builtInDiscovery.hardFailure;
 	}
 
 	#isDiscoveryCacheOlderThanModelsConfig(cacheUpdatedAt: number): boolean {
@@ -1516,20 +1569,22 @@ export class ModelRegistry {
 			configuredDiscoveryProviders,
 		);
 		if (managerOptions.length === 0) {
-			return { models: [], authoritativeProviders: new Set() };
+			return { models: [], authoritativeProviders: new Set(), hardFailure: false };
 		}
 		const discoveries = await Promise.all(
 			managerOptions.map(options => this.#discoverWithModelManager(options, strategy)),
 		);
 		const authoritativeProviders = new Set<string>();
 		const models: Model<Api>[] = [];
+		let hardFailure = false;
 		for (const discovery of discoveries) {
-			for (let mi = 0; mi < discovery.models.length; mi++) models.push(discovery.models[mi]!);
+			models.push(...discovery.models);
+			hardFailure ||= discovery.hardFailure;
 			for (const provider of discovery.authoritativeProviders) {
 				authoritativeProviders.add(provider);
 			}
 		}
-		return { models, authoritativeProviders };
+		return { models, authoritativeProviders, hardFailure };
 	}
 
 	/**
@@ -1717,6 +1772,7 @@ export class ModelRegistry {
 		options: ModelManagerOptions<Api>,
 		strategy: ModelRefreshStrategy,
 	): Promise<BuiltInDiscoveryResult> {
+		let hardFailure = false;
 		try {
 			const manager = createModelManager({
 				...options,
@@ -1725,12 +1781,13 @@ export class ModelRegistry {
 				// it reached nothing: only a THROWN failure was reported. The stage is in the message because it
 				// decides where the reader looks -- `request` at the network, `status` at credentials, `payload`
 				// at whether the endpoint speaks the protocol at all.
-				onDiscoveryFailure: failure =>
-					this.#warnProviderDiscoveryFailure(
-						options.providerId,
-						failure.url || undefined,
-						`${failure.stage}: ${failure.detail}`,
-					),
+				onDiscoveryFailure: failure => {
+					const detail = `${failure.stage}: ${failure.detail}`;
+					if (this.#shouldWarnOnDiscoveryFailure(options.providerId, failure.url || undefined, detail)) {
+						hardFailure = true;
+					}
+					this.#warnProviderDiscoveryFailure(options.providerId, failure.url || undefined, detail);
+				},
 			});
 			const result = await manager.refresh(strategy);
 			const models = result.models.map(model =>
@@ -1740,12 +1797,14 @@ export class ModelRegistry {
 			if (options.dynamicModelsAuthoritative && !result.stale) {
 				authoritativeProviders.add(options.providerId);
 			}
-			return { models, authoritativeProviders };
+			return { models, authoritativeProviders, hardFailure };
 		} catch (error) {
 			// Through the same owner as every other discovery failure, which also means this one is now
 			// deduplicated per provider instead of repeating on every refresh.
-			this.#warnProviderDiscoveryFailure(options.providerId, undefined, errorMessage(error));
-			return { models: [], authoritativeProviders: new Set() };
+			const message = errorMessage(error);
+			hardFailure ||= this.#shouldWarnOnDiscoveryFailure(options.providerId, undefined, message);
+			this.#warnProviderDiscoveryFailure(options.providerId, undefined, message);
+			return { models: [], authoritativeProviders: new Set(), hardFailure };
 		}
 	}
 

@@ -1139,9 +1139,8 @@ export async function resolveAgentModelChain(
 	skipped?: string[];
 }> {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
-	let discoveryFailure = await modelRegistry.refreshForSpawn?.();
+	let discoveryFailure = await modelRegistry.refreshForSpawn?.(modelPatterns);
 	let forcedRefreshAttempted = false;
-	let priorFailures: string[] = [];
 	for (;;) {
 		const allModels = modelRegistry.getAll();
 		const availableModels = modelRegistry.getAvailable();
@@ -1188,29 +1187,26 @@ export async function resolveAgentModelChain(
 			}
 			if (missing && !forcedRefreshAttempted && modelRegistry.refreshForSpawn) {
 				forcedRefreshAttempted = true;
-				priorFailures = [...priorFailures, ...failures];
-				discoveryFailure = await modelRegistry.refreshForSpawn({ force: true });
-				retry = true;
+				discoveryFailure = await modelRegistry.refreshForSpawn(modelPatterns, { force: true });
 				break;
 			}
 			return {
 				model: resolved.model,
 				thinkingLevel: resolved.thinkingLevel,
 				explicitThinkingLevel: resolved.explicitThinkingLevel,
-				warning: resolved.warning,
-				skipped: [...new Set([...priorFailures, ...failures, ...(discoveryFailure ? [discoveryFailure] : [])])],
+				warning: [resolved.warning, discoveryFailure].filter(Boolean).join("; ") || undefined,
+				skipped: [...new Set(failures)],
 			};
 		}
 		if (retry) continue;
 		if (!forcedRefreshAttempted && modelRegistry.refreshForSpawn) {
 			forcedRefreshAttempted = true;
-			priorFailures = [...priorFailures, ...failures];
-			discoveryFailure = await modelRegistry.refreshForSpawn({ force: true });
+			discoveryFailure = await modelRegistry.refreshForSpawn(modelPatterns, { force: true });
 			continue;
 		}
 		throw new Error(
 			`No configured task model is available. Configured chain: ${modelPatterns.join(" -> ")}. ` +
-				`Per-member failures: ${[...new Set([...priorFailures, ...failures])].join("; ")}${discoveryFailure ? `; ${discoveryFailure}` : ""}.`,
+				`Per-member failures: ${[...new Set(failures)].join("; ")}${discoveryFailure ? `; ${discoveryFailure}` : ""}.`,
 		);
 	}
 }

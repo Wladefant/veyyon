@@ -48,7 +48,7 @@ function createMockRegistry(options: MockRegistryOptions) {
 		getApiKey: async (model: Model<Api>) =>
 			options.authedProviders.has(model.provider) ? "sk-test-token" : undefined,
 		isSelectorSuppressed: (selector: string) => options.suppressed?.includes(selector) ?? false,
-		refreshForSpawn: async (_options?: { force?: boolean }) => undefined,
+		refreshForSpawn: async (_selectors?: readonly string[], _options?: { force?: boolean }) => undefined,
 	};
 }
 
@@ -127,19 +127,20 @@ describe("ordered agent model auth resolution", () => {
 			getAll: () => models,
 			getAvailable: () => models,
 			getApiKey: async () => "sk-test-token",
-			refreshForSpawn: async (options?: { force?: boolean }) => {
+			refreshForSpawn: async (_selectors: readonly string[], options?: { force?: boolean }) => {
 				refreshes++;
 				if (options?.force) models = [preferred, fallback];
 				return undefined;
 			},
 		};
 		const result = await resolveAgentModelChain(
-			["preferred/new-model:high", "fallback/known-model"],
+			["missing-provider/missing-model", "preferred/new-model:high", "fallback/known-model"],
 			registry,
 		);
 		expect(result.model?.provider).toBe("preferred");
 		expect(result.thinkingLevel).toBe("high");
 		expect(result.skipped).not.toContain("preferred/new-model:high: not found in the model catalog");
+		expect(result.skipped).toContain("missing-provider/missing-model: not found in the model catalog");
 		expect(refreshes).toBe(2);
 	});
 

@@ -2211,10 +2211,10 @@ describe("ModelRegistry", () => {
 				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
 				registry.suppressSelector("spawn-probe/configured", Date.now() + 60_000);
 
-				await Promise.all([registry.refreshForSpawn(), registry.refreshForSpawn(), registry.refreshForSpawn()]);
-				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/configured"] } as never);
-				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/discovered"] } as never);
-				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/configured:high"] } as never);
+				await Promise.all([registry.refreshForSpawn([]), registry.refreshForSpawn([]), registry.refreshForSpawn([])]);
+				await registry.refreshForSpawn(["spawn-probe/configured"], { force: true });
+				await registry.refreshForSpawn(["spawn-probe/discovered"], { force: true });
+				await registry.refreshForSpawn(["spawn-probe/configured:high"], { force: true });
 				expect(requests).toBe(3);
 				expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
 				expect(registry.find("spawn-probe", "discovered")).toBeDefined();
@@ -2252,9 +2252,9 @@ describe("ModelRegistry", () => {
 				};
 				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
-				const preflight = registry.refreshForSpawn();
+				const preflight = registry.refreshForSpawn([]);
 				await started.promise;
-				const forced = registry.refreshForSpawn({ force: true });
+				const forced = registry.refreshForSpawn(["spawn-race/configured"], { force: true });
 				release.resolve();
 				await Promise.all([preflight, forced]);
 				expect(requests).toBe(2);
@@ -2272,7 +2272,7 @@ describe("ModelRegistry", () => {
 					"spawn-fallback": providerConfig("https://spawn-fallback.example/v1", [{ id: "known" }]),
 				});
 				const registry = new ModelRegistry(authStorage, modelsJsonPath);
-				await registry.refreshForSpawn();
+				await registry.refreshForSpawn([]);
 				expect(registry.find("spawn-fallback", "known")).toBeDefined();
 				writeModelsJson({
 					"spawn-fallback": providerConfig("https://spawn-fallback.example/v1", [{ id: "known" }]),
@@ -2282,7 +2282,7 @@ describe("ModelRegistry", () => {
 				fs.utimesSync(modelsJsonPath, nextTime, nextTime);
 				setSystemTime(nextTime);
 
-				await registry.refreshForSpawn();
+				await registry.refreshForSpawn([]);
 
 				expect(registry.find("spawn-fresh", "new-preferred")).toBeDefined();
 			} finally {
@@ -2306,7 +2306,7 @@ describe("ModelRegistry", () => {
 			};
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 
-			const failure = await registry.refreshForSpawn({ force: true });
+			const failure = await registry.refreshForSpawn(["spawn-failure/known"], { force: true });
 
 			expect(registry.find("spawn-failure", "known")).toBeDefined();
 			expect(failure).toContain("Model discovery failed");
@@ -2324,7 +2324,7 @@ describe("ModelRegistry", () => {
 				snapshotIo: false,
 			});
 
-			const failure = await registry.refreshForSpawn({ force: true });
+			const failure = await registry.refreshForSpawn(["openai-codex/no-model"], { force: true });
 
 			expect(requests).toBeGreaterThan(0);
 			expect(failure).toContain("Model discovery failed");
@@ -2337,7 +2337,7 @@ describe("ModelRegistry", () => {
 			registry.suppressSelector("openai/gpt-4o", Date.now() - 1);
 			registry.suppressSelector("openai/gpt-4.1", Date.now() + 60_000);
 
-			await registry.refreshForSpawn();
+			await registry.refreshForSpawn([]);
 
 			expect(registry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
 			expect(registry.isSelectorSuppressed("openai/gpt-4.1")).toBe(true);
