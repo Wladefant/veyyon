@@ -5,6 +5,7 @@ import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { DAY_MS, WEEK_MS } from "@veyyon/utils/time";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
+import { isUsageLimitReached } from "../auth-storage/usage-reports";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
@@ -238,6 +239,7 @@ function buildReportFromQuotaSummary(
 	endpoint: string,
 ): UsageReport {
 	const limits: UsageLimit[] = [];
+	const authoritativeCounters = new Set<string>();
 
 	for (const group of data.groups ?? []) {
 		const counter = counterForQuotaGroup(group);
@@ -246,6 +248,7 @@ function buildReportFromQuotaSummary(
 			// bucket id repeats it (`gemini-weekly`, `3p-5h`). Nothing reads prose.
 			const window = classifyWindow(bucket.window, bucket.bucketId);
 			if (!window) continue;
+			authoritativeCounters.add(counter.key);
 			const resetsAt = parseResetTime({ resetTime: bucket.resetTime });
 			// A bucket the backend DISABLES is one whose limit does not apply: the
 			// group's weekly limit is spent, so the endpoint marks the 5-hour bucket
@@ -287,11 +290,15 @@ function buildReportFromQuotaSummary(
 	// bottleneck when it picks between two accounts of this provider.
 	limits.sort((a, b) => (a.amount.remainingFraction ?? 1) - (b.amount.remainingFraction ?? 1));
 
+	const metadata = reportMetadata(endpoint, credential) ?? {};
+	if (authoritativeCounters.size > 0) {
+		metadata.authoritativeCounters = [...authoritativeCounters];
+	}
 	return {
 		provider: params.provider,
 		fetchedAt: nowMs,
 		limits,
-		metadata: reportMetadata(endpoint, credential),
+		metadata,
 		raw: data,
 	};
 }
@@ -735,3 +742,33 @@ export const antigravityRankingStrategy: CredentialRankingStrategy = {
 	// entries from `daily-cloudcode-pa.googleapis.com`.
 	windowDefaults: { primaryMs: DAY_MS, secondaryMs: DAY_MS },
 };
+
+function hasExplicitNonExhaustedReading(limit: UsageLimit): boolean {
+	if (limit.amount.remainingFraction !== undefined) return limit.amount.remainingFraction > 0;
+	if (limit.amount.usedFraction !== undefined) return limit.amount.usedFraction < 1;
+	return limit.status === "ok" || limit.status === "warning";
+}
+
+/**
+ * Counter block scopes (`counter:<key>`) that `report` authoritatively proves healthy from
+ * `retrieveUserQuotaSummary`. Fallback model listings, header overlays, and omitted counters are excluded.
+ */
+export function getHealthyAntigravityAuthoritativeBlockScopes(report: UsageReport): string[] {
+	if (report.provider !== "google-antigravity") return [];
+	const rawCounters = report.metadata?.authoritativeCounters;
+	if (!Array.isArray(rawCounters)) return [];
+	const healthyScopes: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of rawCounters) {
+		if (typeof entry !== "string") continue;
+		const counterKey = entry.trim().toLowerCase();
+		if (!counterKey || counterKey === "unknown" || seen.has(counterKey)) continue;
+		seen.add(counterKey);
+		const counterLimits = getAntigravityCounterLimits(report, counterKey);
+		if (counterLimits.length === 0) continue;
+		if (isUsageLimitReached(counterLimits)) continue;
+		if (!counterLimits.some(hasExplicitNonExhaustedReading)) continue;
+		healthyScopes.push(`counter:${counterKey}`);
+	}
+	return healthyScopes;
+}

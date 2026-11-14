@@ -168,6 +168,8 @@ const RESPONSE_CALLS: Record<string, (client: AuthBrokerClient) => Promise<unkno
 	upsertCredentialBlock: client =>
 		client.upsertCredentialBlock(7, { providerKey: "anthropic:oauth", blockScope: "", blockedUntilMs: 1 }),
 	deleteCredentialBlocks: client => client.deleteCredentialBlocks(7),
+	deleteCredentialBlock: client =>
+		client.deleteCredentialBlock(7, { providerKey: "anthropic:oauth", blockScope: "global" }),
 };
 
 describe("a response body its schema rejects", () => {

@@ -858,7 +858,7 @@ describe("Antigravity predicted vs confirmed block reconciliation", () => {
 			});
 
 			const claudeUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:claude-gpt");
-			const modelUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "model:gemini-3.8-flash");
+			const modelUntil = store.getCredentialBlock(rowB.id, PROVIDER_KEY, "model-not-in-plan:gemini-3.8-flash");
 			expect(claudeUntil).toBeDefined();
 			expect(modelUntil).toBeDefined();
 
@@ -871,7 +871,7 @@ describe("Antigravity predicted vs confirmed block reconciliation", () => {
 
 			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeUndefined();
 			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:claude-gpt")).toBe(claudeUntil);
-			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "model:gemini-3.8-flash")).toBe(modelUntil);
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "model-not-in-plan:gemini-3.8-flash")).toBe(modelUntil);
 			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:unknown")).toBe(unknownUntil);
 			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBe(siblingUntil);
 
@@ -977,6 +977,68 @@ describe("Antigravity predicted vs confirmed block reconciliation", () => {
 			remote?.close();
 			await handle?.close();
 			brokerStorage.close();
+		}
+	});
+
+	test("rechecks stale predicted blocks with bounded cadence and skips recheck for confirmed429 holds", async () => {
+		if (!store) throw new Error("test setup failed");
+		let summaryCalls = 0;
+		const countingFetch: typeof fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("retrieveUserQuotaSummary")) {
+				summaryCalls += 1;
+			}
+			return makeFetch()(input, init);
+		}) as typeof fetch;
+		const storage = new AuthStorage(store, {
+			loadBalancing: true,
+			usageProviderResolver: provider => (provider === PROVIDER ? antigravityUsageProvider : undefined),
+			rankingStrategyResolver: provider => (provider === PROVIDER ? antigravityRankingStrategy : undefined),
+			usageFetch: countingFetch,
+		});
+		try {
+			await storage.set(PROVIDER, [
+				{ type: "oauth", ...createCredential("acct-a", "proj-a", "a@example.com") },
+				{ type: "oauth", ...createCredential("acct-b", "proj-b", "b@example.com") },
+			]);
+			const [rowA, rowB] = storage.listStoredCredentials(PROVIDER);
+			if (!rowA || !rowB) throw new Error("expected stored rows");
+
+			const resetIso = new Date(now + 24 * HOUR_MS).toISOString();
+			responsesByToken.set("access-acct-a", { summary: summaryResponse([geminiSummary(0.4)]) });
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0, resetIso)]) });
+
+			// Seed predicted counter:google on acct-b, then confirmed429 counter:google on acct-a.
+			expect(await storage.getApiKey(PROVIDER, "recheck-seed", { modelId: "gemini-3.8-flash" })).toBe("api-acct-a");
+			await storage.markUsageLimitReached(PROVIDER, "recheck-seed", {
+				credentialId: rowA.id,
+				modelId: "gemini-3.8-flash",
+				retryAfterMs: 12 * HOUR_MS,
+			});
+
+			// Past reconcileAfter while summary is temporarily unavailable (503) — only the predicted
+			// acct-b is probed, never confirmed acct-a; a second immediate getApiKey is throttled.
+			now += 10 * MINUTE_MS;
+			responsesByToken.set("access-acct-b", { summary: { status: 503, body: { error: "unavailable" } } });
+			await storage.invalidateUsageCache(PROVIDER);
+			summaryCalls = 0;
+			await storage.getApiKey(PROVIDER, "recheck-1", { modelId: "gemini-3.8-flash" });
+			expect(summaryCalls).toBe(1);
+
+			await storage.getApiKey(PROVIDER, "recheck-2", { modelId: "gemini-3.8-flash" });
+			expect(summaryCalls).toBe(1);
+
+			// Once the 5-minute recheck cooldown elapses and summary recovers, acct-b heals cleanly.
+			now += 6 * MINUTE_MS;
+			responsesByToken.set("access-acct-b", { summary: summaryResponse([geminiSummary(0.9)]) });
+			await storage.invalidateUsageCache(PROVIDER);
+			summaryCalls = 0;
+			expect(await storage.getApiKey(PROVIDER, "recheck-3", { modelId: "gemini-3.8-flash" })).toBe("api-acct-b");
+			expect(summaryCalls).toBe(1);
+			expect(store.getCredentialBlock(rowB.id, PROVIDER_KEY, "counter:google")).toBeUndefined();
+			expect(store.getCredentialBlock(rowA.id, PROVIDER_KEY, "counter:google")).toBeDefined();
+		} finally {
+			storage.close();
 		}
 	});
 });

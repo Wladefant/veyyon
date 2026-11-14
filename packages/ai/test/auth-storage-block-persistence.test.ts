@@ -240,13 +240,13 @@ describe("AuthStorage credential block persistence", () => {
 			const expiresAtMs = Date.now() + 3_600_000;
 			expect(migratedStore.tryAcquireCredentialRefreshLease(1, "test-owner", expiresAtMs)).toBe(true);
 			expect(migratedStore.getCredentialRefreshLeaseExpiresAt(1)).toBe(expiresAtMs);
-			expect(readAuthSchemaVersion(dbPath)).toBe(6);
+			expect(readAuthSchemaVersion(dbPath)).toBe(7);
 		} finally {
 			migratedStore.close();
 		}
 	});
 
-	it("migrates a v4 auth database to current version 6 without dropping credential rows", async () => {
+	it("migrates a v4 auth database to current version 7 without dropping credential rows", async () => {
 		const legacyDb = new Database(dbPath);
 		legacyDb.run(`
 			CREATE TABLE auth_schema_version (
@@ -291,8 +291,61 @@ describe("AuthStorage credential block persistence", () => {
 			const rows = migratedStore.listAuthCredentials(PROVIDER);
 			expect(rows).toHaveLength(1);
 			expect(rows[0]!.credential).toMatchObject({ type: "oauth", access: "legacy-access" });
-			expect(readAuthSchemaVersion(dbPath)).toBe(6);
+			expect(readAuthSchemaVersion(dbPath)).toBe(7);
 			expect(tableExists(dbPath, "auth_credential_blocks")).toBe(true);
+		} finally {
+			migratedStore.close();
+		}
+	});
+
+	it("migrates a v6 auth_credential_blocks table to v7 leaving existing blocks untagged", async () => {
+		const legacyDb = new Database(dbPath);
+		legacyDb.run(`
+			CREATE TABLE auth_schema_version (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				version INTEGER NOT NULL
+			);
+			INSERT INTO auth_schema_version(id, version) VALUES (1, 6);
+			CREATE TABLE auth_credentials (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				provider TEXT NOT NULL,
+				credential_type TEXT NOT NULL,
+				data TEXT NOT NULL,
+				disabled_cause TEXT DEFAULT NULL,
+				identity_key TEXT DEFAULT NULL,
+				created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)),
+				updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
+			);
+			CREATE TABLE auth_credential_blocks (
+				credential_id INTEGER NOT NULL,
+				provider_key TEXT NOT NULL,
+				block_scope TEXT NOT NULL DEFAULT '',
+				blocked_until_ms INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (credential_id, provider_key, block_scope)
+			);
+		`);
+		legacyDb
+			.prepare(
+				"INSERT INTO auth_credential_blocks (credential_id, provider_key, block_scope, blocked_until_ms, updated_at) VALUES (?, ?, ?, ?, ?)",
+			)
+			.run(1, PROVIDER_KEY, "counter:google", FUTURE_BLOCK_MS, LEGACY_TIMESTAMP);
+		legacyDb.close();
+
+		const migratedStore = await SqliteAuthCredentialStore.open(dbPath);
+		try {
+			expect(readAuthSchemaVersion(dbPath)).toBe(7);
+			expect(migratedStore.getCredentialBlock(1, PROVIDER_KEY, "counter:google")).toBe(FUTURE_BLOCK_MS);
+			expect(migratedStore.getCredentialBlockProvenance(1, PROVIDER_KEY, "counter:google")).toBeUndefined();
+			expect(migratedStore.listCredentialBlocks([1])).toEqual([
+				{
+					credentialId: 1,
+					providerKey: PROVIDER_KEY,
+					blockScope: "counter:google",
+					blockedUntilMs: FUTURE_BLOCK_MS,
+					updatedAtMs: LEGACY_TIMESTAMP * 1000,
+				},
+			]);
 		} finally {
 			migratedStore.close();
 		}

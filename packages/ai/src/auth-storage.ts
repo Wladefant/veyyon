@@ -152,6 +152,7 @@ import {
 	anthropicResetCredits,
 	fetchAnthropicResetStatus,
 } from "./usage/anthropic-reset";
+import { getHealthyAntigravityAuthoritativeBlockScopes } from "./usage/google-antigravity";
 import { listCodexResetCredits } from "./usage/openai-codex-reset";
 import { resolveRegisteredRankingStrategy } from "./usage/registry";
 import { raceWithSignal } from "./utils/abort";
@@ -421,8 +422,8 @@ export class AuthStorage {
 					const index = this.#getStoredCredentials(provider).findIndex(entry => entry.id === credentialId);
 					return index !== -1 && this.#tryDisableCredentialAtIfMatches(provider, index, expected, cause);
 				},
-				reconcileCodexUsageBlock: (request, report) => this.#reconcileCodexUsageBlock(request, report),
-				reconcileCodexUsageBlocksFromReports: reports => this.#reconcileCodexUsageBlocksFromReports(reports),
+				reconcileUsageBlock: (request, report) => this.#reconcileUsageBlock(request, report),
+				reconcileUsageBlocksFromReports: reports => this.#reconcileUsageBlocksFromReports(reports),
 				resolveConfigValue: config => this.#configValueResolver(config),
 				markAuthDead: credentialId => {
 					this.#authDeadCredentials.add(credentialId);
@@ -2528,7 +2529,7 @@ export class AuthStorage {
 			entry => entry.id === targetCredentialId && entry.credential.type === credentialType,
 		);
 		if (targetIndex >= 0) {
-			this.#blocks.markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope);
+			this.#blocks.markCredentialBlocked(provider, providerKey, targetIndex, blockedUntil, blockScope, "confirmed");
 			if (provider === "google-antigravity") {
 				const confirmationKey = `${targetCredentialId}:${blockScope ?? ""}`;
 				const confirmedUntil = this.#confirmedAntigravityQuota.get(confirmationKey) ?? 0;
@@ -2628,6 +2629,7 @@ export class AuthStorage {
 			index,
 			Date.now() + MODEL_NOT_IN_PLAN_HOLD_MS,
 			modelNotInPlanScope(modelId),
+			"confirmed",
 		);
 		const idleSiblings = this.#getStoredCredentials(provider).filter(
 			(entry, candidate) =>
@@ -2784,16 +2786,19 @@ export class AuthStorage {
 			const chosenId = this.#getStoredCredentials(provider)[chosenIndex]?.id;
 			const quotaKey = `${chosenId}:${blockScope ?? ""}`;
 			const confirmedUntil = this.#confirmedAntigravityQuota.get(quotaKey);
-			if (confirmedUntil !== undefined) {
-				if (
-					confirmedUntil > Date.now() &&
-					this.#blocks.isCredentialBlocked(provider, providerKey, chosenIndex, blockScope)
-				) {
-					// A real provider refusal permits movement; a predicted hold alone does not.
-					chosenIndex = undefined;
-				} else {
-					this.#confirmedAntigravityQuota.delete(quotaKey);
-				}
+			const persistedConfirmed =
+				blockScope !== undefined &&
+				this.#blocks.getScopedBlockProvenance(provider, providerKey, chosenIndex, blockScope) === "confirmed";
+			const hasLiveInMemoryConfirmation = confirmedUntil !== undefined && confirmedUntil > Date.now();
+			if (
+				(hasLiveInMemoryConfirmation || persistedConfirmed) &&
+				this.#blocks.isCredentialBlocked(provider, providerKey, chosenIndex, blockScope)
+			) {
+				// A real provider refusal (in-memory or persisted across peers/restarts) permits movement;
+				// a predicted hold alone does not.
+				chosenIndex = undefined;
+			} else if (confirmedUntil !== undefined) {
+				this.#confirmedAntigravityQuota.delete(quotaKey);
 			}
 		}
 		const sessionPinIsExplicit = chosenIndex !== undefined;
@@ -3205,6 +3210,7 @@ export class AuthStorage {
 				gate.selection.index,
 				resetAtMs ?? Date.now() + DEFAULT_CREDENTIAL_BACKOFF_MS,
 				gate.blockScope,
+				"predicted",
 			);
 			return true;
 		}
@@ -3824,6 +3830,7 @@ export class AuthStorage {
 	 * entries are only evicted when the same URL is supplied.
 	 */
 	invalidateUsageCache(provider?: string, signal?: AbortSignal): Promise<void> {
+		this.#blocks.clearPredictedRecheckCooldowns(provider);
 		return this.#usage.invalidate(provider, signal);
 	}
 
@@ -3900,17 +3907,51 @@ export class AuthStorage {
 		});
 	}
 
-	#reconcileCodexUsageBlock(request: UsageRequestDescriptor, report: UsageReport): void {
-		if (request.provider !== "openai-codex") return;
+	#reconcileAntigravityUsageBlockForCredential(credentialId: number, report: UsageReport): void {
+		const healthyScopes = getHealthyAntigravityAuthoritativeBlockScopes(report);
+		if (healthyScopes.length === 0) return;
+		const provider: Provider = "google-antigravity";
+		const providerKey = getProviderTypeKey(provider, "oauth");
+		const credentialIndex = this.#getStoredCredentials(provider).findIndex(entry => entry.id === credentialId);
+		if (credentialIndex < 0) return;
+		const nowMs = Date.now();
+		const getStoreReconcileAfter = this.#store.getCredentialBlockReconcileAfter?.bind(this.#store);
+		for (const blockScope of healthyScopes) {
+			const blockedUntilMs = this.#blocks.getScopedBlockedUntil(provider, providerKey, credentialIndex, blockScope);
+			if (blockedUntilMs === undefined) continue;
+			const provenance = this.#blocks.getScopedBlockProvenance(provider, providerKey, credentialIndex, blockScope);
+			if (provenance !== "predicted") continue;
+			const confirmedUntil = this.#confirmedAntigravityQuota.get(`${credentialId}:${blockScope}`);
+			if (confirmedUntil !== undefined && confirmedUntil > nowMs) continue;
+			const localReconcileAfterMs = this.#blocks.reconcileAfterMsForScope(providerKey, blockScope, credentialIndex);
+			const storeScopedProbeAfterMs = getStoreReconcileAfter?.(credentialId, providerKey, blockScope) ?? 0;
+			if (Math.max(localReconcileAfterMs, storeScopedProbeAfterMs) > nowMs) continue;
+			this.#blocks.clearScopedCredentialBlock(providerKey, blockScope, credentialIndex);
+			this.deleteCredentialBlock(credentialId, providerKey, blockScope);
+			logger.info("Cleared stale Antigravity predicted block after authoritative live usage report", {
+				credentialId,
+				provider,
+				blockScope,
+				clearedBlockedUntilMs: blockedUntilMs,
+			});
+		}
+	}
+
+	#reconcileUsageBlock(request: UsageRequestDescriptor, report: UsageReport): void {
+		if (request.provider !== "openai-codex" && request.provider !== "google-antigravity") return;
 		const credentialId = this.#getStoredCredentials(request.provider).find(
 			isUsageCredentialRow(request.credential),
 		)?.id;
 		if (credentialId === undefined) return;
-		this.#reconcileCodexUsageBlockForCredential(request.provider, credentialId, report);
+		if (request.provider === "openai-codex") {
+			this.#reconcileCodexUsageBlockForCredential(request.provider, credentialId, report);
+			return;
+		}
+		this.#reconcileAntigravityUsageBlockForCredential(credentialId, report);
 	}
 
 	#findStoredCredentialIdsForUsageReport(report: UsageReport): number[] {
-		if (report.provider !== "openai-codex") return [];
+		if (report.provider !== "openai-codex" && report.provider !== "google-antigravity") return [];
 		const email = getUsageReportMetadataValue(report, "email")?.toLowerCase();
 		const accountId = (
 			getUsageReportMetadataValue(report, "accountId") ?? getUsageReportScopeAccountId(report)
@@ -3922,6 +3963,14 @@ export class AuthStorage {
 			if (credential.type !== "oauth") continue;
 			const credentialEmail = credential.email?.trim().toLowerCase();
 			const credentialAccountId = credential.accountId?.trim().toLowerCase();
+			if (report.provider === "google-antigravity") {
+				if (email && accountId && credentialEmail && credentialAccountId) {
+					if (credentialEmail === email && credentialAccountId === accountId) matches.push(entry.id);
+				} else if ((email && credentialEmail === email) || (accountId && credentialAccountId === accountId)) {
+					matches.push(entry.id);
+				}
+				continue;
+			}
 			if ((email && credentialEmail === email) || (accountId && credentialAccountId === accountId)) {
 				matches.push(entry.id);
 			}
@@ -3929,14 +3978,26 @@ export class AuthStorage {
 		return matches;
 	}
 
-	#reconcileCodexUsageBlocksFromReports(reports: UsageReport[]): void {
-		const reconciled = new Set<number>();
+	#reconcileUsageBlocksFromReports(reports: UsageReport[]): void {
+		const reconciledCodex = new Set<number>();
+		const reconciledAntigravity = new Set<number>();
 		for (const report of reports) {
-			if (!isHealthyCodexUsageReport(report)) continue;
-			for (const credentialId of this.#findStoredCredentialIdsForUsageReport(report)) {
-				if (reconciled.has(credentialId)) continue;
-				reconciled.add(credentialId);
-				this.#reconcileCodexUsageBlockForCredential(report.provider, credentialId, report);
+			if (report.provider === "openai-codex") {
+				if (!isHealthyCodexUsageReport(report)) continue;
+				for (const credentialId of this.#findStoredCredentialIdsForUsageReport(report)) {
+					if (reconciledCodex.has(credentialId)) continue;
+					reconciledCodex.add(credentialId);
+					this.#reconcileCodexUsageBlockForCredential(report.provider, credentialId, report);
+				}
+				continue;
+			}
+			if (report.provider === "google-antigravity") {
+				if (getHealthyAntigravityAuthoritativeBlockScopes(report).length === 0) continue;
+				for (const credentialId of this.#findStoredCredentialIdsForUsageReport(report)) {
+					if (reconciledAntigravity.has(credentialId)) continue;
+					reconciledAntigravity.add(credentialId);
+					this.#reconcileAntigravityUsageBlockForCredential(credentialId, report);
+				}
 			}
 		}
 	}
@@ -4404,6 +4465,20 @@ export class AuthStorage {
 		const deleteCredentialBlocks = this.#store.deleteCredentialBlocks?.bind(this.#store);
 		if (!deleteCredentialBlocks) return;
 		deleteCredentialBlocks(credentialId);
+		this.#events.bumpGeneration("credential-block");
+	}
+
+	/**
+	 * Broker-server seam: clear one exact scoped block for a credential and notify snapshot waiters.
+	 */
+	deleteCredentialBlock(credentialId: number, providerKey: string, blockScope: string): void {
+		const deleteCredentialBlock = this.#store.deleteCredentialBlock?.bind(this.#store);
+		if (deleteCredentialBlock) {
+			deleteCredentialBlock(credentialId, providerKey, blockScope);
+		} else {
+			this.#store.deleteCredentialBlocks?.(credentialId);
+		}
+		this.#usage.invalidateProviderKey(providerKey);
 		this.#events.bumpGeneration("credential-block");
 	}
 

@@ -120,6 +120,9 @@ export interface StoredAuthCredential {
 	disabledCause: string | null;
 }
 
+/** Whether a credential block came from a proactive usage prediction or a confirmed provider refusal. */
+export type CredentialBlockProvenance = "predicted" | "confirmed";
+
 /** One persisted rate-limit block: credential row id + provider-type key + optional scope. */
 export interface StoredCredentialBlock {
 	/** SQLite row id of the credential (auth_credentials.id). */
@@ -132,8 +135,9 @@ export interface StoredCredentialBlock {
 	blockedUntilMs: number;
 	/** Last row update timestamp in epoch milliseconds, when provided by the backing store. */
 	updatedAtMs?: number;
+	/** Source of the block when known; absent for legacy/untagged rows. */
+	provenance?: CredentialBlockProvenance;
 }
-
 /**
  * Per-credential health record returned by {@link AuthStorage.checkCredentials}.
  *
@@ -384,12 +388,20 @@ export interface AuthCredentialStore {
 	cleanExpiredCache(): void;
 	/** Non-expired block for one (credential, providerKey, scope) key, or undefined. */
 	getCredentialBlock?(credentialId: number, providerKey: string, blockScope: string): number | undefined;
+	/** Provenance of a non-expired block for one (credential, providerKey, scope) key, or undefined. */
+	getCredentialBlockProvenance?(
+		credentialId: number,
+		providerKey: string,
+		blockScope: string,
+	): CredentialBlockProvenance | undefined;
 	/** Earliest time a shared-store block should be eligible for live-usage reconciliation. */
 	getCredentialBlockReconcileAfter?(credentialId: number, providerKey: string, blockScope: string): number | undefined;
 	/** Upsert with MAX semantics: keep the later blockedUntilMs on conflict. */
 	upsertCredentialBlock?(block: StoredCredentialBlock): void;
 	/** Drop every block row for a credential (all providerKeys/scopes). */
 	deleteCredentialBlocks?(credentialId: number): void;
+	/** Drop one exact scoped block row for a credential. */
+	deleteCredentialBlock?(credentialId: number, providerKey: string, blockScope: string): void;
 	/** Prune rows with blocked_until_ms <= nowMs. */
 	cleanExpiredCredentialBlocks?(nowMs: number): void;
 	/** List non-expired blocks for broker snapshots. */

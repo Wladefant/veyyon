@@ -11,15 +11,18 @@ import { scheduler } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import * as logger from "@veyyon/utils/logger";
+import { mergeCredentialBlockProvenance } from "../auth-credential-rows";
 import {
 	type AuthCredential,
 	type AuthCredentialSnapshotEntry,
 	type AuthCredentialStore,
+	type CredentialBlockProvenance,
 	type OAuthCredential,
 	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
 	type StoredCredentialBlock,
 } from "../auth-storage";
+import { stripOverlaidAuthoritativeCounters } from "../auth-storage/usage-reports";
 import { isRecordFromFutureClock } from "../credential-clock";
 import * as AIError from "../error";
 import type { OAuthCredentials } from "../registry/oauth/types";
@@ -68,6 +71,7 @@ function toCredentialBlockSnapshot(block: StoredCredentialBlock): CredentialBloc
 		blockScope: block.blockScope,
 		blockedUntilMs: block.blockedUntilMs,
 		...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
+		...(block.provenance !== undefined ? { provenance: block.provenance } : {}),
 	};
 }
 
@@ -85,7 +89,8 @@ function credentialBlockSnapshotsEqual(
 			leftBlock.providerKey !== rightBlock.providerKey ||
 			leftBlock.blockScope !== rightBlock.blockScope ||
 			leftBlock.blockedUntilMs !== rightBlock.blockedUntilMs ||
-			leftBlock.updatedAtMs !== rightBlock.updatedAtMs
+			leftBlock.updatedAtMs !== rightBlock.updatedAtMs ||
+			leftBlock.provenance !== rightBlock.provenance
 		) {
 			return false;
 		}
@@ -260,7 +265,7 @@ function mergeUsageReports(base: UsageReport, overlay: UsageReport): UsageReport
 		limits,
 		metadata: {
 			...overlayMetadata,
-			...(base.metadata ?? {}),
+			...stripOverlaidAuthoritativeCounters(base.metadata, overlay.limits),
 			...(overlayMetadata.headersUpdatedAt !== undefined
 				? { headersUpdatedAt: overlayMetadata.headersUpdatedAt }
 				: {}),
@@ -310,6 +315,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
 	#pendingCredentialBlockMutations = new Map<number, Set<symbol>>();
 	#credentialBlockReconciliationPending = new Set<number>();
+	#pendingCredentialBlockDeletes = new Map<number, Map<string, symbol>>();
 	#credentialBlockReconciliationInFlight = false;
 	/** Also fences GETs against non-speculative DELETE requests begun during the read. */
 	#credentialBlockMutationEpoch = 0;
@@ -385,17 +391,30 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * any speculative block that was never accepted.
 	 */
 	#retainPendingCredentialBlocks(incoming: SnapshotEntry, previous: SnapshotEntry | undefined): SnapshotEntry {
-		if (!previous || !this.#pendingCredentialBlockMutations.has(incoming.id)) return incoming;
+		const pendingDeletes = this.#pendingCredentialBlockDeletes.get(incoming.id);
+		if (!previous && !pendingDeletes?.size) return incoming;
+		if (!this.#pendingCredentialBlockMutations.has(incoming.id)) return incoming;
 		this.#credentialBlockReconciliationPending.add(incoming.id);
 		const merged = new Map<string, CredentialBlockSnapshot>();
 		for (const block of incoming.blocks ?? []) {
+			if (pendingDeletes?.has(`${block.providerKey}\0${block.blockScope}`)) continue;
 			merged.set(credentialBlockKey(incoming.id, block.providerKey, block.blockScope), block);
 		}
-		for (const block of previous.blocks ?? []) {
+		for (const block of previous?.blocks ?? []) {
+			if (pendingDeletes?.has(`${block.providerKey}\0${block.blockScope}`)) continue;
 			const key = credentialBlockKey(incoming.id, block.providerKey, block.blockScope);
 			const authoritative = merged.get(key);
-			if (!authoritative || block.blockedUntilMs > authoritative.blockedUntilMs) {
+			if (!authoritative) {
 				merged.set(key, block);
+				continue;
+			}
+			const provenance = mergeCredentialBlockProvenance(authoritative.provenance, block.provenance);
+			if (block.blockedUntilMs > authoritative.blockedUntilMs || provenance !== authoritative.provenance) {
+				merged.set(key, {
+					...authoritative,
+					blockedUntilMs: Math.max(authoritative.blockedUntilMs, block.blockedUntilMs),
+					...(provenance ? { provenance } : {}),
+				});
 			}
 		}
 		const blocks = [...merged.values()].sort(compareCredentialBlockSnapshots);
@@ -768,6 +787,23 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		return block.blockedUntilMs;
 	}
 
+	getCredentialBlockProvenance(
+		credentialId: number,
+		providerKey: string,
+		blockScope: string,
+	): CredentialBlockProvenance | undefined {
+		const nowMs = Date.now();
+		this.cleanExpiredCredentialBlocks(nowMs);
+		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
+		if (!entry?.blocks) return undefined;
+		const block = entry.blocks.find(
+			candidate => candidate.providerKey === providerKey && candidate.blockScope === blockScope,
+		);
+		if (!block || block.blockedUntilMs <= nowMs) return undefined;
+		if (isRecordFromFutureClock(block.updatedAtMs, nowMs)) return undefined;
+		return block.provenance;
+	}
+
 	getCredentialBlockReconcileAfter(credentialId: number, providerKey: string, blockScope: string): number | undefined {
 		if (this.getCredentialBlock(credentialId, providerKey, blockScope) === undefined) return undefined;
 		return this.#credentialBlockReconcileAfter.get(credentialBlockKey(credentialId, providerKey, blockScope));
@@ -789,6 +825,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					blockScope: block.blockScope,
 					blockedUntilMs: block.blockedUntilMs,
 					updatedAtMs: block.updatedAtMs,
+					...(block.provenance !== undefined ? { provenance: block.provenance } : {}),
 				});
 			}
 		}
@@ -888,6 +925,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const mutation = Symbol("block-upsert");
 		const key = credentialBlockKey(block.credentialId, block.providerKey, block.blockScope);
 		this.#startCredentialBlockMutation(block.credentialId, mutation);
+		const pendingDeletes = this.#pendingCredentialBlockDeletes.get(block.credentialId);
+		pendingDeletes?.delete(`${block.providerKey}\0${block.blockScope}`);
+		if (pendingDeletes?.size === 0) this.#pendingCredentialBlockDeletes.delete(block.credentialId);
 		this.#upsertSnapshotBlock(block);
 		this.#invalidateUsageCache();
 		this.#credentialBlockReconcileAfter.set(
@@ -916,6 +956,48 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			});
 	}
 
+
+	deleteCredentialBlock(credentialId: number, providerKey: string, blockScope: string): void {
+		const mutation = Symbol("block-delete-scope");
+		const scopeKey = `${providerKey}\0${blockScope}`;
+		this.#startCredentialBlockMutation(credentialId, mutation);
+		let pendingDeletes = this.#pendingCredentialBlockDeletes.get(credentialId);
+		if (!pendingDeletes) {
+			pendingDeletes = new Map<string, symbol>();
+			this.#pendingCredentialBlockDeletes.set(credentialId, pendingDeletes);
+		}
+		pendingDeletes.set(scopeKey, mutation);
+		this.#deleteSnapshotBlock(credentialId, providerKey, blockScope);
+		this.#credentialBlockReconcileAfter.delete(credentialBlockKey(credentialId, providerKey, blockScope));
+		this.#invalidateUsageCache();
+		void this.#client
+			.deleteCredentialBlock(credentialId, { providerKey, blockScope })
+			.then(response => {
+				if (!response.ok) {
+					throw new AIError.AuthBrokerError(`Broker refused credential block deletion id=${credentialId}`);
+				}
+				const activeDeletes = this.#pendingCredentialBlockDeletes.get(credentialId);
+				if (activeDeletes?.get(scopeKey) === mutation) {
+					activeDeletes.delete(scopeKey);
+					if (activeDeletes.size === 0) this.#pendingCredentialBlockDeletes.delete(credentialId);
+				}
+				this.#settleCredentialBlockMutation(credentialId, mutation, false);
+			})
+			.catch(error => {
+				logger.warn("auth-broker credential block delete propagation failed", {
+					id: credentialId,
+					providerKey,
+					blockScope,
+					error: String(error),
+				});
+				const activeDeletes = this.#pendingCredentialBlockDeletes.get(credentialId);
+				if (activeDeletes?.get(scopeKey) === mutation) {
+					activeDeletes.delete(scopeKey);
+					if (activeDeletes.size === 0) this.#pendingCredentialBlockDeletes.delete(credentialId);
+				}
+				this.#settleCredentialBlockMutation(credentialId, mutation, true);
+			});
+	}
 
 	deleteCredentialBlocks(credentialId: number): void {
 		// A DELETE covers every block scope for this ID. Its success cannot
@@ -1226,14 +1308,40 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			blocks.push(incoming);
 		} else {
 			const existing = blocks[blockIndex]!;
+			const provenance =
+				existing.blockedUntilMs > Date.now()
+					? mergeCredentialBlockProvenance(existing.provenance, incoming.provenance)
+					: incoming.provenance;
 			blocks[blockIndex] = {
 				...existing,
 				blockedUntilMs: Math.max(existing.blockedUntilMs, incoming.blockedUntilMs),
+				...(provenance !== undefined ? { provenance } : {}),
 			};
 		}
 		blocks.sort(compareCredentialBlockSnapshots);
 		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = { ...entry, blocks };
+		this.#snapshot = { ...this.#snapshot, credentials };
+		this.#appliedSnapshotRevision += 1;
+	}
+
+	#deleteSnapshotBlock(credentialId: number, providerKey: string, blockScope: string): void {
+		const index = this.#snapshot.credentials.findIndex(entry => entry.id === credentialId);
+		if (index === -1) return;
+		const entry = this.#snapshot.credentials[index]!;
+		if (!entry.blocks || entry.blocks.length === 0) return;
+		const blocks = entry.blocks.filter(
+			candidate => candidate.providerKey !== providerKey || candidate.blockScope !== blockScope,
+		);
+		if (blocks.length === entry.blocks.length) return;
+		const credentials = this.#snapshot.credentials.slice();
+		if (blocks.length > 0) {
+			credentials[index] = { ...entry, blocks };
+		} else {
+			const next: SnapshotEntry = { ...entry };
+			delete next.blocks;
+			credentials[index] = next;
+		}
 		this.#snapshot = { ...this.#snapshot, credentials };
 		this.#appliedSnapshotRevision += 1;
 	}
@@ -1490,8 +1598,8 @@ function normalizeSnapshotEntryBlocks(entry: SnapshotEntry, nowMs: number): Snap
 			blockScope: block.blockScope,
 			blockedUntilMs: block.blockedUntilMs,
 			...(block.updatedAtMs !== undefined ? { updatedAtMs: block.updatedAtMs } : {}),
+			...(block.provenance !== undefined ? { provenance: block.provenance } : {}),
 		}))
-		.sort(compareCredentialBlockSnapshots);
 	if (blocks.length > 0) return { ...entry, blocks };
 	const next: SnapshotEntry = { ...entry };
 	delete next.blocks;

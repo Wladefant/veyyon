@@ -21,6 +21,7 @@ import { REMOTE_REFRESH_SENTINEL } from "../auth-storage";
 import { usageWireSchemas } from "../usage/report-wire";
 import { type } from "../utils/schema/arktype";
 import type {
+	CredentialBlockDeleteRequest,
 	CredentialBlockRequest,
 	CredentialBlockResponse,
 	CredentialBlocksDeleteResponse,
@@ -111,6 +112,7 @@ function buildWireSchemas() {
 		blockScope: "string",
 		blockedUntilMs: "number",
 		"updatedAtMs?": "number",
+		"provenance?": "'predicted' | 'confirmed'",
 	});
 
 	const snapshotEntrySchema = type({
@@ -228,6 +230,11 @@ function buildWireSchemas() {
 
 	const credentialBlockRequestSchema = credentialBlockSnapshotSchema;
 
+	const credentialBlockDeleteRequestSchema = type({
+		"+": "reject",
+		providerKey: type("string").atLeastLength(1),
+		blockScope: "string",
+	});
 	const credentialBlockResponseSchema = type({
 		"+": "reject",
 		ok: "boolean",
@@ -277,6 +284,7 @@ function buildWireSchemas() {
 		credentialDisableRequestSchema,
 		credentialDisableResponseSchema,
 		credentialBlockRequestSchema,
+		credentialBlockDeleteRequestSchema,
 		credentialBlockResponseSchema,
 		credentialBlocksDeleteResponseSchema,
 		usageStaleResponseSchema,
@@ -307,6 +315,7 @@ export interface WireSchemas {
 	credentialDisableRequestSchema: Type<CredentialDisableRequest>;
 	credentialDisableResponseSchema: Type<CredentialDisableResponse>;
 	credentialBlockRequestSchema: Type<CredentialBlockRequest>;
+	credentialBlockDeleteRequestSchema: Type<CredentialBlockDeleteRequest>;
 	credentialBlockResponseSchema: Type<CredentialBlockResponse>;
 	credentialBlocksDeleteResponseSchema: Type<CredentialBlocksDeleteResponse>;
 	usageStaleResponseSchema: Type<UsageStaleResponse>;

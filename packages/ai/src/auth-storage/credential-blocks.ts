@@ -5,11 +5,11 @@
  */
 
 import * as logger from "@veyyon/utils/logger";
-import { USAGE_REPORT_TTL_MS } from "../auth-credential-rows";
+import { mergeCredentialBlockProvenance, USAGE_REPORT_TTL_MS } from "../auth-credential-rows";
 import { isRecordFromFutureClock } from "../credential-clock";
 import type { StoredCredential } from "./credentials";
 import { toScopedBackoffKey } from "./credentials";
-import type { AuthCredentialStore } from "./types";
+import type { AuthCredentialStore, CredentialBlockProvenance } from "./types";
 
 /** How long a credential stays blocked when the provider names no reset time. */
 export const DEFAULT_CREDENTIAL_BACKOFF_MS = 60_000;
@@ -20,6 +20,8 @@ interface InMemoryCredentialBlock {
 	blockedUntilMs: number;
 	/** Epoch milliseconds the block was set, used to detect a backward clock jump. */
 	blockedAtMs: number;
+	/** Source of the block when known; absent for legacy/untagged rows. */
+	provenance?: CredentialBlockProvenance;
 }
 
 export class CredentialBlocks {
@@ -35,6 +37,8 @@ export class CredentialBlocks {
 	#credentialBackoff: Map<string, Map<number, InMemoryCredentialBlock>> = new Map();
 	/** Earliest time a freshly-set in-memory block may be cleared by live usage reconciliation. */
 	#credentialBackoffProbeAfter: Map<string, Map<number, number>> = new Map();
+	/** Earliest time ranking may re-probe a stale predicted block after an unsuccessful recheck. */
+	#predictedRecheckAfter: Map<string, Map<number, number>> = new Map();
 
 	/**
 	 * `rows` returns the provider's loaded credential rows, in the order indices refer to.
@@ -69,6 +73,9 @@ export class CredentialBlocks {
 			const probeAfterMap = this.#credentialBackoffProbeAfter.get(backoffKey);
 			probeAfterMap?.delete(credentialIndex);
 			if (probeAfterMap?.size === 0) this.#credentialBackoffProbeAfter.delete(backoffKey);
+			const recheckAfterMap = this.#predictedRecheckAfter.get(backoffKey);
+			recheckAfterMap?.delete(credentialIndex);
+			if (recheckAfterMap?.size === 0) this.#predictedRecheckAfter.delete(backoffKey);
 			return undefined;
 		}
 		return blockedUntil;
@@ -200,6 +207,94 @@ export class CredentialBlocks {
 		return blockedUntil;
 	}
 
+	/** Provenance of the active block for `blockScope` alone (in memory or store), or undefined if untagged/absent. */
+	getScopedBlockProvenance(
+		provider: string,
+		providerKey: string,
+		credentialIndex: number,
+		blockScope: string,
+	): CredentialBlockProvenance | undefined {
+		const nowMs = Date.now();
+		const scopedKey = toScopedBackoffKey(providerKey, blockScope);
+		const hasInMemory = this.#getCredentialBlockedUntilForKey(scopedKey, credentialIndex, nowMs) !== undefined;
+		const inMemoryProvenance = hasInMemory ? this.#credentialBackoff.get(scopedKey)?.get(credentialIndex)?.provenance : undefined;
+		const credentialId = this.#rows(provider)[credentialIndex]?.id;
+		let persistedProvenance: CredentialBlockProvenance | undefined;
+		if (credentialId !== undefined && this.#store.getCredentialBlock?.(credentialId, providerKey, blockScope) !== undefined) {
+			persistedProvenance = this.#store.getCredentialBlockProvenance?.(credentialId, providerKey, blockScope);
+		}
+		if (inMemoryProvenance === "confirmed" || persistedProvenance === "confirmed") return "confirmed";
+		if (hasInMemory && inMemoryProvenance === undefined) return undefined;
+		if (
+			credentialId !== undefined &&
+			this.#store.getCredentialBlock?.(credentialId, providerKey, blockScope) !== undefined &&
+			persistedProvenance === undefined
+		) {
+			return undefined;
+		}
+		return inMemoryProvenance ?? persistedProvenance;
+	}
+
+	/** Earliest in-memory reconcile time for one exact `blockScope`, ignoring global blocks. */
+	reconcileAfterMsForScope(providerKey: string, blockScope: string, credentialIndex: number): number {
+		const scopedBackoffKey = toScopedBackoffKey(providerKey, blockScope);
+		return this.#credentialBackoffProbeAfter.get(scopedBackoffKey)?.get(credentialIndex) ?? 0;
+	}
+
+	/**
+	 * Whether ranking may re-fetch live usage for a blocked `google-antigravity` counter scope:
+	 * requires an active predicted scoped block past `reconcileAfter`, no active unscoped global
+	 * block, and an elapsed per-process recheck cooldown.
+	 */
+	canRecheckPredictedBlock(
+		provider: string,
+		providerKey: string,
+		credentialIndex: number,
+		blockScope: string,
+		nowMs: number,
+	): boolean {
+		if (!blockScope.startsWith("counter:") || blockScope === "counter:unknown") return false;
+		if (this.#getCredentialBlockedUntilForKey(providerKey, credentialIndex, nowMs) !== undefined) return false;
+		const credentialId = this.#rows(provider)[credentialIndex]?.id;
+		if (credentialId !== undefined && this.#readPersistedCredentialBlock(credentialId, providerKey, "") !== undefined) {
+			return false;
+		}
+		if (this.getScopedBlockProvenance(provider, providerKey, credentialIndex, blockScope) !== "predicted") {
+			return false;
+		}
+		const scopedKey = toScopedBackoffKey(providerKey, blockScope);
+		const localProbeAfterMs = this.reconcileAfterMsForScope(providerKey, blockScope, credentialIndex);
+		const storeProbeAfterMs =
+			credentialId !== undefined
+				? (this.#store.getCredentialBlockReconcileAfter?.(credentialId, providerKey, blockScope) ?? 0)
+				: 0;
+		const recheckAfterMs = this.#predictedRecheckAfter.get(scopedKey)?.get(credentialIndex) ?? 0;
+		return Math.max(localProbeAfterMs, storeProbeAfterMs, recheckAfterMs) <= nowMs;
+	}
+
+	/** Bounds repeated ranking rechecks for a predicted block that did not heal. */
+	notePredictedBlockRecheck(providerKey: string, blockScope: string, credentialIndex: number, nowMs: number): void {
+		const scopedKey = toScopedBackoffKey(providerKey, blockScope);
+		const blockedUntilMs = this.#credentialBackoff.get(scopedKey)?.get(credentialIndex)?.blockedUntilMs;
+		const nextRecheckMs =
+			blockedUntilMs !== undefined ? Math.min(blockedUntilMs, nowMs + USAGE_REPORT_TTL_MS) : nowMs + USAGE_REPORT_TTL_MS;
+		const recheckMap = this.#predictedRecheckAfter.get(scopedKey) ?? new Map<number, number>();
+		recheckMap.set(credentialIndex, nextRecheckMs);
+		this.#predictedRecheckAfter.set(scopedKey, recheckMap);
+	}
+
+	/** Clears bounded ranking recheck throttles when cached usage for `provider` is invalidated. */
+	clearPredictedRecheckCooldowns(provider?: string): void {
+		if (!provider) {
+			this.#predictedRecheckAfter.clear();
+			return;
+		}
+		const prefix = `${provider}:`;
+		for (const key of this.#predictedRecheckAfter.keys()) {
+			if (key.startsWith(prefix)) this.#predictedRecheckAfter.delete(key);
+		}
+	}
+
 	/** Marks a credential as blocked until the specified time. */
 	markCredentialBlocked(
 		provider: string,
@@ -207,17 +302,26 @@ export class CredentialBlocks {
 		credentialIndex: number,
 		blockedUntilMs: number,
 		blockScope: string | undefined = undefined,
+		provenance: CredentialBlockProvenance | undefined = undefined,
 	): void {
 		const backoffKey = toScopedBackoffKey(providerKey, blockScope);
 		const nowMs = Date.now();
 		const backoffMap = this.#credentialBackoff.get(backoffKey) ?? new Map<number, InMemoryCredentialBlock>();
 		const existing = backoffMap.get(credentialIndex);
-		// A block already invalidated by a backward jump must not raise the new
-		// deadline through MAX, or the jump would survive being re-blocked.
-		const carryForward =
-			existing && !isRecordFromFutureClock(existing.blockedAtMs, nowMs) ? existing.blockedUntilMs : 0;
-		const nextBlockedUntil = Math.max(carryForward, blockedUntilMs);
-		backoffMap.set(credentialIndex, { blockedUntilMs: nextBlockedUntil, blockedAtMs: nowMs });
+		// An expired or future-jumped entry must neither raise the deadline nor promote provenance.
+		const activeExisting =
+			existing && existing.blockedUntilMs > nowMs && !isRecordFromFutureClock(existing.blockedAtMs, nowMs)
+				? existing
+				: undefined;
+		const nextBlockedUntil = Math.max(activeExisting?.blockedUntilMs ?? 0, blockedUntilMs);
+		const nextProvenance = activeExisting
+			? mergeCredentialBlockProvenance(activeExisting.provenance, provenance)
+			: provenance;
+		backoffMap.set(credentialIndex, {
+			blockedUntilMs: nextBlockedUntil,
+			blockedAtMs: nowMs,
+			...(nextProvenance ? { provenance: nextProvenance } : {}),
+		});
 		this.#credentialBackoff.set(backoffKey, backoffMap);
 		const probeAfterMap = this.#credentialBackoffProbeAfter.get(backoffKey) ?? new Map<number, number>();
 		probeAfterMap.set(credentialIndex, Math.min(nextBlockedUntil, nowMs + USAGE_REPORT_TTL_MS));
@@ -234,6 +338,7 @@ export class CredentialBlocks {
 				providerKey,
 				blockScope: blockScope ?? "",
 				blockedUntilMs: nextBlockedUntil,
+				...(nextProvenance ? { provenance: nextProvenance } : {}),
 			});
 		} catch (err) {
 			logger.debug("Failed to persist credential block", {
@@ -274,8 +379,23 @@ export class CredentialBlocks {
 			probeAfterMap.delete(credentialIndex);
 			if (probeAfterMap.size === 0) this.#credentialBackoffProbeAfter.delete(key);
 		}
+		for (const [key, recheckMap] of this.#predictedRecheckAfter) {
+			if (key !== providerKey && !key.startsWith(scopedPrefix)) continue;
+			recheckMap.delete(credentialIndex);
+			if (recheckMap.size === 0) this.#predictedRecheckAfter.delete(key);
+		}
 	}
 
+	/** Deletes only one exact scoped in-memory block, leaving all other scopes and global blocks untouched. */
+	clearScopedCredentialBlock(providerKey: string, blockScope: string, credentialIndex: number): void {
+		const scopedKey = toScopedBackoffKey(providerKey, blockScope);
+		for (const map of [this.#credentialBackoff, this.#credentialBackoffProbeAfter, this.#predictedRecheckAfter]) {
+			const inner = map.get(scopedKey);
+			if (!inner) continue;
+			inner.delete(credentialIndex);
+			if (inner.size === 0) map.delete(scopedKey);
+		}
+	}
 	/**
 	 * Deletes the in-memory blocks under every key of `provider`. Reconcile times and persisted
 	 * blocks are kept.
@@ -286,5 +406,6 @@ export class CredentialBlocks {
 				this.#credentialBackoff.delete(key);
 			}
 		}
+		this.clearPredictedRecheckCooldowns(provider);
 	}
 }
