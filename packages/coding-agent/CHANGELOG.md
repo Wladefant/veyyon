@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore per-spawn lifecycle hooks, internal dispatch metadata propagation (`ticketId`, `runId`, `ledgerPath`, `nativeDispatchBound`), `structuredResult` recording, and isolated background follow-up hints ([Refs #1110](https://github.com/Wladefant/veyyon/issues/1110)).
+
 ## [1.10.0] - 2026-11-14
 
 ### Fixed

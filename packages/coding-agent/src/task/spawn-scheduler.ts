@@ -103,6 +103,10 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.successorOf !== undefined) spawn.successorOf = item.successorOf;
 	if (item.priority !== undefined) spawn.priority = item.priority;
 	if (item.ownershipLease !== undefined) spawn.ownershipLease = item.ownershipLease;
+	if (params.ticketId !== undefined) spawn.ticketId = params.ticketId;
+	if (params.runId !== undefined) spawn.runId = params.runId;
+	if (params.ledgerPath !== undefined) spawn.ledgerPath = params.ledgerPath;
+	if (params.nativeDispatchBound !== undefined) spawn.nativeDispatchBound = params.nativeDispatchBound;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
@@ -258,7 +262,10 @@ function settleInlineProgress(
 }
 
 /** What the parent reads once a background agent stops: how to reach it and where its transcript is. */
-function followUpHint(agentId: string, aborted: boolean, ircEnabled: boolean): string {
+function followUpHint(agentId: string, aborted: boolean, ircEnabled: boolean, isolated = false): string {
+	if (isolated) {
+		return `\n\n${agentId} ran isolated and cannot be resumed or messaged — transcript at history://${agentId}`;
+	}
 	if (aborted) {
 		const status = AgentRegistry.global().get(agentId)?.status;
 		if (status === "idle" || status === "parked") {
@@ -625,6 +632,7 @@ export class SpawnScheduler {
 				await this.#admitJob(signal, progress, batch, params.priority);
 				const acquiredAt = Date.now();
 				let delivery: { text: string; failed: boolean };
+				let isolatedHint: boolean | undefined;
 				try {
 					markRunning();
 					progress.status = "running";
@@ -645,8 +653,9 @@ export class SpawnScheduler {
 						failed ? `Background task ${agentId} failed.` : `Background task ${agentId} complete.`,
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
+					isolatedHint = single?.isolated === true;
 					delivery = {
-						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled)}`,
+						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled, isolatedHint)}`,
 						failed,
 					};
 				} catch (error) {
@@ -654,7 +663,12 @@ export class SpawnScheduler {
 					progress.durationMs = Math.max(0, Date.now() - startedAt);
 					batch.settle(true);
 					await reportProgress(`Background task ${agentId} failed.`);
-					const hint = AgentRegistry.global().get(agentId) ? followUpHint(agentId, false, options.ircEnabled) : "";
+					const isolated =
+						isolatedHint ??
+						(this.#session.settings.get("agent.isolation.mode") !== "none" && params.isolated === true);
+					const hint = AgentRegistry.global().get(agentId)
+						? followUpHint(agentId, false, options.ircEnabled, isolated)
+						: "";
 					throw new Error(`${errorMessage(error)}${hint}`);
 				} finally {
 					this.#release();

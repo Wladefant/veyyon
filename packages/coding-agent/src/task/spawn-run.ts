@@ -7,10 +7,10 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
-import { directoryExists, errorMessage, getSessionsDir, prompt, Snowflake } from "@veyyon/utils";
+import { directoryExists, errorMessage, getSessionsDir, isRecord, prompt, Snowflake } from "@veyyon/utils";
 import { formatBytes, formatDuration } from "@veyyon/utils/format";
 import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
-import type { ToolSession } from "..";
+import type { AgentSpawnRecord, ToolSession } from "..";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { mcpManagerInstance } from "../mcp/manager-instance";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
@@ -510,14 +510,32 @@ async function landIsolatedChanges(
  * study or backtest tool can enumerate a session's agents without scraping tool-result prose (GRAN-2).
  * The transcript path is derived as the executor derives it: `<artifactsDir>/<id>.jsonl`.
  */
+function parseStructuredResult(result: SingleResult): Record<string, unknown> | undefined {
+	if (result.output) {
+		try {
+			const trimmed = result.output.trim();
+			if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+				const parsed: unknown = JSON.parse(trimmed);
+				if (isRecord(parsed)) return parsed;
+			}
+		} catch {
+			// Output not JSON
+		}
+	}
+	const yieldItems = result.extractedToolData?.yield;
+	const lastYield = yieldItems?.[yieldItems.length - 1];
+	return isRecord(lastYield) && isRecord(lastYield.data) ? lastYield.data : undefined;
+}
+
 function recordSpawn(
 	session: ToolSession,
 	result: SingleResult,
 	artifactsDir: string,
 	isolation: SpawnIsolation | null,
-): void {
+	params: TaskParams,
+): AgentSpawnRecord {
 	const outcome = classifyAgentOutcome(result);
-	session.recordAgentSpawn?.({
+	const record: AgentSpawnRecord = {
 		agentId: result.id,
 		agentName: result.agent,
 		task: result.task,
@@ -528,7 +546,12 @@ function recordSpawn(
 		durationMs: result.durationMs,
 		usage: result.usage,
 		error: result.error,
-	});
+		ticketId: typeof params.ticketId === "string" ? params.ticketId : undefined,
+		runId: typeof params.runId === "string" ? params.runId : undefined,
+		structuredResult: parseStructuredResult(result),
+	};
+	session.recordAgentSpawn?.(record);
+	return record;
 }
 
 /** The manager that hands out agent ids unique across the session, so no two agents' artifacts collide. */
@@ -689,35 +712,50 @@ async function runPreparedSpawn(
 			Date.now() - startTime,
 		);
 	}
+	const lifecycle = {
+		agentId,
+		agentName: spawn.agent.name,
+		ticketId: typeof params.ticketId === "string" ? params.ticketId : undefined,
+		runId: typeof params.runId === "string" ? params.runId : undefined,
+	};
 	let result: SingleResult;
 	let mergeSummary = "";
-	if (isolation) {
-		const taskStart = Date.now();
-		const run = await runIsolatedSubprocess({
-			baseOptions: options,
-			context: isolation.context,
-			preferredBackend: parseIsolationMode(isolation.mode),
-			agentId,
-			mergeMode: isolation.mergeMode,
-			artifactsDir: spawn.artifacts.dir,
-			buildCommitMessage,
-			buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
-		});
-		({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
-	} else {
-		result = await runSubprocess(options);
-	}
-
-	recordSpawn(session, result, spawn.artifacts.dir, isolation);
-	if (!isolation) {
-		try {
-			await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
-		} catch (error) {
-			result = {
-				...result,
-				error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
-			};
+	let completionEmitted = false;
+	try {
+		session.onSubagentStart?.(lifecycle);
+		if (isolation) {
+			const taskStart = Date.now();
+			const run = await runIsolatedSubprocess({
+				baseOptions: options,
+				context: isolation.context,
+				preferredBackend: parseIsolationMode(isolation.mode),
+				agentId,
+				mergeMode: isolation.mergeMode,
+				artifactsDir: spawn.artifacts.dir,
+				buildCommitMessage,
+				buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
+			});
+			({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
+		} else {
+			result = await runSubprocess(options);
 		}
+
+		if (!isolation) {
+			try {
+				await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
+			} catch (error) {
+				result = {
+					...result,
+					error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
+				};
+			}
+		}
+		const record = recordSpawn(session, result, spawn.artifacts.dir, isolation, params);
+		await session.onSubagentComplete?.(record);
+		completionEmitted = true;
+	} catch (error) {
+		if (!completionEmitted) session.onSubagentStartFailed?.(lifecycle);
+		throw error;
 	}
 	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 }

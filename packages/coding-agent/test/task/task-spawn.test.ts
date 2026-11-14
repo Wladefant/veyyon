@@ -22,6 +22,7 @@ import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
 import * as isolationRunner from "@veyyon/coding-agent/task/isolation-runner";
 import { Semaphore } from "@veyyon/coding-agent/task/parallel";
+import * as spawnRunModule from "@veyyon/coding-agent/task/spawn-run";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -248,6 +249,165 @@ describe("task spawn routing", () => {
 		expect(completions[0]).toMatchObject(starts[0]!);
 	});
 
+	it("awaits completion, populates AgentSpawnRecord metadata, and emits start-failed only after start", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent, reviewerAgent],
+			projectAgentsDir: null,
+		});
+
+		// 1. Pre-execution refusal (disabled agent) emits neither start nor start-failed nor complete.
+		const refusedEvents: string[] = [];
+		const refusedTool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({
+					"async.enabled": false,
+					"agent.agents": { reviewer: { enabled: false } },
+				}),
+				onSubagentStart: () => refusedEvents.push("start"),
+				onSubagentStartFailed: () => refusedEvents.push("start-failed"),
+				onSubagentComplete: () => {
+					refusedEvents.push("complete");
+				},
+			}),
+		);
+		const refused = await refusedTool.execute("tc-refused-lifecycle", {
+			agent: "reviewer",
+			name: "RefusedLifecycle",
+			task: "Review this.",
+			ticketId: "ticket-refused",
+			runId: "run-refused",
+		} as TaskParams);
+		expect(refused.isError).toBe(true);
+		expect(refusedEvents).toEqual([]);
+
+		// 2. Async onSubagentComplete is awaited and receives ticketId, runId, and structuredResult.
+		const completeEntered = Promise.withResolvers<void>();
+		const completeGate = Promise.withResolvers<void>();
+		const recordedSpawns: Array<Record<string, unknown>> = [];
+		const completedRecords: Array<Record<string, unknown>> = [];
+		let completeReturned = false;
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(
+			makeResult("AwaitedComplete", {
+				agent: "reviewer",
+				output: JSON.stringify({ stage: "review", verdict: "ok" }),
+			}),
+		);
+		const awaitedTool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({
+					"async.enabled": false,
+					"agent.agents": { reviewer: { enabled: true } },
+				}),
+				recordAgentSpawn: record => recordedSpawns.push(record as unknown as Record<string, unknown>),
+				onSubagentComplete: async record => {
+					completeEntered.resolve();
+					await completeGate.promise;
+					completedRecords.push(record as unknown as Record<string, unknown>);
+					completeReturned = true;
+				},
+			}),
+		);
+		const pendingExecute = awaitedTool.execute("tc-awaited-complete", {
+			agent: "reviewer",
+			name: "AwaitedComplete",
+			task: "Review this.",
+			ticketId: "ticket-awaited",
+			runId: "run-awaited",
+			nativeDispatchBound: true,
+		} as TaskParams);
+		await completeEntered.promise;
+		let executeResolved = false;
+		void pendingExecute.then(() => {
+			executeResolved = true;
+		});
+		await Promise.resolve();
+		expect(executeResolved).toBe(false);
+		expect(completeReturned).toBe(false);
+		completeGate.resolve();
+		await pendingExecute;
+		expect(executeResolved).toBe(true);
+		expect(completeReturned).toBe(true);
+		expect(recordedSpawns[0]).toMatchObject({
+			agentId: "AwaitedComplete",
+			agentName: "reviewer",
+			ticketId: "ticket-awaited",
+			runId: "run-awaited",
+			structuredResult: { stage: "review", verdict: "ok" },
+		});
+		expect(completedRecords[0]).toMatchObject(recordedSpawns[0]!);
+
+		// 3. Execution throw after onSubagentStart triggers onSubagentStartFailed and skips onSubagentComplete.
+		const crashEvents: string[] = [];
+		const crashStartFailed: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockRejectedValue(new Error("boom"));
+		const crashTool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({
+					"async.enabled": false,
+					"agent.agents": { reviewer: { enabled: true } },
+				}),
+				onSubagentStart: () => crashEvents.push("start"),
+				onSubagentStartFailed: event => {
+					crashEvents.push("start-failed");
+					crashStartFailed.push(event);
+				},
+				onSubagentComplete: () => {
+					crashEvents.push("complete");
+				},
+			}),
+		);
+		const crashResult = await crashTool.execute("tc-crash-lifecycle", {
+			agent: "reviewer",
+			name: "CrashedLifecycle",
+			task: "Review this.",
+			ticketId: "ticket-crash",
+			runId: "run-crash",
+		} as TaskParams);
+		expect(crashResult.isError).toBe(true);
+		expect(crashEvents).toEqual(["start", "start-failed"]);
+		expect(crashStartFailed).toEqual([
+			{
+				agentId: "CrashedLifecycle",
+				agentName: "reviewer",
+				ticketId: "ticket-crash",
+				runId: "run-crash",
+			},
+		]);
+
+		// 4. Rejecting onSubagentComplete still invokes onSubagentStartFailed cleanup.
+		const completeFailEvents: string[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(
+			makeResult("CompleteFail", { agent: "reviewer" }),
+		);
+		const completeFailTool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({
+					"async.enabled": false,
+					"agent.agents": { reviewer: { enabled: true } },
+				}),
+				onSubagentStart: () => completeFailEvents.push("start"),
+				onSubagentStartFailed: () => completeFailEvents.push("start-failed"),
+				onSubagentComplete: async () => {
+					completeFailEvents.push("complete-throw");
+					throw new Error("complete hook failed");
+				},
+			}),
+		);
+		const completeFailResult = await completeFailTool.execute("tc-complete-fail", {
+			agent: "reviewer",
+			name: "CompleteFail",
+			task: "Review this.",
+			ticketId: "ticket-complete-fail",
+			runId: "run-complete-fail",
+		} as TaskParams);
+		expect(completeFailResult.isError).toBe(true);
+		expect(completeFailEvents).toEqual(["start", "complete-throw", "start-failed"]);
+	});
+
 	/**
 	 * Task dispatch reads policy at spawn time, so a model or effort change applies to the next
 	 * child without rebuilding the TaskTool — and a `agent.agents.<name>` row is the layer that
@@ -288,7 +448,7 @@ describe("task spawn routing", () => {
 		expect(spy.mock.calls[0]?.[0]?.parentThinkingLevel).toBeUndefined();
 	});
 
-	it("uses the task spawn identity to select the shared pool's first model", async () => {
+	it("preserves the configured model order for the task spawn identity", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],
 			projectAgentsDir: null,
@@ -316,8 +476,8 @@ describe("task spawn routing", () => {
 		} as TaskParams);
 
 		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual([
-			"openai-codex/gpt-6-luna",
 			"google/gemini-3.8-flash",
+			"openai-codex/gpt-6-luna",
 			"anthropic/claude-sonnet-4",
 		]);
 	});
@@ -413,6 +573,106 @@ describe("task spawn routing", () => {
 		const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
 		expect(delivered).toContain("Task isolation is disabled");
 		expect(delivered).not.toContain("ran isolated");
+	});
+
+	it("propagates internal dispatch params in background mode and gates catch-path isolated hint on registration", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		const starts: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
+		const completions: Array<Record<string, unknown>> = [];
+		const runSpawnSpy = vi.spyOn(spawnRunModule, "runSpawn");
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(
+			makeResult("BgMeta", {
+				output: "summary prose",
+				extractedToolData: { yield: [{ data: { stage: "build" } }] },
+			}),
+		);
+		const manager = createManager();
+		const bgTool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({ "async.enabled": true }),
+				asyncJobManager: manager,
+				onSubagentStart: event => starts.push(event),
+				onSubagentComplete: record => {
+					completions.push(record as unknown as Record<string, unknown>);
+				},
+			}),
+		);
+		const bgRes = await bgTool.execute("tc-bg-meta", {
+			agent: "task",
+			name: "BgMeta",
+			task: "x",
+			ticketId: "ticket-bg",
+			runId: "run-bg",
+			ledgerPath: "/tmp/ledger.json",
+			nativeDispatchBound: true,
+		} as TaskParams);
+		await manager.getJob(bgRes.details!.async!.jobId)!.promise;
+		expect(runSpawnSpy.mock.calls[0]?.[2]?.params).toMatchObject({
+			ticketId: "ticket-bg",
+			runId: "run-bg",
+			ledgerPath: "/tmp/ledger.json",
+			nativeDispatchBound: true,
+		});
+		expect(starts).toEqual([
+			{ agentId: "BgMeta", agentName: "task", ticketId: "ticket-bg", runId: "run-bg" },
+		]);
+		expect(completions[0]).toMatchObject({
+			...starts[0]!,
+			structuredResult: { stage: "build" },
+		});
+
+		// If an isolated agent registered in AgentRegistry and delivery fails in catch, report isolated hint.
+		runSpawnSpy.mockImplementation(async (_session, _bypass, req) => {
+			AgentRegistry.global().register({
+				id: req.preAllocatedId ?? "RegisteredIso",
+				kind: "subagent",
+				parentId: "main",
+				scope: "main",
+				displayName: "RegisteredIso",
+				activity: "work",
+				session: null,
+				createdAt: Date.now(),
+			});
+			throw new Error("unexpected throw after start");
+		});
+		const regTool = await TaskTool.create(createSession({ manager, settings: { "agent.isolation.mode": "auto" } }));
+		const regRes = await regTool.execute("tc-catch-iso", {
+			agent: "task",
+			name: "RegisteredIso",
+			task: "x",
+			isolated: true,
+		} as TaskParams);
+		const regJob = manager.getJob(regRes.details!.async!.jobId)!;
+		await regJob.promise.catch(() => undefined);
+		expect(regJob.errorText ?? "").toContain("RegisteredIso ran isolated and cannot be resumed or messaged");
+
+		// Catch-path with isolation disabled never reports isolated even if an agent entry exists.
+		const isoOffRegTool = await TaskTool.create(
+			createSession({ manager, settings: { "agent.isolation.mode": "none" } }),
+		);
+		const isoOffRegRes = await isoOffRegTool.execute("tc-catch-iso-off", {
+			agent: "task",
+			name: "DisabledIsoThrow",
+			task: "x",
+			isolated: true,
+		} as TaskParams);
+		const isoOffRegJob = manager.getJob(isoOffRegRes.details!.async!.jobId)!;
+		await isoOffRegJob.promise.catch(() => undefined);
+		expect(isoOffRegJob.errorText ?? "").not.toContain("ran isolated");
+
+		// Unregistered throw never emits a follow-up hint.
+		runSpawnSpy.mockRejectedValueOnce(new Error("unregistered throw"));
+		const unregRes = await regTool.execute("tc-catch-unreg", {
+			agent: "task",
+			name: "UnregisteredIso",
+			task: "x",
+			isolated: true,
+		} as TaskParams);
+		const unregJob = manager.getJob(unregRes.details!.async!.jobId)!;
+		await unregJob.promise.catch(() => undefined);
+		expect(unregJob.errorText ?? "").toContain("unregistered throw");
+		expect(unregJob.errorText ?? "").not.toContain("ran isolated");
 	});
 
 	for (const background of [false, true]) {
