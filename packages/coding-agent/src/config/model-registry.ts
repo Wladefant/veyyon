@@ -715,7 +715,11 @@ export class ModelRegistry {
 				const builtInFailure = await this.#refreshRuntimeDiscoveries(force ? "online" : "online-if-uncached");
 				if (
 					builtInFailure ||
-					[...this.#providerDiscoveryStates.values()].some(state => state.error !== undefined)
+					[...this.#providerDiscoveryStates.values()].some(
+						state =>
+							state.error !== undefined &&
+							this.#shouldWarnOnDiscoveryFailure(state.provider, undefined, state.error),
+					)
 				) {
 					return "Model discovery failed; cached catalog data was retained.";
 				}
