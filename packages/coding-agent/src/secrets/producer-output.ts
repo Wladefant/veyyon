@@ -270,10 +270,25 @@ function quotedEnd(text: string, start: number): number {
 	return text.length;
 }
 
+// `gh run view --log-failed` spells ESC as `^[`. Its complete CSI brackets
+// are display notation, not the start of a JSON or util.inspect container.
+const CARET_CSI = /\^\[\[[0-?]*[ -/]*[@-~]/y;
+
+function caretCsiLength(text: string, start: number): number {
+	if (text[start] !== "^") return 0;
+	CARET_CSI.lastIndex = start;
+	return CARET_CSI.exec(text)?.[0].length ?? 0;
+}
+
 function structuredStart(text: string): number {
 	// Only a complete scalar record owns its quotes. Quotes in raw labels must
 	// not consume delimiters belonging to a later structured argument.
 	for (let start = 0; start < text.length; start++) {
+		const escapedCsi = caretCsiLength(text, start);
+		if (escapedCsi) {
+			start += escapedCsi - 1;
+			continue;
+		}
 		const character = text[start];
 		if (character === '"' && !text.slice(0, start).trim()) {
 			const end = quotedEnd(text, start);
@@ -526,6 +541,8 @@ export class ProducerOutputGuard {
 					} else if (this.#quote) {
 						if (character === "\\") this.#escaped = true;
 						else if (character === this.#quote) this.#quote = "";
+					} else if (character === "^") {
+						index += Math.max(0, caretCsiLength(line, index) - 1);
 					} else if (isQuote(character)) {
 						this.#quote = character;
 					} else if (character === "/") {
