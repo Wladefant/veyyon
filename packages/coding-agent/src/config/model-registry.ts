@@ -686,6 +686,7 @@ export class ModelRegistry {
 					failure,
 					catalogStamp: modelCacheStamp(this.#cacheDbPath ?? getModelDbPath(), { ttlMs: DAY_MS }),
 				});
+				if (failure === undefined) this.#lastSpawnPreflightFailure = undefined;
 			} else {
 				this.#lastSpawnPreflightAt = Date.now();
 				this.#lastSpawnPreflightFailure = failure;
