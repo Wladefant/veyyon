@@ -288,7 +288,7 @@ describe("task spawn routing", () => {
 		expect(spy.mock.calls[0]?.[0]?.parentThinkingLevel).toBeUndefined();
 	});
 
-	it("uses the task spawn identity to select the shared pool's first model", async () => {
+	it("preserves the configured model order for the task spawn identity", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],
 			projectAgentsDir: null,
@@ -316,8 +316,8 @@ describe("task spawn routing", () => {
 		} as TaskParams);
 
 		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual([
-			"openai-codex/gpt-6-luna",
 			"google/gemini-3.8-flash",
+			"openai-codex/gpt-6-luna",
 			"anthropic/claude-sonnet-4",
 		]);
 	});
