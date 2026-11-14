@@ -3,8 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { Api, Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
-import { Settings } from "@veyyon/coding-agent/config/settings";
+import { PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models";
+import { IMPLICIT_LOCAL_RUNTIME_IDS, ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
@@ -201,7 +204,61 @@ describe("agent runtime model resolution", () => {
 		expect(childFallbackChains?.["openrouter/z-ai/glm-4.7@cerebras"]).toEqual(["openrouter/z-ai/glm-4.7@fireworks"]);
 	});
 
+	it("does not persist a recovered selected model as skipped", async () => {
+		const unavailable = model("primary", "unavailable-model");
+		const available = model("fallback", "working-model");
+		let models = [available];
+		let persistedEntries: Array<{ type: string; data: unknown }> = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			const session = createYieldingSession();
+			session.sessionManager.appendCustomEntry = ((type: string, data: unknown) => {
+				persistedEntries.push({ type, data });
+			}) as never;
+			return {
+				session,
+				extensionsResult: {},
+				setToolUIContext: () => {},
+				setToolNotifier: () => {},
+			} as never;
+		});
+
+		const result = await runSubprocess({
+			cwd: "/tmp",
+			agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
+			task: "work",
+			index: 0,
+			id: "skipped-model-resolution",
+			modelOverride: ["prior/still-missing", "primary/unavailable-model", "fallback/working-model"],
+			settings: Settings.isolated(),
+			modelRegistry: {
+				refresh: async () => {},
+				getAll: () => models,
+				getAvailable: () => models,
+				getApiKey: async () => "test-key",
+				refreshForSpawn: async (_selectors: readonly string[], options?: { force?: boolean }) => {
+					if (options?.force) models = [unavailable, available];
+					return undefined;
+				},
+			} as never,
+			enableLsp: false,
+			artifactsDir: isolatedArtifactsDir(),
+		});
+
+		expect(persistedEntries).toEqual([
+			{
+				type: "agent-model-resolution",
+				data: {
+					skipped: ["prior/still-missing: not found in the model catalog"],
+				},
+			},
+		]);
+		const persistedText = JSON.stringify(persistedEntries);
+		expect(persistedText).not.toContain("test-key");
+		expect(persistedText).not.toMatch(/provider error|secret/i);
+	});
+
 	it("fails closed when every explicit agent model selector is absent from the catalog", async () => {
+
 		const defaultModel = model("anthropic", "claude-opus-5-5");
 		const createSessionSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
 			async () =>
@@ -242,5 +299,52 @@ describe("agent runtime model resolution", () => {
 		expect(result.error).toContain("google-antigravity/gemini-3.8-flash:high: not found in the model catalog");
 		expect(result.error).toContain("anthropic/claude-haiku-5-5:max: not found in the model catalog");
 		expect(createSessionSpy).not.toHaveBeenCalled();
+	});
+	it("surfaces authenticated built-in discovery failures as safe spawn errors", async () => {
+		const authStorage = await AuthStorage.create(":memory:");
+		const targetUrl = "https://api.synthetic.new/openai/v1/models";
+		const requests: string[] = [];
+		try {
+			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+			const registry = new ModelRegistry(authStorage, path.join(isolatedArtifactsDir(), "models.json"), {
+				fetch: async input => {
+					const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+					requests.push(url);
+					if (url === targetUrl) {
+						throw new Error("catalog-outage-detail");
+					}
+					throw new Error(`unexpected URL: ${url}`);
+				},
+				snapshotIo: false,
+			});
+			const disabledProviders = [
+				...new Set([
+					...registry.getProviders(),
+					...IMPLICIT_LOCAL_RUNTIME_IDS,
+					...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+				]),
+			].filter(provider => provider !== "synthetic");
+			await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+			const result = await runSubprocess({
+				cwd: "/tmp",
+				agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
+				task: "work",
+				index: 0,
+				id: "builtin-discovery-failure",
+				modelOverride: ["synthetic/model-that-does-not-exist"],
+				settings: Settings.isolated(),
+				modelRegistry: registry,
+				enableLsp: false,
+				artifactsDir: isolatedArtifactsDir(),
+			});
+			expect(requests.filter(url => url === targetUrl).length).toBeGreaterThan(0);
+			expect(requests.filter(url => url !== targetUrl)).toEqual([]);
+			expect(result.error).toContain("Model discovery failed");
+			expect(result.error).not.toContain("catalog-outage-detail");
+			expect(result.error).not.toContain("synthetic-test-key");
+		} finally {
+			resetSettingsForTest();
+			authStorage.close();
+		}
 	});
 });

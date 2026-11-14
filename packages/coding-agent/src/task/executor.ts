@@ -1917,6 +1917,7 @@ interface RunModel {
 	retryFallbackKey: string | undefined;
 	/** Already fitted to `model`; undefined lets the child session resolve its own default. */
 	thinkingLevel: ConfiguredThinkingLevel | undefined;
+	skippedModelReasons: string[];
 }
 
 type ChildSessionOptionsBuilder = (sessionManager: SessionManager, settings: Settings) => CreateAgentSessionOptions;
@@ -1993,7 +1994,7 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 		// for the session to state it.
 		if (requested !== undefined) monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
 	}
-	return { modelRegistry, model, thinkingLevel, retryFallbackKey };
+	return { modelRegistry, model, thinkingLevel, retryFallbackKey, skippedModelReasons: resolution.skipped ?? [] };
 }
 
 /**
@@ -2217,6 +2218,11 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 		buildSessionOptions(sessionManager, ctx.settings),
 		ctx.awaitAbortable,
 	);
+	if (runModel.skippedModelReasons.length > 0) {
+		session.sessionManager.appendCustomEntry("agent-model-resolution", {
+			skipped: runModel.skippedModelReasons,
+		});
+	}
 	marks.sessionCreatedAt = performance.now();
 	monitor.setActiveSession(session);
 	// Adopted (kept-alive) agents report later turns to the registry through the session's own

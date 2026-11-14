@@ -1128,7 +1128,7 @@ export function resolveModelOverride(
 export async function resolveAgentModelChain(
 	modelPatterns: string[],
 	modelRegistry: Pick<ModelRegistry, "getAll" | "getAvailable" | "getApiKey"> &
-		Partial<Pick<ModelRegistry, "isSelectorSuppressed">>,
+		Partial<Pick<ModelRegistry, "isSelectorSuppressed" | "refreshForSpawn">>,
 	settings?: Settings,
 	sessionId?: string,
 ): Promise<{
@@ -1136,60 +1136,80 @@ export async function resolveAgentModelChain(
 	thinkingLevel?: ConfiguredThinkingLevel;
 	explicitThinkingLevel: boolean;
 	warning?: string;
+	skipped?: string[];
 }> {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
-	const allModels = modelRegistry.getAll();
-	const availableModels = modelRegistry.getAvailable();
-	const availableRegistry: ModelLookupRegistry = { getAvailable: () => availableModels };
-	const catalogRegistry: ModelLookupRegistry = { getAvailable: () => allModels };
-	const failures: string[] = [];
-	for (const pattern of modelPatterns) {
-		const availableResolution = resolveModelOverride([pattern], availableRegistry, settings);
-		const resolved = availableResolution.model
-			? availableResolution
-			: resolveModelOverride([pattern], catalogRegistry, settings);
-		if (!resolved.model) {
-			failures.push(`${pattern}: not found in the model catalog`);
-			continue;
-		}
+	let discoveryFailure = await modelRegistry.refreshForSpawn?.(modelPatterns);
+	let forcedRefreshAttempted = false;
+	for (;;) {
+		const allModels = modelRegistry.getAll();
+		const availableModels = modelRegistry.getAvailable();
+		const availableRegistry: ModelLookupRegistry = { getAvailable: () => availableModels };
+		const catalogRegistry: ModelLookupRegistry = { getAvailable: () => allModels };
+		const failures: string[] = [];
+		let missing = false;
+		let retry = false;
+		for (const pattern of modelPatterns) {
+			const availableResolution = resolveModelOverride([pattern], availableRegistry, settings);
+			const resolved = availableResolution.model
+				? availableResolution
+				: resolveModelOverride([pattern], catalogRegistry, settings);
+			if (!resolved.model) {
+				missing = true;
+				failures.push(`${pattern}: not found in the model catalog`);
+				continue;
+			}
 
-		const selector = formatModelString(resolved.model);
-		if (
-			modelRegistry.isSelectorSuppressed?.(pattern) ||
-			modelRegistry.isSelectorSuppressed?.(stripThinkingSelector(pattern)) ||
-			modelRegistry.isSelectorSuppressed?.(selector)
-		) {
-			failures.push(`${pattern}: ${selector} is suppressed by a rate limit or quota cooldown`);
-			continue;
-		}
+			const selector = formatModelString(resolved.model);
+			if (
+				modelRegistry.isSelectorSuppressed?.(pattern) ||
+				modelRegistry.isSelectorSuppressed?.(stripThinkingSelector(pattern)) ||
+				modelRegistry.isSelectorSuppressed?.(selector)
+			) {
+				failures.push(`${pattern}: ${selector} is suppressed by a rate limit or quota cooldown`);
+				continue;
+			}
 
-		let apiKey: string | undefined;
-		try {
-			apiKey = await modelRegistry.getApiKey(resolved.model, sessionId);
-		} catch {
-			// Provider errors may contain credentials or request data. Keep this
-			// operator-facing failure bounded to the known auth state.
+			let apiKey: string | undefined;
+			try {
+				apiKey = await modelRegistry.getApiKey(resolved.model, sessionId);
+			} catch {
+				// Provider errors may contain credentials or request data. Keep this
+				// operator-facing failure bounded to the known auth state.
+			}
+			if (apiKey !== kNoAuth && !isAuthenticated(apiKey)) {
+				failures.push(`${pattern}: ${selector} is missing working credentials`);
+				continue;
+			}
+			if (!availableResolution.model) {
+				failures.push(`${pattern}: ${selector} is unavailable in the model registry`);
+				continue;
+			}
+			if (missing && !forcedRefreshAttempted && modelRegistry.refreshForSpawn) {
+				forcedRefreshAttempted = true;
+				discoveryFailure = await modelRegistry.refreshForSpawn(modelPatterns, { force: true });
+				retry = true;
+				break;
+			}
+			return {
+				model: resolved.model,
+				thinkingLevel: resolved.thinkingLevel,
+				explicitThinkingLevel: resolved.explicitThinkingLevel,
+				warning: [resolved.warning, discoveryFailure].filter(Boolean).join("; ") || undefined,
+				skipped: [...new Set(failures)],
+			};
 		}
-		if (apiKey !== kNoAuth && !isAuthenticated(apiKey)) {
-			failures.push(`${pattern}: ${selector} is missing working credentials`);
+		if (retry) continue;
+		if (!forcedRefreshAttempted && modelRegistry.refreshForSpawn) {
+			forcedRefreshAttempted = true;
+			discoveryFailure = await modelRegistry.refreshForSpawn(modelPatterns, { force: true });
 			continue;
 		}
-		if (!availableResolution.model) {
-			failures.push(`${pattern}: ${selector} is unavailable in the model registry`);
-			continue;
-		}
-		return {
-			model: resolved.model,
-			thinkingLevel: resolved.thinkingLevel,
-			explicitThinkingLevel: resolved.explicitThinkingLevel,
-			warning: resolved.warning,
-		};
+		throw new Error(
+			`No configured task model is available. Configured chain: ${modelPatterns.join(" -> ")}. ` +
+				`Per-member failures: ${[...new Set(failures)].join("; ")}${discoveryFailure ? `; ${discoveryFailure}` : ""}.`,
+		);
 	}
-
-	throw new Error(
-		`No configured task model is available. Configured chain: ${modelPatterns.join(" -> ")}. ` +
-			`Per-member failures: ${failures.join("; ")}.`,
-	);
 }
 
 /**
