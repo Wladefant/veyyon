@@ -2244,6 +2244,28 @@ describe("ModelRegistry", () => {
 			}
 		});
 
+		test("returns a safe refresh failure and keeps the prior configured model", async () => {
+			writeRawModelsJson({
+				"spawn-failure": {
+					baseUrl: "https://spawn-failure.example/v1",
+					auth: "none",
+					api: "openai-responses",
+					discovery: { type: "openai-models-list" },
+					models: [{ id: "known" }],
+				},
+			});
+			const fetchMock: FetchImpl = async () => {
+				throw new Error("credential=secret-value");
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+
+			const failure = await registry.refreshForSpawn({ force: true });
+
+			expect(registry.find("spawn-failure", "known")).toBeDefined();
+			expect(failure).toContain("Model discovery failed");
+			expect(failure).not.toContain("secret-value");
+		});
+
 		test("purges expired suppressions without clearing future cooldowns", async () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			registry.suppressSelector("openai/gpt-4o", Date.now() - 1);

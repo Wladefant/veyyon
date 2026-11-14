@@ -48,7 +48,7 @@ function createMockRegistry(options: MockRegistryOptions) {
 		getApiKey: async (model: Model<Api>) =>
 			options.authedProviders.has(model.provider) ? "sk-test-token" : undefined,
 		isSelectorSuppressed: (selector: string) => options.suppressed?.includes(selector) ?? false,
-		refreshForSpawn: async (_options?: { force?: boolean }) => {},
+		refreshForSpawn: async (_options?: { force?: boolean }) => undefined,
 	};
 }
 
@@ -130,6 +130,7 @@ describe("ordered agent model auth resolution", () => {
 			refreshForSpawn: async (options?: { force?: boolean }) => {
 				refreshes++;
 				if (options?.force) models = [preferred, fallback];
+				return undefined;
 			},
 		};
 		const result = await resolveAgentModelChain(
@@ -138,6 +139,7 @@ describe("ordered agent model auth resolution", () => {
 		);
 		expect(result.model?.provider).toBe("preferred");
 		expect(result.thinkingLevel).toBe("high");
+		expect(result.skipped).toContain("preferred/new-model: not found in the model catalog");
 		expect(refreshes).toBe(2);
 	});
 
@@ -157,6 +159,7 @@ describe("ordered agent model auth resolution", () => {
 					refreshPromise = gate.promise;
 				}
 				await refreshPromise;
+				return undefined;
 			},
 		};
 		const first = resolveAgentModelChain(["preferred/new-model"], registry);
@@ -178,6 +181,7 @@ describe("ordered agent model auth resolution", () => {
 			getApiKey: async () => undefined,
 			refreshForSpawn: async () => {
 				refreshes++;
+				return undefined;
 			},
 		};
 		await expect(resolveAgentModelChain(["absent/model"], registry)).rejects.toThrow(
@@ -195,6 +199,7 @@ describe("ordered agent model auth resolution", () => {
 			isSelectorSuppressed: (selector: string) => selector === "opencode-zen/qwen3.6-plus-free",
 			refreshForSpawn: async () => {
 				refreshes++;
+				return undefined;
 			},
 		};
 		await expect(resolveAgentModelChain(["qwen3.6-plus-free"], registry)).rejects.toThrow(/suppressed/);
