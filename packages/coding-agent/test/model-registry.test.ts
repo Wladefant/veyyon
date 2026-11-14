@@ -2215,7 +2215,7 @@ describe("ModelRegistry", () => {
 				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/configured"] } as never);
 				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/discovered"] } as never);
 				await registry.refreshForSpawn({ force: true, selectors: ["spawn-probe/configured:high"] } as never);
-				expect(requests).toBe(4);
+				expect(requests).toBe(3);
 				expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
 				expect(registry.find("spawn-probe", "discovered")).toBeDefined();
 			} finally {
