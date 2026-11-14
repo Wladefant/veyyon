@@ -2447,6 +2447,152 @@ describe("ModelRegistry", () => {
 			expect(registry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
 			expect(registry.isSelectorSuppressed("openai/gpt-4.1")).toBe(true);
 		});
+
+		test("clears a stale preflight discovery warning after a forced refresh succeeds while keeping persistent failure warnings", async () => {
+			vi.useFakeTimers();
+			try {
+				setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+				writeRawModelsJson({
+					"spawn-stale-warning": {
+						baseUrl: "https://spawn-stale-warning.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "fallback" }],
+					},
+				});
+				const targetUrl = "https://spawn-stale-warning.example/v1/models";
+				const disabledProviders = [
+					...new Set([
+						...IMPLICIT_LOCAL_RUNTIME_IDS,
+						...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+					]),
+				];
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+
+				let requests = 0;
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url !== targetUrl) {
+						throw new Error(`Unexpected URL: ${url}`);
+					}
+					requests++;
+					if (requests === 1) {
+						throw new Error("temporary discovery outage");
+					}
+					return new Response(JSON.stringify({ data: [{ id: "new-preferred" }, { id: "fallback" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock, snapshotIo: false });
+				const chain = ["spawn-stale-warning/new-preferred", "spawn-stale-warning/fallback"];
+
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				const first = await resolveAgentModelChain(chain, registry);
+				expect(requests).toBe(2);
+				expect(first.model?.provider).toBe("spawn-stale-warning");
+				expect(first.model?.id).toBe("new-preferred");
+				expect(first.warning).toBeUndefined();
+
+				setSystemTime(new Date(Date.now() + 10_000));
+				const second = await resolveAgentModelChain(chain, registry);
+				expect(requests).toBe(2);
+				expect(second.model?.provider).toBe("spawn-stale-warning");
+				expect(second.model?.id).toBe("new-preferred");
+				expect(second.warning).toBeUndefined();
+
+				let persistentRequests = 0;
+				const persistentRegistry = new ModelRegistry(authStorage, modelsJsonPath, {
+					fetch: async input => {
+						const url = input instanceof Request ? input.url : String(input);
+						if (url !== targetUrl) {
+							throw new Error(`Unexpected URL: ${url}`);
+						}
+						persistentRequests++;
+						throw new Error("persistent discovery outage");
+					},
+					snapshotIo: false,
+				});
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				const persistent = await resolveAgentModelChain(["spawn-stale-warning/fallback"], persistentRegistry);
+				expect(persistentRequests).toBe(1);
+				expect(persistent.model?.id).toBe("fallback");
+				expect(persistent.warning).toContain("Model discovery failed");
+
+				setSystemTime(new Date(Date.now() + 10_000));
+				const persistentCached = await resolveAgentModelChain(
+					["spawn-stale-warning/fallback"],
+					persistentRegistry,
+				);
+				expect(persistentRequests).toBe(1);
+				expect(persistentCached.model?.id).toBe("fallback");
+				expect(persistentCached.warning).toContain("Model discovery failed");
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+				resetSettingsForTest();
+			}
+		});
+
+		test("forces discovery when preferred is missing and every other chain member is under an active cooldown", async () => {
+			vi.useFakeTimers();
+			try {
+				setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+				writeRawModelsJson({
+					"spawn-chain-cooldown": {
+						baseUrl: "https://spawn-chain-cooldown.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "cooldown-fallback" }],
+					},
+				});
+				const targetUrl = "https://spawn-chain-cooldown.example/v1/models";
+				const disabledProviders = [
+					...new Set([
+						...IMPLICIT_LOCAL_RUNTIME_IDS,
+						...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+					]),
+				];
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+
+				let requests = 0;
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url !== targetUrl) {
+						throw new Error(`Unexpected URL: ${url}`);
+					}
+					requests++;
+					return new Response(JSON.stringify({ data: [{ id: "new-preferred" }, { id: "cooldown-fallback" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock, snapshotIo: false });
+				registry.suppressSelector("spawn-chain-cooldown/cooldown-fallback", Date.now() + 60_000);
+
+				const resolved = await resolveAgentModelChain(
+					["spawn-chain-cooldown/new-preferred", "spawn-chain-cooldown/cooldown-fallback"],
+					registry,
+				);
+				expect(requests).toBe(1);
+				expect(resolved.model?.provider).toBe("spawn-chain-cooldown");
+				expect(resolved.model?.id).toBe("new-preferred");
+				expect(registry.isSelectorSuppressed("spawn-chain-cooldown/cooldown-fallback")).toBe(true);
+
+				await expect(
+					resolveAgentModelChain(["spawn-chain-cooldown/cooldown-fallback"], registry),
+				).rejects.toThrow(/suppressed by a rate limit or quota cooldown/);
+				expect(registry.isSelectorSuppressed("spawn-chain-cooldown/cooldown-fallback")).toBe(true);
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+				resetSettingsForTest();
+			}
+		});
 	});
 	});
 });
