@@ -8,6 +8,7 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
+import { openAICodexModelCacheProviderId } from "@veyyon/catalog/provider-models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
@@ -1922,7 +1923,12 @@ describe("ModelRegistry", () => {
 							}),
 						];
 						for (const cachedModel of cachedModels) {
-							writeModelCache(cachedModel.provider, Date.now(), [cachedModel], true, "", dbPath);
+							// Codex discovery caches are account-set scoped ("empty" when no OAuth accounts are stored).
+							const cacheProviderId =
+								cachedModel.provider === "openai-codex"
+									? openAICodexModelCacheProviderId("empty")
+									: cachedModel.provider;
+							writeModelCache(cacheProviderId, Date.now(), [cachedModel], true, "", dbPath);
 						}
 					},
 				},

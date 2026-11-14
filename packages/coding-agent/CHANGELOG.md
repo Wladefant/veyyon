@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Clear inherited `reasoningOptions` when `applyModelPatch` supplies explicit `thinking` metadata so model overrides replace declared thinking surfaces (Refs [#1103](https://github.com/Wladefant/veyyon/pull/1103)).
+
 ## [1.9.3] - 2026-11-13
 
 ### Fixed
