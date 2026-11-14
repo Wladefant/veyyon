@@ -2239,8 +2239,9 @@ describe("ModelRegistry", () => {
 				const started = Promise.withResolvers<void>();
 				const release = Promise.withResolvers<void>();
 				let requests = 0;
-				const fetchMock: FetchImpl = async () => {
-					requests++;
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url === "https://spawn-race.example/v1/models") requests++;
 					if (requests === 1) {
 						started.resolve();
 						await release.promise;

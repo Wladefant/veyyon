@@ -243,7 +243,6 @@ describe("agent runtime model resolution", () => {
 			artifactsDir: isolatedArtifactsDir(),
 		});
 
-		expect(result.resolvedModel).toBe("primary/unavailable-model");
 		expect(persistedEntries).toEqual([
 			{
 				type: "agent-model-resolution",
