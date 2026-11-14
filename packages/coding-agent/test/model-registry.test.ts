@@ -2388,6 +2388,55 @@ describe("ModelRegistry", () => {
 			}
 		});
 
+		test("does not treat refused optional local runtimes as a spawn refresh failure", async () => {
+			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+			const targetUrl = "https://api.synthetic.new/openai/v1/models";
+			const modelId = "hf:zai-org/GLM-5.1";
+			const requests: string[] = [];
+			const unexpectedRemoteUrls: string[] = [];
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async input => {
+					const url = String(input);
+					requests.push(url);
+					if (url === targetUrl) {
+						return new Response(JSON.stringify({ data: [{ id: modelId }] }), {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						});
+					}
+					const hostname = new URL(url).hostname;
+					if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1") {
+						throw new Error("connect ECONNREFUSED");
+					}
+					unexpectedRemoteUrls.push(url);
+					throw new Error(`unexpected remote URL: ${url}`);
+				},
+				snapshotIo: false,
+			});
+			const allowedProviders = new Set(["synthetic", ...IMPLICIT_LOCAL_RUNTIME_IDS]);
+			const disabledProviders = [
+				...new Set([
+					...registry.getProviders(),
+					...IMPLICIT_LOCAL_RUNTIME_IDS,
+					...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+				]),
+			].filter(provider => !allowedProviders.has(provider));
+			try {
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+				const result = await registry.refreshForSpawn(["synthetic/hf:zai-org/GLM-5.1"], { force: true });
+				expect(requests.filter(url => url === targetUrl).length).toBeGreaterThan(0);
+				expect(requests.filter(url => {
+					const hostname = new URL(url).hostname;
+					return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+				}).length).toBeGreaterThan(0);
+				expect(unexpectedRemoteUrls).toEqual([]);
+				expect(registry.find("synthetic", modelId)).toBeDefined();
+				expect(result).toBeUndefined();
+			} finally {
+				resetSettingsForTest();
+				authStorage.removeRuntimeApiKey("synthetic");
+			}
+		});
 		test("purges expired suppressions without clearing future cooldowns", async () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			registry.suppressSelector("openai/gpt-4o", Date.now() - 1);
