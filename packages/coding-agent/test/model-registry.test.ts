@@ -8,7 +8,8 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models";
+import { IMPLICIT_LOCAL_RUNTIME_IDS, ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
@@ -2322,6 +2323,40 @@ describe("ModelRegistry", () => {
 			} finally {
 				releaseFirstTarget.resolve();
 				setSystemTime();
+			}
+		});
+		test("reports a safe failure when only builtin discovery fails", async () => {
+			const unexpectedURLs: string[] = [];
+			let targetRequests = 0;
+			const targetUrl = "https://api.synthetic.new/openai/v1/models";
+			const fetchMock: FetchImpl = async input => {
+				const url = input instanceof Request ? input.url : String(input);
+				if (url !== targetUrl) {
+					unexpectedURLs.push(url);
+					throw new Error(`Unexpected URL: ${url}`);
+				}
+				targetRequests++;
+				throw new Error("catalog-outage-detail");
+			};
+			const disabledProviders = [
+				...new Set([
+					...IMPLICIT_LOCAL_RUNTIME_IDS,
+					...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+				]),
+			].filter(provider => provider !== "synthetic");
+			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+			try {
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+				const failure = await registry.refreshForSpawn({ force: true });
+
+				expect(targetRequests).toBeGreaterThan(0);
+				expect(unexpectedURLs).toEqual([]);
+				expect(failure).toContain("Model discovery failed");
+				expect(failure).not.toContain("catalog-outage-detail");
+				expect(failure).not.toContain("synthetic-test-key");
+			} finally {
+				resetSettingsForTest();
 			}
 		});
 	});
