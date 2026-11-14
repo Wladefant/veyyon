@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2182,5 +2182,73 @@ describe("ModelRegistry", () => {
 			expect(suppressible.isSelectorSuppressed("google-antigravity/gemini-3-pro-low")).toBe(true);
 			expect(suppressible.isSelectorSuppressed("google-antigravity/gemini-2.5-pro")).toBe(false);
 		});
+	describe("spawn freshness", () => {
+		test("coalesces concurrent discovery and preserves an active cooldown", async () => {
+			writeRawModelsJson({
+				"spawn-probe": {
+					baseUrl: "https://spawn-probe.example/v1",
+					auth: "none",
+					api: "openai-responses",
+					discovery: { type: "openai-models-list" },
+					models: [{ id: "configured" }],
+				},
+			});
+			let requests = 0;
+			const fetchMock: FetchImpl = async () => {
+				requests++;
+				return new Response(JSON.stringify({ data: [{ id: "discovered" }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			registry.suppressSelector("spawn-probe/configured", Date.now() + 60_000);
+
+			await Promise.all([registry.refreshForSpawn(), registry.refreshForSpawn(), registry.refreshForSpawn()]);
+			await registry.refreshForSpawn({ force: true });
+			await registry.refreshForSpawn({ force: true });
+			expect(requests).toBe(2);
+
+			expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
+			expect(registry.find("spawn-probe", "discovered")).toBeDefined();
+		});
+
+		test("refreshes an expired snapshot even when existing models remain usable", async () => {
+			vi.useFakeTimers();
+			try {
+				vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+				writeModelsJson({
+					"spawn-fallback": providerConfig("https://spawn-fallback.example/v1", [{ id: "known" }]),
+				});
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				await registry.refreshForSpawn();
+				expect(registry.find("spawn-fallback", "known")).toBeDefined();
+				writeModelsJson({
+					"spawn-fallback": providerConfig("https://spawn-fallback.example/v1", [{ id: "known" }]),
+					"spawn-fresh": providerConfig("https://spawn-fresh.example/v1", [{ id: "new-preferred" }]),
+				});
+				const nextTime = new Date(Date.now() + 5 * 60 * 1000 + 1);
+				fs.utimesSync(modelsJsonPath, nextTime, nextTime);
+				vi.setSystemTime(nextTime);
+
+				await registry.refreshForSpawn();
+
+				expect(registry.find("spawn-fresh", "new-preferred")).toBeDefined();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		test("purges expired suppressions without clearing future cooldowns", async () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			registry.suppressSelector("openai/gpt-4o", Date.now() - 1);
+			registry.suppressSelector("openai/gpt-4.1", Date.now() + 60_000);
+
+			await registry.refreshForSpawn();
+
+			expect(registry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
+			expect(registry.isSelectorSuppressed("openai/gpt-4.1")).toBe(true);
+		});
+	});
 	});
 });

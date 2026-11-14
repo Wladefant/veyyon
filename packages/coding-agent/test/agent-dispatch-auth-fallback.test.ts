@@ -48,6 +48,7 @@ function createMockRegistry(options: MockRegistryOptions) {
 		getApiKey: async (model: Model<Api>) =>
 			options.authedProviders.has(model.provider) ? "sk-test-token" : undefined,
 		isSelectorSuppressed: (selector: string) => options.suppressed?.includes(selector) ?? false,
+		refreshForSpawn: async (_options?: { force?: boolean }) => {},
 	};
 }
 
@@ -115,6 +116,60 @@ describe("ordered agent model auth resolution", () => {
 
 		expect(result.model?.provider).toBe("third-provider");
 		expect(result.model?.id).toBe("third-choice");
+	});
+
+	test("refreshes a missing preferred model before returning an available fallback", async () => {
+		const preferred = buildModel({ ...parentModel, provider: "preferred", id: "new-model" });
+		const fallback = buildModel({ ...parentModel, provider: "fallback", id: "known-model" });
+		let models = [fallback];
+		let refreshes = 0;
+		const registry = {
+			getAll: () => models,
+			getAvailable: () => models,
+			getApiKey: async () => "sk-test-token",
+			refreshForSpawn: async (options?: { force?: boolean }) => {
+				refreshes++;
+				if (options?.force) models = [preferred, fallback];
+			},
+		};
+		const result = await resolveAgentModelChain(
+			["preferred/new-model:high", "fallback/known-model"],
+			registry,
+		);
+		expect(result.model?.provider).toBe("preferred");
+		expect(result.thinkingLevel).toBe("high");
+		expect(refreshes).toBe(2);
+	});
+
+	test("persistent missing chains refresh once and terminate", async () => {
+		let refreshes = 0;
+		const registry = {
+			getAll: () => [],
+			getAvailable: () => [],
+			getApiKey: async () => undefined,
+			refreshForSpawn: async () => {
+				refreshes++;
+			},
+		};
+		await expect(resolveAgentModelChain(["absent/model"], registry)).rejects.toThrow(
+			/absent\/model: not found in the model catalog/,
+		);
+		expect(refreshes).toBe(2);
+	});
+
+	test("keeps an active cooldown enforced after spawn preflight", async () => {
+		let refreshes = 0;
+		const registry = {
+			getAll: () => [unauthedTaskModel],
+			getAvailable: () => [unauthedTaskModel],
+			getApiKey: async () => "sk-test-token",
+			isSelectorSuppressed: (selector: string) => selector === "opencode-zen/qwen3.6-plus-free",
+			refreshForSpawn: async () => {
+				refreshes++;
+			},
+		};
+		await expect(resolveAgentModelChain(["qwen3.6-plus-free"], registry)).rejects.toThrow(/suppressed/);
+		expect(refreshes).toBe(1);
 	});
 
 	test("fails with per-member reasons when no configured member is usable", async () => {
