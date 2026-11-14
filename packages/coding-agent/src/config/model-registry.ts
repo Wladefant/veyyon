@@ -61,7 +61,7 @@ import {
 	mergeCompat,
 	resolveModelOverrideWithAliases,
 } from "./model-patch";
-import { parseModelString, resolveProviderModelReference } from "./model-resolver";
+import { parseModelString, resolveProviderModelReference, stripThinkingSelector } from "./model-resolver";
 import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfiguration } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { resolveConfigValueSync } from "./resolve-config-value-sync";

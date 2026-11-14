@@ -1188,6 +1188,7 @@ export async function resolveAgentModelChain(
 			if (missing && !forcedRefreshAttempted && modelRegistry.refreshForSpawn) {
 				forcedRefreshAttempted = true;
 				discoveryFailure = await modelRegistry.refreshForSpawn(modelPatterns, { force: true });
+				retry = true;
 				break;
 			}
 			return {
