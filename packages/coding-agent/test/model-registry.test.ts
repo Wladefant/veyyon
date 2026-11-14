@@ -2314,9 +2314,11 @@ describe("ModelRegistry", () => {
 		});
 
 		test("reports authenticated built-in model-manager failures as a spawn refresh failure", async () => {
-			authStorage.setRuntimeApiKey("openai", "sk-test-secret");
+			authStorage.setRuntimeApiKey("openai-codex", "codex-test-secret");
+			let requests = 0;
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
 				fetch: async () => {
+					requests++;
 					throw new Error("credential=manager-secret");
 				},
 				snapshotIo: false,
@@ -2324,9 +2326,10 @@ describe("ModelRegistry", () => {
 
 			const failure = await registry.refreshForSpawn({ force: true });
 
+			expect(requests).toBeGreaterThan(0);
 			expect(failure).toContain("Model discovery failed");
 			expect(failure).not.toContain("manager-secret");
-			expect(failure).not.toContain("sk-test-secret");
+			expect(failure).not.toContain("codex-test-secret");
 		});
 
 		test("purges expired suppressions without clearing future cooldowns", async () => {

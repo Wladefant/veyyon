@@ -303,9 +303,11 @@ describe("agent runtime model resolution", () => {
 	it("surfaces authenticated built-in discovery failures as safe spawn errors", async () => {
 		const authStorage = await AuthStorage.create(":memory:");
 		try {
-			authStorage.setRuntimeApiKey("openai", "sk-test-secret");
+			authStorage.setRuntimeApiKey("openai-codex", "codex-test-secret");
+			let requests = 0;
 			const registry = new ModelRegistry(authStorage, path.join(isolatedArtifactsDir(), "models.json"), {
 				fetch: async () => {
+					requests++;
 					throw new Error("credential=provider-secret");
 				},
 				snapshotIo: false,
@@ -316,15 +318,16 @@ describe("agent runtime model resolution", () => {
 				task: "work",
 				index: 0,
 				id: "builtin-discovery-failure",
-				modelOverride: ["openai/model-that-does-not-exist"],
+				modelOverride: ["openai-codex/model-that-does-not-exist"],
 				settings: Settings.isolated(),
 				modelRegistry: registry,
 				enableLsp: false,
 				artifactsDir: isolatedArtifactsDir(),
 			});
+			expect(requests).toBeGreaterThan(0);
 			expect(result.error).toContain("Model discovery failed");
 			expect(result.error).not.toContain("provider-secret");
-			expect(result.error).not.toContain("sk-test-secret");
+			expect(result.error).not.toContain("codex-test-secret");
 		} finally {
 			authStorage.close();
 		}
