@@ -1140,7 +1140,7 @@ export async function resolveAgentModelChain(
 }> {
 	if (modelPatterns.length === 0) return { explicitThinkingLevel: false };
 	let discoveryFailure = await modelRegistry.refreshForSpawn?.();
-	let refreshedMissing = false;
+	let forcedRefreshAttempted = false;
 	let priorFailures: string[] = [];
 	for (;;) {
 		const allModels = modelRegistry.getAll();
@@ -1186,8 +1186,8 @@ export async function resolveAgentModelChain(
 				failures.push(`${pattern}: ${selector} is unavailable in the model registry`);
 				continue;
 			}
-			if (missing && !refreshedMissing && modelRegistry.refreshForSpawn) {
-				refreshedMissing = true;
+			if (missing && !forcedRefreshAttempted && modelRegistry.refreshForSpawn) {
+				forcedRefreshAttempted = true;
 				priorFailures = [...priorFailures, ...failures];
 				discoveryFailure = await modelRegistry.refreshForSpawn({ force: true });
 				retry = true;
@@ -1202,8 +1202,8 @@ export async function resolveAgentModelChain(
 			};
 		}
 		if (retry) continue;
-		if (missing && !refreshedMissing && modelRegistry.refreshForSpawn) {
-			refreshedMissing = true;
+		if (!forcedRefreshAttempted && modelRegistry.refreshForSpawn) {
+			forcedRefreshAttempted = true;
 			priorFailures = [...priorFailures, ...failures];
 			discoveryFailure = await modelRegistry.refreshForSpawn({ force: true });
 			continue;
