@@ -2352,9 +2352,9 @@ describe("ModelRegistry", () => {
 
 				expect(targetRequests).toBeGreaterThan(0);
 				expect(unexpectedURLs).toEqual([]);
-				expect(failure).toContain("Model discovery failed");
-				expect(failure).not.toContain("catalog-outage-detail");
-				expect(failure).not.toContain("synthetic-test-key");
+				expect(failure ?? "").toContain("Model discovery failed");
+				expect(failure ?? "").not.toContain("catalog-outage-detail");
+				expect(failure ?? "").not.toContain("synthetic-test-key");
 			} finally {
 				resetSettingsForTest();
 			}
