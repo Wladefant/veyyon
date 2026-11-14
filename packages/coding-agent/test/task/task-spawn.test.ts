@@ -23,6 +23,7 @@ import * as executorModule from "@veyyon/coding-agent/task/executor";
 import * as isolationRunner from "@veyyon/coding-agent/task/isolation-runner";
 import { Semaphore } from "@veyyon/coding-agent/task/parallel";
 import * as spawnRunModule from "@veyyon/coding-agent/task/spawn-run";
+import * as replenishmentModule from "@veyyon/coding-agent/task/topic-replenishment";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -248,6 +249,51 @@ describe("task spawn routing", () => {
 		expect(completions).toHaveLength(1);
 		expect(completions[0]).toMatchObject(starts[0]!);
 	});
+
+	for (const bindingFails of [false, true]) {
+		it(`binds native dispatch before child lifecycle (bindingFails=${bindingFails})`, async () => {
+			vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+				agents: [taskAgent],
+				projectAgentsDir: null,
+			});
+			const events: string[] = [];
+			const entered = Promise.withResolvers<void>();
+			const gate = Promise.withResolvers<void>();
+			const binding = vi.spyOn(replenishmentModule, "recordNativeDispatch").mockImplementation(async () => {
+				events.push("bind");
+				entered.resolve();
+				await gate.promise;
+				if (bindingFails) throw new Error("binding refused");
+			});
+			const run = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+				events.push("execute");
+				return makeResult(options.id);
+			});
+			const tool = await TaskTool.create(makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({ "async.enabled": false }),
+				onSubagentStart: () => { events.push("start"); },
+				onSubagentStartFailed: () => { events.push("start-failed"); },
+				onSubagentComplete: () => { events.push("complete"); },
+			}));
+			const pending = tool.execute("tc-native-binding", {
+				agent: "task",
+				name: "BoundWorker",
+				task: "Work on the claimed ticket.",
+				ticketId: "ticket-bound",
+				runId: "run-bound",
+				ledgerPath: "/tmp/claimed-ledger.json",
+			} as TaskParams);
+			await entered.promise;
+			expect(events).toEqual(["bind"]);
+			expect(run).not.toHaveBeenCalled();
+			expect(binding).toHaveBeenCalledWith("run-bound", "BoundWorker", "/tmp/claimed-ledger.json", "ticket-bound");
+			gate.resolve();
+			const result = await pending;
+			expect(events).toEqual(bindingFails ? ["bind"] : ["bind", "start", "execute", "complete"]);
+			if (bindingFails) expect(firstToolResultText(result)).toContain("binding refused");
+		});
+	}
 
 	it("awaits completion, populates AgentSpawnRecord metadata, and emits start-failed only after start", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({

@@ -647,13 +647,13 @@ export class SpawnScheduler {
 						launchTiming: { invokedAt: startedAt, acquiredAt },
 					});
 					const single = result.details?.results[0];
+					isolatedHint = single?.isolated === true;
 					const failed = settleJobProgress(progress, single, startedAt);
 					batch.settle(failed);
 					await reportProgress(
 						failed ? `Background task ${agentId} failed.` : `Background task ${agentId} complete.`,
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
-					isolatedHint = single?.isolated === true;
 					delivery = {
 						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled, isolatedHint)}`,
 						failed,

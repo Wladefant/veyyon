@@ -52,6 +52,7 @@ import {
 	successorWorkflow,
 	writeSuccessorCheckpoint,
 } from "./successor-checkpoint";
+import { recordNativeDispatch } from "./topic-replenishment";
 import type { AgentDefinition, AgentProgress, AgentSource, SingleResult, TaskParams, TaskToolDetails } from "./types";
 import { parseIsolationMode, type TaskIsolationMode } from "./worktree";
 
@@ -505,11 +506,6 @@ async function landIsolatedChanges(
 	return { result: landed, summary: merged.summary + nestedSummary };
 }
 
-/**
- * Record the parent's index row for a settled spawn, pointing at the child's durable transcript, so a
- * study or backtest tool can enumerate a session's agents without scraping tool-result prose (GRAN-2).
- * The transcript path is derived as the executor derives it: `<artifactsDir>/<id>.jsonl`.
- */
 function parseStructuredResult(result: SingleResult): Record<string, unknown> | undefined {
 	if (result.output) {
 		try {
@@ -527,6 +523,9 @@ function parseStructuredResult(result: SingleResult): Record<string, unknown> | 
 	return isRecord(lastYield) && isRecord(lastYield.data) ? lastYield.data : undefined;
 }
 
+/**
+ * Record the parent's index row for a settled spawn, pointing at the child's durable transcript.
+ */
 function recordSpawn(
 	session: ToolSession,
 	result: SingleResult,
@@ -711,6 +710,14 @@ async function runPreparedSpawn(
 			projectAgentsDir,
 			Date.now() - startTime,
 		);
+	}
+	if (
+		!params.nativeDispatchBound &&
+		typeof params.runId === "string" &&
+		typeof params.ledgerPath === "string" &&
+		typeof params.ticketId === "string"
+	) {
+		await recordNativeDispatch(params.runId, agentId, params.ledgerPath, params.ticketId);
 	}
 	const lifecycle = {
 		agentId,
