@@ -8,7 +8,8 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { IMPLICIT_LOCAL_RUNTIME_IDS, ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models";
 import { resolveAgentModelChain } from "@veyyon/coding-agent/config/model-resolver";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
@@ -2353,22 +2354,38 @@ describe("ModelRegistry", () => {
 		});
 
 		test("reports authenticated built-in model-manager failures as a spawn refresh failure", async () => {
-			authStorage.setRuntimeApiKey("openai-codex", "codex-test-secret");
-			let requests = 0;
+			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+			const targetUrl = "https://api.synthetic.new/openai/v1/models";
+			const requests: string[] = [];
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
-				fetch: async () => {
-					requests++;
-					throw new Error("credential=manager-secret");
+				fetch: async input => {
+					const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+					requests.push(url);
+					if (url === targetUrl) {
+						throw new Error("catalog-outage-detail");
+					}
+					throw new Error(`unexpected URL: ${url}`);
 				},
 				snapshotIo: false,
 			});
-
-			const failure = await registry.refreshForSpawn(["openai-codex/no-model"], { force: true });
-
-			expect(requests).toBeGreaterThan(0);
-			expect(failure).toContain("Model discovery failed");
-			expect(failure).not.toContain("manager-secret");
-			expect(failure).not.toContain("codex-test-secret");
+			const disabledProviders = [
+				...new Set([
+					...registry.getProviders(),
+					...IMPLICIT_LOCAL_RUNTIME_IDS,
+					...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+				]),
+			].filter(provider => provider !== "synthetic");
+			try {
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+				const failure = await registry.refreshForSpawn(["synthetic/no-model"], { force: true });
+				expect(requests.filter(url => url === targetUrl).length).toBeGreaterThan(0);
+				expect(requests.filter(url => url !== targetUrl)).toEqual([]);
+				expect(failure).toContain("Model discovery failed");
+				expect(failure).not.toContain("catalog-outage-detail");
+				expect(failure).not.toContain("synthetic-test-key");
+			} finally {
+				resetSettingsForTest();
+			}
 		});
 
 		test("purges expired suppressions without clearing future cooldowns", async () => {

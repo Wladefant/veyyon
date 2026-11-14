@@ -5,8 +5,9 @@ import * as path from "node:path";
 import type { Api, Model } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { Settings } from "@veyyon/coding-agent/config/settings";
+import { PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models";
+import { IMPLICIT_LOCAL_RUNTIME_IDS, ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
@@ -301,33 +302,48 @@ describe("agent runtime model resolution", () => {
 	});
 	it("surfaces authenticated built-in discovery failures as safe spawn errors", async () => {
 		const authStorage = await AuthStorage.create(":memory:");
+		const targetUrl = "https://api.synthetic.new/openai/v1/models";
+		const requests: string[] = [];
 		try {
-			authStorage.setRuntimeApiKey("openai-codex", "codex-test-secret");
-			let requests = 0;
+			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
 			const registry = new ModelRegistry(authStorage, path.join(isolatedArtifactsDir(), "models.json"), {
-				fetch: async () => {
-					requests++;
-					throw new Error("credential=provider-secret");
+				fetch: async input => {
+					const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+					requests.push(url);
+					if (url === targetUrl) {
+						throw new Error("catalog-outage-detail");
+					}
+					throw new Error(`unexpected URL: ${url}`);
 				},
 				snapshotIo: false,
 			});
+			const disabledProviders = [
+				...new Set([
+					...registry.getProviders(),
+					...IMPLICIT_LOCAL_RUNTIME_IDS,
+					...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+				]),
+			].filter(provider => provider !== "synthetic");
+			await Settings.init({ inMemory: true, overrides: { disabledProviders } });
 			const result = await runSubprocess({
 				cwd: "/tmp",
 				agent: { name: "task", description: "test", systemPrompt: "test", source: "bundled" },
 				task: "work",
 				index: 0,
 				id: "builtin-discovery-failure",
-				modelOverride: ["openai-codex/model-that-does-not-exist"],
+				modelOverride: ["synthetic/model-that-does-not-exist"],
 				settings: Settings.isolated(),
 				modelRegistry: registry,
 				enableLsp: false,
 				artifactsDir: isolatedArtifactsDir(),
 			});
-			expect(requests).toBeGreaterThan(0);
+			expect(requests.filter(url => url === targetUrl).length).toBeGreaterThan(0);
+			expect(requests.filter(url => url !== targetUrl)).toEqual([]);
 			expect(result.error).toContain("Model discovery failed");
-			expect(result.error).not.toContain("provider-secret");
-			expect(result.error).not.toContain("codex-test-secret");
+			expect(result.error).not.toContain("catalog-outage-detail");
+			expect(result.error).not.toContain("synthetic-test-key");
 		} finally {
+			resetSettingsForTest();
 			authStorage.close();
 		}
 	});
