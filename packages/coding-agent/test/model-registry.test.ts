@@ -2196,7 +2196,11 @@ describe("ModelRegistry", () => {
 					},
 				});
 				let requests = 0;
-				const fetchMock: FetchImpl = async () => {
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url !== "https://spawn-probe.example/v1/models") {
+						throw new Error(`Unexpected URL: ${url}`);
+					}
 					requests++;
 					return new Response(JSON.stringify({ data: [{ id: "discovered" }] }), {
 						status: 200,
