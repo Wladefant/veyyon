@@ -27,6 +27,7 @@ pub mod ast;
 pub mod block;
 pub mod clipboard;
 pub mod commit_memory;
+pub mod console_ctrl;
 mod cores;
 pub mod cpu_budget;
 pub mod crash_handler;

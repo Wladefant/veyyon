@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -16,7 +17,9 @@ import { resolveSupervisorArgv, shouldSuperviseLaunch, superviseProcess } from "
 function createTestContext() {
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "supervisor-test-"));
 	const heartbeatDir = path.join(tempDir, "heartbeat");
+	const sessionStderrDir = path.join(tempDir, "session-stderr");
 	fs.mkdirSync(heartbeatDir, { recursive: true });
+	fs.mkdirSync(sessionStderrDir, { recursive: true });
 	const logs: Array<{ message: string; context: Record<string, unknown> | undefined }> = [];
 	const logger = {
 		errorSync(message: string, context?: Record<string, unknown>) {
@@ -26,6 +29,7 @@ function createTestContext() {
 	return {
 		tempDir,
 		heartbeatDir,
+		sessionStderrDir,
 		logs,
 		logger,
 		writeHeartbeat(pid: number, data?: Record<string, unknown>) {
@@ -62,6 +66,33 @@ function fakeChild(pid: number, exitCode: number | null, signal: NodeJS.Signals 
 			return child;
 		},
 	};
+	return child as unknown as ChildProcess;
+}
+
+function fakeChildWithStderr(
+	pid: number,
+	exitCode: number | null,
+	signal: NodeJS.Signals | null = null,
+	stderrChunks: string[] = [],
+): ChildProcess {
+	const emitter = new EventEmitter();
+	const stderrEmitter = new EventEmitter();
+	const child = {
+		pid,
+		stderr: stderrEmitter,
+		on(event: string, cb: (...args: unknown[]) => void) {
+			emitter.on(event, cb);
+			return child;
+		},
+	};
+	queueMicrotask(() => {
+		for (const chunk of stderrChunks) {
+			stderrEmitter.emit("data", Buffer.from(chunk));
+		}
+		stderrEmitter.emit("end");
+		stderrEmitter.emit("close");
+		emitter.emit("exit", exitCode, signal);
+	});
 	return child as unknown as ChildProcess;
 }
 
@@ -366,7 +397,7 @@ describe("process supervisor", () => {
 		expect(capturedCmd).toBe("test-binary.exe");
 		expect(capturedArgs).toEqual(["launch", "--arg1", "val1"]);
 		expect(capturedOpts?.cwd).toBe("/test/cwd");
-		expect(capturedOpts?.stdio).toBe("inherit");
+		expect(capturedOpts?.stdio).toEqual(["inherit", "inherit", "pipe"]);
 		expect(capturedOpts?.shell).toBe(false);
 		expect(capturedOpts?.env?.TEST_VAR).toBe("inherited-val");
 		expect(capturedOpts?.env?.VEYYON_SUPERVISED).toBe(String(process.pid));
@@ -475,6 +506,386 @@ describe("process supervisor", () => {
 
 		for (const c of cases) {
 			expect(shouldSuperviseLaunch(c.argv, c.env ?? {}, c.tty, c.ppid)).toBe(c.expected);
+		}
+	});
+
+	test("exit attribution: supervisorPid, supervisorCommandLine, childCommand, explicit terminator reason", async () => {
+		const ctx = createTestContext();
+		try {
+			const pid = 5555;
+			ctx.writeHeartbeat(pid, { sessionId: "session-attribution-test", phase: "tool" });
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: ["launch", "--debug-flag"],
+				supervisorPid: 7777,
+				supervisorCommandLine: "veyyon.exe supervisor",
+				platform: "win32",
+				spawn: () => fakeChild(pid, null, "SIGKILL"),
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report).toBeDefined();
+			expect(result.report?.supervisorPid).toBe(7777);
+			expect(result.report?.supervisorCommandLine).toBe("veyyon.exe supervisor");
+			expect(result.report?.childCommand).toBe("veyyon.exe launch --debug-flag");
+			expect("terminatorAttributionReason" in (result.report ?? {})).toBe(false);
+			expect(result.report?.terminatorAttribution?.available).toBe(false);
+			expect(result.report?.terminatorAttribution?.reason).toBe("Child exit reports do not provide killer PID");
+			expect(result.report?.terminatorAttribution?.killerPid).toBeNull();
+
+			expect(ctx.logs.length).toBe(1);
+			expect(ctx.logs[0].context?.supervisorPid).toBe(7777);
+			expect(ctx.logs[0].context?.supervisorCommandLine).toBe("veyyon.exe supervisor");
+			expect(ctx.logs[0].context?.childCommand).toBe("veyyon.exe launch --debug-flag");
+			expect("terminatorAttributionReason" in (ctx.logs[0].context ?? {})).toBe(false);
+			expect(ctx.logs[0].context?.terminatorAttribution).toEqual({
+				available: false,
+				reason: "Child exit reports do not provide killer PID",
+				killerPid: null,
+			});
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("heartbeat resource fields are preserved in report and logged context", async () => {
+		const ctx = createTestContext();
+		try {
+			const pid = 5556;
+			ctx.writeHeartbeat(pid, {
+				sessionId: "session-resources-test",
+				phase: "provider",
+				rssBytes: 104857600,
+				freeMemBytes: 524288000,
+				heapTotal: 50000000,
+				heapUsed: 30000000,
+				external: 1000000,
+				smol: true,
+				forceRAMSize: "512MB",
+				commitChargeBytes: 2000000000,
+				commitLimitBytes: 4000000000,
+				processCommitBytes: 150000000,
+				cgroupMemoryBytes: 120000000,
+				cgroupMemoryMaxBytes: 1000000000,
+				handleCount: 150,
+				consoleLogPath: "C:\\logs\\5556.console.log",
+				consoleCtrlStatus: "installed",
+				consoleCtrlInstalled: true,
+				resourceHistory: [
+					{
+						at: "2026-11-11T12:00:00.000Z",
+						rssBytes: 104857600,
+						handleCount: 150,
+					},
+				],
+			});
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: ["launch"],
+				spawn: () => fakeChild(pid, null, "SIGKILL"),
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report).toBeDefined();
+			expect(result.report?.phase).toBe("provider");
+			expect(result.report?.rssBytes).toBe(104857600);
+			expect(result.report?.freeMemBytes).toBe(524288000);
+			expect(result.report?.heapTotal).toBe(50000000);
+			expect(result.report?.heapUsed).toBe(30000000);
+			expect(result.report?.external).toBe(1000000);
+			expect(result.report?.smol).toBe(true);
+			expect(result.report?.forceRAMSize).toBe("512MB");
+			expect(result.report?.commitChargeBytes).toBe(2000000000);
+			expect(result.report?.commitLimitBytes).toBe(4000000000);
+			expect(result.report?.processCommitBytes).toBe(150000000);
+			expect(result.report?.cgroupMemoryBytes).toBe(120000000);
+			expect(result.report?.cgroupMemoryMaxBytes).toBe(1000000000);
+			expect(result.report?.handleCount).toBe(150);
+			expect(result.report?.consoleLogPath).toBe("C:\\logs\\5556.console.log");
+			expect(result.report?.consoleCtrlStatus).toBe("installed");
+			expect(result.report?.consoleCtrlInstalled).toBe(true);
+			expect(result.report?.resourceHistory).toEqual([
+				{
+					at: "2026-11-11T12:00:00.000Z",
+					rssBytes: 104857600,
+					handleCount: 150,
+				},
+			]);
+
+			expect(ctx.logs.length).toBe(1);
+			expect(ctx.logs[0].context?.rssBytes).toBe(104857600);
+			expect(ctx.logs[0].context?.freeMemBytes).toBe(524288000);
+			expect(ctx.logs[0].context?.heapTotal).toBe(50000000);
+			expect(ctx.logs[0].context?.heapUsed).toBe(30000000);
+			expect(ctx.logs[0].context?.external).toBe(1000000);
+			expect(ctx.logs[0].context?.smol).toBe(true);
+			expect(ctx.logs[0].context?.forceRAMSize).toBe("512MB");
+			expect(ctx.logs[0].context?.commitChargeBytes).toBe(2000000000);
+			expect(ctx.logs[0].context?.commitLimitBytes).toBe(4000000000);
+			expect(ctx.logs[0].context?.processCommitBytes).toBe(150000000);
+			expect(ctx.logs[0].context?.cgroupMemoryBytes).toBe(120000000);
+			expect(ctx.logs[0].context?.cgroupMemoryMaxBytes).toBe(1000000000);
+			expect(ctx.logs[0].context?.handleCount).toBe(150);
+			expect(ctx.logs[0].context?.consoleLogPath).toBe("C:\\logs\\5556.console.log");
+			expect(ctx.logs[0].context?.consoleCtrlStatus).toBe("installed");
+			expect(ctx.logs[0].context?.consoleCtrlInstalled).toBe(true);
+			expect(ctx.logs[0].context?.resourceHistory).toEqual([
+				{
+					at: "2026-11-11T12:00:00.000Z",
+					rssBytes: 104857600,
+					handleCount: 150,
+				},
+			]);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("stderr capture: pipes stderr to bounded rotating log file, drains before report", async () => {
+		const ctx = createTestContext();
+		try {
+			const pid = 5557;
+			ctx.writeHeartbeat(pid, { sessionId: "session-stderr-test", phase: "tool" });
+			// Write 40 bytes chunk, then 30 bytes chunk with maxBytes 50 -> triggers rotation
+			const chunk1 = "A".repeat(40);
+			const chunk2 = "B".repeat(30);
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: ["launch"],
+				spawn: () => fakeChildWithStderr(pid, 1, null, [chunk1, chunk2]),
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				maxStderrLogBytes: 50,
+				maxStderrLogFiles: 3,
+				forwardStderr: false,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report).toBeDefined();
+			expect(result.report?.stderrLogPath).toBeDefined();
+			expect(result.report?.stderrStatus).toBe("captured");
+			expect(result.report?.stderrBytes).toBe(70);
+			expect(result.report?.stderrFiles?.length).toBe(2);
+
+			const activeContent = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
+			expect(activeContent).toBe(chunk2);
+
+			const rotatedFile = path.join(ctx.sessionStderrDir, `${pid}.stderr.1.log`);
+			expect(fs.existsSync(rotatedFile)).toBe(true);
+			expect(fs.readFileSync(rotatedFile, "utf8")).toBe(chunk1);
+
+			expect(ctx.logs.length).toBe(1);
+			expect(ctx.logs[0].context?.stderrLogPath).toBe(result.report!.stderrLogPath);
+			expect(ctx.logs[0].context?.stderrStatus).toBe("captured");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("handles spawn errors gracefully without supervisor crash", async () => {
+		const ctx = createTestContext();
+		try {
+			const result = await superviseProcess({
+				execPath: "nonexistent-binary-12345.exe",
+				argv: [],
+				spawn: () => {
+					throw new Error("spawn ENOENT");
+				},
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+			});
+
+			expect(result.reported).toBe(false);
+			expect(result.exitCode).toBe(1);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("handles rotation errors gracefully without supervisor crash", async () => {
+		const ctx = createTestContext();
+		try {
+			const pid = 5558;
+			ctx.writeHeartbeat(pid, { sessionId: "session-rot-err-test", phase: "tool" });
+			const chunk1 = "A".repeat(40);
+			const chunk2 = "B".repeat(30);
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: ["launch"],
+				spawn: () => fakeChildWithStderr(pid, 1, null, [chunk1, chunk2]),
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				maxStderrLogBytes: 50,
+				maxStderrLogFiles: 3,
+				forwardStderr: false,
+				renameSync: () => {
+					throw new Error("EPERM: operation not permitted");
+				},
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report?.stderrStatus).toBe("rotation_error");
+			const activeContent = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
+			expect(activeContent).toBe(chunk1);
+			expect(activeContent.length).toBeLessThanOrEqual(50);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("stderr rotation with maxFiles=1 truncates single log file at rotate", async () => {
+		const ctx = createTestContext();
+		try {
+			const pid = 5559;
+			ctx.writeHeartbeat(pid, { sessionId: "session-maxfiles-1-test", phase: "tool" });
+			const chunk1 = "A".repeat(40);
+			const chunk2 = "B".repeat(30);
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: ["launch"],
+				spawn: () => fakeChildWithStderr(pid, 1, null, [chunk1, chunk2]),
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				maxStderrLogBytes: 50,
+				maxStderrLogFiles: 1,
+				forwardStderr: false,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report?.stderrStatus).toBe("captured");
+			expect(result.report?.stderrFiles.length).toBe(1);
+			expect(fs.existsSync(path.join(ctx.sessionStderrDir, `${pid}.stderr.1.log`))).toBe(false);
+			const activeContent = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
+			expect(activeContent).toBe(chunk2);
+			expect(activeContent.length).toBeLessThanOrEqual(50);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("stderr rotation splits oversized chunks across rotated files respecting hard byte bound", async () => {
+		const ctx = createTestContext();
+		try {
+			const pid = 5560;
+			ctx.writeHeartbeat(pid, { sessionId: "session-oversized-chunk-test", phase: "tool" });
+			const oversized = "A".repeat(50) + "B".repeat(50) + "C".repeat(20); // 120 bytes
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: ["launch"],
+				spawn: () => fakeChildWithStderr(pid, 1, null, [oversized]),
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				maxStderrLogBytes: 50,
+				maxStderrLogFiles: 3,
+				forwardStderr: false,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report?.stderrStatus).toBe("captured");
+			expect(result.report?.stderrBytes).toBe(120);
+			expect(result.report?.stderrFiles.length).toBe(3);
+
+			const active = fs.readFileSync(result.report!.stderrLogPath!, "utf8");
+			const rot1 = fs.readFileSync(path.join(ctx.sessionStderrDir, `${pid}.stderr.1.log`), "utf8");
+			const rot2 = fs.readFileSync(path.join(ctx.sessionStderrDir, `${pid}.stderr.2.log`), "utf8");
+
+			expect(active).toBe("C".repeat(20));
+			expect(rot1).toBe("B".repeat(50));
+			expect(rot2).toBe("A".repeat(50));
+
+			expect(active.length).toBeLessThanOrEqual(50);
+			expect(rot1.length).toBeLessThanOrEqual(50);
+			expect(rot2.length).toBeLessThanOrEqual(50);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("real subprocess smoke fixture: writes beyond bound, leaves heartbeat, exits without tombstone", async () => {
+		const ctx = createTestContext();
+		const fixturePath = path.resolve(__dirname, "fixtures/supervisor-death-smoke.ts");
+		try {
+			const result = await superviseProcess({
+				execPath: process.execPath,
+				argv: [
+					fixturePath,
+					"--heartbeat-dir",
+					ctx.heartbeatDir,
+					"--bytes",
+					"2500",
+					"--chunk-size",
+					"700",
+					"--exit-code",
+					"42",
+				],
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				maxStderrLogBytes: 500,
+				maxStderrLogFiles: 3,
+				forwardStderr: false,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.exitCode).toBe(42);
+			expect(result.report).toBeDefined();
+
+			const report = result.report!;
+			expect(report.pid).toBeGreaterThan(0);
+			expect(report.sessionId).toBe("smoke-fixture-session");
+			expect(report.phase).toBe("tool");
+			expect(report.handleCount).toBe(88);
+			expect(report.consoleLogPath).toBe(path.join(ctx.heartbeatDir, `${report.pid}.console.log`));
+			expect(report.consoleCtrlStatus).toBe("installed");
+			expect(report.consoleCtrlInstalled).toBe(true);
+			expect(report.resourceHistory).toBeDefined();
+			expect(report.resourceHistory!.length).toBeGreaterThanOrEqual(1);
+			expect(report.resourceHistory![0].handleCount).toBe(88);
+
+			expect((report as any).terminatorAttributionReason).toBeUndefined();
+			expect(report.terminatorAttribution).toEqual({
+				available: false,
+				reason: "Child exit reports do not provide killer PID",
+				killerPid: null,
+			});
+			expect("terminatorAttributionReason" in (report ?? {})).toBe(false);
+			expect(report.stderrStatus).toBe("captured");
+			expect(report.stderrBytes).toBe(2500);
+			expect(report.stderrFiles.length).toBe(3);
+			for (const f of report.stderrFiles) {
+				const stat = fs.statSync(f);
+				expect(stat.size).toBeLessThanOrEqual(500);
+			}
+
+			expect(ctx.logs.length).toBe(1);
+			const loggedCtx = ctx.logs[0].context;
+			expect(loggedCtx?.handleCount).toBe(88);
+			expect(loggedCtx?.consoleCtrlInstalled).toBe(true);
+			expect(loggedCtx?.resourceHistory).toBeDefined();
+			expect("terminatorAttributionReason" in (loggedCtx ?? {})).toBe(false);
+			expect(loggedCtx?.terminatorAttribution).toEqual({
+				available: false,
+				reason: "Child exit reports do not provide killer PID",
+				killerPid: null,
+			});
+		} finally {
+			ctx.cleanup();
 		}
 	});
 });
