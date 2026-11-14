@@ -2313,6 +2313,22 @@ describe("ModelRegistry", () => {
 			expect(failure).not.toContain("secret-value");
 		});
 
+		test("reports authenticated built-in model-manager failures as a spawn refresh failure", async () => {
+			authStorage.setRuntimeApiKey("openai", "sk-test-secret");
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async () => {
+					throw new Error("credential=manager-secret");
+				},
+				snapshotIo: false,
+			});
+
+			const failure = await registry.refreshForSpawn({ force: true });
+
+			expect(failure).toContain("Model discovery failed");
+			expect(failure).not.toContain("manager-secret");
+			expect(failure).not.toContain("sk-test-secret");
+		});
+
 		test("purges expired suppressions without clearing future cooldowns", async () => {
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
 			registry.suppressSelector("openai/gpt-4o", Date.now() - 1);

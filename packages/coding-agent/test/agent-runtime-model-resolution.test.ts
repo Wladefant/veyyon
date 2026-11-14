@@ -227,7 +227,7 @@ describe("agent runtime model resolution", () => {
 			task: "work",
 			index: 0,
 			id: "skipped-model-resolution",
-			modelOverride: ["primary/unavailable-model", "fallback/working-model"],
+			modelOverride: ["prior/still-missing", "primary/unavailable-model", "fallback/working-model"],
 			settings: Settings.isolated(),
 			modelRegistry: {
 				refresh: async () => {},
@@ -248,7 +248,7 @@ describe("agent runtime model resolution", () => {
 			{
 				type: "agent-model-resolution",
 				data: {
-					skipped: [],
+					skipped: ["prior/still-missing: not found in the model catalog"],
 				},
 			},
 		]);
