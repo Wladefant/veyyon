@@ -2184,33 +2184,38 @@ describe("ModelRegistry", () => {
 		});
 	describe("spawn freshness", () => {
 		test("coalesces concurrent discovery and preserves an active cooldown", async () => {
-			writeRawModelsJson({
-				"spawn-probe": {
-					baseUrl: "https://spawn-probe.example/v1",
-					auth: "none",
-					api: "openai-responses",
-					discovery: { type: "openai-models-list" },
-					models: [{ id: "configured" }],
-				},
-			});
-			let requests = 0;
-			const fetchMock: FetchImpl = async () => {
-				requests++;
-				return new Response(JSON.stringify({ data: [{ id: "discovered" }] }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
+			vi.useFakeTimers();
+			try {
+				writeRawModelsJson({
+					"spawn-probe": {
+						baseUrl: "https://spawn-probe.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "configured" }],
+					},
 				});
-			};
-			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
-			registry.suppressSelector("spawn-probe/configured", Date.now() + 60_000);
+				let requests = 0;
+				const fetchMock: FetchImpl = async () => {
+					requests++;
+					return new Response(JSON.stringify({ data: [{ id: "discovered" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+				vi.setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				registry.suppressSelector("spawn-probe/configured", Date.now() + 60_000);
 
-			await Promise.all([registry.refreshForSpawn(), registry.refreshForSpawn(), registry.refreshForSpawn()]);
-			await registry.refreshForSpawn({ force: true });
-			await registry.refreshForSpawn({ force: true });
-			expect(requests).toBe(2);
-
-			expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
-			expect(registry.find("spawn-probe", "discovered")).toBeDefined();
+				await Promise.all([registry.refreshForSpawn(), registry.refreshForSpawn(), registry.refreshForSpawn()]);
+				await registry.refreshForSpawn({ force: true });
+				await registry.refreshForSpawn({ force: true });
+				expect(requests).toBe(2);
+				expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
+				expect(registry.find("spawn-probe", "discovered")).toBeDefined();
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		test("refreshes an expired snapshot even when existing models remain usable", async () => {
