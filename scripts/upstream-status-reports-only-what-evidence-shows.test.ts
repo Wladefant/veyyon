@@ -11,6 +11,10 @@
  * `bun run upstream:status` itself.
  */
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	type Citations,
 	classify,
@@ -22,6 +26,7 @@ import {
 	type OmpClass,
 	patchWalker,
 	ShaIndex,
+	readCommitSummaries,
 } from "./upstream-status";
 
 const SHA_A = "4e78d12428e57aa2b37cb169b34a34e3545714aa";
@@ -231,5 +236,28 @@ describe("follow-up links", () => {
 			]),
 		);
 		expect(commits.map(c => c.followUpOf)).toEqual([[], [], [], [], [], []]);
+	});
+});
+
+describe("readCommitSummaries", () => {
+	it("reads summaries for an oversized SHA list without hitting argv limits", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "upstream-status-stdin-"));
+		try {
+			execFileSync("git", ["init", "-q"], { cwd: dir });
+			execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
+			execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+			writeFileSync(join(dir, "file.txt"), "hello\n");
+			execFileSync("git", ["add", "file.txt"], { cwd: dir });
+			execFileSync("git", ["commit", "-q", "-m", "initial commit"], { cwd: dir });
+			const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+			// 1,000 40-char SHAs would exceed 41 KB on argv and throw ENAMETOOLONG on Windows.
+			const out = await readCommitSummaries(Array.from({ length: 1000 }, () => sha), dir);
+			const lines = out.trim().split("\n");
+			expect(lines.length).toBeGreaterThanOrEqual(1);
+			expect(lines[0]).toContain(`${sha}\t`);
+			expect(lines[0]).toContain("\tinitial commit");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

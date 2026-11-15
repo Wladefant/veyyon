@@ -297,6 +297,34 @@ async function git(args: string[]): Promise<string> {
 	return stdout;
 }
 
+async function gitWithInput(args: string[], input: string, cwd = REPO_ROOT): Promise<string> {
+	const child = spawn("git", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+	const stdoutChunks: Buffer[] = [];
+	const stderrChunks: Buffer[] = [];
+	child.stdout.on("data", chunk => stdoutChunks.push(chunk));
+	child.stderr.on("data", chunk => stderrChunks.push(chunk));
+	const exited = new Promise<number | null>((resolve, reject) => {
+		child.on("error", reject);
+		child.on("close", resolve);
+	});
+	child.stdin.end(input);
+	const code = await exited;
+	if (code !== 0) {
+		const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+		throw new Error(`git ${args.slice(0, 3).join(" ")} … exited ${code}: ${stderr}`);
+	}
+	return Buffer.concat(stdoutChunks).toString("utf8");
+}
+
+/**
+ * Read `<sha>\t<date>\t<subject>` summaries for an arbitrarily long SHA list over stdin
+ * so Windows command-line length limits (`ENAMETOOLONG`) are never reached.
+ */
+export async function readCommitSummaries(shas: readonly string[], cwd = REPO_ROOT): Promise<string> {
+	if (shas.length === 0) return "";
+	return gitWithInput(["log", "--stdin", "--no-walk=unsorted", "--format=%H%x09%cs%x09%s"], `${shas.join("\n")}\n`, cwd);
+}
+
 /** Stream a git command's stdout line by line, failing on a non-zero exit. */
 async function gitLines(args: string[], onLine: (line: string) => void): Promise<void> {
 	const child = spawn("git", args, { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
@@ -486,9 +514,7 @@ async function main(options: Options): Promise<void> {
 		if (line.startsWith("+ ")) santhrealMissing.push(line.slice(2));
 		else if (line.startsWith("- ")) santhrealEquivalent++;
 	}
-	const santhrealSubjects = santhrealMissing.length
-		? await git(["log", "--no-walk=unsorted", "--format=%H%x09%cs%x09%s", ...santhrealMissing])
-		: "";
+	const santhrealSubjects = await readCommitSummaries(santhrealMissing);
 
 	// oh-my-pi shares none, so every commit after the snapshot is matched by citation or content.
 	const rawLog = await git(["log", "--format=%H%x09%P%x09%cs%x09%s", `${OMP_SNAPSHOT}..${omp}`]);
