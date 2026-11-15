@@ -20,7 +20,10 @@ import { resetActiveSkillsForTests, setActiveSkills } from "@veyyon/coding-agent
 import { InternalUrlRouter, parseInternalUrl } from "@veyyon/coding-agent/internal-urls";
 import { HistoryProtocolHandler } from "@veyyon/coding-agent/internal-urls/history-protocol";
 import { readLiveHistoryEntry, searchLiveHistoryEntries } from "@veyyon/coding-agent/internal-urls/history-exact";
-import { formatSessionHistoryMarkdown, formatSessionHistoryMarkdownAsync } from "@veyyon/coding-agent/session/session-history-format";
+import {
+	formatSessionHistoryMarkdown,
+	formatSessionHistoryMarkdownAsync,
+} from "@veyyon/coding-agent/session/session-history-format";
 import {
 	registerArtifactsDir,
 	resetRegisteredArtifactDirsForTests,
@@ -118,7 +121,10 @@ describe("history read bounded regressions", () => {
 			// 2. Normal nested directory
 			const normalNestedDir = path.join(artifactsDir, "ParentAgent");
 			await fs.mkdir(normalNestedDir, { recursive: true });
-			await fs.writeFile(path.join(normalNestedDir, "ParentAgent.Child.jsonl"), sessionFixtureJsonl("hello from child"));
+			await fs.writeFile(
+				path.join(normalNestedDir, "ParentAgent.Child.jsonl"),
+				sessionFixtureJsonl("hello from child"),
+			);
 
 			// 3. Normal root transcript
 			await fs.writeFile(path.join(artifactsDir, "TopAgent.jsonl"), sessionFixtureJsonl("hello from top"));
@@ -741,13 +747,14 @@ describe("history read bounded regressions", () => {
 
 			// Write a session file that exceeds STREAM_LOAD_THRESHOLD_BYTES so loadSessionFile
 			// uses loadEntriesFromFileStream with forEachFileLine and FileHandle resources.
-			const paddingLine = JSON.stringify({
-				type: "message",
-				id: "padding-msg",
-				parentId: "msg-2",
-				timestamp: new Date().toISOString(),
-				message: { role: "assistant", content: [{ type: "text", text: "X".repeat(1024 * 1024) }] },
-			}) + "\n";
+			const paddingLine =
+				JSON.stringify({
+					type: "message",
+					id: "padding-msg",
+					parentId: "msg-2",
+					timestamp: new Date().toISOString(),
+					message: { role: "assistant", content: [{ type: "text", text: "X".repeat(1024 * 1024) }] },
+				}) + "\n";
 			let content = sessionFixtureJsonl("disk cancel transcript");
 			while (Buffer.byteLength(content, "utf-8") < STREAM_LOAD_THRESHOLD_BYTES + 1024) {
 				content += paddingLine;
@@ -910,7 +917,12 @@ describe("history read bounded regressions", () => {
 
 		let error: unknown;
 		try {
-			await readLiveHistoryEntry(branch as never, { entryId: "entry-target", offset: 0, limit: 100 }, undefined, controller.signal);
+			await readLiveHistoryEntry(
+				branch as never,
+				{ entryId: "entry-target", offset: 0, limit: 100 },
+				undefined,
+				controller.signal,
+			);
 		} catch (err) {
 			error = err;
 		}
@@ -1022,9 +1034,7 @@ describe("history read bounded regressions", () => {
 
 	it("rejects in async formatter when output exceeds 8 MiB output cap while sync formatter preserves behavior", async () => {
 		const hugeText = "a".repeat(9 * 1024 * 1024);
-		const messages = [
-			{ role: "user", content: hugeText, timestamp: 1 },
-		];
+		const messages = [{ role: "user", content: hugeText, timestamp: 1 }];
 
 		let error: unknown;
 		try {

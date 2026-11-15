@@ -29,22 +29,46 @@ export class HistoryDirectoryIndex {
 		try {
 			const stat = await fs.stat(this.#cachePath);
 			if (stat.size > MAX_CACHE_BYTES) return;
-			const data: unknown = JSON.parse(await fs.readFile(this.#cachePath, { encoding: "utf8", signal: this.#signal }));
-			if (!data || typeof data !== "object" || !("version" in data) || data.version !== 1 || !("rows" in data) || !Array.isArray(data.rows)) return;
+			const data: unknown = JSON.parse(
+				await fs.readFile(this.#cachePath, { encoding: "utf8", signal: this.#signal }),
+			);
+			if (
+				!data ||
+				typeof data !== "object" ||
+				!("version" in data) ||
+				data.version !== 1 ||
+				!("rows" in data) ||
+				!Array.isArray(data.rows)
+			)
+				return;
 			let count = 0;
 			for (const item of data.rows) {
 				this.#signal?.throwIfAborted();
-				if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== "string") throw new Error("Invalid history directory index");
+				if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== "string")
+					throw new Error("Invalid history directory index");
 				const [dir, row] = item;
 				const inside = this.#roots.some(root => {
 					const relative = path.relative(root, dir);
-					return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+					return (
+						relative === "" ||
+						(!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
+					);
 				});
-				if (!inside || !row || typeof row.stamp !== "string" || !Array.isArray(row.entries)) throw new Error("Invalid history directory index");
+				if (!inside || !row || typeof row.stamp !== "string" || !Array.isArray(row.entries))
+					throw new Error("Invalid history directory index");
 				count += row.entries.length + 1;
 				if (count > MAX_CACHE_ENTRIES) throw new Error("History directory index is too large");
 				for (const entry of row.entries) {
-					if (!entry || typeof entry.name !== "string" || !entry.name || entry.name === "." || entry.name === ".." || /[/\\\0]/.test(entry.name) || !["d", "f", "o"].includes(entry.kind)) throw new Error("Invalid history directory entry");
+					if (
+						!entry ||
+						typeof entry.name !== "string" ||
+						!entry.name ||
+						entry.name === "." ||
+						entry.name === ".." ||
+						/[/\\\0]/.test(entry.name) ||
+						!["d", "f", "o"].includes(entry.kind)
+					)
+						throw new Error("Invalid history directory entry");
 				}
 				this.#rows.set(dir, row);
 			}
@@ -67,11 +91,12 @@ export class HistoryDirectoryIndex {
 			}
 			const entries = (await fs.readdir(dir, { withFileTypes: true })).map(entry => ({
 				name: entry.name,
-				kind: entry.isDirectory() ? "d" as const : entry.isFile() ? "f" as const : "o" as const,
+				kind: entry.isDirectory() ? ("d" as const) : entry.isFile() ? ("f" as const) : ("o" as const),
 			}));
 			this.#signal?.throwIfAborted();
 			const after = await fs.lstat(dir);
-			if (stamp === `${after.dev}:${after.ino}:${after.mtimeMs}:${after.ctimeMs}`) this.#visited.set(dir, { stamp, entries });
+			if (stamp === `${after.dev}:${after.ino}:${after.mtimeMs}:${after.ctimeMs}`)
+				this.#visited.set(dir, { stamp, entries });
 			return entries;
 		} catch (error) {
 			this.#signal?.throwIfAborted();

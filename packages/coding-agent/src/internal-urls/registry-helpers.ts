@@ -165,7 +165,10 @@ export async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<Se
 	// reach descendants that the initial traversal could not inspect.
 	const minVisitedDepth = new Map<string, number>();
 	const pending = artifactsDirsFromRegistry().map(dir => ({ dir, depth: 0 }));
-	const directoryIndex = new HistoryDirectoryIndex(pending.map(item => item.dir), signal);
+	const directoryIndex = new HistoryDirectoryIndex(
+		pending.map(item => item.dir),
+		signal,
+	);
 	await directoryIndex.load();
 	for (let cursor = 0; cursor < pending.length; ) {
 		signal?.throwIfAborted();

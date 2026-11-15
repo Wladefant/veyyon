@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { ArtifactManager } from "@veyyon/kernel/session/artifacts";
 import { BlobStore, externalizeTextSync } from "@veyyon/kernel/session/blob-store";
 import type { FileEntry } from "@veyyon/kernel/session/session-entries";
-import { loadSessionHistoryReadOnly } from "@veyyon/kernel/session/session-loader"
+import { loadSessionHistoryReadOnly } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { migrateSessionEntries, migrateToCurrentVersion } from "@veyyon/kernel/session/session-migrations";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";

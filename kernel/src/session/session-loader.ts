@@ -1189,7 +1189,12 @@ function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPay
 	settleBlobSite(site, reference, resolved, lost, strings);
 }
 
-async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads, signal?: AbortSignal): Promise<void> {
+async function resolveBlobSites(
+	scan: EntryScan,
+	blobStore: BlobStore,
+	lost: LostPayloads,
+	signal?: AbortSignal,
+): Promise<void> {
 	const { sites, strings } = scan;
 	if (sites.length === 0) return;
 	const reads: BlobReads = { imageData: new Map(), imageUrl: new Map(), text: new Map() };
