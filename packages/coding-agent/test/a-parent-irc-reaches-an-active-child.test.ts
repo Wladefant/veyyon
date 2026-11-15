@@ -136,6 +136,7 @@ describe("parent IRC delivery to an active child", () => {
 			],
 			[blocker.tool],
 		);
+		child.session.agent.setSteeringMode("all");
 		const registry = AgentRegistry.global();
 		registry.register({ id: "parent", displayName: "Parent", kind: "main", scope: "test", session: parent.session });
 		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
