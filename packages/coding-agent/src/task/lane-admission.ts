@@ -490,7 +490,7 @@ export async function getLaneAdmissionStatus(options?: {
 		if (result.reclaimedCount > 0) {
 			await writeLedgerUnderLock(ledgerPath, {
 				version: LANE_ADMISSION_VERSION,
-				cap: effectiveCap,
+				cap: ledger.cap,
 				reservations: result.retained,
 			});
 		}
@@ -857,9 +857,6 @@ export async function releaseLaneAdmission(options: LaneAdmissionReleaseOptions)
 			const responseCap = resolveDurableCap(ledger.cap, requestedCap);
 			const index = ledger.reservations.findIndex(r => r.slotId === options.slotId);
 			if (index === -1) {
-				if (responseCap < ledger.cap && fs.existsSync(ledgerPath)) {
-					await writeLedgerUnderLock(ledgerPath, { ...ledger, cap: responseCap });
-				}
 				return {
 					ok: true,
 					released: false,
@@ -874,7 +871,7 @@ export async function releaseLaneAdmission(options: LaneAdmissionReleaseOptions)
 				return { ok: false, released: false, slot_id: options.slotId, reason: "lease_token_mismatch" };
 			}
 			const nextReservations = ledger.reservations.filter((_, i) => i !== index);
-			await writeLedgerUnderLock(ledgerPath, { ...ledger, cap: responseCap, reservations: nextReservations });
+			await writeLedgerUnderLock(ledgerPath, { ...ledger, reservations: nextReservations });
 			return {
 				ok: true,
 				released: true,
