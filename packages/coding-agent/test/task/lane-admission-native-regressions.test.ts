@@ -300,6 +300,80 @@ describe("native host-lane admission regressions", () => {
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 	});
 
+	it("settles transient release failure without handing retry ownership to the caller", async () => {
+		const lease = await acquireSubagentHostLane({
+			agentId: "ReleaseRecovery",
+			owner: "session/ReleaseRecovery.jsonl",
+			cap: 1,
+		});
+		const realRelease = laneModule.laneAdmissionDriver.release;
+		vi.spyOn(laneModule.laneAdmissionDriver, "release")
+			.mockImplementationOnce(async options => ({
+				ok: false,
+				released: false,
+				slot_id: options.slotId,
+				reason: "transient_release_error",
+			}))
+			.mockImplementation(options => realRelease(options));
+		await lease!.release();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
+	it("does not let a fail-fast caller join an existing waiting flight", async () => {
+		const filler = await acquireLaneAdmission({
+			owner: "mixed-flight-filler",
+			kind: "native",
+			workerPid: process.pid,
+			cap: 1,
+		});
+		const waitingController = new AbortController();
+		const nestedController = new AbortController();
+		const waiting = acquireSubagentHostLane({
+			agentId: "MixedFlight",
+			owner: "session/MixedFlight.jsonl",
+			cap: 1,
+			signal: waitingController.signal,
+			pollIntervalMs: 5,
+		});
+		let outcome: unknown;
+		const nested = acquireSubagentHostLane({
+			agentId: "MixedFlight",
+			owner: "session/MixedFlight.jsonl",
+			cap: 1,
+			signal: nestedController.signal,
+			waitIfFull: false,
+		}).then(value => { outcome = value; }, error => { outcome = error; });
+		try {
+			// Pending-flight rejection must not wait for ledger IO or the parent's lease.
+			await Promise.resolve();
+			expect(outcome).toBeInstanceOf(LaneAdmissionError);
+			expect(outcome).toMatchObject({ code: "nested_host_lane_cap_reached" });
+		} finally {
+			nestedController.abort();
+			waitingController.abort();
+			await waiting;
+			await releaseLaneAdmission({ slotId: filler.slot_id!, leaseToken: filler.lease_token! });
+			await nested;
+		}
+	});
+
+	it("counts same-named agents from independent session owners separately", async () => {
+		const [first, second] = await Promise.all([
+			acquireSubagentHostLane({ agentId: "Reviewer", owner: "session-one/Reviewer.jsonl", cap: 2 }),
+			acquireSubagentHostLane({ agentId: "Reviewer", owner: "session-two/Reviewer.jsonl", cap: 2 }),
+		]);
+		try {
+			expect(first).not.toBeNull();
+			expect(second).not.toBeNull();
+			expect(first!.slotId).not.toBe(second!.slotId);
+			expect((await getLaneAdmissionStatus()).active_lanes).toBe(2);
+		} finally {
+			await first?.release();
+			await second?.release();
+		}
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
 	it("joins concurrent same-key acquisitions into one flight at a single remaining slot", async () => {
 		const filler = await acquireLaneAdmission({
 			owner: "single-flight-filler",
