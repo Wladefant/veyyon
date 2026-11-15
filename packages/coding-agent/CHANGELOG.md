@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The shared Windows daemon broker survives the client process that started it.
+
 ## [1.10.0] - 2026-11-14
 
 ### Fixed
