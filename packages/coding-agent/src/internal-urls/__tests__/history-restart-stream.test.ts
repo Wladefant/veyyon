@@ -66,5 +66,43 @@ it("reuses a disk index after registry reset and invalidates a newly ambiguous i
 	await fs.writeFile(dir.join("oldagent.jsonl"), "another conversation identity");
 	const collided = await scanSessionFilesFromDisk();
 	expect([...collided.files.keys()]).not.toContain("OldAgent");
-	expect(collided.ambiguous.has("OldAgent")).toBe(true);
+	expect([...collided.ambiguous].map(id => id.toLowerCase())).toContain("oldagent");
+});
+
+it("keeps branch selection and restored tool-result lookahead in stored prefixes", async () => {
+	using dir = TempDir.createSync("history-restart-branch-");
+	const store = new BlobStore(blobsDirForSessionDir(dir.path()));
+	const result = store.putSync(Buffer.from("line A\nline B"));
+	const records = [
+		{ type: "session", version: 4, id: "stored", cwd: dir.path(), timestamp: "2026-11-15T00:00:00.000Z" },
+		{ type: "message", id: "root", parentId: null, message: { role: "user", content: "start", timestamp: 1 } },
+		{ type: "message", id: "call", parentId: "root", message: { role: "assistant", content: [{ type: "toolCall", id: "read-call", name: "read", arguments: { path: "example.ts" } }], timestamp: 2 } },
+		{ type: "message", id: "result", parentId: "call", message: { role: "toolResult", toolCallId: "read-call", toolName: "read", content: [{ type: "text", text: `blobtext:sha256:${result.hash}` }], isError: false, timestamp: 3 } },
+		{ type: "message", id: "abandoned", parentId: "root", message: { role: "user", content: "wrong branch", timestamp: 4 } },
+		{ type: "message", id: "selected", parentId: "result", message: { role: "user", content: "kept", timestamp: 5 } },
+	];
+	await fs.writeFile(dir.join("OldAgent.jsonl"), records.map(record => JSON.stringify({ timestamp: "2026-11-15T00:00:00.000Z", ...record })).join("\n") + "\n");
+	registerArtifactsDir(dir.path());
+	const view = await new HistoryProtocolHandler().resolve(parseInternalUrl("history://OldAgent"), { historyMaxLines: 13 });
+	expect(view.content).toBe("# OldAgent (on disk)\n\n## user\n\nstart\n\n## assistant\n\n→ read(example.ts) ⇒ ok · 2 lines\n\n## user\n\nkept\n");
+});
+
+it("restores the selected compaction summary without reviving discarded messages", async () => {
+	using dir = TempDir.createSync("history-restart-compaction-");
+	const store = new BlobStore(blobsDirForSessionDir(dir.path()));
+	const summary = store.putSync(Buffer.from("restored summary"));
+	const records = [
+		{ type: "session", version: 4, id: "stored", cwd: dir.path() },
+		{ type: "message", id: "discard", parentId: null, message: { role: "user", content: "discarded", timestamp: 1 } },
+		{ type: "message", id: "keep", parentId: "discard", message: { role: "user", content: "retained", timestamp: 2 } },
+		{ type: "compaction", id: "compact", parentId: "keep", firstKeptEntryId: "keep", summary: `blobtext:sha256:${summary.hash}`, tokensBefore: 100 },
+		{ type: "message", id: "latest", parentId: "compact", message: { role: "user", content: "latest", timestamp: 3 } },
+	];
+	await fs.writeFile(dir.join("OldAgent.jsonl"), records.map(record => JSON.stringify({ timestamp: "2026-11-15T00:00:00.000Z", ...record })).join("\n") + "\n");
+	registerArtifactsDir(dir.path());
+	const view = await new HistoryProtocolHandler().resolve(parseInternalUrl("history://OldAgent"), { historyMaxLines: 20 });
+	expect(view.content).toContain("[compaction] restored summary");
+	expect(view.content).toContain("retained");
+	expect(view.content).toContain("latest");
+	expect(view.content).not.toContain("discarded");
 });
