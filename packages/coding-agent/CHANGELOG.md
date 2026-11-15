@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Python eval shutdown and reset, acquire, and replacement waits now honor caller cancellation while retaining transition ownership until completion ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
+- Python eval shutdown waits now have a JavaScript-side deadline, and reset, acquire, and replacement transitions honor caller cancellation without dropping transition ownership ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
 
 ## [1.10.0] - 2026-11-14
 
