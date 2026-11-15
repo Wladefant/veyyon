@@ -1022,11 +1022,10 @@ describe("task spawn routing", () => {
 		runSpawnSpy.mockImplementation(async (_session, _bypass, req) => {
 			AgentRegistry.global().register({
 				id: req.preAllocatedId ?? "RegisteredIso",
-				kind: "subagent",
+				kind: "sub",
 				parentId: "main",
 				scope: "main",
 				displayName: "RegisteredIso",
-				activity: "work",
 				session: null,
 				createdAt: Date.now(),
 			});
