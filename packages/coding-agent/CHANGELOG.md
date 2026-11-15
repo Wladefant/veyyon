@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Python eval shutdown and reset, acquire, and replacement waits now honor caller cancellation while retaining transition ownership until completion ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
+
 ## [1.10.0] - 2026-11-14
 
 ### Fixed
