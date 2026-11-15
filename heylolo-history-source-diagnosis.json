@@ -1,0 +1,51 @@
+{
+  "scope": "T3 history import limits and Veyyon replay entry support; installed source inspection only, no runtime logs or app action",
+  "docs_read": ["https://www.electronjs.org/docs/latest/tutorial/asar-archives", "https://github.com/electron/asar/blob/main/src/disk.ts", "https://github.com/electron/asar/blob/main/src/pickle.ts"],
+  "documented_constraints": "Electron ASAR docs specify archive framing and file payloads. They do not document T3 import behavior or limits.",
+  "t3_installed_source": {
+    "directory": "C:/Users/wkiri/AppData/Local/Programs/t3code/resources",
+    "version_identity": "app.asar package.json: version/buildVersion 0.1.8-nightly.20261105.4234; t3codeCommitHash 8b570d282b5f.",
+    "archive_inspection_method": "Read-only stdlib struct/json parser based on official electron/asar source; no extraction or archive writes.",
+    "native_acp_import_handler": {
+      "archive": "server.asar",
+      "member": "apps/server/dist/server-BOoG6m__.mjs",
+      "member_offset": 132215089,
+      "member_size": 1973450,
+      "member_position": 1097999,
+      "source_symbol": "importAcpRegistrySession",
+      "finding": "Checks the ACP provider advertises native canLoad or canResume. Derives a deterministic T3 thread ID and returns early if that thread already exists. Otherwise it calls threadLaunch.launch with importedNativeThread.ref {driver,nativeId,strength:'strong'} plus title/updatedAt metadata, then returns threadId/imported. This handler does not itself copy transcript messages; it creates a T3 thread tied to the native session and requests launch. Therefore the import operation is not proven metadata-only end to end: launch/provider handling can initiate load/resume, but that subsequent path is not inspected here.",
+      "limits": "No import-specific size, message-count, entry-type, or timeout cap visible in this handler."
+    },
+    "native_session_list_contract": {
+      "archive": "server.asar",
+      "member": "apps/server/dist/ManagedEndpointRuntime-B1OaMkPN.mjs",
+      "member_offset": 918490,
+      "member_size": 4975540,
+      "member_position": 203180,
+      "finding": "AcpRegistrySession schema bounds sessionId to 1024 characters, cwd to 4096, additionalDirectories to 32 entries, title to 1024 characters, updatedAt to 128 characters. The listSessions result schema bounds a returned page to 256 sessions and cursor to 2048 characters. These are provider-session listing/schema limits, not transcript import limits."
+    },
+    "imported_transcript_distinction": {
+      "archive": "server.asar",
+      "member": "apps/server/dist/runtimeLayer-DPNjRJEf.mjs",
+      "member_offset": 123289246,
+      "member_size": 7476335,
+      "member_position": 7157757,
+      "finding": "A separate generic local agent-session importer parses scanned transcript records into threads, records message.updated and turn-item.updated events from thread.messages, and inserts a system notice when omittedMessageCount is positive. That is distinct from the native ACP session import handler above; the inspected snippet shows actual transcript event import for that generic scanner path, not the ACP registry import path."
+    }
+  },
+  "veyyon_source": {
+    "checkout": "C:/Users/wkiri/development/veyyon-wt/acp-no-autoresume",
+    "head": "68caac321b8a4e8d0fabd67f1581706b46e20fe7",
+    "identity_caveat": "This checkout commit is identified, but its correspondence to the Veyyon build that handled the imported thread is unknown.",
+    "load_and_replay": [
+      {"file": "packages/coding-agent/src/modes/acp/acp-agent.ts", "lines": "589-599", "finding": "loadSession loads the managed session, refreshes external-turn entries, calls #replaySessionHistory, then returns configuration/mode state."},
+      {"file": "packages/coding-agent/src/modes/acp/acp-agent.ts", "lines": "1782-1811", "finding": "Full replay builds transcript messages from SessionManager.buildSessionContext({ transcript: true }).messages and sends mapped sessionUpdate notifications sequentially. No explicit message/size limit appears in this replay block."},
+      {"file": "packages/coding-agent/src/modes/acp/acp-agent.ts", "lines": "1851-1899", "finding": "Replay maps assistant, user/developer/custom/hookMessage, toolResult, bashExecution, pythonExecution, and compactionSummary roles. Other roles return no notifications."},
+      {"file": "contracts/session/src/entry.ts", "lines": "53-81", "finding": "The persisted SessionEntry contract includes compaction and branch_summary entries."},
+      {"file": "kernel/src/session/session-manager.ts", "lines": "3355-3377,3646-3663", "finding": "appendCompaction and branchWithSummary persist compaction and branch summary entries."},
+      {"file": "packages/coding-agent/src/modes/acp/acp-agent.ts", "lines": "1786-1798,1887-1898", "finding": "Replay projects transcript messages into replayable roles and recognizes compactionSummary, but does not directly handle branch_summary. Whether a branch summary appears through transcript projection is not established."}
+    ]
+  },
+  "diagnosis": "T3's native ACP import handler creates a T3 thread linked to the native provider session, then calls threadLaunch.launch; it does not itself copy transcript messages. The handler's launch/provider continuation was not inspected, so the exact point when history is requested remains unknown. The Veyyon checkout's ACP load path does replay transcript messages. The likely failure boundary is therefore in T3 launch/provider session loading or later Veyyon session projection, but the inspected evidence cannot choose between them. No import-specific size/message/entry-type/timeout limit was found in the native handler. The only explicit finite-count cap found here is the list API's 256-session page schema.",
+  "excluded": ["T3 runtime logs", "application/provider invocation", "UI inspection", "source execution", "source modification"]
+}
