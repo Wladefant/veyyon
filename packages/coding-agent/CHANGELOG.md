@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
+
 ## [1.10.0] - 2026-11-14
 
 ### Fixed

@@ -5903,8 +5903,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
 			}
 			const outbox = this.#ircContinuations;
-			if (this.#ircActivePhase || outbox.unfinished().length > 0) {
-				// Preserve both phase boundaries and the order of input retained across a restart.
+			if (!this.isStreaming && (this.#ircActivePhase || outbox.unfinished().length > 0)) {
+				// Idle continuations retain separate phases; live input must reach the next model step.
 				outbox.begin(msg.id, record);
 				await this.sessionManager.ensureOnDisk();
 				await this.sessionManager.sync();
