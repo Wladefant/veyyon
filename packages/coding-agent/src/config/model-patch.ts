@@ -64,7 +64,10 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 	const result = { ...base };
 	if (patch.name !== undefined) result.name = patch.name;
 	if (patch.reasoning !== undefined) result.reasoning = patch.reasoning;
-	if (patch.thinking !== undefined) result.thinking = patch.thinking;
+	if (patch.thinking !== undefined) {
+		result.thinking = patch.thinking;
+		result.reasoningOptions = undefined;
+	}
 	if (patch.input !== undefined) result.input = patch.input;
 	if (patch.supportsTools !== undefined) result.supportsTools = patch.supportsTools;
 	if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
