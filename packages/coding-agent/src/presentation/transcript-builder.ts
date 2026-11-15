@@ -9,6 +9,7 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, ToolResultMessage } from "@veyyon/ai";
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
+import { contentText } from "@veyyon/utils/content-text";
 import { formatBytes } from "@veyyon/utils/format";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { isRecord } from "@veyyon/utils/type-guards";

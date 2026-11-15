@@ -606,8 +606,7 @@ export class AgentSession {
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
-	#cancelExitRecorder?: () => void;
-	#exitRecorded = false;
+	#cancelExitCleanup?: () => void;
 	/** Session ids can change on fork/compaction; cleanup must use the id recorded at start. */
 	#toolMarkerSessions = new Map<string, string>();
 	/** In-flight tool names keyed by toolCallId for heartbeat phase reporting. */
@@ -1926,7 +1925,7 @@ export class AgentSession {
 			sessionStore: this.sessionManager,
 			redact: text => this.obfuscateProviderText(text),
 		});
-		// The counterpart of the exit recorder below: a death that never reached
+		// The counterpart of the exit record: a death that never reached
 		// JavaScript wrote no `session_exit` entry and no error line, so the only
 		// account of it is what its process left on disk — the in-flight marker of
 		// a tool call, and the heartbeat naming the phase it was in. Sweep those
@@ -1945,8 +1944,8 @@ export class AgentSession {
 							? "provider"
 							: "idle",
 		});
-		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
-			this.#recordSessionExit(reason);
+		this.#cancelExitCleanup = postmortem.register(`agent-session-markers:${this.sessionManager.getSessionId()}`, () => {
+			this.#clearLifecycleMarkers();
 		});
 		this.#heartbeatLogInterval = setInterval(() => this.#logHeartbeat(), SESSION_HEARTBEAT_INTERVAL_MS);
 		this.#heartbeatLogInterval.unref?.();
@@ -2510,9 +2509,7 @@ export class AgentSession {
 		}
 	}
 
-	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
-		if (this.#exitRecorded) return;
-		this.#exitRecorded = true;
+	#clearLifecycleMarkers(): void {
 		if (this.#heartbeatLogInterval !== undefined) {
 			clearInterval(this.#heartbeatLogInterval);
 			this.#heartbeatLogInterval = undefined;
@@ -2521,6 +2518,7 @@ export class AgentSession {
 		// Same reason as the markers below: this exit reaches JavaScript, so the
 		// log accounts for it and the heartbeat must not report it as silent.
 		this.#heartbeat?.leave();
+		this.#heartbeat = undefined;
 		// This exit reached JavaScript, so the log will carry an account of it
 		// either way. Leaving the marker behind would report the next launch a
 		// crash that did not happen.
@@ -2528,47 +2526,6 @@ export class AgentSession {
 			clearToolCallInFlight(sessionId, toolCallId);
 		}
 		this.#toolMarkerSessions.clear();
-		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
-		if (
-			pendingToolCalls.length === 0 &&
-			!this.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")
-		) {
-			return;
-		}
-		const kind: SessionExitData["kind"] =
-			reason === "dispose" || reason === postmortem.Reason.MANUAL
-				? "normal"
-				: reason === postmortem.Reason.UNCAUGHT_EXCEPTION || reason === postmortem.Reason.UNHANDLED_REJECTION
-					? "fatal"
-					: reason === postmortem.Reason.EXIT
-						? "process_exit"
-						: "signal";
-		const data: SessionExitData = {
-			reason,
-			kind,
-			recordedAt: new Date().toISOString(),
-		};
-		if (pendingToolCalls.length > 0) data.pendingToolCalls = pendingToolCalls;
-		try {
-			this.sessionManager.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, data);
-			this.sessionManager.flushSync();
-			// Looked up on `logger` at call time, not captured in a table: the level is the
-			// method name, and a captured function would also detach the spy a test installs.
-			logger[sessionExitLogLevel(kind, pendingToolCalls.length)]("Session exit recorded", {
-				sessionId: this.sessionManager.getSessionId(),
-				sessionFile: this.sessionManager.getSessionFile(),
-				reason,
-				kind,
-				pendingToolCalls: pendingToolCalls.length,
-			});
-		} catch (error) {
-			logger.error("Failed to record session exit", {
-				sessionId: this.sessionManager.getSessionId(),
-				sessionFile: this.sessionManager.getSessionFile(),
-				reason,
-				error: errorMessage(error),
-			});
-		}
 	}
 
 
@@ -2679,7 +2636,6 @@ export class AgentSession {
 				// this the working line announces a call in raw handle form while the
 				// transcript right beneath it shows the same call expanded.
 				const intent = this.displayToolIntent(event.intent);
-recordToolExecutionStart(this, event);
 this.#exitRecord.recordToolStart(event);
 const markerSessionId = this.sessionManager.getSessionId();
 this.#toolMarkerSessions.set(event.toolCallId, markerSessionId);
@@ -3455,14 +3411,9 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		this.beginDispose();
-		this.#recordSessionExit(options.reason ?? "dispose");
-		if (this.#heartbeatLogInterval !== undefined) {
-			clearInterval(this.#heartbeatLogInterval);
-			this.#heartbeatLogInterval = undefined;
-		}
-		this.#inFlightToolNames.clear();
-		this.#cancelExitRecorder?.();
-		this.#cancelExitRecorder = undefined;
+		this.#clearLifecycleMarkers();
+		this.#cancelExitCleanup?.();
+		this.#cancelExitCleanup = undefined;
 		this.#exitRecord.close(options.reason ?? "dispose");
 		try {
 			if (this.#config.extensionRunner?.hasHandlers("session_shutdown")) {

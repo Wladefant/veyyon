@@ -113,6 +113,78 @@ class WindowsProcessSafety(unittest.TestCase):
                 runner.kill()
                 runner.wait(timeout=5)
             drain_thread.join(timeout=1)
+    def test_runner_children_do_not_consume_protocol_stdin(self):
+        runner = subprocess.Popen(
+            [sys.executable, "-u", str(ROOT / "runner.py")],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, creationflags=FLAGS,
+        )
+        lines = queue.Queue()
+        errors = queue.Queue()
+        def drain(stream, target):
+            for line in stream:
+                target.put(line)
+        stdout_thread = threading.Thread(target=drain, args=(runner.stdout, lines), daemon=True)
+        stderr_thread = threading.Thread(target=drain, args=(runner.stderr, errors), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        frames = []
+        try:
+            deadline = time.monotonic() + 5
+            send_and_wait(
+                runner.stdin, lines,
+                {"id": "inherited-stdin", "code": (
+                    "import subprocess, sys; "
+                    "result = subprocess.run([sys.executable, '-c', 'print(\"sub-ok\")'], "
+                    "capture_output=True, text=True, timeout=2, creationflags="
+                    "int(__import__('subprocess').CREATE_NO_WINDOW if sys.platform == 'win32' else 0)); "
+                    "print(result.stdout, end=''); "
+                    "print(result.stderr, file=sys.stderr, end=''); "
+                    "print('child-returncode=' + str(result.returncode))"
+                )},
+                deadline, frames,
+            )
+            first = [frame for frame in frames if frame.get("id") == "inherited-stdin"]
+            self.assertFalse([frame for frame in first if frame.get("type") == "error"], first)
+            self.assertTrue(any(frame.get("type") == "stdout" and "sub-ok" in frame.get("data", "") for frame in first), first)
+            self.assertTrue(any(frame.get("type") == "done" and frame.get("status") == "ok" for frame in first), first)
+
+            send_and_wait(
+                runner.stdin, lines,
+                {"id": "explicit-stdin", "code": (
+                    "import subprocess, sys; "
+                    "result = subprocess.run([sys.executable, '-c', "
+                    "'import sys; print(sys.stdin.read())'], input='input-ok', "
+                    "capture_output=True, text=True, timeout=2, "
+                    "creationflags=int(__import__('subprocess').CREATE_NO_WINDOW "
+                    "if sys.platform == 'win32' else 0)); "
+                    "print(result.stdout, end=''); "
+                    "print(result.stderr, file=sys.stderr, end='')"
+                )},
+                deadline, frames,
+            )
+            second = [frame for frame in frames if frame.get("id") == "explicit-stdin"]
+            self.assertFalse([frame for frame in second if frame.get("type") == "error"], second)
+            self.assertTrue(any(frame.get("type") == "stdout" and "input-ok" in frame.get("data", "") for frame in second), second)
+            self.assertTrue(any(frame.get("type") == "done" and frame.get("status") == "ok" for frame in second), second)
+        finally:
+            if runner.stdin and not runner.stdin.closed:
+                try:
+                    runner.stdin.write(json.dumps({"type": "exit"}) + "\n")
+                    runner.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    pass
+            if runner.poll() is None:
+                try:
+                    runner.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    runner.kill()
+                    runner.wait(timeout=5)
+            for stream in (runner.stdin, runner.stdout, runner.stderr):
+                if stream and not stream.closed:
+                    stream.close()
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
     def test_send_and_wait_enforces_hard_deadline_on_continuous_non_done_output(self):
         lines = queue.Queue()
         stop_feeder = threading.Event()
