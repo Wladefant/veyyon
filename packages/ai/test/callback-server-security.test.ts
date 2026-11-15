@@ -59,8 +59,14 @@ describe("OAuthCallbackFlow callback security", () => {
 		["replacement patterns", "$& $' $" + "` $$"],
 	])("preserves %s in provider errors as inert page data without a valid state", async (_label, errorText) => {
 		const { info, abort, login } = await startFlow();
-		const redirectUri = new URL(info.url).searchParams.get("redirect_uri");
 		const loginSettled = login.catch(() => undefined);
+		const redirectUri = new URL(info.url).searchParams.get("redirect_uri");
+		if (!redirectUri) {
+			abort.abort("test cleanup");
+			await loginSettled;
+			throw new Error("OAuth test flow did not advertise its callback URI");
+		}
+
 		try {
 			const callback = new URL(redirectUri);
 			callback.searchParams.set("error", "access_denied");
@@ -77,11 +83,10 @@ describe("OAuthCallbackFlow callback security", () => {
 			});
 		} finally {
 			abort.abort("test cleanup");
-			await login.catch(() => undefined);
-		} finally {
-			abort.abort("test cleanup");
 			await loginSettled;
 		}
+	});
+
 	it("preserves callback codes containing markup and replacement patterns", async () => {
 		const { info, abort, login } = await startFlow();
 		const authUrl = new URL(info.url);
