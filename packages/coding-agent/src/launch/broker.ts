@@ -1848,7 +1848,11 @@ export class DaemonBroker {
 function persist(record: ManagedDaemon): void {
 	const metaPath = managedDaemonMetaPath(record.dir);
 	record.persistQueue = record.persistQueue
-		.then(() => atomicWriteFile(metaPath, JSON.stringify({ daemon: record.snapshot, spec: record.spec })))
+		.then(() =>
+			atomicWriteFile(metaPath, JSON.stringify({ daemon: record.snapshot, spec: record.spec }), {
+				requireAtomicReplace: true,
+			}),
+		)
 		.catch(error => {
 			logger.warn("Failed to persist daemon metadata", {
 				name: record.snapshot.name,

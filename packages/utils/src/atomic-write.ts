@@ -322,18 +322,32 @@ function closingAfterSync(operation: () => void, close: () => void): void {
 	if (operationError !== undefined) throw operationError;
 }
 
+const RENAME_RETRY_BUDGET_MS = 2_000;
+const RENAME_RETRY_INITIAL_MS = 5;
+const RENAME_RETRY_MAX_MS = 100;
+
 async function renameTempOverTarget(
 	tmpPath: string,
 	target: string,
 	requireAtomicReplace = false,
 ): Promise<void> {
-	try {
-		await fsp.rename(tmpPath, target);
-		return;
-	} catch (error) {
-		if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
+	// Windows readers briefly deny replacement with EPERM/EACCES/EEXIST; retry the
+	// same staged sibling rename first so readers never observe a missing target.
+	const deadline = Date.now() + RENAME_RETRY_BUDGET_MS;
+	for (let failures = 0; ; failures++) {
+		try {
+			await fsp.rename(tmpPath, target);
+			return;
+		} catch (error) {
+			if (!isRenameClobberError(error)) throw error;
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) {
+				if (requireAtomicReplace) throw error;
+				break;
+			}
+			await Bun.sleep(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
+		}
 	}
-
 	// Windows lacks a consistently atomic replace-existing rename. Preserve the
 	// displaced inode under an owned sibling until the replacement succeeds, so
 	// a failed second rename can restore the caller's original bytes.
