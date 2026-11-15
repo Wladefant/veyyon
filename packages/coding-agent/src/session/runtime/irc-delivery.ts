@@ -48,6 +48,10 @@ export interface IrcDeliveryHost {
 	/** Stop tracking a wake turn; the session drains what stranded once none is left in flight. */
 	endWakeTurn(): void;
 	runEphemeralTurn(args: EphemeralTurnArgs): Promise<EphemeralTurnResult>;
+	/** Optional abort signal cancelled when the owning session aborts or disposes. */
+	wakeSignal?(): AbortSignal | undefined;
+	/** Optional host admission lease acquired before running a background wake turn; null cancels before start. */
+	acquireWakeLease?(signal?: AbortSignal): Promise<{ release(): Promise<void> } | null>;
 }
 
 export class IrcDelivery {
@@ -187,20 +191,31 @@ export class IrcDelivery {
 			agent.replaceQueues(agent.peekSteeringQueue().slice(), []);
 		}
 		host.beginWakeTurn();
-		void agent
-			.prompt(records)
-			.catch(error => {
+		void (async () => {
+			let lease: { release(): Promise<void> } | null = null;
+			try {
+				if (host.acquireWakeLease) {
+					lease = await host.acquireWakeLease(host.wakeSignal?.());
+					if (!lease || host.isDisposed()) return;
+				}
+				await agent.prompt(records);
+			} catch (error) {
 				logger.warn("IRC wake turn failed", { error: errorMessage(error) });
-			})
-			.finally(() => {
+			} finally {
 				if (parkedFollowUps.length > 0) {
 					agent.replaceQueues(
 						agent.peekSteeringQueue().slice(),
 						parkedFollowUps.concat(agent.peekFollowUpQueue()),
 					);
 				}
+				if (lease) {
+					await lease.release().catch(error => {
+						logger.warn("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
+					});
+				}
 				host.endWakeTurn();
-			});
+			}
+		})();
 	}
 
 	/**

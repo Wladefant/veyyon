@@ -86,7 +86,7 @@ import {
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
 import { reportProviderError } from "./provider-error-reporter";
-import { acquireNativeHostLaneWait, type NativeHostLaneLease } from "./lane-admission";
+import { acquireSubagentHostLane, type NativeHostLaneLease } from "./lane-admission";
 import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
 import { YIELD_TOOL_NAME } from "./subprocess-tool-registry";
@@ -1651,7 +1651,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 
 	let hostLaneLease: NativeHostLaneLease | null = null;
 	try {
-		hostLaneLease = await acquireNativeHostLaneWait({ owner: `${id}:followup`, signal });
+		hostLaneLease = await acquireSubagentHostLane({ agentId: id, owner: `${id}:followup`, signal });
 	} catch (error) {
 		const reason = errorMessage(error);
 		return {
@@ -2675,7 +2675,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 
 	let hostLaneLease: NativeHostLaneLease | null = null;
 	try {
-		hostLaneLease = await acquireNativeHostLaneWait({ owner: id, signal });
+		hostLaneLease = await acquireSubagentHostLane({ agentId: id, owner: id, signal });
 	} catch (error) {
 		return startupFailedBeforeMonitor(options, error, startTime);
 	}

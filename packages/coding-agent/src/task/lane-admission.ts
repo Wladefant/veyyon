@@ -375,21 +375,22 @@ export async function getLaneAdmissionStatus(options?: {
 	liveness?: LaneLivenessProbe;
 }): Promise<LaneAdmissionStatus> {
 	const globalConfigRoot = options?.globalConfigRoot ?? getGlobalConfigRootDir();
-	const effectiveCap = resolveCap(options?.cap);
+	const explicitCap = options?.cap !== undefined ? resolveCap(options.cap) : undefined;
 	const liveness = options?.liveness ?? DEFAULT_LIVENESS_PROBE;
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
 
-	const { retained, reclaimedCount } = await withLedgerLock(ledgerPath, async () => {
-		const ledger = await readLedgerUnderLock(ledgerPath, effectiveCap);
+	const { retained, reclaimedCount, cap: resolvedCap } = await withLedgerLock(ledgerPath, async () => {
+		const ledger = await readLedgerUnderLock(ledgerPath, explicitCap ?? DEFAULT_HOST_LANE_CAP);
+		const responseCap = explicitCap ?? ledger.cap;
 		const result = reclaimProvenDeadReservations(ledger.reservations, liveness);
 		if (result.reclaimedCount > 0) {
 			await writeLedgerUnderLock(ledgerPath, {
 				version: LANE_ADMISSION_VERSION,
-				cap: effectiveCap,
+				cap: responseCap,
 				reservations: result.retained,
 			});
 		}
-		return result;
+		return { ...result, cap: responseCap };
 	});
 
 	const unregistered = listUnregisteredLiveTerminalOwners(globalConfigRoot, liveness);
@@ -399,11 +400,11 @@ export async function getLaneAdmissionStatus(options?: {
 		ok: true,
 		action: "status",
 		ledger_path: ledgerPath,
-		cap: effectiveCap,
+		cap: resolvedCap,
 		active_lanes: retained.length,
 		launching_lanes: launchingLanes,
 		bound_active_lanes: boundActiveLanes,
-		n_free: Math.max(0, effectiveCap - retained.length),
+		n_free: Math.max(0, resolvedCap - retained.length),
 		all_host_enforced: unregistered.length === 0,
 		unregistered_live_owners: unregistered,
 		reclaimed_count: reclaimedCount,
@@ -444,6 +445,26 @@ export async function acquireLaneAdmission(
 			const ledger = await readLedgerUnderLock(ledgerPath, effectiveCap);
 			const { retained, reclaimedCount } = reclaimProvenDeadReservations(ledger.reservations, liveness);
 
+			if (retained.some(r => r.owner === owner)) {
+				if (reclaimedCount > 0) {
+					await writeLedgerUnderLock(ledgerPath, {
+						version: LANE_ADMISSION_VERSION,
+						cap: effectiveCap,
+						reservations: retained,
+					});
+				}
+				return {
+					ok: false,
+					admitted: false,
+					reason: "owner_already_reserved",
+					cap: effectiveCap,
+					active_lanes: retained.length,
+					n_free: Math.max(0, effectiveCap - retained.length),
+					all_host_enforced: allHostEnforced,
+					unregistered_live_owners: unregistered,
+					reclaimed_count: reclaimedCount,
+				};
+			}
 			if (retained.length >= effectiveCap) {
 				if (reclaimedCount > 0) {
 					await writeLedgerUnderLock(ledgerPath, {
@@ -553,17 +574,31 @@ export async function adoptLaneAdmission(options: LaneAdmissionAdoptOptions): Pr
 			if (existing.leaseToken !== options.leaseToken) {
 				return { ok: false, adopted: false, slot_id: options.slotId, reason: "lease_token_mismatch" };
 			}
+			if (existing.state === "active" && existing.pid !== null && existing.pid !== options.pid) {
+				return { ok: false, adopted: false, slot_id: options.slotId, reason: "slot_already_adopted" };
+			}
 
+			const pidAlive = liveness.isPidAlive(options.pid);
+			if (!pidAlive) {
+				return {
+					ok: false,
+					adopted: false,
+					slot_id: options.slotId,
+					pid: options.pid,
+					identity_verified: false,
+					pid_alive: false,
+					reason: "worker_pid_not_alive",
+				};
+			}
 			const now = Date.now();
 			const identity = liveness.getStartIdentity(options.pid);
-			const pidAlive = liveness.isPidAlive(options.pid);
 			const updated: LaneReservation = {
 				...existing,
 				state: "active",
 				pid: options.pid,
 				processIdentity: identity,
 				identityVerified: identity !== null,
-				adoptedAt: now,
+				adoptedAt: existing.adoptedAt ?? now,
 				lastHeartbeatAt: now,
 			};
 			const nextReservations = [...ledger.reservations];
@@ -683,6 +718,15 @@ function waitAbortably(ms: number, signal?: AbortSignal): Promise<void> {
 	return promise;
 }
 
+/** Internal indirection enabling deterministic spies on ledger calls inside wait loops. */
+export const laneAdmissionDriver = {
+	acquire: acquireLaneAdmission,
+	heartbeat: heartbeatLaneAdmission,
+	release: releaseLaneAdmission,
+};
+
+const activeNativeAgentLeases = new Map<string, { lease: NativeHostLaneLease; count: number }>();
+
 /**
  * Acquire a native host-wide lane slot, waiting while the host cap is full until
  * admitted or `signal` aborts. Returns `null` when aborted before admission.
@@ -699,7 +743,7 @@ export async function acquireNativeHostLaneWait(options: {
 	const heartbeatMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS;
 
 	while (!options.signal?.aborted) {
-		const res = await acquireLaneAdmission({
+		const res = await laneAdmissionDriver.acquire({
 			owner: options.owner,
 			kind: "native",
 			callerPid: process.pid,
@@ -710,14 +754,27 @@ export async function acquireNativeHostLaneWait(options: {
 		if (res.admitted && res.slot_id && res.lease_token) {
 			const slotId = res.slot_id;
 			const leaseToken = res.lease_token;
+			if (options.signal?.aborted) {
+				await laneAdmissionDriver
+					.release({
+						slotId,
+						leaseToken,
+						cap: options.cap,
+						globalConfigRoot: options.globalConfigRoot,
+					})
+					.catch(() => {});
+				return null;
+			}
 			let released = false;
 			const timer = setInterval(() => {
 				if (released) return;
-				void heartbeatLaneAdmission({
-					slotId,
-					leaseToken,
-					globalConfigRoot: options.globalConfigRoot,
-				}).catch(() => {});
+				void laneAdmissionDriver
+					.heartbeat({
+						slotId,
+						leaseToken,
+						globalConfigRoot: options.globalConfigRoot,
+					})
+					.catch(() => {});
 			}, heartbeatMs);
 			timer.unref?.();
 
@@ -728,7 +785,7 @@ export async function acquireNativeHostLaneWait(options: {
 					if (released) return;
 					released = true;
 					clearInterval(timer);
-					await releaseLaneAdmission({
+					await laneAdmissionDriver.release({
 						slotId,
 						leaseToken,
 						cap: options.cap,
@@ -746,4 +803,75 @@ export async function acquireNativeHostLaneWait(options: {
 		await waitAbortably(pollMs, options.signal);
 	}
 	return null;
+}
+
+/**
+ * Acquire or borrow the active in-process host lane lease for a subagent `agentId`.
+ * Prevents double-counting or deadlocking when a running subagent turn triggers an
+ * internal wake/replay turn before releasing its outer lease.
+ */
+export async function acquireSubagentHostLane(options: {
+	agentId: string;
+	owner: string;
+	signal?: AbortSignal;
+	cap?: number;
+	pollIntervalMs?: number;
+	heartbeatIntervalMs?: number;
+	globalConfigRoot?: string;
+}): Promise<NativeHostLaneLease | null> {
+	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
+	const key = `${getLaneAdmissionLedgerPath(globalConfigRoot)}\0${options.agentId}`;
+	const existing = activeNativeAgentLeases.get(key);
+	if (existing) {
+		if (options.signal?.aborted) return null;
+		existing.count += 1;
+		let released = false;
+		return {
+			slotId: existing.lease.slotId,
+			leaseToken: existing.lease.leaseToken,
+			async release(): Promise<void> {
+				if (released) return;
+				released = true;
+				const current = activeNativeAgentLeases.get(key);
+				if (!current || current !== existing) return;
+				current.count -= 1;
+				if (current.count <= 0) {
+					activeNativeAgentLeases.delete(key);
+					await current.lease.release();
+				}
+			},
+		};
+	}
+
+	const underlying = await acquireNativeHostLaneWait({
+		owner: options.owner,
+		signal: options.signal,
+		cap: options.cap,
+		pollIntervalMs: options.pollIntervalMs,
+		heartbeatIntervalMs: options.heartbeatIntervalMs,
+		globalConfigRoot,
+	});
+	if (!underlying) return null;
+
+	const entry = { lease: underlying, count: 1 };
+	activeNativeAgentLeases.set(key, entry);
+	let released = false;
+	return {
+		slotId: underlying.slotId,
+		leaseToken: underlying.leaseToken,
+		async release(): Promise<void> {
+			if (released) return;
+			released = true;
+			const current = activeNativeAgentLeases.get(key);
+			if (current === entry) {
+				current.count -= 1;
+				if (current.count <= 0) {
+					activeNativeAgentLeases.delete(key);
+					await current.lease.release();
+				}
+			} else {
+				await underlying.release();
+			}
+		},
+	};
 }

@@ -183,6 +183,7 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
+import { acquireSubagentHostLane, type NativeHostLaneLease } from "../task/lane-admission";
 import type { YieldItem } from "../task/types";
 import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -797,6 +798,7 @@ export class AgentSession {
 	/** The per-family service tiers `/fast` and `tier.*` set, and the tier each request resolves to. */
 	readonly #tiers: ServiceTiers;
 	#isDisposed = false;
+	#wakeAbortController = new AbortController();
 	/** Subscribers, the extension forwarding every session event passes through, and the held `agent_end`. */
 	readonly #events: SessionEvents;
 	readonly #persistence: MessagePersistence;
@@ -1200,19 +1202,35 @@ export class AgentSession {
 			this.#ircActivePhase === phaseId && typeof phaseId === "string"
 				? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
 				: Promise.resolve();
+		let wakeLease: NativeHostLaneLease | null = null;
+		let wakeAdmitted = false;
+		const wakeSignal = this.#wakeAbortController.signal;
 		const settled = ready
-			.then(() =>
-				terminal
-					? undefined
-					: records.length > 0 && retainedIndex < 0
-						? this.agent.prompt(records)
-						: this.agent.continue(),
-			)
+			.then(async () => {
+				if (terminal) {
+					wakeAdmitted = true;
+					return;
+				}
+				if (this.#config.agentKind === "sub") {
+					const agentId = this.#config.agentId ?? this.sessionId;
+					wakeLease = await acquireSubagentHostLane({
+						agentId,
+						owner: `${agentId}:wake`,
+						signal: wakeSignal,
+					});
+					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
+				}
+				wakeAdmitted = true;
+				await (records.length > 0 && retainedIndex < 0
+					? this.agent.prompt(records)
+					: this.agent.continue());
+			})
 			.then(
-				() => publish(),
+				() => (wakeAdmitted ? publish() : undefined),
 				error => publish(error),
 			)
 			.then(async () => {
+				if (!wakeAdmitted) return;
 				if (typeof completionId === "string") {
 					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
 					this.sessionManager.flushSync();
@@ -1233,6 +1251,11 @@ export class AgentSession {
 						this.agent.peekSteeringQueue().slice(),
 						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
 					);
+				}
+				if (wakeLease) {
+					await wakeLease.release().catch(error => {
+						logger.warn("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
+					});
 				}
 				// Claim the next retained phase before dropping this turn's idle accounting.
 				if (published) {
@@ -1332,6 +1355,19 @@ export class AgentSession {
 			},
 			endWakeTurn: () => this.#endInFlight(),
 			runEphemeralTurn: args => this.runEphemeralTurn(args),
+			wakeSignal: () => this.#wakeAbortController.signal,
+			acquireWakeLease: async signal => {
+				if (this.#isDisposed) return null;
+				if (this.#config.agentKind !== "sub") {
+					return { release: async () => {} };
+				}
+				const agentId = this.#config.agentId ?? this.sessionId;
+				return acquireSubagentHostLane({
+					agentId,
+					owner: `${agentId}:wake`,
+					signal: signal ?? this.#wakeAbortController.signal,
+				});
+			},
 		});
 		this.#stopHook = new SessionStopHook({
 			isHalted: () =>
@@ -3407,6 +3443,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#wakeAbortController.abort();
 		this.#irc.flushPending();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -5025,6 +5062,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		this.#abortInProgress = true;
 		try {
 			this.abortRetry();
+			this.#wakeAbortController.abort();
 			this.#promptGeneration++;
 			this.#nextTurn.forgetRequestedTurn();
 			if (options?.preserveCompaction) {
@@ -5074,6 +5112,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				this.#advisorRoster.preserveCard(card);
 			}
 		} finally {
+			if (!this.#isDisposed) this.#wakeAbortController = new AbortController();
 			this.#abortInProgress = false;
 			this.#drainStrandedQueuedMessages();
 		}

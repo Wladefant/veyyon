@@ -727,8 +727,8 @@ describe("host-wide shared lane admission", () => {
 
 	it("releases immediately and returns null when acquireNativeHostLaneWait aborts mid-acquire", async () => {
 		const controller = new AbortController();
-		const realAcquire = laneModule.acquireLaneAdmission;
-		vi.spyOn(laneModule, "acquireLaneAdmission").mockImplementationOnce(async opts => {
+		const realAcquire = laneModule.laneAdmissionDriver.acquire;
+		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementationOnce(async opts => {
 			const res = await realAcquire(opts);
 			controller.abort();
 			return res;
@@ -752,19 +752,19 @@ describe("host-wide shared lane admission", () => {
 			await promptHold.promise;
 		});
 
-		const realRelease = laneModule.releaseLaneAdmission;
+		const realRelease = laneModule.laneAdmissionDriver.release;
 		let wakeReleased = Promise.withResolvers<void>();
-		vi.spyOn(laneModule, "releaseLaneAdmission").mockImplementation(async opts => {
+		let wakeSlotIdToWatch: string | undefined;
+		vi.spyOn(laneModule.laneAdmissionDriver, "release").mockImplementation(async opts => {
 			const res = await realRelease(opts);
 			if (opts.slotId === wakeSlotIdToWatch) {
 				wakeReleased.resolve();
 			}
 			return res;
 		});
-		let wakeSlotIdToWatch: string | undefined;
-		const realAcquire = laneModule.acquireLaneAdmission;
+		const realAcquire = laneModule.laneAdmissionDriver.acquire;
 		let capDeniedObserved = Promise.withResolvers<void>();
-		vi.spyOn(laneModule, "acquireLaneAdmission").mockImplementation(async opts => {
+		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementation(async opts => {
 			const res = await realAcquire(opts);
 			if (res.admitted && opts.owner === "WakeSubChild:wake") {
 				wakeSlotIdToWatch = res.slot_id;
@@ -774,7 +774,6 @@ describe("host-wide shared lane admission", () => {
 			}
 			return res;
 		});
-
 		const outcome = await subSession.deliverIrcMessage({
 			id: "wake-1",
 			from: "Main",
@@ -887,6 +886,8 @@ describe("host-wide shared lane admission", () => {
 		).toBe("woken");
 		await capDeniedObserved.promise;
 		await disposeSub.dispose();
+		// Give the cancelled wake turn's abort unwind a turn of the event loop to settle before freeing a slot.
+		await Promise.resolve();
 		const freed2 = fillers.pop()!;
 		await releaseLaneAdmission({ slotId: freed2.slotId, leaseToken: freed2.leaseToken });
 		expect(disposedPrompted).toBe(0);
@@ -912,8 +913,26 @@ describe("host-wide shared lane admission", () => {
 		let wakeOutcome: "injected" | "woken" | undefined;
 		const childSession = makeRealAgentSession({ agentId: "InProcessReuseChild", agentKind: "sub" });
 		const innerPromptDone = Promise.withResolvers<void>();
+		const innerWakeIdle = Promise.withResolvers<void>();
 		vi.spyOn(childSession.agent, "prompt").mockImplementation(async () => {
 			innerPromptDone.resolve();
+		});
+		const origRelease = laneModule.laneAdmissionDriver.release;
+		let childSlotId: string | undefined;
+		const origAcquire = laneModule.laneAdmissionDriver.acquire;
+		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementation(async opts => {
+			const res = await origAcquire(opts);
+			if (res.admitted && opts.owner === "InProcessReuseChild") {
+				childSlotId = res.slot_id;
+			}
+			return res;
+		});
+		vi.spyOn(laneModule.laneAdmissionDriver, "release").mockImplementation(async opts => {
+			const res = await origRelease(opts);
+			if (opts.slotId === childSlotId) {
+				innerWakeIdle.resolve();
+			}
+			return res;
 		});
 		const mockSession = createMockSession(
 			async ({ emit }) => {
@@ -945,6 +964,7 @@ describe("host-wide shared lane admission", () => {
 			eventBus: new EventBus(),
 			artifactsDir: makeArtifactsDir(),
 		});
+		await innerWakeIdle.promise;
 		expect(res.exitCode).toBe(0);
 		expect(wakeOutcome).toBe("woken");
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(DEFAULT_HOST_LANE_CAP - 1);
