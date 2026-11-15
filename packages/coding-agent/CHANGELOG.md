@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-15
+
+### Fixed
+
+- Count only indented untracked entries in git status/stash pop + topic ledger ([PR #1127](https://github.com/Wladefant/veyyon/pull/1127)).
+
 ## [1.10.0] - 2026-11-14
 
 ### Fixed
