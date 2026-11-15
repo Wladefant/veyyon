@@ -221,6 +221,16 @@
 
 ### Changed
 
+- Spawned agents have three states, running, idle and asleep: an idle agent falls asleep after 5 minutes (`agent.idleTtlMs`, "Sleep Idle Agents After") and frees its session, and any agent with a transcript, including a stopped, failed or killed one, wakes when messaged for the rest of the session instead of being pruned or left unrevivable; an agent that ran in an isolated worktree stays readable at `history://<id>` but cannot be woken, since the worktree is removed when its run ends.
+- `job cancel` on an agent and `x` in the agent dashboard stop the agent and everything it spawned and put them to sleep, so a stopped agent wakes when messaged instead of being terminated.
+- The `irc` roster lists the 10 most recently active asleep agents and a count of older ones, which still wake by id, and a blocking `irc` send to a peer that falls asleep before replying ends at once instead of waiting for its timeout.
+- The `irc` loop bound refuses a message after 8 in a row between two agents with no tool call by either between them other than `irc`, `job` or `todo`, instead of after 16 in a row regardless of work, and the `irc-signal` rule that flagged messages starting with words such as "understood", "heads up" or "working on" is removed.
+- `agent.softRequestBudget` defaults to Unlimited instead of 200 requests, offers 200, 500, 1000 and 2000, and the bundled scout and sonic agents no longer carry a lower built-in limit.
+- Collab hosts and guests speak protocol 5, which reports closed agents as `asleep`; a peer on protocol 4 is rejected with the protocol-mismatch error.
+- A text search result keeps only the card rows its card can draw and a count of the matches past them, so a 30-turn session with broad searches writes 4.1 MB to its session file instead of 7.2 MB and 21 MB to disk instead of 31 MB, with the card drawn as before.
+- A session file records a text search's kept card rows as a length of the rows its result redraws, so a resumed card draws the rows it was written with whatever the card's row limits become, and the search codec no longer loads the card limits at launch.
+- A live tool or assistant block's rows enter terminal scrollback once, when final, instead of as copies taken while they scroll off mid-run, so a 20-turn session with parallel tool calls writes 1.0 MB to the terminal instead of 4.1 MB with no whole-transcript replays, and a running tool's rows above the screen reach scrollback when it finishes.
+- The working line and live tool-card spinners advance every 200 ms instead of every 80 ms and repainted rows no longer send their blank padding, so a session waiting 30 s on a model and a tool writes 94 KB in 327 frames to the terminal instead of 197 KB in 548.
 - No user-visible change: `/btw` and `/omfg` show, replace, dismiss and fail a request through one `SidePanelSlot` in `modes/terminal/controllers/side-panel-slot.ts` instead of two copies, and a `/btw` answer is held on its request instead of in controller fields cleared on close.
 - No user-visible change: the collab host and guest connect through `RelayClient` from `@veyyon/wire/relay-client` instead of a private copy of the relay client, and `collab/crypto` no longer wraps `sealFrame` and `openFrame`.
 - No user-visible change: the memory tools resolve their backend through `memory-session`, the JS eval host and worker encode errors through one `eval/js/error-payload` codec, and `config get`, `set` and `reset` report a missing or unknown key through one helper.
@@ -383,6 +393,30 @@
 - Legacy MCP SSE requests honor per-request timeout overrides, including `timeoutMs: 0` to disable the deadline ([Refs #860](https://github.com/Wladefant/veyyon/issues/860)).
 - MCP JSON-RPC failures no longer log caller arguments, response bytes, status reasons, or URL query values ([Refs #856](https://github.com/Wladefant/veyyon/issues/856)).
 - ACP permission requests ignore selections returned after cancellation and retain active selection behavior ([Refs #879](https://github.com/Wladefant/veyyon/pull/879)).
+- The `web_search` tool guidance treats results that name versions, models or products newer than the model's training as current, confirms one with at most two targeted follow-up searches, and prefers corroborated results over prior knowledge ([#882](https://github.com/santhreal/veyyon/issues/882)).
+- No user-visible change: `--mode json` states why it dropped a line through `errorMessage` from `@veyyon/utils` instead of an inline copy.
+- No user-visible change: a spawned agent's model list is split by the same `normalizeModelPatternList` the settings layers use instead of a second copy in the executor.
+- No user-visible change: `--models` scoping and `enabledModels` filtering detect a glob selector through one predicate instead of two copies.
+
+### Fixed
+- A model with no known context window no longer reports that the session compacts at 1 token; threshold compaction does not run for such a model and the compaction-threshold notice stays silent.
+- A model selector with an effort suffix, such as `kimi-code/k3.1-pro:high` for an agent, resolves to the model it names at that effort instead of a sibling whose id contains the suffix's letters, such as `kimi-code/k3.1-pro-highspeed`; an unknown suffix such as `:hgh` is dropped with a warning instead of picking such a sibling.
+- A spawned agent whose first configured model has no working credentials runs the next configured model that has them instead of falling back to the parent session's model, and a keyless local parent model (Ollama, llama.cpp, LM Studio) is accepted as the fallback.
+- A model list that resolves after extensions load, such as an agent or `--model` naming an extension provider's model, starts on the first listed model whose provider has working credentials instead of the first listed model or the parent session's model, and accepts a keyless parent model as the fallback.
+- `inspect_image` with no `agent.helpers.vision.model` set skips a text-only default or active model and reads the image with an image-capable one, the same order attached-image descriptions use, instead of failing with "does not support image input".
+- `inspect_image` and the description a text-only session reads for an attached image run at the Vision helper's effort, or a `:level` on its model, else the session's effort, instead of the provider's default.
+- Eval `completion()` with no `model` or with `"default"` runs at the Eval Completion helper's effort, else the session's, instead of the provider's default; a `:off` suffix disables reasoning, and an effort the model lacks is fitted down to its nearest offered effort instead of up to its highest.
+- `/guided-goal` fits its effort to the efforts the plan model offers instead of sending one the model lacks.
+- Session titles, agent labels, unexpected-stop checks, speech rewrites and memory passes run at the effort picked with their helper's model, else the session's effort, instead of with reasoning off or at a fixed low or medium effort; auto-thinking classification runs at its helper's effort, else with reasoning off, and `veyyon commit` honors a `:off` on its helper's model.
+- An idle agent with a running background job, its own or one an agent it spawned started, stays awake instead of falling asleep on the idle timeout and cancelling the job.
+- `job cancel` on an asleep agent stops the agents still running under it instead of reporting the agent already asleep.
+- A background agent that ran in an isolated worktree reports that messages cannot reach it, and a stopped isolated agent's result no longer says to message it via `irc`, since its worktree is removed when the run ends.
+- A stopped background agent's result offers to message it via `irc` once instead of twice.
+- The `/agents` stop confirmation states that the agents a stopped agent spawned also fall asleep, and the `job` agent listing says `cancel` stops an agent, which then wakes when messaged, instead of saying it kills it.
+- A message sent while an earlier one is still preparing its images no longer reaches the model ahead of it: a prompt claims the turn before preparing its images, and steers, follow-ups and extension messages are delivered in the order they were sent.
+- `--mode json` prints every session event instead of silently dropping assistant tool-call messages, `turn_end`, `agent_end` and a persisted session's read results, and reports a line it cannot redact on stderr.
+- A collab host with `share.redactSecrets` on and a configured secret delivers live entries and events that hold provider streaming state or a read's card to guests instead of failing to send them.
+- An `eval` cell that throws, exits non-zero or times out is reported to the agent loop as a failed tool call, as a failed `bash` command is, instead of as a success whose text states the exit code.
 - An active goal keeps driving after a turn that ends in prose without a tool call, including the reply to the `/goal` objective, and stops with a warning only after 3 such turns in a row instead of stopping silently after one.
 - The goal continuation after a turn that ended without a tool call states that the turn did no work and directs the model to start an untried approach, so a model that answers with a status report returns to work.
 - A goal continuation held by a draft or attached images in the composer is sent once the draft is deleted without being sent, instead of leaving the goal idle until the next message.
@@ -485,6 +519,33 @@
 - A failed abort requested by an extension in print, RPC or a spawned agent is logged instead of exiting the process.
 - No user-visible change: print, RPC, ACP and a spawned agent build their extension actions through one `sessionExtensionActions` in `extensibility/extensions/session-actions.ts` instead of three copies.
 - The ask dialog and the plan review shed their padding on short terminals like every other card, showing up to four more body rows at 24 rows.
+
+### Removed
+
+- The `agent.prune.enabled`, `agent.prune.afterMs` and `agent.prune.waitingAfterMs` settings are removed with the agent pruning they controlled; a config that sets them loads with the keys dropped.
+- `AgentSession.markMovedFromEmptySessionFile` and the dispose step that read it are removed; nothing called the method, so the step never ran; no user-facing change.
+- The terminal's `emitCustomToolSessionEvent` and `showToolError` are removed; nothing called them; no user-facing change.
+- The `ssr`, `expandMacro`, `runnables` and `relatedTests` LSP server capabilities are removed from the built-in rust-analyzer entry and the documentation; no code read them, and a config that still sets them loads unchanged.
+
+## [1.5.10] - 2026-10-25
+
+### Added
+
+- The login card sends a browser login's link to the clipboard when it appears, and `c` (or `alt+c` while its field holds typed text) sends it again, shown on a `copy link` key chip.
+- A browser login whose provider takes a pasted callback asks in the login card for the address the browser ended on, so a sign-in over SSH completes without a forwarded port; an address that does not complete the sign-in is asked for again.
+- The account card lists a provider's second way to sign in as its own row named by the method, such as `+ add with API key (legacy)` under OpenCode Go, `+ add with API key` under Nous Research and `+ add with device code` under ChatGPT, which were reachable only by typing their id.
+
+### Changed
+
+- Settings → Agents → Roster lists the subagents before the helpers, in aligned State, Effort and Model columns under a one-line heading with `session` in an unset cell and the model cut first in a narrow card, shows an overridden row's layer in its Effort and Model columns and what it runs in its detail line, reads a catalog model id ending in `:max` as that model rather than max effort, drops its duplicate key hints, returns to the opening row on Esc, and the agent page labels its spawn row "Can spawn" ([#966](https://github.com/santhreal/veyyon/issues/966)).
+- `/login <url>` completes only an MCP server's OAuth flow; a provider login takes the pasted address in its login card.
+- The startup Codex websocket prewarm resolves its service tier from the session it opens the socket for; no user-facing change.
+- The account card's notice line flattens whitespace through the shared `collapseWhitespace`; no user-facing change.
+- `bench/session-compaction-stall.bench.ts` measures the longest event-loop stall and the wall time of a compaction's republish on a large synthetic session; no user-facing change.
+- The no-model sentence a prompt receives is built in `config/model-resolution-failure.ts` instead of the session runtime; no user-facing change.
+
+### Fixed
+
 - A read that reaches a line longer than its byte budget names that line and continues at the next one, instead of `Use :N to continue` sending the reader back to the same window, and its truncation notices and card state the read's budget instead of the bytes shown.
 - A resumed or switched-to session whose model exists only in a provider's discovery listing runs on that model instead of the settings default when the discovery cache cannot supply it, as on the first launch after an upgrade that changes the cache format.
 - Codex web search and image generation requests send `x-codex-routing-hint`, and the startup websocket prewarm states the session's configured service tier, which the first turn on that socket sends.

@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
+import { RAIL_SETTLE_FRAME_MS, RAIL_SETTLE_FRAMES } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type Component, TUI } from "@veyyon/tui";
 import { StressRenderScheduler } from "../../../hosts/terminal/engine/test/render-stress-scheduler";
@@ -40,6 +41,7 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 		for (const component of components) component.stopAnimation();
 		components.length = 0;
 		vi.restoreAllMocks();
+		vi.useRealTimers();
 	});
 
 	function makeComponent(args: unknown) {
@@ -103,6 +105,10 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 	});
 
 	it("removes streamed SSH placeholder rows from the terminal buffer when the first result arrives", async () => {
+		// Fake timers so the rail settle animation a coloured live card plays after
+		// its final result can be run to its end; the stress scheduler drains
+		// renders but never advances a real interval.
+		vi.useFakeTimers();
 		const term = new VirtualTerminal(90, 8, 1_000);
 		const scheduler = new StressRenderScheduler();
 		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
@@ -133,15 +139,33 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 			const rows = plainBuffer(term);
 			expect(rows.some(row => row.includes("SSH: […]"))).toBe(false);
 			expect(rows.some(row => row.includes("$ …"))).toBe(false);
+			// The card is live and taller than the three rows above the editor, so
+			// only its tail is on screen; its header is not final and stays out of
+			// native scrollback until the result settles.
+			expect(rows.filter(row => row.includes("SSH: [router]"))).toHaveLength(0);
+			expect(rows.filter(row => row.includes("Output"))).toHaveLength(1);
+			expect(rows.filter(row => row.includes("partial output"))).toHaveLength(1);
+
+			component.updateResult(sshResult("partial output"), false);
+			// A card that streamed under a coloured rail settles for RAIL_SETTLE_FRAMES
+			// frames and stays in the live region until the last one. With no colour
+			// (NO_COLOR) there is no rail to animate and the card is final at once.
+			vi.advanceTimersByTime(RAIL_SETTLE_FRAME_MS * RAIL_SETTLE_FRAMES);
+			tui.requestRender();
+			await drain(scheduler, term);
+
+			const settled = plainBuffer(term);
+			expect(settled.some(row => row.includes("SSH: […]"))).toBe(false);
+			expect(settled.some(row => row.includes("$ …"))).toBe(false);
 			// Counted, not merely present. This is a REPAINT test: the failure it
 			// exists to catch is the old rows surviving alongside the new ones, and
 			// `some(...)` is true whether the header was repainted in place or drawn
 			// a second time below the first. The placeholder checks above catch only
 			// the case where the stale text differs; a header that repainted itself
 			// verbatim twice was invisible to every assertion here.
-			expect(rows.filter(row => row.includes("⋯ SSH: [router]"))).toHaveLength(1);
-			expect(rows.filter(row => row.includes("Output"))).toHaveLength(1);
-			expect(rows.filter(row => row.includes("partial output"))).toHaveLength(1);
+			expect(settled.filter(row => row.includes("SSH: [router]"))).toHaveLength(1);
+			expect(settled.filter(row => row.includes("Output"))).toHaveLength(1);
+			expect(settled.filter(row => row.includes("partial output"))).toHaveLength(1);
 		} finally {
 			tui.stop();
 			await term.flush();
@@ -149,6 +173,7 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 	});
 
 	it("removes provisional SSH partial chrome from the terminal buffer when the result settles", async () => {
+		vi.useFakeTimers();
 		const term = new VirtualTerminal(90, 8, 1_000);
 		const scheduler = new StressRenderScheduler();
 		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
@@ -165,10 +190,13 @@ describe("ToolExecutionComponent SSH repaint seams", () => {
 			await drain(scheduler, term);
 			const partialRows = plainBuffer(term);
 			// Counted for the same reason as above: a duplicated repaint is the bug.
-			expect(partialRows.filter(row => row.includes("SSH: [router]"))).toHaveLength(1);
+			// The live card's header sits above the window and is not final yet, so
+			// it is in neither the window nor native scrollback.
+			expect(partialRows.filter(row => row.includes("SSH: [router]"))).toHaveLength(0);
 			expect(partialRows.filter(row => row.includes("partial output"))).toHaveLength(1);
 
 			component.updateResult(sshResult("final output"), false);
+			vi.advanceTimersByTime(RAIL_SETTLE_FRAME_MS * RAIL_SETTLE_FRAMES);
 			tui.requestRender();
 			await drain(scheduler, term);
 

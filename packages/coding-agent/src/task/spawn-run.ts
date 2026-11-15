@@ -719,7 +719,11 @@ async function runPreparedSpawn(
 			};
 		}
 	}
-	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
+	// An agent wakes only in the workspace it ran in, and an isolated run's worktree is removed by now, so
+	// no message can reach it. A background run's delivery appends its own follow-up hint, so the summary
+	// offers one only to a parent that waited on the run.
+	const offerResume = isolation === null && !request.detached;
+	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary, offerResume);
 }
 
 /**
@@ -749,6 +753,7 @@ function buildResultPayload(
 	projectAgentsDir: string | null,
 	totalDurationMs: number,
 	mergeSummary: string,
+	offerResume: boolean,
 ): AgentToolResult<TaskToolDetails> {
 	const outcome = classifyAgentOutcome(result);
 	const status = outcome.label;
@@ -772,10 +777,9 @@ function buildResultPayload(
 		preview = lastNewline >= 0 ? slice.slice(0, lastNewline) : slice;
 		truncated = true;
 	}
-	// A stopped-but-adopted agent (soft-budget stop) stays messageable; tell
-	// the parent so it can resume via irc instead of redoing the work.
-	const refStatus = AgentRegistry.global().get(result.id)?.status;
-	const resumable = result.aborted && (refStatus === "idle" || refStatus === "parked");
+	// A stopped agent stays registered: idle after a request-limit stop, asleep after any other. Tell the
+	// parent so it messages the agent via irc instead of redoing the work.
+	const resumable = offerResume && result.aborted && AgentRegistry.global().get(result.id) !== undefined;
 	const summary = prompt.render(toolsPrompts["tools/task-summary"].text, {
 		agentName: result.agent,
 		id: result.id,

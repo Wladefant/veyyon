@@ -4,7 +4,7 @@
  *
  * - Bare `history://` renders an index listing registered agent ids.
  * - `history://<id>` with a live ref renders the in-memory transcript.
- * - A parked ref (session null, sessionFile retained) renders read-only from
+ * - An asleep ref (session null, sessionFile retained) renders read-only from
  *   the JSONL session file.
  * - An unknown id fails with an error listing the known ids.
  */
@@ -56,7 +56,7 @@ function sessionFixtureJsonl(): string {
 		id: "m1",
 		parentId: null,
 		timestamp,
-		message: { role: "user", content: "parked hello", timestamp: 1 },
+		message: { role: "user", content: "asleep hello", timestamp: 1 },
 	};
 	const assistantEntry = {
 		type: "message",
@@ -65,7 +65,7 @@ function sessionFixtureJsonl(): string {
 		timestamp,
 		message: {
 			role: "assistant",
-			content: [{ type: "text", text: "parked reply" }],
+			content: [{ type: "text", text: "asleep reply" }],
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "test-model",
@@ -141,9 +141,9 @@ describe("history:// protocol", () => {
 		expect(resource.content).toContain("# HubAgent (idle)");
 	});
 
-	it("history://<id> renders a parked ref read-only from its session file", async () => {
+	it("history://<id> renders an asleep ref read-only from its session file", async () => {
 		await withTempDir(async dir => {
-			const sessionFile = path.join(dir, "parked.jsonl");
+			const sessionFile = path.join(dir, "asleep.jsonl");
 			await Bun.write(sessionFile, sessionFixtureJsonl());
 			AgentRegistry.global().register({
 				id: "Sleeper",
@@ -151,14 +151,14 @@ describe("history:// protocol", () => {
 				kind: "sub",
 				session: null,
 				sessionFile,
-				status: "parked",
+				status: "asleep",
 			});
 
 			const resource = await InternalUrlRouter.instance().resolve("history://Sleeper");
 
-			expect(resource.content).toContain("# Sleeper (parked)");
-			expect(resource.content).toContain("parked hello");
-			expect(resource.content).toContain("parked reply");
+			expect(resource.content).toContain("# Sleeper (asleep)");
+			expect(resource.content).toContain("asleep hello");
+			expect(resource.content).toContain("asleep reply");
 			expect(resource.sourcePath).toBe(sessionFile);
 			expect(resource.notes?.join("\n")).toContain("read-only");
 		});
@@ -192,7 +192,7 @@ describe("history:// protocol", () => {
 			kind: "sub",
 			session: null,
 			sessionFile: null,
-			status: "aborted",
+			status: "asleep",
 		});
 
 		const error = await InternalUrlRouter.instance()
@@ -218,14 +218,14 @@ describe("history:// protocol", () => {
 			displayName: "advisor",
 			kind: "advisor",
 			session: fakeLiveSession([{ role: "user", content: "should stay hidden", timestamp: 1 }]),
-			status: "parked",
+			status: "asleep",
 		});
 		AgentRegistry.global().register({
 			id: "AdvisorProbe",
 			displayName: "advisor",
 			kind: "advisor",
 			session: fakeLiveSession([{ role: "user", content: "should stay hidden", timestamp: 1 }]),
-			status: "parked",
+			status: "asleep",
 		});
 
 		// Index lists the agent but never the advisor.
@@ -259,7 +259,7 @@ describe("history:// protocol", () => {
 			kind: "advisor",
 			session: null,
 			sessionFile: "/tmp/x/__advisor.jsonl",
-			status: "parked",
+			status: "asleep",
 		});
 
 		const completions = await new HistoryProtocolHandler().complete();
@@ -289,7 +289,7 @@ describe("history:// protocol", () => {
 
 			const resource = await InternalUrlRouter.instance().resolve("history://Sub1");
 			expect(resource.content).toContain("# Sub1 (on disk)");
-			expect(resource.content).toContain("parked hello");
+			expect(resource.content).toContain("asleep hello");
 			expect(resource.sourcePath).toBe(path.join(artifactsDir, "Sub1.jsonl"));
 			expect(resource.notes?.join("\n")).toContain("unregistered");
 		});

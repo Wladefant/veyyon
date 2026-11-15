@@ -12,10 +12,8 @@
   - `packages/coding-agent/src/task/executor.ts`: create child sessions, run agents, collect output, hand finished sessions to the lifecycle manager.
   - `packages/coding-agent/src/task/run-monitor.ts`: per-run progress, abort and soft request-budget enforcement, usage totals, output capture, and timed wait hints for expensive child models.
   - `packages/coding-agent/src/task/provider-error-reporter.ts`: report terminal provider HTTP 429/402 lane errors to `model_routing.py record-error`.
-  - `packages/coding-agent/src/registry/agent-lifecycle.ts`: idle-TTL parking and revival of finished agents.
-
-  - `packages/coding-agent/src/registry/agent-registry.ts`: process-global agent directory (`running | idle | parked | aborted`).
-
+  - `packages/coding-agent/src/registry/agent-lifecycle.ts`: idle-TTL sleep, stop, and waking of finished agents.
+  - `packages/coding-agent/src/registry/agent-registry.ts`: process-global agent directory (`running | idle | asleep`).
   - `packages/coding-agent/src/async/job-manager.ts`: background job registration, progress, and result delivery.
   - `packages/coding-agent/src/task/parallel.ts`: `Semaphore` used for the session-scoped concurrency bound.
   - `@veyyon/natives` (`natives/fs/iso`): isolation PAL: `isoResolve` / `isoStart` / `isoStop` backend resolution and fallback.
@@ -55,7 +53,7 @@ The wire schema is shape-swapped by `agent.batch` (default on). One unit of work
 | `agent` | `string` | No | Agent type to run this item (e.g. `scout`). Defaults to the spawn policy's default agent (`deep` under an unrestricted `spawns: "*"`, otherwise the first name the parent's `spawns` list allows); items in one batch call may use different agent types. Item field in batch shape, top-level in flat shape. |
 | `task` | `string` | Yes | The work, complete, self-contained instructions. Empty-after-trim is rejected. Item field in batch shape, top-level in flat shape. |
 | `cwd` | `string` | No | Per-spawn working-directory override. Item field in batch shape, top-level in flat shape. |
-| `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `agent.isolation.mode` is not `none`; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion, not revivable. |
+| `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `agent.isolation.mode` is not `none`; per item in batch shape, top-level in flat shape. An isolated agent falls asleep at completion; its workspace is merged and removed, so a wake fails unless the recorded working directory still exists. |
 | `ownershipLease` | `{ paths: string[], expiresAt: string }` | No | Explicit dirty-path handoff for a non-isolated spawn. Paths resolve inside the child's canonical worktree. Expiry must be a future timestamp. |
 
 The runtime supplies the lease's grantor and allocated child owner. It resolves existing symlinks before checking path scope, including the existing parent of a new file. It rejects expired, empty and out-of-worktree grants before starting the child. Isolated spawns cannot inherit dirty-path ownership.
@@ -77,7 +75,7 @@ The tool returns one text block plus `details: TaskToolDetails`.
 Background response (`async.enabled=true`):
 - `content`: `` Spawned agent `<id>` (job `<jobId>`). The result will be delivered when it yields. ... `` plus a coordination hint (`irc` DM when enabled, otherwise `job`). A batch call instead returns `` Spawned N background agents using <agent types>. ... `` (the deduped per-item agent types, comma-joined) with a per-agent `- `<id>` (job `<jobId>`)` listing.
 - `details`: `{ projectAgentsDir, results, totalDurationMs, progress: [<AgentProgress per spawn>], async: { state, jobId, type: "task" } }`. The call keeps one shared `progress[]` snapshot; `async.jobId` is the first started job and `async.state` aggregates over the async spawns ("running" until every job settles, "failed" if any spawn failed): jobs that settled before the call returned are already reflected. A mixed call's `results` carries the blocking spawns' inline `SingleResult`s (pure background calls return `results: []`).
-- Live progress keeps streaming into the same tool block via `onUpdate(...)`; each final result arrives later as an async-result injection into the parent conversation. The delivery text appends a follow-up hint: `` <id> is now idle — message it via `irc` to follow up; transcript at history://<id> `` (aborted variant points at the transcript only).
+- Live progress keeps streaming into the same tool block via `onUpdate(...)`; each final result arrives later as an async-result injection into the parent conversation. The delivery text appends a follow-up hint: `` <id> is now idle — message it via `irc` to follow up; transcript at history://<id> `` (a stopped agent reads `` <id> was stopped and is asleep — message it via `irc` to wake it and continue its work instead of redoing it; transcript at history://<id> ``). An isolated agent's worktree is removed when its run ends and an agent wakes only in the workspace it ran in, so its hint reads `` <id> finished; its isolated worktree is removed, so messages cannot reach it — transcript at history://<id> ``. The task summary inside a background delivery carries no follow-up hint of its own; a blocking run's summary offers `irc` in its `<abort-reason>` when the run was stopped.
 
 Settled response (`async.enabled=false`, no job manager, every item's agent `blocking: true`, or async job body):
 - `content`: summary rendered from `packages/coding-agent/src/prompts/tools/task-summary.md` with a preview capped at 5000 chars; `agent://<id>` holds the full output. A sync batch concatenates the per-spawn summaries.
@@ -93,7 +91,7 @@ Settled response (`async.enabled=false`, no job manager, every item's agent `blo
 Artifacts and side channels:
 - Every agent with an artifacts dir writes `<id>.md`; `agent://<id>` resolves to that file.
 - If the output file is JSON, `agent://<id>/<path>` and `agent://<id>?q=<query>` perform JSON extraction.
-- Each agent gets `<id>.jsonl` session history when the parent persists artifacts; `history://<id>` renders it as a concise transcript (works for live and parked agents).
+- Each agent gets `<id>.jsonl` session history when the parent persists artifacts; `history://<id>` renders it as a concise transcript (works for live and asleep agents).
 - Isolated patch mode writes `<id>.patch` before merge.
 
 ## Flow
@@ -117,17 +115,17 @@ Artifacts and side channels:
 13. Child tool availability: explicit `agent.tools` if provided; auto-add `task` when the agent has `spawns` and depth allows; strip `task` past `agent.maxNestedSpawnDepth`; ensure `irc` is present in explicit tool lists; expand `exec` to `eval` + `bash`; strip parent-owned `todo`.
 14. The child must finish through the hidden `yield` tool; up to 3 reminder prompts, the last forcing `toolChoice = yield` when supported. `finalizeSubprocessOutput(...)` reconciles raw text, `yield` payloads, structured schemas, `report_finding` data, and abort states.
 15. End-of-run lifecycle (keep-alive, in `runSubprocess`'s finalizer):
-    - hard abort (caller signal / wall-clock / budget) → registry status `aborted`, session disposed: terminal;
-    - isolated run → status `parked` without a reviver (workspace is merged + cleaned, so the session is not revivable; transcript stays readable via `history://`), then session disposed and detached;
-    - everything else (success and failure alike) → status `idle` with the live session attached, and `AgentLifecycleManager.global().adopt(id, { idleTtlMs, revive })` arms the park timer. The reviver reopens the session JSONL (park closed the writer, so the single-writer lock is taken cleanly).
-16. Lifecycle thereafter: `idle` agents are parked after `agent.idleTtlMs`, which defaults to 5 minutes regardless of model or provider. Parking disposes the live session but retains the `AgentRef` and session file; messaging (`irc`), or opening the agent in the agent dashboard, revives it back to `idle`. `"Main"` is never parked.
+    - stopped run (caller signal, wall clock, `job cancel`, the dashboard's stop) → `adopt(id, { idleTtlMs, revive })` and `fallAsleep`: the session is disposed and detached and the status is `asleep`;
+    - isolated run → status `asleep` with no run reviver (the workspace is merged and cleaned); a wake goes through the persisted-agent reviver, which fails when the recorded workspace is gone;
+    - a run stopped at the request limit, and everything else (success and failure alike) → status `idle` with the live session attached, and `AgentLifecycleManager.global().adopt(id, { idleTtlMs, revive })` arms the sleep timer. The reviver reopens the session JSONL (falling asleep closed the writer, so the single-writer lock is taken cleanly).
+16. Lifecycle thereafter: an agent is `running`, `idle` or `asleep`, and nothing is removed until its conversation ends. `idle` agents fall asleep after `agent.idleTtlMs`, which defaults to 5 minutes regardless of model or provider. Falling asleep disposes the live session but retains the `AgentRef` and session file; messaging (`irc`), or opening the agent in the agent dashboard, wakes it back to `idle`. An agent on screen never falls asleep on its timer. `"Main"` never falls asleep.
 
 ## Modes / Variants
 - Execution mode
   - Background job: `async.enabled=true`; non-blocking spawns go through `AsyncJobManager`.
   - Sync inline: `async.enabled=false`, no job manager, or the item's agent declares `blocking: true` (per item: a mixed call runs both modes).
 - Batch mode (`agent.batch`, default on)
-  - on: `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, `agent`/`isolated` per item. Lifecycle, revival, and concurrency semantics match N parallel single calls.
+  - on: `{ context, tasks[] }`: one independent spawn per item, required `context` shared across the call's spawns, `agent`/`isolated` per item. Lifecycle, wake, and concurrency semantics match N parallel single calls.
   - off: single spawn per call; `tasks`/`context` are rejected and removed from the schema.
 - Isolation mode (`agent.isolation.mode`): `none`, `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, `rcopy` (legacy `worktree`, `fuse-overlay`, `fuse-projfs` accepted for back-compat); the PAL resolves the actual backend with fallback.
 - Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to `veyyon/task/<id>`, cherry-pick into parent).
@@ -147,19 +145,19 @@ Artifacts and side channels:
   - Git operations for baseline capture, patch apply, worktrees, branches, stash, cherry-pick, commits.
   - Provider error reporter spawns `python <script> record-error --model <model>` with stdin payload on provider HTTP 429/402 errors.
 - Session state (transcript, memory, jobs, checkpoints, registries)
-  - Creates child `AgentSession` instances with isolated settings snapshots; finished sessions stay registered in the process-global `AgentRegistry` as `idle`/`parked` until process teardown or explicit release.
+  - Creates child `AgentSession` instances with isolated settings snapshots; finished sessions stay registered in the process-global `AgentRegistry` as `idle`/`asleep` until their conversation ends or the process exits.
   - With `async.enabled=true`, registers one async job per spawn in `session.asyncJobManager`; completion is injected into the parent as an async-result message.
   - Arms idle-TTL timers in `AgentLifecycleManager` (unref'd; they never hold the process open).
   - Emits `task:agent:event`, `task:subagent:progress`, and `task:subagent:lifecycle` on the parent event bus; the two `subagent` spellings are wire vocabulary a collab guest matches on.
   - Allocates session-scoped output ids through `AgentOutputManager` so `agent://` stays unique across invocations.
   - Shares the parent `local://` root and `ArtifactManager` with agents.
 - Background work / cancellation
-  - `job cancel` (or parent tool-call abort) cancels background jobs; parent tool-call abort cancels sync runs through the call signal. A hard-aborted run lands `aborted` and is torn down.
+  - `job cancel` (or parent tool-call abort) cancels background jobs; parent tool-call abort cancels sync runs through the call signal. A stopped run falls asleep and wakes when messaged.
   - Missing-`yield` recovery sends up to three internal reminder prompts to the child session.
 
 ## Limits & Caps
 - Concurrency: one session-scoped `Semaphore` sized from `agent.maxConcurrency` bounds concurrent agents across parallel `task` calls: both async job bodies and the sync fallback acquire it. `#getSpawnSemaphore` resizes it on every acquire and release, so a mid-session settings change applies to queued work as well as to new spawns.
-- Idle TTL: `agent.idleTtlMs`, default 5 minutes. A positive millisecond value overrides it; `<= 0` disables parking and keeps idle sessions live until exit.
+- Idle TTL: `agent.idleTtlMs`, default 5 minutes. A positive millisecond value overrides it; `<= 0` disables the sleep timer and keeps idle sessions live until exit.
 - Per-agent output truncation: `MAX_OUTPUT_BYTES = 500_000` and `MAX_OUTPUT_LINES = 5000` in `packages/coding-agent/src/task/types.ts` (overridable via `VEYYON_TASK_MAX_OUTPUT_BYTES` / `VEYYON_TASK_MAX_OUTPUT_LINES`). Full raw output is still written to `<id>.md`.
 - Progress coalescing: `PROGRESS_COALESCE_MS = 150`; recent-output tail: `RECENT_OUTPUT_TAIL_BYTES = 8 * 1024` (last 8 non-empty lines).
 - Missing-`yield` reminder retries: `MAX_YIELD_RETRIES = 3` in `packages/coding-agent/src/task/executor.ts`; MCP proxy tools share parent connection transport deadlines.
@@ -215,7 +213,7 @@ Windows: the `rcopy` and `block-clone` backends mount nothing, so steps 3 to 7 r
 ## Notes
 - Parallelism is parallel `task` calls in one assistant message: or, with `agent.batch`, a `tasks[]` batch in one call; either way the session-scoped semaphore bounds the fan-out. With `async.enabled=true`, each spawn is an independent background job.
 - Shared background convention without batch mode: write it once to a `local://` file and reference that path in each spawn's `task`: agents share the parent's `local://` root. With `agent.batch`, the required `context` parameter carries the shared background directly into each spawn's system prompt.
-- Prefer messaging an existing agent (`irc`) over a fresh spawn for follow-up work: it already holds the relevant context. `irc` op:"list" shows idle/parked candidates; messaging a parked agent revives it. `history://<id>` shows what an agent has done.
+- Prefer messaging an existing agent (`irc`) over a fresh spawn for follow-up work: it already holds the relevant context. `irc` op:"list" shows idle and asleep candidates; messaging an asleep agent wakes it. `history://<id>` shows what an agent has done.
 - `irc` availability is derived, not configured (`isIrcEnabled` in `packages/coding-agent/src/tools/agent/irc.ts`): it exists exactly when there is someone to message: the session can spawn agents, or it is an agent itself. Messaging is the only follow-up path to a finished agent, so task without irc would strand idle agents.
 - `tools.discoveryMode: all` hides non-essential built-ins, and `task` is a carve-out. At `agent.delegation` `preferred` (the default) or `required` the prompt asks you to delegate, so `task` stays in the request; hiding it would leave an instruction you cannot follow. At `allowed` nothing asks for delegation, so `task` is hidden like any other discoverable built-in and you reach it through `search_tool_bm25`, and the prompt drops its delegation section to match. The decision is made in `sdk.ts` before agent discovery runs, from the strength alone: whether any agent is enabled is not knowable yet at that point.
 - Only the general-purpose `deep` agent ships enabled; other agent names require `agent.agents.<name>.enabled = true` before the model may choose them, including definitions added under `~/.veyyon/subagents/`.

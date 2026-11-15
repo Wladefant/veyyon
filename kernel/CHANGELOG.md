@@ -13,6 +13,14 @@
 - Bounded history reads cap nested tool arguments, preserve accurate block line counts, and prioritize cancellation over a missing fallback ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
 
 ## [1.8.20] - 2026-11-09
+- The agent storage retry loop and owned-resource disposal coerce a thrown value with `toError` from `@veyyon/utils/type-guards` instead of inline copies; no user-facing change.
+- `emptyUsageStatistics()` is defined in `session/session-entries.ts` beside `UsageStatistics` instead of in `session/session-entry-index.ts`, so a caller reads it without evaluating the session context; no user-facing change.
+- The `SideCompleteImpl` documentation names `ProviderTransport.sideComplete` as the transport the session's own side requests run on ([#892](https://github.com/santhreal/veyyon/issues/892)); no user-facing change.
+- Doc comments left stranded above another declaration's doc comment moved onto the declaration they describe, and the stale duplicates beside a rewritten doc were deleted; no user-facing change.
+- The machine budget and the settings store import the config-root and global-config helpers from the `@veyyon/utils` modules split out of `@veyyon/utils/dirs`; no user-facing change.
+- `session/history-storage` exports `historyQueryTokens`, the tokenizer prompt history search matches with; no user-facing change.
+- A prune, shake or dedupe rewrites the changed tail inside the session file through a journal beside it instead of copying the whole file first, which cuts the bytes a 30-turn session writes to its session file from 41.3 MB to 22.6 MB, and a load finishes a rewrite a crash stopped part way.
+- The tail journal sizes its copy buffer with `clampLow` from `@veyyon/utils/math` instead of an inline clamp; no user-facing change.
 
 ### Fixed
 

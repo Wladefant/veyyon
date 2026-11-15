@@ -65,6 +65,7 @@
 - Use credential-safe broker provenance in source descriptions instead of echoing the configured endpoint ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Cloud Code Assist Gemini 3 replay sends the bypass sentinel on each imported turn's first function call and leaves unsigned parallel calls unchanged ([#844](https://github.com/Wladefant/veyyon/issues/844)).
 - Stop GitHub Copilot device-login polling when the login is cancelled.
+- The Anthropic OAuth user-agent reports `agent-sdk/0.3.322`, the Agent SDK release published beside Claude Code 2.1.322.
 - An Anthropic Messages stream from the auth gateway whose upstream ends without a `done` event reports the token usage of the last event received in its closing `message_delta`, instead of zero input, output and cache tokens.
 - A required tool call on a request that cannot force it (a model or host that rejects a forced `tool_choice`, a host without `tool_choice`, a remembered rejection, Ollama, Cursor, Devin, GitLab Duo, and Claude on Antigravity) is asked for in the request text, instead of the tool only being offered.
 - A provider request whose dial was refused, found no route or got no resolver answer is dialed once and handed to the turn, whose visible countdown retries it, instead of being redialed by every provider's hidden retry loop inside each turn attempt.

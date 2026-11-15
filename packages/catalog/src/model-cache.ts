@@ -9,10 +9,16 @@ import { openSqliteDatabaseSync } from "@veyyon/utils/sqlite";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v15 invalidates rows
-// with single-account `accessPrograms`; discovery now records `accountAccess`.
-// v14 invalidates Codex rows discovered before `available_access_programs`
-// was read. v13 invalidates
+// the model manager rebuilds via `buildModel` on load. v16 invalidates
+// Antigravity and Gemini CLI rows cached before served `-low`/`-medium`/`-high`
+// triples collapsed: Gemini 4 Carbon cached as three raw rows offering a
+// minimal..xhigh budget ladder its deployments do not take. v15 invalidates Anthropic
+// rows discovered before `/v1/models` limits and capabilities were read: a model
+// newer than the bundle and models.dev (Claude Mythos 5.2) cached with no context
+// window, no reasoning and text-only input for up to the 24 hour TTL. v14 invalidates Codex
+// rows discovered before `available_access_programs` was read: a cached row
+// without `accountAccess` sends no `access_programs.cyber` for up to the 24
+// hour TTL. v13 invalidates
 // Antigravity rows discovered as client 2.1.4: the endpoint lists Gemini 4 Argon
 // and the per-tier Gemini 3.8 Flash deployments only to client 3.0.0 or later,
 // so a cached list keeps Argon out of the picker for up to the 24 hour TTL. v12 invalidates rows
@@ -42,7 +48,7 @@ import type { Api, Model, ModelSpec } from "./types";
 // (222222/8888); v5 invalidated rows predating effort-tier variant collapsing
 // (raw `-low`/`-high`/`-thinking` member ids); v4 dropped the pre-efforts
 // ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 15;
+const CACHE_SCHEMA_VERSION = 16;
 
 interface CacheRow {
 	provider_id: string;

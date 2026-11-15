@@ -28,6 +28,7 @@ import {
 import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ArgotSession } from "argot";
 import type { AsyncJobManager } from "../async";
+import { normalizeModelPatternList } from "../config/model-pattern-list";
 import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelSelectorValue,
@@ -77,13 +78,7 @@ import { resolveEvalBackends } from "../tools/shell/eval-backends";
 import type { EventBus } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { WorkspaceTree } from "../workspace-tree";
-import {
-	type AgentPruneBudget,
-	agentSettingsFor,
-	resolveAgentIdleTtlMs,
-	resolveAgentMaxNestedSpawnDepth,
-	resolveAgentPruneBudget,
-} from "./agent-settings";
+import { agentSettingsFor, resolveAgentIdleTtlMs, resolveAgentMaxNestedSpawnDepth } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
 import { reportProviderError } from "./provider-error-reporter";
 import { selectRoleContext } from "./role-context";
@@ -120,6 +115,8 @@ export const SOFT_REQUEST_BUDGET: Record<string, number> = {
 	sonic: 100,
 	default: 250,
 };
+
+const MCP_CALL_TIMEOUT_MS = 60_000;
 
 /** Flatten whitespace and clip salvage text for the cancelled-child summary line. */
 function formatSalvageSnippet(text: string, maxLength = 500): string {
@@ -184,17 +181,6 @@ export function resolveEffectiveSubagentThinkingLevel(
 	configuredThinkingLevel: ConfiguredThinkingLevel | undefined,
 ): ConfiguredThinkingLevel | undefined {
 	return explicitThinkingLevel ? resolvedThinkingLevel : (configuredThinkingLevel ?? resolvedThinkingLevel);
-}
-
-function normalizeModelPatterns(value: string | string[] | undefined): string[] {
-	if (!value) return [];
-	if (Array.isArray(value)) {
-		return value.map(entry => entry.trim()).filter(Boolean);
-	}
-	return value
-		.split(",")
-		.map(entry => entry.trim())
-		.filter(Boolean);
 }
 
 interface AgentRetryFallbackCandidate {
@@ -444,7 +430,7 @@ export interface ExecutorOptions {
 	 */
 	parentSessionId?: string;
 	/**
-	 * Keep the finished agent addressable in the registry for IRC/revival.
+	 * Keep the finished agent addressable in the registry for IRC and waking.
 	 * Defaults to true. Eval bridge agents are programmatic one-shot helpers and
 	 * set this false so disposal unregisters them instead of leaving idle peers.
 	 */
@@ -1425,8 +1411,8 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 }
 
 /**
- * Whether an agent's sign-off says it stopped to wait on another agent, which earns
- * it the longer close budget.
+ * Whether an agent's sign-off says it stopped to wait on another agent, which a
+ * roster shows as `waiting` rather than finished.
  *
  * WHAT IT IS GIVEN. Callers pass {@link agentSignOffText}, which is the agent's
  * LAST assistant message when that message carried text, and the run's accumulated
@@ -1456,9 +1442,8 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
  * lets the clause begin a line: anything else between the marker and the verb, as in
  * "- The fix was worth waiting for", still fails to match.
  *
- * A false positive only lengthens the grace and a false negative only shortens it to
- * the ordinary one, so the failure direction is a ref that lingers rather than one
- * that vanishes while still needed. That asymmetry is why a phrase match is
+ * A false positive shows a finished agent as waiting and a false negative shows a
+ * waiting agent as finished. Both are display-only, which is why a phrase match is
  * acceptable here at all; nothing about correctness depends on it.
  */
 const WAITING_ON_PEER =
@@ -1480,32 +1465,37 @@ export function saysItIsWaitingOnAPeer(signOff: string | undefined): boolean {
  *
  * The fallback matters and is deliberately the broad one. An agent whose final
  * message was a bare `yield` tool call left no salvage text, and reading nothing
- * there would deny the longer grace to exactly the agents that stopped to wait,
- * which is the harmful direction: a peer the operator is about to message gets
- * dropped. Over-matching only makes a ref linger.
+ * there would show exactly the agents that stopped to wait as finished.
  */
 function agentSignOffText(monitor: AgentRunMonitor): string | undefined {
 	return monitor.lastAssistantSalvageText() ?? monitor.rawOutput();
 }
 
 /**
- * Settle an agent's registry lifecycle after a run: terminal teardown for
- * hard aborts, unregister for one-shot helpers, park for isolated runs, and
- * idle + lifecycle adoption for kept-alive agents. A soft-budget abort on a
- * kept-alive, revivable agent is treated as a self-inflicted stop rather than
- * a kill — the agent stays interrogable and resumable (irc wake / revival).
+ * Settle an agent's registry lifecycle after a run.
+ *
+ * - A one-shot helper (`keepAlive: false`) is disposed and unregistered: it has no
+ *   IRC presence and nothing addresses it again.
+ * - An agent that finished normally, or stopped on its own request limit, goes `idle`
+ *   with its session live and falls asleep on the idle TTL.
+ * - Every other stop (killed, timed out, cancelled, failed) and every isolated run
+ *   falls asleep at once: the session is closed, the transcript stays on disk, and a
+ *   message wakes the agent from it. A stopped session is not reused because the stop
+ *   may have left it mid-stream; a wake rebuilds it from the transcript instead.
+ *
+ * No outcome is terminal. An isolated run carries no reviver because its worktree is
+ * merged and removed after the run; a wake then goes through the persisted-agent
+ * factory, which reports when the workspace is gone.
  */
 export async function finalizeSubagentLifecycle(args: {
 	id: string;
 	session: AgentSession;
 	aborted: boolean;
-	/** Which watchdog (if any) requested the abort; decides revivability. */
+	/** Which watchdog (if any) requested the abort; a request-limit stop keeps the session live. */
 	abortKind?: AbortReason;
 	keepAlive: boolean;
 	isolated: boolean;
 	agentIdleTtlMs: number;
-	/** Close budgets for the parked ref; absent keeps it listed until exit. */
-	prune?: AgentPruneBudget;
 	/**
 	 * The agent's sign-off (see the resolver beside {@link saysItIsWaitingOnAPeer}),
 	 * read only to decide whether it stopped to wait on a peer.
@@ -1528,71 +1518,28 @@ export async function finalizeSubagentLifecycle(args: {
 		}
 	};
 
-	// A budget abort leaves a consistent session with its transcript on disk;
-	// caller signals, wall-clock timeouts (possible stream hang), and internal
-	// terminations are genuine kills and stay terminal.
-	const resumableAbort =
-		args.abortKind === "budget" && args.keepAlive && !args.isolated && args.reviveSession !== null;
-	if (args.aborted && !resumableAbort) {
-		registry.setStatus(args.id, "aborted");
-		await disposeSession();
-		// `AgentRef.session` is null exactly when parked or aborted, and until this
-		// call it was not: the flip to "aborted" left the disposing session hanging off
-		// the ref, and `ensureLive` returns `ref.session` whenever it is set, so a wake
-		// arriving inside the dispose window was handed a session being torn down. The
-		// sdk's dispose wrapper unregisters any ref that is not parked, so this ref is
-		// usually gone a moment later and needs no close budget of its own, but "usually
-		// gone" is not the invariant the field documents.
-		registry.detachSession(args.id);
-		return;
-	}
-
 	if (!args.keepAlive) {
-		// One-shot helper: dispose and unregister. No IRC, no revival.
 		await disposeSession();
 		registry.unregister(args.id);
 		return;
 	}
 
-	if (args.isolated) {
-		// Isolated run: the worktree is merged + cleaned after the run, so
-		// the session is not resumable. Park the ref WITHOUT a reviver: the
-		// transcript stays reachable (history://), but ensureLive will throw.
-		// Status must flip to "parked" before dispose so the sdk dispose
-		// wrapper skips unregister.
-		registry.setWaitingOnPeer(args.id, saysItIsWaitingOnAPeer(args.signOff));
-		registry.setStatus(args.id, "parked");
-		await disposeSession();
-		registry.detachSession(args.id);
-		// Adopted only to arm the close, with no idle stage (it is already parked) and
-		// no reviver (there is nothing to revive into). These are the refs it matters
-		// most for: an isolated agent can never be woken, so leaving it listed offers
-		// the operator a peer that cannot answer. Adopting after the status flip is
-		// what lets the close deadline read `parked` and arm immediately.
-		AgentLifecycleManager.global().adopt(args.id, {
-			idleTtlMs: 0,
-			pruneAfterMs: args.prune?.afterMs ?? 0,
-			pruneWaitingAfterMs: args.prune?.waitingAfterMs ?? 0,
-		});
+	const lifecycle = AgentLifecycleManager.global();
+	const revive = args.isolated ? undefined : (args.reviveSession ?? undefined);
+	registry.setWaitingOnPeer(args.id, saysItIsWaitingOnAPeer(args.signOff));
+	const stoppedOnRequestLimit = args.abortKind === "budget";
+	if (args.isolated || (args.aborted && !stoppedOnRequestLimit)) {
+		lifecycle.adopt(args.id, { idleTtlMs: args.agentIdleTtlMs, revive });
+		await lifecycle.fallAsleep(args.id, args.session, disposeSession);
 		return;
 	}
-
-	// Keep-alive: finished and failed agents both stay interrogable.
-	// The lifecycle manager owns idle-TTL parking + revival from here on, and the
-	// close budgets decide how long the parked ref survives after that.
-	registry.setWaitingOnPeer(args.id, saysItIsWaitingOnAPeer(args.signOff));
 	registry.setStatus(args.id, "idle");
-	AgentLifecycleManager.global().adopt(args.id, {
-		idleTtlMs: args.agentIdleTtlMs,
-		pruneAfterMs: args.prune?.afterMs ?? 0,
-		pruneWaitingAfterMs: args.prune?.waitingAfterMs ?? 0,
-		revive: args.reviveSession ?? undefined,
-	});
+	lifecycle.adopt(args.id, { idleTtlMs: args.agentIdleTtlMs, revive });
 }
 
 /** Options for {@link runSubagentFollowUpTurn}. */
 export interface FollowUpTurnOptions {
-	/** Registry id of the (live or parked) agent to continue. */
+	/** Registry id of the (live or asleep) agent to continue. */
 	id: string;
 	/** Agent definition the session was originally spawned with (drives progress labels + finalize). */
 	agent: AgentDefinition;
@@ -1612,14 +1559,14 @@ export interface FollowUpTurnOptions {
 
 /**
  * Continue a previously spawned (keep-alive) agent with one more monitored
- * turn: revive it if parked, send `message` as a real prompt, drive it to
+ * turn: wake it if asleep, send `message` as a real prompt, drive it to
  * `yield`, and finalize a {@link SingleResult} exactly like a first run.
  *
  * The session's full conversation history is retained (live session, or JSONL
  * replay through the lifecycle reviver), so the turn sees all prior context.
  * Unlike {@link runSubprocess}, the session is NOT torn down afterwards — it
- * stays adopted by the {@link AgentLifecycleManager} (idle → TTL park →
- * revive), and an aborted turn only aborts the in-flight turn.
+ * stays adopted by the {@link AgentLifecycleManager} (idle → TTL sleep →
+ * wake), and an aborted turn only aborts the in-flight turn.
  */
 export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Promise<SingleResult> {
 	const { id, agent, message, signal } = options;
@@ -1679,17 +1626,10 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		monitor.finish();
 		// The waiting flag describes the agent's LATEST word, not its first. A follow-up
 		// turn does not go through `finalizeSubagentLifecycle`, so without this an agent
-		// that once signed off "waiting on X" and has since reported done keeps the
-		// longer close grace for the rest of the session, and the operator's ordinary
-		// budget is never applied to it again.
-		//
-		// Inside the `finally`, and after `captureSalvage`, on purpose. It used to sit
-		// after the whole try/finally, which relied on `driveSessionToYield` never
-		// throwing. That happens to hold today (it catches every path into a
-		// `DriveOutcome`), so this placement fixes no reachable bug, and that is exactly
-		// why it belongs here: "the flag always tracks the latest word" was true only
-		// because of an invariant of a different 160-line function, stated nowhere, and
-		// one added `throw` there would have made it quietly false.
+		// that once signed off "waiting on X" and has since reported done would show as
+		// waiting for the rest of the session. Inside the `finally`, after
+		// `captureSalvage`, so the flag tracks the latest word even if
+		// `driveSessionToYield` ever throws.
 		AgentRegistry.global().setWaitingOnPeer(id, saysItIsWaitingOnAPeer(agentSignOffText(monitor)));
 	}
 
@@ -1726,7 +1666,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
  * inherited transitively at registration, so a child at ANY depth already
  * carries the root's identity and the request goes straight there. A
  * parent-to-parent chain is the thing this avoids: every intermediate is an
- * agent that can be parked, aborted or simply busy, and each one is another
+ * agent that can be asleep, stopped or simply busy, and each one is another
  * place the request can be dropped, which is the abandonment being fixed.
  *
  * Returns undefined when the root itself has no UI (ACP, `-p` with no terminal)
@@ -2061,7 +2001,7 @@ function spliceAgentSystemPrompt(defaultPrompt: string[], agentPrompt: string): 
  */
 function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel): ChildSessionOptionsBuilder {
 	// The builder outlives the run: the live session keeps its `systemPrompt` callback, and the
-	// lifecycle reviver keeps the builder for as long as the agent is parked. Every field is read out
+	// lifecycle reviver keeps the builder for as long as the agent is asleep. Every field is read out
 	// of `ctx` here, so neither closure holds `ctx`, whose run monitor keeps every assistant text of the
 	// run, nor `ctx.options`, whose `onProgress` and `signal` belong to the spawning tool call.
 	const { options, marks, toolNames, spawnsEnv, childDepth, maxNestedSpawnDepth, ircEnabled } = ctx;
@@ -2151,14 +2091,14 @@ async function createChildSession(
 }
 
 /**
- * Lifecycle reviver: park closed the JSONL writer, so reopening takes the single-writer lock cleanly
- * and restores the full message history (createAgentSession → agent.replaceMessages).
+ * Lifecycle reviver: falling asleep closed the JSONL writer, so reopening takes the single-writer lock
+ * cleanly and restores the full message history (createAgentSession → agent.replaceMessages).
  */
 function createSessionReviver(
 	ctx: ChildSessionContext,
 	buildSessionOptions: ChildSessionOptionsBuilder,
 ): () => Promise<AgentSession> {
-	// The reviver lives as long as the parked agent, so it captures the fields it reads, never `ctx`
+	// The reviver lives as long as the asleep agent, so it captures the fields it reads, never `ctx`
 	// or `ctx.options`: see `childSessionOptionsBuilder`.
 	const { options, sessionFile, settings } = ctx;
 	const { id, parentArtifactManager, parentSessionId } = options;
@@ -2411,7 +2351,6 @@ interface RunRelease {
 	unsubscribe: (() => void) | undefined;
 	turnAborted: boolean;
 	agentIdleTtlMs: number;
-	prune: AgentPruneBudget;
 	reviveSession: (() => Promise<AgentSession>) | null;
 }
 
@@ -2454,7 +2393,6 @@ async function releaseRunSession(release: RunRelease): Promise<void> {
 		keepAlive: options.keepAlive !== false,
 		isolated: options.worktree !== undefined,
 		agentIdleTtlMs: release.agentIdleTtlMs,
-		prune: release.prune,
 		// `captureSalvage` ran on the line above, so the sign-off is this run's LAST assistant text
 		// rather than every assistant message it produced.
 		signOff: agentSignOffText(monitor),
@@ -2500,7 +2438,7 @@ function logLaunchTiming(options: ExecutorOptions, startTime: number, marks: Lau
 async function driveChildRun(
 	ctx: ChildSessionContext,
 	startTime: number,
-	lifecycle: Pick<RunRelease, "agentIdleTtlMs" | "prune">,
+	lifecycle: Pick<RunRelease, "agentIdleTtlMs">,
 ): Promise<DriveOutcome & { durationMs: number }> {
 	const { options, monitor } = ctx;
 	let abortSignal = monitor.abortSignal;
@@ -2568,7 +2506,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 
 	// An agent ALWAYS gets a durable session file — never an in-memory session that would silently lose
 	// its transcript (Law 10, no silent fallback). When the caller provides no artifacts dir, route the
-	// transcript to the durable sessions dir so the run stays studyable and revivable via
+	// transcript to the durable sessions dir so the run stays studyable and wakeable via
 	// history://<id> (GRAN-1).
 	const sessionFile = spawnOptions.artifactsDir
 		? path.join(spawnOptions.artifactsDir, sessionFileName(id))
@@ -2609,6 +2547,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 		modelRegistry: options.modelRegistry,
 		settings,
 		parentActiveModelPattern: options.parentActiveModelPattern,
+		parentThinkingLevel: options.parentThinkingLevel,
 		obfuscateProviderText: options.obfuscateProviderText,
 		completeImpl: options.completeImpl,
 		modelOverride,
@@ -2633,7 +2572,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 			// The caller resolved this through `resolveAgentModel`, the one owner of "what model does
 			// this agent run", and handed the patterns down. Falling back to `agent.model` here would let
 			// the definition's frontmatter decide on any path that forgot to resolve.
-			modelPatterns: normalizeModelPatterns(modelOverride),
+			modelPatterns: normalizeModelPatternList(modelOverride),
 			toolNames: resolveChildToolNames(agent, atMaxDepth, settings),
 			spawnsEnv: childSpawnsEnv(agent, atMaxDepth),
 			childDepth,
@@ -2643,7 +2582,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 			marks: { perfStart: performance.now() },
 		},
 		startTime,
-		{ agentIdleTtlMs: resolveAgentIdleTtlMs(settings), prune: resolveAgentPruneBudget(settings) },
+		{ agentIdleTtlMs: resolveAgentIdleTtlMs(settings) },
 	);
 	monitor.finish();
 
