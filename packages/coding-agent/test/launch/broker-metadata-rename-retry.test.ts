@@ -51,6 +51,7 @@ afterEach(async () => {
 		Reflect.deleteProperty(Process.prototype, "children");
 		patchedChildren = false;
 	}
+	isolatedConfigRoot?.restore();
 	isolatedConfigRoot = undefined;
 });
 
