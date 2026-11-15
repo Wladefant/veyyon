@@ -32,7 +32,8 @@ const JSON_REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ cha
 const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
 const PERSIST_CREDENTIALS_BOOLEAN =
-	/^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|\\n))/;
+	/^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|\\r?\\n))/;
+const PERSIST_CREDENTIALS_LABEL = /(?:^|[^A-Za-z0-9_-])["']?persist-credentials["']?[ \t]*:[ \t]*$/i;
 const SOURCE_COMMIT_PIN = /^[ \t]*(?:-[ \t]+)?Source $/i;
 const MARKDOWN_COMMIT_LINK =
 	/^\[(?:pinned )?source commit\]\(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/commit\/[a-f0-9]{40}\)(?:\.[ \t]+This PR head is `[a-f0-9]{40}`\.)?(?=[ \t]*(?:\r?\n|$))/i;
@@ -133,8 +134,12 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		if (match.groups!.key.toLowerCase() === "pin" &&
 			SOURCE_COMMIT_PIN.test(text.slice(sourceLineStart, match.index + match.groups!.boundary.length)) &&
 			MARKDOWN_COMMIT_LINK.test(tail)) continue;
-		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
-			continue;
+		const escapedBreak = text.lastIndexOf("\\n", match.index);
+		const logicalLineStart = Math.max(text.lastIndexOf("\n", match.index) + 1, escapedBreak >= 0 ? escapedBreak + 2 : 0);
+		if (
+			PERSIST_CREDENTIALS_LABEL.test(text.slice(logicalLineStart, start)) &&
+			PERSIST_CREDENTIALS_BOOLEAN.test(tail)
+		) continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
 		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;

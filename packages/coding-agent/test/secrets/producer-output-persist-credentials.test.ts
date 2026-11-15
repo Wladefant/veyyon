@@ -34,6 +34,15 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		expect(guard.sanitize(input) === input).toBe(true);
 		for (let split = 0; split <= input.length; split++) expect(stream(input, split) === input).toBe(true);
 	});
+	it.each(["\n", "\r\n"])(
+		"preserves a JSON-string log with an escaped %j boundary and later error sentinel",
+		boundary => {
+			const value = `checkout persist-credentials: false${boundary}${sentinel.trimEnd()}`;
+			const input = JSON.stringify(value);
+			expect(guard.sanitize(input)).toBe(input);
+			for (let split = 0; split <= input.length; split++) expect(stream(input, split)).toBe(input);
+		},
+	);
 
 	it.each([
 		"persist-credentials: falseish",
