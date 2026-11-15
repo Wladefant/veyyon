@@ -12,6 +12,7 @@
  * headless override, and `veyyon grievances push` remains the explicit
  * one-shot command. Tool execution never blocks on the network and never throws.
  */
+import * as os from "node:os";
 import type { Database } from "bun:sqlite";
 import type { AgentTool } from "@veyyon/agent-core";
 import type { FetchImpl } from "@veyyon/ai";
@@ -248,6 +249,50 @@ interface GrievanceRow {
  * is transformed. Object keys matter because reports can contain structured
  * metadata whose property names are model-controlled.
  */
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Remove the user's identity from grievance text. Reports quote paths and
+ * commands verbatim and leave the machine, so the home directory becomes `~`,
+ * and the login name becomes `<user>` in the forms that name the user: a home
+ * path (`/c/Users/<user>`, an encoded session dir `-Users-<user>-`, `~<user>`),
+ * a reverse-DNS label (`com.<user>.app`) and `<user>@host`. Elsewhere the name
+ * is left alone (`will`, `node`, `bin`, `test`). `root` names no one, so only
+ * its home is rewritten.
+ */
+function redactUserIdentity(text: string): string {
+	let redacted = text;
+	const home = os.homedir();
+	// Case-insensitive throughout: Windows and default macOS volumes name the
+	// same home in any case (`c:\users\will`), and over-matching another
+	// casing only hides more.
+	if (home.length > 1) {
+		const slashHome = home.replaceAll("\\", "/");
+		const homeForms = slashHome === home ? [home] : [home, slashHome];
+		for (const form of homeForms) {
+			const pattern = `(?<![\\p{L}\\p{N}_.-])${escapeRegExp(form)}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`;
+			redacted = redacted.replace(new RegExp(pattern, "giu"), "~");
+		}
+	}
+	let user: string | undefined;
+	try {
+		user = os.userInfo().username;
+	} catch {
+		// No passwd entry for the uid (some containers): the home rewrite above still applies.
+	}
+	if (user && user !== "root") {
+		const name = escapeRegExp(user);
+		const pattern = new RegExp(
+			`(?<=(?<![\\p{L}\\p{N}])(?:Users|home)[/\\\\-]|~|(?<![\\p{L}\\p{N}])(?:com|org|net|io|dev)\\.)${name}(?![\\p{L}\\p{N}])|(?<![\\p{L}\\p{N}])${name}(?=@)`,
+			"giu",
+		);
+		redacted = redacted.replace(pattern, "<user>");
+	}
+	return redacted;
+}
+
 export function sanitizeAutoQaPayload(value: unknown, sanitize: AutoQaSanitizer): unknown {
 	const seen = new WeakMap<object, unknown>();
 	const visit = (node: unknown): unknown => {
@@ -305,7 +350,10 @@ async function performFlush(db: Database, config: PushConfig, options: FlushOpti
 		try {
 			// Resolve after the queue read and immediately before serialization /
 			// fetch. Resolve again for every batch after an intervening POST.
-			const sanitize = options.resolveSanitizer?.() ?? ((text: string) => text);
+			const secretSanitize = options.resolveSanitizer?.();
+			const sanitize: AutoQaSanitizer = secretSanitize
+				? text => redactUserIdentity(secretSanitize(text))
+				: redactUserIdentity;
 			body = JSON.stringify(sanitizeAutoQaPayload(rawPayload, sanitize));
 		} catch {
 			lastFailureAt = Date.now();
@@ -458,7 +506,7 @@ export function createReportToolIssueTool(session: ToolSession, activeBuiltinNam
 						getModel(),
 						VERSION,
 						canonicalTool,
-						params.report,
+						redactUserIdentity(params.report),
 					);
 					// Fire and forget. A disabled toggle returns before network I/O;
 					// an enabled one drains all queued rows through the live secret

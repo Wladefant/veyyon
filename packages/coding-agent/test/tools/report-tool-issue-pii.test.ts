@@ -17,6 +17,7 @@ import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 let tempDir = "";
 
+	openAutoQaDb();
 beforeAll(() => {
 	isolatedConfigRoot = enterIsolatedConfigRoot("autoqa-pii");
 	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-autoqa-pii-"));
