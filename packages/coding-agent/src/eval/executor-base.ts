@@ -801,11 +801,15 @@ export class KernelSessionPool<
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (this.#failedStartups.has(sessionKey)) {
-			await this.#retireFailedStartup(sessionKey);
+			await waitForPromiseWithCancellation(
+				this.#retireFailedStartup(sessionKey),
+				options,
+				this.#cancelledErrorClass,
+			);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (existing && this.#retiring.has(existing)) {
-			await this.#retireSession(existing);
+			await waitForPromiseWithCancellation(this.#retireSession(existing), options, this.#cancelledErrorClass);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (existing) {
@@ -916,7 +920,7 @@ export class KernelSessionPool<
 		const oldKernel = session.kernel;
 		let pending = this.#transitions.get(session.sessionKey);
 		while (pending) {
-			await pending;
+			await waitForPromiseWithCancellation(pending, options, this.#cancelledErrorClass);
 			if (session.kernel !== oldKernel) return;
 			pending = this.#transitions.get(session.sessionKey);
 		}
@@ -937,11 +941,12 @@ export class KernelSessionPool<
 			this.#logOwnership(session, "owned");
 		})();
 		this.#transitions.set(session.sessionKey, replacing);
-		try {
-			await replacing;
-		} finally {
-			if (this.#transitions.get(session.sessionKey) === replacing) this.#transitions.delete(session.sessionKey);
-		}
+		void replacing
+			.finally(() => {
+				if (this.#transitions.get(session.sessionKey) === replacing) this.#transitions.delete(session.sessionKey);
+			})
+			.catch(() => {});
+		await waitForPromiseWithCancellation(replacing, options, this.#cancelledErrorClass);
 	}
 
 	#logOwnership(session: ManagedKernelSession<SessionKernel>, state: "owned" | "retiring" | "released"): void {
@@ -1268,20 +1273,22 @@ export function createKernelExecutionDriver<
 			options.bridgeSessionId = sessionId;
 		}
 		if (options.reset) {
-			const inFlight = pool.resettingSessions.get(sessionKey);
-			if (inFlight) await inFlight;
-			else {
-				const resetPromise = pool.resetSession(sessionKey);
+			let resetPromise = pool.resettingSessions.get(sessionKey);
+			if (!resetPromise) {
+				resetPromise = pool.resetSession(sessionKey);
 				pool.resettingSessions.set(sessionKey, resetPromise);
-				try {
-					await resetPromise;
-				} finally {
-					pool.resettingSessions.delete(sessionKey);
-				}
+				void resetPromise
+					.finally(() => {
+						if (pool.resettingSessions.get(sessionKey) === resetPromise) {
+							pool.resettingSessions.delete(sessionKey);
+						}
+					})
+					.catch(() => {});
 			}
+			await waitForPromiseWithCancellation(resetPromise, options, cancelledErrorClass);
 		} else {
 			const inFlight = pool.resettingSessions.get(sessionKey);
-			if (inFlight) await inFlight;
+			if (inFlight) await waitForPromiseWithCancellation(inFlight, options, cancelledErrorClass);
 		}
 		const session = await pool.acquireSession(sessionKey, sessionId, cwd, options);
 		if (options.signal?.aborted) {

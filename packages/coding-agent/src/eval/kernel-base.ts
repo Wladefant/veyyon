@@ -905,13 +905,20 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		// The runner's Windows job remains the creation-time ownership guard.
 		let treeExited = false;
 		if (treeObserved) {
+			let treeTimeout: NodeJS.Timeout | undefined;
 			try {
-				const exits = await Promise.all(
-					[...this.#ownedTree.values()].map(owned => owned.waitForExit({ timeoutMs })),
-				);
-				treeExited = exits.every(Boolean);
+				const exits = await Promise.race([
+					Promise.all([...this.#ownedTree.values()].map(owned => owned.waitForExit({ timeoutMs }))),
+					new Promise<null>(resolve => {
+						treeTimeout = setTimeout(() => resolve(null), Math.max(0, timeoutMs));
+						treeTimeout.unref();
+					}),
+				]);
+				treeExited = exits !== null && exits.every(Boolean);
 			} catch (error) {
 				logger.warn("eval kernel tree exit was not confirmed", { pid: proc.pid, error: errorMessage(error) });
+			} finally {
+				clearTimeout(treeTimeout);
 			}
 		}
 		const confirmed = !!result && treeExited;
