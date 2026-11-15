@@ -72,8 +72,13 @@ export interface TerminalControlOptions {
 }
 
 /** Optional protocol features this build serves. A peer that lacks one never sees the field. */
-export const TERMINAL_CAPABILITIES = ["deliver-ack", "session-notices", "rotate", "idle-exit"] as const;
-
+export const TERMINAL_CAPABILITIES = [
+	"deliver-ack",
+	"session-notices",
+	"rotate",
+	"idle-exit",
+	"lane-admission",
+] as const;
 /** The newest assistant entries a subscriber is told about; older ones were seen by any earlier subscriber. */
 const HISTORY_FRAME_ENTRIES = 1000;
 const MAX_REMEMBERED_DELIVERIES = 256;

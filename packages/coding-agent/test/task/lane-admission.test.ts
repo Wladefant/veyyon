@@ -39,6 +39,7 @@ import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { TempDir } from "@veyyon/utils";
 import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
+import { applyOwnerOnlyWindowsAcl } from "@veyyon/utils/windows-acl";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 
@@ -340,17 +341,25 @@ describe("host-wide shared lane admission", () => {
 
 	it("fails closed for external callers when live terminal owners lack lane-admission capability", async () => {
 		const terminalsDir = path.join(getGlobalConfigRootDir(), "profiles", "default", "run", "terminals");
-		fs.mkdirSync(terminalsDir, { recursive: true });
-		fs.writeFileSync(
-			path.join(terminalsDir, "legacy-session.json"),
-			JSON.stringify({
-				version: 1,
-				sessionId: "legacy-session",
-				pid: process.pid,
-				capabilities: ["deliver-ack", "session-notices"],
-			}),
-			"utf8",
-		);
+		const ownerFile = path.join(terminalsDir, "legacy-session.json");
+		fs.mkdirSync(terminalsDir, { recursive: true, mode: 0o700 });
+		if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(terminalsDir);
+		else fs.chmodSync(terminalsDir, 0o700);
+		const writeOwnerRecord = async (capabilities: readonly string[]) => {
+			fs.writeFileSync(
+				ownerFile,
+				JSON.stringify({
+					version: 1,
+					sessionId: "legacy-session",
+					pid: process.pid,
+					capabilities,
+				}),
+				{ encoding: "utf8", mode: 0o600 },
+			);
+			if (process.platform === "win32") await applyOwnerOnlyWindowsAcl(ownerFile);
+			else fs.chmodSync(ownerFile, 0o600);
+		};
+		await writeOwnerRecord(["deliver-ack", "session-notices"]);
 
 		const status = await getLaneAdmissionStatus();
 		expect(status.all_host_enforced).toBe(false);
@@ -371,17 +380,7 @@ describe("host-wide shared lane admission", () => {
 		await releaseLaneAdmission({ slotId: nat.slot_id!, leaseToken: nat.lease_token! });
 
 		// Once live terminals advertise lane-admission, external callers are admitted
-		fs.writeFileSync(
-			path.join(terminalsDir, "legacy-session.json"),
-			JSON.stringify({
-				version: 1,
-				sessionId: "legacy-session",
-				pid: process.pid,
-				capabilities: ["deliver-ack", "session-notices", LANE_ADMISSION_CAPABILITY],
-			}),
-			"utf8",
-		);
-
+		await writeOwnerRecord(["deliver-ack", "session-notices", LANE_ADMISSION_CAPABILITY]);
 		const extOk = await acquireLaneAdmission({ owner: "ext-upgrade-ok", kind: "external", cap: 40 });
 		expect(extOk.ok).toBe(true);
 		expect(extOk.admitted).toBe(true);
@@ -539,28 +538,17 @@ describe("host-wide shared lane admission", () => {
 			{ activeToolNames: ["yield"] },
 		);
 
-		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
-		const lifecycle = AgentLifecycleManager.global();
-		lifecycle.adopt("FollowUpSlotChild", session, {
+		vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockResolvedValue(session);
+
+		const follow = await runSubagentFollowUpTurn({
+			id: "FollowUpSlotChild",
 			agent: testAgent,
-			task: "initial",
-			sessionFile: path.join(makeArtifactsDir(), "follow.jsonl"),
-			idleTtlMs: 60_000,
+			message: "continue",
+			eventBus: new EventBus(),
+			artifactsDir: makeArtifactsDir(),
 		});
-
-		try {
-			const follow = await runSubagentFollowUpTurn({
-				id: "FollowUpSlotChild",
-				agent: testAgent,
-				message: "continue",
-				eventBus: new EventBus(),
-			});
-			expect(follow.exitCode).toBe(0);
-			expect(lanesDuringFollowUp).toBe(1);
-		} finally {
-			await lifecycle.disposeAll();
-		}
-
+		expect(follow.exitCode).toBe(0);
+		expect(lanesDuringFollowUp).toBe(1);
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 	});
 });

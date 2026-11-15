@@ -128,6 +128,11 @@ export const commands: CommandEntry[] = [
 		},
 	},
 	{
+		name: "lane-admission",
+		load: () => import("./commands/lane-admission").then(m => m.default),
+		summary: { description: "Manage host-wide shared lane admission slots" },
+	},
+	{
 		name: "licenses",
 		load: () => import("./commands/licenses").then(m => m.default),
 		summary: { description: "Print Veyyon and third-party license notices" },
