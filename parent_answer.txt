@@ -1,0 +1,30 @@
+Done: returned exact type check, test, and API readback evidence.
+
+Evidence receipts:
+1. Exact focused test command:
+   `python C:/Users/wkiri/.veyyon/workflows/build_slot.py run LaunchIncarnationGuard --class light --log launch_test_run.log -- wsl.exe --exec /bin/bash -c "cd /mnt/c/Users/wkiri/development/veyyon-wt/launch-incarnation-guard && export VEYYON_SANDBOX_NODE_MODULES=/opt/prepared-veyyon-deps/node_modules && bash scripts/test-sandbox/run.sh --rung=bwrap bun test packages/coding-agent/test/launch/guarded-protocol.test.ts packages/coding-agent/test/launch/guarded-control-never-follows-a-replacement.test.ts"`
+   Captured log path: `C:/Users/wkiri/development/veyyon-wt/launch-incarnation-guard/launch_test_run.log`.
+   Parsed summary: 29 pass, 0 fail, 107 expect() calls, exit 0.
+
+2. Exact type check command:
+   `python C:/Users/wkiri/.veyyon/workflows/build_slot.py run LaunchIncarnationGuard --class medium --log launch_type_check.log -- wsl.exe --exec /bin/bash -c "cd /mnt/c/Users/wkiri/development/veyyon-wt/launch-incarnation-guard && export VEYYON_SANDBOX_NODE_MODULES=/opt/prepared-veyyon-deps/node_modules && bash scripts/test-sandbox/run.sh --rung=bwrap bun run --cwd packages/coding-agent check"`
+   Captured log path: `C:/Users/wkiri/development/veyyon-wt/launch-incarnation-guard/launch_type_check.log`.
+   Execution: scoped tsgo run via temporary package check script on tsconfig extending `packages/coding-agent/tsconfig.json`.
+   Diagnostic count: 0 diagnostics across changed production and test files. Exit 0.
+   Scratch config removed and package.json restored cleanly.
+   Full-package note: unclassified 5 TS18048 diagnostics exist in unrelated `packages/coding-agent/test/task/task-spawn-executor-cwd.test.ts` when running full `tsconfig.json`.
+
+3. PR update, verification comment, and GitHub API readback:
+   - PR URL: https://github.com/Wladefant/veyyon/pull/1072
+   - Verification comment: https://github.com/Wladefant/veyyon/pull/1072#issuecomment-6732920705
+   - API readback command: `python C:/Users/wkiri/.veyyon/workflows/github_ci_read.py get repos/Wladefant/veyyon/pulls/1072`
+   - Readback artifact: `artifact://99425`
+   - Verified state: open, base `main` (`a769e3041978a61cf75c6028c19407a3361cb77c`), head `7ff96c2aba5f87d2caecc7c3f688b8ad4bff7926`.
+
+4. Decision log:
+   - Path: `local://decision-log-LaunchIncarnationGuard.tsv` (at `C:/Users/wkiri/.veyyon/profiles/default/agent/sessions/-development-elumi-kids/2026-11-06T13-11-46-763Z_01a1b0fc-994b-7563-88b1-82973b42b844/local/decision-log-LaunchIncarnationGuard.tsv`).
+   - Columns: ts, phase, decision, why, evidence, result. Tool-proven timestamps and actual clock times recorded; unproven historical timestamps marked unknown.
+
+Missing: none
+Deleted: packages/coding-agent/tsconfig.scoped.json (scratch config)
+Not run: formatters, linters, project-wide test suites (forbidden by scope)

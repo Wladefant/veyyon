@@ -1,0 +1,24 @@
+fix(launch): guard broker operations with expectedId and expectedGeneration
+
+Refs #1071
+
+## Overview
+Adds incarnation guards to launch tool operations and daemon broker RPC. Operations can require `expectedId` and `expectedGeneration` tuples to guarantee they target the exact process incarnation intended, preventing stale commands from affecting replaced or recycled daemons.
+
+## Changes
+- Wire protocol: `DaemonWireRequest` supports `guarded` wrapper opcode carrying `expectedId`, `expectedGeneration`, and payload request.
+- Daemon broker: validates guard tuple against daemon `id` and `generation`. Rejects mismatched incarnations with `DaemonError.STALE_INCARNATION` and code `ERR_DAEMON_STALE_INCARNATION`.
+- Tool interface: `launch` tool accepts `expectedId` and `expectedGeneration`.
+- Broker capabilities: reports `guardedIdentity: 1` in `DaemonCapabilities`.
+- Completions persistence: enforces schema version 3 (`COMPLETION_SCHEMA_VERSION = 3`).
+- Base wire parser fixture: confirms legacy brokers reject guarded requests.
+- Regression tests: comprehensive protocol and control tests verifying guarded execution, stale rejections, escalation, and capability propagation.
+
+## Verification
+- Local WSL sandbox focused test:
+  `bun test packages/coding-agent/test/launch/guarded-protocol.test.ts packages/coding-agent/test/launch/guarded-control-never-follows-a-replacement.test.ts`
+  Result: 29 pass, 0 fail (107 expectations, 2 files).
+- Scoped TypeScript contract check (tsgo):
+  `tsgo -p tsconfig.scoped.json --noEmit` via temporary package script `bun run --cwd packages/coding-agent check`
+  Result: 0 diagnostics across changed launch production and test files.
+  Note: Whole-package `tsgo -p tsconfig.json --noEmit` emits 5 diagnostics in unrelated `packages/coding-agent/test/task/task-spawn-executor-cwd.test.ts` (unclassified; not asserted baseline).

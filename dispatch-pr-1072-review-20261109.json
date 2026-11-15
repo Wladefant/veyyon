@@ -1,0 +1,73 @@
+{
+  "dispatch_timestamp_utc": "2026-11-09T05:28:39Z",
+  "originating_session_id": "01a1b0fc-994b-7563-88b1-82973b42b844",
+  "dispatched_by": "LaunchIncarnationGuard.LaunchChatGPTDispatch",
+  "parent": "LaunchIncarnationGuard",
+  "target_pr": "https://github.com/Wladefant/veyyon/pull/1072",
+  "target_head_sha": "7ff96c2aba5f87d2caecc7c3f688b8ad4bff7926",
+  "target_base_sha": "a769e3041978a61cf75c6028c19407a3361cb77c",
+  "owning_issue": "https://github.com/Wladefant/veyyon/issues/1071",
+  "consumer_pr": "https://github.com/Wladefant/heylolo-evidence/pull/33",
+  "consumer_accepted_head_sha": "bb9adecf7a5077a0919b105bcd0e87c87736acc9",
+  "job": {
+    "job_id": "b7d49e4a546c4c758864950aa5ba90e7",
+    "marker": "cgr-b7d49e4a546c4c758864950aa5ba90e7",
+    "canonical_post_marker": "chatgpt-job: b7d49e4a546c4c758864950aa5ba90e7",
+    "account": "fiftyx",
+    "requested_account": "fiftyx",
+    "worker_role": "review",
+    "target_pr": "https://github.com/Wladefant/veyyon/pull/1072",
+    "target_head_sha": "7ff96c2aba5f87d2caecc7c3f688b8ad4bff7926",
+    "state": "queued",
+    "supported_path": "QUEUED_NOT_SENT",
+    "ready_epoch": 1794202119.0351315,
+    "ready_utc": "2026-11-09T05:28:39Z",
+    "prompt_file": "C:/Users/wkiri/.veyyon/chatgpt-research/brief-pr1072-review-7ff96c2.txt",
+    "model": "GPT-6",
+    "thinking": "extra high",
+    "tool": "web-search",
+    "needs_github": true,
+    "session": "01a1b0fc-994b-7563-88b1-82973b42b844"
+  },
+  "queue_status_snapshot": {
+    "active_total": 30,
+    "active_by_account": {
+      "fiftyx": 20,
+      "helllo": 10
+    },
+    "account_capacity": {
+      "fiftyx": 20,
+      "helllo": 20,
+      "total": 40
+    },
+    "capacity_status": "fiftyx at operational capacity ceiling (20/20 active); job successfully enqueued in QUEUED_NOT_SENT state ready for automatic dispatch upon slot release",
+    "counts": {
+      "queued": 71,
+      "sent": 29,
+      "running": 1,
+      "completed": 321,
+      "failed": 184,
+      "cancelled": 58,
+      "expired": 5,
+      "save_failed": 3,
+      "superseded": 2,
+      "operator-run": 3,
+      "answered": 1
+    }
+  },
+  "lineage_and_evidence": {
+    "issue_url": "https://github.com/Wladefant/veyyon/issues/1071",
+    "issue_state": "open",
+    "pr_url": "https://github.com/Wladefant/veyyon/pull/1072",
+    "pr_diff_url": "https://github.com/Wladefant/veyyon/pull/1072.diff",
+    "pr_state": "open",
+    "base_ref": "main",
+    "base_sha": "a769e3041978a61cf75c6028c19407a3361cb77c",
+    "head_ref": "fix/launch-incarnation-guard",
+    "head_sha": "7ff96c2aba5f87d2caecc7c3f688b8ad4bff7926",
+    "producer_contract": "expectedId + expectedGeneration tuple, generation snapshot, list.details.capabilities.guardedIdentity=1 before start",
+    "consumer_contract": "heylolo-evidence PR #33 accepted head bb9adecf7a5077a0919b105bcd0e87c87736acc9",
+    "source_verification": "focused tests 29 pass, 0 fail, 107 expectations in 2 files (guarded-protocol.test.ts, guarded-control-never-follows-a-replacement.test.ts); scoped tsgo 0 diagnostics",
+    "installed_support": "unclaimed / unverified live"
+  }
+}

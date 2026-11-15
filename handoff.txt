@@ -1,0 +1,28 @@
+Done: completed scoped type-contract gate and corrected evidence for PR #1072.
+
+Branch: `fix/launch-incarnation-guard`.
+Base: `main` (`a769e3041978a61cf75c6028c19407a3361cb77c`).
+Exact pushed head: `7ff96c2aba5f87d2caecc7c3f688b8ad4bff7926`.
+
+Verification:
+1. Focused test suite in WSL bwrap sandbox via build_slot:
+   - Command: `python C:/Users/wkiri/.veyyon/workflows/build_slot.py run LaunchIncarnationGuard --class light --log launch_test_run.log -- wsl.exe --exec /bin/bash -c "cd /mnt/c/Users/wkiri/development/veyyon-wt/launch-incarnation-guard && export VEYYON_SANDBOX_NODE_MODULES=/opt/prepared-veyyon-deps/node_modules && bash scripts/test-sandbox/run.sh --rung=bwrap bun test packages/coding-agent/test/launch/guarded-protocol.test.ts packages/coding-agent/test/launch/guarded-control-never-follows-a-replacement.test.ts"`
+   - Result: 29 pass, 0 fail, 107 expect() calls across 2 files, exit 0.
+   - Preserved log: `launch_test_run.log` (timestamp 2026-11-09T05:12:18Z).
+
+2. Scoped type check via tsgo (no tsc):
+   - Command: `python C:/Users/wkiri/.veyyon/workflows/build_slot.py run LaunchIncarnationGuard --class medium --log launch_type_check.log -- wsl.exe --exec /bin/bash -c "cd /mnt/c/Users/wkiri/development/veyyon-wt/launch-incarnation-guard && export VEYYON_SANDBOX_NODE_MODULES=/opt/prepared-veyyon-deps/node_modules && bash scripts/test-sandbox/run.sh --rung=bwrap bun run --cwd packages/coding-agent check"`
+   - Target configuration: temporary tsconfig extending `packages/coding-agent/tsconfig.json` with `include` scoped to changed production files (`src/launch/broker.ts`, `src/launch/client.ts`, `src/launch/completions.ts`, `src/launch/protocol.ts`, `src/tools/shell/launch.ts`) and test files (`test/launch/guarded-control-never-follows-a-replacement.test.ts`, `test/launch/guarded-protocol.test.ts`).
+   - Invocation: temporary package script `"check": "tsgo -p tsconfig.scoped.json --noEmit"`. Scratch config removed after check.
+   - Result: 0 diagnostics across changed files, exit 0.
+   - Log path: `launch_type_check.log` (timestamp 2026-11-09T05:21:58Z).
+   - Package-scope diagnosis: full `packages/coding-agent/tsconfig.json` check reports 5 TS18048 errors in unrelated `packages/coding-agent/test/task/task-spawn-executor-cwd.test.ts` (unclassified, not asserted baseline).
+
+3. PR corrections and readback:
+   - PR URL: https://github.com/Wladefant/veyyon/pull/1072
+   - PR body updated via `gh_app.py` to remove invalid `tsc` claims and reflect scoped `tsgo` check.
+   - Verification comment posted: https://github.com/Wladefant/veyyon/pull/1072#issuecomment-6732920705
+   - API readback artifact: `artifact://99425` (verified state open, head 7ff96c2aba5f87d2caecc7c3f688b8ad4bff7926).
+
+Handoff:
+Main owns merge, review, and release.
