@@ -1,0 +1,10 @@
+## Summary
+
+- Add a BaseKernel execution regression that checks trace metadata for secret-shaped and ordinary source.
+- Log request character count instead of IPC payload content.
+- Add the #943 changelog entry.
+
+## Verification
+
+- OVH focused regression and type checks are dispatched for exact head `994b057848886cac6ddd077a51240dea5b611530`.
+- The regression run against the pre-fix commit is queued; its result is not yet observed.
