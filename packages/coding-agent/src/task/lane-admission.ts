@@ -622,13 +622,14 @@ export async function heartbeatLaneAdmission(
 export async function releaseLaneAdmission(
 	options: LaneAdmissionReleaseOptions,
 ): Promise<LaneAdmissionReleaseResult> {
-	const effectiveCap = resolveCap(options.cap);
+	const explicitCap = options.cap !== undefined ? resolveCap(options.cap) : undefined;
 	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
 
 	try {
 		return await withLedgerLock(ledgerPath, async () => {
-			const ledger = await readLedgerUnderLock(ledgerPath, effectiveCap);
+			const ledger = await readLedgerUnderLock(ledgerPath, explicitCap ?? DEFAULT_HOST_LANE_CAP);
+			const responseCap = explicitCap ?? ledger.cap;
 			const index = ledger.reservations.findIndex(r => r.slotId === options.slotId);
 			if (index === -1) {
 				return {
@@ -637,7 +638,7 @@ export async function releaseLaneAdmission(
 					already_absent: true,
 					slot_id: options.slotId,
 					active_lanes: ledger.reservations.length,
-					n_free: Math.max(0, effectiveCap - ledger.reservations.length),
+					n_free: Math.max(0, responseCap - ledger.reservations.length),
 				};
 			}
 			const existing = ledger.reservations[index]!;
@@ -651,7 +652,7 @@ export async function releaseLaneAdmission(
 				released: true,
 				slot_id: options.slotId,
 				active_lanes: nextReservations.length,
-				n_free: Math.max(0, effectiveCap - nextReservations.length),
+				n_free: Math.max(0, responseCap - nextReservations.length),
 			};
 		});
 	} catch (error) {

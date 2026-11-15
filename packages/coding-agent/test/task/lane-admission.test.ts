@@ -216,9 +216,8 @@ describe("host-wide shared lane admission", () => {
 
 		// 4) Active slot with null processIdentity (unknown liveness) -> retained
 		const unknownProbe: LaneLivenessProbe = {
+			...probe,
 			getStartIdentity: () => null,
-			isPidAlive: () => false,
-			isInstanceAlive: (_pid, expected) => expected === null,
 		};
 		const unknownSlot = await acquireLaneAdmission({
 			owner: "unknown-liveness",
@@ -486,7 +485,7 @@ describe("host-wide shared lane admission", () => {
 			async ({ emit }) => {
 				const during = await getLaneAdmissionStatus();
 				lanesDuringPrompt = during.active_lanes;
-				emit(yieldSuccessEvent(undefined));
+				emit(yieldSuccessEvent({ ok: true }));
 			},
 			{ activeToolNames: ["yield"] },
 		);
@@ -533,7 +532,7 @@ describe("host-wide shared lane admission", () => {
 		const session = createMockSession(
 			async ({ emit }) => {
 				lanesDuringFollowUp = (await getLaneAdmissionStatus()).active_lanes;
-				emit(yieldSuccessEvent(undefined));
+				emit(yieldSuccessEvent({ ok: true }));
 			},
 			{ activeToolNames: ["yield"] },
 		);
