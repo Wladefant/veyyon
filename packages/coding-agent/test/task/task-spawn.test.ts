@@ -11,10 +11,11 @@
  * Param validation (missing agent / missing task) is covered by
  * test/task/task-schema.test.ts.
  */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import { type AsyncJob, AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -272,13 +273,21 @@ describe("task spawn routing", () => {
 				events.push("execute");
 				return makeResult(options.id);
 			});
-			const tool = await TaskTool.create(makeToolSession({
-				cwd: "/tmp",
-				settings: Settings.isolated({ "async.enabled": false }),
-				onSubagentStart: () => { events.push("start"); },
-				onSubagentStartFailed: () => { events.push("start-failed"); },
-				onSubagentComplete: () => { events.push("complete"); },
-			}));
+			const tool = await TaskTool.create(
+				makeToolSession({
+					cwd: "/tmp",
+					settings: Settings.isolated({ "async.enabled": false }),
+					onSubagentStart: () => {
+						events.push("start");
+					},
+					onSubagentStartFailed: () => {
+						events.push("start-failed");
+					},
+					onSubagentComplete: () => {
+						events.push("complete");
+					},
+				}),
+			);
 			const pending = tool.execute("tc-native-binding", {
 				agent: "task",
 				name: "BoundWorker",
@@ -290,7 +299,12 @@ describe("task spawn routing", () => {
 			await entered.promise;
 			expect(events).toEqual(["bind"]);
 			expect(run).not.toHaveBeenCalled();
-			expect(binding).toHaveBeenCalledWith("run-bound", "agent://BoundWorker", "/tmp/claimed-ledger.json", "ticket-bound");
+			expect(binding).toHaveBeenCalledWith(
+				"run-bound",
+				"agent://BoundWorker",
+				"/tmp/claimed-ledger.json",
+				"ticket-bound",
+			);
 			gate.resolve();
 			const result = await pending;
 			expect(events).toEqual(bindingFails ? ["bind"] : ["bind", "start", "execute", "complete"]);
@@ -533,9 +547,7 @@ describe("task spawn routing", () => {
 
 		// 4. Rejecting onSubagentComplete does NOT invoke onSubagentStartFailed cleanup.
 		const completeFailEvents: string[] = [];
-		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(
-			makeResult("CompleteFail", { agent: "reviewer" }),
-		);
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("CompleteFail", { agent: "reviewer" }));
 		const completeFailTool = await TaskTool.create(
 			makeToolSession({
 				cwd: "/tmp",
@@ -994,9 +1006,7 @@ describe("task spawn routing", () => {
 			ledgerPath: "/tmp/ledger.json",
 			nativeDispatchBound: true,
 		});
-		expect(starts).toEqual([
-			{ agentId: "BgMeta", agentName: "task", ticketId: "ticket-bg", runId: "run-bg" },
-		]);
+		expect(starts).toEqual([{ agentId: "BgMeta", agentName: "task", ticketId: "ticket-bg", runId: "run-bg" }]);
 		expect(completions[0]).toMatchObject({
 			...starts[0]!,
 			structuredResult: { stage: "build" },
