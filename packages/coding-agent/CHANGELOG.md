@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved an existing text file's CRLF line endings and UTF-8 BOM across `WriteTool` overwrites and verified persisted conventions on ACP editor-bridge writes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0ffd42c7146ac69cf18c8561ccf4febea32403ac, f77456fe1d75fdcf38b893081a6a7d12cedd89d2).
+
 ## [1.10.1] - 2026-11-15
 
 ### Fixed
