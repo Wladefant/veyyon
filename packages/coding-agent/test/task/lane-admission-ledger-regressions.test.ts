@@ -641,6 +641,9 @@ const acq = await mod.acquireLaneAdmission({
 let released;
 if (acq.admitted) {
 	fs.writeFileSync(path.join(barrierDir, "admitted-" + idx), JSON.stringify({ slotId: acq.slot_id, pid: process.pid }));
+}
+fs.writeFileSync(path.join(barrierDir, "attempted-" + idx), JSON.stringify({ admitted: acq.admitted, slotId: acq.slot_id }));
+if (acq.admitted) {
 	await nextLine();
 	const rel = await mod.releaseLaneAdmission({
 		slotId: acq.slot_id,
@@ -688,21 +691,24 @@ process.stdout.write(JSON.stringify({
 			child.stdin.flush();
 		}
 
-		// Wait for all 3 admitted winners to report so we can observe the live ledger under contention
-		await waitForDirectoryCondition(barrierDir, () => {
-			const admittedFiles = fs.readdirSync(barrierDir).filter(name => name.startsWith("admitted-"));
-			return admittedFiles.length === cap;
-		});
+		// WHY: wait until all contenders attempt admission before releasing winners so late arrivals cannot fill freed slots.
+		await waitForDirectoryCondition(barrierDir, () =>
+			Array.from({ length: workerCount }, (_, i) => fs.existsSync(path.join(barrierDir, `attempted-${i}`))).every(Boolean),
+		);
 
 		const liveStatus = await getLaneAdmissionStatus();
 		expect(liveStatus.cap).toBe(cap);
 		expect(liveStatus.active_lanes).toBe(cap);
 		expect(liveStatus.n_free).toBe(0);
 
-		// Allow the 3 admitted processes to release
+		// Allow the admitted processes to release
 		for (const child of children) {
-			child.stdin.write("release\n");
-			child.stdin.end();
+			try {
+				child.stdin.write("release\n");
+				child.stdin.end();
+			} catch {
+				// Child may have already exited after admission rejection.
+			}
 		}
 
 		const outcomes: RaceWorkerOutcome[] = [];

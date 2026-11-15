@@ -251,8 +251,10 @@ describe("host-wide shared lane admission", () => {
 		expect(launchingSlot.state).toBe("launching");
 
 		// 4) Immediate bind with null processIdentity fails closed (worker_identity_unverifiable)
+		// WHY: PID 303 must report alive so admission reaches start-identity verification instead of worker_pid_not_alive.
 		const unknownProbe: LaneLivenessProbe = {
 			...probe,
+			isPidAlive: pid => pid === 303 || probe.isPidAlive(pid),
 			getStartIdentity: () => null,
 		};
 		const unknownSlot = await acquireLaneAdmission({

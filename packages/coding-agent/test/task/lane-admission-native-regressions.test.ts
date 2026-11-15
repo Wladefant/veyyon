@@ -79,6 +79,8 @@ describe("native host-lane admission regressions", () => {
 		});
 		expect(filler.admitted).toBe(true);
 
+		// WHY: capture unspied driver method before spy creation so mock implementations avoid recursive stack overflow.
+		const realAcquire = laneModule.laneAdmissionDriver.acquire;
 		const acquireSpy = vi.spyOn(laneModule.laneAdmissionDriver, "acquire");
 
 		let caught: unknown;
@@ -120,7 +122,6 @@ describe("native host-lane admission regressions", () => {
 
 		// Abort firing during acquire on full cap returns null rather than nested_host_lane_cap_reached
 		const midAbort = new AbortController();
-		const realAcquire = laneModule.laneAdmissionDriver.acquire;
 		acquireSpy.mockImplementationOnce(async opts => {
 			const res = await realAcquire(opts);
 			midAbort.abort();
