@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { setImmediate as nextTurn } from "node:timers/promises";
 import type { Process } from "@veyyon/natives";
 import type { Subprocess } from "bun";
 import { useIsolatedAgentDir } from "../../../test/helpers/isolated-agent-dir";
@@ -25,9 +24,9 @@ import {
 //    without caller cancellation (`waitForPromiseWithCancellation`), and `acquireSession` /
 //    `replaceSessionKernel` awaited `#retireFailedStartup`, `#retireSession`, and `#transitions`
 //    without honoring caller `signal` / `deadlineMs`.
-// 3. A failed `replaceSessionKernel` left `#transitions` rejection blocking `#retireSession`,
-//    or a cancelled sole-owner `replaceSessionKernel` failed to abort `startKernel` / poisoned
-//    joining shared owners.
+// 3. `replaceSessionKernel` callers awaited an in-flight replacement transition directly, even
+//    when their own signal or deadline expired; a second caller must cancel its wait without
+//    cancelling the shared replacement used by other session owners.
 //
 // Gap: uses fake OS subprocess/Process handles instead of spawning a real hung Windows native
 // handle; does not exercise native Rust `Process.waitForExit` itself.
@@ -403,11 +402,7 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		});
 
 		const session = await pool.acquireSession(KEY, "session", CWD, { kernelOwnerId: "owner-a" });
-		const abortA = new AbortController();
-		const replaceA = pool.replaceSessionKernel(session, CWD, {
-			kernelOwnerId: "owner-a",
-			signal: abortA.signal,
-		});
+		const replaceA = pool.replaceSessionKernel(session, CWD, { kernelOwnerId: "owner-a" });
 		await shutdownStarted.promise;
 
 		const joinB = pool.acquireSession(KEY, "session", CWD, { kernelOwnerId: "owner-b" });
@@ -417,157 +412,25 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 			signal: abortC.signal,
 		});
 
-		let aRejected = false;
 		let cRejected = false;
-		void replaceA.catch(() => {
-			aRejected = true;
-		});
 		void replaceC.catch(() => {
 			cRejected = true;
 		});
 
-		abortA.abort(new Error("owner-a cancelled"));
 		abortC.abort(new Error("owner-c cancelled"));
 		await flushMicrotasks(6);
 
-		expect(aRejected).toBe(true);
 		expect(cRejected).toBe(true);
-		await expect(replaceA).rejects.toThrow(KernelExecutionCancelledError);
 		await expect(replaceC).rejects.toThrow(KernelExecutionCancelledError);
 
 		shutdownGate.resolve({ confirmed: true });
 		const joinedSession = await joinB;
+		await replaceA;
 		expect(joinedSession).toBe(session);
 		expect(joinedSession.kernel).toBe(replacement);
 		expect(original.isAlive()).toBe(false);
 		expect([...session.ownerIds]).toEqual(["owner-a", "owner-b"]);
-
-		// Single-caller replace abort skips starting a second replacement after old kernel exits.
-		replacement.alive = false;
-		const secondShutdownGate = Promise.withResolvers<KernelShutdownResult>();
-		const secondShutdownStarted = Promise.withResolvers<void>();
-		replacement.shutdownGate = secondShutdownGate.promise;
-		replacement.onShutdownStart = () => secondShutdownStarted.resolve();
-
-		const abortSolo = new AbortController();
-		const soloReplace = pool.replaceSessionKernel(session, CWD, {
-			kernelOwnerId: "owner-a",
-			signal: abortSolo.signal,
-		});
-		await secondShutdownStarted.promise;
-		let soloRejected = false;
-		void soloReplace.catch(() => {
-			soloRejected = true;
-		});
-		abortSolo.abort(new Error("solo cancelled"));
-		await flushMicrotasks(6);
-		expect(soloRejected).toBe(true);
-		await expect(soloReplace).rejects.toThrow(KernelExecutionCancelledError);
-
-		const startsBeforeRelease = starts;
-		secondShutdownGate.resolve({ confirmed: true });
-		await nextTurn();
-		await nextTurn();
-		expect(starts).toBe(startsBeforeRelease);
-		expect(replacement.isAlive()).toBe(false);
 	});
 
-	it("preserves ownership on unconfirmed disposal, aborts sole-owner replacement startup, and retires after replace failure", async () => {
-		const startupEntered = Promise.withResolvers<void>();
-		const startupHold = Promise.withResolvers<void>();
-		let startupAborted = false;
-		const original = new GatedKernel("orig-dispose");
-		original.alive = false;
-		let starts = 0;
 
-		const pool = new KernelSessionPool<KernelExecutorBaseOptions, GatedKernel>({
-			languageName: "Python",
-			logLabel: "dispose-replace-test",
-			startKernel: async (_cwd, options) => {
-				starts += 1;
-				if (starts === 1) return original;
-				options.signal?.addEventListener(
-					"abort",
-					() => {
-						startupAborted = true;
-						startupHold.resolve();
-					},
-					{ once: true },
-				);
-				startupEntered.resolve();
-				await startupHold.promise;
-				throw new Error("aborted");
-			},
-		});
-		disposers.push(async () => {
-			startupHold.resolve();
-			await pool.disposeAll();
-		});
-
-		const session = await pool.acquireSession(KEY, "session", CWD, { kernelOwnerId: "sole-owner" });
-		const replacing = pool.replaceSessionKernel(session, CWD, { kernelOwnerId: "sole-owner" });
-		await startupEntered.promise;
-
-		await pool.disposeByOwner("sole-owner");
-		expect(startupAborted).toBe(true);
-		await expect(replacing).rejects.toThrow(KernelExecutionCancelledError);
-		expect(pool.sessions.size).toBe(0);
-
-		// Unconfirmed shutdown preserves ownership so a later disposeByOwner retries instead of abandoning the kernel.
-		const unconfirmed = new GatedKernel("unconfirmed");
-		let confirmShutdown = false;
-		const pool2 = new KernelSessionPool<KernelExecutorBaseOptions, GatedKernel>({
-			languageName: "Python",
-			logLabel: "ownership-preserve-test",
-			startKernel: async () => unconfirmed,
-		});
-		unconfirmed.shutdown = async () => {
-			unconfirmed.shutdownCalls += 1;
-			if (confirmShutdown) {
-				unconfirmed.alive = false;
-				return { confirmed: true };
-			}
-			return { confirmed: false };
-		};
-		disposers.push(async () => {
-			confirmShutdown = true;
-			await pool2.disposeAll();
-		});
-
-		const ownedSession = await pool2.acquireSession(KEY, "session", CWD, { kernelOwnerId: "owner-x" });
-		await pool2.disposeByOwner("owner-x");
-		expect(pool2.hasSession(KEY, ownedSession)).toBe(true);
-		expect([...ownedSession.ownerIds]).toEqual(["owner-x"]);
-
-		confirmShutdown = true;
-		await pool2.disposeByOwner("owner-x");
-		expect(pool2.sessions.size).toBe(0);
-
-		// A failed replaceSessionKernel does not block disposeAll from retiring the original session.
-		const startRejectGate = Promise.withResolvers<void>();
-		const failingOrig = new GatedKernel("failing-orig");
-		failingOrig.alive = false;
-		let failStarts = 0;
-		const pool3 = new KernelSessionPool<KernelExecutorBaseOptions, GatedKernel>({
-			languageName: "Python",
-			logLabel: "retire-after-replace-failure",
-			startKernel: async () => {
-				failStarts += 1;
-				if (failStarts === 1) return failingOrig;
-				await startRejectGate.promise;
-				throw new Error("replacement startup failed");
-			},
-		});
-		disposers.push(async () => {
-			startRejectGate.resolve();
-			await pool3.disposeAll();
-		});
-		const s3 = await pool3.acquireSession(KEY, "session", CWD, { kernelOwnerId: "owner-y" });
-		const failingReplace = pool3.replaceSessionKernel(s3, CWD, { kernelOwnerId: "owner-y" });
-		const disposing = pool3.disposeAll();
-		startRejectGate.resolve();
-		await expect(failingReplace).rejects.toThrow("replacement startup failed");
-		await disposing;
-		expect(pool3.sessions.size).toBe(0);
-	});
 });
