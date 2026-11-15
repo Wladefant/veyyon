@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Redacted home directory paths and identity-form login names from auto-QA grievances at both local storage and outbound flush boundaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 841cfcf79650204c646f73bf306a64ca480e407b, 99680efef69f846a8a52c8c4726403ab61781a24, d765811a8d6dafe718da2361a7e47c8c4ecb3f43).
+
 ## [1.10.1] - 2026-11-15
 
 ### Fixed
