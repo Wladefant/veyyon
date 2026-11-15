@@ -213,6 +213,31 @@ describe("JavaScript eval worker lifecycle", () => {
 		setJsEvalWorkerThreadForTests(restoreWorkerThread);
 	});
 
+	it("isolates real agent contexts and resets only the requesting agent", async () => {
+		using tempDir = TempDir.createSync("@veyyon-js-agent-state-");
+		const shared = {
+			cwd: tempDir.path(),
+			sessionId: `js-agents:${crypto.randomUUID()}`,
+			session: makeSession(tempDir.path()),
+		};
+		const agentA = { ...shared, agentId: "agent-a" };
+		const agentB = { ...shared, agentId: "agent-b" };
+		expect((await executeJs("globalThis.agentValue = 'A';", agentA)).exitCode).toBe(0);
+		const unseen = await executeJs("console.log(typeof globalThis.agentValue);", agentB);
+		expect(unseen.exitCode).toBe(0);
+		expect(unseen.output.trim()).toBe("undefined");
+		expect((await executeJs("globalThis.agentValue = 'B';", agentB)).exitCode).toBe(0);
+		const retained = await executeJs("console.log(globalThis.agentValue);", agentA);
+		expect(retained.exitCode).toBe(0);
+		expect(retained.output.trim()).toBe("A");
+		const reset = await executeJs("console.log(typeof globalThis.agentValue);", { ...agentB, reset: true });
+		expect(reset.exitCode).toBe(0);
+		expect(reset.output.trim()).toBe("undefined");
+		const unaffected = await executeJs("console.log(globalThis.agentValue);", agentA);
+		expect(unaffected.exitCode).toBe(0);
+		expect(unaffected.output.trim()).toBe("A");
+	}, 30_000);
+
 	it("exits a real worker on graceful close even with ref'ed user handles", async () => {
 		using tempDir = TempDir.createSync("@veyyon-js-worker-real-close-");
 
