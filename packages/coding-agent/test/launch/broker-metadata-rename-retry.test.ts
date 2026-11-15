@@ -1,9 +1,8 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Process } from "@veyyon/natives";
-import * as nativeProcess from "@veyyon/utils/native-process";
+import { Process } from "@veyyon/natives";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { DaemonBroker } from "../../src/launch/broker";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
@@ -17,19 +16,14 @@ beforeAll(async () => {
 	await fs.mkdir(TEST_PARENT, { recursive: true });
 	testRoot = await fs.mkdtemp(path.join(TEST_PARENT, "run-"));
 });
-let processHandleSpy: Mock<typeof nativeProcess.processHandle> | undefined;
+let patchedChildren = false;
 
 beforeEach(() => {
-	const realProcessHandle = nativeProcess.processHandle;
-	processHandleSpy = spyOn(nativeProcess, "processHandle").mockImplementation(pid => {
-		const handle = realProcessHandle(pid);
-		if (!handle) return null;
-		const candidate = handle as unknown as { children?: () => Process[] };
-		if (typeof candidate.children === "function") return handle;
-		return Object.assign(Object.create(Object.getPrototypeOf(handle)), handle, {
-			children: () => [],
-		}) as Process;
-	});
+	const proto: object = Process.prototype;
+	if (!("children" in proto) || typeof Reflect.get(proto, "children") !== "function") {
+		Reflect.set(proto, "children", () => []);
+		patchedChildren = true;
+	}
 	isolatedConfigRoot = enterIsolatedConfigRoot("launch-rename-retry");
 });
 
@@ -53,9 +47,10 @@ afterEach(async () => {
 		const dir = cleanupDirs.pop();
 		if (dir) await fs.rm(dir, { recursive: true, force: true });
 	}
-	processHandleSpy?.mockRestore();
-	processHandleSpy = undefined;
-	isolatedConfigRoot?.restore();
+	if (patchedChildren) {
+		Reflect.deleteProperty(Process.prototype, "children");
+		patchedChildren = false;
+	}
 	isolatedConfigRoot = undefined;
 });
 
