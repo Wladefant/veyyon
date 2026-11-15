@@ -1,7 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { Process } from "@veyyon/natives";
+import * as nativeProcess from "@veyyon/utils/native-process";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { DaemonBroker } from "../../src/launch/broker";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
@@ -15,8 +17,19 @@ beforeAll(async () => {
 	await fs.mkdir(TEST_PARENT, { recursive: true });
 	testRoot = await fs.mkdtemp(path.join(TEST_PARENT, "run-"));
 });
+let processHandleSpy: Mock<typeof nativeProcess.processHandle> | undefined;
 
 beforeEach(() => {
+	const realProcessHandle = nativeProcess.processHandle;
+	processHandleSpy = spyOn(nativeProcess, "processHandle").mockImplementation(pid => {
+		const handle = realProcessHandle(pid);
+		if (!handle) return null;
+		const candidate = handle as unknown as { children?: () => Process[] };
+		if (typeof candidate.children === "function") return handle;
+		return Object.assign(Object.create(Object.getPrototypeOf(handle)), handle, {
+			children: () => [],
+		}) as Process;
+	});
 	isolatedConfigRoot = enterIsolatedConfigRoot("launch-rename-retry");
 });
 
@@ -40,6 +53,8 @@ afterEach(async () => {
 		const dir = cleanupDirs.pop();
 		if (dir) await fs.rm(dir, { recursive: true, force: true });
 	}
+	processHandleSpy?.mockRestore();
+	processHandleSpy = undefined;
 	isolatedConfigRoot?.restore();
 	isolatedConfigRoot = undefined;
 });

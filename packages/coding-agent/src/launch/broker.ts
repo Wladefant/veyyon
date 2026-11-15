@@ -1851,6 +1851,7 @@ function persist(record: ManagedDaemon): void {
 		.then(() =>
 			atomicWriteFile(metaPath, JSON.stringify({ daemon: record.snapshot, spec: record.spec }), {
 				requireAtomicReplace: true,
+				retryRename: true,
 			}),
 		)
 		.catch(error => {
