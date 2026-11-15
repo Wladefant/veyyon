@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
 ## [1.10.1] - 2026-11-15
 
 ### Fixed

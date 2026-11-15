@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Added opt-in `retryRename` to `atomicWriteFile` to retry transient Windows `EPERM`/`EACCES`/`EEXIST` rename denials without moving the existing target aside ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
 ## [1.8.20] - 2026-11-09
 
 ### Added
