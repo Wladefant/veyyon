@@ -528,37 +528,40 @@ describe("history exact record lookup", () => {
 			const header = { type: "session", id: "s-evidence" };
 			const root = { type: "message", id: "root", parentId: null, message: "trusted atlas evidence" };
 			const leaf = { type: "message", id: "leaf", parentId: "root", message: "ordinary continuation" };
-			const prefix = [header, root, leaf].map(record => JSON.stringify(record)).join("\n") + "\n";
 			for (const invalid of [
 				{ type: "message", id: "root", parentId: 42, message: "forged needle from corrupt parent" },
 				{ type: "message", id: "root", parentId: [], message: "forged needle from corrupt parent" },
 			]) {
-				await fs.writeFile(file, prefix + JSON.stringify(invalid) + "\n");
+				for (const records of [
+					[header, root, leaf, invalid],
+					[header, invalid, root, leaf],
+				]) {
+					await fs.writeFile(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");
 				const exact = await readStoredHistoryEntry(file, {
 					entryId: "root",
 					leafId: "leaf",
 					offset: 0,
 					limit: 256,
 				});
-				expect(exact.status).toBe("ok");
-				expect(exact.fragment).toBe(JSON.stringify(root));
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
 				const forged = await searchStoredHistoryEntries(file, {
 					query: "forged needle",
 					leafId: "leaf",
 					limit: 5,
 				});
-				expect(forged.status).toBe("partial");
+				expect(forged.status).toBe("unavailable");
 				expect(forged.matches).toEqual([]);
 				const trusted = await searchStoredHistoryEntries(file, {
 					query: "trusted atlas",
 					leafId: "leaf",
 					limit: 5,
 				});
-				expect(trusted.status).toBe("partial");
-				expect(trusted.matches.map(match => match.entryId)).toEqual(["root"]);
-				expect(trusted.matches[0]!.revision).toBe(exact.revision!);
+				expect(trusted.status).toBe("unavailable");
+				expect(trusted.matches).toEqual([]);
 			}
 
+				}
 			// The first-pass title-slot exception must also apply to matching.
 			const title = { type: "title", id: "root", title: "forged needle in metadata" };
 			await fs.writeFile(file, [title, header, root, leaf].map(record => JSON.stringify(record)).join("\n") + "\n");
@@ -1253,7 +1256,9 @@ describe("history exact record lookup", () => {
 					Buffer.from('"}\n'),
 				]),
 				Buffer.from('"type":"session","id":"earlier"}\n'),
-				Buffer.from('"legacy non-object metadata"\n'),
+				Buffer.from('"type":"session","id":"earlier"}\n\n'),
+				Buffer.from('"\\u0074ype":"session","id":"earlier"}\n\n'),
+				Buffer.from('"type":"session","i\\u0064":"earlier"}\n\n'),
 			];
 			for (const unreadable of unsafeFirstRows) {
 				// Identity cannot be certified by discarding a possible first header.
