@@ -2675,7 +2675,12 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 
 	let hostLaneLease: NativeHostLaneLease | null = null;
 	try {
-		hostLaneLease = await acquireSubagentHostLane({ agentId: id, owner: id, signal });
+		hostLaneLease = await acquireSubagentHostLane({
+			agentId: id,
+			owner: id,
+			signal,
+			waitIfFull: (options.taskDepth ?? 0) === 0,
+		});
 	} catch (error) {
 		return startupFailedBeforeMonitor(options, error, startTime);
 	}

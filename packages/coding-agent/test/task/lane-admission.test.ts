@@ -250,7 +250,7 @@ describe("host-wide shared lane admission", () => {
 		expect(launchingSlot.admitted).toBe(true);
 		expect(launchingSlot.state).toBe("launching");
 
-		// 4) Active slot with null processIdentity (unknown liveness) -> retained
+		// 4) Immediate bind with null processIdentity fails closed (worker_identity_unverifiable)
 		const unknownProbe: LaneLivenessProbe = {
 			...probe,
 			getStartIdentity: () => null,
@@ -263,9 +263,12 @@ describe("host-wide shared lane admission", () => {
 			cap: 4,
 			liveness: unknownProbe,
 		});
-		expect(unknownSlot.admitted).toBe(true);
+		expect(unknownSlot.ok).toBe(false);
+		expect(unknownSlot.admitted).toBe(false);
+		expect(unknownSlot.reason).toBe("worker_identity_unverifiable");
 
-		// Age all timestamps by 24 hours on disk to verify elapsed time alone never reclaims
+		// Seed a historical unverified active reservation and age all timestamps by 24 hours on disk
+		// to verify neither elapsed time nor unknown liveness is ever reclaimed.
 		const ledgerPath = getLaneAdmissionLedgerPath();
 		const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as {
 			version: number;
@@ -273,12 +276,26 @@ describe("host-wide shared lane admission", () => {
 			reservations: Array<Record<string, unknown>>;
 		};
 		const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+		ledger.reservations.push({
+			slotId: "historical-unknown-slot",
+			leaseToken: "historical-unknown-token",
+			kind: "external",
+			owner: "unknown-liveness",
+			state: "active",
+			pid: 303,
+			processIdentity: null,
+			callerPid: 303,
+			callerProcessIdentity: null,
+			identityVerified: false,
+			acquiredAt: dayAgo,
+			adoptedAt: dayAgo,
+			lastHeartbeatAt: dayAgo,
+		});
 		for (const item of ledger.reservations) {
 			item.acquiredAt = dayAgo;
 			item.lastHeartbeatAt = dayAgo;
 		}
 		fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), "utf8");
-
 		// Kill only pid 202 (leaving 101 live, launchingSlot unbound, unknownSlot unverified)
 		fakeLive.delete("202");
 		fakeLive.delete("202:test:202:1");
