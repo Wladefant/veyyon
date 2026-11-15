@@ -18,7 +18,7 @@ import { isProcessAlive } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 import { daemonBrokerLeasePath } from "../../src/launch/paths";
-import { shutdownBroker } from "../helpers/daemon-broker";
+import { shutdownBroker, waitUntil } from "../helpers/daemon-broker";
 import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
 import { useTempDirs } from "../helpers/temp-dirs";
 
@@ -27,31 +27,12 @@ const makeTempDir = useTempDirs();
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 let cleanupHermeticEnv: (() => void) | undefined;
-const cleanupClients: DaemonBrokerClient[] = [];
-const cleanupRuntimes: Array<{ projectDir: string; runtimeDir: string }> = [];
 
 beforeEach(() => {
 	isolatedConfigRoot = enterIsolatedConfigRoot("broker-survives-spawner-exit");
 });
 
-afterEach(async () => {
-	while (cleanupClients.length > 0) {
-		const client = cleanupClients.pop();
-		if (client) await shutdownBroker(client);
-	}
-	while (cleanupRuntimes.length > 0) {
-		const entry = cleanupRuntimes.pop();
-		if (!entry) continue;
-		const hasLease = await fs.stat(daemonBrokerLeasePath(entry.runtimeDir)).then(
-			() => true,
-			() => false,
-		);
-		if (!hasLease) continue;
-		const fallbackClient = await createDaemonBrokerClient(entry.projectDir, {
-			runtimeDir: entry.runtimeDir,
-		}).catch(() => undefined);
-		if (fallbackClient) await shutdownBroker(fallbackClient);
-	}
+afterEach(() => {
 	cleanupHermeticEnv?.();
 	cleanupHermeticEnv = undefined;
 	isolatedConfigRoot?.restore();
@@ -84,7 +65,6 @@ describe("daemon broker lifetime across spawner exit", () => {
 		const projectDir = makeTempDir("veyyon-spawner-exit-project-");
 		const runtimeDir = makeTempDir("veyyon-spawner-exit-runtime-");
 		const scriptDir = makeTempDir("veyyon-spawner-exit-script-");
-		cleanupRuntimes.push({ projectDir, runtimeDir });
 		const spawnerScript = path.join(scriptDir, "spawner.ts");
 		const clientModulePath = path.resolve(import.meta.dir, "../../src/launch/client.ts");
 
@@ -124,6 +104,8 @@ process.exit(0);
 			timeout: 20_000,
 		});
 
+		let independentClient: DaemonBrokerClient | undefined;
+		let originalBrokerPid: number | undefined;
 		const stderrPromise = new Response(spawner.stderr).text();
 		const reader = spawner.stdout.getReader();
 		try {
@@ -138,15 +120,14 @@ process.exit(0);
 			if (typeof parsed !== "object" || parsed === null || !("pid" in parsed) || typeof parsed.pid !== "number") {
 				throw new Error(`Unexpected spawner ready payload: ${readyLine}`);
 			}
-			const originalBrokerPid = parsed.pid;
+			originalBrokerPid = parsed.pid;
 			expect(await readBrokerLeasePid(runtimeDir)).toBe(originalBrokerPid);
 			expect(isProcessAlive(originalBrokerPid)).toBeTrue();
 
-			const independentClient = await createDaemonBrokerClient(projectDir, {
+			independentClient = await createDaemonBrokerClient(projectDir, {
 				runtimeDir,
 				idleGraceMs: IDLE_GRACE_MS,
 			});
-			cleanupClients.push(independentClient);
 			const preExitPing = await independentClient.request({ op: "ping" });
 			expect(preExitPing.op).toBe("ping");
 			if (preExitPing.op === "ping") {
@@ -173,6 +154,27 @@ process.exit(0);
 				await spawner.exited;
 			}
 			await stderrPromise.catch(() => "");
+			if (independentClient) {
+				await shutdownBroker(independentClient);
+			} else {
+				const leasePid = await readBrokerLeasePid(runtimeDir).catch(() => undefined);
+				if (leasePid !== undefined) {
+					originalBrokerPid ??= leasePid;
+					const fallbackClient = await createDaemonBrokerClient(projectDir, { runtimeDir }).catch(() => undefined);
+					if (fallbackClient) await shutdownBroker(fallbackClient);
+				}
+			}
+			if (originalBrokerPid !== undefined && isProcessAlive(originalBrokerPid)) {
+				const pidToStop = originalBrokerPid;
+				const exited = await waitUntil(() => !isProcessAlive(pidToStop), 5_000, 25);
+				if (!exited) {
+					try {
+						process.kill(pidToStop);
+					} catch {
+						// Process already exited.
+					}
+				}
+			}
 		}
 	}, 30_000);
 });
