@@ -353,13 +353,7 @@ export function listUnregisteredLiveTerminalOwners(
 	}
 	for (const entry of profileEntries) {
 		if (!entry.isDirectory()) continue;
-		scanTerminalDirectory(
-			path.join(profilesDir, entry.name, "run", "terminals"),
-			entry.name,
-			liveness,
-			owners,
-			seen,
-		);
+		scanTerminalDirectory(path.join(profilesDir, entry.name, "run", "terminals"), entry.name, liveness, owners, seen);
 	}
 	return owners;
 }
@@ -379,7 +373,11 @@ export async function getLaneAdmissionStatus(options?: {
 	const liveness = options?.liveness ?? DEFAULT_LIVENESS_PROBE;
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
 
-	const { retained, reclaimedCount, cap: resolvedCap } = await withLedgerLock(ledgerPath, async () => {
+	const {
+		retained,
+		reclaimedCount,
+		cap: resolvedCap,
+	} = await withLedgerLock(ledgerPath, async () => {
 		const ledger = await readLedgerUnderLock(ledgerPath, explicitCap ?? DEFAULT_HOST_LANE_CAP);
 		const responseCap = explicitCap ?? ledger.cap;
 		const result = reclaimProvenDeadReservations(ledger.reservations, liveness);
@@ -412,9 +410,7 @@ export async function getLaneAdmissionStatus(options?: {
 	};
 }
 
-export async function acquireLaneAdmission(
-	options: LaneAdmissionAcquireOptions,
-): Promise<LaneAdmissionAcquireResult> {
+export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions): Promise<LaneAdmissionAcquireResult> {
 	const owner = options.owner.trim();
 	if (!owner) {
 		throw new LaneAdmissionError("invalid_owner", "Lane admission owner must be non-empty");
@@ -491,8 +487,7 @@ export async function acquireLaneAdmission(
 			if (callerPid !== null && !isValidPid(callerPid)) {
 				throw new LaneAdmissionError("invalid_pid", `Invalid caller pid: ${String(callerPid)}`);
 			}
-			const workerPid =
-				options.workerPid !== undefined ? options.workerPid : kind === "native" ? process.pid : null;
+			const workerPid = options.workerPid !== undefined ? options.workerPid : kind === "native" ? process.pid : null;
 			if (workerPid !== null && !isValidPid(workerPid)) {
 				throw new LaneAdmissionError("invalid_pid", `Invalid worker pid: ${String(workerPid)}`);
 			}
@@ -654,9 +649,7 @@ export async function heartbeatLaneAdmission(
 	}
 }
 
-export async function releaseLaneAdmission(
-	options: LaneAdmissionReleaseOptions,
-): Promise<LaneAdmissionReleaseResult> {
+export async function releaseLaneAdmission(options: LaneAdmissionReleaseOptions): Promise<LaneAdmissionReleaseResult> {
 	const explicitCap = options.cap !== undefined ? resolveCap(options.cap) : undefined;
 	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);

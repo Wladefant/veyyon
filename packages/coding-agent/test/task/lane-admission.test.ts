@@ -23,14 +23,14 @@ import { Agent } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
-import * as laneModule from "@veyyon/coding-agent/task/lane-admission";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubagentFollowUpTurn, runSubprocess } from "@veyyon/coding-agent/task/executor";
+import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
+import * as laneModule from "@veyyon/coding-agent/task/lane-admission";
 import {
-	acquireNativeHostLaneWait,
 	acquireLaneAdmission,
+	acquireNativeHostLaneWait,
 	adoptLaneAdmission,
 	DEFAULT_HOST_LANE_CAP,
 	getLaneAdmissionLedgerPath,
@@ -43,10 +43,10 @@ import {
 } from "@veyyon/coding-agent/task/lane-admission";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
 import { applyOwnerOnlyWindowsAcl } from "@veyyon/utils/windows-acl";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 
@@ -287,7 +287,11 @@ describe("host-wide shared lane admission", () => {
 		expect(status.reclaimed_count).toBe(1);
 		expect(status.active_lanes).toBe(3);
 		expect(status.n_free).toBe(1);
-		expect(status.reservations.map(r => r.owner).sort()).toEqual(["live-old", "uncertain-launch", "unknown-liveness"]);
+		expect(status.reservations.map(r => r.owner).sort()).toEqual([
+			"live-old",
+			"uncertain-launch",
+			"unknown-liveness",
+		]);
 	});
 
 	it("external reservation survives caller death while spawned worker process lives, then reclaims when worker exits", async () => {
@@ -408,7 +412,12 @@ describe("host-wide shared lane admission", () => {
 		expect(ext.reason).toBe("older_unregistered_veyyon_processes_live");
 
 		// Native acquires still register so mixed hosts track upgraded processes
-		const nat = await acquireLaneAdmission({ owner: "nat-upgrade-ok", kind: "native", workerPid: process.pid, cap: 40 });
+		const nat = await acquireLaneAdmission({
+			owner: "nat-upgrade-ok",
+			kind: "native",
+			workerPid: process.pid,
+			cap: 40,
+		});
 		expect(nat.ok).toBe(true);
 		expect(nat.admitted).toBe(true);
 		expect(nat.all_host_enforced).toBe(false);
@@ -480,14 +489,7 @@ describe("host-wide shared lane admission", () => {
 			]);
 			expect(beat.exitCode).toBe(0);
 
-			const badRelease = runCli([
-				"release",
-				"--slot-id",
-				acqJson.slot_id,
-				"--lease-token",
-				"bad-token",
-				"--json",
-			]);
+			const badRelease = runCli(["release", "--slot-id", acqJson.slot_id, "--lease-token", "bad-token", "--json"]);
 			expect(badRelease.exitCode).toBe(1);
 
 			const status = runCli(["status", "--cap", "1", "--json"]);
@@ -603,7 +605,12 @@ describe("host-wide shared lane admission", () => {
 		expect(first.admitted).toBe(true);
 
 		// Second concurrent acquire with the same launching owner fails closed (no double start)
-		const dupLaunching = await acquireLaneAdmission({ owner: "dup-owner", kind: "external", cap: 4, liveness: probe });
+		const dupLaunching = await acquireLaneAdmission({
+			owner: "dup-owner",
+			kind: "external",
+			cap: 4,
+			liveness: probe,
+		});
 		expect(dupLaunching.ok).toBe(false);
 		expect(dupLaunching.admitted).toBe(false);
 		expect(dupLaunching.reason).toBe("owner_already_reserved");
@@ -630,7 +637,12 @@ describe("host-wide shared lane admission", () => {
 		expect(retried.reclaimed_count).toBe(1);
 
 		await releaseLaneAdmission({ slotId: retried.slot_id!, leaseToken: retried.lease_token! });
-		const afterRelease = await acquireLaneAdmission({ owner: "dup-owner", kind: "external", cap: 4, liveness: probe });
+		const afterRelease = await acquireLaneAdmission({
+			owner: "dup-owner",
+			kind: "external",
+			cap: 4,
+			liveness: probe,
+		});
 		expect(afterRelease.admitted).toBe(true);
 	});
 
