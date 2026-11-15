@@ -344,6 +344,31 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(goodAdopt.adopted).toBe(true);
 	});
 
+	it("does not persist lower caps from status reclamation or absent release", async () => {
+		let alive = true;
+		const liveness: LaneLivenessProbe = {
+			getStartIdentity: pid => `test:${pid}:1`,
+			isPidAlive: () => alive,
+			isInstanceAlive: () => alive,
+		};
+		const acquired = await acquireLaneAdmission({
+			owner: "cap-policy-owner",
+			kind: "native",
+			workerPid: 101,
+			cap: 4,
+			liveness,
+		});
+		expect(acquired.admitted).toBe(true);
+
+		await releaseLaneAdmission({ slotId: "missing", leaseToken: "invalid", cap: 1 });
+		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(4);
+
+		alive = false;
+		const status = await getLaneAdmissionStatus({ cap: 1, liveness });
+		expect(status.reclaimed_count).toBe(1);
+		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(4);
+	});
+
 	it("enforces persisted cap as a durable ceiling and never silently raises it on later acquires, status, or releases", async () => {
 		const fakeLive = new Map<string, boolean>([
 			["101", true],
