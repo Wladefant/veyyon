@@ -59,8 +59,10 @@ const testAgent: AgentDefinition = {
 
 const tempDirs: TempDir[] = [];
 const createdSessions: AgentSession[] = [];
-function makeRealAgentSession(opts: { agentId?: string; agentKind?: "main" | "sub" } = {}): AgentSession {
-	const sessionManager = SessionManager.inMemory("/repo");
+function makeRealAgentSession(
+	opts: { agentId?: string; agentKind?: "main" | "sub"; sessionManager?: SessionManager } = {},
+): AgentSession {
+	const sessionManager = opts.sessionManager ?? SessionManager.inMemory("/repo");
 	const session = new AgentSession({
 		agent: new Agent({
 			initialState: {
@@ -961,18 +963,15 @@ describe("host-wide shared lane admission", () => {
 		}
 
 		let wakeOutcome: "injected" | "woken" | undefined;
-		const childSession = makeRealAgentSession({ agentId: "InProcessReuseChild", agentKind: "sub" });
+		let childSession: AgentSession;
 		const innerPromptDone = Promise.withResolvers<void>();
 		const innerWakeIdle = Promise.withResolvers<void>();
-		vi.spyOn(childSession.agent, "prompt").mockImplementation(async () => {
-			innerPromptDone.resolve();
-		});
 		const origRelease = laneModule.laneAdmissionDriver.release;
 		let childSlotId: string | undefined;
 		const origAcquire = laneModule.laneAdmissionDriver.acquire;
 		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementation(async opts => {
 			const res = await origAcquire(opts);
-			if (res.admitted && opts.owner === "InProcessReuseChild") {
+			if (res.admitted && opts.owner.includes("InProcessReuseChild")) {
 				childSlotId = res.slot_id;
 			}
 			return res;
@@ -1000,7 +999,17 @@ describe("host-wide shared lane admission", () => {
 			},
 			{ activeToolNames: ["yield"] },
 		);
-		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(mockSession));
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			childSession = makeRealAgentSession({
+				agentId: "InProcessReuseChild",
+				agentKind: "sub",
+				sessionManager: options?.sessionManager,
+			});
+			vi.spyOn(childSession.agent, "prompt").mockImplementation(async () => {
+				innerPromptDone.resolve();
+			});
+			return createSessionResult(mockSession);
+		});
 
 		const res = await runSubprocess({
 			cwd: "/repo",
