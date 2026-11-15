@@ -1043,7 +1043,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			// operator greps for a filename that does not exist. No-op for a new
 			// file (nothing is stored yet) and on a case-sensitive filesystem.
 			const reportedPath = overwritingExistingFile ? resolveStoredPathCase(absolutePath) : absolutePath;
-			const existingConventions = overwritingExistingFile
+			const existingConventions = existing?.isFile()
 				? await detectExistingTextConventions(absolutePath)
 				: undefined;
 			const { text: writeContent, applied: appliedConventions } = applyExistingTextConventions(
@@ -1061,6 +1061,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 					displayPath,
 					writeContent,
 					appliedConventions,
+					true,
 				);
 				return {
 					content: [{ type: "text", text: resultText }],
@@ -1080,6 +1081,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 				displayPath,
 				writeContent,
 				appliedConventions,
+				false,
 			);
 			if (!diagnostics) {
 				return {
@@ -1107,17 +1109,17 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 		displayPath: string,
 		content: string,
 		appliedConventions: AppliedTextConventions,
+		routedThroughBridge: boolean,
 	): Promise<{ resultText: string; madeExecutable?: boolean }> {
-		const persistedText =
-			appliedConventions.crlf || appliedConventions.bom
-				? await fs.readFile(absolutePath, "utf8").catch(() => content)
+		const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, content);
+		const header = maybeWriteSnapshotHeader(this.session, absolutePath, content);
+		const writeBytes = Buffer.byteLength(content, "utf8");
+		const conventionText =
+			routedThroughBridge && (appliedConventions.crlf || appliedConventions.bom)
+				? await fs.readFile(absolutePath, "utf8").catch(() => undefined)
 				: content;
-		const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, persistedText);
-		const header = maybeWriteSnapshotHeader(this.session, absolutePath, persistedText);
-		const writeBytes = Buffer.byteLength(persistedText, "utf8");
-		const note = textFileConventionNote(appliedConventions, persistedText);
+		const note = conventionText !== undefined ? textFileConventionNote(appliedConventions, conventionText) : undefined;
 		const writeLine = note
-			? `Successfully wrote ${writeBytes} bytes to ${displayPath}\n${note}`
 			: `Successfully wrote ${writeBytes} bytes to ${displayPath}`;
 		const resultText = header ? `${header}\n${writeLine}` : writeLine;
 		const fullResultText = madeExecutable ? `${resultText}\n${EXECUTABLE_NOTICE}` : resultText;
