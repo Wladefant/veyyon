@@ -1146,6 +1146,7 @@ function readBlobSite(
 	blobStore: BlobStore,
 	reads: BlobReads,
 	signal?: AbortSignal,
+	maxTextBytes?: number,
 ): Promise<string> {
 	const started =
 		site.kind === "image-data" ? reads.imageData : site.kind === "image-url" ? reads.imageUrl : reads.text;
@@ -1156,7 +1157,7 @@ function readBlobSite(
 				? resolveImageData(blobStore, reference, { signal })
 				: site.kind === "image-url"
 					? resolveImageDataUrl(blobStore, reference, { signal })
-					: resolveTextBlobRef(blobStore, reference, { signal });
+					: resolveTextBlobRef(blobStore, reference, { signal, maxBytes: maxTextBytes });
 		started.set(reference, read);
 	}
 	return read;
@@ -1169,10 +1170,11 @@ async function resolveBlobSite(
 	strings: StringPool,
 	reads: BlobReads,
 	signal?: AbortSignal,
+	maxTextBytes?: number,
 ): Promise<void> {
 	const reference = siteReference(site);
 	if (reference === undefined) return;
-	const resolved = await readBlobSite(site, reference, blobStore, reads, signal);
+	const resolved = await readBlobSite(site, reference, blobStore, reads, signal, maxTextBytes);
 	signal?.throwIfAborted();
 	settleBlobSite(site, reference, resolved, lost, strings);
 }
@@ -1194,6 +1196,7 @@ async function resolveBlobSites(
 	blobStore: BlobStore,
 	lost: LostPayloads,
 	signal?: AbortSignal,
+	maxTextBytes?: number,
 ): Promise<void> {
 	const { sites, strings } = scan;
 	if (sites.length === 0) return;
@@ -1205,7 +1208,7 @@ async function resolveBlobSites(
 			for (let index = next++; index < sites.length; index = next++) {
 				signal?.throwIfAborted();
 				const site = sites[index];
-				if (site) await resolveBlobSite(site, blobStore, lost, strings, reads, signal);
+				if (site) await resolveBlobSite(site, blobStore, lost, strings, reads, signal, maxTextBytes);
 			}
 		}),
 	);
@@ -1238,6 +1241,8 @@ export interface BlobResolutionOptions {
 	operatorNotices?: OperatorNotices;
 	/** Caller's abort signal. */
 	signal?: AbortSignal;
+	/** Optional upper bound on bytes read per externalized text blob. */
+	maxTextBytes?: number;
 }
 
 /**
@@ -1281,7 +1286,7 @@ export async function resolveBlobRefsInEntries(
 				scanResidentValues(entry as unknown as Record<string, unknown>, cold, scan);
 			}
 		}
-		await resolveBlobSites(scan, blobStore, lost, options?.signal);
+		await resolveBlobSites(scan, blobStore, lost, options?.signal, options?.maxTextBytes);
 	} finally {
 		// Each site holds the object its payload restores into, so a scan the engine keeps reachable
 		// past the load would hold every restored text of a session the caller has released.
@@ -1325,7 +1330,7 @@ export function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
 
 export type ReadOnlySessionHistory = {
 	messages: AgentMessage[];
-	prepareMessage: (message: AgentMessage) => Promise<void>;
+	prepareMessage: (message: AgentMessage, opts?: { maxTextBytes?: number }) => Promise<void>;
 };
 
 /**
@@ -1350,7 +1355,7 @@ export async function loadSessionHistoryReadOnly(
 	const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
 	const context = buildSessionContext(sessionEntries);
 	const prepared = new WeakSet<AgentMessage>(options.deferPayloads ? [] : context.messages);
-	const prepareMessage = async (message: AgentMessage): Promise<void> => {
+	const prepareMessage = async (message: AgentMessage, prepareOpts?: { maxTextBytes?: number }): Promise<void> => {
 		signal?.throwIfAborted();
 		if (prepared.has(message)) return;
 		// Restoration reads only the payload, not event identity. This transient
@@ -1358,9 +1363,11 @@ export async function loadSessionHistoryReadOnly(
 		await resolveBlobRefsInEntries(
 			[{ type: "message", id: "history-view", parentId: null, timestamp: "", message }],
 			blobs,
-			{ signal },
+			{ signal, maxTextBytes: prepareOpts?.maxTextBytes },
 		);
-		prepared.add(message);
+		if (prepareOpts?.maxTextBytes === undefined) {
+			prepared.add(message);
+		}
 	};
 	signal?.throwIfAborted();
 	return { messages: context.messages, prepareMessage };

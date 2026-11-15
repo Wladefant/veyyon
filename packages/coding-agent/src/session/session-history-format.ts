@@ -55,7 +55,7 @@ export interface HistoryFormatOptions {
 	/** Stop after this many markdown lines without rendering later messages. */
 	maxLines?: number;
 	/** Restore stored payloads only when the requested view reaches this message. */
-	prepareMessage?: (message: AgentMessage) => Promise<void>;
+	prepareMessage?: (message: AgentMessage, opts?: { maxTextBytes?: number }) => Promise<void>;
 }
 
 /** Max length of the primary-arg summary inside `→ tool(...)` lines. */
@@ -672,7 +672,7 @@ async function preflightHistoryMessage(
 	signal?: AbortSignal,
 ): Promise<void> {
 	if (!msg || typeof msg !== "object") return;
-	await opts?.prepareMessage?.(msg);
+	await opts?.prepareMessage?.(msg, { maxTextBytes: Math.floor(MAX_RECORD_BYTES / 2) });
 	if ("content" in msg) await preflightContentBytes(msg.content, MAX_RECORD_BYTES, signal);
 	if (msg.role !== "assistant" || !Array.isArray(msg.content)) return;
 	let totalAssistantText = 0;

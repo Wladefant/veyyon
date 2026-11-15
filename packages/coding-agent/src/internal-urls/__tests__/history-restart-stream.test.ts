@@ -185,3 +185,91 @@ it("restores the selected compaction summary without reviving discarded messages
 	expect(view.content).toContain("latest");
 	expect(view.content).not.toContain("discarded");
 });
+
+it("discovers transcripts under a symlinked registered root while skipping untrusted descendant symlinks", async () => {
+	using target = TempDir.createSync("history-symlink-target-");
+	using linkParent = TempDir.createSync("history-symlink-root-");
+	using untrustedTarget = TempDir.createSync("history-symlink-untrusted-");
+	const rootLink = `${linkParent.path()}/artifacts-root`;
+	await fs.writeFile(
+		target.join("OldAgent.jsonl"),
+		JSON.stringify({ type: "session", version: 4, id: "sym", cwd: target.path(), timestamp: "2026-11-15T00:00:00.000Z" }) +
+			"\n" +
+			JSON.stringify({
+				type: "message",
+				id: "m1",
+				parentId: null,
+				timestamp: "2026-11-15T00:00:01.000Z",
+				message: { role: "user", content: "from symlink root", timestamp: 1 },
+			}) +
+			"\n",
+	);
+	await fs.writeFile(
+		untrustedTarget.join("UntrustedChild.jsonl"),
+		JSON.stringify({ type: "session", version: 4, id: "untrusted", cwd: untrustedTarget.path(), timestamp: "2026-11-15T00:00:00.000Z" }) + "\n",
+	);
+	const linkType = process.platform === "win32" ? "junction" : "dir";
+	await fs.symlink(target.path(), rootLink, linkType);
+	await fs.symlink(untrustedTarget.path(), target.join("untrusted-sub"), linkType);
+	registerArtifactsDir(rootLink);
+	const scan = await scanSessionFilesFromDisk();
+	expect(scan.files.has("OldAgent")).toBe(true);
+	expect(scan.files.has("UntrustedChild")).toBe(false);
+	const view = await new HistoryProtocolHandler().resolve(parseInternalUrl("history://OldAgent"), {
+		historyMaxLines: 10,
+	});
+	expect(view.content).toContain("from symlink root");
+});
+
+it("renders a bounded prefix when the first user message or tool result references a >8 MiB text blob", async () => {
+	using dir = TempDir.createSync("history-large-blob-");
+	const store = new BlobStore(blobsDirForSessionDir(dir.path()));
+	const hugeUser = store.putSync(Buffer.from(`line-1\nline-2\n${"x".repeat(9 * 1024 * 1024)}`));
+	const hugeTool = store.putSync(Buffer.from(`tool-summary-line\n${"y".repeat(9 * 1024 * 1024)}`));
+	await fs.writeFile(
+		dir.join("BigAgent.jsonl"),
+		[
+			{ type: "session", version: 4, id: "big", cwd: dir.path(), timestamp: "2026-11-15T00:00:00.000Z" },
+			{
+				type: "message",
+				id: "u1",
+				parentId: null,
+				timestamp: "2026-11-15T00:00:01.000Z",
+				message: { role: "user", content: `blobtext:sha256:${hugeUser.hash}`, timestamp: 1 },
+			},
+			{
+				type: "message",
+				id: "a1",
+				parentId: "u1",
+				timestamp: "2026-11-15T00:00:02.000Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "foo.ts" } }],
+					timestamp: 2,
+				},
+			},
+			{
+				type: "message",
+				id: "t1",
+				parentId: "a1",
+				timestamp: "2026-11-15T00:00:03.000Z",
+				message: {
+					role: "toolResult",
+					toolCallId: "c1",
+					toolName: "read",
+					content: [{ type: "text", text: `blobtext:sha256:${hugeTool.hash}` }],
+					isError: false,
+					timestamp: 3,
+				},
+			},
+		]
+			.map(record => JSON.stringify(record))
+			.join("\n") + "\n",
+	);
+	registerArtifactsDir(dir.path());
+	const view = await new HistoryProtocolHandler().resolve(parseInternalUrl("history://BigAgent"), {
+		historyMaxLines: 12,
+	});
+	expect(view.content).toContain("line-1");
+	expect(view.content).toContain("line-2");
+});

@@ -14,11 +14,13 @@ export class HistoryDirectoryIndex {
 	readonly #rows = new Map<string, DirectoryRow>();
 	readonly #visited = new Map<string, DirectoryRow>();
 	readonly #roots: string[];
+	readonly #rootSet: Set<string>;
 	readonly #cachePath: string;
 	readonly #signal?: AbortSignal;
 
 	constructor(roots: readonly string[], signal?: AbortSignal) {
 		this.#roots = [...new Set(roots.map(root => path.resolve(root)))].sort();
+		this.#rootSet = new Set(this.#roots);
 		const key = createHash("sha256").update(JSON.stringify(this.#roots)).digest("hex");
 		this.#cachePath = path.join(getAgentDir(), "cache", "history-directories", `${key}.json`);
 		this.#signal = signal;
@@ -81,7 +83,8 @@ export class HistoryDirectoryIndex {
 	async entries(dir: string): Promise<ListedEntry[]> {
 		this.#signal?.throwIfAborted();
 		try {
-			const before = await fs.lstat(dir);
+			const isRoot = this.#rootSet.has(path.resolve(dir));
+			const before = isRoot ? await fs.stat(dir) : await fs.lstat(dir);
 			if (!before.isDirectory()) return [];
 			const stamp = `${before.dev}:${before.ino}:${before.mtimeMs}:${before.ctimeMs}`;
 			const cached = this.#rows.get(dir);
@@ -94,7 +97,7 @@ export class HistoryDirectoryIndex {
 				kind: entry.isDirectory() ? ("d" as const) : entry.isFile() ? ("f" as const) : ("o" as const),
 			}));
 			this.#signal?.throwIfAborted();
-			const after = await fs.lstat(dir);
+			const after = isRoot ? await fs.stat(dir) : await fs.lstat(dir);
 			if (stamp === `${after.dev}:${after.ino}:${after.mtimeMs}:${after.ctimeMs}`)
 				this.#visited.set(dir, { stamp, entries });
 			return entries;
