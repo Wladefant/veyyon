@@ -591,18 +591,6 @@ describe("task spawn routing", () => {
 					requests: {
 						"verifier-ticket": {
 							prompt: "Verify claimed work",
-							state: "review",
-							head: "0".repeat(40),
-							repo_root: process.cwd(),
-							authorization: {
-								status: "authorized",
-								timestamp: "2026-11-15T00:00:00Z",
-								scope: "staging",
-								authorized_by: "operator",
-							},
-						},
-						"producer-ticket": {
-							prompt: "Replacement producer work",
 							state: "pending",
 							head: "0".repeat(40),
 							repo_root: process.cwd(),
@@ -621,6 +609,23 @@ describe("task spawn routing", () => {
 			expect(claim.claimed).toBe(true);
 			const claimedTicket = claim.ticket!;
 			expect(claimedTicket.id).toBe("verifier-ticket");
+
+			const seededLedger = JSON.parse(await fs.readFile(ledgerPath, "utf8")) as {
+				requests: Record<string, Record<string, unknown>>;
+			};
+			seededLedger.requests["producer-ticket"] = {
+				prompt: "Replacement producer work",
+				state: "pending",
+				head: "0".repeat(40),
+				repo_root: process.cwd(),
+				authorization: {
+					status: "authorized",
+					timestamp: "2026-11-15T00:00:00Z",
+					scope: "staging",
+					authorized_by: "operator",
+				},
+			};
+			await fs.writeFile(ledgerPath, JSON.stringify(seededLedger), "utf8");
 
 			let dispatched = 0;
 			let startFailedCalls = 0;
