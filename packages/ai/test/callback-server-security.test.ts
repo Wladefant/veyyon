@@ -11,7 +11,7 @@ class CallbackProbeFlow extends OAuthCallbackFlow {
 		return { url: url.toString() };
 	}
 
-	async exchangeCodeForTokens(code: string): Promise<OAuthCredentials> {
+	async exchangeToken(code: string): Promise<OAuthCredentials> {
 		return {
 			access: code,
 			refresh: "refresh-token",
@@ -60,8 +60,7 @@ describe("OAuthCallbackFlow callback security", () => {
 	])("preserves %s in provider errors as inert page data without a valid state", async (_label, errorText) => {
 		const { info, abort, login } = await startFlow();
 		const redirectUri = new URL(info.url).searchParams.get("redirect_uri");
-		if (!redirectUri) throw new Error("OAuth test flow did not advertise its callback URI");
-
+		const loginSettled = login.catch(() => undefined);
 		try {
 			const callback = new URL(redirectUri);
 			callback.searchParams.set("error", "access_denied");
@@ -79,9 +78,10 @@ describe("OAuthCallbackFlow callback security", () => {
 		} finally {
 			abort.abort("test cleanup");
 			await login.catch(() => undefined);
+		} finally {
+			abort.abort("test cleanup");
+			await loginSettled;
 		}
-	});
-
 	it("preserves callback codes containing markup and replacement patterns", async () => {
 		const { info, abort, login } = await startFlow();
 		const authUrl = new URL(info.url);
