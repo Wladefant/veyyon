@@ -591,7 +591,7 @@ describe("task spawn routing", () => {
 					requests: {
 						"verifier-ticket": {
 							prompt: "Verify claimed work",
-							state: "pending",
+							state: "review",
 							head: "0".repeat(40),
 							repo_root: process.cwd(),
 							authorization: {
@@ -620,6 +620,7 @@ describe("task spawn routing", () => {
 			const claim = await replenishmentModule.claimNextAuthorizedTicket(ledgerPath, { workerId: "replenisher" });
 			expect(claim.claimed).toBe(true);
 			const claimedTicket = claim.ticket!;
+			expect(claimedTicket.id).toBe("verifier-ticket");
 
 			let dispatched = 0;
 			let startFailedCalls = 0;
