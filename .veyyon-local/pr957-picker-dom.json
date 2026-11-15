@@ -1,0 +1,59 @@
+{
+  "url": "https://chatgpt.com/",
+  "utc": "2026-11-04T17:44:43.593Z",
+  "controls": [
+    {
+      "role": "menuitem",
+      "text": "Medium",
+      "checked": null,
+      "value": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "role": "menuitem",
+      "text": "",
+      "checked": null,
+      "value": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "role": "slider",
+      "text": "",
+      "checked": null,
+      "value": "1",
+      "min": "0",
+      "max": "3"
+    },
+    {
+      "role": "menuitemradio",
+      "text": "GPT-6",
+      "checked": "true",
+      "value": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "role": "menuitemradio",
+      "text": "GPT-5.6 Sol",
+      "checked": "false",
+      "value": null,
+      "min": null,
+      "max": null
+    },
+    {
+      "role": "menuitemradio",
+      "text": "Pro",
+      "checked": "false",
+      "value": null,
+      "min": null,
+      "max": null
+    }
+  ],
+  "chat": [
+    {
+      "pressed": "true"
+    }
+  ]
+}
