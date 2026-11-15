@@ -3,13 +3,13 @@
  * registered agent sessions.
  */
 
-import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { isMissingPath } from "@veyyon/utils/fs-error";
 import { isSessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { AgentRegistry } from "../registry/agent-registry";
+import { HistoryDirectoryIndex } from "./history-directory-index";
 
 const extraArtifactsDirs = new Set<string>();
 
@@ -165,6 +165,8 @@ export async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<Se
 	// reach descendants that the initial traversal could not inspect.
 	const minVisitedDepth = new Map<string, number>();
 	const pending = artifactsDirsFromRegistry().map(dir => ({ dir, depth: 0 }));
+	const directoryIndex = new HistoryDirectoryIndex(pending.map(item => item.dir), signal);
+	await directoryIndex.load();
 	for (let cursor = 0; cursor < pending.length; ) {
 		signal?.throwIfAborted();
 		const batch: { dir: string; depth: number }[] = [];
@@ -179,25 +181,18 @@ export async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<Se
 		// A large conversation has thousands of tiny child directories. Awaiting
 		// each listing serially makes unrelated agents delay every history read.
 		const listings = await Promise.all(
-			batch.map(async ({ dir, depth }) => {
-				try {
-					return { dir, depth, entries: await fs.readdir(dir, { withFileTypes: true }) };
-				} catch (err) {
-					if (isMissingPath(err)) return { dir, depth, entries: [] as Dirent[] };
-					throw err;
-				}
-			}),
+			batch.map(async ({ dir, depth }) => ({ dir, depth, entries: await directoryIndex.entries(dir) })),
 		);
 		for (const { dir, depth, entries } of listings) {
 			for (const entry of entries) {
 				if (signal?.aborted) signal.throwIfAborted();
 				if (ARTIFACT_RESERVATION_DIR_PATTERN.test(entry.name) || ARTIFACT_ID_DATABASE_PATTERN.test(entry.name))
 					continue;
-				if (entry.isDirectory()) {
+				if (entry.kind === "d") {
 					pending.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
 					continue;
 				}
-				if (!entry.isFile()) continue;
+				if (entry.kind !== "f") continue;
 				const name = entry.name;
 				if (!isSessionFileName(name)) continue;
 				if (name.startsWith("__advisor")) continue;
@@ -222,5 +217,6 @@ export async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<Se
 			}
 		}
 	}
+	await directoryIndex.save();
 	return { files: found, ambiguous };
 }

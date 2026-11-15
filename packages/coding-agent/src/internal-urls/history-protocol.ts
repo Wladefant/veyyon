@@ -24,7 +24,7 @@ import * as fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
+import { loadSessionHistoryReadOnly, type ReadOnlySessionHistory } from "@veyyon/kernel/session/session-loader";
 import { isAbortError } from "@veyyon/utils";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -658,11 +658,16 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 
 		const notes: string[] = [];
 		let messages: unknown[];
+		let prepareMessage: ReadOnlySessionHistory["prepareMessage"] | undefined;
 		if (ref.session) {
 			messages = ref.session.messages;
 			notes.push("Source: live session");
 		} else if (ref.sessionFile) {
-			messages = await loadSessionMessagesReadOnly(ref.sessionFile, signal);
+			const history = await loadSessionHistoryReadOnly(ref.sessionFile, signal, {
+				deferPayloads: context?.historyMaxLines !== undefined,
+			});
+			messages = history.messages;
+			prepareMessage = history.prepareMessage;
 			notes.push(`Source: session file (read-only, ${ref.status})`);
 		} else {
 			// No live session and no retained sessionFile — try the disk scan before
@@ -676,7 +681,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 
 		const content = await formatSessionHistoryMarkdownAsync(
 			messages,
-			{ title: `${ref.id} (${ref.status})`, maxLines: context?.historyMaxLines },
+			{ title: `${ref.id} (${ref.status})`, maxLines: context?.historyMaxLines, prepareMessage },
 			signal,
 		);
 		return {
@@ -747,10 +752,10 @@ async function resolveFromDisk(
 		}
 	}
 	if (!matchedId || !sessionFile) return undefined;
-	const messages = await loadSessionMessagesReadOnly(sessionFile, signal);
+	const history = await loadSessionHistoryReadOnly(sessionFile, signal, { deferPayloads: maxLines !== undefined });
 	const content = await formatSessionHistoryMarkdownAsync(
-		messages,
-		{ title: `${matchedId} (on disk)`, maxLines },
+		history.messages,
+		{ title: `${matchedId} (on disk)`, maxLines, prepareMessage: history.prepareMessage },
 		signal,
 	);
 	return {

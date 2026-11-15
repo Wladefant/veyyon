@@ -25,15 +25,15 @@ it("streams a stored prefix without opening payloads from later messages", async
 	].map(value => JSON.stringify(value)).join("\n") + "\n");
 	registerArtifactsDir(dir.path());
 	const get = BlobStore.prototype.get;
-	const payloadRead = spyOn(BlobStore.prototype, "get").mockImplementation(function (hash, options) {
+	const payloadRead = spyOn(BlobStore.prototype, "get").mockImplementation(function (this: BlobStore, hash, options) {
 		if (hash === tail.hash) throw new Error("unrequested tail payload opened");
 		return get.call(this, hash, options);
 	});
 	const readFile = fs.readFile;
-	const transcriptRead = spyOn(fs, "readFile").mockImplementation((...args: Parameters<typeof fs.readFile>) => {
+	const transcriptRead = spyOn(fs, "readFile").mockImplementation(((...args: Parameters<typeof fs.readFile>) => {
 		if (String(args[0]) === file) throw new Error("whole transcript read");
 		return readFile(...args);
-	});
+	}) as typeof fs.readFile);
 	try {
 		const result = await new HistoryProtocolHandler().resolve(parseInternalUrl("history://OldAgent"), { historyMaxLines: 7 });
 		expect(result.content).toBe("# OldAgent (on disk)\n\n## user\n\nfirst\nsecond\nthird\n");
@@ -54,10 +54,10 @@ it("reuses a disk index after registry reset and invalidates a newly ambiguous i
 	resetRegisteredArtifactDirsForTests();
 	registerArtifactsDir(dir.path());
 	const readdir = fs.readdir;
-	const listing = spyOn(fs, "readdir").mockImplementation((...args: Parameters<typeof fs.readdir>) => {
+	const listing = spyOn(fs, "readdir").mockImplementation(((...args: Parameters<typeof fs.readdir>) => {
 		if (String(args[0]) === dir.join("nested")) throw new Error("indexed directory enumerated again");
 		return readdir(...args);
-	});
+	}) as typeof fs.readdir);
 	try {
 		expect((await scanSessionFilesFromDisk()).files.get("OldAgent")).toBe(dir.join("nested", "OldAgent.jsonl"));
 	} finally {

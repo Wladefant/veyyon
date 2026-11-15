@@ -54,6 +54,8 @@ export interface HistoryFormatOptions {
 	expandEditDiffs?: boolean;
 	/** Stop after this many markdown lines without rendering later messages. */
 	maxLines?: number;
+	/** Restore stored payloads only when the requested view reaches this message. */
+	prepareMessage?: (message: AgentMessage) => Promise<void>;
 }
 
 /** Max length of the primary-arg summary inside `→ tool(...)` lines. */
@@ -379,12 +381,13 @@ function* toolCallLine(
 	result: ToolResultMessage | undefined,
 	includeToolIntent?: boolean,
 	expandEditDiffs?: boolean,
-): Generator<void, string> {
+): Generator<void | AgentMessage, string> {
 	const head = `→ ${name}(${primaryArg(name, args)})`;
 	let base: string;
 	if (!result) {
 		base = `${head} ⇒ pending`;
 	} else {
+		yield result;
 		const { lines, firstLine } = yield* summarizeToolResult(result);
 		const count = formatCount("line", lines);
 		if (result.isError) {
@@ -669,6 +672,7 @@ async function preflightHistoryMessage(
 	signal?: AbortSignal,
 ): Promise<void> {
 	if (!msg || typeof msg !== "object") return;
+	await opts?.prepareMessage?.(msg);
 	if ("content" in msg) await preflightContentBytes(msg.content, MAX_RECORD_BYTES, signal);
 	if (msg.role !== "assistant" || !Array.isArray(msg.content)) return;
 	let totalAssistantText = 0;

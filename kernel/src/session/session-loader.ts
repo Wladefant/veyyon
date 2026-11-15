@@ -56,6 +56,8 @@ export const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 export interface SessionLoadOptions {
 	source?: string;
 	operatorNotices?: OperatorNotices;
+	/** Stream records even when the file is smaller than the automatic threshold. */
+	stream?: boolean;
 	/**
 	 * Move compacted history to disk while a streamed file loads (see {@link LoadCooling}). The
 	 * result's `cold` holds the store the moved entries read back through and the usage totals.
@@ -795,7 +797,7 @@ export async function loadSessionFile(
 		before = storage.statSync(filePath);
 		options.signal?.throwIfAborted();
 		loaded =
-			storage instanceof FileSessionStorage && before.size >= STREAM_LOAD_THRESHOLD_BYTES
+			storage instanceof FileSessionStorage && (options.stream || before.size >= STREAM_LOAD_THRESHOLD_BYTES)
 				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath }, storage)
 				: parseSessionContent(
 						await (storage instanceof FileSessionStorage && options.signal
@@ -1316,23 +1318,45 @@ export function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
 	return entry;
 }
 
+export type ReadOnlySessionHistory = {
+	messages: AgentMessage[];
+	prepareMessage: (message: AgentMessage) => Promise<void>;
+};
+
 /**
  * Read-only message view of a session file: load entries, migrate to the
  * current version, resolve blob refs, and build the context along the
  * persisted leaf path (last entry). Does NOT create a writer or take the
  * session lock — safe to call against a file another session is writing.
  */
-export async function loadSessionMessagesReadOnly(filePath: string, signal?: AbortSignal): Promise<AgentMessage[]> {
+export async function loadSessionHistoryReadOnly(
+	filePath: string,
+	signal?: AbortSignal,
+	options: { deferPayloads?: boolean } = {},
+): Promise<ReadOnlySessionHistory> {
 	signal?.throwIfAborted();
-	const entries = await loadEntriesFromFile(filePath, undefined, { signal });
+	const entries = await loadEntriesFromFile(filePath, undefined, { signal, stream: options.deferPayloads });
 	signal?.throwIfAborted();
-	if (entries.length === 0) return [];
-	await resolveBlobRefsInEntries(entries, new BlobStore(blobsDirForSessionDir(path.dirname(filePath))), { signal });
+	const blobs = new BlobStore(blobsDirForSessionDir(path.dirname(filePath)));
+	if (!options.deferPayloads) await resolveBlobRefsInEntries(entries, blobs, { signal });
 	signal?.throwIfAborted();
 	await migrateToCurrentVersion(entries);
 	signal?.throwIfAborted();
 	const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
 	const context = buildSessionContext(sessionEntries);
+	const prepared = new WeakSet<AgentMessage>(options.deferPayloads ? [] : context.messages);
+	const prepareMessage = async (message: AgentMessage): Promise<void> => {
+		signal?.throwIfAborted();
+		if (prepared.has(message)) return;
+		// Restoration reads only the payload, not event identity. This transient
+		// message view is never persisted and also covers generated summary messages.
+		await resolveBlobRefsInEntries(
+			[{ type: "message", id: "history-view", parentId: null, timestamp: "", message }],
+			blobs,
+			{ signal },
+		);
+		prepared.add(message);
+	};
 	signal?.throwIfAborted();
-	return context.messages;
+	return { messages: context.messages, prepareMessage };
 }

@@ -32,7 +32,7 @@ import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
 import {
 	STREAM_LOAD_THRESHOLD_BYTES,
-	loadSessionMessagesReadOnly,
+	loadSessionHistoryReadOnly,
 	parseSessionContent,
 } from "@veyyon/kernel/session/session-loader";
 import * as sessionLoaderModule from "@veyyon/kernel/session/session-loader";
@@ -716,7 +716,7 @@ describe("history read bounded regressions", () => {
 			try {
 				let error: unknown;
 				try {
-					await loadSessionMessagesReadOnly(sessionFilePath, controller.signal);
+					await loadSessionHistoryReadOnly(sessionFilePath, controller.signal);
 				} catch (err) {
 					error = err;
 				}
