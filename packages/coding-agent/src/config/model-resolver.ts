@@ -37,7 +37,7 @@ import {
 	parseThinkingLevel,
 	resolveThinkingLevelForModel,
 } from "../thinking";
-import { hasUsableCredential } from "./auth-state";
+import { hasUsableCredential, isAuthenticated, kNoAuth } from "./auth-state";
 import { normalizeModelPatternList } from "./model-pattern-list";
 import type { ModelRegistry } from "./model-registry";
 import { type ModelRegistryView, modelResolutionFailureMessage } from "./model-resolution-failure";

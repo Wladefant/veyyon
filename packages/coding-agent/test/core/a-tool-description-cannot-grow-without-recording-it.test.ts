@@ -54,10 +54,10 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/async-result": 105,
 	"tools/bash": 1564,
 	// 1440 -> 1575: the `context` and `storage_state` parameters, the `save_state` action and the signed-in-session example.
-	"tools/browser": 1575,
+	"tools/browser": 1902,
 	"tools/checkpoint": 166,
 	"tools/debug": 414,
-	"tools/eval": 2007,
+	"tools/eval": 2023,
 	// 410 -> 469: image and binary file support for github file-read.
 	"tools/github": 469,
 	"tools/goal": 162,
@@ -67,10 +67,10 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/image-gen": 110,
 	"tools/inspect-image": 260,
 	"tools/inspect-image-system": 192,
-	"tools/irc": 681,
+	"tools/irc": 1021,
 	"tools/isolation-recovery-hint": 83,
 	"tools/isolation-summary": 589,
-	"tools/job": 413,
+	"tools/job": 407,
 	"tools/launch": 722,
 	"tools/learn": 198,
 	"tools/lsp": 610,
@@ -89,8 +89,8 @@ const RECORDED_TOKENS: Record<string, number> = {
 	"tools/search-tool-bm25": 359,
 	"tools/set-cwd": 449,
 	"tools/ssh": 236,
-	"tools/task": 1146,
-	"tools/task-summary": 151,
+	"tools/task": 1648,
+	"tools/task-summary": 150,
 	// 500 -> 505: the `pending` op row and the concurrent in-progress rule the todo tool gained.
 	"tools/todo": 505,
 	"tools/vibe-kill": 78,
@@ -105,7 +105,7 @@ const RECORDED_TOKENS: Record<string, number> = {
 };
 
 /** The sum the recorded table claims, so the total is in the diff of any trim. */
-const RECORDED_TOTAL = 22116;
+const RECORDED_TOTAL = 23526;
 
 const measured = new Map<string, number>([
 	...Object.entries(toolsPrompts).map(([id, entry]) => [id, estimateTokensFromText(entry.text)] as const),

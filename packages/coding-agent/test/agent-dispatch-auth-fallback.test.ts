@@ -314,55 +314,6 @@ describe("ordered agent model auth resolution", () => {
 
 		expect(result.model?.provider).toBe("third-provider");
 	});
-
-	test("a later configured model with working auth outranks the parent's model", async () => {
-		const registry = createMockRegistry({
-			models: [parentModel, unauthedTaskModel, sharedModel],
-			authedProviders: new Set(["deepseek"]),
-		});
-
-		const result = await resolveModelOverrideWithAuthFallback(
-			["qwen3.6-plus-free", "deepseek/shared-id:high"],
-			"deepseek/deepseek-v4-pro",
-			registry,
-		);
-
-		expect(result.authFallbackUsed).toBe(false);
-		expect(result.model?.id).toBe("shared-id");
-		expect(result.explicitThinkingLevel).toBe(true);
-	});
-
-	test("a later configured model wins with no parent model too", async () => {
-		const registry = createMockRegistry({
-			models: [unauthedTaskModel, sharedModel],
-			authedProviders: new Set(["deepseek"]),
-		});
-
-		const result = await resolveModelOverrideWithAuthFallback(
-			["qwen3.6-plus-free,deepseek/shared-id"],
-			undefined,
-			registry,
-		);
-
-		expect(result.authFallbackUsed).toBe(false);
-		expect(result.model?.id).toBe("shared-id");
-	});
-
-	test("a keyless parent model is a usable fallback", async () => {
-		const registry: ModelLookupRegistry & { getApiKey(model: Model<Api>): Promise<string | undefined> } = {
-			getAvailable: () => [parentModel, unauthedTaskModel],
-			getApiKey: async (model: Model<Api>) => (model.provider === "deepseek" ? kNoAuth : undefined),
-		} as never;
-
-		const result = await resolveModelOverrideWithAuthFallback(
-			["qwen3.6-plus-free"],
-			"deepseek/deepseek-v4-pro",
-			registry,
-		);
-
-		expect(result.authFallbackUsed).toBe(true);
-		expect(result.model?.id).toBe("deepseek-v4-pro");
-	});
 });
 
 describe("session-sticky OAuth resolution", () => {

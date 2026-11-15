@@ -620,14 +620,9 @@ export class AgentLifecycleManager {
 	}
 
 	#onRegistryEvent(event: RegistryEvent): void {
-		const adopted = this.#adopted.get(event.ref.id);
-		if (!adopted) return;
 		if (event.type === "removed") {
 			this.#adopted.delete(event.ref.id);
 			this.#scheduleNext();
-			void this.cleanupParkedOrphans().catch(error =>
-				logger.warn("AgentLifecycleManager.cleanupParkedOrphans failed", { error: errorMessage(error) }),
-			);
 			return;
 		}
 		const adopted = this.#adopted.get(event.ref.id);
