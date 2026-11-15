@@ -386,10 +386,10 @@ export class AgentLifecycleManager {
 		for (const ref of this.#registry.list()) {
 			if (
 				ref.kind !== "sub" ||
-				ref.status !== "parked" ||
+				ref.status !== "asleep" ||
 				!ref.parentId ||
 				this.#registry.get(ref.parentId) ||
-				this.#parking.has(ref.id) ||
+				this.#sleeping.has(ref.id) ||
 				this.#revivals.has(ref.id)
 			) {
 				continue;
@@ -399,8 +399,8 @@ export class AgentLifecycleManager {
 			const current = this.#registry.get(ref.id);
 			if (
 				current !== ref ||
-				current.status !== "parked" ||
-				this.#parking.has(ref.id) ||
+				current.status !== "asleep" ||
+				this.#sleeping.has(ref.id) ||
 				this.#revivals.has(ref.id) ||
 				this.#registry.get(ref.parentId)
 			) {

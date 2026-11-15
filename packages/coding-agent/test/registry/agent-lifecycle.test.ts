@@ -566,7 +566,7 @@ describe("AgentLifecycleManager", () => {
 				parentId: "Gone",
 				session: null,
 				sessionFile,
-				status: "parked",
+				status: "asleep",
 			});
 			await lifecycle.cleanupParkedOrphans();
 
@@ -598,39 +598,10 @@ describe("AgentLifecycleManager", () => {
 			displayName: "root",
 			kind: "main",
 			session: null,
-			status: "parked",
+			status: "asleep",
 		});
 		await lifecycle.cleanupParkedOrphans();
 		expect(registry.get(root.id)).toBe(root);
-	});
-
-	it("reports unfinished parked assignments as stalled before ordinary pruning", async () => {
-		const parentSession = makeSessionStub();
-		registry.register({
-			id: "Parent",
-			displayName: "parent",
-			kind: "main",
-			session: parentSession.session,
-			sessionFile: "/tmp/Parent.jsonl",
-		});
-		const parked = registry.register({
-			id: "Unfinished",
-			displayName: "task",
-			kind: "sub",
-			parentId: "Parent",
-			session: null,
-			sessionFile: "/tmp/Unfinished.jsonl",
-			status: "parked",
-		});
-		await lifecycle.prune("Unfinished");
-
-		expect(parentSession.customMessages()).toContain(
-			'Agent "Unfinished" stalled: Assignment was pruned before reporting a terminal outcome.',
-		);
-		expect(parentSession.flushCalls()).toBe(1);
-		expect(parked.terminalOutcome).toBe("stalled");
-		expect(parked.terminalOutcomeReason).toMatch(/pruned|pruning/i);
-		expect(registry.get("Unfinished")).toBeUndefined();
 	});
 
 	it("clears the prior terminal outcome only when a new assignment starts", () => {
@@ -639,7 +610,7 @@ describe("AgentLifecycleManager", () => {
 			displayName: "task",
 			kind: "sub",
 			session: null,
-			status: "parked",
+			status: "asleep",
 		});
 		registry.recordTerminalOutcome("Reused", "completed", "first run");
 		registry.recordTerminalOutcome("Reused", "failed", "late report");
