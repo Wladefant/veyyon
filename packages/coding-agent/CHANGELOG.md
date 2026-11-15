@@ -8,6 +8,18 @@
 - Bound producer-output scalar serialization and diagnose oversized records without exposing credential-bearing lines.
 - Preserve environment-inventory taint across oversized assignment records, bound repeating-prefix lookbehind, and keep quoted multi-record logs out of scalar mode.
 
+## [1.10.0] - 2026-11-14
+
+### Fixed
+
+- Add explicit priority slot admission ([PR #1108](https://github.com/Wladefant/veyyon/pull/1108)).
+
+## [1.9.4] - 2026-11-14
+
+### Fixed
+
+- Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
+
 ## [1.9.3] - 2026-11-13
 
 ### Fixed

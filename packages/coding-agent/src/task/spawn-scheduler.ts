@@ -11,7 +11,7 @@ import type { ToolSession } from "..";
 import type { AsyncJobManager } from "../async";
 import { AgentRegistry } from "../registry/agent-registry";
 import { classifyAgentOutcome, describeAgentBatch, summarizeAgentBatch } from "./outcome";
-import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
+import { mapWithConcurrencyLimit, Semaphore, type SpawnPriority } from "./parallel";
 import { appendAdvisory } from "./spawn-advisory";
 import { agentOutputManagerFor, allocateAgentId, pendingSpawnProgress, runSpawn, type SpawnRequest } from "./spawn-run";
 import { treeSpawnSemaphore } from "./spawn-semaphore";
@@ -101,6 +101,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.name !== undefined) spawn.name = item.name;
 	if (item.task !== undefined) spawn.task = item.task;
 	if (item.successorOf !== undefined) spawn.successorOf = item.successorOf;
+	if (item.priority !== undefined) spawn.priority = item.priority;
 	if (item.ownershipLease !== undefined) spawn.ownershipLease = item.ownershipLease;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
@@ -505,7 +506,7 @@ export class SpawnScheduler {
 	/** Run one spawn inline once the semaphore admits it, stamping the wait for the launch-timing log. */
 	async #runAdmitted(request: Omit<SpawnRequest, "launchTiming">): Promise<AgentToolResult<TaskToolDetails>> {
 		const invokedAt = Date.now();
-		await this.#semaphore().acquire(request.signal);
+		await this.#semaphore().acquire(request.signal, request.params.priority);
 		const acquiredAt = Date.now();
 		try {
 			return await runSpawn(this.#session, this.#parentApprovalBypassed, {
@@ -590,9 +591,14 @@ export class SpawnScheduler {
 	 * "running" forever. A permit this job never acquired is never released: that would let a later spawn
 	 * start past `agent.maxConcurrency`.
 	 */
-	async #admitJob(signal: AbortSignal, progress: AgentProgress, batch: BackgroundBatch): Promise<void> {
+	async #admitJob(
+		signal: AbortSignal,
+		progress: AgentProgress,
+		batch: BackgroundBatch,
+		priority?: SpawnPriority,
+	): Promise<void> {
 		const admitted = await this.#semaphore()
-			.acquire(signal)
+			.acquire(signal, priority)
 			.then(
 				() => true,
 				() => false,
@@ -616,7 +622,7 @@ export class SpawnScheduler {
 			agentId,
 			async ({ signal, reportProgress, markRunning }) => {
 				const startedAt = Date.now();
-				await this.#admitJob(signal, progress, batch);
+				await this.#admitJob(signal, progress, batch, params.priority);
 				const acquiredAt = Date.now();
 				let delivery: { text: string; failed: boolean };
 				try {
