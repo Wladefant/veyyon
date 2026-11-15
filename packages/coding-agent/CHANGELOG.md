@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Scoped one-off `gc` SQLite statements with `using` so `db.close()` releases database and WAL handles immediately on Windows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
+
 ## [1.10.1] - 2026-11-15
 
 ### Fixed
