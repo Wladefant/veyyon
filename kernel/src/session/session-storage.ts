@@ -684,7 +684,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	readText(path: string): Promise<string> {
-		return Bun.file(path).text();
+		return fsp.readFile(path, "utf8");
 	}
 
 	readTextSync(path: string): string | undefined {

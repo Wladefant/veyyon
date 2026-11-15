@@ -968,4 +968,125 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get(parked.id)).toBe(parked);
 		expect(parked.terminalOutcome).toBeUndefined();
 	});
+	it("coalesces concurrent cleanupParkedOrphans passes so each orphan is opened and stalled once", async () => {
+		const gate = deferred();
+		let openInFlight = 0;
+		let maxOpenInFlight = 0;
+		const opensByPath = new Map<string, number>();
+		const openedManagers: SessionStub[] = [];
+		vi.spyOn(SessionManager, "open").mockImplementation(async filePath => {
+			openInFlight++;
+			maxOpenInFlight = Math.max(maxOpenInFlight, openInFlight);
+			opensByPath.set(filePath, (opensByPath.get(filePath) ?? 0) + 1);
+			await gate.promise;
+			openInFlight--;
+			const stub = makeSessionStub();
+			openedManagers.push(stub);
+			return stub.session.sessionManager as unknown as SessionManager;
+		});
+
+		for (let i = 0; i < 4; i++) {
+			registry.register({
+				id: `Orphan${i}`,
+				displayName: `Orphan${i}`,
+				kind: "sub",
+				parentId: "GoneParent",
+				session: null,
+				sessionFile: `/tmp/Orphan${i}.jsonl`,
+				status: "parked",
+			});
+		}
+
+		const first = lifecycle.cleanupParkedOrphans();
+		const second = lifecycle.cleanupParkedOrphans();
+		// Removing another unrelated ref emits a registry "removed" event mid-sweep.
+		registry.register({
+			id: "Other",
+			displayName: "Other",
+			kind: "sub",
+			session: null,
+			status: "parked",
+		});
+		registry.unregister("Other");
+		await drainMicrotasks(5);
+
+		gate.resolve();
+		await Promise.all([first, second]);
+
+		expect(maxOpenInFlight).toBe(1);
+		for (let i = 0; i < 4; i++) {
+			expect(opensByPath.get(`/tmp/Orphan${i}.jsonl`)).toBe(1);
+			expect(registry.get(`Orphan${i}`)).toBeUndefined();
+		}
+		expect(openedManagers).toHaveLength(4);
+		for (const stub of openedManagers) {
+			expect(stub.customMessages()).toHaveLength(1);
+			expect(stub.flushCalls()).toBe(1);
+		}
+	});
+
+	it("does not double-report stalled when prune() and cleanupParkedOrphans() target the same ref", async () => {
+		const gate = deferred();
+		const openStarted = deferred();
+		let openCount = 0;
+		const stub = makeSessionStub();
+		vi.spyOn(SessionManager, "open").mockImplementation(async () => {
+			openCount++;
+			openStarted.resolve();
+			await gate.promise;
+			return stub.session.sessionManager as unknown as SessionManager;
+		});
+
+		const child = registry.register({
+			id: "SharedOrphan",
+			displayName: "SharedOrphan",
+			kind: "sub",
+			parentId: "MissingParent",
+			session: null,
+			sessionFile: "/tmp/SharedOrphan.jsonl",
+			status: "parked",
+		});
+
+		const sweep = lifecycle.cleanupParkedOrphans();
+		await openStarted.promise;
+		const pruneRun = lifecycle.prune(child.id);
+		gate.resolve();
+		await Promise.all([sweep, pruneRun]);
+
+		expect(openCount).toBe(1);
+		expect(stub.customMessages()).toHaveLength(1);
+		expect(registry.get(child.id)).toBeUndefined();
+	});
+
+	it("stops an in-flight orphan sweep when lifecycle.dispose() runs", async () => {
+		const gate = deferred();
+		const firstOpen = deferred();
+		let openCount = 0;
+		vi.spyOn(SessionManager, "open").mockImplementation(async () => {
+			openCount++;
+			firstOpen.resolve();
+			await gate.promise;
+			return makeSessionStub().session.sessionManager as unknown as SessionManager;
+		});
+
+		for (let i = 0; i < 3; i++) {
+			registry.register({
+				id: `DisposeOrphan${i}`,
+				displayName: `DisposeOrphan${i}`,
+				kind: "sub",
+				parentId: "MissingParent",
+				session: null,
+				sessionFile: `/tmp/DisposeOrphan${i}.jsonl`,
+				status: "parked",
+			});
+		}
+
+		const sweep = lifecycle.cleanupParkedOrphans();
+		await firstOpen.promise;
+		const disposing = lifecycle.dispose();
+		gate.resolve();
+		await Promise.all([sweep, disposing]);
+
+		expect(openCount).toBe(1);
+	});
 });

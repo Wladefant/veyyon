@@ -173,12 +173,15 @@ export class AgentLifecycleManager {
 
 	/** Stop listening to the registry and drop every timer and tracked agent. */
 	#retire(): void {
+		this.#disposed = true;
+		this.#orphanCleanupPending = false;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 		this.#clearTimer();
 		this.#adopted.clear();
 		this.#revivals.clear();
 		this.#parking.clear();
+		this.#stalling.clear();
 		this.#pinned.clear();
 		this.#persistedReviverFactory = undefined;
 		this.#orphanSweepDeadline = undefined;
@@ -188,6 +191,8 @@ export class AgentLifecycleManager {
 	readonly #adopted = new Map<string, AdoptedAgent>();
 	/** Ids whose session is being disposed by {@link park} right now. */
 	readonly #parking = new Set<string>();
+	/** Ids whose stalled outcome is currently being persisted by {@link prune} or {@link cleanupParkedOrphans}. */
+	readonly #stalling = new Set<string>();
 	/** In-flight revives, so concurrent {@link ensureLive} calls coalesce. */
 	readonly #revivals = new Map<string, Promise<AgentSession>>();
 	/**
@@ -203,6 +208,9 @@ export class AgentLifecycleManager {
 	/** One process-wide next-deadline timer; never one poller/timer per agent. */
 	#timer: NodeJS.Timeout | undefined;
 	#orphanSweepDeadline: number | undefined;
+	#orphanCleanupInFlight: Promise<void> | undefined;
+	#orphanCleanupPending = false;
+	#disposed = false;
 	/** TTL policy applied when a cold-revived ref is adopted on demand. */
 	#persistedReviveTtl: number | PersistedAgentIdleTtlResolver = 0;
 	/**
@@ -487,19 +495,53 @@ export class AgentLifecycleManager {
 	 * and unattributed refs are intentionally outside this cleanup rule.
 	 */
 	async cleanupParkedOrphans(): Promise<void> {
+		if (this.#disposed) return;
+		if (this.#orphanCleanupInFlight) {
+			this.#orphanCleanupPending = true;
+			return this.#orphanCleanupInFlight;
+		}
+		const run = (async () => {
+			do {
+				this.#orphanCleanupPending = false;
+				await this.#runParkedOrphanSweep();
+			} while (this.#orphanCleanupPending && !this.#disposed);
+		})();
+		this.#orphanCleanupInFlight = run;
+		try {
+			await run;
+		} finally {
+			if (this.#orphanCleanupInFlight === run) {
+				this.#orphanCleanupInFlight = undefined;
+			}
+		}
+	}
+
+	async #runParkedOrphanSweep(): Promise<void> {
 		for (const ref of this.#registry.list()) {
+			if (this.#disposed) return;
 			if (
 				ref.kind !== "sub" ||
 				ref.status !== "parked" ||
 				!ref.parentId ||
 				this.#registry.get(ref.parentId) ||
 				this.#parking.has(ref.id) ||
-				this.#revivals.has(ref.id)
+				this.#revivals.has(ref.id) ||
+				this.#stalling.has(ref.id)
 			) {
 				continue;
 			}
 			const reason = "Parent session no longer exists.";
-			if (!ref.terminalOutcome && !(await this.#reportStalled(ref, reason))) continue;
+			if (!ref.terminalOutcome) {
+				this.#stalling.add(ref.id);
+				let reported = false;
+				try {
+					reported = await this.#reportStalled(ref, reason);
+				} finally {
+					this.#stalling.delete(ref.id);
+				}
+				if (this.#disposed) return;
+				if (!reported) continue;
+			}
 			const current = this.#registry.get(ref.id);
 			if (
 				current !== ref ||
@@ -648,10 +690,11 @@ export class AgentLifecycleManager {
 	async prune(id: string): Promise<void> {
 		const ref = this.#registry.get(id);
 		const reviving = this.#revivals.has(id);
-		if (ref?.status !== "parked" || reviving || this.#parking.has(id)) {
+		const stalling = this.#stalling.has(id);
+		if (ref?.status !== "parked" || reviving || stalling || this.#parking.has(id)) {
 			const adopted = this.#adopted.get(id);
 			if (adopted) {
-				if (reviving) arm(adopted, Date.now() + REVIVE_RECHECK_MS, "prune");
+				if (reviving || stalling) arm(adopted, Date.now() + REVIVE_RECHECK_MS, "prune");
 				else this.#refreshDeadline(id, adopted);
 				this.#scheduleNext();
 			}
@@ -664,7 +707,14 @@ export class AgentLifecycleManager {
 		});
 		if (!ref.terminalOutcome) {
 			const reason = "Assignment was pruned before reporting a terminal outcome.";
-			if (!(await this.#reportStalled(ref, reason))) {
+			this.#stalling.add(id);
+			let reported = false;
+			try {
+				reported = await this.#reportStalled(ref, reason);
+			} finally {
+				this.#stalling.delete(id);
+			}
+			if (!reported) {
 				const adopted = this.#adopted.get(id);
 				if (adopted) arm(adopted, Date.now() + PARKED_ORPHAN_RECHECK_MS, "prune");
 				this.#scheduleNext();
@@ -681,6 +731,8 @@ export class AgentLifecycleManager {
 
 	/** Teardown everything (process exit / main session dispose). */
 	async dispose(): Promise<void> {
+		this.#disposed = true;
+		this.#orphanCleanupPending = false;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 		this.#orphanSweepDeadline = undefined;
@@ -689,6 +741,7 @@ export class AgentLifecycleManager {
 		await Promise.all(ids.map(id => this.release(id)));
 		this.#revivals.clear();
 		this.#parking.clear();
+		this.#stalling.clear();
 		this.#pinned.clear();
 		this.#persistedReviverFactory = undefined;
 	}
@@ -815,9 +868,11 @@ export class AgentLifecycleManager {
 		if (event.type === "removed") {
 			this.#adopted.delete(event.ref.id);
 			this.#scheduleNext();
-			void this.cleanupParkedOrphans().catch(error =>
-				logger.warn("AgentLifecycleManager.cleanupParkedOrphans failed", { error: errorMessage(error) }),
-			);
+			if (!this.#disposed) {
+				void this.cleanupParkedOrphans().catch(error =>
+					logger.warn("AgentLifecycleManager.cleanupParkedOrphans failed", { error: errorMessage(error) }),
+				);
+			}
 			return;
 		}
 		const adopted = this.#adopted.get(event.ref.id);

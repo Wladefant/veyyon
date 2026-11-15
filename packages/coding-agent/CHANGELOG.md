@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
+
 ## [1.10.0] - 2026-11-14
 
 ### Fixed

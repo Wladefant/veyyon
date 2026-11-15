@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
@@ -166,6 +167,65 @@ describe("session storage writers conform to lifecycle and error contracts", () 
 				if (writer) {
 					await writer.close();
 				}
+				await fsp.rm(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("readText never observes torn trailing records while a writer appends concurrently", async () => {
+			const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "veyyon-readtext-race-"));
+			const filePath = path.join(tmpDir, "session.jsonl");
+			const baseLine = `${JSON.stringify({ id: "0", type: "message", text: "x".repeat(1800) })}\n`;
+			await fsp.writeFile(filePath, baseLine.repeat(600), "utf8");
+
+			const storage = new FileSessionStorage();
+			const writer = storage.openWriter(filePath);
+			const appendLine = `${JSON.stringify({
+				id: "1",
+				type: "custom_message",
+				customType: "agent-terminal-outcome",
+				content: 'Agent "Orphan" stalled: Parent session no longer exists.',
+				details: { outcome: "stalled" },
+			})}\n`;
+
+			let badLines = 0;
+			let totalReads = 0;
+			let writing = true;
+			const writerLoop = (async () => {
+				try {
+					for (let i = 0; i < 120; i++) {
+						await writer.append(appendLine);
+						await yieldToEventLoop();
+					}
+				} finally {
+					writing = false;
+				}
+			})();
+
+			const readerLoop = (async () => {
+				while (writing) {
+					const batch = Array.from({ length: 16 }, async () => {
+						const text = await storage.readText(filePath);
+						totalReads++;
+						for (const line of text.split("\n")) {
+							if (line.trim().length === 0) continue;
+							try {
+								JSON.parse(line);
+							} catch {
+								badLines++;
+							}
+						}
+					});
+					await Promise.all(batch);
+				}
+			})();
+
+			try {
+				await Promise.all([writerLoop, readerLoop]);
+				await writer.close();
+				expect(totalReads).toBeGreaterThan(0);
+				expect(badLines).toBe(0);
+			} finally {
+				if (writer.isOpen()) await writer.close().catch(() => {});
 				await fsp.rm(tmpDir, { recursive: true, force: true });
 			}
 		});
