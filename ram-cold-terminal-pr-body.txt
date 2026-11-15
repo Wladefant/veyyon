@@ -1,0 +1,25 @@
+## Summary
+
+Refs [Veyyon issue #980](https://github.com/Wladefant/veyyon/issues/980). Terminal history transiently reads cold assistant payloads and only the details of non-error `yield` tool results. It leaves non-yield results, user messages, and non-message entries untouched. Text and turn provenance stay unchanged.
+
+## Regression evidence
+
+- On base `6a99d8be68abd8ff7a95fe07ccd106ef241ae87c`, the assistant regression expected cold fields `["content"]`, but observed `undefined`.
+- On test-only head `9a85a7b14a08c573c461d28f354f0142d964c7e8`, the tool-result regression expected cold fields `["details"]`, but observed `undefined`.
+- On test-only head `9c5c197d1e2a69c7dfd5eeda1ed73b8dc88c9130`, the non-yield read-count regression expected zero payload reads, but observed one.
+
+## Verification on the final head
+
+Final pushed head: `27da7a7fd13ff2f5b74c4020f8aba2064534ee6b`.
+
+The focused test passed: 10 tests passed, 0 failed, 128 assertions. `build_slot.py` invoked `wsl.exe`, then the pinned bwrap sandbox with isolated dependencies. No WSL or other process was stopped or restarted.
+
+The existing terminal-owner test file also passed: 4 tests, 0 failed, 16 assertions. It includes the session-switch and close path. Test file: `packages/coding-agent/test/a-terminal-control-request-stays-with-its-owner.test.ts`.
+
+The package type check reported two errors in unchanged `test/core/js-executor.test.ts` at lines 549 and 571. A clean type check on base `6a99d8be68abd8ff7a95fe07ccd106ef241ae87c` reported the same two errors. The check is not green.
+
+## Real journal replay
+
+A read-only replay selected 8 assistant entries from the bounded 16 MiB tail of this historical journal: `C:/Users/wkiri/.veyyon/profiles/default/agent/sessions/-development-super-board/2026-09-15T19-56-43-199Z_01a0a6a4-a53f-77ae-b4f7-7fd68868fb45.jsonl`. The journal was 604,642,702 bytes at replay. The fixed path left 24,021 serialized content bytes cold, versus zero after the baseline projection. Both runs returned 8 texts with SHA-256 `f51d45f23a07dcec35da60383b14e5328a1a3feb4e19035ad2382bce455f0606`. This measures retained serialized payload bytes, not RSS, private-memory savings, or whole-host recovered RAM.
+
+No full suite, formatter, or linter ran.
