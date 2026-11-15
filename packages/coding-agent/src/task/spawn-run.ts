@@ -585,11 +585,7 @@ async function runPreparedSpawn(
 				agentId,
 				spawnCwd,
 			);
-			await fs.writeFile(
-				path.join(spawn.artifacts.dir, `${encodeURIComponent(agentId)}.ownership-lease.json`),
-				`${JSON.stringify(ownershipLease, null, 2)}\n`,
-				{ flag: "wx", mode: 0o600 },
-			);
+			await fs.writeFile(path.join(spawn.artifacts.dir, `${encodeURIComponent(agentId)}.ownership-lease.json`), `${JSON.stringify(ownershipLease, null, 2)}\n`, { flag: "w", mode: 0o600 });
 		} catch (err) {
 			return spawnRefusal(`ownership-lease: ${errorMessage(err)}`, projectAgentsDir, Date.now() - startTime);
 		}
