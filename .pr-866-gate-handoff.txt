@@ -1,0 +1,17 @@
+## OVH gate handoff — NOT READY
+
+Exact PR head: `5391c344b450662117ff6edf1d07c46fb751a292`
+PR base: `3abbe3feab80e9f7c222b3315b1059b330986f28`
+
+- Focused OVH tests: https://github.com/Wladefant/veyyon/actions/runs/41916525471
+- OVH typecheck: https://github.com/Wladefant/veyyon/actions/runs/41916581815
+
+The focused OVH run remains queued. Its `prepare` job requests the workflow's `veyyon` runner label, but GitHub reports `runner_id=0` and an empty `runner_name`. The typecheck run remains pending with no jobs. Two 900-second watches timed out. Recent OVH dispatches also remain queued. This is an OVH runner-allocation blocker, not a test result.
+
+One local focused run used `build_slot` and pinned bwrap. It reached the tests but failed before assertions because this fresh worktree lacks the `@veyyon/catalog/models` link. `build_slot` parsed 0 pass and 6 fail. The raw log reports 0 pass, 3 fail, 3 errors, and 3 tests across 3 files. The error is `Cannot find module '@veyyon/catalog/models'` from `packages/ai/src/providers/register-builtins.ts`. This does not establish a source-level test failure. No retry was made.
+
+The focused test input names `packages/coding-agent/test/mcp-legacy-sse-private-diagnostics.test.ts`, `packages/coding-agent/test/mcp-legacy-sse-transport.test.ts`, and `packages/coding-agent/test/an-http-deadline-ends-a-stalled-request-and-leaves-no-timer-armed.test.ts`. Exact OVH checkout identity, parsed counts, and type diagnostics remain unavailable. No passing proof is claimed.
+
+Main owns merge and issue closure. Keep this PR open until the existing runs produce exact-head receipts. Do not treat this comment as READY.
+
+Status checked: 2026-11-04T22:50:33Z.
