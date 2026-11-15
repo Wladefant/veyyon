@@ -28,6 +28,7 @@ const makeTempDir = useTempDirs();
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 let cleanupHermeticEnv: (() => void) | undefined;
 const cleanupClients: DaemonBrokerClient[] = [];
+const cleanupRuntimes: Array<{ projectDir: string; runtimeDir: string }> = [];
 
 beforeEach(() => {
 	isolatedConfigRoot = enterIsolatedConfigRoot("broker-survives-spawner-exit");
@@ -37,6 +38,19 @@ afterEach(async () => {
 	while (cleanupClients.length > 0) {
 		const client = cleanupClients.pop();
 		if (client) await shutdownBroker(client);
+	}
+	while (cleanupRuntimes.length > 0) {
+		const entry = cleanupRuntimes.pop();
+		if (!entry) continue;
+		const hasLease = await fs.stat(daemonBrokerLeasePath(entry.runtimeDir)).then(
+			() => true,
+			() => false,
+		);
+		if (!hasLease) continue;
+		const fallbackClient = await createDaemonBrokerClient(entry.projectDir, {
+			runtimeDir: entry.runtimeDir,
+		}).catch(() => undefined);
+		if (fallbackClient) await shutdownBroker(fallbackClient);
 	}
 	cleanupHermeticEnv?.();
 	cleanupHermeticEnv = undefined;
@@ -70,6 +84,7 @@ describe("daemon broker lifetime across spawner exit", () => {
 		const projectDir = makeTempDir("veyyon-spawner-exit-project-");
 		const runtimeDir = makeTempDir("veyyon-spawner-exit-runtime-");
 		const scriptDir = makeTempDir("veyyon-spawner-exit-script-");
+		cleanupRuntimes.push({ projectDir, runtimeDir });
 		const spawnerScript = path.join(scriptDir, "spawner.ts");
 		const clientModulePath = path.resolve(import.meta.dir, "../../src/launch/client.ts");
 
@@ -106,11 +121,19 @@ process.exit(0);
 			stdout: "pipe",
 			stderr: "pipe",
 			windowsHide: true,
+			timeout: 20_000,
 		});
 
+		const stderrPromise = new Response(spawner.stderr).text();
 		const reader = spawner.stdout.getReader();
 		try {
-			const readyLine = await readLine(reader);
+			let readyLine: string;
+			try {
+				readyLine = await readLine(reader);
+			} catch (error) {
+				const stderr = await stderrPromise.catch(() => "");
+				throw new Error(`${error instanceof Error ? error.message : String(error)} (stderr: ${stderr})`);
+			}
 			const parsed: unknown = JSON.parse(readyLine);
 			if (typeof parsed !== "object" || parsed === null || !("pid" in parsed) || typeof parsed.pid !== "number") {
 				throw new Error(`Unexpected spawner ready payload: ${readyLine}`);
@@ -149,6 +172,7 @@ process.exit(0);
 				spawner.kill();
 				await spawner.exited;
 			}
+			await stderrPromise.catch(() => "");
 		}
 	}, 30_000);
 });
