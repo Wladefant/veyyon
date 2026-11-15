@@ -102,7 +102,6 @@ export class AgentLifecycleManager {
 		this.#sleeping.clear();
 		this.#pinned.clear();
 		this.#persistedReviverFactory = undefined;
-		this.#orphanSweepDeadline = undefined;
 	}
 
 	readonly #registry: AgentRegistry;
@@ -133,7 +132,6 @@ export class AgentLifecycleManager {
 	constructor(registry: AgentRegistry = AgentRegistry.global()) {
 		this.#registry = registry;
 		this.#unsubscribe = registry.onChange(event => this.#onRegistryEvent(event));
-		this.#orphanSweepDeadline = Date.now() + PARKED_ORPHAN_RECHECK_MS;
 		this.#scheduleNext();
 	}
 
@@ -503,7 +501,6 @@ export class AgentLifecycleManager {
 	async dispose(): Promise<void> {
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
-		this.#orphanSweepDeadline = undefined;
 		this.#clearTimer();
 		const ids = Array.from(this.#adopted.keys());
 		await Promise.all(ids.map(id => this.release(id)));
@@ -577,7 +574,7 @@ export class AgentLifecycleManager {
 
 	#scheduleNext(): void {
 		this.#clearTimer();
-		let nextDeadline = this.#orphanSweepDeadline ?? Number.POSITIVE_INFINITY;
+		let nextDeadline = Number.POSITIVE_INFINITY;
 		for (const adopted of this.#adopted.values()) {
 			if (adopted.deadline !== undefined) nextDeadline = Math.min(nextDeadline, adopted.deadline);
 		}
@@ -627,7 +624,6 @@ export class AgentLifecycleManager {
 		}
 		const adopted = this.#adopted.get(event.ref.id);
 		if (!adopted) {
-			if (event.type === "registered") this.#adoptRestored(event.ref);
 			return;
 		}
 		if (event.type !== "status_changed") return;
