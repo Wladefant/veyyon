@@ -1,0 +1,19 @@
+fix(config): add github.enabled to reloadConfig whitelist (Refs Wladefant/superboard#2203)
+
+## Summary
+Add `github.enabled` to `Settings.reloadConfig()` (`reloadSelectedConfig`) whitelist so runtime config reloads take effect without restarting the process, and propagate to child forks created via `forkWithRuntimeOverrides()`.
+
+## Problem and Root Cause
+When `github.enabled` was changed on disk, `reloadConfig()` only reloaded routing (`agent.*`), compaction, and `tools.maxDiscoveredTools`. As a result, changes to `github.enabled` were treated as restart-required or ignored during hot reload, and newly spawned forks continued seeing the stale initial setting value.
+
+## Changes
+- `packages/coding-agent/src/config/settings.ts`: Added `"github.enabled"` to the `reloadConfig()` selection list.
+- `packages/coding-agent/test/config-hot-reload.test.ts`: Added regression test asserting `github.enabled` true->false and false->true transitions reload from disk, propagate to forks, and an explicit tool allowlist naming `github` cannot bypass `github.enabled: false`.
+- `packages/coding-agent/CHANGELOG.md`: Added bullet documenting the hot reload fix.
+
+## Verification Evidence
+Focused exact-head checks executed locally via `build_slot.py` under WSL bwrap sandbox with `VEYYON_SANDBOX_NODE_MODULES=/home/veyyon-test/sync1031-deps-checkout/node_modules`:
+- Negative control (test-only commit `cfcf81dd2a`): 1 failed (`expect(settings.get("github.enabled")).toBe(false)` received `true`).
+- Positive control (exact head `30a20b03e6`): 32 passed, 0 failed, 309 expect() calls in `packages/coding-agent/test/config-hot-reload.test.ts`.
+
+Refs Wladefant/superboard#2203
