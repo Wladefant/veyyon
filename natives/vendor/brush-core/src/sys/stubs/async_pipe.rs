@@ -1,7 +1,7 @@
 //! Async pipe reading utilities for non-Unix platforms.
 //!
-//! Uses `spawn_blocking` internally for the I/O operation only,
-//! not for the entire subshell execution.
+//! Uses an independent OS thread instead of `tokio::task::spawn_blocking` so
+//! command substitutions never starve behind a saturated Tokio blocking pool.
 
 use std::io::{self, Read};
 
@@ -15,16 +15,20 @@ impl AsyncPipeReader {
 	}
 
 	pub(crate) async fn read_to_string(&mut self) -> io::Result<String> {
-		let Some(reader) = self.inner.take() else {
+		let Some(mut reader) = self.inner.take() else {
 			return Ok(String::new());
 		};
 
-		tokio::task::spawn_blocking(move || {
-			let mut s = String::new();
-			{ reader }.read_to_string(&mut s)?;
-			Ok(s)
-		})
-		.await
-		.map_err(io::Error::other)?
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		std::thread::Builder::new()
+			.name("brush-async-pipe".into())
+			.spawn(move || {
+				let mut s = String::new();
+				let res = reader.read_to_string(&mut s).map(|_| s);
+				let _ = tx.send(res);
+			})
+			.map_err(io::Error::other)?;
+
+		rx.await.map_err(io::Error::other)?
 	}
 }

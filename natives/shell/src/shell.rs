@@ -29,7 +29,7 @@ use tokio::{sync::Mutex as TokioMutex, time};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(windows)]
-use crate::windows::configure_windows_path;
+use crate::windows::configure_windows_session_cancellable;
 use crate::{
 	cancel::{AbortReason, AbortToken, CancelToken},
 	cpu_budget::{self, BudgetGroup},
@@ -338,6 +338,7 @@ async fn run_shell_session(
 		let spawn_budget = spawn_budget.clone();
 		async move {
 			let mut session_guard = session.lock().await;
+			abort_state.set(at).await;
 
 			let session = match &mut *session_guard {
 				Some(session) => session,
@@ -351,7 +352,6 @@ async fn run_shell_session(
 					.await?,
 				),
 			};
-			abort_state.set(at).await;
 			run_shell_command(
 				session,
 				&run_config,
@@ -675,9 +675,18 @@ const fn inherited_env_value<'a>(_key: &str, value: &'a str) -> std::borrow::Cow
 
 /// Copies the host environment into `shell`, merging duplicate `PATH` values
 /// and registering the merged `PATH` last.
+#[cfg(test)]
 fn copy_env_into_shell(
 	shell: &mut BrushShell,
 	env: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Result<()> {
+	copy_env_into_shell_with_expand(shell, env, true)
+}
+
+fn copy_env_into_shell_with_expand(
+	shell: &mut BrushShell,
+	env: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+	expand_temp: bool,
 ) -> Result<()> {
 	let mut merged_path: Option<String> = None;
 	for (key, value) in env {
@@ -695,7 +704,11 @@ fn copy_env_into_shell(
 			});
 			continue;
 		}
-		let value = inherited_env_value(normalized_key, value);
+		let value = if expand_temp {
+			inherited_env_value(normalized_key, value)
+		} else {
+			std::borrow::Cow::Borrowed(value)
+		};
 		let mut var = ShellVariable::new(ShellValue::String(value.into_owned()));
 		var.export();
 		shell
@@ -721,7 +734,6 @@ fn copy_env_into_shell(
 	}
 	Ok(())
 }
-
 #[cfg(windows)]
 fn merge_path_values(existing: &str, incoming: &str) -> String {
 	let mut merged = Vec::new();
@@ -861,7 +873,7 @@ async fn create_session_for_run(
 		}
 	}
 
-	copy_env_into_shell(&mut shell, std::env::vars_os())?;
+	copy_env_into_shell_with_expand(&mut shell, std::env::vars_os(), !cfg!(windows))?;
 
 	if let Some(env) = config.session_env.as_ref() {
 		for (key, value) in env {
@@ -869,8 +881,12 @@ async fn create_session_for_run(
 			if should_skip_env_var(normalized_key) {
 				continue;
 			}
-			// The agent forwards its whole host env here, so temp paths need the
-			// same long-form expansion as the direct host copy above.
+			// On Windows, temp expansion runs off the Tokio runtime below
+			// alongside Windows PATH setup so synchronous GetLongPathNameW
+			// calls never stall Tokio workers.
+			#[cfg(windows)]
+			let value = std::borrow::Cow::Borrowed(value.as_str());
+			#[cfg(not(windows))]
 			let value = inherited_env_value(normalized_key, value);
 			let mut var = ShellVariable::new(ShellValue::String(value.into_owned()));
 			var.export();
@@ -904,7 +920,7 @@ async fn create_session_for_run(
 	}
 
 	#[cfg(windows)]
-	configure_windows_path(&mut shell)?;
+	configure_windows_session_cancellable(&mut shell, cancel_token.as_ref()).await?;
 
 	if let Some(snapshot_path) = config.snapshot_path.as_ref() {
 		source_snapshot(&mut shell, snapshot_path, spawn_registry, cancel_token, spawn_budget)
@@ -1376,6 +1392,10 @@ async fn run_shell_command_once(
 			reader_cancel.cancel();
 		}
 	});
+	let _reader_abort_guard = ReaderAbortGuard {
+		reader_cancel: reader_cancel.clone(),
+		handles:       vec![reader_handle.abort_handle(), cancel_bridge.abort_handle()],
+	};
 	ensure_trailing_newline_for_heredoc(&mut command);
 	let source_info = SourceInfo::from("veyyon-natives:command");
 	let result = session
@@ -1501,6 +1521,14 @@ async fn run_shell_command_streams(
 			reader_cancel.cancel();
 		}
 	});
+	let _reader_abort_guard = ReaderAbortGuard {
+		reader_cancel: reader_cancel.clone(),
+		handles:       vec![
+			stdout_handle.abort_handle(),
+			stderr_handle.abort_handle(),
+			cancel_bridge.abort_handle(),
+		],
+	};
 	let mut command = options.command.clone();
 	ensure_trailing_newline_for_heredoc(&mut command);
 	let source_info = SourceInfo::from("veyyon-shell:streams");
@@ -1583,8 +1611,22 @@ async fn run_shell_command_streams(
 	Ok((result, working_dir))
 }
 
+struct ReaderAbortGuard {
+	reader_cancel: CancellationToken,
+	handles:       Vec<tokio::task::AbortHandle>,
+}
+
+impl Drop for ReaderAbortGuard {
+	fn drop(&mut self) {
+		self.reader_cancel.cancel();
+		for handle in &self.handles {
+			handle.abort();
+		}
+	}
+}
+
 #[cfg(windows)]
-enum PipeReadiness {
+pub(crate) enum PipeReadiness {
 	Ready(usize),
 	Empty,
 	Eof,
@@ -1592,7 +1634,7 @@ enum PipeReadiness {
 }
 
 #[cfg(windows)]
-fn check_pipe_readiness(handle: std::os::windows::io::RawHandle) -> PipeReadiness {
+pub(crate) fn check_pipe_readiness(handle: std::os::windows::io::RawHandle) -> PipeReadiness {
 	use windows_sys::Win32::{
 		Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED, GetLastError},
 		System::Pipes::PeekNamedPipe,
@@ -1680,11 +1722,49 @@ async fn read_pipe_chunk_windows(
 				*poll_count = poll_count.saturating_add(1);
 			},
 			PipeReadiness::Eof => return Ok(None),
-			PipeReadiness::NotAPipe => match reader.read(buf) {
-				Ok(0) => return Ok(None),
-				Ok(n) => return Ok(Some(n)),
-				Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
-				Err(e) => return Err(e),
+			PipeReadiness::NotAPipe => {
+				if reader.metadata().is_ok_and(|meta| meta.is_file()) {
+					match reader.read(buf) {
+						Ok(0) => return Ok(None),
+						Ok(n) => return Ok(Some(n)),
+						Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
+						Err(e) => return Err(e),
+					}
+				} else {
+					let Ok(mut cloned) = reader.try_clone() else {
+						return Ok(None);
+					};
+					let read_len = buf.len();
+					let (tx, rx) = tokio::sync::oneshot::channel();
+					std::thread::Builder::new()
+						.name("veyyon-win-nonpipe-read".into())
+						.spawn(move || {
+							let mut chunk = vec![0u8; read_len];
+							let res = loop {
+								match cloned.read(&mut chunk) {
+									Ok(n) => {
+										chunk.truncate(n);
+										break Ok(chunk);
+									},
+									Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
+									Err(e) => break Err(e),
+								}
+							};
+							let _ = tx.send(res);
+						})
+						.map_err(io::Error::other)?;
+					let chunk = tokio::select! {
+						biased;
+						() = cancel_token.cancelled() => return Ok(None),
+						res = rx => res.map_err(io::Error::other)??,
+					};
+					if chunk.is_empty() {
+						return Ok(None);
+					}
+					let n = chunk.len();
+					buf[..n].copy_from_slice(&chunk);
+					return Ok(Some(n));
+				}
 			},
 		}
 	}
@@ -1831,11 +1911,17 @@ async fn read_output_bytes(
 		};
 		let _ = activity.try_send(());
 		buf.truncate(n);
-		if let Some(sink) = sink.as_ref()
-			&& sink.send(Bytes::from(buf)).is_err()
-		{
-			// Receiver dropped — stop forwarding and let the pipe close.
-			break;
+		if let Some(sink) = sink.as_ref() {
+			tokio::select! {
+				biased;
+				() = cancel_token.cancelled() => break,
+				res = sink.send_async(Bytes::from(buf)) => {
+					if res.is_err() {
+						// Receiver dropped — stop forwarding and let the pipe close.
+						break;
+					}
+				},
+			}
 		}
 	}
 }

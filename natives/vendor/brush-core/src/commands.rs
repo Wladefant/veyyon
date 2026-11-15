@@ -471,16 +471,25 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 		args: Vec<CommandArg>,
 	) -> ExecutionSpawnResult {
 		let last_arg = Self::take_last_arg(&args);
-		let join_handle = tokio::task::spawn_blocking(move || {
-			let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
+		let rt = tokio::runtime::Handle::current();
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		let spawn_res = std::thread::Builder::new()
+			.name("brush-builtin".into())
+			.spawn(move || {
+				let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
+				let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
+				shell.update_last_arg_variable(last_arg);
+				let _ = tx.send(result);
+			});
 
-			let rt = tokio::runtime::Handle::current();
-			let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
-
-			// Update $_ after command execution.
-			shell.update_last_arg_variable(last_arg);
-
-			result
+		let join_handle = tokio::spawn(async move {
+			if let Err(err) = spawn_res {
+				return Err(std::io::Error::other(err).into());
+			}
+			match rx.await {
+				Ok(res) => res,
+				Err(err) => Err(std::io::Error::other(err).into()),
+			}
 		});
 
 		ExecutionSpawnResult::StartedTask(join_handle)

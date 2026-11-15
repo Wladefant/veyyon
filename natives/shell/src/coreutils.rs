@@ -32,15 +32,25 @@ use tokio_util::sync::CancellationToken;
 /// command name at index 0) and returns a process-style exit code.
 type UutilRun = fn(Vec<OsString>) -> i32;
 
-/// Await a blocking builtin and report cancellation only after its thread
-/// finishes.
+/// Await a blocking builtin on an independent thread (avoiding Tokio's capped
+/// blocking pool and nested `spawn_blocking` deadlocks) and report
+/// cancellation once its thread finishes.
 pub async fn run_cancellable_blocking(
 	cancel: Option<CancellationToken>,
 	task: impl FnOnce(Arc<AtomicBool>) -> i32 + Send + 'static,
 ) -> i32 {
 	let cancel_flag = Arc::new(AtomicBool::new(false));
 	let thread_flag = Arc::clone(&cancel_flag);
-	let mut handle = tokio::task::spawn_blocking(move || task(thread_flag));
+	let (tx, mut rx) = tokio::sync::oneshot::channel();
+	let spawn_res = std::thread::Builder::new()
+		.name("veyyon-coreutil".into())
+		.spawn(move || {
+			let code = task(thread_flag);
+			let _ = tx.send(code);
+		});
+	if spawn_res.is_err() {
+		return 1;
+	}
 
 	match cancel {
 		Some(token) => {
@@ -49,17 +59,60 @@ pub async fn run_cancellable_blocking(
 				biased;
 				() = token.cancelled() => {
 					cancel_flag.store(true, Ordering::Relaxed);
-					let _ = (&mut handle).await;
+					let _ = (&mut rx).await;
 					130
 				},
-				result = &mut handle => {
+				result = &mut rx => {
 					// If the token already fired, the task only finished because
 					// our cancel flag unblocked it — report interrupted.
 					if token_check.is_cancelled() { 130 } else { result.unwrap_or(1) }
 				},
 			}
 		},
-		None => handle.await.unwrap_or(1),
+		None => rx.await.unwrap_or(1),
+	}
+}
+
+#[cfg(windows)]
+struct CancellableWindowsStdin {
+	inner:  OpenFile,
+	cancel: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+impl Read for CancellableWindowsStdin {
+	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+		use std::{os::windows::io::AsRawHandle, time::Duration};
+
+		const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+		if self.cancel.load(Ordering::Relaxed) {
+			return Ok(0);
+		}
+		let raw_handle = match &self.inner {
+			OpenFile::PipeReader(pipe) => Some(pipe.as_raw_handle()),
+			OpenFile::File(file) => Some(file.as_raw_handle()),
+			_ => None,
+		};
+		if let Some(handle) = raw_handle {
+			loop {
+				if self.cancel.load(Ordering::Relaxed) {
+					return Ok(0);
+				}
+				match crate::shell::check_pipe_readiness(handle) {
+					crate::shell::PipeReadiness::Ready(avail) => {
+						let to_read = avail.min(buf.len()).max(1);
+						return self.inner.read(&mut buf[..to_read]);
+					},
+					crate::shell::PipeReadiness::Empty => {
+						std::thread::sleep(POLL_INTERVAL);
+					},
+					crate::shell::PipeReadiness::Eof => return Ok(0),
+					crate::shell::PipeReadiness::NotAPipe => break,
+				}
+			}
+		}
+		self.inner.read(buf)
 	}
 }
 
@@ -156,7 +209,19 @@ async fn run_uutil<SE: ShellExtensions>(
 		// Keeps every descriptor in `fds` open for the utility's lifetime.
 		let _held = open_fds;
 		let stdin: Box<dyn Read + Send> = match stdin {
-			Some(file) => Box::new(file),
+			Some(file) => {
+				#[cfg(windows)]
+				{
+					Box::new(CancellableWindowsStdin {
+						inner:  file,
+						cancel: Arc::clone(&scope_flag),
+					})
+				}
+				#[cfg(not(windows))]
+				{
+					Box::new(file)
+				}
+			},
 			None => Box::new(io::empty()),
 		};
 		let stdout: Box<dyn Write + Send> = match stdout {
