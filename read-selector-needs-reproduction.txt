@@ -1,0 +1,10 @@
+The reported selector failure needs an exact reproduction before a source fix.
+
+1. Linux WSL bwrap passed the focused SetCwdTool-to-ReadTool check on base `499736b81060a1c80a7c00d4926628abd8fbdba0`: 1 pass, 0 fail, 10 assertions. Both relative `rel/file.ts:2-3` and an absolute filesystem path returned lines 2 and 3.
+2. Native Windows Bun 1.4.4 executed 0 tests. The test gate refused execution because `VEYYON_TEST_SANDBOX` was unset. The existing sandbox script provides Linux routes, not a verified native Windows route. The Windows selector cases remain unverified.
+3. In this lane, the installed `read` tool successfully read `plugins/hashline/src/patcher.ts:510-515` after `set_cwd`.
+4. The reporting lane observed `plugins/hashline/src/patcher.ts:203-445` succeed, then `plugins/hashline/src/patcher.ts:510-665` fail with ENOENT. The absolute selector path also failed. Its cwd was `C:/Users/wkiri/development/veyyon-wt/fix-stale-edit-1036`.
+
+The current evidence does not establish that changing cwd causes the failure. No implementation PR is proposed.
+
+A reproduction needs the exact failing tool-call JSON, the session cwd, and the installed Veyyon version and source SHA. Include the preceding successful call and the full error result to preserve the sequence.
