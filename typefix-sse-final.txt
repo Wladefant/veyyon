@@ -1,0 +1,57 @@
+bun test v1.4.3 (c6da4a4d3)
+inned)
+
+packages/coding-agent/test/agent-session-message-pipeline.test.ts:
+(pass) AgentSession message pipeline > applies transformContext before convertToLlm [52.08ms]
+(pass) AgentSession message pipeline > marks queued user steers without changing the public queue text [2.83ms]
+(pass) AgentSession message pipeline > resolves image attachments from submitted messages, not tool-result images [1.97ms]
+(pass) AgentSession message pipeline > keeps stored steering text raw while pre-LLM conversion wraps it [3.85ms]
+(pass) AgentSession message pipeline > normalizes text-only and image prompts queued during a steer stream [55.59ms]
+(pass) AgentSession message pipeline > normalizes text-only and image prompts queued during a followUp stream [14.51ms]
+(pass) AgentSession message pipeline > composes session payload hooks into direct side-request options [2.44ms]
+(pass) AgentSession message pipeline > keeps ephemeral side-channel cache key separate from provider routing while preserving websocket state [4.29ms]
+(pass) AgentSession message pipeline > runs ephemeral side-channel requests through the configured side stream function [2.32ms]
+(pass) AgentSession message pipeline > rotates ephemeral side-channel credentials on Google Resource exhausted [6.40ms]
+(pass) AgentSession message pipeline > applies configured OpenRouter routing variant to ephemeral side-channel options [2.49ms]
+(pass) AgentSession message pipeline > obfuscates user messages on ephemeral side-channel requests [6.27ms]
+(pass) AgentSession message pipeline > preserves the provider prefix when ephemeral followups append structured history [4.57ms]
+(pass) AgentSession message pipeline > snapshots and obfuscates ephemeral history before asynchronous context conversion [2.82ms]
+(pass) AgentSession message pipeline > keeps obfuscated side-channel stable prefix byte-identical to the main turn [7.40ms]
+(pass) AgentSession message pipeline > records raw SSE diagnostics into the session buffer before request hooks [2.27ms]
+(pass) AgentSession message pipeline > emits message_update to session listeners before slow extension handlers finish [2.72ms]
+(pass) AgentSession message pipeline > keeps first-turn memory out of the system prompt and sends it exactly once [9.08ms]
+(fail) AgentSession message pipeline > preserves append-only prefixes in agent sessions when context handlers rewrite prior turns [6160.40ms]
+  ^ this test timed out after 5000ms.
+
+# Unhandled error between tests
+-------------------------------
+1083 | 			expect(session.agent.appendOnlyContext).toBeDefined();
+1084 | 
+1085 | 			await session.sendUserMessage("first");
+1086 | 			await session.sendUserMessage("second");
+1087 | 
+1088 | 			expect(contexts).toHaveLength(2);
+                           ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 2
+Received length: 0
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/agent-session-message-pipeline.test.ts:1088:21)
+-------------------------------
+
+(pass) AgentSession message pipeline > does not carry a session's recalled memory into the session switched to [207.15ms]
+(pass) AgentSession message pipeline > does not carry a session's recalled memory into a new session [11.29ms]
+(pass) AgentSession message pipeline > does not duplicate the recalled memory when forking [19.96ms]
+(pass) AgentSession message pipeline > ephemeral side-channel forwards native tools, injects developer reminder, leaves toolChoice auto [3.44ms]
+(pass) AgentSession message pipeline > ephemeral side-channel discards any emitted tool calls [2.72ms]
+
+1 tests failed:
+(fail) AgentSession message pipeline > preserves append-only prefixes in agent sessions when context handlers rewrite prior turns [6160.40ms]
+  ^ this test timed out after 5000ms.
+
+ 23 pass
+ 1 fail
+ 1 error
+ 107 expect() calls
+Ran 24 tests across 1 file. [12.15s]

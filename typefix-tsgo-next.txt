@@ -1,0 +1,17 @@
+packages/coding-agent/src/session/runtime/turn-continuations.ts(102,15): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/src/task/executor.ts(2273,23): error TS2304: Cannot find name 'getSessionSlashCommands'.
+packages/coding-agent/src/task/executor.ts(2274,34): error TS2304: Cannot find name 'runExtensionSetModel'.
+packages/coding-agent/src/task/executor.ts(2290,41): error TS2304: Cannot find name 'USER_INTERRUPT_LABEL'.
+packages/coding-agent/src/task/executor.ts(2295,38): error TS2304: Cannot find name 'runExtensionCompact'.
+packages/coding-agent/src/tools/agent/irc.ts(114,20): error TS2339: Property 'wire' does not exist on type 'Lazy<Type<{ op: "inbox" | "list" | "send" | "wait"; to?: string | undefined; message?: string | undefined; replyTo?: string | undefined; await?: boolean | undefined; from?: string | undefined; timeoutMs?: number | undefined; peek?: boolean | undefined; ttlMinutes?: number | undefined; }, {}>>'.
+packages/coding-agent/test/a-parent-irc-reaches-an-active-child.test.ts(68,82): error TS2339: Property 'message' does not exist on type '{}'.
+packages/coding-agent/test/acp-agent.test.ts(833,36): error TS2339: Property 'options' does not exist on type 'SessionConfigOption'.
+  Property 'options' does not exist on type 'SessionConfigBoolean & { type: "boolean"; } & { id: string; name: string; description?: string | null | undefined; category?: string | null | undefined; _meta?: { ...; } | ... 1 more ... | undefined; }'.
+packages/coding-agent/test/acp-agent.test.ts(833,49): error TS7006: Parameter 'option' implicitly has an 'any' type.
+packages/coding-agent/test/agent-session-message-pipeline.test.ts(282,49): error TS2339: Property 'content' does not exist on type 'AgentMessage'.
+  Property 'content' does not exist on type 'BashExecutionMessage'.
+packages/coding-agent/test/helpers/idle-extension-actions.ts(8,2): error TS2322: Type '{ listWorkers?: ListWorkersHandler | undefined; steerWorker?: SteerWorkerHandler | undefined; sendMessage: SendMessageHandler; ... 11 more ...; setSessionName: (name: string) => Promise<void>; }' is not assignable to type 'ExtensionActions'.
+  Types of property 'listWorkers' are incompatible.
+    Type 'ListWorkersHandler | undefined' is not assignable to type 'ListWorkersHandler'.
+      Type 'undefined' is not assignable to type 'ListWorkersHandler'.
+packages/coding-agent/test/native-control/extension-worker-access.test.ts(273,9): error TS2741: Property 'obfuscateProviderText' is missing in type '{ getModel: () => undefined; isIdle: () => true; abort: () => void; hasPendingMessages: () => false; shutdown: () => void; getContextUsage: () => undefined; compact: () => Promise<void>; getSystemPrompt: () => never[]; }' but required in type 'ExtensionContextActions'.

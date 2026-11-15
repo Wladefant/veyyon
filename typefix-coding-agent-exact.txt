@@ -1,0 +1,2 @@
+packages/coding-agent/test/acp-agent.test.ts(834,64): error TS2339: Property 'value' does not exist on type 'SessionConfigSelectGroup | SessionConfigSelectOption'.
+  Property 'value' does not exist on type 'SessionConfigSelectGroup'.

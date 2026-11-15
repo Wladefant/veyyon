@@ -1,0 +1,14 @@
+PR #1017 exact-head focused runtime verification
+
+Head: 4d54822588a5809026ee95671b53447ab22d93f9
+
+Executed on pinned Debian WSL with `scripts/test-sandbox/run.sh --rung=bwrap bun test` via `build_slot.py --class medium`:
+- `packages/ai/test/message-text.test.ts`
+- `packages/ai/test/wireinv-anthropic-thinking.test.ts` (closest existing targeted Anthropic thinking coverage; the requested `packages/ai/test/stream.test.ts` does not exist in this checkout)
+- `packages/catalog/test/ollama-cloud-provider.test.ts`
+- `packages/catalog/test/special-model-managers.test.ts`
+
+Result: 48 passed, 0 failed, 169 expectations across four files. This run does not include a direct stream.ts OUTPUT_FALLBACK_BUFFER test: no `stream.test.ts` exists, and repository search found that symbol only in source/changelog. Coverage therefore maps to three runtime/compiler categories directly and serves as the closest available Anthropic thinking check for stream behavior; no direct assertion was established for OUTPUT_FALLBACK_BUFFER.
+
+Additional targeted wire candidates: `packages/ai/test/wireinv-openai-effort.test.ts`, `packages/ai/test/openai-responses-stateful.test.ts`, `packages/ai/test/a-model-sent-through-the-anthropic-shim-keeps-every-effort-it-declares.test.ts`.
+Result: failed. The output showed existing failures in the catalog-derived effort ladder (`deepseek/deepseek-v4-pro` unexpectedly includes `low`) and Anthropic shim request shaping (`moonshot/kimi-k2.7-code` and `...-highspeed` omit `thinking`). These remain retained; this targeted run does not establish a passing exact-wire check for ReasoningEffort. No broad suite or root check:types was run.

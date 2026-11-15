@@ -1,0 +1,84 @@
+packages/agent/src/tool-normalization.ts(195,22): error TS2322: Type 'TSchema' is not assignable to type 'Record<string, unknown>'.
+  Type 'Type<unknown, {}>' is not assignable to type 'Record<string, unknown>'.
+    Index signature for type 'string' is missing in type 'Type<unknown, {}>'.
+packages/coding-agent/src/extensibility/extensions/session-actions.ts(35,70): error TS2339: Property 'id' does not exist on type 'AgentSession'.
+packages/coding-agent/src/index.ts(112,1): error TS2308: Module "./session/agent-session" has already exported a member named 'RESCOPE_TERMINATE_REASON'. Consider explicitly re-exporting to resolve the ambiguity.
+packages/coding-agent/src/mcp/transports/http.ts(660,61): error TS2345: Argument of type 'JsonRpcError | undefined' is not assignable to parameter of type '{ code: number; message: string; }'.
+  Type 'undefined' is not assignable to type '{ code: number; message: string; }'.
+packages/coding-agent/src/mcp/transports/http.ts(741,39): error TS18048: 'message.error' is possibly 'undefined'.
+packages/coding-agent/src/mcp/transports/http.ts(741,62): error TS18048: 'message.error' is possibly 'undefined'.
+packages/coding-agent/src/session/agent-session.ts(410,36): error TS2304: Cannot find name 'AgentContinueSkipReason'.
+packages/coding-agent/src/session/agent-session.ts(410,70): error TS2304: Cannot find name 'ScheduledAgentContinueOptions'.
+packages/coding-agent/src/session/agent-session.ts(652,37): error TS2304: Cannot find name 'path'.
+packages/coding-agent/src/session/agent-session.ts(910,24): error TS2552: Cannot find name 'AgentSessionEvent'. Did you mean 'SessionEvents'?
+packages/coding-agent/src/session/agent-session.ts(2026,21): error TS2304: Cannot find name 'sessionCpuLimit'.
+packages/coding-agent/src/session/agent-session.ts(2029,13): error TS7006: Parameter 'error' implicitly has an 'any' type.
+packages/coding-agent/src/session/agent-session.ts(2875,58): error TS2552: Cannot find name 'CompactionCheckResult'. Did you mean 'CompactionResult'?
+packages/coding-agent/src/session/agent-session.ts(2982,25): error TS2552: Cannot find name 'CompactionCheckResult'. Did you mean 'CompactionResult'?
+packages/coding-agent/src/session/agent-session.ts(3031,21): error TS2552: Cannot find name 'CompactionCheckResult'. Did you mean 'CompactionResult'?
+packages/coding-agent/src/session/agent-session.ts(3111,35): error TS2304: Cannot find name 'ScheduledAgentContinueOptions'.
+packages/coding-agent/src/session/agent-session.ts(3614,34): error TS2304: Cannot find name 'QUIESCENCE_RECHECK_MS'.
+packages/coding-agent/src/session/agent-session.ts(4285,27): error TS2304: Cannot find name 'goalsPrompts'.
+packages/coding-agent/src/session/agent-session.ts(4298,27): error TS2304: Cannot find name 'sessionPrompts'.
+packages/coding-agent/src/session/agent-session.ts(4329,19): error TS2304: Cannot find name 'describeAttachedImagesForTextModel'.
+packages/coding-agent/src/session/agent-session.ts(4374,34): error TS2304: Cannot find name 'normalizeModelContextImages'.
+packages/coding-agent/src/session/agent-session.ts(4743,4): error TS2304: Cannot find name 'throwIfExtensionCommand'.
+packages/coding-agent/src/session/agent-session.ts(4792,4): error TS2304: Cannot find name 'throwIfExtensionCommand'.
+packages/coding-agent/src/session/agent-session.ts(5170,11): error TS2304: Cannot find name 'SessionBeforeSwitchResult'.
+packages/coding-agent/src/session/agent-session.ts(5428,8): error TS2304: Cannot find name 'shouldCompact'.
+packages/coding-agent/src/session/agent-session.ts(5467,12): error TS2304: Cannot find name 'AgentTurnEndContext'.
+packages/coding-agent/src/session/agent-session.ts(5492,31): error TS2304: Cannot find name 'calculateContextTokens'.
+packages/coding-agent/src/session/agent-session.ts(5494,25): error TS2304: Cannot find name 'compactionContextTokens'.
+packages/coding-agent/src/session/agent-session.ts(5495,8): error TS2304: Cannot find name 'shouldCompact'.
+packages/coding-agent/src/session/runtime/turn-continuations.ts(102,15): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/src/task/executor.ts(2273,23): error TS2304: Cannot find name 'getSessionSlashCommands'.
+packages/coding-agent/src/task/executor.ts(2274,34): error TS2304: Cannot find name 'runExtensionSetModel'.
+packages/coding-agent/src/task/executor.ts(2290,41): error TS2304: Cannot find name 'USER_INTERRUPT_LABEL'.
+packages/coding-agent/src/task/executor.ts(2295,38): error TS2304: Cannot find name 'runExtensionCompact'.
+packages/coding-agent/src/tools/agent/irc.ts(114,20): error TS2339: Property 'wire' does not exist on type 'Lazy<Type<{ op: "inbox" | "list" | "send" | "wait"; to?: string | undefined; message?: string | undefined; replyTo?: string | undefined; await?: boolean | undefined; from?: string | undefined; timeoutMs?: number | undefined; peek?: boolean | undefined; ttlMinutes?: number | undefined; }, {}>>'.
+packages/coding-agent/src/tools/shell/eval.ts(37,2): error TS2305: Module '"../core/output-meta"' has no exported member 'resolveOutputSinkHeadBytes'.
+packages/coding-agent/test/a-parent-irc-reaches-an-active-child.test.ts(68,75): error TS2339: Property 'message' does not exist on type '{}'.
+packages/coding-agent/test/a-run-only-mcp-config-rejects-a-fifo-without-a-writer.test.ts(98,43): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ type: string; command: string; }' is not assignable to parameter of type 'MCPServerConfig'.
+      Type '{ type: string; command: string; }' is not assignable to type 'MCPStdioServerConfig'.
+        Types of property 'type' are incompatible.
+          Type 'string' is not assignable to type '"stdio"'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1023,17): error TS2339: Property 'rawInput' does not exist on type 'SessionUpdate'.
+  Property 'rawInput' does not exist on type 'AvailableCommandsUpdate & { sessionUpdate: "available_commands_update"; }'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1024,17): error TS2339: Property 'locations' does not exist on type 'SessionUpdate'.
+  Property 'locations' does not exist on type 'AvailableCommandsUpdate & { sessionUpdate: "available_commands_update"; }'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1118,66): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Object literal may only specify known properties, and 'oldText' does not exist in type '{ type: string; path?: string | undefined; }'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1138,43): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Object literal may only specify known properties, and 'oldText' does not exist in type '{ type: string; path?: string | undefined; }'.
+packages/coding-agent/test/an-agent-woken-by-irc-is-listed-in-the-agents-block.test.ts(124,32): error TS2345: Argument of type 'number' is not assignable to parameter of type 'TUI'.
+packages/coding-agent/test/an-agent-woken-by-irc-is-listed-in-the-agents-block.test.ts(159,19): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/test/differential/the-browser-card-draws-what-main-drew.test.ts(134,37): error TS2322: Type '"close" | "inventory" | "open"' is not assignable to type '"close" | "open" | "run" | "save_state" | undefined'.
+  Type '"inventory"' is not assignable to type '"close" | "open" | "run" | "save_state" | undefined'.
+packages/coding-agent/test/extensibility/custom-commands/review.test.ts(8,15): error TS2305: Module '"@veyyon/coding-agent/tools/web/gh"' has no exported member 'CacheLookupResult'.
+packages/coding-agent/test/helpers/idle-extension-actions.ts(8,2): error TS2322: Type '{ listWorkers?: ListWorkersHandler | undefined; steerWorker?: SteerWorkerHandler | undefined; sendMessage: SendMessageHandler; ... 11 more ...; setSessionName: (name: string) => Promise<void>; }' is not assignable to type 'ExtensionActions'.
+  Types of property 'listWorkers' are incompatible.
+    Type 'ListWorkersHandler | undefined' is not assignable to type 'ListWorkersHandler'.
+      Type 'undefined' is not assignable to type 'ListWorkersHandler'.
+packages/coding-agent/test/input-controller-escape.test.ts(725,29): error TS2345: Argument of type 'number' is not assignable to parameter of type 'TUI'.
+packages/coding-agent/test/input-controller-escape.test.ts(737,29): error TS2345: Argument of type 'number' is not assignable to parameter of type 'TUI'.
+packages/coding-agent/test/mcp-legacy-sse-private-diagnostics.test.ts(122,69): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ tools: never[]; }' is not assignable to parameter of type 'undefined'.
+packages/coding-agent/test/native-control/extension-worker-access.test.ts(273,9): error TS2741: Property 'obfuscateProviderText' is missing in type '{ getModel: () => undefined; isIdle: () => true; abort: () => void; hasPendingMessages: () => false; shutdown: () => void; getContextUsage: () => undefined; compact: () => Promise<void>; getSystemPrompt: () => never[]; }' but required in type 'ExtensionContextActions'.
+packages/coding-agent/test/read-multi-range.test.ts(58,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(72,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(106,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(132,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(163,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(178,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(194,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(208,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(221,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(236,18): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(237,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(251,16): error TS2304: Cannot find name 'toolResultText'.
+packages/coding-agent/test/read-multi-range.test.ts(279,16): error TS2304: Cannot find name 'toolResultText'.

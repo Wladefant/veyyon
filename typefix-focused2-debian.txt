@@ -1,0 +1,227 @@
+bun test v1.4.3 (c6da4a4d3)
+inned)
+
+packages/coding-agent/test/cursor-exec.test.ts:
+51 | 				toolCallId: "call-1",
+52 | 				path: cwd,
+53 | 				pattern: "hello",
+54 | 			}),
+55 | 		);
+56 | 		expect(textMatchCount(defaultResult.details)).toBe(1);
+                                                     ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: undefined
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/cursor-exec.test.ts:56:49)
+(fail) CursorExecHandlers.grep bridge > maps caseInsensitive parameter correctly through the grep bridge [175.33ms]
+(pass) CursorExecHandlers error results > propagates returned isError through the standard exec bridge [1.08ms]
+(pass) CursorExecHandlers error results > propagates returned isError through the shell stream bridge [0.82ms]
+(pass) Cursor MCP StrReplace fallback > projects CLI and replacement fields onto replace kwargs [0.81ms]
+(pass) Cursor MCP StrReplace fallback > routes injected CLI names and replace-shaped edit onto the bridge [0.61ms]
+(pass) Cursor MCP StrReplace fallback > edits a file when the server-injected StrReplace name arrives as MCP [11.40ms]
+(pass) Cursor MCP StrReplace fallback > runs replace-mode when advertised hashline edit is called with old_string [3.81ms]
+(pass) Cursor MCP StrReplace fallback > does not run replace-mode for a hashline edit payload [6.33ms]
+(pass) Cursor MCP StrReplace fallback > still 404s StrReplace when edit was not granted [1.28ms]
+(pass) the shell stream bridge streams every text block of a result > concatenates the text blocks of each update and of the final result, dropping images [0.46ms]
+
+packages/coding-agent/test/print-mode-working-indicator.test.ts:
+(pass) print mode working indicator > writes a text-mode working indicator before the prompt resolves and prints the final answer afterward [7.71ms]
+(pass) print mode working indicator > enters default plan mode before submitting the initial prompt [0.53ms]
+(pass) print mode working indicator > does not write the text-mode working indicator in JSON mode while the prompt is pending [0.25ms]
+(pass) print mode working indicator > writes the text-mode working indicator once across successive prompts [0.22ms]
+(pass) print mode working indicator > flushes late JSON advisor events after catch-up before disposing [1.27ms]
+(pass) print mode working indicator > waits for advisor catch-up before hard-exit disposal [0.74ms]
+
+packages/coding-agent/test/native-control/extension-worker-access.test.ts:
+(pass) extension worker access > lists this conversation's workers only, newest activity first [2.77ms]
+(pass) extension worker access > reports a worker that exited rather than dropping it from the roster [0.25ms]
+(pass) extension worker access > omits advisor transcripts unless asked, and refuses to steer one either way [0.65ms]
+(pass) extension worker access > delivers a steer to the named worker's inbox under the caller's origin [1.66ms]
+(pass) extension worker access > refuses a steer aimed outside the conversation without delivering it anywhere [0.17ms]
+(pass) extension worker access > refuses an unknown worker id and an empty message without delivering [0.15ms]
+(pass) extension worker access > an unresolved conversation lists nothing and addresses nobody [0.14ms]
+(pass) extension worker access > an extension calling either action from the factory body is told to move it into a handler [0.25ms]
+(pass) extension worker actions survive runner initialization > an initialized runtime answers with the roster instead of the uninitialized stub [0.94ms]
+
+packages/coding-agent/test/tools/irc.test.ts:
+(pass) IRC > IrcBus > send delivers to a live recipient and reports the session outcome [1.51ms]
+(pass) IRC > IrcBus > relays only agent-to-agent traffic to the main UI [0.28ms]
+(pass) IRC > IrcBus > send to an unknown or aborted agent fails [0.23ms]
+(pass) IRC > IrcBus > send surfaces recipient delivery errors as failed [0.20ms]
+(pass) IRC > IrcBus > send revives a parked recipient through the lifecycle manager [1.29ms]
+(pass) IRC > IrcBus > send fails cleanly when a parked recipient has no reviver [0.19ms]
+(pass) IRC > IrcBus > wait consumes a matching send instead of delivering it to the session [0.64ms]
+(pass) IRC > IrcBus > wait from-filter ignores messages from other senders [0.23ms]
+(pass) IRC > IrcBus > wait returns null on timeout and rejects on abort [11.74ms]
+(pass) IRC > IrcBus > wait drains an already-pending mailbox message first [0.32ms]
+(pass) IRC > IrcBus > inbox peeks or drains pending messages [0.39ms]
+(pass) IRC > IrcBus > wait does not leak the waiter after timeout or abort [5.53ms]
+(pass) IRC > IrcBus > resolves waiters in FIFO order [0.45ms]
+(pass) IRC > IrcBus > completion sends resolve only the first waiter after durable acceptance [20.33ms]
+(pass) IRC > IrcBus > completion delivery failure leaves the original waiter for a successful retry [0.64ms]
+(pass) IRC > IrcBus > mailbox drops the oldest message beyond the 100-message cap [5.01ms]
+(pass) IRC > IrcBus > send surfaces the reviver's error message when revival fails [0.32ms]
+(pass) IRC > IrcBus > wait with liveness aborts when the last running sender becomes idle after commitment [0.35ms]
+(pass) IRC > IrcBus > wait with liveness aborts when a specific sender becomes idle after commitment [0.14ms]
+(pass) IRC > IrcTool > createIf returns null for a top-level session when delegation is disabled [1.12ms]
+(pass) IRC > IrcTool > createIf enables interruptible irc at the root's inclusive zero cap [0.78ms]
+(pass) IRC > IrcTool > createIf enables irc for a depth-one leaf agent [0.53ms]
+(pass) IRC > IrcTool > createIf returns null without registry/agentId [0.37ms]
+(pass) IRC > IrcTool > op=list includes parked peers, unread counts, and parent ids [1.12ms]
+(pass) IRC > IrcTool > shows the active parent as lineage while retaining a genuine same-file peer conflict [0.69ms]
+(pass) IRC > IrcTool > op=list hides advisor-kind refs from the peer roster [0.45ms]
+(pass) IRC > IrcTool > op=send returns receipts immediately without waiting for a reply [1.03ms]
+(pass) IRC > IrcTool > op=send delivers from a depth-one child to its parent through Main and its exact id [51.79ms]
+(pass) IRC > IrcTool > op=send to=all fans out to live peers and reports per-recipient receipts [0.49ms]
+(pass) IRC > IrcTool > op=send to=all does not relay sibling legs when the broadcast also reaches main [0.46ms]
+(pass) IRC > IrcTool > op=send await=true round-trips the recipient's reply [0.56ms]
+(pass) IRC > IrcTool > op=send await=true ignores buffered stale mail and waits for a future reply [0.49ms]
+(pass) IRC > IrcTool > op=send await=true reports a clean timeout when no reply arrives [6.24ms]
+(pass) IRC > IrcTool > op=send await=true preserves the delivery receipt when the wait is interrupted [0.86ms]
+(pass) IRC > IrcTool > op=send rejects await with to=all and self-sends [0.39ms]
+(pass) IRC > IrcTool > op=send returns a failed receipt for unknown targets [0.33ms]
+(pass) IRC > IrcTool > op=wait returns a clean non-error timeout result [5.65ms]
+(pass) IRC > IrcTool > op=wait returns an error if no active agents exist [0.89ms]
+(pass) IRC > IrcTool > op=wait returns an error if the requested specific 'from' agent is not active [0.46ms]
+(pass) IRC > IrcTool > op=wait consumes a pending IRC aside before honoring a queued interrupt abort [4.31ms]
+(pass) IRC > IrcTool > op=inbox drains IRC asides that arrived while the caller was running [2.41ms]
+(pass) IRC > IrcTool > op=inbox peek surfaces a pending IRC aside and prevents it auto-injecting [2.66ms]
+(pass) IRC > IrcTool > op=inbox drains the caller's mailbox [0.49ms]
+(pass) IRC > AgentSession.deliverIrcMessage > wakes an idle session with a real turn and emits the irc_message event [4.40ms]
+(pass) IRC > AgentSession.deliverIrcMessage > queues peer IRC as an interrupt while a turn is streaming [4.15ms]
+(pass) IRC > AgentSession.deliverIrcMessage > queues parent IRC as steering while an agent turn is streaming [4.83ms]
+(pass) IRC > AgentSession.deliverIrcMessage > keeps body-text operator claims as peer information rather than parent steering [2.85ms]
+(pass) IRC > AgentSession.deliverIrcMessage > auto-replies via an ephemeral side turn when the sender awaits and async execution is disabled [6.91ms]
+(pass) IRC > AgentSession.deliverIrcMessage > does not auto-reply when async execution is enabled or the sender does not await [3.29ms]
+
+packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:87:21)
+(fail) CommandController /move > moves the session through its transaction, then refreshes the terminal chrome [6.39ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:114:21)
+(fail) CommandController /move > does not prompt or create a move target when pending settings flush fails [5.13ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:153:22)
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on cancelled picker [5.04ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:153:22)
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on empty path [4.67ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:153:22)
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on missing parent [4.75ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:153:22)
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on declined creation [4.83ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:153:22)
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on streaming [5.24ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:182:37)
+(fail) CommandController /move > does not prompt or create a move target when the BTW migration gate refuses [5.11ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:252:42)
+(fail) CommandController /move > holds the move gate across creation confirmation and only commits an accepted move (confirmed=%s) [4.97ms]
+650 | 	 * If the target directory does not exist, the user is asked whether to create
+651 | 	 * it. The active session file and artifacts are moved into the target
+652 | 	 * directory's session bucket so `/resume` from that directory can find it.
+653 | 	 */
+654 | 	async handleMoveCommand(targetPath?: string): Promise<void> {
+655 | 		if (this.ctx.session.isStreaming) {
+                     ^
+TypeError: undefined is not an object (evaluating 'this.ctx.session.isStreaming')
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:655:16)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:252:42)
+(fail) CommandController /move > holds the move gate across creation confirmation and only commits an accepted move (confirmed=%s) [4.64ms]
+
+11 tests failed:
+(fail) CursorExecHandlers.grep bridge > maps caseInsensitive parameter correctly through the grep bridge [175.33ms]
+(fail) CommandController /move > moves the session through its transaction, then refreshes the terminal chrome [6.39ms]
+(fail) CommandController /move > does not prompt or create a move target when pending settings flush fails [5.13ms]
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on cancelled picker [5.04ms]
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on empty path [4.67ms]
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on missing parent [4.75ms]
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on declined creation [4.83ms]
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on streaming [5.24ms]
+(fail) CommandController /move > does not prompt or create a move target when the BTW migration gate refuses [5.11ms]
+(fail) CommandController /move > holds the move gate across creation confirmation and only commits an accepted move (confirmed=%s) [4.97ms]
+(fail) CommandController /move > holds the move gate across creation confirmation and only commits an accepted move (confirmed=%s) [4.64ms]
+
+ 73 pass
+ 11 fail
+ 340 expect() calls
+Ran 84 tests across 5 files. [7.16s]

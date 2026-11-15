@@ -1,0 +1,17 @@
+scripts/no-coding-agent-bucket-runs-as-one-process.test.ts(27,10): error TS2305: Module '"./ci-test-ts"' has no exported member 'chunksAtOnce'.
+scripts/no-coding-agent-bucket-runs-as-one-process.test.ts(27,53): error TS2459: Module '"./ci-test-ts"' declares 'Mode' locally, but it is not exported.
+scripts/no-coding-agent-bucket-runs-as-one-process.test.ts(71,43): error TS2339: Property 'ciChunksAtOnce' does not exist on type 'CodingAgentBucketPlan'.
+scripts/no-coding-agent-bucket-runs-as-one-process.test.ts(77,41): error TS2339: Property 'ciChunksAtOnce' does not exist on type 'CodingAgentBucketPlan'.
+scripts/no-coding-agent-bucket-runs-as-one-process.test.ts(77,65): error TS2339: Property 'ciChunksAtOnce' does not exist on type 'CodingAgentBucketPlan'.
+scripts/no-coding-agent-bucket-runs-as-one-process.test.ts(77,92): error TS2339: Property 'ciChunksAtOnce' does not exist on type 'CodingAgentBucketPlan'.
+scripts/no-coding-agent-bucket-runs-as-one-process.test.ts(91,26): error TS2339: Property 'ciChunksAtOnce' does not exist on type 'CodingAgentBucketPlan'.
+scripts/ovh-test-shards.test.ts(76,15): error TS2339: Property 'shards' does not exist on type 'number | TestShardPlan'.
+  Property 'shards' does not exist on type 'number'.
+scripts/ovh-test-shards.test.ts(76,30): error TS7006: Parameter 'shard' implicitly has an 'any' type.
+scripts/ovh-test-shards.test.ts(78,28): error TS2339: Property 'shards' does not exist on type 'number | TestShardPlan'.
+  Property 'shards' does not exist on type 'number'.
+scripts/ovh-test-shards.test.ts(86,18): error TS2339: Property 'shards' does not exist on type 'number | TestShardPlan'.
+  Property 'shards' does not exist on type 'number'.
+scripts/ovh-test-shards.test.ts(86,29): error TS7006: Parameter 'shard' implicitly has an 'any' type.
+scripts/ovh-test-shards.test.ts(88,17): error TS2339: Property 'shardCount' does not exist on type 'number | TestShardPlan'.
+  Property 'shardCount' does not exist on type 'number'.

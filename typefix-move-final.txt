@@ -1,0 +1,77 @@
+Acquired build slot lock for 'repair-move-final3' (PID 2876)
+bun test v1.4.3 (c6da4a4d3)
+Released build slot lock for 'repair-move-final3'
+[RUN] Acquired build slot lock for 'repair-move-final3'. Executing command: bash scripts/test-sandbox/run.sh --rung=bwrap bun test ./packages/coding-agent/test/modes/terminal/controllers/move-c...
+[RUN] child_pid=28556 started for 'repair-move-final3'.
+[test-sandbox] rung bwrap (pinned)
+
+packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:
+(pass) CommandController /move > moves the session through its transaction, then refreshes the terminal chrome [2.98ms]
+(pass) CommandController /move > does not prompt or create a move target when pending settings flush fails [1.18ms]
+1910 | 				`Supported platforms: ${SUPPORTED_PLATFORMS.join(", ")}\n` +
+1911 | 				"If you need support for this platform, please open an issue.",
+1912 | 		);
+1913 | 	}
+1914 | 	const details = errors.map(error => `- ${error}`).join("\n");
+1915 | 	throw new Error(
+                  ^
+error: Failed to load veyyon_natives native addon for linux-x64 (modern).
+
+Tried:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-modern.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-baseline.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+
+Provision it from the matching release: bun --cwd=natives/bridge/bindings run ensure
+If developing locally, build with: bun --cwd=natives/bridge/bindings run build
+  (optional x64 variants: TARGET_VARIANT=baseline|modern)
+Or reinstall the standalone binary: curl -fsSL https://get.veyyon.dev | sh
+ code: "VEYYON_NATIVE_ADDON_UNAVAILABLE"
+
+      at loadNative (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1915:12)
+      at native (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1703:27)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1731:21)
+      at parseKey (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/utils/src/keys.ts:711:3)
+      at matches (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/utils/src/keybindings.ts:308:18)
+      at handleInput (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/selectors/move-overlay.ts:229:7)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:58:14)
+      at #showMoveOverlay (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:632:31)
+      at handleMoveCommand (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/controllers/command-controller.ts:663:30)
+(fail) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on cancelled picker [25.64ms]
+(pass) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on empty path [0.57ms]
+(pass) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on missing parent [0.89ms]
+(pass) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on declined creation [0.72ms]
+(pass) CommandController /move > preserves the session and BTW state when /move is cancelled or rejected on streaming [0.53ms]
+(pass) CommandController /move > does not prompt or create a move target when the BTW migration gate refuses [0.84ms]
+(pass) CommandController /move > holds the move gate across creation confirmation and only commits an accepted move (confirmed=%s) [2.69ms]
+(pass) CommandController /move > holds the move gate across creation confirmation and only commits an accepted move (confirmed=%s) [1.25ms]
+
+ 9 pass
+ 1 fail
+ 97 expect() calls
+Ran 10 tests across 1 file. [1447.00ms]
+[RUN] Releasing build slot lock for 'repair-move-final3'...

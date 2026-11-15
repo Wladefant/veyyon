@@ -1,0 +1,15 @@
+bun test v1.4.3 (c6da4a4d3)
+inned)
+
+packages/coding-agent/test/a-parent-irc-reaches-an-active-child.test.ts:
+
+packages/coding-agent/test/acp-agent.test.ts:
+(pass) ACP agent > prioritizes advertised ACP models without dropping or reordering models within a provider [57.47ms]
+
+packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts:
+
+ 1 pass
+ 102 filtered out
+ 0 fail
+ 3 expect() calls
+Ran 1 test across 3 files. [12.12s]

@@ -1,0 +1,9 @@
+Initial tsgo: node_modules/@typescript/native-preview/bin/tsgo -p packages/coding-agent/tsconfig.json --noEmit
+Run: build_slot.py run typefix-tsgo-bash --class medium --timeout 900 -- bash -lc ...
+Compiler diagnostics:
+packages/coding-agent/test/cursor-exec.test.ts(319,1): error TS1005: '}' expected.
+packages/coding-agent/test/modes/terminal/controllers/move-command.test.ts(39,3): error TS1135: Argument expression expected.
+packages/coding-agent/test/print-mode-working-indicator.test.ts(62,3): error TS1005: ',' expected.
+packages/coding-agent/test/tools/image-gen.test.ts(1098,1): error TS1005: '}' expected.
+packages/coding-agent/test/tools/web-search-codex.test.ts(815,2): error TS1128: Declaration or statement expected.
+packages/coding-agent/test/tools/web-search-codex.test.ts(816,1): error TS1005: '}' expected.

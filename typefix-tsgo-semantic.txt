@@ -1,0 +1,278 @@
+packages/agent/src/tool-normalization.ts(190,44): error TS2345: Argument of type 'TSchema' is not assignable to parameter of type 'Record<string, unknown>'.
+  Type 'Type<unknown, {}>' is not assignable to type 'Record<string, unknown>'.
+    Index signature for type 'string' is missing in type 'Type<unknown, {}>'.
+packages/ai/src/providers/cursor-exec-results.ts(70,34): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor-exec-results.ts(111,34): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor-exec-results.ts(150,34): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor-exec-results.ts(189,36): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor-exec-results.ts(242,34): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor-exec-results.ts(312,34): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor-exec-results.ts(475,34): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor.ts(2381,49): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor.ts(3096,36): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/cursor.ts(3177,37): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/gitlab-duo-workflow.ts(646,34): error TS2345: Argument of type '(ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+    Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+      Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent'.
+          Types of property 'type' are incompatible.
+            Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/gitlab-duo-workflow/goal.ts(188,28): error TS2345: Argument of type 'string | (ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'string | readonly (ImageContent | TextContent)[]'.
+    Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+      Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+          Type 'VideoContent' is not assignable to type 'ImageContent'.
+            Types of property 'type' are incompatible.
+              Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/gitlab-duo-workflow/goal.ts(209,28): error TS2345: Argument of type 'string | (ImageContent | TextContent | VideoContent)[]' is not assignable to parameter of type 'string | readonly (ImageContent | TextContent)[]'.
+  Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'string | readonly (ImageContent | TextContent)[]'.
+    Type '(ImageContent | TextContent | VideoContent)[]' is not assignable to type 'readonly (ImageContent | TextContent)[]'.
+      Type 'ImageContent | TextContent | VideoContent' is not assignable to type 'ImageContent | TextContent'.
+        Type 'VideoContent' is not assignable to type 'ImageContent | TextContent'.
+          Type 'VideoContent' is not assignable to type 'ImageContent'.
+            Types of property 'type' are incompatible.
+              Type '"video"' is not assignable to type '"image"'.
+packages/ai/src/providers/openai-responses.ts(87,2): error TS2459: Module '"./openai-responses-wire"' declares 'ReasoningEffort' locally, but it is not exported.
+packages/ai/src/stream.ts(1709,39): error TS2304: Cannot find name 'OUTPUT_FALLBACK_BUFFER'.
+packages/ai/src/stream.ts(1711,39): error TS2304: Cannot find name 'OUTPUT_FALLBACK_BUFFER'.
+packages/ai/src/stream.ts(1732,35): error TS2304: Cannot find name 'OUTPUT_FALLBACK_BUFFER'.
+packages/ai/src/stream.ts(1733,32): error TS2304: Cannot find name 'OUTPUT_FALLBACK_BUFFER'.
+packages/catalog/src/provider-models/ollama.ts(234,21): error TS2304: Cannot find name 'isGlm52ReasoningEffortModelId'.
+packages/catalog/src/provider-models/special.ts(56,36): error TS2304: Cannot find name 'CodexDiscoveryAccount'.
+packages/coding-agent/scripts/compile-binary.ts(2,13): error TS2300: Duplicate identifier 'path'.
+packages/coding-agent/scripts/compile-binary.ts(5,13): error TS2300: Duplicate identifier 'path'.
+packages/coding-agent/src/eval/js/context-manager.ts(666,4): error TS2304: Cannot find name 'awaitCloseAck'.
+packages/coding-agent/src/eval/js/context-manager.ts(667,5): error TS7006: Parameter 'ack' implicitly has an 'any' type.
+packages/coding-agent/src/eval/js/context-manager.ts(704,11): error TS2304: Cannot find name 'awaitCloseAck'.
+packages/coding-agent/src/eval/js/context-manager.ts(705,5): error TS7006: Parameter 'ack' implicitly has an 'any' type.
+packages/coding-agent/src/eval/js/context-manager.ts(777,11): error TS2304: Cannot find name 'awaitCloseAck'.
+packages/coding-agent/src/eval/js/context-manager.ts(778,5): error TS7006: Parameter 'ack' implicitly has an 'any' type.
+packages/coding-agent/src/exec/bash-executor.ts(769,45): error TS2339: Property 'abort' does not exist on type 'Shell | [Shell, Timeout]'.
+  Property 'abort' does not exist on type '[Shell, Timeout]'.
+packages/coding-agent/src/extensibility/extensions/session-actions.ts(36,3): error TS2739: Type '{ sendMessage: SendMessageHandler; sendUserMessage: SendUserMessageHandler; appendEntry: <T = unknown>(customType: string, data: T | undefined) => void; ... 9 more ...; setSessionName: (name: string) => Promise<...>; }' is missing the following properties from type 'ExtensionActions': listWorkers, steerWorker
+packages/coding-agent/src/index.ts(112,1): error TS2308: Module "./session/agent-session" has already exported a member named 'RESCOPE_TERMINATE_REASON'. Consider explicitly re-exporting to resolve the ambiguity.
+packages/coding-agent/src/internal-urls/__tests__/history-exact.test.ts(464,47): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+packages/coding-agent/src/internal-urls/__tests__/history-exact.test.ts(491,47): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+      Type 'undefined' is not assignable to type 'string'.
+packages/coding-agent/src/internal-urls/artifact-protocol.ts(211,28): error TS2552: Cannot find name 'artifactFileNamesFromRegistry'. Did you mean 'artifactsDirsFromRegistry'?
+packages/coding-agent/src/launch/client.ts(5,10): error TS2300: Duplicate identifier 'isEexist'.
+packages/coding-agent/src/launch/client.ts(5,20): error TS2300: Duplicate identifier 'isEnoent'.
+packages/coding-agent/src/launch/client.ts(5,30): error TS2300: Duplicate identifier 'postmortem'.
+packages/coding-agent/src/launch/client.ts(6,10): error TS2300: Duplicate identifier 'isEexist'.
+packages/coding-agent/src/launch/client.ts(6,20): error TS2300: Duplicate identifier 'isEnoent'.
+packages/coding-agent/src/launch/client.ts(6,30): error TS2300: Duplicate identifier 'postmortem'.
+packages/coding-agent/src/mcp/transports/http.ts(535,7): error TS2552: Cannot find name 'mcpHttpFailureMessage'. Did you mean 'mcpHttpFailure'?
+packages/coding-agent/src/mcp/transports/http.ts(657,23): error TS2554: Expected 5 arguments, but got 4.
+packages/coding-agent/src/mcp/transports/http.ts(671,4): error TS2552: Cannot find name 'headers'. Did you mean 'Headers'?
+packages/coding-agent/src/mcp/transports/http.ts(686,20): error TS2552: Cannot find name 'mcpHttpFailureMessage'. Did you mean 'mcpHttpFailure'?
+packages/coding-agent/src/mcp/transports/http.ts(703,19): error TS18046: 'raw' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(704,4): error TS18046: 'raw' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(705,14): error TS18046: 'raw' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(706,4): error TS18046: 'raw' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(724,17): error TS18046: 'peerError' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(725,27): error TS18046: 'peerError' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(726,20): error TS18046: 'peerError' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(727,12): error TS18046: 'peerError' is of type 'unknown'.
+packages/coding-agent/src/mcp/transports/http.ts(734,33): error TS18048: 'result.error' is possibly 'undefined'.
+packages/coding-agent/src/mcp/transports/http.ts(734,55): error TS18048: 'result.error' is possibly 'undefined'.
+packages/coding-agent/src/mcp/transports/http.ts(811,39): error TS18048: 'message.error' is possibly 'undefined'.
+packages/coding-agent/src/mcp/transports/http.ts(811,62): error TS18048: 'message.error' is possibly 'undefined'.
+packages/coding-agent/src/mcp/transports/sse.ts(229,60): error TS2339: Property 'id' does not exist on type 'never'.
+packages/coding-agent/src/mcp/transports/sse.ts(230,46): error TS2339: Property 'id' does not exist on type 'never'.
+packages/coding-agent/src/mcp/transports/sse.ts(232,34): error TS2339: Property 'id' does not exist on type 'never'.
+packages/coding-agent/src/modes/terminal/controllers/command-controller.ts(721,19): error TS2339: Property 'applyCwdChange' does not exist on type 'CommandControllerContext'.
+packages/coding-agent/src/modes/terminal/controllers/command-controller.ts(745,19): error TS2339: Property 'applyCwdChange' does not exist on type 'CommandControllerContext'.
+packages/coding-agent/src/session/agent-session.ts(410,36): error TS2304: Cannot find name 'AgentContinueSkipReason'.
+packages/coding-agent/src/session/agent-session.ts(410,70): error TS2304: Cannot find name 'ScheduledAgentContinueOptions'.
+packages/coding-agent/src/session/agent-session.ts(652,37): error TS2304: Cannot find name 'path'.
+packages/coding-agent/src/session/agent-session.ts(910,24): error TS2552: Cannot find name 'AgentSessionEvent'. Did you mean 'SessionEvents'?
+packages/coding-agent/src/session/agent-session.ts(2026,21): error TS2304: Cannot find name 'sessionCpuLimit'.
+packages/coding-agent/src/session/agent-session.ts(2029,13): error TS7006: Parameter 'error' implicitly has an 'any' type.
+packages/coding-agent/src/session/agent-session.ts(2875,58): error TS2552: Cannot find name 'CompactionCheckResult'. Did you mean 'CompactionResult'?
+packages/coding-agent/src/session/agent-session.ts(2982,25): error TS2552: Cannot find name 'CompactionCheckResult'. Did you mean 'CompactionResult'?
+packages/coding-agent/src/session/agent-session.ts(3031,21): error TS2552: Cannot find name 'CompactionCheckResult'. Did you mean 'CompactionResult'?
+packages/coding-agent/src/session/agent-session.ts(3111,35): error TS2304: Cannot find name 'ScheduledAgentContinueOptions'.
+packages/coding-agent/src/session/agent-session.ts(3614,34): error TS2304: Cannot find name 'QUIESCENCE_RECHECK_MS'.
+packages/coding-agent/src/session/agent-session.ts(4285,27): error TS2304: Cannot find name 'goalsPrompts'.
+packages/coding-agent/src/session/agent-session.ts(4298,27): error TS2304: Cannot find name 'sessionPrompts'.
+packages/coding-agent/src/session/agent-session.ts(4329,19): error TS2304: Cannot find name 'describeAttachedImagesForTextModel'.
+packages/coding-agent/src/session/agent-session.ts(4374,34): error TS2304: Cannot find name 'normalizeModelContextImages'.
+packages/coding-agent/src/session/agent-session.ts(4743,4): error TS2304: Cannot find name 'throwIfExtensionCommand'.
+packages/coding-agent/src/session/agent-session.ts(4792,4): error TS2304: Cannot find name 'throwIfExtensionCommand'.
+packages/coding-agent/src/session/agent-session.ts(5170,11): error TS2304: Cannot find name 'SessionBeforeSwitchResult'.
+packages/coding-agent/src/session/agent-session.ts(5428,8): error TS2304: Cannot find name 'shouldCompact'.
+packages/coding-agent/src/session/agent-session.ts(5467,12): error TS2304: Cannot find name 'AgentTurnEndContext'.
+packages/coding-agent/src/session/agent-session.ts(5492,31): error TS2304: Cannot find name 'calculateContextTokens'.
+packages/coding-agent/src/session/agent-session.ts(5494,25): error TS2304: Cannot find name 'compactionContextTokens'.
+packages/coding-agent/src/session/agent-session.ts(5495,8): error TS2304: Cannot find name 'shouldCompact'.
+packages/coding-agent/src/session/runtime/turn-continuations.ts(102,15): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/src/task/executor.ts(2273,23): error TS2304: Cannot find name 'getSessionSlashCommands'.
+packages/coding-agent/src/task/executor.ts(2274,34): error TS2304: Cannot find name 'runExtensionSetModel'.
+packages/coding-agent/src/task/executor.ts(2290,41): error TS2304: Cannot find name 'USER_INTERRUPT_LABEL'.
+packages/coding-agent/src/task/executor.ts(2295,38): error TS2304: Cannot find name 'runExtensionCompact'.
+packages/coding-agent/src/tools/agent/irc.ts(114,20): error TS2339: Property 'wire' does not exist on type 'Lazy<Type<{ op: "inbox" | "list" | "send" | "wait"; to?: string | undefined; message?: string | undefined; replyTo?: string | undefined; await?: boolean | undefined; from?: string | undefined; timeoutMs?: number | undefined; peek?: boolean | undefined; ttlMinutes?: number | undefined; }, {}>>'.
+packages/coding-agent/src/tools/shell/eval.ts(37,2): error TS2305: Module '"../core/output-meta"' has no exported member 'resolveOutputSinkHeadBytes'.
+packages/coding-agent/src/tools/web/gh.ts(73,2): error TS2305: Module '"./gh-fetch"' has no exported member 'ViewLookupResult'.
+packages/coding-agent/src/tools/web/search/providers/codex.ts(75,9): error TS2304: Cannot find name 'ids'.
+packages/coding-agent/test/a-parent-irc-reaches-an-active-child.test.ts(68,75): error TS2339: Property 'message' does not exist on type '{}'.
+packages/coding-agent/test/a-run-only-mcp-config-rejects-a-fifo-without-a-writer.test.ts(98,43): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ type: string; command: string; }' is not assignable to parameter of type 'MCPServerConfig'.
+      Type '{ type: string; command: string; }' is not assignable to type 'MCPStdioServerConfig'.
+        Types of property 'type' are incompatible.
+          Type 'string' is not assignable to type '"stdio"'.
+packages/coding-agent/test/acp-builtins.test.ts(13,10): error TS2305: Module '"@veyyon/coding-agent/slash-commands/helpers/todo"' has no exported member 'TODO_VERBS'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1023,17): error TS2339: Property 'rawInput' does not exist on type 'SessionUpdate'.
+  Property 'rawInput' does not exist on type 'AvailableCommandsUpdate & { sessionUpdate: "available_commands_update"; }'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1024,17): error TS2339: Property 'locations' does not exist on type 'SessionUpdate'.
+  Property 'locations' does not exist on type 'AvailableCommandsUpdate & { sessionUpdate: "available_commands_update"; }'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1118,66): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Object literal may only specify known properties, and 'oldText' does not exist in type '{ type: string; path?: string | undefined; }'.
+packages/coding-agent/test/acp-event-mapper.test.ts(1138,43): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Object literal may only specify known properties, and 'oldText' does not exist in type '{ type: string; path?: string | undefined; }'.
+packages/coding-agent/test/an-agent-woken-by-irc-is-listed-in-the-agents-block.test.ts(124,18): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/test/an-agent-woken-by-irc-is-listed-in-the-agents-block.test.ts(159,19): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/test/cloud-checkpoints.test.ts(214,64): error TS2345: Argument of type '"owner-a"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/cloud-checkpoints.test.ts(215,67): error TS2345: Argument of type '"owner-b"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/cloud-checkpoints.test.ts(1229,3): error TS2345: Argument of type '"runtime-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/core/block-replace.test.ts(102,32): error TS2304: Cannot find name 'executeOptions'.
+packages/coding-agent/test/core/js-executor.test.ts(552,5): error TS2322: Type '(chunk: string) => number' is not assignable to type '(chunk: string) => void | Promise<void>'.
+  Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/coding-agent/test/core/js-executor.test.ts(574,4): error TS2322: Type '(chunk: string) => number' is not assignable to type '(chunk: string) => void | Promise<void>'.
+  Type 'number' is not assignable to type 'void | Promise<void>'.
+packages/coding-agent/test/differential/the-browser-card-draws-what-main-drew.test.ts(57,7): error TS2741: Property 'extension' is missing in type '{ headless: true; spawned: true; connected: true; cmux: true; }' but required in type 'Record<NonNullable<"cmux" | "connected" | "extension" | "headless" | "spawned" | undefined>, true>'.
+packages/coding-agent/test/differential/the-browser-card-draws-what-main-drew.test.ts(65,7): error TS2741: Property 'inventory' is missing in type '{ open: true; close: true; run: true; save_state: true; }' but required in type 'Record<"close" | "inventory" | "open" | "run" | "save_state", true>'.
+packages/coding-agent/test/differential/the-browser-card-draws-what-main-drew.test.ts(132,37): error TS2322: Type '"close" | "inventory" | "open"' is not assignable to type '"close" | "open" | "run" | "save_state" | undefined'.
+  Type '"inventory"' is not assignable to type '"close" | "open" | "run" | "save_state" | undefined'.
+packages/coding-agent/test/extensibility/custom-commands/review.test.ts(54,45): error TS2304: Cannot find name 'CacheLookupResult'.
+packages/coding-agent/test/goals/a-goal-is-never-unset-in-silence.test.ts(249,16): error TS2304: Cannot find name 'fileExists'.
+packages/coding-agent/test/helpers/idle-extension-actions.ts(8,2): error TS2322: Type '{ listWorkers?: ListWorkersHandler | undefined; steerWorker?: SteerWorkerHandler | undefined; sendMessage: SendMessageHandler; ... 11 more ...; setSessionName: (name: string) => Promise<void>; }' is not assignable to type 'ExtensionActions'.
+  Types of property 'listWorkers' are incompatible.
+    Type 'ListWorkersHandler | undefined' is not assignable to type 'ListWorkersHandler'.
+      Type 'undefined' is not assignable to type 'ListWorkersHandler'.
+packages/coding-agent/test/input-controller-escape.test.ts(725,15): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/test/input-controller-escape.test.ts(737,15): error TS2554: Expected 1 arguments, but got 0.
+packages/coding-agent/test/interactive-mode-default-plan-mode.test.ts(238,21): error TS2304: Cannot find name 'makeTool'.
+packages/coding-agent/test/interactive-mode-mcp-connecting.test.ts(17,21): error TS2304: Cannot find name 'path'.
+packages/coding-agent/test/kernel-ipc-trace-does-not-log-payload.test.ts(51,18): error TS2339: Property 'dispose' does not exist on type 'TraceKernel'.
+packages/coding-agent/test/launch/a-restarting-daemon-settles-cleanly-on-recovery-and-stop.test.ts(160,10): error TS2304: Cannot find name 'delay'.
+packages/coding-agent/test/launch/launch-lifecycle-races-and-recovery.test.ts(144,10): error TS2304: Cannot find name 'shutdown'.
+packages/coding-agent/test/launch/launch-lifecycle-races-and-recovery.test.ts(388,11): error TS2304: Cannot find name 'shutdown'.
+packages/coding-agent/test/main-session-resolution-error.test.ts(52,61): error TS2552: Cannot find name 'SettingsType'. Did you mean 'Settings'?
+packages/coding-agent/test/main-session-resolution-error.test.ts(53,62): error TS2552: Cannot find name 'SettingsType'. Did you mean 'Settings'?
+packages/coding-agent/test/mcp-legacy-sse-private-diagnostics.test.ts(122,69): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Argument of type '{ tools: never[]; }' is not assignable to parameter of type 'undefined'.
+packages/coding-agent/test/native-control/extension-worker-access.test.ts(273,9): error TS2741: Property 'obfuscateProviderText' is missing in type '{ getModel: () => undefined; isIdle: () => true; abort: () => void; hasPendingMessages: () => false; shutdown: () => void; getContextUsage: () => undefined; compact: () => Promise<void>; getSystemPrompt: () => never[]; }' but required in type 'ExtensionContextActions'.
+packages/coding-agent/test/noninteractive-dispose.test.ts(49,9): error TS2322: Type '{ subscribe: () => () => void; prompt: () => Promise<false>; displayAssistantContent: () => never[]; obfuscateProviderText: (text: string) => string; state: { messages: AssistantMessage[]; }; sessionManager: { ...; }; prepareForHeadlessAdvisorDrain: () => void; waitForAdvisorCatchup: () => Promise<...>; dispose: () ...' is not assignable to type 'PrintModeSession'.
+  Type '{ subscribe: () => () => void; prompt: () => Promise<false>; displayAssistantContent: () => never[]; obfuscateProviderText: (text: string) => string; state: { messages: AssistantMessage[]; }; sessionManager: { ...; }; prepareForHeadlessAdvisorDrain: () => void; waitForAdvisorCatchup: () => Promise<...>; dispose: () ...' is not assignable to type 'Pick<AgentSession, "displayAssistantContent" | "dispose" | "obfuscateProviderText" | "prepareForHeadlessAdvisorDrain" | "prompt" | "subscribe" | "waitForAdvisorCatchup" | "waitForQuiescence"> & { ...; }'.
+    Property 'waitForQuiescence' is missing in type '{ subscribe: () => () => void; prompt: () => Promise<false>; displayAssistantContent: () => never[]; obfuscateProviderText: (text: string) => string; state: { messages: AssistantMessage[]; }; sessionManager: { ...; }; prepareForHeadlessAdvisorDrain: () => void; waitForAdvisorCatchup: () => Promise<...>; dispose: () ...' but required in type 'Pick<AgentSession, "displayAssistantContent" | "dispose" | "obfuscateProviderText" | "prepareForHeadlessAdvisorDrain" | "prompt" | "subscribe" | "waitForAdvisorCatchup" | "waitForQuiescence">'.
+packages/coding-agent/test/read-edit-out-of-cwd.test.ts(17,1): error TS2304: Cannot find name 'beforeAll'.
+packages/coding-agent/test/read-edit-out-of-cwd.test.ts(107,38): error TS2304: Cannot find name 'editOptions'.
+packages/coding-agent/test/read-edit-out-of-cwd.test.ts(111,31): error TS2304: Cannot find name 'editOptions'.
+packages/coding-agent/test/read-multi-range.test.ts(298,16): error TS2304: Cannot find name 'textOutput'.
+packages/coding-agent/test/registry/agent-lifecycle.test.ts(911,21): error TS2304: Cannot find name 'deferred'.
+packages/coding-agent/test/registry/agent-lifecycle.test.ts(912,24): error TS2304: Cannot find name 'deferred'.
+packages/coding-agent/test/session/a-side-request-carries-the-session-hooks-and-provider-settings.test.ts(85,2): error TS2741: Property 'pendingRedactionPrefixLength' is missing in type '{ revision: number; cwd: string; expansionObfuscator: undefined; redactionObfuscator: undefined; hasRedactions: true; obfuscateText: (text: string) => string; obfuscateMessages: (messages: Message[]) => Message[]; ... 4 more ...; assertFreshForExpansion: () => undefined; }' but required in type 'SecretRuntimeLease'.
+packages/coding-agent/test/session/a-title-request-carries-only-the-visible-conversation.test.ts(29,7): error TS2741: Property 'image' is missing in type '{ text: { type: "text"; text: string; }[]; thinking: ({ type: "thinking"; thinking: string; } | { type: "thinking"; thinking: string; thinkingSignature: string; })[]; redactedThinking: { type: "redactedThinking"; data: string; }[]; fallback: { ...; }[]; toolCall: { ...; }[]; }' but required in type '{ fallback: AnthropicFallbackContent[]; image: ImageContent[]; redactedThinking: RedactedThinkingContent[]; text: TextContent[]; thinking: ThinkingContent[]; toolCall: ToolCall[]; }'.
+packages/coding-agent/test/session/a-title-request-carries-only-the-visible-conversation.test.ts(41,7): error TS2741: Property 'video' is missing in type '{ text: { type: "text"; text: string; }[]; image: { type: "image"; data: string; mimeType: string; }[]; }' but required in type '{ image: ImageContent[]; text: TextContent[]; video: VideoContent[]; }'.
+packages/coding-agent/test/synchronized-session.test.ts(37,66): error TS2345: Argument of type '"node"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(220,3): error TS2345: Argument of type '"test-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(256,3): error TS2345: Argument of type '"test-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(291,3): error TS2345: Argument of type '"test-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(336,3): error TS2345: Argument of type '"runtime-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(386,3): error TS2345: Argument of type '"test-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(418,3): error TS2345: Argument of type '"test-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(466,4): error TS2345: Argument of type '"runtime-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(505,3): error TS2345: Argument of type '"test-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(533,3): error TS2345: Argument of type '"expired-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(563,3): error TS2345: Argument of type '"valid-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(632,5): error TS2345: Argument of type '"runtime-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(676,4): error TS2345: Argument of type '"test-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(733,3): error TS2345: Argument of type '"runtime-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(762,78): error TS2345: Argument of type '"owner-a"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(816,5): error TS2345: Argument of type '"runtime-owner"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(919,64): error TS2345: Argument of type '"owner-a"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(920,66): error TS2345: Argument of type '"owner-b"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(991,67): error TS2345: Argument of type '"owner-a"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(992,67): error TS2345: Argument of type '"owner-b"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(1056,67): error TS2345: Argument of type '"owner-a"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/synchronized-session.test.ts(1057,70): error TS2345: Argument of type '"owner-b"' is not assignable to parameter of type '`${string}-${string}-${string}-${string}-${string}`'.
+packages/coding-agent/test/tools/a-lane-exit-closes-only-the-tabs-it-created-and-leaves-foreign-tabs-open.test.ts(277,3): error TS2741: Property 'targetId' is missing in type '{ url: string; viewport: { width: number; height: number; }; }' but required in type 'ReadyInfo'.
+packages/coding-agent/test/tools/an-eval-display-marks-what-json-cannot-hold-in-place.test.ts(19,20): error TS2305: Module '"@veyyon/coding-agent/tools/shell/eval"' has no exported member 'formatDisplayJsonForText'.
+packages/coding-agent/test/usage-reset-cli-contract.test.ts(7,84): error TS2353: Object literal may only specify known properties, and 'json' does not exist in type 'UsageResetOptions'.
+packages/coding-agent/test/usage-reset-cli-contract.test.ts(11,78): error TS2353: Object literal may only specify known properties, and 'json' does not exist in type 'UsageResetOptions'.
+packages/coding-agent/test/write-streaming-preview-expand.test.ts(4,2): error TS2300: Duplicate identifier 'decodeStreamedToolArgs'.
+packages/coding-agent/test/write-streaming-preview-expand.test.ts(4,2): error TS2305: Module '"@veyyon/coding-agent/modes/terminal/controllers/tool-args-reveal"' has no exported member 'decodeStreamedToolArgs'.
+packages/coding-agent/test/write-streaming-preview-expand.test.ts(5,2): error TS2300: Duplicate identifier 'streamingStringKeysForTool'.
+packages/coding-agent/test/write-streaming-preview-expand.test.ts(9,10): error TS2300: Duplicate identifier 'decodeStreamedToolArgs'.
+packages/coding-agent/test/write-streaming-preview-expand.test.ts(9,34): error TS2300: Duplicate identifier 'streamingStringKeysForTool'.

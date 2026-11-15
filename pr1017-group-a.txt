@@ -1,0 +1,586 @@
+bun test v1.4.3 (c6da4a4d3)
+bun test v1.4.3 (c6da4a4d3)
+t/src/internal-urls/__tests__/history-exact.test.ts:
+(pass) history exact record lookup > reads exact text in bounded Unicode pages with stable record and branch IDs [13.55ms]
+(pass) history exact record lookup > preserves a whole Unicode code point at a page boundary [2.37ms]
+(pass) history exact record lookup > rejects continuation after a same-ID record rewrite [4.31ms]
+(pass) history exact record lookup > does not invent missing records or make them look like exact evidence [2.88ms]
+(pass) history exact record lookup > uses the active branch for non-persistent sessions [0.27ms]
+(pass) history exact record lookup > rejects malformed page IDs and unbounded reads [0.27ms]
+(pass) history exact record lookup > finds stored evidence IDs on the selected branch and returns newest matches first [4.24ms]
+(pass) history exact record lookup > keeps matching ancestors despite 501 hits in an abandoned sibling [20.05ms]
+(pass) history exact record lookup > returns bounded partial results for more than 500 readable matches without losing the current leaf [11.06ms]
+(pass) history exact record lookup > does not infer an abandoned branch when a later oversized record was skipped [149.44ms]
+(pass) history exact record lookup > refuses implicit branch selection after an unreadable final JSONL record [3.58ms]
+(pass) history exact record lookup > refuses non-JSON corruption after records without rejecting initial titles or blanks [4.82ms]
+(pass) history exact record lookup > fails closed on structurally invalid JSONL entry objects without hiding explicit archives [25.40ms]
+(pass) history exact record lookup > search never presents rejected JSONL records as accepted branch evidence [10.71ms]
+(pass) history exact record lookup > refuses duplicate stored entry IDs even when the requested leaf is explicit [10.71ms]
+(pass) history exact record lookup > refuses cyclic stored ancestry for implicit and explicit leaf selection [11.69ms]
+(pass) history exact record lookup > refuses dangling stored parent links without hiding a healthy archived branch [11.33ms]
+(pass) history exact record lookup > does not certify explicit archived evidence when the 100,000-entry index is exhausted [2360.39ms]
+(pass) history exact record lookup > does not return explicit archived content from a 128 MiB truncated scan [459.61ms]
+(pass) history exact record lookup > rejects repeated same session header for implicit read and search [1.76ms]
+(pass) history exact record lookup > rejects repeated different session header for implicit read and search [1.37ms]
+(pass) history exact record lookup > rejects entry before session header for implicit read and search [1.39ms]
+(pass) history exact record lookup > rejects missing session header for implicit read and search [1.35ms]
+(pass) history exact record lookup > does not accept repeated leading title as a history header [5.06ms]
+(pass) history exact record lookup > does not accept late id-bearing title as a history header [3.22ms]
+(pass) history exact record lookup > rejects duplicate top-level id without returning forged evidence [2.55ms]
+(pass) history exact record lookup > rejects duplicate top-level parentId without returning forged evidence [2.09ms]
+(pass) history exact record lookup > rejects duplicate top-level type without returning forged evidence [2.25ms]
+(pass) history exact record lookup > rejects escaped-equivalent top-level id without returning forged evidence [2.34ms]
+(pass) history exact record lookup > rejects escaped-equivalent top-level parentId without returning forged evidence [2.18ms]
+(pass) history exact record lookup > rejects escaped-equivalent top-level type without returning forged evidence [2.51ms]
+(pass) history exact record lookup > rejects duplicate top-level id alongside nested message keys without returning forged evidence [3.85ms]
+(pass) history exact record lookup > rejects blank session and entry IDs (""), including valid child's ancestry [2.76ms]
+(pass) history exact record lookup > rejects blank session and entry IDs ("   "), including valid child's ancestry [2.39ms]
+(pass) history exact record lookup > does not treat an absent explicit leaf after malformed suffix as a healthy archive [3.07ms]
+(pass) history exact record lookup > rejects malformed search queries without suppressing ordinary letters and digits [0.14ms]
+
+packages/coding-agent/test/a-parent-irc-reaches-an-active-child.test.ts:
+(pass) parent IRC delivery to an active child > injects parent steering into the streaming child exactly once [2482.02ms]
+
+packages/coding-agent/test/a-run-only-mcp-config-rejects-a-fifo-without-a-writer.test.ts:
+(pass) run-only MCP input rejects a direct FIFO without waiting for a writer [137.86ms]
+(pass) run-only MCP input rejects a symlink FIFO without waiting for a writer [127.74ms]
+(pass) run-only MCP input still accepts a symlink to a regular file [4.57ms]
+
+packages/coding-agent/test/acp-agent.test.ts:
+(pass) ACP agent > keeps run-only MCP servers on client-list replacement and rejects shadowing before reconnecting [18.09ms]
+[veyyon] warning: loaded a stale native addon built for @veyyon/natives@1.5.6, but this tree is at 1.8.5. It may drift from the current sources. Rebuild with: bun --cwd=natives/bridge/bindings run build
+  (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node)
+(pass) ACP agent > waits for delayed run-only stdio tools before first turns across ACP lifecycles [369.36ms]
+(pass) ACP agent > prioritizes advertised ACP models without dropping or reordering models within a provider [29.97ms]
+(pass) ACP agent > supports multiple live ACP sessions with model and lifecycle handlers [20.79ms]
+(pass) ACP agent > advertises plan mode and emits schema-valid mode updates [6.58ms]
+(pass) ACP agent > plan-approval standing handler errors when the plan file is missing [7.34ms]
+(pass) ACP agent > plan-approval standing handler approves the agent-named plan and exits plan mode on apply [7.36ms]
+(pass) ACP agent > plan-approval standing handler treats dismissed elicitation as refine, never approves [7.58ms]
+(pass) ACP agent > pushes config_option_update when thinking level changes internally [205.38ms]
+(pass) ACP agent > suppresses lifetime config_option_update during the bootstrap window [204.57ms]
+(pass) ACP agent > re-advertises commands and config options after any working-directory change [228.28ms]
+(pass) ACP agent > emits a single config_option_update per setSessionConfigOption(thinking) call [206.14ms]
+(pass) ACP agent > lists static speech models for ACP mobile voice settings [3.36ms]
+(pass) ACP agent > accepts Veyyon extension methods (and the legacy _omp/ prefix) and rejects unknown unprefixed methods [3.87ms]
+(pass) ACP agent > replays messageIds and returns turn usage for prompts [13.36ms]
+(pass) ACP agent > replays each completed external turn once before the next prompt [17.21ms]
+(pass) ACP agent > replays an adopted external turn on the next prompt after its delivery failed [10.10ms]
+(pass) ACP agent > rejects ambiguous stored IDs during load with the first project newer [10.59ms]
+(pass) ACP agent > rejects ambiguous stored IDs during load with the second project newer [8.71ms]
+(pass) ACP agent > rejects ambiguous stored IDs during fork with the first project newer [8.59ms]
+(pass) ACP agent > rejects ambiguous stored IDs during fork with the second project newer [9.09ms]
+(pass) ACP agent > forks an already-loaded session from its own path despite a copied stored ID [13.41ms]
+(pass) ACP agent > rejects an unknown stored ID during load (empty) [6.25ms]
+(pass) ACP agent > rejects an unknown stored ID during load (absent) [6.25ms]
+(pass) ACP agent > rejects an unknown stored ID during fork (empty) [5.57ms]
+(pass) ACP agent > rejects an unknown stored ID during fork (absent) [5.59ms]
+(pass) ACP agent > replays the full transcript after loading a compacted session from disk [5.35ms]
+(pass) ACP agent > loads a stored session by ID when the client cwd has changed [7.64ms]
+(pass) ACP agent > loads a stored session over ACP JSON-RPC after the client cwd changes [15.51ms]
+(pass) ACP agent > refuses to resume a cold stored session from a foreign cwd [5.75ms]
+(pass) ACP agent > resumes a stored session without replaying it, and refuses a missing id or a foreign cwd [13.60ms]
+(pass) ACP agent > keeps synchronous assistant messages distinct without deltas [7.38ms]
+(pass) ACP agent > keeps synchronous assistant messages distinct with a second-message delta [6.40ms]
+(pass) ACP agent > keeps the full T3 text in one message when message_start arrives after its first delta [7.69ms]
+(pass) ACP agent > delivers the final visible answer when agent_end overtakes the assistant message_end (#4902) [5.45ms]
+(pass) ACP agent > does not duplicate the final answer when the assistant message_end arrives before agent_end [5.41ms]
+(pass) ACP agent > surfaces a provider error that reaches the client only via agent_end [5.37ms]
+(pass) ACP agent > does not re-send a streamed error chunk from the agent_end fallback [5.49ms]
+(pass) ACP agent > replays assistant tool calls and matching results without duplicating the start [9.21ms]
+(pass) ACP agent > preserves tool_use input payloads when replaying assistant tool calls [7.04ms]
+(pass) ACP agent > does not replay silent-abort marker as agent_message_chunk to ACP clients [6.30ms]
+(pass) ACP agent > emits ACP plan updates from live todo results [6.78ms]
+(pass) ACP agent > replays todo tool results as ACP plan updates [8.25ms]
+(pass) ACP agent > advertises ACP-safe builtins and skill commands [566.73ms]
+(pass) ACP agent > includes extension-registered commands in available_commands_update and excludes ACP-builtin collisions [9.04ms]
+(pass) ACP agent > executes skill commands through custom skill messages [8.33ms]
+(pass) ACP agent > auto-cancels an in-progress turn and queues a new prompt when called mid-flight [6.24ms]
+(pass) ACP agent > closes the ACP session when implicit cancel cleanup times out [15.36ms]
+(pass) ACP agent > waits for AgentSession idle cleanup after agent_end before returning [4.36ms]
+(pass) ACP agent > drains async job deliveries before completing the ACP prompt [4.05ms]
+(pass) ACP agent > keeps async delivery follow-up updates inside the owning ACP prompt [4.35ms]
+(pass) ACP agent > queues next prompt until AgentSession idle cleanup completes [5.12ms]
+(pass) ACP agent > serializes multiple prompts queued during idle cleanup [6.54ms]
+(pass) ACP agent > cancels a prompt while external history is refreshing without starting it [9.30ms]
+(pass) ACP agent > does not dispatch against an unfinished external tool turn, then adopts its completion [10.50ms]
+(pass) ACP agent > excludes imported usage when cancellation interrupts external replay [7.73ms]
+(pass) ACP agent > does not replay adopted external messages twice after a cancelled refresh and full load [8.98ms]
+(pass) ACP agent > suppresses late updates after cancel and waits cleanup before the next prompt [4.74ms]
+(pass) ACP agent > closes the ACP session when cancel cleanup times out [15.07ms]
+(pass) ACP agent > rejects a queued prompt when cancel cleanup closes the session [15.23ms]
+(pass) ACP agent > keeps closeSession gated while cancel cleanup is pending [4.48ms]
+(pass) ACP agent > rejects fork while cancel cleanup is pending [4.19ms]
+(pass) ACP agent > executes consumed ACP builtins without prompting the agent [3.95ms]
+(pass) ACP agent > executes force builtins and forwards remaining prompt text [3.99ms]
+(pass) ACP agent > ACP elicitation bridge > translates select to a single-property string-enum elicitation [0.80ms]
+(pass) ACP agent > ACP elicitation bridge > translates confirm to a boolean elicitation and returns the accepted value [0.55ms]
+(pass) ACP agent > ACP elicitation bridge > translates input to a string elicitation and surfaces the placeholder as description [0.49ms]
+(pass) ACP agent > ACP elicitation bridge > returns undefined / false for decline and cancel actions [1.08ms]
+(pass) ACP agent > ACP elicitation bridge > falls back to the stubbed behaviour when the client does not advertise form elicitation [0.50ms]
+(pass) ACP agent > ACP elicitation bridge > treats transport-level elicitation failures as undecided input [0.84ms]
+(pass) ACP agent > ACP elicitation bridge > skips the SDK call entirely when dialogOptions.signal is already aborted [0.49ms]
+(pass) ACP agent > ACP elicitation bridge > resolves to the stub fallback when dialogOptions.signal aborts mid-flight [0.44ms]
+(pass) ACP agent > ACP elicitation bridge > returns the stub fallback when the client sends a wrong-typed accept payload [0.46ms]
+(pass) ACP agent > ACP elicitation bridge > returns the stub fallback when accept arrives without the expected `value` key [0.41ms]
+(pass) ACP agent > ACP elicitation bridge > returns the stub fallback when accept arrives with no content at all [0.46ms]
+(pass) ACP agent > ACP elicitation bridge > fires onTimeout and resolves to the stub fallback when dialogOptions.timeout expires [1.62ms]
+(pass) ACP agent > ACP elicitation bridge > treats whitespace-only placeholder as absent on `input` [0.69ms]
+(pass) ACP agent > ACP elicitation bridge > sends `message === title` on `confirm` when the message is empty (no join) [0.44ms]
+(pass) ACP agent > ACP elicitation bridge > still resolves to the stub fallback when dialogOptions.onTimeout throws [1.64ms]
+(pass) ACP agent > ACP elicitation bridge > reads the sessionId getter on every elicitation so mid-flight session changes are reflected [0.47ms]
+(pass) ACP publishes only the effort levels the model in scope declares > offers a declaring model exactly its own ladder, and no option at all to a model with none [26.38ms]
+(pass) ACP publishes only the effort levels the model in scope declares > refuses a level the model does not declare, naming the model and what would have worked [4.76ms]
+(pass) ACP publishes only the effort levels the model in scope declares > spells out the levels that would have worked, and pushes nothing when it refuses [204.81ms]
+(pass) ACP background conversations > leaves the background when its turn ends [9.16ms]
+(pass) ACP background conversations > leaves the background when the client cancels it [7.21ms]
+(pass) ACP background conversations > leaves the background when a newer handoff passes the limit [10.67ms]
+(pass) ACP background conversations > leaves the background when session/load claims it back [4.57ms]
+(pass) ACP background conversations > leaves the background when session/resume claims it back [4.33ms]
+(pass) ACP background conversations > leaves the background when the client disconnects [4.04ms]
+(pass) ACP background conversations > keeps an idle session attached: nothing runs, so nothing moves [4.26ms]
+(pass) ACP background conversations > refuses requests for a hidden session until it is claimed back, and lists it as running [4.51ms]
+(pass) ACP background conversations > refuses a request that names no session or no background conversation [2.24ms]
+
+packages/coding-agent/test/acp-builtins.test.ts:
+(pass) ACP builtin slash commands > consumes fast status without returning prompt text [0.65ms]
+(pass) ACP builtin slash commands > forces a tool and returns remaining prompt text [0.35ms]
+(pass) ACP builtin slash commands > forces a tool when a tab separates its name from the prompt [0.40ms]
+(pass) ACP builtin slash commands > renders provider usage reports when the session can fetch them [1.84ms]
+(pass) ACP builtin slash commands > bare /usage lists its subcommands instead of rendering the report [0.36ms]
+(pass) ACP builtin slash commands > routes saved reset redemption through /usage reset [0.66ms]
+(pass) ACP builtin slash commands > spends an Anthropic reset when the provider prefix names it [0.36ms]
+(pass) ACP builtin slash commands > does not dispatch the legacy /reset-usage command [0.16ms]
+(pass) ACP builtin slash commands > returns false for unknown commands [0.17ms]
+(pass) ACP builtin slash commands > jobs: shows informative message when snapshot is null [0.35ms]
+(pass) ACP builtin slash commands > jobs: lists running and recent jobs from snapshot [0.24ms]
+(pass) ACP builtin slash commands > dump: outputs transcript with LLM request JSON path when sidecar succeeds [0.31ms]
+(pass) ACP builtin slash commands > dump: reports the reason when dumpLlmRequestToTmpDir throws, and still outputs the transcript [0.26ms]
+(pass) ACP builtin slash commands > dump: outputs empty-state message when no messages [0.25ms]
+(pass) ACP builtin slash commands > model: returns current model when set [0.46ms]
+(pass) ACP builtin slash commands > model: returns no-selection message when undefined [0.17ms]
+(pass) ACP builtin slash commands > model: returns ACP usage message when args provided [0.21ms]
+(pass) ACP builtin slash commands > rejects argument tails for /fresh but accepts them for /model [0.24ms]
+(pass) ACP builtin slash commands > model: applies known id and emits both title + config change notifications [0.31ms]
+(pass) ACP builtin slash commands > model: does not emit config change when id is unknown [0.16ms]
+(pass) ACP builtin slash commands > removed commands return false (fall through to model) [1.96ms]
+(pass) session lifecycle commands > /session info: a named session prints its title [0.43ms]
+(pass) session lifecycle commands > /session info: a session with no title yet says it is untitled [0.18ms]
+(pass) session lifecycle commands > /session delete: returns in-memory usage when no sessionFile [0.16ms]
+(pass) session lifecycle commands > /session delete: refuses while streaming [0.15ms]
+(pass) session lifecycle commands > /rename: renames and calls notifyTitleChanged on success [0.31ms]
+(pass) session lifecycle commands > /rename: a title with nothing left once cleaned prints the terminal's message and renames nothing [0.19ms]
+(pass) session lifecycle commands > /move: refuses while streaming [0.30ms]
+(pass) wave 3 commands > /export: calls exportToHtml with the given arg and outputs the path [0.34ms]
+(pass) wave 3 commands > /export: uses default path when no arg given [0.15ms]
+(pass) wave 3 commands > /export: returns usage on exportToHtml failure [0.19ms]
+(pass) wave 3 commands > /todo no-args: outputs empty state message when no todos [0.37ms]
+(pass) wave 3 commands > /todo append: stores phases and records custom entry [0.76ms]
+(pass) wave 3 commands > /todo rm <phase>: tells the agent and the session file not to re-add what was removed [0.97ms]
+(pass) wave 3 commands > /todo done: a quoted task is matched without its quotes [0.57ms]
+(pass) wave 3 commands > /todo start: a task whose text holds quotes is matched as typed [0.31ms]
+(pass) wave 3 commands > /todo export: writes the default file under the active session cwd [2.23ms]
+(pass) wave 3 commands > /todo export: creates the directories a missing path needs [1.37ms]
+(pass) wave 3 commands > /todo export: writes a quoted path with spaces [1.15ms]
+(pass) wave 3 commands > /todo import: reads a quoted absolute path [1.46ms]
+(pass) wave 3 commands > /todo import: reads the default file under the active session cwd [1.07ms]
+(pass) wave 3 commands > /todo import: reports parse errors without committing [0.99ms]
+(pass) wave 3 commands > /todo export: reports invalid internal-scheme paths [0.25ms]
+(pass) wave 3 commands > /todo import: reports invalid internal-scheme paths [0.19ms]
+(pass) wave 3 commands > /todo edit: returns TUI-only usage message [0.26ms]
+(pass) wave 3 commands > /todo unknown: returns usage message [0.15ms]
+(pass) wave 3 commands > /todo unknown: names every accepted verb, and every named verb is accepted [2.09ms]
+(pass) wave 3 commands > /move: returns usage when no arg [0.27ms]
+(pass) wave 3 commands > /move: returns usage when path does not exist [0.31ms]
+(pass) wave 3 commands > /move: relocates storage and cwd-scoped runtime through one transaction owner [1.03ms]
+(pass) wave 3 commands > /move: strips outer double quotes from the path, as the terminal does [1.04ms]
+(pass) wave 3 commands > /move: a quoted empty path prints usage [0.30ms]
+(pass) wave 3 commands > /move: reports a failed transaction and keeps the original cwd [0.92ms]
+(pass) wave 3 commands > /memory unknown: returns usage message [0.52ms]
+(pass) wave 3 commands > /todo start: finds pending task by substring and starts it [0.50ms]
+(pass) wave 3 commands > /browser visible: sets headless=false; second call is idempotent [0.79ms]
+(pass) wave 3 commands > /browser no-arg after /browser visible toggles to headless [0.25ms]
+(pass) wave 3 commands > /compact: reports Compaction complete. after session.compact resolves [0.51ms]
+(pass) wave 3 commands > /compact handoff: refuses the token and names the command that transfers [0.21ms]
+(pass) wave 4 commands > /mcp (no args): outputs help text containing list, enable, disable, remove, reload [0.19ms]
+(pass) wave 4 commands > /mcp help: outputs help text containing list, enable, disable, remove, reload [20.87ms]
+(pass) wave 4 commands > /mcp add (no args): returns usage string [0.60ms]
+(pass) wave 4 commands > /mcp reload: calls refreshCommands and outputs confirmation [0.34ms]
+(pass) wave 4 commands > /mcp resources: outputs server list or no-server message [1.52ms]
+(pass) wave 4 commands > /mcp unknown-verb: returns usage pointing to help [0.29ms]
+(pass) wave 4 commands > /ssh (no args): outputs help text containing list and remove [0.21ms]
+(pass) wave 4 commands > /ssh help: outputs help text containing list and remove [9.14ms]
+(pass) wave 4 commands > /ssh add (no args): returns usage [0.66ms]
+(pass) wave 4 commands > /ssh unknown-verb: returns unknown subcommand message [0.29ms]
+(pass) wave 4 commands > /marketplace is not a builtin: falls through as a prompt [0.35ms]
+(pass) wave 4 commands > /todo start: resolves ambiguous matches by preferring active tasks [0.34ms]
+(pass) wave 5 — adapters and polish > /mcp help: lists resources, prompts, test, add, smithery-search [0.41ms]
+(pass) wave 5 — adapters and polish > /mcp add foo url … token X: writes the profile config and names no scope [0.65ms]
+(pass) wave 5 — adapters and polish > "/mcp add foo url https://example.com project" is refused and writes no config [0.32ms]
+(pass) wave 5 — adapters and polish > "/mcp remove foo project" is refused and writes no config [0.33ms]
+(pass) wave 5 — adapters and polish > "/mcp add foo --url https://example.com" is refused and writes no config [0.21ms]
+(pass) wave 5 — adapters and polish > "/mcp add foo --token X" is refused and writes no config [0.15ms]
+(pass) wave 5 — adapters and polish > "/mcp add foo --scope project" is refused and writes no config [0.12ms]
+(pass) wave 5 — adapters and polish > "/mcp add foo -- echo hi" is refused and writes no config [0.10ms]
+(pass) wave 5 — adapters and polish > /mcp test bogus: returns error when server not found in config [0.48ms]
+(pass) wave 5 — adapters and polish > /ssh add foo x user y: calls addSSHHost [0.32ms]
+(pass) wave 5 — adapters and polish > /ssh add reads a bare integer as the port and a host named like a keyword [0.24ms]
+(pass) wave 5 — adapters and polish > "/ssh add foo --host x" is refused and writes no SSH host [0.19ms]
+(pass) wave 5 — adapters and polish > "/ssh add foo x --user y" is refused and writes no SSH host [0.26ms]
+(pass) wave 5 — adapters and polish > "/ssh add foo x --port 2222" is refused and writes no SSH host [0.12ms]
+(pass) wave 5 — adapters and polish > /model gpt-fake-9000: returns unknown-model message [0.19ms]
+(pass) wave 5 — adapters and polish > /model known-id: reports model set and triggers notifyTitleChanged [0.29ms]
+(pass) wave 5 — adapters and polish > /usage show: includes bar character when usedFraction is 0.5 [0.40ms]
+(pass) wave 5 — adapters and polish > /context: lists more than one breakdown line for session with messages [1.57ms]
+(pass) wave 5 — adapters and polish > /jobs: empty-state output mentions background jobs definition [0.35ms]
+
+ 222 pass
+ 0 fail
+ 1179 expect() calls
+Ran 222 tests across 5 files. [12.46s]
+[test-sandbox] rung bwrap (pinned)
+
+packages/coding-agent/test/acp-event-mapper.test.ts:
+(pass) ACP event mapper > attaches a stable messageId to live assistant chunks [0.63ms]
+(pass) ACP event mapper > emits final assistant text when no text deltas were observed [0.20ms]
+(pass) ACP event mapper > does not duplicate final assistant text after streaming deltas [0.07ms]
+(pass) ACP event mapper > preserves command text when a new command tool is started [0.20ms]
+(pass) ACP event mapper > uses command text for a new command tool even when intent is generic [0.06ms]
+(pass) ACP event mapper > preserves eval source when a new eval tool is started [0.15ms]
+(pass) ACP event mapper > builds eval source content from valid cells only [0.13ms]
+(pass) ACP event mapper > limits eval source before emitting visible tool-call text [0.10ms]
+(pass) ACP event mapper > emits a diff ToolCallContent for each per-file edit result [0.65ms]
+(pass) ACP event mapper > emits a diff ToolCallContent for single-file edit details [0.12ms]
+(pass) ACP event mapper > resolves live image blob refs for ACP content without expanding rawOutput [0.25ms]
+(pass) ACP event mapper > emits locations on tool_execution_update from args [0.10ms]
+(pass) ACP event mapper > preserves command text when a command tool update replaces content [0.12ms]
+(pass) ACP event mapper > preserves command text when tool update details accompany empty content [0.12ms]
+(pass) ACP event mapper > keeps terminal content alongside readable text [0.08ms]
+(pass) ACP event mapper > keeps terminal content alongside readable end text [0.08ms]
+(pass) ACP event mapper > preserves command text when a command tool final update replaces content [0.21ms]
+(pass) ACP event mapper > keeps terminal content alongside readable error and message fields [0.17ms]
+(pass) ACP event mapper > keeps plain command output visible without terminal details [0.07ms]
+(pass) ACP event mapper > embeds only terminal content from direct terminalId [0.07ms]
+(pass) ACP event mapper > does not duplicate existing terminal content [0.09ms]
+(pass) ACP event mapper > shows bash commands in visible tool call content [0.07ms]
+(pass) ACP event mapper > maps shell and exec tool starts as execute [0.11ms]
+594 | 	}
+595 | 
+596 | 	async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+597 | 		assertAbsoluteCwd(params.cwd);
+598 | 		const record = await this.#loadManagedSession(params.sessionId, params.cwd, params.mcpServers, true);
+599 | 		for (const id of await record.session.refreshExternalTurn()) record.pendingExternalEntryIds.add(id);
+                                              ^
+TypeError: record.session.refreshExternalTurn is not a function. (In 'record.session.refreshExternalTurn()', 'record.session.refreshExternalTurn' is undefined)
+      at loadSession (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/acp/acp-agent.ts:599:41)
+      at async <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/acp-event-mapper.test.ts:814:16)
+(fail) ACP event mapper > replays assistant tool_use input through the ACP dispatcher without wrapping [15.01ms]
+(pass) ACP event mapper > builds replayed bash tool calls from JSON string arguments [0.18ms]
+(pass) ACP event mapper > builds replayed read tool-call locations against the replay cwd [0.58ms]
+(pass) ACP event mapper > keeps malformed replay arguments as raw input without command content [0.09ms]
+(pass) ACP event mapper > keeps object replay arguments unchanged and builds command content [0.09ms]
+(pass) ACP event mapper > does not add command text content to non-command tool starts [0.09ms]
+(pass) ACP event mapper > resolves tool_execution_start locations against mapper cwd [0.08ms]
+(pass) ACP event mapper > emits distinct locations for move-style path arguments [0.07ms]
+(pass) ACP event mapper > omits a NUL-bearing read location with cwd while preserving raw tool arguments [0.08ms]
+(pass) ACP event mapper > keeps only valid absolute locations when one move argument is invalid [0.36ms]
+(pass) ACP event mapper > omits rejected per-file result locations without hiding valid sibling files [0.18ms]
+(pass) ACP event mapper > omits invalid diff paths but keeps valid absolute diffs and original output [0.21ms]
+(pass) ACP event mapper > normalizes the direct single-file edit diff with a supplied session cwd [0.25ms]
+(pass) ACP event mapper > preserves original relative diff paths for legacy ACP events without cwd [0.14ms]
+(pass) ACP event mapper > rejects mutated ACP notification discriminators [0.91ms]
+
+packages/coding-agent/test/an-agent-woken-by-irc-is-listed-in-the-agents-block.test.ts:
+[veyyon] warning: loaded a stale native addon built for @veyyon/natives@1.5.6, but this tree is at 1.8.5. It may drift from the current sources. Rebuild with: bun --cwd=natives/bridge/bindings run build
+  (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node)
+(pass) an agent woken by IRC is listed in the Agents block while it runs > lists an agent woken from idle (initially detached=true) in the Agents block [516.17ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > lists an agent woken from parked (initially detached=true) in the Agents block [432.77ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > lists an agent woken from idle (initially detached=false) in the Agents block [339.31ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > lists an agent woken from parked (initially detached=false) in the Agents block [418.35ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > does not list a sync spawn when status_changed fires without a status transition (e.g. pending approval) [263.23ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > leaves row absent after lifecycle failed and lists it when revived to running [335.91ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > keeps a failed run's todo open when its wake settles to idle [319.33ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > keeps a failed run's todo open when its wake settles to parked [326.51ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > keeps a failed run's todo open when its wake settles to aborted [335.53ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > keeps a aborted run's todo open when its wake settles to idle [332.66ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > keeps a aborted run's todo open when its wake settles to parked [313.69ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > keeps a aborted run's todo open when its wake settles to aborted [334.59ms]
+(pass) an agent woken by IRC is listed in the Agents block while it runs > leaves a sync spawn's own run to the bus when its registry status flaps mid-run [253.12ms]
+(pass) a woken agent's row after the wake > settles aborted when the registry aborts the woken turn of a completed agent [0.24ms]
+
+packages/coding-agent/test/cloud-checkpoints.test.ts:
+(pass) cloud checkpoints > the shared capture filter rejects private credential material before workspace reads [0.42ms]
+(pass) cloud checkpoints > matching and fallback explicit source fences preserve legitimate handoff [11.70ms]
+(pass) cloud checkpoints > an old explicit transfer fence cannot spend a newer shared-client owner [0.37ms]
+138 | 				baseUrl: "https://checkpoint.invalid", token: "test",
+139 | 				key: new Uint8Array(32), fetch: fake,
+140 | 			});
+141 | 			const earlier = client.acquireLease("s", "owner-old");
+142 | 			const later = await client.acquireLease("s", "owner-new");
+143 | 			const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
+                                                   ^
+error: expect(received).toThrow(expected)
+
+Expected pattern: /admission superseded/
+Received message: "The operation timed out."
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/cloud-checkpoints.test.ts:143:46)
+(fail) cloud checkpoints > a late valid or invalid lease reply cannot change a newer owner's fence [10014.01ms]
+  ^ this test timed out after 5000ms.
+(pass) cloud checkpoints > a pending one-use claim blocks competing claims, leases and transfers before dispatch [1.20ms]
+213 | 			});
+214 | 			const old = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000a");
+215 | 			const winner = new SynchronizedSession("s", client, undefined, "00000000-0000-4000-8000-00000000000b");
+216 | 			const firstAdmission = old.admit();
+217 | 			await winner.admit();
+218 | 			const rejection = expect(firstAdmission).rejects.toThrow(/admission superseded/);
+                                                          ^
+error: expect(received).toThrow(expected)
+
+Expected pattern: /admission superseded/
+Received message: "The operation timed out."
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/cloud-checkpoints.test.ts:218:53)
+(fail) cloud checkpoints > two actual guards retain winner admission and renewal after late former lease [10006.65ms]
+  ^ this test timed out after 5000ms.
+179 | 			this.#leaseAdmissions.delete(sessionId);
+180 | 	}
+181 | 	async acquireLease(sessionId: string, ownerNode: string): Promise<CheckpointLease> {
+182 | 		if (!isCheckpointNodeLabel(ownerNode)) throw new Error("A valid checkpoint owner label is required");
+183 | 		if (this.#transferClaimsInFlight.has(sessionId))
+184 | 			throw new Error("Checkpoint transfer admission already in flight");
+                   ^
+error: Checkpoint transfer admission already in flight
+      at acquireLease (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/checkpoints/cloud-checkpoints.ts:184:14)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/cloud-checkpoints.test.ts:250:17)
+(fail) cloud checkpoints > a late transfer-claim reply cannot overwrite or invalidate a newer lease [4.15ms]
+TimeoutError: The operation timed out.
+DOMException {
+  code: 23,
+  name: "TimeoutError",
+  message: "The operation timed out.",
+  INDEX_SIZE_ERR: 1,
+  DOMSTRING_SIZE_ERR: 2,
+  HIERARCHY_REQUEST_ERR: 3,
+  WRONG_DOCUMENT_ERR: 4,
+  INVALID_CHARACTER_ERR: 5,
+  NO_DATA_ALLOWED_ERR: 6,
+  NO_MODIFICATION_ALLOWED_ERR: 7,
+  NOT_FOUND_ERR: 8,
+  NOT_SUPPORTED_ERR: 9,
+  INUSE_ATTRIBUTE_ERR: 10,
+  INVALID_STATE_ERR: 11,
+  SYNTAX_ERR: 12,
+  INVALID_MODIFICATION_ERR: 13,
+  NAMESPACE_ERR: 14,
+  INVALID_ACCESS_ERR: 15,
+  VALIDATION_ERR: 16,
+  TYPE_MISMATCH_ERR: 17,
+  SECURITY_ERR: 18,
+  NETWORK_ERR: 19,
+  ABORT_ERR: 20,
+  URL_MISMATCH_ERR: 21,
+  QUOTA_EXCEEDED_ERR: 22,
+  TIMEOUT_ERR: 23,
+  INVALID_NODE_TYPE_ERR: 24,
+  DATA_CLONE_ERR: 25,
+  toString: [Function: toString],
+}
+267 | 			baseUrl: "https://checkpoint.invalid", token: "test",
+268 | 			key: new Uint8Array(32), fetch: async () => pendingOld,
+269 | 		});
+270 | 		const earlier = client.acquireLease("s", "owner-old");
+271 | 		client.loseLease("s");
+272 | 		const rejection = expect(earlier).rejects.toThrow(/admission superseded/);
+                                                  ^
+error: expect(received).toThrow(expected)
+
+Expected pattern: /admission superseded/
+Received message: "The operation timed out."
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/cloud-checkpoints.test.ts:272:45)
+(fail) cloud checkpoints > explicit lease loss invalidates a still-pending admission response [10003.84ms]
+  ^ this test timed out after 5000ms.
+(pass) cloud checkpoints > commit preflight refuses impossible cloud identities and head numbers without uploads [12.62ms]
+(pass) cloud checkpoints > round trips ciphertext larger than the service object cap [139.56ms]
+(pass) cloud checkpoints > same-head concurrent commits share one encrypted operation and authority receipt [1.51ms]
+(pass) cloud checkpoints > a different concurrent same-head payload cannot replace the pending replay [1.09ms]
+(pass) cloud checkpoints > an ambiguous same-head commit retries with the original idempotency key [1.19ms]
+(pass) cloud checkpoints > an unverified 200 commit receipt retains the original idempotency key for reconciliation [3.41ms]
+(pass) cloud checkpoints > is disabled by default and excludes credentials and caches [0.22ms]
+(pass) cloud checkpoints > authenticates encrypted bundle and rejects tampering [0.63ms]
+(pass) cloud checkpoints > rejects authenticated ciphertext with an unsupported bundle shape [1.54ms]
+(pass) cloud checkpoints > lease loss fences commits [0.46ms]
+(pass) cloud checkpoints > unparseable lease deadlines cannot authorize checkpoint writes [0.63ms]
+(pass) cloud checkpoints > rejects invalid authority lease epochs before opening a writable lease [0.62ms]
+(pass) cloud checkpoints > renewal rejects an expired authority fence and immediately loses local writability [0.27ms]
+(pass) lease response body remains inside the checkpoint timeout [40.65ms]
+(pass) checkpoint authority JSON refuses an oversized first chunk without consuming a second [0.81ms]
+(pass) checkpoint authority JSON accepts a valid response split across streaming chunks [0.32ms]
+(pass) checkpoint control headers fail closed when custom fetch ignores abort [30.48ms]
+(pass) checkpoint object GET headers have a deadline when custom fetch ignores abort [30.95ms]
+(pass) checkpoint object PUT headers have a deadline without acknowledging a commit [35.01ms]
+(pass) checkpoint JSON reader fails on deadline when fake stream ignores abort [30.73ms]
+(pass) checkpoint object reader fails on deadline when fake stream ignores abort [34.18ms]
+(pass) restoration rejects an oversized streaming object without consuming a second chunk [0.97ms]
+(pass) restoration aborts a stalled object body before its eventual bytes [40.97ms]
+(pass) malformed transfer identities and capabilities fail before a claim request [1.16ms]
+(pass) checkpoint transfer grants reject an authority response for a different runtime owner [0.92ms]
+(pass) claim and resume refuse the unredeemed transfer epoch under HTTP 200 [0.62ms]
+(pass) claim and resume receipts bind the requested target and transfer identity [1.34ms]
+(pass) an overlong authority resume capability cannot replace a one-time transfer claim [0.43ms]
+(pass) checkpoint renewal refuses a changed authority owner and revokes its cached lease [0.30ms]
+(pass) an uncertain transfer fences the old writer before the remote answer and never reacquires after two errors [0.54ms]
+(pass) transfer receipt must bind target identity, transfer ID, next epoch, and live deadline [2.02ms]
+(pass) definite transfer refusals are not replayed while ambiguous statuses retry at most once [1.97ms]
+(pass) checkpoint finalization accepts only affirmative authority receipts [1.23ms]
+(pass) nonconfirming transfer finalization fences session admission but permits one cleanup release [0.99ms]
+(pass) restoration rejects malformed and foreign heads before any object GET [1.87ms]
+
+packages/coding-agent/test/core/block-replace.test.ts:
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > resolves the inner `if` block (line 2) and replaces its full span [138.86ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > resolves the enclosing function block (line 1) and replaces the whole construct [3.38ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > deletes the resolved `if` block (line 2) end-to-end via `DEL.BLK` [2.48ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > resolves and replaces a Go function block containing new(expr) [6.34ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > inserts after an Emacs Lisp top-level macro-style form [5.66ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > inserts after an extensionless .emacs top-level form [3.26ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > reports the diff for a resolved block edit [3.01ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > echoes the resolved span in the result text for SWAP.BLK [2.89ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > echoes the resolved span in the result text for DEL.BLK [2.82ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > rejects a lone closing delimiter (no block begins there) and steers to `SWAP N.=M:` [2.17ms]
+(pass) SWAP.BLK — native tree-sitter resolution end-to-end > rejects a block edit on an unrecognized language [1.86ms]
+(pass) block ops on markdown headings — whole-section resolution end-to-end > DEL.BLK at a `## H2` deletes the entire section, including nested subsections [6.28ms]
+(pass) block ops on markdown headings — whole-section resolution end-to-end > INS.BLK.POST at a `## H2` lands after the whole section, past nested subsections [3.09ms]
+
+packages/coding-agent/test/core/js-executor.test.ts:
+(pass) executeJs > persists bindings across calls and reset clears them [460.24ms]
+(pass) executeJs > parallel() barriers until every thunk settles and throws the lowest-index error [45.75ms]
+(pass) executeJs > persists bindings from cells that contain nested returns [5.22ms]
+(pass) executeJs > persists bindings from cells that need the async wrapper [5.60ms]
+(pass) executeJs > persists bindings when auto-displaying the final expression [2.20ms]
+(pass) executeJs > does not expose the final expression marker as a global property [3.62ms]
+(pass) executeJs > ignores user-assigned final expression markers without a rewritten final expression [1.24ms]
+(pass) executeJs > captures promise-valued final expression before promise callbacks can mutate the marker [2.47ms]
+(pass) executeJs > awaits rewritten thenable final expressions once [4.83ms]
+(pass) executeJs > does not auto-display side-effect import rewrites [2.39ms]
+(pass) executeJs > exposes the worker's real process object [2.48ms]
+(pass) executeJs > exposes common web globals and the raw Node fs module [6.44ms]
+(pass) executeJs > reads files as text and supports offset/limit slicing [5.69ms]
+367 | 		// Five arguments, not three: the bridge hands the tool its abort signal, no progress
+368 | 		// callback, and the SESSION'S tool context, which is what makes an eval call answer to the
+369 | 		// approval policy rather than bypassing it. This fake session exposes no context, so the
+370 | 		// last two positions are undefined - asserted rather than omitted, because a bridge that
+371 | 		// stopped passing the context would otherwise still match.
+372 | 		expect(execute).toHaveBeenNthCalledWith(
+                        ^
+error: expect(received).toHaveBeenNthCalledWith(n, ...expected)
+
+Call #1:
+  [
+-   StringMatching /^js-read-/,
++   "js-read-70559d2f-faa0-4110-bc8b-0b09c20bbe36",
+    {
+-     "i": "js prelude",
+      "path": "artifact://15:raw:1-1400",
+    },
+-   Any<Function>,
++   AbortSignal {},
+    undefined,
+    undefined,
+  ]
+
+- Expected  - 3
++ Received  + 2
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/core/js-executor.test.ts:372:19)
+(fail) executeJs > delegates URI reads through the read tool with positional slicing [11.60ms]
+(pass) executeJs > rejects directory reads from native read() [2.04ms]
+431 | 				images: undefined,
+432 | 			},
+433 | 			agentOutput: "from-agent",
+434 | 		});
+435 | 		expect(execute).toHaveBeenCalledTimes(2);
+436 | 		expect(execute.mock.calls[0]?.[1]).toEqual({ path: "package.json", [INTENT_FIELD]: "js prelude" });
+                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "i": "js prelude",
+    "path": "package.json",
+  }
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/core/js-executor.test.ts:436:38)
+(fail) executeJs > routes output() through tool.read and keeps tool.* results normalized [6.63ms]
+(pass) executeJs > auto-displays the final awaited expression result [1.98ms]
+(pass) executeJs > awaits promise-valued final expressions before displaying [1.66ms]
+(pass) executeJs > awaits identifier promise final expressions before displaying [1.10ms]
+(pass) executeJs > auto-displays returned objects as structured output [1.00ms]
+(pass) executeJs > rewrites static `import { x } from "pkg"` to dynamic import [1.72ms]
+(pass) executeJs > strips TypeScript syntax before executing user code [3.01ms]
+525 | 			sessionId,
+526 | 			session,
+527 | 			sessionFile,
+528 | 		});
+529 | 		expect(result.exitCode).toBe(0);
+530 | 		expect(result.output).toBe('{\n  "name": "probe",\n  "run": "[Function: run]",\n  "tag": "Symbol(marker)"\n}\n');
+                              ^
+error: expect(received).toBe(expected)
+
+- "{
+-   "name": "probe",
+-   "run": "[Function: run]",
+-   "tag": "Symbol(marker)"
+- }
++ "[object Object]
+  "
+
+- Expected  - 5
++ Received  + 1
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/core/js-executor.test.ts:530:25)
+(fail) executeJs > states a final value structuredClone cannot copy as text, with its functions and symbols marked in place [6.09ms]
+(pass) executeJs > withholds an incomplete structured inventory on timeout [108.40ms]
+(pass) executeJs > withholds an incomplete structured inventory on cancel [200.43ms]
+(pass) executeJs > keeps a thrown error's explanation without leaking unfinished credential values [181.36ms]
+(pass) executeJs > prints RegExp after a completed container and console arguments: console.log({ count: 1 }, /\{/); [5.92ms]
+(pass) executeJs > prints RegExp after a completed container and console arguments: console.log([1], /\{/); [2.37ms]
+(pass) executeJs > prints RegExp after a completed container and console arguments: console.log({ count: 1 }, 42, /\{/); [2.28ms]
+(pass) executeJs > prints RegExp after a completed container and console arguments: console.log({ count: 1 }, "value", /\{/); [1.25ms]
+(pass) executeJs > prints RegExp after a completed container and console arguments: console.log({ count: 1 }, /ok/, /\{/); [1.42ms]
+(pass) executeJs > withholds complete and unfinished inventories after a slash-bearing scalar argument [2.66ms]
+(pass) executeJs > prints a complete object holding a RegExp and the text after it [1.16ms]
+(pass) executeJs > cancels execution when the timeout expires [23.17ms]
+(pass) ProducerOutputGuard finalization > does not release withheld inventory when finish is called twice [0.10ms]
+(pass) ProducerOutputGuard finalization > withholds an incomplete final line after an ordinary status line [0.19ms]
+(pass) ProducerOutputGuard finalization > withholds an incomplete inventory split into individual characters [0.11ms]
+(pass) ProducerOutputGuard finalization > emits a complete structured object with two ordinary keys [0.09ms]
+(pass) ProducerOutputGuard finalization > allows two complete assignments but blocks three [0.16ms]
+(pass) ProducerOutputGuard finalization > streams a complete object holding the RegExp /\{/ [0.10ms]
+(pass) ProducerOutputGuard finalization > streams a complete object holding the RegExp /[{]/ [0.04ms]
+(pass) ProducerOutputGuard finalization > streams a complete object holding the RegExp /\[/ [0.05ms]
+(pass) ProducerOutputGuard finalization > streams a complete object holding the RegExp /[[]/ [0.05ms]
+(pass) ProducerOutputGuard finalization > streams a complete object holding the RegExp /a\/{/ [0.04ms]
+(pass) ProducerOutputGuard finalization > streams a complete object holding the RegExp /x/g [0.04ms]
+(pass) ProducerOutputGuard finalization > treats a slash that never closes on its line as ordinary text [0.14ms]
+(pass) ProducerOutputGuard finalization > still withholds an unfinished inventory whose values look like RegExps [0.06ms]
+
+8 tests failed:
+(fail) ACP event mapper > replays assistant tool_use input through the ACP dispatcher without wrapping [15.01ms]
+(fail) cloud checkpoints > a late valid or invalid lease reply cannot change a newer owner's fence [10014.01ms]
+  ^ this test timed out after 5000ms.
+(fail) cloud checkpoints > two actual guards retain winner admission and renewal after late former lease [10006.65ms]
+  ^ this test timed out after 5000ms.
+(fail) cloud checkpoints > a late transfer-claim reply cannot overwrite or invalidate a newer lease [4.15ms]
+(fail) cloud checkpoints > explicit lease loss invalidates a still-pending admission response [10003.84ms]
+  ^ this test timed out after 5000ms.
+(fail) executeJs > delegates URI reads through the read tool with positional slicing [11.60ms]
+(fail) executeJs > routes output() through tool.read and keeps tool.* results normalized [6.63ms]
+(fail) executeJs > states a final value structuredClone cannot copy as text, with its functions and symbols marked in place [6.09ms]
+
+ 147 pass
+ 8 fail
+ 746 expect() calls
+Ran 155 tests across 5 files. [43.42s]

@@ -1,0 +1,289 @@
+bun test v1.4.3 (c6da4a4d3)
+inned)
+
+packages/coding-agent/test/agent-session-command-whitespace.test.ts:
+(pass) AgentSession custom-command whitespace > finds a custom command and parses its arguments when separated by a tab [32.88ms]
+
+packages/coding-agent/test/agent-session-compaction.test.ts:
+(skip) AgentSession compaction e2e > should trigger manual compaction via compact()
+(skip) AgentSession compaction e2e > should persist compaction to session file
+(skip) AgentSession compaction e2e > should work with --no-session mode (in-memory only)
+(skip) AgentSession compaction e2e > should emit correct events during auto-compaction
+
+packages/coding-agent/test/agent-session-message-pipeline.test.ts:
+(pass) AgentSession message pipeline > applies transformContext before convertToLlm [31.90ms]
+(pass) AgentSession message pipeline > marks queued user steers without changing the public queue text [4.19ms]
+(pass) AgentSession message pipeline > resolves image attachments from submitted messages, not tool-result images [3.16ms]
+(pass) AgentSession message pipeline > keeps stored steering text raw while pre-LLM conversion wraps it [5.02ms]
+(pass) AgentSession message pipeline > normalizes text-only and image prompts queued during a steer stream [86.85ms]
+(pass) AgentSession message pipeline > normalizes text-only and image prompts queued during a followUp stream [18.33ms]
+(pass) AgentSession message pipeline > composes session payload hooks into direct side-request options [3.31ms]
+(pass) AgentSession message pipeline > keeps ephemeral side-channel cache key separate from provider routing while preserving websocket state [5.97ms]
+(pass) AgentSession message pipeline > runs ephemeral side-channel requests through the configured side stream function [3.63ms]
+(pass) AgentSession message pipeline > rotates ephemeral side-channel credentials on Google Resource exhausted [9.10ms]
+(pass) AgentSession message pipeline > applies configured OpenRouter routing variant to ephemeral side-channel options [3.41ms]
+(pass) AgentSession message pipeline > obfuscates user messages on ephemeral side-channel requests [6.71ms]
+(pass) AgentSession message pipeline > preserves the provider prefix when ephemeral followups append structured history [5.55ms]
+(pass) AgentSession message pipeline > snapshots and obfuscates ephemeral history before asynchronous context conversion [3.47ms]
+(pass) AgentSession message pipeline > keeps obfuscated side-channel stable prefix byte-identical to the main turn [8.56ms]
+847 | 		sessions.push(session);
+848 | 
+849 | 		const prepared = await session.prepareSimpleStreamOptions({});
+850 | 		prepared.onSseEvent?.({ event: "message", data: "{}", raw: ["event: message", "data: {}"] });
+851 | 
+852 | 		expect(session.rawSseDebugBuffer?.snapshot().totalEvents).toBe(1);
+                                                                  ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: undefined
+
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/agent-session-message-pipeline.test.ts:852:61)
+(fail) AgentSession message pipeline > records raw SSE diagnostics into the session buffer before request hooks [9.16ms]
+(pass) AgentSession message pipeline > emits message_update to session listeners before slow extension handlers finish [2.71ms]
+(pass) AgentSession message pipeline > keeps first-turn memory out of the system prompt and sends it exactly once [11.35ms]
+(pass) AgentSession message pipeline > preserves append-only prefixes in agent sessions when context handlers rewrite prior turns [4157.48ms]
+(pass) AgentSession message pipeline > does not carry a session's recalled memory into the session switched to [27.58ms]
+(pass) AgentSession message pipeline > does not carry a session's recalled memory into a new session [9.85ms]
+(pass) AgentSession message pipeline > does not duplicate the recalled memory when forking [18.25ms]
+(pass) AgentSession message pipeline > ephemeral side-channel forwards native tools, injects developer reminder, leaves toolChoice auto [2.96ms]
+(pass) AgentSession message pipeline > ephemeral side-channel discards any emitted tool calls [2.24ms]
+
+packages/coding-agent/test/mid-turn-rebuild-pending-tool.test.ts:
+1910 | 				`Supported platforms: ${SUPPORTED_PLATFORMS.join(", ")}\n` +
+1911 | 				"If you need support for this platform, please open an issue.",
+1912 | 		);
+1913 | 	}
+1914 | 	const details = errors.map(error => `- ${error}`).join("\n");
+1915 | 	throw new Error(
+                  ^
+error: Failed to load veyyon_natives native addon for linux-x64 (modern).
+
+Tried:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-modern.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-baseline.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+
+Provision it from the matching release: bun --cwd=natives/bridge/bindings run ensure
+If developing locally, build with: bun --cwd=natives/bridge/bindings run build
+  (optional x64 variants: TARGET_VARIANT=baseline|modern)
+Or reinstall the standalone binary: curl -fsSL https://get.veyyon.dev | sh
+ code: "VEYYON_NATIVE_ADDON_UNAVAILABLE"
+
+      at loadNative (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1915:12)
+      at native (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1703:27)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1731:21)
+      at supportedLanguage (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:128:17)
+      at prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:143:16)
+      at #prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:947:3)
+      at #finalizeRebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:905:8)
+      at rebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:222:8)
+      at renderSessionContext (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/utils/ui-helpers.ts:195:17)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/mid-turn-rebuild-pending-tool.test.ts:113:11)
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > renders a dangling toolCall as pending, tracks it, and routes the live result into it [28.50ms]
+1910 | 				`Supported platforms: ${SUPPORTED_PLATFORMS.join(", ")}\n` +
+1911 | 				"If you need support for this platform, please open an issue.",
+1912 | 		);
+1913 | 	}
+1914 | 	const details = errors.map(error => `- ${error}`).join("\n");
+1915 | 	throw new Error(
+                  ^
+error: Failed to load veyyon_natives native addon for linux-x64 (modern).
+
+Tried:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-modern.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-baseline.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+
+Provision it from the matching release: bun --cwd=natives/bridge/bindings run ensure
+If developing locally, build with: bun --cwd=natives/bridge/bindings run build
+  (optional x64 variants: TARGET_VARIANT=baseline|modern)
+Or reinstall the standalone binary: curl -fsSL https://get.veyyon.dev | sh
+ code: "VEYYON_NATIVE_ADDON_UNAVAILABLE"
+
+      at loadNative (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1915:12)
+      at native (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1703:27)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1731:21)
+      at supportedLanguage (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:128:17)
+      at prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:143:16)
+      at #prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:947:3)
+      at #finalizeRebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:905:8)
+      at rebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:222:8)
+      at renderSessionContext (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/utils/ui-helpers.ts:195:17)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/mid-turn-rebuild-pending-tool.test.ts:113:11)
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > recovers read arguments from the focused session: persisted-before-attach [8.37ms]
+1910 | 				`Supported platforms: ${SUPPORTED_PLATFORMS.join(", ")}\n` +
+1911 | 				"If you need support for this platform, please open an issue.",
+1912 | 		);
+1913 | 	}
+1914 | 	const details = errors.map(error => `- ${error}`).join("\n");
+1915 | 	throw new Error(
+                  ^
+error: Failed to load veyyon_natives native addon for linux-x64 (modern).
+
+Tried:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-modern.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-baseline.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+
+Provision it from the matching release: bun --cwd=natives/bridge/bindings run ensure
+If developing locally, build with: bun --cwd=natives/bridge/bindings run build
+  (optional x64 variants: TARGET_VARIANT=baseline|modern)
+Or reinstall the standalone binary: curl -fsSL https://get.veyyon.dev | sh
+ code: "VEYYON_NATIVE_ADDON_UNAVAILABLE"
+
+      at loadNative (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1915:12)
+      at native (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1703:27)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1731:21)
+      at supportedLanguage (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:128:17)
+      at prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:143:16)
+      at #prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:947:3)
+      at #finalizeRebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:905:8)
+      at rebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:222:8)
+      at renderSessionContext (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/utils/ui-helpers.ts:195:17)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/mid-turn-rebuild-pending-tool.test.ts:113:11)
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > recovers read arguments from the focused session: persisted-after-attach [4.06ms]
+1694 |  * lands in front of the first frame or behind it; the marker is the only way to
+1695 |  * see that from outside.
+1696 |  * @param {string} [trigger]
+1697 |  */
+1698 | export function native(trigger) {
+1699 | 	if (nativeLoadFailure !== undefined) throw nativeLoadFailure;
+                                                   ^
+error: Failed to load veyyon_natives native addon for linux-x64 (modern).
+
+Tried:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-modern.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64-baseline.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node: Cannot find module '/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /usr/local/bin/veyyon_natives.linux-x64.node: Cannot find module '/usr/local/bin/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-modern.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64-baseline.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+- /tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node: Cannot find module '/tmp/veyyon-test-home-2/.veyyon/natives/1.8.5/veyyon_natives.linux-x64.node'
+Require stack:
+- /mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js
+
+Provision it from the matching release: bun --cwd=natives/bridge/bindings run ensure
+If developing locally, build with: bun --cwd=natives/bridge/bindings run build
+  (optional x64 variants: TARGET_VARIANT=baseline|modern)
+Or reinstall the standalone binary: curl -fsSL https://get.veyyon.dev | sh
+      at native (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1699:45)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/natives/bridge/bindings/native/loader-state.js:1731:21)
+      at supportedLanguage (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:128:17)
+      at prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/theme/highlight.ts:143:16)
+      at #prefetchHighlights (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:947:3)
+      at #finalizeRebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:905:8)
+      at rebuild (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/components/transcript/chat-transcript-builder.ts:222:8)
+      at renderSessionContext (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/src/modes/terminal/utils/ui-helpers.ts:195:17)
+      at <anonymous> (/mnt/c/Users/wkiri/development/veyyon-wt/typefix-20261107/packages/coding-agent/test/mid-turn-rebuild-pending-tool.test.ts:192:11)
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > seals dangling toolCalls on idle rebuilds instead of leaving a live spinner [4.52ms]
+
+4 tests skipped:
+(skip) AgentSession compaction e2e > should trigger manual compaction via compact()
+(skip) AgentSession compaction e2e > should persist compaction to session file
+(skip) AgentSession compaction e2e > should work with --no-session mode (in-memory only)
+(skip) AgentSession compaction e2e > should emit correct events during auto-compaction
+
+
+5 tests failed:
+(fail) AgentSession message pipeline > records raw SSE diagnostics into the session buffer before request hooks [9.16ms]
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > renders a dangling toolCall as pending, tracks it, and routes the live result into it [28.50ms]
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > recovers read arguments from the focused session: persisted-before-attach [8.37ms]
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > recovers read arguments from the focused session: persisted-after-attach [4.06ms]
+(fail) mid-turn transcript rebuild keeps in-flight tool calls > seals dangling toolCalls on idle rebuilds instead of leaving a live spinner [4.52ms]
+
+ 24 pass
+ 4 skip
+ 5 fail
+ 114 expect() calls
+Ran 33 tests across 4 files. [12.98s]

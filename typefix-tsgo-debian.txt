@@ -1,0 +1,5 @@
+packages/coding-agent/src/index.ts(112,1): error TS2308: Module "./session/agent-session" has already exported a member named 'RESCOPE_TERMINATE_REASON'. Consider explicitly re-exporting to resolve the ambiguity.
+packages/coding-agent/test/a-parent-irc-reaches-an-active-child.test.ts(68,82): error TS2339: Property 'message' does not exist on type '{}'.
+packages/coding-agent/test/acp-agent.test.ts(833,36): error TS2339: Property 'options' does not exist on type 'SessionConfigOption'.
+  Property 'options' does not exist on type 'SessionConfigBoolean & { type: "boolean"; } & { id: string; name: string; description?: string | null | undefined; category?: string | null | undefined; _meta?: { ...; } | ... 1 more ... | undefined; }'.
+packages/coding-agent/test/acp-agent.test.ts(833,49): error TS7006: Parameter 'option' implicitly has an 'any' type.
