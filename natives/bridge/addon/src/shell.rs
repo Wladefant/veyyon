@@ -370,7 +370,10 @@ fn bridge_chunks(
 /// the consumer is gone; dropping `rx` then disconnects the channel so
 /// parked/future senders fail fast and the pipe readers keep draining the
 /// child instead of wedging it.
-async fn pump_chunks(rx: flume::Receiver<String>, mut forward: impl AsyncFnMut(String) -> bool) -> bool {
+async fn pump_chunks(
+	rx: flume::Receiver<String>,
+	mut forward: impl AsyncFnMut(String) -> bool,
+) -> bool {
 	// Hard cap on one coalesced batch so the JS main thread never sees a
 	// multi-MB napi callback (a giant single string would stall sanitize +
 	// tail-buffer maintenance for the whole copy).
@@ -440,14 +443,14 @@ mod tests {
 			let (orphan, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
 			let handle = tokio::spawn(pump_chunks(rx, async |_payload: String| true));
 			let mut result = drain_result(cancelled, timed_out);
-			time::timeout(
-				Duration::from_secs(4),
-				await_drain(Some(handle), &mut result),
-			)
-			.await
-			.expect("interrupted drain must not wait for an orphaned sender");
+			time::timeout(Duration::from_secs(4), await_drain(Some(handle), &mut result))
+				.await
+				.expect("interrupted drain must not wait for an orphaned sender");
 			assert!(orphan.send("late".to_string()).is_err(), "drain must disconnect the orphan");
-			assert!(result.expect("native result").output_incomplete, "abandoned output must be marked incomplete");
+			assert!(
+				result.expect("native result").output_incomplete,
+				"abandoned output must be marked incomplete"
+			);
 		}
 	}
 
@@ -586,7 +589,10 @@ mod tests {
 				});
 				let completed = time::timeout(Duration::from_secs(32), async {
 					producer.await.expect("producer");
-					assert!(!pump.await.expect("pump"), "stalled forwarding must report incomplete capture");
+					assert!(
+						!pump.await.expect("pump"),
+						"stalled forwarding must report incomplete capture"
+					);
 				})
 				.await;
 				assert!(completed.is_ok(), "a stalled JS callback must not retain the bridge forever");
