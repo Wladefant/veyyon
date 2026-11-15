@@ -865,6 +865,43 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get("Unfinished")).toBeUndefined();
 	});
 
+	it("ignores a displaced assignment's late terminal report and accepts its replacement", () => {
+		const first = registry.register({
+			id: "Replaced",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/first.jsonl",
+		});
+		const replacement = registry.register({
+			id: first.id,
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			sessionFile: "/tmp/replacement.jsonl",
+		});
+		registry.recordTerminalOutcome(first.id, "failed", "late first assignment");
+		expect(replacement.terminalOutcome).toBeUndefined();
+		expect(replacement.terminalOutcomeReason).toBeUndefined();
+		registry.recordTerminalOutcome(replacement.id, "completed", "replacement finished");
+		expect(replacement.terminalOutcome).toBe("completed");
+		expect(replacement.terminalOutcomeReason).toBe("replacement finished");
+	});
+
+	it("accepts the captured assignment after an in-place parked revival", () => {
+		const ref = registry.register({
+			id: "Revived",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			status: "parked",
+		});
+		registry.setStatus(ref.id, "running");
+		expect(registry.get(ref.id)).toBe(ref);
+		registry.recordTerminalOutcome(ref.id, "completed", "revived assignment finished");
+		expect(ref.terminalOutcome).toBe("completed");
+	});
+
 	it("clears the prior terminal outcome only when a new assignment starts", () => {
 		const ref = registry.register({
 			id: "Reused",
