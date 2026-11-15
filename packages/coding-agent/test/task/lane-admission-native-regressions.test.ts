@@ -9,10 +9,9 @@
  *   acquisitions at one remaining slot share one acquire promise.
  * - Independent waiter cancellation without cancelling sibling waiters, aborting the
  *   underlying acquire only once all waiters cancel, and zero-leak cancellation races.
- * - Durable `release()` checking `driver.release` `result.ok`, throwing on `false`,
- *   sharing concurrent release promises, resetting on failure for clean retries,
- *   decrementing each borrowed ref once, retaining the final ref until durable release
- *   succeeds, and surfacing abort-mid-acquire compensation release failures.
+ * - Durable `release()` checking `driver.release` `result.ok`, owning transient retries,
+ *   sharing concurrent release promises, and settling abort compensation without
+ *   manual repair or a caller retaining the lease handle.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
@@ -266,7 +265,7 @@ describe("native host-lane admission regressions", () => {
 		const realAcquire = laneModule.laneAdmissionDriver.acquire;
 		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementation(async opts => {
 			const res = await realAcquire(opts);
-			if (opts.owner === "TopWaitingChild" && !res.admitted && res.reason === "host_lane_cap_reached") {
+			if (opts.owner.includes("TopWaitingChild") && !res.admitted && res.reason === "host_lane_cap_reached") {
 				topWaitDenied.resolve();
 			}
 			return res;
@@ -392,8 +391,8 @@ describe("native host-lane admission regressions", () => {
 			return realAcquire(opts);
 		});
 
-		const p1 = acquireSubagentHostLane({ agentId: "SameKeyAgent", owner: "SameKeyAgent:1", cap: 2 });
-		const p2 = acquireSubagentHostLane({ agentId: "SameKeyAgent", owner: "SameKeyAgent:2", cap: 2 });
+		const p1 = acquireSubagentHostLane({ agentId: "SameKeyAgent", owner: "SameKeyAgent", cap: 2 });
+		const p2 = acquireSubagentHostLane({ agentId: "SameKeyAgent", owner: "SameKeyAgent", cap: 2 });
 
 		await acquireEntered.promise;
 		expect(acquireSpy).toHaveBeenCalledTimes(1);
@@ -440,14 +439,14 @@ describe("native host-lane admission regressions", () => {
 		const ctrlB = new AbortController();
 		const pA = acquireSubagentHostLane({
 			agentId: "CancelJoinAgent",
-			owner: "CancelJoinAgent:A",
+			owner: "CancelJoinAgent",
 			cap: 1,
 			pollIntervalMs: 10,
 			signal: ctrlA.signal,
 		});
 		const pB = acquireSubagentHostLane({
 			agentId: "CancelJoinAgent",
-			owner: "CancelJoinAgent:B",
+			owner: "CancelJoinAgent",
 			cap: 1,
 			pollIntervalMs: 10,
 			signal: ctrlB.signal,
@@ -487,14 +486,14 @@ describe("native host-lane admission regressions", () => {
 		const ctrl2 = new AbortController();
 		const w1 = acquireSubagentHostLane({
 			agentId: "CancelAllAgent",
-			owner: "CancelAllAgent:1",
+			owner: "CancelAllAgent",
 			cap: 1,
 			pollIntervalMs: 10,
 			signal: ctrl1.signal,
 		});
 		const w2 = acquireSubagentHostLane({
 			agentId: "CancelAllAgent",
-			owner: "CancelAllAgent:2",
+			owner: "CancelAllAgent",
 			cap: 1,
 			pollIntervalMs: 10,
 			signal: ctrl2.signal,
@@ -530,7 +529,7 @@ describe("native host-lane admission regressions", () => {
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 	});
 
-	it("checks driver release result.ok, shares concurrent release failures, allows retry, and surfaces mid-acquire release failures", async () => {
+	it("owns concurrent release retries and abort compensation until durable settlement", async () => {
 		const lease = await acquireSubagentHostLane({
 			agentId: "RetryReleaseAgent",
 			owner: "RetryReleaseAgent",
@@ -551,7 +550,7 @@ describe("native host-lane admission regressions", () => {
 			})
 			.mockImplementation(opts => realRelease(opts));
 
-		// Concurrent release calls share one driver.release call and both surface the failure
+		// Both handles await the same release and its transient retry.
 		const r1 = lease!.release();
 		const r2 = lease!.release();
 		await releaseStarted.promise;
@@ -559,13 +558,10 @@ describe("native host-lane admission regressions", () => {
 		allowReleaseReturn.resolve();
 
 		const [res1, res2] = await Promise.allSettled([r1, r2]);
-		expect(res1.status).toBe("rejected");
-		expect(res2.status).toBe("rejected");
-		expect((res1 as PromiseRejectedResult).reason).toBeInstanceOf(LaneAdmissionError);
-		expect(((res1 as PromiseRejectedResult).reason as LaneAdmissionError).code).toBe("transient_release_error");
-		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+		expect(res1.status).toBe("fulfilled");
+		expect(res2.status).toBe("fulfilled");
 
-		// Failure reset in-flight release state so retry invokes driver.release and succeeds durably
+		// Repeated calls after settlement do not write the ledger again.
 		await lease!.release();
 		expect(releaseSpy).toHaveBeenCalledTimes(2);
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
@@ -574,7 +570,7 @@ describe("native host-lane admission regressions", () => {
 		await lease!.release();
 		expect(releaseSpy).toHaveBeenCalledTimes(2);
 
-		// Abort-mid-acquire compensation also checks result.ok and surfaces failure on both layers
+		// Aborted acquisition retains compensation ownership without manual repair.
 		const realAcquire = laneModule.laneAdmissionDriver.acquire;
 		const acquireSpy = vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementationOnce(async opts => {
 			const res = await realAcquire(opts);
@@ -594,14 +590,8 @@ describe("native host-lane admission regressions", () => {
 				cap: 2,
 				signal: ctrlWait.signal,
 			}),
-		).rejects.toMatchObject({ name: "LaneAdmissionError", code: "compensation_failed" });
-		// Clean up the leaked slot from mocked compensation failure
-		const afterWaitFail = await getLaneAdmissionStatus();
-		expect(afterWaitFail.active_lanes).toBe(1);
-		await realRelease({
-			slotId: afterWaitFail.reservations[0]!.slotId,
-			leaseToken: afterWaitFail.reservations[0]!.leaseToken,
-		});
+		).resolves.toBeNull();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 
 		const ctrlSub = new AbortController();
 		acquireSpy.mockImplementationOnce(async opts => {
@@ -622,13 +612,7 @@ describe("native host-lane admission regressions", () => {
 				cap: 2,
 				signal: ctrlSub.signal,
 			}),
-		).rejects.toMatchObject({ name: "LaneAdmissionError", code: "sub_compensation_failed" });
-		const afterSubFail = await getLaneAdmissionStatus();
-		expect(afterSubFail.active_lanes).toBe(1);
-		await realRelease({
-			slotId: afterSubFail.reservations[0]!.slotId,
-			leaseToken: afterSubFail.reservations[0]!.leaseToken,
-		});
+		).resolves.toBeNull();
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 	});
 
@@ -638,7 +622,7 @@ describe("native host-lane admission regressions", () => {
 		const releaseSpy = vi.spyOn(laneModule.laneAdmissionDriver, "release");
 
 		const outer = await acquireSubagentHostLane({ agentId: "RefOrderAgent", owner: "RefOrderAgent", cap: 2 });
-		const wake = await acquireSubagentHostLane({ agentId: "RefOrderAgent", owner: "RefOrderAgent:wake", cap: 2 });
+		const wake = await acquireSubagentHostLane({ agentId: "RefOrderAgent", owner: "RefOrderAgent", cap: 2 });
 		expect(outer).not.toBeNull();
 		expect(wake).not.toBeNull();
 		expect(outer!.slotId).toBe(wake!.slotId);
@@ -651,35 +635,15 @@ describe("native host-lane admission regressions", () => {
 		expect(releaseSpy).toHaveBeenCalledTimes(0);
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
 
-		// Final reference release fails durably -> slot & map entry remain retained
+		// A transient failure retains ownership until the retry settles.
 		releaseSpy.mockResolvedValueOnce({
 			ok: false,
 			released: false,
 			slot_id: wake!.slotId,
 			reason: "final_release_failed",
 		});
-		await expect(wake!.release()).rejects.toMatchObject({
-			name: "LaneAdmissionError",
-			code: "final_release_failed",
-		});
-		expect(releaseSpy).toHaveBeenCalledTimes(1);
-		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
-
-		// Retained map entry is still borrowable for legitimate same-agent wake until durable release succeeds
-		const wake2 = await acquireSubagentHostLane({
-			agentId: "RefOrderAgent",
-			owner: "RefOrderAgent:wake2",
-			cap: 2,
-		});
-		expect(wake2).not.toBeNull();
-		expect(wake2!.slotId).toBe(wake!.slotId);
-		expect(acquireSpy).toHaveBeenCalledTimes(1);
-
-		// Releasing wake decrements 2 -> 1; releasing wake2 triggers durable release and deletes map entry
-		await wake!.release();
-		expect(releaseSpy).toHaveBeenCalledTimes(1);
 		releaseSpy.mockImplementation(opts => realRelease(opts));
-		await wake2!.release();
+		await wake!.release();
 		expect(releaseSpy).toHaveBeenCalledTimes(2);
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 

@@ -952,12 +952,19 @@ async function releaseSlotDurably(options: {
 	cap?: number;
 	globalConfigRoot?: string;
 }): Promise<void> {
-	const res = await laneAdmissionDriver.release(options);
-	if (!res.ok) {
-		throw new LaneAdmissionError(
-			res.reason ?? "release_failed",
-			`Failed to release host lane slot ${options.slotId}: ${res.reason ?? "unknown"}`,
-		);
+	// Teardown and abort compensation have no later caller to retry a lost handle.
+	// Keep the fenced release owned by this promise until the ledger settles.
+	for (;;) {
+		try {
+			const res = await laneAdmissionDriver.release(options);
+			if (res.ok) return;
+			if (res.reason === "lease_token_mismatch") {
+				throw new LaneAdmissionError(res.reason, `Host lane slot ${options.slotId} belongs to another lease`);
+			}
+		} catch (error) {
+			if (error instanceof LaneAdmissionError && error.code === "lease_token_mismatch") throw error;
+		}
+		await waitAbortably(100);
 	}
 }
 
@@ -1199,10 +1206,11 @@ export async function acquireNativeHostLaneWait(options: {
  * Acquire or borrow the active in-process host lane lease for a subagent `agentId`.
  * Prevents double-counting or deadlocking when a running subagent turn triggers an
  * internal wake/replay turn before releasing its outer lease, and shares a single
- * in-flight acquisition per `agentId` across concurrent callers.
+ * in-flight acquisition per transcript owner and `agentId` across reentrant callers.
  */
 export async function acquireSubagentHostLane(options: {
 	agentId: string;
+	/** Canonical transcript path, shared only by turns of this same agent run. */
 	owner: string;
 	signal?: AbortSignal;
 	cap?: number;
@@ -1214,7 +1222,7 @@ export async function acquireSubagentHostLane(options: {
 	if (options.signal?.aborted) return null;
 
 	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
-	const key = `${getLaneAdmissionLedgerPath(globalConfigRoot)}\0${options.agentId}`;
+	const key = `${getLaneAdmissionLedgerPath(globalConfigRoot)}\0${options.agentId}\0${options.owner}`;
 	const callerWaitIfFull = options.waitIfFull ?? true;
 
 	for (;;) {
@@ -1233,6 +1241,12 @@ export async function acquireSubagentHostLane(options: {
 
 		const pending = pendingNativeAgentAcquires.get(key);
 		if (pending) {
+			if (!callerWaitIfFull && pending.waitIfFull) {
+				throw new LaneAdmissionError(
+					"nested_host_lane_cap_reached",
+					`Nested owner "${options.owner}" cannot join a waiting host lane acquisition`,
+				);
+			}
 			if (pending.aborted) {
 				await awaitSettleAbortably(pending.promise, options.signal);
 				if (options.signal?.aborted) return null;

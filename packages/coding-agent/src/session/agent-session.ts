@@ -1215,7 +1215,7 @@ export class AgentSession {
 					const agentId = this.#config.agentId ?? this.sessionId;
 					wakeLease = await acquireSubagentHostLane({
 						agentId,
-						owner: `${agentId}:wake`,
+						owner: path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
 						signal: wakeSignal,
 					});
 					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
@@ -1364,7 +1364,7 @@ export class AgentSession {
 				const agentId = this.#config.agentId ?? this.sessionId;
 				return acquireSubagentHostLane({
 					agentId,
-					owner: `${agentId}:wake`,
+					owner: path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
 					signal: signal ?? this.#wakeAbortController.signal,
 				});
 			},

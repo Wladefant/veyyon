@@ -1651,7 +1651,11 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 
 	let hostLaneLease: NativeHostLaneLease | null = null;
 	try {
-		hostLaneLease = await acquireSubagentHostLane({ agentId: id, owner: `${id}:followup`, signal });
+		hostLaneLease = await acquireSubagentHostLane({
+			agentId: id,
+			owner: path.resolve(AgentRegistry.global().get(id)?.sessionFile ?? path.join(getSessionsDir(), sessionFileName(id))),
+			signal,
+		});
 	} catch (error) {
 		const reason = errorMessage(error);
 		return {
@@ -2677,7 +2681,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 	try {
 		hostLaneLease = await acquireSubagentHostLane({
 			agentId: id,
-			owner: id,
+			owner: path.resolve(sessionFile),
 			signal,
 			waitIfFull: (options.taskDepth ?? 0) === 0,
 		});

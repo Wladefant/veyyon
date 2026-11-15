@@ -548,6 +548,15 @@ describe("host-wide shared lane admission", () => {
 		);
 
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+		const realRelease = laneModule.laneAdmissionDriver.release;
+		vi.spyOn(laneModule.laneAdmissionDriver, "release")
+			.mockImplementationOnce(async options => ({
+				ok: false,
+				released: false,
+				slot_id: options.slotId,
+				reason: "transient_executor_release",
+			}))
+			.mockImplementation(options => realRelease(options));
 
 		const result = await runSubprocess({
 			cwd: "/repo",
@@ -595,6 +604,15 @@ describe("host-wide shared lane admission", () => {
 		);
 
 		vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockResolvedValue(session);
+		const realRelease = laneModule.laneAdmissionDriver.release;
+		vi.spyOn(laneModule.laneAdmissionDriver, "release")
+			.mockImplementationOnce(async options => ({
+				ok: false,
+				released: false,
+				slot_id: options.slotId,
+				reason: "transient_followup_release",
+			}))
+			.mockImplementation(options => realRelease(options));
 
 		const follow = await runSubagentFollowUpTurn({
 			id: "FollowUpSlotChild",
@@ -772,6 +790,7 @@ describe("host-wide shared lane admission", () => {
 
 	it("acquires a host admission slot for subagent IRC wake turns, prevents double-start at cap, and bypasses for main", async () => {
 		const subSession = makeRealAgentSession({ agentId: "WakeSubChild", agentKind: "sub" });
+		const subOwner = path.resolve(subSession.sessionManager.getSessionFile() ?? subSession.sessionId);
 		let activeDuringPrompt = -1;
 		let promptCalls = 0;
 		let promptStarted = Promise.withResolvers<void>();
@@ -797,10 +816,10 @@ describe("host-wide shared lane admission", () => {
 		let capDeniedObserved = Promise.withResolvers<void>();
 		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementation(async opts => {
 			const res = await realAcquire(opts);
-			if (res.admitted && opts.owner === "WakeSubChild:wake") {
+			if (res.admitted && opts.owner === subOwner) {
 				wakeSlotIdToWatch = res.slot_id;
 			}
-			if (!res.admitted && res.reason === "host_lane_cap_reached" && opts.owner.endsWith(":wake")) {
+			if (!res.admitted && res.reason === "host_lane_cap_reached" && opts.owner === subOwner) {
 				capDeniedObserved.resolve();
 			}
 			return res;
