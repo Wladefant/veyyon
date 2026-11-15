@@ -161,7 +161,7 @@ describe("write tool keeps the replaced file's line endings and BOM", () => {
 		await fs.writeFile(filePath, "\uFEFFclass A {}\r\n");
 		// An editor whose save normalizes to LF without a BOM.
 		const bridge: ClientBridge = {
-			capabilities: { fs: { writeTextFile: true } },
+			capabilities: { writeTextFile: true },
 			writeTextFile: async ({ path: target, content }) => {
 				await Bun.write(target, content.replace(/^\uFEFF/, "").replaceAll("\r\n", "\n"));
 			},
