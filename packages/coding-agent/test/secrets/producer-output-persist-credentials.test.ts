@@ -210,18 +210,18 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		}
 	});
 
-	it("does not trap quoted multi-record logs over 16 Mi chars in scalar mode", () => {
-		const progressLine = `ok progress line ${"x".repeat(40_000)}\n`;
-		const progressBody = progressLine.repeat(430);
-		const tail = "Error: later failure\n";
-		const obfuscator = new SecretObfuscator([
-			{ type: "plain", origin: "config", content: "synthetic-first-line\nsynthetic-second-line", name: "CANARY" },
-		]);
-		const owner = {
-			redact: (text: string) => obfuscator.obfuscate(text),
-			pendingPrefixLength: (text: string) => obfuscator.pendingRedactionPrefixLength(text),
-		};
-		for (const opener of ['"started"\n', '  "started"\n', '"unclosed quote\n']) {
+	const progressBody = `ok progress line ${"x".repeat(40_000)}\n`.repeat(430);
+	it.each(['"started"\n', '  "started"\n', '"unclosed quote\n'])(
+		"does not trap quoted multi-record logs over 16 Mi chars in scalar mode (%j)",
+		opener => {
+			const tail = "Error: later failure\n";
+			const obfuscator = new SecretObfuscator([
+				{ type: "plain", origin: "config", content: "synthetic-first-line\nsynthetic-second-line", name: "CANARY" },
+			]);
+			const owner = {
+				redact: (text: string) => obfuscator.obfuscate(text),
+				pendingPrefixLength: (text: string) => obfuscator.pendingRedactionPrefixLength(text),
+			};
 			const input = `${opener}${progressBody}${tail}`;
 			expect(input.length).toBeGreaterThan(16 * 1024 * 1024);
 			const direct = runWithProducerSecretOwner(owner, () => new ProducerOutputGuard().sanitize(input));
@@ -231,8 +231,12 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 			const streamGuard = runWithProducerSecretOwner(owner, () => new ProducerOutputGuard());
 			const streamed = streamGuard.push(input) + streamGuard.finish();
 			expect(streamed).toBe(direct);
-		}
+		},
+		25_000,
+	);
 
+	it("preserves quoted multi-record logs over 16 Mi chars across chunk boundaries", () => {
+		const tail = "Error: later failure\n";
 		const splitInput = `"started"\n${progressBody}${tail}`;
 		for (const split of [8, 9, 10, splitInput.length - tail.length]) {
 			const splitGuard = new ProducerOutputGuard();
@@ -240,7 +244,10 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 			expect(streamed.endsWith(tail)).toBe(true);
 			expect(streamed.startsWith('"started"\n')).toBe(true);
 		}
+	}, 25_000);
 
+	it("enforces scalar and oversized bounds on quoted records and genuine 16 Mi JSON scalars", () => {
+		const tail = "Error: later failure\n";
 		const oversizedQuotedLine = `"${"x".repeat(70_000)}"\n${tail}`;
 		expect(new ProducerOutputGuard().sanitize(oversizedQuotedLine)).toBe(`${OVERSIZED_OUTPUT_RECORD}\n${tail}`);
 		const oversizedLineGuard = new ProducerOutputGuard();

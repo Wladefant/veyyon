@@ -237,6 +237,22 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(streamed).not.toContain("ghs_");
 		expect(guard.push('{"later":"safe"}\n')).toBe('{"later":"safe"}\n');
 	});
+	it("emits a single oversized placeholder for balanced or multiline structured oversized records", () => {
+		const longLine = `{"payload":"${"x".repeat(65_537)}","token":"ghs_planted_fake_value"}`;
+		const streamedNoNewline = new ProducerOutputGuard();
+		expect(streamedNoNewline.push(longLine) + streamedNoNewline.finish()).toBe(OVERSIZED_OUTPUT_RECORD);
+
+		const multilineGuard = new ProducerOutputGuard();
+		const multiline = `foo: {\n  payload: "${"x".repeat(65_537)}"\n}\nError: after structured\n`;
+		expect(multilineGuard.push(multiline) + multilineGuard.finish()).toBe(
+			`${OVERSIZED_OUTPUT_RECORD}\nError: after structured\n`,
+		);
+
+		const assignmentGuard = new ProducerOutputGuard();
+		expect(assignmentGuard.push(`A=1\n${longLine}\n`) + assignmentGuard.finish()).toBe(
+			`A=1\n${OVERSIZED_OUTPUT_RECORD}\n`,
+		);
+	});
 	it("withholds a known multiline literal that exceeds the bounded pending record", () => {
 		const longSecret = `${"a".repeat(32 * 1024)}\n${"b".repeat(32 * 1024)}`;
 		const guard = guardFor(longSecret);
