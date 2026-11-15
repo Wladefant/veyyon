@@ -1,0 +1,222 @@
+commit dd5cc7ab2405eaf6c579c08cb924f09791f826ef
+Author:     Wladimir Kirjanovs <wladefant@gmail.com>
+AuthorDate: Mon Nov 2 12:33:10 2026 +0100
+Commit:     Wladimir Kirjanovs <wladefant@gmail.com>
+CommitDate: Mon Nov 2 12:33:10 2026 +0100
+
+    fix(session): adopt sequential external turns in warm ACP histories
+
+diff --git a/kernel/CHANGELOG.md b/kernel/CHANGELOG.md
+index efda39eeae..10b06ff8d5 100644
+--- a/kernel/CHANGELOG.md
++++ b/kernel/CHANGELOG.md
+@@ -4,6 +4,10 @@
+ 
+ ## [Unreleased]
+ 
++### Fixed
++
++- Warm session managers adopt completed external turns into the active branch before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
++
+ ## [1.7.5] - 2026-11-02
+ 
+ ### Changed
+diff --git a/kernel/src/session/session-manager.ts b/kernel/src/session/session-manager.ts
+index 824520cba3..ddffae8520 100644
+--- a/kernel/src/session/session-manager.ts
++++ b/kernel/src/session/session-manager.ts
+@@ -2214,6 +2214,73 @@ export class SessionManager {
+ 		await this.#refreshForeignLines();
+ 		return this.#foreignLines.length > 0;
+ 	}
++	/**
++	 * Adopt a completed turn written by another manager to this transcript.
++	 *
++	 * The stat/version check in {@link #refreshForeignLines} keeps the ordinary
++	 * no-change path cheap. A foreign line triggers one full load; only a new
++	 * assistant turn on the active branch is adopted. The caller must use this
++	 * only while its agent is idle.
++	 */
++	async refreshExternalTurn(): Promise<boolean> {
++		if (!(await this.holdsForeignEntries())) return false;
++		const sessionFile = this.#sessionFile;
++		if (!sessionFile) return false;
++
++		// Flush local appends before loading, so the foreign adoption cannot discard
++		// entries that were still pending in this manager's writer.
++		await this.flush();
++		const resolvedSessionFile = path.resolve(sessionFile);
++		const loaded = await loadSessionFile(resolvedSessionFile, this.#storage, {
++			operatorNotices: this.#operatorNotices,
++			coolCompactedHistory: true,
++		});
++		if (loaded.entries.length < 2) return false;
++
++		const fileEntries = loaded.entries;
++		const header = fileEntries[0] as SessionHeader;
++		if (header.id !== this.#sessionId) return false;
++		await resolveBlobRefsInEntries(
++			fileEntries,
++			new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
++			{
++				source: resolvedSessionFile,
++				operatorNotices: this.#operatorNotices,
++			},
++		);
++		const migrated = await migrateToCurrentVersion(fileEntries);
++		const entries = fileEntries.slice(1) as SessionEntry[];
++		const byId = new Map(entries.map(entry => [entry.id, entry]));
++		const activePath = walkBranchPath(byId, entries.at(-1));
++		const lastMessage = [...activePath].reverse().find(entry => entry.type === "message");
++		const hasNewActiveEntry = activePath.some(entry => !this.#index.has(entry.id));
++		if (!hasNewActiveEntry || lastMessage?.message.role !== "assistant") return false;
++
++		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
++		const lifecycleStarted = this.#lifecycleStarted;
++		const lifecycleEnded = this.#lifecycleEnded;
++		await this.#drainAndCloseWriter();
++		if (loaded.cold !== undefined) this.#cold = loaded.cold.payloads;
++		this.#applyEntries(header, entries, loaded.cold?.usage);
++		this.#lifecycleStarted = lifecycleStarted;
++		this.#lifecycleEnded = lifecycleEnded;
++		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
++		this.#hasTitleSlot = titleSlot !== undefined;
++		this.#fileIsCurrent = true;
++		this.#rewriteRequired = migrated;
++		this.#deferredLegacyRewrite = migrated;
++		this.#forceFileCreation = true;
++		this.#artifactManager = null;
++		this.#artifactManagerSessionFile = null;
++		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) {
++			this.#rewriteRequired = true;
++			this.#deferredLegacyRewrite = false;
++		}
++		if (loaded.layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(loaded.layout);
++		this.#coolUnreachablePayloads();
++		return true;
++	}
++
+ 
+ 	/**
+ 	 * Drop only session files that this manager saw materialized for a draft and
+diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+index 298b7a1b98..fe352c1011 100644
+--- a/packages/coding-agent/CHANGELOG.md
++++ b/packages/coding-agent/CHANGELOG.md
+@@ -2,6 +2,10 @@
+ 
+ ## [Unreleased]
+ 
++### Fixed
++
++- ACP clients receive each completed external turn once before the next prompt ([Refs #903](https://github.com/Wladefant/veyyon/issues/903)).
++
+ ## [1.7.6] - 2026-11-02
+ 
+ ### Fixed
+diff --git a/packages/coding-agent/src/modes/acp/acp-agent.ts b/packages/coding-agent/src/modes/acp/acp-agent.ts
+index 64db6ec723..028459995e 100644
+--- a/packages/coding-agent/src/modes/acp/acp-agent.ts
++++ b/packages/coding-agent/src/modes/acp/acp-agent.ts
+@@ -184,6 +184,7 @@ type ManagedSessionRecord = {
+ 	promptTurn: PromptTurnState | undefined;
+ 	promptQueue: PromptQueueState;
+ 	liveMessageId: string | undefined;
++	displayedEntryIds: Set<string>;
+ 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
+ 	toolArgsById: Map<string, unknown>;
+ 	extensionsConfigured: boolean;
+@@ -730,6 +731,9 @@ export class AcpAgent implements Agent {
+ 				await previousTurn.cleanup;
+ 			}
+ 			throwIfRecordClosed(record);
++			if (await record.session.refreshExternalTurn()) {
++				await this.#replayNewlyAdoptedHistory(record);
++			}
+ 
+ 			const converted = convertPromptBlocks(params.prompt);
+ 			const pendingPrompt = Promise.withResolvers<PromptResponse>();
+@@ -1271,6 +1275,7 @@ export class AcpAgent implements Agent {
+ 			await waitForAcpPromptIdle(record);
+ 			record.liveMessageId = undefined;
+ 			record.liveMessageProgress = undefined;
++			if (!record.background) this.#markSessionEntriesDisplayed(record);
+ 			finishPrompt(record, {
+ 				stopReason: resolveStopReason(event, promptTurn.cancelRequested),
+ 				usage: buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
+@@ -1761,6 +1766,36 @@ export class AcpAgent implements Agent {
+ 				await this.#connection.sessionUpdate(notification);
+ 			}
+ 		}
++		this.#markSessionEntriesDisplayed(record);
++	}
++
++	async #replayNewlyAdoptedHistory(record: ManagedSessionRecord): Promise<void> {
++		const sessionId = record.session.sessionId;
++		const cwd = record.session.sessionManager.getCwd();
++		const newlyVisible = record.session.sessionManager
++			.getBranch()
++			.filter(entry => !record.displayedEntryIds.has(entry.id));
++		const replayedToolCallIds = new Set<string>();
++		const replayedToolCallArgs = new Map<string, unknown>();
++		for (const entry of newlyVisible) {
++			if (entry.type !== "message") continue;
++			for (const notification of this.#messageToReplayNotifications(
++				sessionId,
++				entry.message as ReplayableMessage,
++				cwd,
++				replayedToolCallIds,
++				replayedToolCallArgs,
++			)) {
++				await this.#connection.sessionUpdate(notification);
++			}
++		}
++		for (const entry of newlyVisible) record.displayedEntryIds.add(entry.id);
++	}
++
++	#markSessionEntriesDisplayed(record: ManagedSessionRecord): void {
++		for (const entry of record.session.sessionManager.getBranch()) {
++			record.displayedEntryIds.add(entry.id);
++		}
+ 	}
+ 
+ 	#messageToReplayNotifications(
+@@ -2247,6 +2282,7 @@ function createManagedSessionRecord(session: AgentSession): ManagedSessionRecord
+ 		promptTurn: undefined,
+ 		promptQueue: { promise: Promise.resolve(), release: undefined },
+ 		liveMessageId: undefined,
++		displayedEntryIds: new Set(),
+ 		liveMessageProgress: undefined,
+ 		toolArgsById: new Map(),
+ 		extensionsConfigured: false,
+diff --git a/packages/coding-agent/src/session/agent-session.ts b/packages/coding-agent/src/session/agent-session.ts
+index 2568dd35bf..013db04ed7 100644
+--- a/packages/coding-agent/src/session/agent-session.ts
++++ b/packages/coding-agent/src/session/agent-session.ts
+@@ -5445,6 +5445,7 @@ export class AgentSession {
+ 			acceptTerminalEmptyStop?: boolean;
+ 		},
+ 	): Promise<void> {
++		await this.refreshExternalTurn();
+ 		this.#inFlight.begin();
+ 		startupMarker("prompt:start");
+ 		const generation = this.#promptGeneration;
+@@ -8083,6 +8084,18 @@ export class AgentSession {
+ 		await this.switchSession(sessionFile);
+ 	}
+ 
++	/**
++	 * Adopt a completed turn from another writer before an idle prompt. This
++	 * leaves the Agent's steering and follow-up queues untouched.
++	 */
++	async refreshExternalTurn(): Promise<boolean> {
++		if (this.isStreaming) return false;
++		if (!(await this.sessionManager.refreshExternalTurn())) return false;
++		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
++		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
++		return true;
++	}
++
+ 	/**
+ 	 * Switch to a different session file; see {@link SessionSwitch.switchTo}.
+ 	 * @returns true if switch completed, false if cancelled by hook
