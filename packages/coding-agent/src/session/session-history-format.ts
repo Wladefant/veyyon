@@ -123,7 +123,7 @@ async function preflightContentBytes(
 	}
 }
 
-function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generator<void, string> {
+function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generator<undefined, string> {
 	let start = 0;
 	let scanned = 0;
 	const CHUNK = 32_768;
@@ -131,7 +131,7 @@ function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generato
 		if (text.charCodeAt(start) === 10) break;
 		start++;
 		scanned++;
-		if ((scanned & (CHUNK - 1)) === 0) yield;
+		if ((scanned & (CHUNK - 1)) === 0) yield undefined;
 	}
 	if (start >= text.length || text.charCodeAt(start) === 10) {
 		return "";
@@ -143,18 +143,18 @@ function* extractFirstLinePreview(text: string, max = PRIMARY_ARG_MAX): Generato
 	return oneLine(text.slice(start, end), max);
 }
 
-function* scanTextLines(text: string): Generator<void, number> {
+function* scanTextLines(text: string): Generator<undefined, number> {
 	if (!text) return 0;
 	let count = 1;
 	const CHUNK_SIZE = 32_768;
 	for (let i = 0; i < text.length; i++) {
 		if (text.charCodeAt(i) === 10) count++;
-		if (((i + 1) & (CHUNK_SIZE - 1)) === 0) yield;
+		if (((i + 1) & (CHUNK_SIZE - 1)) === 0) yield undefined;
 	}
 	return count;
 }
 
-function* summarizeToolResult(result: ToolResultMessage): Generator<void, { lines: number; firstLine?: string }> {
+function* summarizeToolResult(result: ToolResultMessage): Generator<undefined, { lines: number; firstLine?: string }> {
 	const content = result.content;
 	if (!content) return { lines: 0 };
 	let lines = 0;
@@ -171,7 +171,7 @@ function* summarizeToolResult(result: ToolResultMessage): Generator<void, { line
 		for (let i = 0; i < rawContent.length; i++) {
 			if (rawContent.charCodeAt(i) === 10) lines++;
 			scanned++;
-			if ((scanned & (CHUNK_SIZE - 1)) === 0) yield;
+			if ((scanned & (CHUNK_SIZE - 1)) === 0) yield undefined;
 		}
 		return { lines, firstLine };
 	}
@@ -191,7 +191,7 @@ function* summarizeToolResult(result: ToolResultMessage): Generator<void, { line
 			for (let i = 0; i < text.length; i++) {
 				if (text.charCodeAt(i) === 10) lines++;
 				scanned++;
-				if ((scanned & (CHUNK_SIZE - 1)) === 0) yield;
+				if ((scanned & (CHUNK_SIZE - 1)) === 0) yield undefined;
 			}
 		} else if (block.type === "image") {
 			if (emitted++ > 0) lines++;
@@ -377,7 +377,7 @@ function* toolCallLine(
 	result: ToolResultMessage | undefined,
 	includeToolIntent?: boolean,
 	expandEditDiffs?: boolean,
-): Generator<void, string> {
+): Generator<undefined, string> {
 	const head = `→ ${name}(${primaryArg(name, args)})`;
 	let base: string;
 	if (!result) {
@@ -412,7 +412,7 @@ function* executionLine(
 	kind: "bash" | "python",
 	source: string,
 	msg: BashExecutionMessage | PythonExecutionMessage,
-): Generator<void, string> {
+): Generator<undefined, string> {
 	const status = msg.cancelled
 		? "cancelled"
 		: msg.exitCode !== undefined && msg.exitCode !== 0
@@ -483,7 +483,7 @@ function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions)
 	// Index tool results by call id so each toolCall collapses to one line.
 	const resultsByCallId = new Map<string, ToolResultMessage>();
 	for (const msg of typed) {
-		yield;
+		yield undefined;
 		if (msg.role === "toolResult") {
 			resultsByCallId.set(msg.toolCallId, msg);
 		}
@@ -492,7 +492,7 @@ function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions)
 	let lastWatchedLabel: string | undefined;
 
 	for (const msg of typed) {
-		yield;
+		yield undefined;
 		switch (msg.role) {
 			case "user":
 			case "developer": {
@@ -521,7 +521,7 @@ function* historyMarkdownSteps(messages: unknown[], opts?: HistoryFormatOptions)
 				const assistantMsg = msg as AssistantMessage;
 				let headerEmitted = false;
 				for (const block of assistantMsg.content) {
-					yield;
+					yield undefined;
 					let line: string | undefined;
 					if (block.type === "text") {
 						if (block.text.trim()) line = block.text;
