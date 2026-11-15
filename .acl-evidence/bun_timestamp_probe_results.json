@@ -1,0 +1,45 @@
+{
+  "description": "Bun timestamp probe measuring spawn call, PS script completion marker, JS 'exit' event, JS 'close' event, and promise resolution.",
+  "limitations": "Independent probe in isolated runner. Cannot observe event-loop lag or synchrony stalls in the original incident caller process.",
+  "runs": [
+    {
+      "iteration": 1,
+      "spawnCallElapsedMs": 28.08,
+      "spawnEventElapsedMs": 28.54,
+      "psScriptEndUtc": "2026-11-05T09:05:20.3522268Z",
+      "childExitEventElapsedMs": 2790.77,
+      "childCloseEventElapsedMs": 2795.46,
+      "promiseResolveElapsedMs": 2795.46,
+      "deltaPsScriptToCloseMs": 427.46,
+      "totalWallMs": 2795.46,
+      "exitCode": 0,
+      "stdout": "PS_SCRIPT_END:2026-11-05T09:05:20.3522268Z\r\nOK"
+    },
+    {
+      "iteration": 2,
+      "spawnCallElapsedMs": 5.59,
+      "spawnEventElapsedMs": 5.68,
+      "psScriptEndUtc": "2026-11-05T09:05:23.1177670Z",
+      "childExitEventElapsedMs": 2603.72,
+      "childCloseEventElapsedMs": 2603.94,
+      "promiseResolveElapsedMs": 2603.94,
+      "deltaPsScriptToCloseMs": 265.94,
+      "totalWallMs": 2603.94,
+      "exitCode": 0,
+      "stdout": "PS_SCRIPT_END:2026-11-05T09:05:23.1177670Z\r\nOK"
+    },
+    {
+      "iteration": 3,
+      "spawnCallElapsedMs": 4.43,
+      "spawnEventElapsedMs": 4.48,
+      "psScriptEndUtc": "2026-11-05T09:05:26.1201185Z",
+      "childExitEventElapsedMs": 3105.53,
+      "childCloseEventElapsedMs": 3105.83,
+      "promiseResolveElapsedMs": 3105.83,
+      "deltaPsScriptToCloseMs": 369.83,
+      "totalWallMs": 3105.83,
+      "exitCode": 0,
+      "stdout": "PS_SCRIPT_END:2026-11-05T09:05:26.1201185Z\r\nOK"
+    }
+  ]
+}

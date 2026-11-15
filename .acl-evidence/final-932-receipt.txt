@@ -1,0 +1,78 @@
+The live terminal claims publish an older loaded build than the installed executable. The 27–43 second timeout tails remain unexplained.
+
+## Runtime identity and deadline
+
+These six live publisher claims report `loadedVersion: 1.7.7` and `loadedBuildSha: eef2ea0fb19f4b86d8cf8e35c50b8cdb7b2b0063`:
+
+- PID 15968: `15968-932c2c2e-3c92-4044-b9ca-24c9dbf34b40.json`
+- PID 18532: `18532-b366a13f-3ea1-4308-98c1-64226ff349e0.json`
+- PID 22092: `22092-f3a00dd4-2051-4ee2-929c-ab98258e43ab.json`
+- PID 4204: `4204-851ab85f-c7f3-4566-8e53-9b7fa1c5d2ef.json`
+- PID 46376: `46376-ba33ec56-7c34-40e4-93de-868e05079520.json`
+- PID 5052: `5052-b57ee6c9-de08-416a-978e-cbc2fe81e377.json`
+
+At that SHA, `packages/utils/src/windows-acl.ts:7` compiles `WINDOWS_ACL_TIMEOUT_MS = 15_000`. It has no environment override getter.
+
+Source: https://github.com/Wladefant/veyyon/blob/eef2ea0fb19f4b86d8cf8e35c50b8cdb7b2b0063/packages/utils/src/windows-acl.ts#L7
+
+PID 18532 uses `C:\Users\wkiri\AppData\Local\veyyon\veyyon.exe`. Its creation time is `2026-11-04T10:17:52.461094Z`.
+The current file at that path has modification time `2026-11-04T22:26:39.615476Z`. Thus the process started before the current file modification time.
+File modification time is an install/update proxy, not an independently verified installation timestamp. All six publishers predate that modification time.
+
+The installed AppData executable reports `1.7.9`, full build SHA `8f2d627f9e949617224b8c391a39cf768096be57`. Its source defaults to 60,000 ms.
+The merge commit of https://github.com/Wladefant/veyyon/pull/956 is `27e117dc7572c3a3e31ebb76c5bcd7c9bf7b3b1d`.
+`git merge-base --is-ancestor 27e117dc7572c3a3e31ebb76c5bcd7c9bf7b3b1d 8f2d627f9e949617224b8c391a39cf768096be57` returned 0.
+
+The separate `.bun\bin\veyyon.exe` reports 1.5.6. The six publisher executable paths are AppData, not that executable.
+Published claim fields establish what the claims report. They do not independently inspect each process's loaded image.
+The inspection child's `VEYYON_WINDOWS_ACL_TIMEOUT_MS` was unset. This does not establish another process's environment.
+
+## Source trace
+
+The current source executes non-isolated task setup in the caller's runtime:
+
+1. `packages/coding-agent/src/task/spawn-run.ts:633-647` selects isolated subprocess execution only for isolation. The ordinary path calls `runSubprocess(options)`.
+2. Despite that function's name, `executor.ts:2495-2551` calls `driveChildRun` directly.
+3. `executor.ts:2450-2464` calls `openChildSession` directly.
+4. `executor.ts:2157-2166` calls `SessionManager.open` before it creates the child session.
+5. `kernel/src/session/session-manager.ts:3442` runs the terminal ownership check.
+
+These references describe the inspected source, not a claim that the installed binary reloaded it.
+
+The terminal publisher creates `${process.pid}-${nonce}.json` in `terminal-control.ts:159-166`, then publishes it through the atomic writer at lines 838-853.
+`kernel/src/session/terminal-ownership.ts:60-72` checks records sequentially. Each baseline read verifies the parent ACL and record ACL in sequence.
+The baseline `packages/utils/src/windows-acl.ts:205-220` starts Windows PowerShell. Lines 278-280 arm the deadline after the spawn call returns.
+The ownership check starts elapsed timing before the read and formats elapsed after its failure recovery check. That elapsed value is not child execution time alone.
+The filename identifies the claim publisher. It does not, by itself, identify the process that ran verification.
+
+## Measurements and limits
+
+The earlier baseline and native comparison receipts remain available:
+
+- https://github.com/Wladefant/veyyon/issues/932#issuecomment-6653703780
+- https://github.com/Wladefant/veyyon/issues/932#issuecomment-6653735482
+- https://github.com/Wladefant/veyyon/pull/933#issuecomment-6653738943
+
+Baseline verification, 20 runs per mode: sequential p50/p95/max 3931.19/4676.27/5867.63 ms. Concurrency eight: 5853.88/7698.10/7838.91 ms. Both modes had zero failures.
+The native candidate in https://github.com/Wladefant/veyyon/pull/933 was measured at head `757030ccaeaf2cabbc5e8610e65695c15ba45496`, incorporated into scratch merge `0660cbc8e35259a93a1957341fd5a366aed1c334`.
+Fifteen interleaved process-to-process pairs gave PowerShell p50/p95 2835.09/3399.42 ms and native p50/p95 197.42/571.55 ms. Both methods completed 15/15, with zero failures or missing samples.
+
+The following are separate scratch probes, not matched timestamps from the failing runtime:
+
+- Win32 kernel probe, three runs: spawn call 4.20–13.04 ms. Kernel process lifetime 2599.69–2715.67 ms. Script completion to OS exit 234.02–272.68 ms. Post-exit buffer drainage 19.49–47.88 ms.
+- Separate Bun probe, three runs: JavaScript `exit` callback to `close`/promise resolution 0.22–4.69 ms. Total wall time 2603.94–3105.83 ms. A JavaScript exit callback is not an independent OS exit timestamp.
+- A separate 15-second-deadline probe completed 14/14 launches without a timeout. Its 100 ms timer tracker recorded p50/p95/max lag 3.94/44.75/307.70 ms.
+
+The 27–43 second tails were not reproduced. Per-command slowness in those incidents remains unproven. CPU sampling cannot distinguish a blocked event loop, a slow child, and IPC wait.
+
+One dead-publisher claim remains: `26500-f66d8e0f-7e98-414e-9d7e-9f6e40acb7d9.json`, mtime `2026-09-28T22:56:56.065887Z`, size 3 bytes. It was not deleted.
+
+## Disposition
+
+No new source implementation duplicates the existing native candidate. No branch belonging to another lane was changed.
+No process was killed or restarted. No executable was installed. Operator card `tq:787e097d` owns the restart decision.
+The native candidate still requires its normal exact-head verification and review gates. A ChatGPT review job was submitted as `8a27208ad1c0407aa786ae68ab789412`; no review result is claimed here.
+
+Deleted: none.
+Not run: the focused Windows FFI test could not execute through the repository's sandbox route. The direct test refused its missing sandbox marker. The sandbox retry failed before assertions. No test pass count is claimed. No full suite, release, install, restart, or incident-runtime instrumentation ran.
+Missing: direct event-time evidence for the 27–43 second tails, and independent identification of each process's loaded image.

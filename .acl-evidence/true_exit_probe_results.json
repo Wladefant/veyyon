@@ -1,0 +1,72 @@
+{
+  "description": "Timestamp probe measuring baseline ACL spawn call, PS script completion, true OS kernel exit (GetProcessTimes), and pipe drainage.",
+  "limitations": "This independent scratch probe measures execution in an isolated runner process. It cannot retroactively inspect the event loop state, synchrony stalls, or scheduling queues of the original incident caller process.",
+  "runs": [
+    {
+      "iteration": 1,
+      "pid": 49988,
+      "spawn_call_ms": 4.2,
+      "total_wall_ms": 2739.02,
+      "kernel_lifetime_ms": 2715.67,
+      "ps_script_to_os_exit_rundown_ms": 260.56,
+      "os_exit_to_drain_ms": 21.41,
+      "timestamps_utc": {
+        "spawn_start": "2026-11-05T09:04:43.134706+00:00",
+        "spawn_end": "2026-11-05T09:04:43.139023+00:00",
+        "kernel_creation": "2026-11-05T09:04:43.136848+00:00",
+        "ps_script_end": "2026-11-05T09:04:45.591956+00:00",
+        "kernel_exit": "2026-11-05T09:04:45.852521+00:00",
+        "os_signaled": "2026-11-05T09:04:45.869652+00:00",
+        "communicate_end": "2026-11-05T09:04:45.873936+00:00"
+      },
+      "stdout_tail": [
+        "OK"
+      ],
+      "exit_code": 0
+    },
+    {
+      "iteration": 2,
+      "pid": 52612,
+      "spawn_call_ms": 4.27,
+      "total_wall_ms": 2649.67,
+      "kernel_lifetime_ms": 2599.69,
+      "ps_script_to_os_exit_rundown_ms": 272.68,
+      "os_exit_to_drain_ms": 47.88,
+      "timestamps_utc": {
+        "spawn_start": "2026-11-05T09:04:45.873936+00:00",
+        "spawn_end": "2026-11-05T09:04:45.878564+00:00",
+        "kernel_creation": "2026-11-05T09:04:45.876336+00:00",
+        "ps_script_end": "2026-11-05T09:04:48.203346+00:00",
+        "kernel_exit": "2026-11-05T09:04:48.476027+00:00",
+        "os_signaled": "2026-11-05T09:04:48.503481+00:00",
+        "communicate_end": "2026-11-05T09:04:48.523908+00:00"
+      },
+      "stdout_tail": [
+        "OK"
+      ],
+      "exit_code": 0
+    },
+    {
+      "iteration": 3,
+      "pid": 36524,
+      "spawn_call_ms": 13.04,
+      "total_wall_ms": 2660.96,
+      "kernel_lifetime_ms": 2629.83,
+      "ps_script_to_os_exit_rundown_ms": 234.02,
+      "os_exit_to_drain_ms": 19.49,
+      "timestamps_utc": {
+        "spawn_start": "2026-11-05T09:04:48.524448+00:00",
+        "spawn_end": "2026-11-05T09:04:48.537809+00:00",
+        "kernel_creation": "2026-11-05T09:04:48.535967+00:00",
+        "ps_script_end": "2026-11-05T09:04:50.931771+00:00",
+        "kernel_exit": "2026-11-05T09:04:51.165793+00:00",
+        "os_signaled": "2026-11-05T09:04:51.183749+00:00",
+        "communicate_end": "2026-11-05T09:04:51.185281+00:00"
+      },
+      "stdout_tail": [
+        "OK"
+      ],
+      "exit_code": 0
+    }
+  ]
+}

@@ -1,0 +1,1838 @@
+{
+  "timestamp_epoch": 1793866893.0485117,
+  "baseline_commit": "6a99d8be68abd8ff7a95fe07ccd106ef241ae87c",
+  "target_file": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\packages\\utils\\src\\windows-acl.ts",
+  "scratch_target": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json",
+  "command_flags": {
+    "powershell_flags": [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-WindowStyle",
+      "Hidden",
+      "-File"
+    ],
+    "subprocess_flags": "CREATE_NO_WINDOW (0x08000000)",
+    "minimal_env_keys": [
+      "SystemRoot",
+      "VEYYON_OWNER_ONLY_ACL_PATH"
+    ]
+  },
+  "system_state": {
+    "pre": {
+      "process_count": 542,
+      "cpu_percent": 100.0,
+      "cpu_count_logical": 16,
+      "cpu_count_physical": 8,
+      "memory_total_gb": 43.89,
+      "memory_available_gb": 5.53,
+      "memory_used_gb": 38.36,
+      "memory_percent": 87.4
+    },
+    "post": {
+      "process_count": 523,
+      "cpu_percent": 93.2,
+      "memory_percent": 85.2,
+      "memory_used_gb": 37.4
+    },
+    "terminals": {
+      "directory": "C:\\Users\\wkiri\\.veyyon\\profiles\\default\\run\\terminals",
+      "exists": true,
+      "total_files": 7,
+      "live_pid_count": 6,
+      "pipe_serving_count": 6,
+      "files": [
+        {
+          "filename": "15968-932c2c2e-3c92-4044-b9ca-24c9dbf34b40.json",
+          "size_bytes": 628,
+          "pid": 15968,
+          "pid_alive": true,
+          "pipe_name": "\\\\.\\pipe\\veyyon-terminal-932c2c2e-3c92-4044-b9ca-24c9dbf34b40",
+          "pipe_serving": true
+        },
+        {
+          "filename": "18532-b366a13f-3ea1-4308-98c1-64226ff349e0.json",
+          "size_bytes": 625,
+          "pid": 18532,
+          "pid_alive": true,
+          "pipe_name": "\\\\.\\pipe\\veyyon-terminal-b366a13f-3ea1-4308-98c1-64226ff349e0",
+          "pipe_serving": true
+        },
+        {
+          "filename": "22092-f3a00dd4-2051-4ee2-929c-ab98258e43ab.json",
+          "size_bytes": 613,
+          "pid": 22092,
+          "pid_alive": true,
+          "pipe_name": "\\\\.\\pipe\\veyyon-terminal-f3a00dd4-2051-4ee2-929c-ab98258e43ab",
+          "pipe_serving": true
+        },
+        {
+          "filename": "26500-f66d8e0f-7e98-414e-9d7e-9f6e40acb7d9.json",
+          "size_bytes": 3,
+          "pid": 26500,
+          "pid_alive": false,
+          "pipe_name": "\\\\.\\pipe\\veyyon-terminal-f66d8e0f-7e98-414e-9d7e-9f6e40acb7d9",
+          "pipe_serving": false
+        },
+        {
+          "filename": "4204-851ab85f-c7f3-4566-8e53-9b7fa1c5d2ef.json",
+          "size_bytes": 614,
+          "pid": 4204,
+          "pid_alive": true,
+          "pipe_name": "\\\\.\\pipe\\veyyon-terminal-851ab85f-c7f3-4566-8e53-9b7fa1c5d2ef",
+          "pipe_serving": true
+        },
+        {
+          "filename": "46376-ba33ec56-7c34-40e4-93de-868e05079520.json",
+          "size_bytes": 608,
+          "pid": 46376,
+          "pid_alive": true,
+          "pipe_name": "\\\\.\\pipe\\veyyon-terminal-ba33ec56-7c34-40e4-93de-868e05079520",
+          "pipe_serving": true
+        },
+        {
+          "filename": "5052-b57ee6c9-de08-416a-978e-cbc2fe81e377.json",
+          "size_bytes": 608,
+          "pid": 5052,
+          "pid_alive": true,
+          "pipe_name": "\\\\.\\pipe\\veyyon-terminal-b57ee6c9-de08-416a-978e-cbc2fe81e377",
+          "pipe_serving": true
+        }
+      ]
+    },
+    "defender": {
+      "processes": [
+        {
+          "pid": 5008,
+          "name": "MsMpEng.exe",
+          "cpu_percent": 0.0,
+          "rss_mb": 178.8,
+          "num_threads": 14,
+          "create_time": 1793784307.7178376
+        },
+        {
+          "pid": 27612,
+          "name": "SecurityHealthService.exe",
+          "cpu_percent": 0.0,
+          "rss_mb": 35.56,
+          "num_threads": 6,
+          "create_time": 1793842558.1381164
+        }
+      ],
+      "mp_computer_status": {
+        "AntivirusEnabled": true,
+        "RealTimeProtectionEnabled": false,
+        "IoavProtectionEnabled": false,
+        "AntispywareEnabled": true,
+        "BehaviorMonitorEnabled": false,
+        "OnAccessProtectionEnabled": false,
+        "AMServiceEnabled": true,
+        "AntivirusSignatureLastUpdated": "2026-11-04T19:22:33.0000000+01:00",
+        "EngineVersion": null,
+        "AntivirusSignatureVersion": "1.463.130.0"
+      },
+      "mp_query_error": null
+    }
+  },
+  "benchmarks": {
+    "verify_sequential": {
+      "stats": {
+        "total_expected": 20,
+        "complete": 20,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 2830.57,
+        "p50_ms": 3931.19,
+        "p95_ms": 4676.27,
+        "max_ms": 5867.63,
+        "mean_ms": 3915.44,
+        "stddev_ms": 705.46
+      },
+      "runs": [
+        {
+          "duration_ms": 3402.72,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 1
+        },
+        {
+          "duration_ms": 2861.42,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 2
+        },
+        {
+          "duration_ms": 2948.12,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 3
+        },
+        {
+          "duration_ms": 2830.57,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 4
+        },
+        {
+          "duration_ms": 2918.4,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 5
+        },
+        {
+          "duration_ms": 3641.88,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 6
+        },
+        {
+          "duration_ms": 4005.08,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 7
+        },
+        {
+          "duration_ms": 4145.16,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 8
+        },
+        {
+          "duration_ms": 3844.23,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 9
+        },
+        {
+          "duration_ms": 4451.33,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 10
+        },
+        {
+          "duration_ms": 3810.39,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 11
+        },
+        {
+          "duration_ms": 4449.24,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 12
+        },
+        {
+          "duration_ms": 3798.72,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 13
+        },
+        {
+          "duration_ms": 4140.54,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 14
+        },
+        {
+          "duration_ms": 4232.71,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 15
+        },
+        {
+          "duration_ms": 4676.27,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 16
+        },
+        {
+          "duration_ms": 4006.93,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 17
+        },
+        {
+          "duration_ms": 4346.19,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 18
+        },
+        {
+          "duration_ms": 5867.63,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 19
+        },
+        {
+          "duration_ms": 3931.19,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 20
+        }
+      ]
+    },
+    "verify_concurrency8": {
+      "stats": {
+        "total_expected": 20,
+        "complete": 20,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 3466.99,
+        "p50_ms": 5853.88,
+        "p95_ms": 7698.1,
+        "max_ms": 7838.91,
+        "mean_ms": 5937.88,
+        "stddev_ms": 1297.41
+      },
+      "runs": [
+        {
+          "duration_ms": 6619.62,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 1
+        },
+        {
+          "duration_ms": 5769.85,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 2
+        },
+        {
+          "duration_ms": 6297.5,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 3
+        },
+        {
+          "duration_ms": 5487.4,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 4
+        },
+        {
+          "duration_ms": 6413.34,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 5
+        },
+        {
+          "duration_ms": 5728.44,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 6
+        },
+        {
+          "duration_ms": 6541.17,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 7
+        },
+        {
+          "duration_ms": 7838.91,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 8
+        },
+        {
+          "duration_ms": 7598.88,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 9
+        },
+        {
+          "duration_ms": 5640.41,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 10
+        },
+        {
+          "duration_ms": 7496.11,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 11
+        },
+        {
+          "duration_ms": 6619.38,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 12
+        },
+        {
+          "duration_ms": 5853.88,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 13
+        },
+        {
+          "duration_ms": 6480.99,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 14
+        },
+        {
+          "duration_ms": 7698.1,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 15
+        },
+        {
+          "duration_ms": 5706.06,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 16
+        },
+        {
+          "duration_ms": 3848.56,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 17
+        },
+        {
+          "duration_ms": 3888.79,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 18
+        },
+        {
+          "duration_ms": 3763.21,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 19
+        },
+        {
+          "duration_ms": 3466.99,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 20
+        }
+      ]
+    },
+    "empty_sequential": {
+      "stats": {
+        "total_expected": 20,
+        "complete": 20,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 1973.09,
+        "p50_ms": 2506.7,
+        "p95_ms": 3098.1,
+        "max_ms": 3596.77,
+        "mean_ms": 2615.32,
+        "stddev_ms": 425.77
+      },
+      "runs": [
+        {
+          "duration_ms": 2647.31,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 1
+        },
+        {
+          "duration_ms": 2437.91,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 2
+        },
+        {
+          "duration_ms": 1973.09,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 3
+        },
+        {
+          "duration_ms": 2107.3,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 4
+        },
+        {
+          "duration_ms": 3019.56,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 5
+        },
+        {
+          "duration_ms": 2348.49,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 6
+        },
+        {
+          "duration_ms": 2956.85,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 7
+        },
+        {
+          "duration_ms": 2558.2,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 8
+        },
+        {
+          "duration_ms": 2323.99,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 9
+        },
+        {
+          "duration_ms": 2902.29,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 10
+        },
+        {
+          "duration_ms": 3098.1,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 11
+        },
+        {
+          "duration_ms": 3037.81,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 12
+        },
+        {
+          "duration_ms": 2876.16,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 13
+        },
+        {
+          "duration_ms": 3058.52,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 14
+        },
+        {
+          "duration_ms": 2506.7,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 15
+        },
+        {
+          "duration_ms": 3596.77,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 16
+        },
+        {
+          "duration_ms": 2163.2,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 17
+        },
+        {
+          "duration_ms": 2218.23,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 18
+        },
+        {
+          "duration_ms": 2464.91,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 19
+        },
+        {
+          "duration_ms": 2011.1,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 20
+        }
+      ]
+    },
+    "empty_concurrency8": {
+      "stats": {
+        "total_expected": 20,
+        "complete": 20,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 2252.34,
+        "p50_ms": 3374.85,
+        "p95_ms": 4161.15,
+        "max_ms": 4677.09,
+        "mean_ms": 3434.66,
+        "stddev_ms": 556.72
+      },
+      "runs": [
+        {
+          "duration_ms": 3518.65,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 1
+        },
+        {
+          "duration_ms": 3580.99,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 2
+        },
+        {
+          "duration_ms": 3327.92,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 3
+        },
+        {
+          "duration_ms": 3806.08,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 4
+        },
+        {
+          "duration_ms": 3878.11,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 5
+        },
+        {
+          "duration_ms": 3631.81,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 6
+        },
+        {
+          "duration_ms": 4161.15,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 7
+        },
+        {
+          "duration_ms": 4677.09,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 8
+        },
+        {
+          "duration_ms": 3054.81,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 9
+        },
+        {
+          "duration_ms": 3130.47,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 10
+        },
+        {
+          "duration_ms": 3498.33,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 11
+        },
+        {
+          "duration_ms": 3668.58,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 12
+        },
+        {
+          "duration_ms": 4153.65,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 13
+        },
+        {
+          "duration_ms": 3374.85,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 14
+        },
+        {
+          "duration_ms": 3302.87,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 15
+        },
+        {
+          "duration_ms": 3289.2,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 16
+        },
+        {
+          "duration_ms": 3118.61,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 17
+        },
+        {
+          "duration_ms": 2832.63,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 18
+        },
+        {
+          "duration_ms": 2435.08,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 19
+        },
+        {
+          "duration_ms": 2252.34,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "iteration": 20
+        }
+      ]
+    },
+    "verify_paired_environment": {
+      "minimal_stats": {
+        "total_expected": 10,
+        "complete": 10,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 2356.14,
+        "p50_ms": 2685.08,
+        "p95_ms": 3674.8,
+        "max_ms": 3674.8,
+        "mean_ms": 2754.08,
+        "stddev_ms": 354.69
+      },
+      "full_stats": {
+        "total_expected": 10,
+        "complete": 10,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 2402.52,
+        "p50_ms": 2577.39,
+        "p95_ms": 3622.81,
+        "max_ms": 3622.81,
+        "mean_ms": 2753.35,
+        "stddev_ms": 335.43
+      },
+      "runs": [
+        {
+          "duration_ms": 3674.8,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 1,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2969.18,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 1,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2892.55,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 2,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2767.54,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 2,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2980.2,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 3,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2577.39,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 3,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2542.75,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 4,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2749.51,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 4,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2633.82,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 5,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2550.8,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 5,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2675.44,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 6,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2685.08,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 6,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2426.21,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 7,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2515.22,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 7,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 3622.81,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 8,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2483.8,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 8,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2356.14,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 9,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2402.52,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 9,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2784.82,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 10,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2783.69,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 10,
+          "order_in_pair": 2
+        }
+      ]
+    },
+    "empty_paired_environment": {
+      "minimal_stats": {
+        "total_expected": 10,
+        "complete": 10,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 2072.78,
+        "p50_ms": 2830.3,
+        "p95_ms": 4089.59,
+        "max_ms": 4089.59,
+        "mean_ms": 2938.89,
+        "stddev_ms": 599.66
+      },
+      "full_stats": {
+        "total_expected": 10,
+        "complete": 10,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 1992.98,
+        "p50_ms": 2799.17,
+        "p95_ms": 3455.24,
+        "max_ms": 3455.24,
+        "mean_ms": 2802.79,
+        "stddev_ms": 446.29
+      },
+      "runs": [
+        {
+          "duration_ms": 2072.78,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 1,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2179.5,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 1,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 1992.98,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 2,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2395.56,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 2,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2457.92,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 3,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 3455.24,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 3,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 3382.09,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 4,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 3237.54,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 4,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2830.3,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 5,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 3167.05,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 5,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2656.78,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 6,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2975.47,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 6,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2658.28,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 7,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2844.71,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 7,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2895.44,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 8,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2836.13,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 8,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 4089.59,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 9,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 2654.97,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 9,
+          "order_in_pair": 2
+        },
+        {
+          "duration_ms": 2799.17,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "full",
+          "pair_index": 10,
+          "order_in_pair": 1
+        },
+        {
+          "duration_ms": 3835.3,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "",
+          "error": null,
+          "kind": "minimal",
+          "pair_index": 10,
+          "order_in_pair": 2
+        }
+      ]
+    },
+    "instrumented_breakdown": {
+      "summary": {
+        "count": 10,
+        "host_startup_stats": {
+          "total_expected": 10,
+          "complete": 10,
+          "errors": 0,
+          "missing": 0,
+          "min_ms": 1750.59,
+          "p50_ms": 2662.95,
+          "p95_ms": 4026.31,
+          "max_ms": 4026.31,
+          "mean_ms": 2840.27,
+          "stddev_ms": 627.78
+        },
+        "internal_total_stats": {
+          "total_expected": 10,
+          "complete": 10,
+          "errors": 0,
+          "missing": 0,
+          "min_ms": 900.45,
+          "p50_ms": 1038.57,
+          "p95_ms": 1598.09,
+          "max_ms": 1598.09,
+          "mean_ms": 1235.47,
+          "stddev_ms": 263.23
+        },
+        "item_stats": {
+          "total_expected": 10,
+          "complete": 10,
+          "errors": 0,
+          "missing": 0,
+          "min_ms": 430.74,
+          "p50_ms": 562.48,
+          "p95_ms": 913.2,
+          "max_ms": 913.2,
+          "mean_ms": 642.01,
+          "stddev_ms": 173.33
+        },
+        "acl_body_stats": {
+          "total_expected": 10,
+          "complete": 10,
+          "errors": 0,
+          "missing": 0,
+          "min_ms": 439.16,
+          "p50_ms": 528.91,
+          "p95_ms": 708.78,
+          "max_ms": 708.78,
+          "mean_ms": 560.37,
+          "stddev_ms": 94.18
+        }
+      },
+      "runs": [
+        {
+          "duration_ms": 5608.67,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":913.2,\"acl_body_ms\":618.96,\"internal_total_ms\":1582.36}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 913.2,
+            "acl_body_ms": 618.96,
+            "internal_total_ms": 1582.36
+          },
+          "host_startup_ms": 4026.31
+        },
+        {
+          "duration_ms": 4629.76,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":843.64,\"acl_body_ms\":708.78,\"internal_total_ms\":1598.09}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 843.64,
+            "acl_body_ms": 708.78,
+            "internal_total_ms": 1598.09
+          },
+          "host_startup_ms": 3031.67
+        },
+        {
+          "duration_ms": 4688.75,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":886.58,\"acl_body_ms\":622.23,\"internal_total_ms\":1561.15}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 886.58,
+            "acl_body_ms": 622.23,
+            "internal_total_ms": 1561.15
+          },
+          "host_startup_ms": 3127.6
+        },
+        {
+          "duration_ms": 4354.3,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":610.85,\"acl_body_ms\":592.51,\"internal_total_ms\":1229.24}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 610.85,
+            "acl_body_ms": 592.51,
+            "internal_total_ms": 1229.24
+          },
+          "host_startup_ms": 3125.06
+        },
+        {
+          "duration_ms": 4878.33,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":690.93,\"acl_body_ms\":686.35,\"internal_total_ms\":1413.45}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 690.93,
+            "acl_body_ms": 686.35,
+            "internal_total_ms": 1413.45
+          },
+          "host_startup_ms": 3464.88
+        },
+        {
+          "duration_ms": 3622.63,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":468.19,\"acl_body_ms\":502.81,\"internal_total_ms\":995.32}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 468.19,
+            "acl_body_ms": 502.81,
+            "internal_total_ms": 995.32
+          },
+          "host_startup_ms": 2627.31
+        },
+        {
+          "duration_ms": 2651.04,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":430.74,\"acl_body_ms\":449.28,\"internal_total_ms\":900.45}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 430.74,
+            "acl_body_ms": 449.28,
+            "internal_total_ms": 900.45
+          },
+          "host_startup_ms": 1750.59
+        },
+        {
+          "duration_ms": 3103.57,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":455.33,\"acl_body_ms\":528.91,\"internal_total_ms\":1011.77}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 455.33,
+            "acl_body_ms": 528.91,
+            "internal_total_ms": 1011.77
+          },
+          "host_startup_ms": 2091.8
+        },
+        {
+          "duration_ms": 3533.06,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":558.18,\"acl_body_ms\":454.66,\"internal_total_ms\":1038.57}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 558.18,
+            "acl_body_ms": 454.66,
+            "internal_total_ms": 1038.57
+          },
+          "host_startup_ms": 2494.49
+        },
+        {
+          "duration_ms": 3687.25,
+          "exit_code": 0,
+          "stdout": "OK",
+          "stderr": "TIMING_BREAKDOWN:{\"item_ms\":562.48,\"acl_body_ms\":439.16,\"internal_total_ms\":1024.3}",
+          "error": null,
+          "breakdown": {
+            "item_ms": 562.48,
+            "acl_body_ms": 439.16,
+            "internal_total_ms": 1024.3
+          },
+          "host_startup_ms": 2662.95
+        }
+      ]
+    },
+    "icacls_sequential": {
+      "stats": {
+        "total_expected": 20,
+        "complete": 20,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 58.56,
+        "p50_ms": 136.89,
+        "p95_ms": 203.32,
+        "max_ms": 239.7,
+        "mean_ms": 139.21,
+        "stddev_ms": 46.24
+      },
+      "runs": [
+        {
+          "duration_ms": 203.32,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 1
+        },
+        {
+          "duration_ms": 185.59,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 2
+        },
+        {
+          "duration_ms": 239.7,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 3
+        },
+        {
+          "duration_ms": 105.84,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 4
+        },
+        {
+          "duration_ms": 96.16,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 5
+        },
+        {
+          "duration_ms": 143.99,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 6
+        },
+        {
+          "duration_ms": 154.64,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 7
+        },
+        {
+          "duration_ms": 136.89,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 8
+        },
+        {
+          "duration_ms": 134.08,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 9
+        },
+        {
+          "duration_ms": 131.88,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 10
+        },
+        {
+          "duration_ms": 172.64,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 11
+        },
+        {
+          "duration_ms": 88.18,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 12
+        },
+        {
+          "duration_ms": 82.79,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 13
+        },
+        {
+          "duration_ms": 180.06,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 14
+        },
+        {
+          "duration_ms": 169.04,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 15
+        },
+        {
+          "duration_ms": 58.56,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 16
+        },
+        {
+          "duration_ms": 147.73,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 17
+        },
+        {
+          "duration_ms": 64.82,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 18
+        },
+        {
+          "duration_ms": 117.05,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 19
+        },
+        {
+          "duration_ms": 171.25,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 20
+        }
+      ]
+    },
+    "icacls_concurrency8": {
+      "stats": {
+        "total_expected": 20,
+        "complete": 20,
+        "errors": 0,
+        "missing": 0,
+        "min_ms": 56.75,
+        "p50_ms": 112.36,
+        "p95_ms": 140.29,
+        "max_ms": 156.35,
+        "mean_ms": 108.44,
+        "stddev_ms": 23.7
+      },
+      "runs": [
+        {
+          "duration_ms": 101.65,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 1
+        },
+        {
+          "duration_ms": 119.69,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 2
+        },
+        {
+          "duration_ms": 116.06,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 3
+        },
+        {
+          "duration_ms": 105.65,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 4
+        },
+        {
+          "duration_ms": 125.21,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 5
+        },
+        {
+          "duration_ms": 156.35,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 6
+        },
+        {
+          "duration_ms": 113.72,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 7
+        },
+        {
+          "duration_ms": 140.29,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 8
+        },
+        {
+          "duration_ms": 137.12,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 9
+        },
+        {
+          "duration_ms": 92.04,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 10
+        },
+        {
+          "duration_ms": 104.73,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 11
+        },
+        {
+          "duration_ms": 88.26,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 12
+        },
+        {
+          "duration_ms": 78.55,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 13
+        },
+        {
+          "duration_ms": 56.75,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 14
+        },
+        {
+          "duration_ms": 78.31,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 15
+        },
+        {
+          "duration_ms": 79.8,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 16
+        },
+        {
+          "duration_ms": 126.53,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 17
+        },
+        {
+          "duration_ms": 123.01,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 18
+        },
+        {
+          "duration_ms": 112.36,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 19
+        },
+        {
+          "duration_ms": 112.66,
+          "exit_code": 0,
+          "stdout": "C:\\Users\\wkiri\\development\\veyyon-wt\\acl-startup-20261105\\.acl-evidence\\scratch-terminal\\terminal_scratch.json NT AUTHORITY\\SYSTEM:(F)\n                                                                                                               DESKTOP-5SDUT2N\\wkiri:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files",
+          "stderr": "",
+          "error": null,
+          "iteration": 20
+        }
+      ]
+    }
+  }
+}

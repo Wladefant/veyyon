@@ -1,0 +1,7 @@
+AclStartup measured the existing Windows PowerShell ACL verifier on the unedited baseline (`windows-acl.ts` at base `6a99d8be68abd8ff7a95fe07ccd106ef241ae87c`). The report is in `.acl-evidence/results.md` in the measurement worktree.
+
+Observed baseline, N=20 per case: exact verification script sequential p50 3931.19 ms, p95 4676.27 ms; concurrency 8 p50 5853.88 ms, p95 7698.1 ms. Empty PowerShell sequential p50 2506.7 ms; concurrency 8 p50 3374.85 ms. Read-only `icacls` sequential p50 136.89 ms and concurrency 8 p50 112.36 ms. All listed cases completed 20/20 with no errors or missing samples. These are measurements of different command paths, not a direct native-verifier comparison or end-to-end agent-launch result.
+
+The host report recorded 100% CPU and 87.4% RAM at setup. Defender real-time and on-access protection were reported disabled. We therefore do not attribute the observed delay to Defender. The historical 15-second failure was not reproduced during this baseline; current timings do not prove its cause. The native branch comparison remains to be measured using the callable API described in PR #933.
+
+Full details and raw measurements remain in the existing local evidence files; no database/session data was changed.

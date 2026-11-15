@@ -1,0 +1,395 @@
+{
+  "TargetPids": [
+    "18532",
+    "15968",
+    "5052",
+    "24932"
+  ],
+  "Sample1Utc": "2026-11-05T09:02:21.4754309Z",
+  "Sample2Utc": "2026-11-05T09:03:06.8522146Z",
+  "ActualElapsedSeconds": 45.354,
+  "DenominatorCores": 16,
+  "ProcessDeltas": {
+    "5052": {
+      "Pid": 5052,
+      "Name": "veyyon",
+      "Running": true,
+      "Sample1_Utc": "2026-11-05T09:02:21.4754309Z",
+      "Sample2_Utc": "2026-11-05T09:03:06.8522146Z",
+      "ElapsedSeconds": 45.354,
+      "CpuDeltaSeconds": 15.672,
+      "CpuCorePercent": 34.55,
+      "Cpu16CoreNormalizedPercent": 2.16,
+      "Sample1_ThreadCount": 45,
+      "Sample2_ThreadCount": 53,
+      "Sample1_WorkingSetMB": 1681.98,
+      "Sample2_WorkingSetMB": 1692.48
+    },
+    "18532": {
+      "Pid": 18532,
+      "Name": "veyyon",
+      "Running": true,
+      "Sample1_Utc": "2026-11-05T09:02:21.4754309Z",
+      "Sample2_Utc": "2026-11-05T09:03:06.8522146Z",
+      "ElapsedSeconds": 45.354,
+      "CpuDeltaSeconds": 21.641,
+      "CpuCorePercent": 47.72,
+      "Cpu16CoreNormalizedPercent": 2.98,
+      "Sample1_ThreadCount": 57,
+      "Sample2_ThreadCount": 55,
+      "Sample1_WorkingSetMB": 1974.68,
+      "Sample2_WorkingSetMB": 1923.57
+    },
+    "15968": {
+      "Pid": 15968,
+      "Name": "veyyon",
+      "Running": true,
+      "Sample1_Utc": "2026-11-05T09:02:21.4754309Z",
+      "Sample2_Utc": "2026-11-05T09:03:06.8522146Z",
+      "ElapsedSeconds": 45.354,
+      "CpuDeltaSeconds": 49.875,
+      "CpuCorePercent": 109.97,
+      "Cpu16CoreNormalizedPercent": 6.87,
+      "Sample1_ThreadCount": 55,
+      "Sample2_ThreadCount": 55,
+      "Sample1_WorkingSetMB": 3964.75,
+      "Sample2_WorkingSetMB": 3899.88
+    },
+    "24932": {
+      "Pid": 24932,
+      "Name": "veyyon",
+      "Running": true,
+      "Sample1_Utc": "2026-11-05T09:02:21.4754309Z",
+      "Sample2_Utc": "2026-11-05T09:03:06.8522146Z",
+      "ElapsedSeconds": 45.354,
+      "CpuDeltaSeconds": 27.281,
+      "CpuCorePercent": 60.15,
+      "Cpu16CoreNormalizedPercent": 3.76,
+      "Sample1_ThreadCount": 32,
+      "Sample2_ThreadCount": 32,
+      "Sample1_WorkingSetMB": 38.62,
+      "Sample2_WorkingSetMB": 39.46
+    }
+  },
+  "ObservedPsChildrenCount": 53,
+  "ObservedPsChildren": [
+    {
+      "Pid": 50116,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:46"
+    },
+    {
+      "Pid": 29732,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:39"
+    },
+    {
+      "Pid": 47912,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:03"
+    },
+    {
+      "Pid": 7588,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:59"
+    },
+    {
+      "Pid": 22312,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/04/2026 10:40:08"
+    },
+    {
+      "Pid": 30104,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:50"
+    },
+    {
+      "Pid": 38072,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:25"
+    },
+    {
+      "Pid": 14076,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:40"
+    },
+    {
+      "Pid": 34152,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:01"
+    },
+    {
+      "Pid": 45512,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:48"
+    },
+    {
+      "Pid": 54168,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:37"
+    },
+    {
+      "Pid": 35028,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:19"
+    },
+    {
+      "Pid": 29312,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:56"
+    },
+    {
+      "Pid": 9580,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/04/2026 11:18:24"
+    },
+    {
+      "Pid": 57616,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:56"
+    },
+    {
+      "Pid": 3984,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:05"
+    },
+    {
+      "Pid": 10772,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:02"
+    },
+    {
+      "Pid": 66908,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:04"
+    },
+    {
+      "Pid": 33196,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:45"
+    },
+    {
+      "Pid": 59148,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:45"
+    },
+    {
+      "Pid": 23032,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:40"
+    },
+    {
+      "Pid": 61752,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:56"
+    },
+    {
+      "Pid": 40516,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:59"
+    },
+    {
+      "Pid": 56752,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:33"
+    },
+    {
+      "Pid": 53676,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:43"
+    },
+    {
+      "Pid": 64748,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:50"
+    },
+    {
+      "Pid": 64932,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:55"
+    },
+    {
+      "Pid": 40712,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:42"
+    },
+    {
+      "Pid": 34060,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:38"
+    },
+    {
+      "Pid": 15520,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/04/2026 11:18:21"
+    },
+    {
+      "Pid": 45872,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:48"
+    },
+    {
+      "Pid": 51772,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:30"
+    },
+    {
+      "Pid": 43344,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:56"
+    },
+    {
+      "Pid": 11052,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:29"
+    },
+    {
+      "Pid": 59496,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:44"
+    },
+    {
+      "Pid": 64892,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:35"
+    },
+    {
+      "Pid": 55292,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:00"
+    },
+    {
+      "Pid": 27128,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:04"
+    },
+    {
+      "Pid": 67216,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:38"
+    },
+    {
+      "Pid": 41908,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:41"
+    },
+    {
+      "Pid": 39556,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:52"
+    },
+    {
+      "Pid": 31492,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:22"
+    },
+    {
+      "Pid": 44052,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:35"
+    },
+    {
+      "Pid": 33392,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:03:05"
+    },
+    {
+      "Pid": 43416,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:46"
+    },
+    {
+      "Pid": 66148,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:43"
+    },
+    {
+      "Pid": 10428,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:32"
+    },
+    {
+      "Pid": 39920,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:53"
+    },
+    {
+      "Pid": 61924,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:59"
+    },
+    {
+      "Pid": 36884,
+      "ParentPid": 5052,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:52"
+    },
+    {
+      "Pid": 44684,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:48"
+    },
+    {
+      "Pid": 8764,
+      "ParentPid": 18532,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:52"
+    },
+    {
+      "Pid": 67464,
+      "ParentPid": 15968,
+      "Name": "powershell.exe",
+      "CreationDate": "11/05/2026 10:02:57"
+    }
+  ]
+}

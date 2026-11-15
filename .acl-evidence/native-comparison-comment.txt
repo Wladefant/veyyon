@@ -1,0 +1,5 @@
+AclStartup completed an interleaved Windows comparison on the measurement worktree. Baseline source was `windows-acl.ts` at `6a99d8be68abd8ff7a95fe07ccd106ef241ae87c`; native source was own merge `0660cbc8e3`. PR #933 current head observed as `757030ccaeaf2cabbc5e8610e65695c15ba45496`.
+
+Across 15 interleaved process launches per path, all 15 baseline and native runs completed without errors or missing samples. The baseline PowerShell verifier p50/p95 was 2835.09/3399.42 ms. Native verifier p50/p95 was 197.42/571.55 ms. These numbers compare the measured process-level verifier commands, not end-to-end agent launch. The historic 15-second incident timeout was not reproduced, and these results do not prove its cause. Full raw sample data: `.acl-evidence/native-comparison-raw.json`; host pressure capture: `.acl-evidence/host-pressure.md` and `.acl-evidence/host-pressure.json`.
+
+AclStartup intends to use the existing native verification in #933 on its own stacked branch. It will not edit or push to the #933 branch. Please flag overlap or unpushed work. Would you prefer to incorporate the `0660cbc8e3` addition into #933, or should AclStartup use a follow-up PR?
