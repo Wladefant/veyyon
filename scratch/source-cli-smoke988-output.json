@@ -1,0 +1,91 @@
+{
+  "command": [
+    "bun",
+    "packages/coding-agent/src/cli.ts",
+    "--print",
+    "--model",
+    "anthropic/claude-haiku-4-5-20251001",
+    "Run Python eval print(2+2), then bash echo hi, then bash exit 7; state exit code 7. Then search files for package.json, report results, and exit normally."
+  ],
+  "cwd": "C:\\Users\\wkiri\\development\\veyyon-wt\\pr988-sync",
+  "elapsed_seconds": 0.347,
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "error: Bun runtime must be >= 1.4.3 (found v1.4.2). Please upgrade: bun upgrade\n",
+  "new_pids": [
+    {
+      "pid": 5824,
+      "ppid": 15968,
+      "name": "powershell.exe",
+      "cmdline": [
+        "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "\n$ErrorActionPreference = 'Stop'\n$target = [Environment]::GetEnvironmentVariable('VEYYON_OWNER_ONLY_ACL_PATH', 'Process')\nif ([string]::IsNullOrEmpty($target)) { throw 'ACL target is missing' }\n$item = Get-Item -LiteralPath $target -Force -ErrorAction Stop\nif ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'ACL target is a reparse point' }\n\nif ($item.PSProvider.Name -ne 'FileSystem') { throw 'ACL target is not a filesystem path' }\n$identity = [Security.Principal.WindowsIdentity]::GetCurrent().User\n$actual = Get-Acl -LiteralPath $target -ErrorAction Stop\n$owner = $actual.GetOwner([Security.Principal.SecurityIdentifier])\nif (-not $owner.Equals($identity)) { throw 'ACL owner is not the current user' }\nif (-not $actual.AreAccessRulesProtected) { throw 'ACL inheritance is enabled' }\n$rules = @($actual.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))\nif ($rules.Count -ne 2) { throw 'ACL does not contain exactly two access rules' }\n$system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')\n$expectedIdentities = @($identity, $system)\n$expectedInheritance = [Security.AccessControl.InheritanceFlags]::None\nif ($item.PSIsContainer) {\n  $expectedInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit\n}\nforeach ($rule in $rules) {\n  if ($rule.IsInherited) { throw 'ACL contains an inherited access rule' }\n  $principalAllowed = $false\n  foreach ($expectedIdentity in $expectedIdentities) {\n    if ($rule.IdentityReference.Equals($expectedIdentity)) { $principalAllowed = $true }\n  }\n  if (-not $principalAllowed) { throw 'ACL grants another identity access' }\n  if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { throw 'ACL principal rule is not an allow rule' }\n  if ($rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl) { throw 'ACL principal rule is not exactly full control' }\n  if ($rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { throw 'ACL principal rule has unexpected propagation flags' }\n  if ($rule.InheritanceFlags -ne $expectedInheritance) { throw 'ACL principal rule has unexpected inheritance flags' }\n}\nforeach ($expectedIdentity in $expectedIdentities) {\n  $principalRules = @($rules | Where-Object { $_.IdentityReference.Equals($expectedIdentity) })\n  if ($principalRules.Count -ne 1) { throw 'ACL is missing an expected principal rule' }\n}\nif ($item.PSIsContainer) {\n  foreach ($rule in $rules) {\n    if ($rule.InheritanceFlags -ne $expectedInheritance) { throw 'ACL directory principal rule does not protect descendants' }\n  }\n} elseif ($rules | Where-Object { $_.InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None }) {\n  throw 'ACL file principal rule has unexpected inheritance flags'\n}\n\n[Console]::Out.Write('OK')\n"
+      ],
+      "create_time": 1793908315.1656928
+    },
+    {
+      "pid": 56504,
+      "ppid": 18236,
+      "name": "powershell.exe",
+      "cmdline": [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        "Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 18100,19100 } | Select-Object LocalPort,OwningProcess,LocalAddress | ConvertTo-Json -Compress"
+      ],
+      "create_time": 1793908316.2818973
+    },
+    {
+      "pid": 57644,
+      "ppid": 13604,
+      "name": "comet.exe",
+      "cmdline": [
+        "C:\\Users\\wkiri\\AppData\\Local\\Perplexity\\Comet\\Application\\comet.exe",
+        "--type=renderer",
+        "--extension-process",
+        "--perplexity-backend-url=https://www.perplexity.ai/",
+        "--perplexity-comet-plus-partners=washingtonpost.com,.washingtonpost.com",
+        "--origin-trial-disabled-features=CanvasTextNg|WebAssemblyCustomDescriptors",
+        "--no-pre-read-main-dll",
+        "--video-capture-use-gpu-memory-buffer",
+        "--lang=en-US",
+        "--device-scale-factor=1",
+        "--num-raster-threads=4",
+        "--enable-main-frame-before-activation",
+        "--renderer-client-id=793",
+        "--launch-time-ticks=124020152020",
+        "--metrics-shmem-handle=8408,i,5201616603992166409,1137011621087123292,1572864",
+        "--field-trial-handle=2064,i,5560917598585484076,17518140888075597840,262144",
+        "--disable-features=Allow-external-extensions-scripting-on-NTP",
+        "--variations-seed-version",
+        "--pseudonymization-salt-handle=2076,i,382273212790330833,5998184350340736232,4",
+        "--trace-process-track-uuid=3190709729386057751",
+        "--mojo-platform-channel-handle=9652",
+        "/prefetch:9"
+      ],
+      "create_time": 1793908306.2143476
+    },
+    {
+      "pid": 17720,
+      "ppid": 56504,
+      "name": "conhost.exe",
+      "cmdline": [
+        "\\??\\C:\\WINDOWS\\system32\\conhost.exe",
+        "0x4"
+      ],
+      "create_time": 1793908316.2858624
+    }
+  ],
+  "missing_pids": [],
+  "before_count": 481,
+  "after_count": 485
+}
