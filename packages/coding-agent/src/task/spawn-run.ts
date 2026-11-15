@@ -717,7 +717,7 @@ async function runPreparedSpawn(
 		typeof params.ledgerPath === "string" &&
 		typeof params.ticketId === "string"
 	) {
-		await recordNativeDispatch(params.runId, agentId, params.ledgerPath, params.ticketId);
+		await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
 	}
 	const lifecycle = {
 		agentId,
@@ -725,9 +725,9 @@ async function runPreparedSpawn(
 		ticketId: typeof params.ticketId === "string" ? params.ticketId : undefined,
 		runId: typeof params.runId === "string" ? params.runId : undefined,
 	};
-	let result: SingleResult;
+	let result: SingleResult | undefined;
 	let mergeSummary = "";
-	let completionEmitted = false;
+	let completionStarted = false;
 	try {
 		session.onSubagentStart?.(lifecycle);
 		if (isolation) {
@@ -758,11 +758,27 @@ async function runPreparedSpawn(
 			}
 		}
 		const record = recordSpawn(session, result, spawn.artifacts.dir, isolation, params);
+		completionStarted = true;
 		await session.onSubagentComplete?.(record);
-		completionEmitted = true;
 	} catch (error) {
-		if (!completionEmitted) session.onSubagentStartFailed?.(lifecycle);
-		throw error;
+		if (!completionStarted || !result) {
+			session.onSubagentStartFailed?.(lifecycle);
+			throw error;
+		}
+		const completionError = `Completion persistence failed: ${errorMessage(error)}`;
+		const failedResult: SingleResult = {
+			...result,
+			exitCode: result.exitCode !== 0 ? result.exitCode : 1,
+			error: result.error ? `${result.error}; ${completionError}` : completionError,
+			stderr: result.stderr ? `${result.stderr}\n${completionError}` : completionError,
+		};
+		const payload = buildResultPayload(failedResult, projectAgentsDir, Date.now() - startTime, mergeSummary);
+		const summary = payload.content.find(part => part.type === "text")?.text ?? "";
+		return {
+			...payload,
+			isError: true,
+			content: [{ type: "text", text: summary ? `${completionError}\n\n${summary}` : completionError }],
+		};
 	}
 	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 }

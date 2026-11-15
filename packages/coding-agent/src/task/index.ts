@@ -189,6 +189,15 @@ function validateBatchParams(params: TaskParams, hasTask: boolean): string | und
 	if (hasTask) {
 		return "Top-level `task` is not part of the batch shape. Put the work in `tasks[]` items.";
 	}
+	if (
+		tasks.length > 1 &&
+		(params.ticketId !== undefined ||
+			params.runId !== undefined ||
+			params.ledgerPath !== undefined ||
+			params.nativeDispatchBound !== undefined)
+	) {
+		return "Multi-item `tasks` batches cannot share a single native dispatch identity (`ticketId`, `runId`, `ledgerPath`, or `nativeDispatchBound`). Spawn one task per native claim.";
+	}
 	const itemProblem = batchItemProblem(tasks);
 	if (itemProblem !== undefined) return itemProblem;
 	if (typeof params.context !== "string" || params.context.trim() === "") {

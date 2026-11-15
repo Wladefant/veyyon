@@ -103,6 +103,18 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.successorOf !== undefined) spawn.successorOf = item.successorOf;
 	if (item.priority !== undefined) spawn.priority = item.priority;
 	if (item.ownershipLease !== undefined) spawn.ownershipLease = item.ownershipLease;
+	if (
+		Array.isArray(params.tasks) &&
+		params.tasks.length > 1 &&
+		(params.ticketId !== undefined ||
+			params.runId !== undefined ||
+			params.ledgerPath !== undefined ||
+			params.nativeDispatchBound !== undefined)
+	) {
+		throw new Error(
+			"Multi-item task batches cannot share a single native dispatch identity (ticketId, runId, ledgerPath, nativeDispatchBound).",
+		);
+	}
 	if (params.ticketId !== undefined) spawn.ticketId = params.ticketId;
 	if (params.runId !== undefined) spawn.runId = params.runId;
 	if (params.ledgerPath !== undefined) spawn.ledgerPath = params.ledgerPath;
@@ -654,8 +666,11 @@ export class SpawnScheduler {
 						failed ? `Background task ${agentId} failed.` : `Background task ${agentId} complete.`,
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
+					const hint = single
+						? followUpHint(agentId, single.aborted === true, options.ircEnabled, isolatedHint)
+						: "";
 					delivery = {
-						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled, isolatedHint)}`,
+						text: `${finalText}${hint}`,
 						failed,
 					};
 				} catch (error) {

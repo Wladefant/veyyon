@@ -11,6 +11,9 @@
  * Param validation (missing agent / missing task) is covered by
  * test/task/task-schema.test.ts.
  */
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import { type AsyncJob, AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
@@ -287,13 +290,118 @@ describe("task spawn routing", () => {
 			await entered.promise;
 			expect(events).toEqual(["bind"]);
 			expect(run).not.toHaveBeenCalled();
-			expect(binding).toHaveBeenCalledWith("run-bound", "BoundWorker", "/tmp/claimed-ledger.json", "ticket-bound");
+			expect(binding).toHaveBeenCalledWith("run-bound", "agent://BoundWorker", "/tmp/claimed-ledger.json", "ticket-bound");
 			gate.resolve();
 			const result = await pending;
 			expect(events).toEqual(bindingFails ? ["bind"] : ["bind", "start", "execute", "complete"]);
 			if (bindingFails) expect(firstToolResultText(result)).toContain("binding refused");
 		});
 	}
+
+	it("binds an unbound native ledger claim with agent:// and completes it through the Python bridge", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-task-bridge-"));
+		try {
+			const ledgerPath = path.join(tempDir, "ledger.json");
+			await fs.writeFile(
+				ledgerPath,
+				JSON.stringify({
+					version: 2,
+					requests: {
+						"ticket-bridge": {
+							prompt: "Implement bridge binding",
+							state: "pending",
+							head: "0".repeat(40),
+							repo_root: process.cwd(),
+							authorization: {
+								status: "authorized",
+								timestamp: "2026-11-15T00:00:00Z",
+								scope: "staging",
+								authorized_by: "operator",
+							},
+						},
+					},
+				}),
+				"utf8",
+			);
+			const claim = await replenishmentModule.claimNextAuthorizedTicket(ledgerPath, { workerId: "replenisher" });
+			expect(claim.claimed).toBe(true);
+			const claimedTicket = claim.ticket!;
+			expect(claimedTicket.runId).toBeTruthy();
+
+			const engine = new replenishmentModule.TopicReplenishmentEngine({
+				ledgerPath,
+				minFloor: 0,
+				targetCount: 0,
+				maxCeiling: 0,
+				maxRamPct: 100,
+				executor: async () => undefined,
+			});
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
+				makeResult(options.id, {
+					output: JSON.stringify({
+						stage: "build",
+						verdict: "pass",
+						checks: [
+							{
+								name: "verify",
+								command: ["git", "status"],
+								exit_code: 0,
+								observed: "clean",
+								purpose: "verification",
+							},
+						],
+					}),
+				}),
+			);
+			const tool = await TaskTool.create(
+				makeToolSession({
+					cwd: process.cwd(),
+					settings: Settings.isolated({ "async.enabled": false }),
+					onSubagentStart: record => engine.onWorkerStart(record),
+					onSubagentComplete: async record => {
+						await engine.onWorkerComplete(
+							{
+								agentId: record.agentId,
+								agentName: record.agentName,
+								task: record.task,
+								status: record.status,
+								exitCode: record.exitCode,
+								durationMs: record.durationMs,
+								error: record.error,
+								ticketId: record.ticketId,
+								runId: record.runId,
+								structuredResult: record.structuredResult,
+							},
+							[],
+						);
+					},
+				}),
+			);
+
+			const result = await tool.execute("tc-bridge-real", {
+				agent: "task",
+				name: "BridgeWorker",
+				task: "Work on the claimed ticket.",
+				ticketId: claimedTicket.id,
+				runId: claimedTicket.runId,
+				ledgerPath,
+			} as TaskParams);
+
+			expect(result.isError).toBeFalsy();
+			expect(result.details?.results[0]?.exitCode).toBe(0);
+			const updatedLedger = JSON.parse(await fs.readFile(ledgerPath, "utf8")) as {
+				requests: Record<string, { state: string; history?: Array<{ to_state?: string }> }>;
+			};
+			expect(updatedLedger.requests["ticket-bridge"]?.state).toBe("QA");
+			expect(updatedLedger.requests["ticket-bridge"]?.history?.at(-1)?.to_state).toBe("QA");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 
 	it("awaits completion, populates AgentSpawnRecord metadata, and emits start-failed only after start", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
@@ -423,7 +531,7 @@ describe("task spawn routing", () => {
 			},
 		]);
 
-		// 4. Rejecting onSubagentComplete still invokes onSubagentStartFailed cleanup.
+		// 4. Rejecting onSubagentComplete does NOT invoke onSubagentStartFailed cleanup.
 		const completeFailEvents: string[] = [];
 		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(
 			makeResult("CompleteFail", { agent: "reviewer" }),
@@ -451,7 +559,131 @@ describe("task spawn routing", () => {
 			runId: "run-complete-fail",
 		} as TaskParams);
 		expect(completeFailResult.isError).toBe(true);
-		expect(completeFailEvents).toEqual(["start", "complete-throw", "start-failed"]);
+		expect(firstToolResultText(completeFailResult)).toContain("complete hook failed");
+		expect(completeFailResult.details?.results[0]?.id).toBe("CompleteFail");
+		expect(completeFailEvents).toEqual(["start", "complete-throw"]);
+	});
+
+	it("retains the verifier gate and skips replenishment when completion persistence rejects", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent, reviewerAgent],
+			projectAgentsDir: null,
+		});
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-verifier-gate-"));
+		try {
+			const ledgerPath = path.join(tempDir, "ledger.json");
+			await fs.writeFile(
+				ledgerPath,
+				JSON.stringify({
+					version: 2,
+					requests: {
+						"verifier-ticket": {
+							prompt: "Verify claimed work",
+							state: "pending",
+							head: "0".repeat(40),
+							repo_root: process.cwd(),
+							authorization: {
+								status: "authorized",
+								timestamp: "2026-11-15T00:00:00Z",
+								scope: "staging",
+								authorized_by: "operator",
+							},
+						},
+						"producer-ticket": {
+							prompt: "Replacement producer work",
+							state: "pending",
+							head: "0".repeat(40),
+							repo_root: process.cwd(),
+							authorization: {
+								status: "authorized",
+								timestamp: "2026-11-15T00:00:00Z",
+								scope: "staging",
+								authorized_by: "operator",
+							},
+						},
+					},
+				}),
+				"utf8",
+			);
+			const claim = await replenishmentModule.claimNextAuthorizedTicket(ledgerPath, { workerId: "replenisher" });
+			expect(claim.claimed).toBe(true);
+			const claimedTicket = claim.ticket!;
+
+			let dispatched = 0;
+			let startFailedCalls = 0;
+			const engine = new replenishmentModule.TopicReplenishmentEngine({
+				ledgerPath,
+				targetCount: 1,
+				maxCeiling: 1,
+				maxRamPct: 100,
+				executor: async () => {
+					dispatched++;
+				},
+			});
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+				const raw = JSON.parse(await fs.readFile(ledgerPath, "utf8")) as {
+					requests: Record<string, { native_claim?: { run_id?: string } }>;
+				};
+				raw.requests[claimedTicket.id]!.native_claim!.run_id = "stale-run-id";
+				await fs.writeFile(ledgerPath, JSON.stringify(raw), "utf8");
+				return makeResult(options.id, { agent: "reviewer" });
+			});
+			const tool = await TaskTool.create(
+				makeToolSession({
+					cwd: process.cwd(),
+					settings: Settings.isolated({
+						"async.enabled": false,
+						"agent.agents": { reviewer: { enabled: true } },
+					}),
+					onSubagentStart: record => engine.onWorkerStart(record),
+					onSubagentStartFailed: record => {
+						startFailedCalls++;
+						engine.onWorkerStartFailed(record);
+						void engine.replenish([]);
+					},
+					onSubagentComplete: async record => {
+						await engine.onWorkerComplete(
+							{
+								agentId: record.agentId,
+								agentName: record.agentName,
+								task: record.task,
+								status: record.status,
+								exitCode: record.exitCode,
+								durationMs: record.durationMs,
+								error: record.error,
+								ticketId: record.ticketId,
+								runId: record.runId,
+								structuredResult: record.structuredResult,
+							},
+							[],
+						);
+					},
+				}),
+			);
+
+			const result = await tool.execute("tc-verifier-persist-fail", {
+				agent: "reviewer",
+				name: "VerifierGate",
+				task: "Verify the fix.",
+				ticketId: claimedTicket.id,
+				runId: claimedTicket.runId,
+				ledgerPath,
+			} as TaskParams);
+
+			expect(result.isError).toBe(true);
+			expect(firstToolResultText(result)).toContain("Completion persistence failed");
+			expect(startFailedCalls).toBe(0);
+			expect(dispatched).toBe(0);
+			const outcome = await engine.replenish([]);
+			expect(outcome.status).toBe("verification_blocked");
+			expect(outcome.dispatchedCount).toBe(0);
+			const ledgerAfter = JSON.parse(await fs.readFile(ledgerPath, "utf8")) as {
+				requests: Record<string, { state: string }>;
+			};
+			expect(ledgerAfter.requests["producer-ticket"]?.state).toBe("pending");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	/**
@@ -619,6 +851,108 @@ describe("task spawn routing", () => {
 		const delivered = `${job!.resultText ?? ""}${job!.errorText ?? ""}`;
 		expect(delivered).toContain("Task isolation is disabled");
 		expect(delivered).not.toContain("ran isolated");
+		expect(delivered).not.toContain("is now idle");
+		expect(delivered).not.toContain("message it via");
+	});
+
+	it("preserves isolated identity and suppresses idle/irc hints when an isolated background completion hook rejects", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockResolvedValue({
+			repoRoot: "/repo",
+			baseline: {} as never,
+		});
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockResolvedValue({
+			...makeResult("IsoCompleteFail"),
+			isolated: true,
+		});
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "",
+			changesApplied: true,
+			hadAnyChanges: false,
+			mergedBranchForNestedPatches: false,
+		});
+		let startFailedCalls = 0;
+		const manager = createManager();
+		const tool = await TaskTool.create(
+			makeToolSession({
+				cwd: "/tmp",
+				settings: Settings.isolated({ "async.enabled": true, "agent.isolation.mode": "auto" }),
+				asyncJobManager: manager,
+				onSubagentStartFailed: () => {
+					startFailedCalls++;
+				},
+				onSubagentComplete: async () => {
+					throw new Error("ledger write failed");
+				},
+			}),
+		);
+		const res = await tool.execute("tc-iso-complete-fail", {
+			agent: "task",
+			name: "IsoCompleteFail",
+			task: "x",
+			isolated: true,
+		} as TaskParams);
+		const job = manager.getJob(res.details?.async?.jobId ?? "")!;
+		await job.promise.catch(() => undefined);
+		expect(job.status).toBe("failed");
+		expect(startFailedCalls).toBe(0);
+		const delivered = `${job.resultText ?? ""}${job.errorText ?? ""}`;
+		expect(delivered).toContain("Completion persistence failed: ledger write failed");
+		expect(delivered).toContain("IsoCompleteFail ran isolated and cannot be resumed or messaged");
+		expect(delivered).toContain("history://IsoCompleteFail");
+		expect(delivered).not.toContain("is now idle");
+		expect(delivered).not.toContain("message it via");
+	});
+
+	it("rejects multi-item batch calls sharing a single native dispatch identity while allowing normal and single-item batches", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const bindingSpy = vi.spyOn(replenishmentModule, "recordNativeDispatch");
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => makeResult(options.id));
+		const tool = await TaskTool.create(
+			createSession({
+				settings: { "async.enabled": false, "agent.batch": true },
+			}),
+		);
+
+		const rejected = await tool.execute("tc-batch-shared-ticket", {
+			context: "Shared context.",
+			tasks: [
+				{ agent: "task", name: "BatchA", task: "Task A." },
+				{ agent: "task", name: "BatchB", task: "Task B." },
+			],
+			ticketId: "ticket-shared",
+			runId: "run-shared",
+			ledgerPath: "/tmp/ledger.json",
+		} as TaskParams);
+		expect(rejected.isError).toBe(true);
+		expect(firstToolResultText(rejected)).toContain("Multi-item");
+		expect(runSpy).not.toHaveBeenCalled();
+		expect(bindingSpy).not.toHaveBeenCalled();
+
+		const singleBatch = await tool.execute("tc-batch-single-ticket", {
+			context: "Shared context.",
+			tasks: [{ agent: "task", name: "BatchOnly", task: "Task Only." }],
+			ticketId: "ticket-single",
+			runId: "run-single",
+			nativeDispatchBound: true,
+		} as TaskParams);
+		expect(singleBatch.isError).toBeFalsy();
+		expect(runSpy).toHaveBeenCalledTimes(1);
+
+		const normalBatch = await tool.execute("tc-batch-normal", {
+			context: "Shared context.",
+			tasks: [
+				{ agent: "task", name: "BatchNormA", task: "Task A." },
+				{ agent: "task", name: "BatchNormB", task: "Task B." },
+			],
+		} as TaskParams);
+		expect(normalBatch.isError).toBeFalsy();
+		expect(runSpy).toHaveBeenCalledTimes(3);
 	});
 
 	it("propagates internal dispatch params in background mode and gates catch-path isolated hint on registration", async () => {
