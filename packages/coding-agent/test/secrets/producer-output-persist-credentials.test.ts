@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
-import { ProducerOutputGuard } from "../../src/secrets/producer-output";
+import { SecretObfuscator } from "../../src/secrets/obfuscator";
+import { OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
+import { runWithProducerSecretOwner } from "../../src/secrets/producer-owner";
 
 const guard = new ProducerOutputGuard();
 const sentinel = "Error: checkout failed\n";
@@ -207,4 +209,54 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 			expect(output).toContain(sentinel);
 		}
 	});
+
+	it("does not trap quoted multi-record logs over 16 Mi chars in scalar mode", () => {
+		const progressLine = `ok progress line ${"x".repeat(40_000)}\n`;
+		const progressBody = progressLine.repeat(430);
+		const tail = "Error: later failure\n";
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: "synthetic-first-line\nsynthetic-second-line", name: "CANARY" },
+		]);
+		const owner = {
+			redact: (text: string) => obfuscator.obfuscate(text),
+			pendingPrefixLength: (text: string) => obfuscator.pendingRedactionPrefixLength(text),
+		};
+		for (const opener of ['"started"\n', '  "started"\n', '"unclosed quote\n']) {
+			const input = `${opener}${progressBody}${tail}`;
+			expect(input.length).toBeGreaterThan(16 * 1024 * 1024);
+			const direct = runWithProducerSecretOwner(owner, () => new ProducerOutputGuard().sanitize(input));
+			expect(direct.endsWith(tail)).toBe(true);
+			expect(direct).not.toBe(OVERSIZED_OUTPUT_RECORD);
+
+			const streamGuard = runWithProducerSecretOwner(owner, () => new ProducerOutputGuard());
+			const streamed = streamGuard.push(input) + streamGuard.finish();
+			expect(streamed).toBe(direct);
+		}
+
+		const splitInput = `"started"\n${progressBody}${tail}`;
+		for (const split of [8, 9, 10, splitInput.length - tail.length]) {
+			const splitGuard = new ProducerOutputGuard();
+			const streamed = splitGuard.push(splitInput.slice(0, split)) + splitGuard.push(splitInput.slice(split)) + splitGuard.finish();
+			expect(streamed.endsWith(tail)).toBe(true);
+			expect(streamed.startsWith('"started"\n')).toBe(true);
+		}
+
+		const oversizedQuotedLine = `"${"x".repeat(70_000)}"\n${tail}`;
+		expect(new ProducerOutputGuard().sanitize(oversizedQuotedLine)).toBe(`${OVERSIZED_OUTPUT_RECORD}\n${tail}`);
+		const oversizedLineGuard = new ProducerOutputGuard();
+		expect(oversizedLineGuard.push(oversizedQuotedLine) + oversizedLineGuard.finish()).toBe(
+			`${OVERSIZED_OUTPUT_RECORD}\n${tail}`,
+		);
+
+		const longTrailingWhitespace = `"started"\n${" ".repeat(70_000)}\n${tail}`;
+		const wsGuard = new ProducerOutputGuard();
+		expect(wsGuard.push(longTrailingWhitespace) + wsGuard.finish()).toBe(
+			`"started"\n${OVERSIZED_OUTPUT_RECORD}\n${tail}`,
+		);
+
+		const realOversizedScalar = JSON.stringify("x".repeat(16 * 1024 * 1024 + 100));
+		expect(new ProducerOutputGuard().sanitize(realOversizedScalar)).toBe(OVERSIZED_OUTPUT_RECORD);
+		const realOversizedGuard = new ProducerOutputGuard();
+		expect(realOversizedGuard.push(realOversizedScalar) + realOversizedGuard.finish()).toBe(OVERSIZED_OUTPUT_RECORD);
+	}, 25_000);
 });

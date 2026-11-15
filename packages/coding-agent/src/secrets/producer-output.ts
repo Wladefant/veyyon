@@ -8,6 +8,9 @@ import { currentProducerSecretOwner } from "./producer-owner";
 // This is accidental-disclosure protection, not a sandbox against encoded or arbitrary exfiltration.
 const MAX_RECORD_CHARS = 64 * 1024;
 const MAX_SCALAR_CHARS = 16 * 1024 * 1024;
+const MAX_PENDING_LOOKBEHIND_CHARS = 1024 * 1024;
+const MAX_DIRECT_SANITIZE_CHARS = 4 * 1024 * 1024;
+const MAX_DROPPING_PREFIX_CHARS = 256;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
@@ -56,7 +59,7 @@ function pickSentinel(text: string): string | null {
 function wrapRedact(redact: (text: string) => string): (text: string) => string {
 	return (text: string): string => {
 		const direct = redact(text);
-		if (direct === redactProviderSecrets(text) && text.split("\n").some(isAuthorizationHeading)) {
+		if (/authori[sz]ation/i.test(text) && text.split("\n").some(isAuthorizationHeading) && direct === redactProviderSecrets(text)) {
 			const sentinel = pickSentinel(text);
 			if (!sentinel) return BLOCKED_OUTPUT_RECORD;
 			// Provider header patterns cross newlines. The continuation classifier,
@@ -392,6 +395,64 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 	return match[0].length - 1;
 }
 
+
+function classifyJsonStringScalar(text: string, first: number): "scalar" | "oversized" | "not-scalar" {
+	const limit = Math.min(text.length, first + MAX_SCALAR_CHARS);
+	let inString = true;
+	let escaped = false;
+	let trailingWhitespace = 0;
+	let index = first + 1;
+	for (; index < limit; index++) {
+		const code = text.charCodeAt(index);
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (code === 0x5c) {
+				escaped = true;
+			} else if (code === 0x22) {
+				inString = false;
+			} else if (code < 0x20) {
+				return "not-scalar";
+			}
+		} else if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+			trailingWhitespace++;
+			if (trailingWhitespace > MAX_RECORD_CHARS) return "not-scalar";
+		} else {
+			return "not-scalar";
+		}
+	}
+	if (inString) return text.length > MAX_SCALAR_CHARS ? "oversized" : "not-scalar";
+	for (; index < text.length; index++) {
+		const code = text.charCodeAt(index);
+		if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+			trailingWhitespace++;
+			if (trailingWhitespace > MAX_RECORD_CHARS) return "not-scalar";
+		} else {
+			return "not-scalar";
+		}
+	}
+	return text.length > MAX_SCALAR_CHARS ? "oversized" : "scalar";
+}
+
+function hasOversizedLine(text: string): boolean {
+	let lineStart = 0;
+	while (lineStart <= text.length) {
+		const newline = text.indexOf("\n", lineStart);
+		const end = newline < 0 ? text.length : newline;
+		if (end - lineStart > MAX_RECORD_CHARS) return true;
+		if (newline < 0) break;
+		lineStart = newline + 1;
+	}
+	return false;
+}
+
+function appendLinePrefix(prefix: string, segment: string): string {
+	if (prefix.length >= MAX_DROPPING_PREFIX_CHARS) return prefix;
+	const sanitized = sanitizeText(segment);
+	const body = prefix.length === 0 ? sanitized.trimStart() : sanitized;
+	if (!body) return prefix;
+	return prefix + body.slice(0, MAX_DROPPING_PREFIX_CHARS - prefix.length);
+}
 /** Keep JSON structure and primitive metadata out of the text-record grammar. */
 export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
 	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
@@ -425,7 +486,9 @@ export class ProducerOutputGuard {
 	#recordLength = 0;
 	#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 	#dropping = false;
+	#droppingPrefix = "";
 	#oversizedPending = false;
+	#oversizedPendingPrefix = "";
 	#withholding = false;
 	#candidate = "";
 	#assignments = 0;
@@ -439,7 +502,9 @@ export class ProducerOutputGuard {
 	#scalarProbe = "";
 	#scalarParts: string[] | null = null;
 	#scalarLength = 0;
-	#scalarModeDecided = false;
+	#scalarState: "undecided" | "in_string" | "after_string" | "records" = "undecided";
+	#scalarEscaped = false;
+	#scalarTrailingWhitespace = 0;
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
@@ -453,20 +518,23 @@ export class ProducerOutputGuard {
 		try {
 			const first = text.search(/\S/);
 			if (first >= 0 && text[first] === '"') {
-				if (text.length > MAX_SCALAR_CHARS) return OVERSIZED_OUTPUT_RECORD;
-				try {
-					const value: unknown = JSON.parse(text);
-					if (typeof value === "string") {
-						const safe = this.sanitize(value);
-						return safe === value ? text : text.slice(0, first) + JSON.stringify(safe);
+				const scalarKind = classifyJsonStringScalar(text, first);
+				if (scalarKind === "oversized") return OVERSIZED_OUTPUT_RECORD;
+				if (scalarKind === "scalar") {
+					try {
+						const value: unknown = JSON.parse(text);
+						if (typeof value === "string") {
+							const safe = this.sanitize(value);
+							return safe === value ? text : text.slice(0, first) + JSON.stringify(safe);
+						}
+					} catch {
+						// A non-JSON quoted log remains ordinary producer text.
 					}
-				} catch {
-					// A non-JSON quoted log remains ordinary producer text.
 				}
 			}
 			const original = sanitizeText(text);
 			if (isInventory(original)) return BLOCKED_OUTPUT_RECORD;
-			if (original.split("\n").some(line => line.length > MAX_RECORD_CHARS)) return this.#sanitizeOversizedRecords(text);
+			if (hasOversizedLine(original)) return this.#sanitizeOversizedRecords(text);
 			if (/^\s*[{[]/.test(text)) {
 				try {
 					const value = JSON.parse(text);
@@ -476,6 +544,7 @@ export class ProducerOutputGuard {
 					// util.inspect records are not JSON; the bounded record guard owns them.
 				}
 			}
+			if (text.length > MAX_DIRECT_SANITIZE_CHARS) return this.#sanitizeOversizedRecords(text);
 			// Classify labels before an owner can rename them. Normalization must not
 			// reveal a label that was missed while retaining raw literal secret bytes.
 			const classified = classifyCredentialText(text);
@@ -522,14 +591,66 @@ export class ProducerOutputGuard {
 		this.#scalarLength = 0;
 		this.#scalarProbe = "";
 		this.#recordLength = 0;
+		this.#scalarState = "records";
+		this.#scalarEscaped = false;
+		this.#scalarTrailingWhitespace = 0;
 		this.#candidate = "";
 		this.#candidateOversized = false;
 		this.#candidateEndsWithNewline = false;
 		this.#dropping = false;
 		this.#oversizedPending = false;
+		this.#droppingPrefix = "";
+		this.#oversizedPendingPrefix = "";
 		return label;
 	}
 
+
+	#holdOversizedCandidateLine(newline: string): void {
+		const entry = `${OVERSIZED_OUTPUT_RECORD}${newline}`;
+		if (!this.#candidateOversized && this.#candidate.length + entry.length > MAX_RECORD_CHARS) {
+			this.#candidate = "";
+			this.#candidateOversized = true;
+		}
+		if (!this.#candidateOversized) this.#candidate += entry;
+		this.#candidateEndsWithNewline = newline.length > 0;
+	}
+
+	#consumeCompletedOversizedLine(line: string, newline: string, output: string[]): boolean {
+		if (!line.trim()) {
+			if (this.#assignments > 0 && !this.#structured) this.#holdOversizedCandidateLine(newline);
+			return false;
+		}
+		if (ENV_ASSIGNMENT.test(line)) {
+			this.#assignments++;
+			if (this.#assignments >= 3) {
+				output.push(this.#block(BLOCKED_OUTPUT_RECORD) + newline);
+				return true;
+			}
+			if (!this.#structured) this.#holdOversizedCandidateLine(newline);
+			return false;
+		}
+		this.#assignments = 0;
+		if (!this.#structured && (this.#candidate || this.#candidateOversized)) {
+			const flushed = this.#flushCandidate();
+			if (flushed) output.push(flushed);
+		}
+		return false;
+	}
+
+	#consumeBufferedOversizedPrefix(
+		buffered: string,
+		output: string[],
+	): { blocked: boolean; currentLine: string } {
+		const sanitized = sanitizeText(buffered);
+		const lastBreak = sanitized.lastIndexOf("\n");
+		if (lastBreak < 0) return { blocked: false, currentLine: sanitized };
+		for (const line of sanitized.slice(0, lastBreak).split("\n")) {
+			if (this.#consumeCompletedOversizedLine(line, "\n", output)) {
+				return { blocked: true, currentLine: "" };
+			}
+		}
+		return { blocked: false, currentLine: sanitized.slice(lastBreak + 1) };
+	}
 	#flushCandidate(): string {
 		const candidate = this.#candidate;
 		const oversized = this.#candidateOversized;
@@ -585,7 +706,13 @@ export class ProducerOutputGuard {
 
 	#record(record: string, newline: string): string {
 		if (this.#candidateOversized && this.#structured) {
-			for (const line of sanitizeText(record).split("\n")) this.#scanStructuredLine(line);
+			for (const line of sanitizeText(record).split("\n")) {
+				if (line.trim()) {
+					this.#assignments = ENV_ASSIGNMENT.test(line) ? this.#assignments + 1 : 0;
+					if (this.#assignments >= 3) return this.#block() + newline;
+				}
+				this.#scanStructuredLine(line);
+			}
 			this.#candidateEndsWithNewline = newline.length > 0;
 			return this.#structured ? "" : this.#flushCandidate();
 		}
@@ -634,31 +761,83 @@ export class ProducerOutputGuard {
 
 	push(chunk: string): string {
 		if (this.#withholding) return "";
-		if (this.#scalarParts) {
-			if (chunk.length > MAX_SCALAR_CHARS - this.#scalarLength) return this.#block(OVERSIZED_OUTPUT_RECORD);
-			this.#scalarLength += chunk.length;
-			if (chunk) this.#scalarParts.push(chunk);
+		if (this.#scalarState === "records") return this.#pushRecords(chunk);
+		if (this.#scalarState === "in_string" || this.#scalarState === "after_string") {
+			return this.#advanceScalarProbe(chunk, 0);
+		}
+		const probe = this.#scalarProbe + chunk;
+		const first = probe.search(/\S/);
+		if (first < 0) {
+			if (probe.length > MAX_RECORD_CHARS) {
+				this.#scalarProbe = "";
+				this.#scalarState = "records";
+				return this.#pushRecords(probe);
+			}
+			this.#scalarProbe = probe;
 			return "";
 		}
-		if (!this.#scalarModeDecided) {
-			const probe = this.#scalarProbe + chunk;
-			const first = probe.search(/\S/);
-			if (first < 0) {
-				if (probe.length > MAX_SCALAR_CHARS) return this.#block(OVERSIZED_OUTPUT_RECORD);
-				this.#scalarProbe = probe;
-				return "";
-			}
-			this.#scalarModeDecided = true;
-			this.#scalarProbe = "";
-			if (probe[first] === '"') {
-				if (probe.length > MAX_SCALAR_CHARS) return this.#block(OVERSIZED_OUTPUT_RECORD);
-				this.#scalarParts = [probe];
-				this.#scalarLength = probe.length;
-				return "";
-			}
+		this.#scalarProbe = "";
+		if (probe[first] !== '"') {
+			this.#scalarState = "records";
 			return this.#pushRecords(probe);
 		}
-		return this.#pushRecords(chunk);
+		this.#scalarState = "in_string";
+		this.#scalarEscaped = false;
+		this.#scalarTrailingWhitespace = 0;
+		this.#scalarParts = [];
+		this.#scalarLength = 0;
+		return this.#advanceScalarProbe(probe, first + 1);
+	}
+
+	#advanceScalarProbe(segment: string, scanStart: number): string {
+		for (let index = scanStart; index < segment.length; index++) {
+			const code = segment.charCodeAt(index);
+			if (this.#scalarState === "in_string") {
+				if (this.#scalarEscaped) {
+					this.#scalarEscaped = false;
+				} else if (code === 0x5c) {
+					this.#scalarEscaped = true;
+				} else if (code === 0x22) {
+					this.#scalarState = "after_string";
+				} else if (code < 0x20) {
+					return this.#abandonScalarToRecords(segment);
+				}
+			} else if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+				this.#scalarTrailingWhitespace++;
+				if (this.#scalarTrailingWhitespace > MAX_RECORD_CHARS) {
+					return this.#abandonScalarToRecords(segment);
+				}
+			} else {
+				return this.#abandonScalarToRecords(segment);
+			}
+			if (this.#scalarLength + index + 1 > MAX_SCALAR_CHARS) {
+				return this.#block(OVERSIZED_OUTPUT_RECORD);
+			}
+		}
+		if (segment.length > MAX_SCALAR_CHARS - this.#scalarLength) {
+			return this.#block(OVERSIZED_OUTPUT_RECORD);
+		}
+		this.#scalarLength += segment.length;
+		if (segment) this.#scalarParts!.push(segment);
+		return "";
+	}
+
+	#abandonScalarToRecords(segment: string): string {
+		const parts = this.#scalarParts ?? [];
+		this.#scalarParts = null;
+		this.#scalarLength = 0;
+		this.#scalarTrailingWhitespace = 0;
+		this.#scalarEscaped = false;
+		this.#scalarState = "records";
+		const output: string[] = [];
+		for (const part of parts) {
+			const flushed = this.#pushRecords(part);
+			if (flushed) output.push(flushed);
+			if (this.#withholding) return output.join("");
+		}
+		const tail = this.#pushRecords(segment);
+		if (tail) output.push(tail);
+		return output.join("");
 	}
 
 	#pushRecords(chunk: string): string {
@@ -671,11 +850,42 @@ export class ProducerOutputGuard {
 			const separator = newline < 0 ? "" : "\n";
 			const segment = chunk.slice(offset, end);
 			let scannedDroppedSegment = false;
-			if (!this.#dropping) {
+			if (this.#dropping) {
+				this.#droppingPrefix = appendLinePrefix(this.#droppingPrefix, segment);
+			} else {
 				const segmentLength = end - offset;
 				if (this.#oversizedPending) {
-					this.#pending += segment + separator;
-					this.#recordLength += segmentLength;
+					this.#oversizedPendingPrefix = appendLinePrefix(this.#oversizedPendingPrefix, segment);
+					if (this.#pending.length + segmentLength + separator.length > MAX_PENDING_LOOKBEHIND_CHARS) {
+						const room = Math.max(0, MAX_PENDING_LOOKBEHIND_CHARS - this.#pending.length);
+						const bounded = sanitizeText(this.#pending + segment.slice(0, room));
+						let pendingPrefix = 0;
+						try {
+							pendingPrefix = this.#pendingPrefixLength?.(bounded) ?? 0;
+						} catch {
+							this.#block();
+							break;
+						}
+						if (pendingPrefix > 0) {
+							output.push(this.#block(OVERSIZED_OUTPUT_RECORD));
+							break;
+						}
+						this.#pending = "";
+						this.#oversizedPending = false;
+						this.#dropping = true;
+						this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+						this.#droppingPrefix = this.#oversizedPendingPrefix;
+						this.#oversizedPendingPrefix = "";
+						if (this.#structured) {
+							this.#candidate = "";
+							this.#candidateOversized = true;
+						}
+						this.#scanStructuredLine(segment);
+						scannedDroppedSegment = true;
+					} else {
+						this.#pending += segment + separator;
+						this.#recordLength += segmentLength;
+					}
 				} else if (
 					this.#recordLength + segmentLength + separator.length > MAX_RECORD_CHARS ||
 					this.#pending.length + segmentLength + separator.length > MAX_RECORD_CHARS
@@ -690,16 +900,22 @@ export class ProducerOutputGuard {
 						break;
 					}
 					const hasStructure = this.#structured || prospective.split("\n").some(line => structuredStart(line) >= 0);
-					if (pendingPrefix > 0 && !hasStructure) {
+					const consumed = this.#consumeBufferedOversizedPrefix(buffered, output);
+					if (consumed.blocked) break;
+					if (pendingPrefix > 0 && !hasStructure && prospective.length <= MAX_PENDING_LOOKBEHIND_CHARS) {
 						this.#pending = prospective;
 						this.#recordLength += segmentLength;
 						this.#oversizedPending = true;
+						this.#oversizedPendingPrefix = appendLinePrefix(consumed.currentLine, segment);
 					} else {
 						this.#pending = "";
 						this.#dropping = true;
 						this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-						this.#candidate = "";
-						this.#candidateOversized = true;
+						this.#droppingPrefix = appendLinePrefix(consumed.currentLine, segment);
+						if (hasStructure) {
+							this.#candidate = "";
+							this.#candidateOversized = true;
+						}
 						for (const line of buffered.split("\n")) this.#scanStructuredLine(line);
 						this.#scanStructuredLine(segment);
 						scannedDroppedSegment = true;
@@ -713,29 +929,48 @@ export class ProducerOutputGuard {
 			if (newline < 0) break;
 			this.#recordLength = 0;
 			if (this.#oversizedPending) {
+				const sanitized = sanitizeText(this.#pending);
 				let pendingPrefix = 0;
 				try {
-					pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(this.#pending)) ?? 0;
+					pendingPrefix = this.#pendingPrefixLength?.(sanitized) ?? 0;
 				} catch {
 					this.#block();
 					break;
 				}
 				if (pendingPrefix > 0) {
+					if (pendingPrefix > MAX_PENDING_LOOKBEHIND_CHARS) {
+						output.push(this.#block(OVERSIZED_OUTPUT_RECORD));
+						break;
+					}
+					if (this.#consumeCompletedOversizedLine(this.#oversizedPendingPrefix, "\n", output)) break;
+					this.#oversizedPendingPrefix = "";
+					this.#pending = sanitized.slice(-pendingPrefix);
 					offset = newline + 1;
 					continue;
 				}
+				const prefixLine = this.#oversizedPendingPrefix;
+				const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
 				this.#pending = "";
 				this.#oversizedPending = false;
-				output.push(`${OVERSIZED_OUTPUT_RECORD}\n`);
+				this.#oversizedPendingPrefix = "";
+				if (this.#consumeCompletedOversizedLine(prefixLine, "\n", output)) break;
+				if (!wasAssignment) output.push(`${OVERSIZED_OUTPUT_RECORD}\n`);
 				offset = newline + 1;
 				continue;
 			}
 			if (this.#dropping) {
+				const prefixLine = this.#droppingPrefix;
+				const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
 				this.#pending = "";
 				this.#dropping = false;
 				this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-				this.#candidateEndsWithNewline = true;
-				if (!this.#structured) output.push(this.#flushCandidate());
+				this.#droppingPrefix = "";
+				if (this.#consumeCompletedOversizedLine(prefixLine, "\n", output)) break;
+				if (this.#structured) {
+					this.#candidateEndsWithNewline = true;
+				} else if (!wasAssignment) {
+					output.push(`${OVERSIZED_OUTPUT_RECORD}\n`);
+				}
 				offset = newline + 1;
 				continue;
 			}
@@ -761,18 +996,20 @@ export class ProducerOutputGuard {
 	}
 
 	finish(): string {
-		if (this.#scalarParts) {
-			const serialized = this.#scalarParts.join("");
+		if (this.#scalarState === "in_string" || this.#scalarState === "after_string") {
+			const serialized = this.#scalarParts!.join("");
 			this.#scalarParts = null;
 			this.#scalarLength = 0;
-			this.#scalarModeDecided = true;
+			this.#scalarTrailingWhitespace = 0;
+			this.#scalarEscaped = false;
+			this.#scalarState = "records";
 			return this.sanitize(serialized);
 		}
-		if (!this.#scalarModeDecided && this.#scalarProbe) {
+		if (this.#scalarState === "undecided") {
 			const probe = this.#scalarProbe;
 			this.#scalarProbe = "";
-			this.#scalarModeDecided = true;
-			return this.#pushRecords(probe) + this.#finishRecords();
+			this.#scalarState = "records";
+			return probe ? this.#pushRecords(probe) + this.#finishRecords() : this.#finishRecords();
 		}
 		return this.#finishRecords();
 	}
@@ -780,10 +1017,20 @@ export class ProducerOutputGuard {
 	#finishRecords(): string {
 		if (this.#withholding) return "";
 		if (this.#oversizedPending) {
+			const prefixLine = this.#oversizedPendingPrefix;
+			const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
 			this.#pending = "";
 			this.#recordLength = 0;
 			this.#oversizedPending = false;
-			return OVERSIZED_OUTPUT_RECORD;
+			this.#oversizedPendingPrefix = "";
+			const output: string[] = [];
+			if (this.#consumeCompletedOversizedLine(prefixLine, "", output)) return output.join("");
+			if (!this.#structured && (this.#candidate || this.#candidateOversized)) {
+				const flushed = this.#flushCandidate();
+				if (flushed) output.push(flushed);
+			}
+			if (!wasAssignment) output.push(OVERSIZED_OUTPUT_RECORD);
+			return output.join("");
 		}
 		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) {
 			return "";
@@ -797,11 +1044,32 @@ export class ProducerOutputGuard {
 				return "";
 			}
 		}
-		const text = this.#dropping ? this.#block(this.#droppingLabel) : this.#record(this.#pending, "");
+		if (this.#dropping) {
+			const prefixLine = this.#droppingPrefix;
+			const label = this.#droppingLabel;
+			const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
+			this.#pending = "";
+			this.#recordLength = 0;
+			this.#dropping = false;
+			this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+			this.#droppingPrefix = "";
+			const output: string[] = [];
+			if (this.#consumeCompletedOversizedLine(prefixLine, "", output)) return output.join("");
+			if (this.#structured && this.#depth > 0) return output.join("") + this.#block(label);
+			if (!this.#structured && (this.#candidate || this.#candidateOversized)) {
+				const flushed = this.#flushCandidate();
+				if (flushed) output.push(flushed);
+			}
+			if (!wasAssignment) output.push(this.#block(label));
+			else this.#withholding = true;
+			return output.join("");
+		}
+		const text = this.#record(this.#pending, "");
 		this.#pending = "";
 		this.#recordLength = 0;
 		this.#dropping = false;
 		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+		this.#droppingPrefix = "";
 		if (!this.#withholding && this.#structured && this.#depth > 0) return text + this.#block();
 		const output = text + (this.#withholding ? "" : this.#flushCandidate());
 		if (pendingPrefix > 0) this.#withholding = true;
@@ -813,7 +1081,9 @@ export class ProducerOutputGuard {
 		this.#recordLength = 0;
 		this.#dropping = false;
 		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+		this.#droppingPrefix = "";
 		this.#oversizedPending = false;
+		this.#oversizedPendingPrefix = "";
 		this.#withholding = false;
 		this.#candidate = "";
 		this.#candidateOversized = false;
@@ -826,6 +1096,9 @@ export class ProducerOutputGuard {
 		this.#authorizationHeading = false;
 		this.#scalarProbe = "";
 		this.#scalarParts = null;
-		this.#scalarModeDecided = false;
+		this.#scalarLength = 0;
+		this.#scalarState = "undecided";
+		this.#scalarEscaped = false;
+		this.#scalarTrailingWhitespace = 0;
 	}
 }
