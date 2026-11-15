@@ -1120,6 +1120,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 				: content;
 		const note = conventionText !== undefined ? textFileConventionNote(appliedConventions, conventionText) : undefined;
 		const writeLine = note
+			? `Successfully wrote ${writeBytes} bytes to ${displayPath}\n${note}`
 			: `Successfully wrote ${writeBytes} bytes to ${displayPath}`;
 		const resultText = header ? `${header}\n${writeLine}` : writeLine;
 		const fullResultText = madeExecutable ? `${resultText}\n${EXECUTABLE_NOTICE}` : resultText;
