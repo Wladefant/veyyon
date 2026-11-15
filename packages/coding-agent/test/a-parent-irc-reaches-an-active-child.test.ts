@@ -114,11 +114,6 @@ describe("parent IRC delivery to an active child", () => {
 			const receipt = await IrcBus.global().send({ from: "parent", to: "child", body: "Pause edits and report current status." });
 			expect(receipt).toMatchObject({ to: "child", outcome: "injected" });
 			expect(child.session.isStreaming).toBe(true);
-			expect(child.session.agent.peekSteeringQueue()).toEqual(expect.arrayContaining([expect.objectContaining({
-				role: "custom",
-				customType: "irc:incoming",
-				content: expect.stringContaining("Pause edits and report current status."),
-			})]));
 			expect(received).toEqual(["Pause edits and report current status."]);
 			await child.session.waitForIdle();
 			await turn;

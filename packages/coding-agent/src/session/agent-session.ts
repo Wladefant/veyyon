@@ -5931,7 +5931,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				this.#ircContinuations.begin(msg.id, record);
 				await this.sessionManager.ensureOnDisk();
 				await this.sessionManager.sync();
-				this.agent.steer(record);
+				// IRC drains as one ordered batch, independent of the user's one-at-a-time steering mode.
+				this.#irc.inbox.queueInterrupt(record);
 			} else {
 				this.#irc.inbox.queueInterrupt(record);
 			}
