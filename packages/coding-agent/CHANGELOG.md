@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Enforce host-wide shared lane admission ledger (cap 40) and `veyyon lane-admission` CLI ([Refs #1113](https://github.com/Wladefant/veyyon/issues/1113)).
+
 ## [1.10.0] - 2026-11-14
 
 ### Fixed
