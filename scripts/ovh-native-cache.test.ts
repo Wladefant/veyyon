@@ -41,6 +41,8 @@ function fixture(): Fixture {
 	const target = join(toolCache, "veyyon-cargo", "runner-one");
 	const buildLog = join(dir, "build.log");
 	const output = join(dir, "github-output");
+	const relatedTests = join(dir, "related-tests");
+	writeFileSync(relatedTests, "selected.test.ts\n");
 	const fakeBun = join(bin, "bun");
 	writeFileSync(fakeBun, [
 		"#!/bin/sh",
@@ -69,7 +71,7 @@ function fixture(): Fixture {
 			GITHUB_WORKSPACE: workspace,
 			RUNNER_TEMP: runnerTemp,
 			CARGO_TARGET_DIR: target,
-			RELATED_TESTS: "selected.test.ts",
+			RELATED_TESTS: relatedTests,
 			NATIVE_INPUT: "false",
 			GITHUB_OUTPUT: output,
 			BUILD_LOG: buildLog,
