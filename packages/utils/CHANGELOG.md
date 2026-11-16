@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Exported `BINARY_SNIFF_BYTES` from `binary.ts` for `WriteTool` header sniffing (no user-facing effect) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.8.20] - 2026-11-09
 
 ### Added
