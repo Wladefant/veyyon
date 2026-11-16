@@ -955,34 +955,43 @@ mod tests {
 			async move { std::future::pending::<bool>().await }
 		});
 
-		let inner = std::sync::Arc::clone(&shell.inner);
-		let run_task = tokio::spawn(Shell::run_with_bridge(
-			inner,
-			run_guard,
-			CoreShellRunOptions {
-				command:       "sh -c 'echo READY'".to_string(),
-				cwd:           None,
-				env:           None,
-				timeout_ms:    None,
-				cpu_budget_id: None,
-			},
-			core_cancel,
-			Some(tx),
-			Some(drain),
-		));
-
+		let core_result = shell
+			.inner
+			.run(
+				CoreShellRunOptions {
+					command:       "sh -c 'echo READY'".to_string(),
+					cwd:           None,
+					env:           None,
+					timeout_ms:    None,
+					cpu_budget_id: None,
+				},
+				Some(tx),
+				core_cancel.clone(),
+			)
+			.await
+			.map(Into::into)
+			.map_err(crate::napi_error::to_napi);
+		assert!(
+			core_result
+				.as_ref()
+				.is_ok_and(|res| !res.cancelled && !res.timed_out && res.exit_code == Some(0)),
+			"core command must finish cleanly before testing post-completion abort",
+		);
 		time::timeout(Duration::from_secs(15), started_rx)
 			.await
 			.expect("short command output should reach on_chunk")
 			.expect("forward started signal should not drop");
-		time::sleep(Duration::from_millis(100)).await;
 		assert_eq!(shell.active_runs.active_count(), 1);
+		let drain_task = tokio::spawn(async move {
+			let _run_guard = run_guard;
+			await_chunk_drain(Some(drain), &core_cancel, core_result).await
+		});
 		shell.abort().await.expect("Shell.abort should succeed");
 
-		let settled = time::timeout(Duration::from_secs(5), run_task)
+		let settled = time::timeout(Duration::from_secs(5), drain_task)
 			.await
 			.expect("Shell.abort() must settle stalled drain even after core completion")
-			.expect("run task should not panic");
+			.expect("drain task should not panic");
 		assert!(
 			settled.is_err(),
 			"aborting stalled post-completion drain must return an explicit error, not truncate silently",
