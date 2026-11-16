@@ -5,6 +5,12 @@
 ### Fixed
 
 - `history://` reads stream stored session prefixes lazily and reuse a validated directory index so post-restart reads stay within the 5-second timeout ([PR #1125](https://github.com/Wladefant/veyyon/pull/1125), [Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
+
 ## [1.10.1] - 2026-11-15
 
 ### Fixed
