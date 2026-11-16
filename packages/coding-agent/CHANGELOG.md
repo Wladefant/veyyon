@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep caret-escaped ANSI CSI sequences out of producer output container and inventory detection while preserving credential redaction ([PR #1087](https://github.com/Wladefant/veyyon/pull/1087)).
+
 ## [1.9.2] - 2026-11-12
 
 ### Fixed

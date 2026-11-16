@@ -21,6 +21,20 @@ describe("producer output keeps caret-escaped ANSI", () => {
 		expect(streamed(`${echo}values: [\n`, 0)).toContain(BLOCKED_OUTPUT_RECORD);
 	});
 
+	it("does not let a malformed caret-escaped prefix swallow a container opener", () => {
+		const envObject = "^[[ {\n  DATABASE_URL: 'fake-db',\n  AWS_REGION: 'us-east-1',\n  MY_ENV: 'val'\n}\n";
+		const output = streamed(envObject, 0);
+		expect(output).toContain(BLOCKED_OUTPUT_RECORD);
+		expect(output).not.toContain("fake-db");
+	});
+
+	it("still detects inventory keys inside objects containing caret-escaped ANSI", () => {
+		const styledEnv = "{ ^[[36;1mDATABASE_URL: 'fake-db', AWS_REGION: 'us-east-1', MY_ENV: 'val'^[[0m }\n";
+		const output = streamed(styledEnv, 0);
+		expect(output).toContain(BLOCKED_OUTPUT_RECORD);
+		expect(output).not.toContain("fake-db");
+	});
+
 	it("keeps credential redaction active beside escaped sequences", () => {
 		const secrets = [
 			`ghp_${"A".repeat(36)}`,

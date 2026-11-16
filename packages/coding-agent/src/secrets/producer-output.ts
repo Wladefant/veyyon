@@ -266,7 +266,7 @@ function quotedEnd(text: string, start: number): number {
 
 // `gh run view --log-failed` spells ESC as `^[`. Its complete CSI brackets
 // are display notation, not the start of a JSON or util.inspect container.
-const CARET_CSI = /\^\[\[[0-?]*[ -/]*[@-~]/y;
+const CARET_CSI = /\^\[\[[0-?]*[ !#-&(-/]*[@-Z\\^_`a-z|~]/y;
 
 function caretCsiLength(text: string, start: number): number {
 	if (text[start] !== "^") return 0;
@@ -316,6 +316,11 @@ function hasInventoryKeys(text: string): boolean {
 	for (let index = Math.max(scanStart, 0); index < text.length; index++) {
 		const character = text[index];
 		if (/\s/.test(character)) continue;
+		const escapedCsi = caretCsiLength(text, index);
+		if (escapedCsi) {
+			index += escapedCsi - 1;
+			continue;
+		}
 		if (character === "{" || character === "[") {
 			containers.push(character);
 			expectingKey = character === "{";
