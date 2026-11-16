@@ -59,6 +59,8 @@ export interface DaemonSpec {
 export interface DaemonSnapshot {
 	name: string;
 	id: string;
+	/** Monotonic incarnation counter for the daemon ID; optional for legacy snapshots. */
+	generation?: number;
 	state: DaemonState;
 	pid?: number;
 	createdAt: number;
@@ -142,6 +144,8 @@ export type DaemonTerminationOwner = (typeof DAEMON_TERMINATION_OWNERS)[number];
 export interface DaemonCompletionRecord {
 	name: string;
 	id: string;
+	/** Monotonic incarnation counter for the daemon ID; optional for legacy completion records. */
+	generation?: number;
 	/** The session that started the daemon, when the start named one. */
 	owner?: string;
 	terminatedBy: DaemonTerminationOwner;
@@ -172,10 +176,36 @@ export type DaemonOperation =
 			cursor?: number;
 			timeoutMs: number;
 	  }
-	| { op: "wait"; name: string; for: "ready" | "exit"; pattern?: string; timeoutMs: number }
-	| { op: "send"; name: string; data?: string; signal?: DaemonSignal }
-	| { op: "stop"; name: string; timeoutMs: number }
-	| { op: "restart"; name: string }
+	| {
+			op: "wait";
+			name: string;
+			for: "ready" | "exit";
+			pattern?: string;
+			timeoutMs: number;
+			expectedId?: string;
+			expectedGeneration?: number;
+	  }
+	| {
+			op: "send";
+			name: string;
+			data?: string;
+			signal?: DaemonSignal;
+			expectedId?: string;
+			expectedGeneration?: number;
+	  }
+	| {
+			op: "stop";
+			name: string;
+			timeoutMs: number;
+			expectedId?: string;
+			expectedGeneration?: number;
+	  }
+	| {
+			op: "restart";
+			name: string;
+			expectedId?: string;
+			expectedGeneration?: number;
+	  }
 	| { op: "describe"; name: string }
 	| { op: "shutdown" };
 
@@ -183,7 +213,12 @@ export type DaemonOperation =
 export type DaemonRpcResult =
 	| { op: "ping"; projectDir: string; pid?: number }
 	| { op: "start"; daemon: DaemonSnapshot; readyTimedOut: boolean }
-	| { op: "list"; daemons: DaemonSnapshot[]; completions: DaemonCompletionRecord[] }
+	| {
+			op: "list";
+			daemons: DaemonSnapshot[];
+			completions: DaemonCompletionRecord[];
+			capabilities?: { guardedIdentity?: 1 };
+	  }
 	| {
 			op: "logs";
 			name: string;
@@ -206,6 +241,50 @@ export interface DaemonWireRequest {
 	id: string;
 	token: string;
 	operation: DaemonOperation;
+}
+
+/** Discriminator wrapping a guarded operation so legacy brokers fail closed. */
+export interface DaemonGuardedWireOperation {
+	op: "guarded";
+	operation: DaemonOperation;
+}
+
+/** Wire operation representation before socket transmission. */
+export type DaemonWireOperation = DaemonOperation | DaemonGuardedWireOperation;
+
+/** Wrap an operation in an op:'guarded' wire envelope if guarded; validate complete tuple. */
+export function encodeDaemonOperation(operation: DaemonOperation): DaemonWireOperation {
+	const opWithGuards = operation as { expectedId?: unknown; expectedGeneration?: unknown };
+	const hasId = opWithGuards.expectedId !== undefined;
+	const hasGen = opWithGuards.expectedGeneration !== undefined;
+	if (hasId || hasGen) {
+		if (!hasId || !hasGen) {
+			throw new Error("expectedId and expectedGeneration must be supplied together");
+		}
+		if (typeof opWithGuards.expectedId !== "string" || opWithGuards.expectedId.length === 0) {
+			throw new Error("expectedId must be a non-empty string");
+		}
+		if (
+			typeof opWithGuards.expectedGeneration !== "number" ||
+			!Number.isSafeInteger(opWithGuards.expectedGeneration) ||
+			opWithGuards.expectedGeneration <= 0
+		) {
+			throw new Error("expectedGeneration must be a positive safe integer");
+		}
+		if (
+			operation.op !== "send" &&
+			operation.op !== "stop" &&
+			operation.op !== "wait" &&
+			operation.op !== "restart"
+		) {
+			throw new Error(`Guarded identity is not supported for ${operation.op}`);
+		}
+		return {
+			op: "guarded",
+			operation,
+		};
+	}
+	return operation;
 }
 
 /** Response envelope kept raw until matched with its pending operation. */
@@ -355,9 +434,14 @@ export function parseDaemonSpec(value: unknown): DaemonSpec {
 /** Decode and validate one daemon snapshot. */
 export function parseDaemonSnapshot(value: unknown): DaemonSnapshot {
 	const source = record(value, "daemon snapshot");
+	const generation = optionalNumber(source.generation, "daemon.generation");
+	if (generation !== undefined && (!Number.isSafeInteger(generation) || generation <= 0)) {
+		throw new Error("daemon.generation must be a positive safe integer");
+	}
 	return {
 		name: stringValue(source.name, "daemon.name"),
 		id: stringValue(source.id, "daemon.id"),
+		...(generation !== undefined ? { generation } : {}),
 		state: daemonState(source.state),
 		pid: optionalNumber(source.pid, "daemon.pid"),
 		createdAt: numberValue(source.createdAt, "daemon.createdAt"),
@@ -383,9 +467,14 @@ export function parseDaemonSnapshot(value: unknown): DaemonSnapshot {
 /** Decode and validate one retained completion record. */
 export function parseDaemonCompletionRecord(value: unknown): DaemonCompletionRecord {
 	const source = record(value, "daemon completion");
+	const generation = optionalNumber(source.generation, "completion.generation");
+	if (generation !== undefined && (!Number.isSafeInteger(generation) || generation <= 0)) {
+		throw new Error("completion.generation must be a positive safe integer");
+	}
 	return {
 		name: stringValue(source.name, "completion.name"),
 		id: stringValue(source.id, "completion.id"),
+		...(generation !== undefined ? { generation } : {}),
 		owner: optionalString(source.owner, "completion.owner"),
 		terminatedBy: terminationOwner(source.terminatedBy),
 		exitReason: optionalString(source.exitReason, "completion.exitReason"),
@@ -428,57 +517,101 @@ export function parseDaemonRetiringNotice(value: unknown): number | undefined {
 function parseDaemonOperation(value: unknown): DaemonOperation {
 	const source = record(value, "daemon operation");
 	const op = stringValue(source.op, "operation.op");
-	switch (op) {
+
+	let targetRecord = source;
+	let targetOp = op;
+	let expectedId: string | undefined;
+	let expectedGeneration: number | undefined;
+
+	if (op === "guarded") {
+		const inner = record(source.operation, "guarded operation");
+		const innerOp = stringValue(inner.op, "operation.op");
+		if (innerOp !== "send" && innerOp !== "stop" && innerOp !== "wait" && innerOp !== "restart") {
+			throw new Error(`Guarded operation does not support ${innerOp}`);
+		}
+		const rawExpectedId = inner.expectedId !== undefined ? inner.expectedId : source.expectedId;
+		const rawExpectedGeneration =
+			inner.expectedGeneration !== undefined ? inner.expectedGeneration : source.expectedGeneration;
+		if (rawExpectedId === undefined || rawExpectedGeneration === undefined) {
+			throw new Error("expectedId and expectedGeneration must be supplied together");
+		}
+		if (typeof rawExpectedId !== "string" || rawExpectedId.length === 0) {
+			throw new Error("expectedId must be a non-empty string");
+		}
+		if (
+			typeof rawExpectedGeneration !== "number" ||
+			!Number.isSafeInteger(rawExpectedGeneration) ||
+			rawExpectedGeneration <= 0
+		) {
+			throw new Error("expectedGeneration must be a positive safe integer");
+		}
+		targetRecord = inner;
+		targetOp = innerOp;
+		expectedId = rawExpectedId;
+		expectedGeneration = rawExpectedGeneration;
+	} else if (source.expectedId !== undefined || source.expectedGeneration !== undefined) {
+		throw new Error("Guard fields are not allowed on ordinary wire operations");
+	}
+
+	switch (targetOp) {
 		case "ping":
 		case "list":
 		case "shutdown":
-			return { op };
+			return { op: targetOp };
 		case "start":
 			return {
-				op,
-				spec: parseDaemonSpec(source.spec),
-				owner: optionalString(source.owner, "operation.owner"),
+				op: "start",
+				spec: parseDaemonSpec(targetRecord.spec),
+				owner: optionalString(targetRecord.owner, "operation.owner"),
 			};
 		case "logs":
 			return {
-				op,
-				name: stringValue(source.name, "operation.name"),
-				lines: numberValue(source.lines, "operation.lines"),
-				head: booleanValue(source.head, "operation.head"),
-				grep: optionalString(source.grep, "operation.grep"),
-				follow: booleanValue(source.follow, "operation.follow"),
-				cursor: optionalNumber(source.cursor, "operation.cursor"),
-				timeoutMs: numberValue(source.timeoutMs, "operation.timeoutMs"),
+				op: "logs",
+				name: stringValue(targetRecord.name, "operation.name"),
+				lines: numberValue(targetRecord.lines, "operation.lines"),
+				head: booleanValue(targetRecord.head, "operation.head"),
+				grep: optionalString(targetRecord.grep, "operation.grep"),
+				follow: booleanValue(targetRecord.follow, "operation.follow"),
+				cursor: optionalNumber(targetRecord.cursor, "operation.cursor"),
+				timeoutMs: numberValue(targetRecord.timeoutMs, "operation.timeoutMs"),
 			};
 		case "wait": {
-			const target = stringValue(source.for, "operation.for");
+			const target = stringValue(targetRecord.for, "operation.for");
 			if (target !== "ready" && target !== "exit") throw new Error("operation.for must be ready or exit");
 			return {
-				op,
-				name: stringValue(source.name, "operation.name"),
+				op: "wait",
+				name: stringValue(targetRecord.name, "operation.name"),
 				for: target,
-				pattern: optionalString(source.pattern, "operation.pattern"),
-				timeoutMs: numberValue(source.timeoutMs, "operation.timeoutMs"),
+				pattern: optionalString(targetRecord.pattern, "operation.pattern"),
+				timeoutMs: numberValue(targetRecord.timeoutMs, "operation.timeoutMs"),
+				...(expectedId !== undefined ? { expectedId, expectedGeneration } : {}),
 			};
 		}
 		case "send":
 			return {
-				op,
-				name: stringValue(source.name, "operation.name"),
-				data: optionalString(source.data, "operation.data"),
-				signal: source.signal === undefined ? undefined : daemonSignal(source.signal),
+				op: "send",
+				name: stringValue(targetRecord.name, "operation.name"),
+				data: optionalString(targetRecord.data, "operation.data"),
+				signal: targetRecord.signal === undefined ? undefined : daemonSignal(targetRecord.signal),
+				...(expectedId !== undefined ? { expectedId, expectedGeneration } : {}),
 			};
 		case "stop":
 			return {
-				op,
-				name: stringValue(source.name, "operation.name"),
-				timeoutMs: numberValue(source.timeoutMs, "operation.timeoutMs"),
+				op: "stop",
+				name: stringValue(targetRecord.name, "operation.name"),
+				timeoutMs: numberValue(targetRecord.timeoutMs, "operation.timeoutMs"),
+				...(expectedId !== undefined ? { expectedId, expectedGeneration } : {}),
 			};
 		case "restart":
+			return {
+				op: "restart",
+				name: stringValue(targetRecord.name, "operation.name"),
+				...(expectedId !== undefined ? { expectedId, expectedGeneration } : {}),
+			};
 		case "describe":
-			return { op, name: stringValue(source.name, "operation.name") };
+			return { op: "describe", name: stringValue(targetRecord.name, "operation.name") };
 		default:
-			throw new Error(`Unknown daemon operation: ${op}`);
+			throw new Error(`Unknown daemon operation: ${targetOp}`);
 	}
 }
 
@@ -504,10 +637,20 @@ export function parseDaemonRpcResult(operation: DaemonOperation, value: unknown)
 				throw new Error("result.completions must be an array");
 			}
 			const completions: unknown[] = source.completions === undefined ? [] : source.completions;
+			let capabilities: { guardedIdentity?: 1 } | undefined;
+			if (source.capabilities !== undefined) {
+				const capRecord = record(source.capabilities, "result.capabilities");
+				if (capRecord.guardedIdentity === 1) {
+					capabilities = { guardedIdentity: 1 };
+				} else if (capRecord.guardedIdentity !== undefined) {
+					throw new Error("result.capabilities.guardedIdentity must be 1 when present");
+				}
+			}
 			return {
 				op: "list",
 				daemons: source.daemons.map(parseDaemonSnapshot),
 				completions: completions.map(parseDaemonCompletionRecord),
+				...(capabilities ? { capabilities } : {}),
 			};
 		}
 		case "logs":

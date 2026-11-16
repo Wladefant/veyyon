@@ -41,10 +41,9 @@ import { type SettingPath, Settings } from "../config/settings";
 import type { Rule } from "../discovery/capability/rule";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
-import { sessionExtensionActions } from "../extensibility/extensions/session-actions";
-import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
+import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { LocalProtocolOptions } from "../internal-urls";
 import type { MCPManager } from "../mcp/manager";
@@ -58,9 +57,8 @@ import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { discoverAuthStorage } from "../session/auth-broker-config";
 import { rootBudgetGroupOwnerId, withInheritedBudgetGroup } from "../session/cpu-limit";
-import { USER_INTERRUPT_LABEL } from "../session/messages";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { truncateTail } from "../session/streaming-output";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
@@ -1917,6 +1915,7 @@ interface RunModel {
 	retryFallbackKey: string | undefined;
 	/** Already fitted to `model`; undefined lets the child session resolve its own default. */
 	thinkingLevel: ConfiguredThinkingLevel | undefined;
+	skippedModelReasons: string[];
 }
 
 type ChildSessionOptionsBuilder = (sessionManager: SessionManager, settings: Settings) => CreateAgentSessionOptions;
@@ -1993,7 +1992,7 @@ async function resolveRunModel(ctx: ChildSessionContext): Promise<RunModel> {
 		// for the session to state it.
 		if (requested !== undefined) monitor.progress.resolvedModel = resolvedModelBadge(model, thinkingLevel);
 	}
-	return { modelRegistry, model, thinkingLevel, retryFallbackKey };
+	return { modelRegistry, model, thinkingLevel, retryFallbackKey, skippedModelReasons: resolution.skipped ?? [] };
 }
 
 /**
@@ -2217,6 +2216,11 @@ async function openChildSession(ctx: ChildSessionContext): Promise<OpenedChildSe
 		buildSessionOptions(sessionManager, ctx.settings),
 		ctx.awaitAbortable,
 	);
+	if (runModel.skippedModelReasons.length > 0) {
+		session.sessionManager.appendCustomEntry("agent-model-resolution", {
+			skipped: runModel.skippedModelReasons,
+		});
+	}
 	marks.sessionCreatedAt = performance.now();
 	monitor.setActiveSession(session);
 	// Adopted (kept-alive) agents report later turns to the registry through the session's own
@@ -2616,6 +2620,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 		softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice") ?? false,
 		maxRuntimeMs: nonNegativeInt(options.maxRuntimeMs ?? settings.get("agent.maxRuntimeMs")),
 	});
+	monitor.beginSessionInitialization();
 
 	const done = await driveChildRun(
 		{

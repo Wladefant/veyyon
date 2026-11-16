@@ -12,9 +12,9 @@ import {
 	toError,
 } from "@veyyon/utils";
 import { Settings } from "../config/settings";
+import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
-import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
 import {
@@ -36,6 +36,7 @@ import {
 } from "./kernel-base";
 import { ensureKernelToolBridge, type KernelToolBridgeInfo, registerKernelToolBridge } from "./kernel-tool-bridge";
 import type { KernelDisplayOutput } from "./py/display";
+import { agentEvalSessionKey } from "./session-id";
 
 /**
  * Constructor for a language executor's cancellation error. Each backend
@@ -86,6 +87,7 @@ export interface KernelExecutorBaseOptions {
 	artifactId?: string;
 	artifactPath?: string;
 	sessionId?: string;
+	agentId?: string;
 	kernelOwnerId?: string;
 	kernelMode?: KernelMode;
 	interpreter?: string;
@@ -130,8 +132,8 @@ export function normalizeSessionCwd(cwd: string): string {
 }
 
 /**
- * The key a retained kernel session is stored under: the session id, the
- * explicit interpreter if the caller named one, and otherwise the part of the
+ * The key a retained kernel session is stored under: the session and agent ids,
+ * the explicit interpreter if the caller named one, and otherwise the part of the
  * cwd that selects the default runtime (a project venv for Python, nothing for
  * Ruby and Julia).
  *
@@ -157,6 +159,7 @@ export function normalizeSessionCwd(cwd: string): string {
  */
 export function buildEvalSessionKey(options: {
 	sessionId: string;
+	agentId?: string;
 	cwd: string;
 	/** The interpreter the caller asked for, or undefined to let the runtime choose. */
 	interpreter: string | undefined;
@@ -169,8 +172,9 @@ export function buildEvalSessionKey(options: {
 	resolveDefaultRuntimeScope?: (cwd: string) => string;
 }): string {
 	const cwd = normalizeSessionCwd(options.cwd);
+	const agentSession = agentEvalSessionKey(options.sessionId, options.agentId);
 	if (options.interpreter === undefined) {
-		return `${options.sessionId}\0\0${options.resolveDefaultRuntimeScope?.(cwd) ?? ""}`;
+		return `${agentSession}\0\0${options.resolveDefaultRuntimeScope?.(cwd) ?? ""}`;
 	}
 	const resolved = options.resolveInterpreterPath(options.interpreter, cwd);
 	// A path that cannot be canonicalised is keyed as written. This is not a
@@ -183,7 +187,7 @@ export function buildEvalSessionKey(options: {
 	} catch {
 		interpreter = resolved;
 	}
-	return `${options.sessionId}\0${interpreter}\0`;
+	return `${agentSession}\0${interpreter}\0`;
 }
 
 export function getExecutionDeadlineMs(options?: { deadlineMs?: number; timeoutMs?: number }): number | undefined {
@@ -563,24 +567,6 @@ export async function executeWithKernelBase<
 	});
 
 	const displayOutputs: KernelDisplayOutput[] = [];
-	/** The run's result over everything the sink holds, with `annotation` appended to the output. */
-	const finish = async (
-		outcome: Pick<KernelExecutionResult, "exitCode" | "cancelled" | "stdinRequested">,
-		annotation?: string,
-	): Promise<KernelExecutionResult> => {
-		const dumped = await sink.dump(annotation);
-		return {
-			...outcome,
-			truncated: dumped.truncated,
-			output: dumped.output,
-			artifactId: dumped.artifactId ?? undefined,
-			totalLines: dumped.totalLines,
-			totalBytes: dumped.totalBytes,
-			outputLines: dumped.outputLines,
-			outputBytes: dumped.outputBytes,
-			displayOutputs,
-		};
-	};
 	const deadlineMs = (resolveDeadlineMs ?? getExecutionDeadlineMs)(options);
 	let executionTimeoutMs: number | undefined;
 	const abortShield = createBridgeAbortShield(options?.signal);
@@ -830,11 +816,15 @@ export class KernelSessionPool<
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (this.#failedStartups.has(sessionKey)) {
-			await this.#retireFailedStartup(sessionKey);
+			await waitForPromiseWithCancellation(
+				this.#retireFailedStartup(sessionKey),
+				options,
+				this.#cancelledErrorClass,
+			);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (existing && this.#retiring.has(existing)) {
-			await this.#retireSession(existing);
+			await waitForPromiseWithCancellation(this.#retireSession(existing), options, this.#cancelledErrorClass);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (existing) {
@@ -947,19 +937,22 @@ export class KernelSessionPool<
 		const oldKernel = session.kernel;
 		let pending = this.#transitions.get(session.sessionKey);
 		while (pending) {
-			await pending;
+			await waitForPromiseWithCancellation(pending, options, this.#cancelledErrorClass);
 			if (session.kernel !== oldKernel) return;
 			pending = this.#transitions.get(session.sessionKey);
 		}
 		this.#retiring.add(session);
 		const replacing = (async () => {
 			if (this.#failedStartups.has(session.sessionKey)) await this.#confirmFailedStartupShutdown(session.sessionKey);
-			await this.#confirmShutdown(session, getRemainingTimeoutMs(options.deadlineMs));
+			await this.#confirmShutdown(session);
 			if (!this.hasSession(session.sessionKey, session)) throw new this.#cancelledErrorClass(false);
-			requireRemainingTimeoutMs(options.deadlineMs, this.#cancelledErrorClass);
 			let nextKernel: TKernel;
 			try {
-				nextKernel = await this.#options.startKernel(cwd, options);
+				nextKernel = await this.#options.startKernel(cwd, {
+					...options,
+					signal: undefined,
+					deadlineMs: undefined,
+				});
 			} catch (error) {
 				throw this.#retainFailedStartup(error, session.sessionKey, session.sessionId, cwd, session);
 			}
@@ -968,11 +961,12 @@ export class KernelSessionPool<
 			this.#logOwnership(session, "owned");
 		})();
 		this.#transitions.set(session.sessionKey, replacing);
-		try {
-			await replacing;
-		} finally {
-			if (this.#transitions.get(session.sessionKey) === replacing) this.#transitions.delete(session.sessionKey);
-		}
+		void replacing
+			.finally(() => {
+				if (this.#transitions.get(session.sessionKey) === replacing) this.#transitions.delete(session.sessionKey);
+			})
+			.catch(() => {});
+		await waitForPromiseWithCancellation(replacing, options, this.#cancelledErrorClass);
 	}
 
 	#logOwnership(session: ManagedKernelSession<SessionKernel>, state: "owned" | "retiring" | "released"): void {
@@ -1319,6 +1313,7 @@ export function createKernelExecutionDriver<
 		const sessionId = options.sessionId ?? `session:${cwd}`;
 		const sessionKey = buildEvalSessionKey({
 			sessionId,
+			agentId: options.agentId,
 			cwd,
 			interpreter: options.interpreter,
 			resolveInterpreterPath,
@@ -1330,20 +1325,22 @@ export function createKernelExecutionDriver<
 		if (options.reset) {
 			const resetOwnerId = options.kernelOwnerId ?? sessionId;
 			pool.assertResetOwner(sessionKey, resetOwnerId);
-			const inFlight = pool.resettingSessions.get(sessionKey);
-			if (inFlight) await inFlight;
-			else {
-				const resetPromise = pool.resetSession(sessionKey, resetOwnerId);
+			let resetPromise = pool.resettingSessions.get(sessionKey);
+			if (!resetPromise) {
+				resetPromise = pool.resetSession(sessionKey, resetOwnerId);
 				pool.resettingSessions.set(sessionKey, resetPromise);
-				try {
-					await resetPromise;
-				} finally {
-					pool.resettingSessions.delete(sessionKey);
-				}
+				void resetPromise
+					.finally(() => {
+						if (pool.resettingSessions.get(sessionKey) === resetPromise) {
+							pool.resettingSessions.delete(sessionKey);
+						}
+					})
+					.catch(() => {});
 			}
+			await waitForPromiseWithCancellation(resetPromise, options, cancelledErrorClass);
 		} else {
 			const inFlight = pool.resettingSessions.get(sessionKey);
-			if (inFlight) await inFlight;
+			if (inFlight) await waitForPromiseWithCancellation(inFlight, options, cancelledErrorClass);
 		}
 		const session = await pool.acquireSession(sessionKey, sessionId, cwd, options);
 		if (options.signal?.aborted) {

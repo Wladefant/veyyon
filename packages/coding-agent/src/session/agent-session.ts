@@ -936,6 +936,8 @@ export class AgentSession {
 	#ircContinuations: IrcContinuationOutbox | undefined;
 	#ircActivePhase: string | undefined;
 	#ircWakeSettled: Promise<void> | undefined;
+	#ircReplayPending: Promise<void> | undefined;
+	#attemptedOutboxReplayIds = new Set<string>();
 	/**
 	 * Recent raw SSE traffic for the debug viewer and the report bundle, which read the session the
 	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
@@ -982,6 +984,36 @@ export class AgentSession {
 			}
 		}
 		this.#queue.scheduleDrain();
+		const pendingPhases = (this.#ircContinuations?.unfinishedPhases() ?? [])
+			.filter(entry => !this.#attemptedOutboxReplayIds.has(entry.phaseId));
+		if (
+			!this.isStreaming &&
+			!this.#ircActivePhase &&
+			!this.#planMode.enabled &&
+			pendingPhases.length > 0 &&
+			!this.#ircReplayPending
+		) {
+			let wokeContinuation = false;
+			const replay = this.#replayIrcContinuations(false, true)
+				.then(woke => {
+					wokeContinuation = woke;
+				})
+				.catch(error => {
+					logger.warn("Replaying pending IRC continuations failed", { error: errorMessage(error) });
+				})
+				.finally(() => {
+					if (this.#ircReplayPending === replay) this.#ircReplayPending = undefined;
+					if (!this.#isDisposed && !this.isStreaming && !this.#ircActivePhase) {
+						if (wokeContinuation) {
+							this.#drainStrandedQueuedMessages();
+						} else {
+							this.#irc.resumeStranded();
+						}
+					}
+				});
+			this.#ircReplayPending = replay;
+			return;
+		}
 		this.#irc.resumeStranded();
 	}
 
@@ -1018,6 +1050,25 @@ export class AgentSession {
 	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
 	 *  in effect, even though the wake left a provider-valid tail. */
 	#wakeForIrc(records: CustomMessage[], recovering = false): Promise<void> {
+		if (!this.#ircContinuations) {
+			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+		}
+		const outbox = this.#ircContinuations;
+		// A recovered steer runs as its own phase. Its context receipt is not proof
+		// that a streaming step consumed it; recover until its result exists.
+		if (recovering) records = records.map(record => ({
+			...record,
+			details: {
+				...(record.details && typeof record.details === "object" ? record.details : {}),
+				streamingSteer: false,
+			},
+		}));
+		records = records.map(record =>
+			record.customType === "task:continuation" ||
+			Reflect.get(record.details ?? {}, "relation") === "parent"
+				? outbox.withOrdering(record)
+				: record,
+		);
 		const selfId = this.#config.agentId;
 		const parentRecord = records.find(
 			record =>
@@ -1040,10 +1091,6 @@ export class AgentSession {
 				: parentRecord
 					? Reflect.get(parentRecord.details ?? {}, "from")
 					: undefined;
-		if (!this.#ircContinuations) {
-			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
-		}
-		const outbox = this.#ircContinuations;
 		if (typeof phaseId === "string" && selfId) {
 			if (this.#ircActivePhase === phaseId) return Promise.resolve();
 			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord))
@@ -3589,8 +3636,9 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
-		while (this.#ircWakeSettled) {
-			await this.#ircWakeSettled;
+		while (this.#ircWakeSettled || this.#ircReplayPending) {
+			if (this.#ircReplayPending) await this.#ircReplayPending;
+			if (this.#ircWakeSettled) await this.#ircWakeSettled;
 			await this.agent.waitForIdle();
 			await this.#waitForPostPromptRecovery();
 		}
@@ -4107,7 +4155,11 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	}
 
 	setPlanModeState(state: PlanModeState | undefined): void {
+		const wasEnabled = this.#planMode.enabled;
 		this.#planMode.setState(state);
+		if (wasEnabled && !this.#planMode.enabled && !this.#isDisposed && !this.isStreaming && !this.#ircActivePhase) {
+			this.#drainStrandedQueuedMessages();
+		}
 	}
 
 	getGoalModeState(): GoalModeState | undefined {
@@ -5813,7 +5865,16 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		const registry = AgentRegistry.global();
 		const identity = registry.actorContext(msg.to);
 		const relation = registry.relationTo(msg.to, msg.from);
-		const record: CustomMessage = {
+		if (!msg.completion && relation === "parent" && this.sessionManager.getEntries().some(entry =>
+			entry.type === "custom_message" && entry.customType === "irc:incoming" &&
+			Reflect.get(entry.details ?? {}, "from") === msg.from &&
+			Reflect.get(entry.details ?? {}, "id") === msg.id)) {
+			// Context is a durable delivery receipt even when no continuation phase was claimed.
+			await this.sessionManager.ensureOnDisk();
+			await this.sessionManager.sync();
+			return "injected";
+		}
+		let record: CustomMessage = {
 			role: "custom",
 			customType: msg.completion ? "task:continuation" : "irc:incoming",
 			content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
@@ -5837,6 +5898,8 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				id: msg.id,
 				from: msg.from,
 				message: msg.body,
+				sentAt: msg.ts,
+				phaseId: msg.id,
 				source: "agent",
 				relation,
 				...identity,
@@ -5855,6 +5918,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			timestamp: msg.ts,
 		};
 		if (msg.completion) {
+			record = this.#ircContinuations.withOrdering(record);
 			// Persist before acknowledging delivery. A sender crash may replay the same result.
 			this.#appendCustomMessageToContext(record);
 			this.sessionManager.flushSync();
@@ -5871,6 +5935,49 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			return "woken";
 		}
 		void this.#events.send({ type: "irc_message", message: record });
+		if (this.isStreaming) {
+			if (relation === "parent") {
+				if (!this.#ircContinuations) {
+					this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+				}
+				const outbox = this.#ircContinuations;
+				if (this.agent.state.isStreaming) {
+					record = {
+						...record,
+						content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
+							from: msg.from,
+							selfId: msg.to,
+							message: msg.body,
+						}),
+						details: {
+							...(record.details && typeof record.details === "object" ? record.details : {}),
+							streamingSteer: true,
+						},
+					};
+					// Claim before yielding to disk I/O or enqueueing the steer. A retry cannot
+					// inject twice, and a restart can recover until message_end persists it.
+					outbox.begin(msg.id, record);
+					await this.sessionManager.ensureOnDisk();
+					await this.sessionManager.sync();
+					if (this.agent.state.isStreaming) {
+						this.agent.steer(record);
+					} else if (!this.#ircActivePhase && !this.isStreaming) {
+						await this.replayIrcContinuations();
+					}
+				} else {
+					outbox.begin(msg.id, record);
+					await this.sessionManager.ensureOnDisk();
+					await this.sessionManager.sync();
+					if (!this.#ircActivePhase && !this.isStreaming) {
+						await this.replayIrcContinuations();
+					}
+				}
+			} else {
+				this.#irc.inbox.queueInterrupt(record);
+			}
+			if (autoReply) void this.#runIrcAutoReply(msg);
+			return "injected";
+		}
 		if (relation === "parent") {
 			if (!this.#ircContinuations) {
 				this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
@@ -5885,25 +5992,6 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				return "injected";
 			}
 		}
-		if (this.isStreaming) {
-			if (relation === "parent") {
-				this.agent.steer({
-					role: "user",
-					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
-						from: msg.from,
-						selfId: msg.to,
-						message: msg.body,
-					}),
-					attribution: "agent",
-					timestamp: msg.ts,
-					steering: true,
-				});
-			} else {
-				this.#irc.inbox.queueInterrupt(record);
-			}
-			if (autoReply) void this.#runIrcAutoReply(msg);
-			return "injected";
-		}
 		// Plan mode: record into context but do not wake an autonomous turn.
 		if (this.#planMode.enabled) {
 			this.#appendCustomMessageToContext(record);
@@ -5917,6 +6005,10 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 
 	/** Replay durable result deliveries on a retained agent's next native activation. */
 	async replayIrcContinuations(settling = false): Promise<void> {
+		await this.#replayIrcContinuations(settling, false);
+	}
+
+	async #replayIrcContinuations(settling: boolean, skipAttempted: boolean): Promise<boolean> {
 		if (!this.#ircContinuations) {
 			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
 		}
@@ -5924,25 +6016,33 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		await outbox.flush(async completion => {
 			const registry = AgentRegistry.global();
 			const context = registry.actorContext(completion.agentId);
-			// Only this agent's verified lineage can receive its result, never a foreign peer.
-			for (const parentId of context.ancestorIds) {
-				const parent = registry.get(parentId);
-				if (!parent || parent.status === "aborted") continue;
-				const receipt = await IrcBus.global().send(
-					{ from: completion.agentId, to: parentId, body: completion.output },
-					{
-						completion: {
-							version: 1,
-							id: completion.id,
-							handle: completion.handle,
-							phaseId: completion.phaseId,
-							resultSource: completion.resultSource,
-						},
-					},
-				);
-				if (receipt.outcome !== "failed") return true;
+			// Pin before sending: a failed/absent acknowledgement cannot prove the
+			// recipient did not persist its receipt. Never fail over an attempted send.
+			let parentId = outbox.deliveryTarget(completion.id);
+			if (!parentId) {
+				parentId = context.ancestorIds.find(id => {
+					const parent = registry.get(id);
+					return parent && parent.status !== "aborted" && (parent.session || parent.sessionFile);
+				});
+				if (!parentId) return false;
+				parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			}
-			return false;
+			if (!context.ancestorIds.includes(parentId)) return false;
+			const parent = registry.get(parentId);
+			if (!parent || parent.status === "aborted") return false;
+			const receipt = await IrcBus.global().send(
+				{ from: completion.agentId, to: parentId, body: completion.output },
+				{
+					completion: {
+						version: 1,
+						id: completion.id,
+						handle: completion.handle,
+						phaseId: completion.phaseId,
+						resultSource: completion.resultSource,
+					},
+				},
+			);
+			return receipt.outcome !== "failed";
 		});
 		if (
 			this.agent.state.isStreaming ||
@@ -5950,7 +6050,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			this.#planMode.enabled ||
 			this.#ircActivePhase
 		)
-			return;
+			return false;
 		const consumed = new Set(
 			this.sessionManager
 				.getEntries()
@@ -5978,10 +6078,11 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				AgentRegistry.global().actorContext(from).ancestorIds.includes(selfId)
 			) {
 				await this.#wakeForIrc([pendingCompletion], true);
-				return;
+				return true;
 			}
 		}
-		const retained = outbox.unfinished().find(record => {
+		const retained = outbox.unfinishedPhases().find(({ phaseId, record }) => {
+			if (skipAttempted && this.#attemptedOutboxReplayIds.has(phaseId)) return false;
 			const from = Reflect.get(record.details ?? {}, "from");
 			const selfId = this.#config.agentId;
 			if (typeof from !== "string" || selfId === undefined) return false;
@@ -5990,7 +6091,12 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				? registry.actorContext(from).ancestorIds.includes(selfId)
 				: registry.relationTo(selfId, from) === "parent";
 		});
-		if (retained) await this.#wakeForIrc([retained], true);
+		if (retained) {
+			this.#attemptedOutboxReplayIds.add(retained.phaseId);
+			await this.#wakeForIrc([retained.record], true);
+			return true;
+		}
+		return false;
 	}
 
 	/**

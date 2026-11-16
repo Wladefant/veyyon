@@ -8,7 +8,7 @@
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { atomicWriteFileSync, atomicWriteFileWith } from "@veyyon/utils/atomic-write";
+import { atomicWriteFileSync, atomicWriteFileWith, fsyncDirEntry, fsyncDirEntrySync } from "@veyyon/utils/atomic-write";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
@@ -108,6 +108,9 @@ export class ArtifactManager {
 	async #ensureDir(): Promise<void> {
 		if (!this.#dirCreated) {
 			await fs.mkdir(this.#dir, { recursive: true });
+			// The session directory names this sidecar. Persist that entry before
+			// allocating an ID or allowing a caller to publish an artifact:// ref.
+			await fsyncDirEntry(path.dirname(this.#dir));
 			this.#dirCreated = true;
 		}
 		// Memoize the first-use scan so it runs exactly once. Concurrent callers
@@ -121,6 +124,8 @@ export class ArtifactManager {
 	#ensureDirSync(): void {
 		if (!this.#dirCreated) {
 			fsSync.mkdirSync(this.#dir, { recursive: true });
+			// Keep the synchronous allocation path under the same publication order.
+			fsyncDirEntrySync(path.dirname(this.#dir));
 			this.#dirCreated = true;
 		}
 		if (!this.#idsInitialized) {
@@ -175,7 +180,11 @@ export class ArtifactManager {
 	 * reservation after publication: a failed save must not recycle its ID.
 	 */
 	allocateId(): number {
-		fsSync.mkdirSync(this.#dir, { recursive: true });
+		if (!this.#dirCreated) {
+			fsSync.mkdirSync(this.#dir, { recursive: true });
+			fsyncDirEntrySync(path.dirname(this.#dir));
+			this.#dirCreated = true;
+		}
 		for (;;) {
 			const id = this.#nextId++;
 			try {

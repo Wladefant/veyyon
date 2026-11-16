@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setSystemTime, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,7 +8,9 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
-import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { IMPLICIT_LOCAL_RUNTIME_IDS, ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { PROVIDER_DESCRIPTORS } from "@veyyon/catalog/provider-models";
+import { resolveAgentModelChain } from "@veyyon/coding-agent/config/model-resolver";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
@@ -2182,5 +2184,415 @@ describe("ModelRegistry", () => {
 			expect(suppressible.isSelectorSuppressed("google-antigravity/gemini-3-pro-low")).toBe(true);
 			expect(suppressible.isSelectorSuppressed("google-antigravity/gemini-2.5-pro")).toBe(false);
 		});
+	describe("spawn freshness", () => {
+		test("coalesces concurrent discovery and preserves an active cooldown", async () => {
+			vi.useFakeTimers();
+			try {
+				writeRawModelsJson({
+					"spawn-probe": {
+						baseUrl: "https://spawn-probe.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "configured" }],
+					},
+				});
+				let requests = 0;
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url !== "https://spawn-probe.example/v1/models") {
+						throw new Error(`Unexpected URL: ${url}`);
+					}
+					requests++;
+					return new Response(JSON.stringify({ data: [{ id: "discovered" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				registry.suppressSelector("spawn-probe/configured", Date.now() + 60_000);
+
+				await Promise.all([registry.refreshForSpawn([]), registry.refreshForSpawn([]), registry.refreshForSpawn([])]);
+				await registry.refreshForSpawn(["spawn-probe/configured"], { force: true });
+				await registry.refreshForSpawn(["spawn-probe/discovered"], { force: true });
+				await registry.refreshForSpawn(["spawn-probe/configured:high"], { force: true });
+				expect(requests).toBe(3);
+				expect(registry.isSelectorSuppressed("spawn-probe/configured")).toBe(true);
+				expect(registry.find("spawn-probe", "discovered")).toBeDefined();
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+			}
+		});
+		test("revalidates a cached missing chain after another registry updates the shared catalog", async () => {
+			writeRawModelsJson({
+				"spawn-shared": {
+					baseUrl: "https://spawn-shared.example/v1",
+					auth: "none",
+					api: "openai-responses",
+					discovery: { type: "openai-models-list" },
+				},
+			});
+			const targetUrl = "https://spawn-shared.example/v1/models";
+			let targetRequests = 0;
+			let catalogUpdated = false;
+			const fetchMock: FetchImpl = async input => {
+				const url = input instanceof Request ? input.url : String(input);
+				if (url !== targetUrl) throw new Error(`Unexpected URL: ${url}`);
+				targetRequests++;
+				const modelIds = catalogUpdated ? ["new-preferred", "fallback"] : ["fallback"];
+				return new Response(JSON.stringify({ data: modelIds.map(id => ({ id })) }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			};
+			const registryA = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			const registryB = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			const chain = ["spawn-shared/new-preferred", "spawn-shared/fallback"];
+
+			const first = await resolveAgentModelChain(chain, registryA);
+			expect(first.model?.id).toBe("fallback");
+			expect(targetRequests).toBe(1);
+
+			catalogUpdated = true;
+			await registryB.refresh("online");
+
+			const second = await resolveAgentModelChain(chain, registryA);
+			expect(second.model?.id).toBe("new-preferred");
+			expect(targetRequests).toBe(3);
+		});
+
+		test("runs a forced online refresh after an in-flight non-forced preflight", async () => {
+			vi.useFakeTimers();
+			try {
+				writeRawModelsJson({
+					"spawn-race": {
+						baseUrl: "https://spawn-race.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "configured" }],
+					},
+				});
+				const started = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				let requests = 0;
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url === "https://spawn-race.example/v1/models") requests++;
+					if (requests === 1) {
+						started.resolve();
+						await release.promise;
+					}
+					return new Response(JSON.stringify({ data: [{ id: "configured" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				const preflight = registry.refreshForSpawn([]);
+				await started.promise;
+				const forced = registry.refreshForSpawn(["spawn-race/configured"], { force: true });
+				release.resolve();
+				await Promise.all([preflight, forced]);
+				expect(requests).toBe(2);
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+			}
+		});
+
+		test("refreshes an expired snapshot even when existing models remain usable", async () => {
+			vi.useFakeTimers();
+			try {
+				setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+				writeModelsJson({
+					"spawn-fallback": providerConfig("https://spawn-fallback.example/v1", [{ id: "known" }]),
+				});
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				await registry.refreshForSpawn([]);
+				expect(registry.find("spawn-fallback", "known")).toBeDefined();
+				writeModelsJson({
+					"spawn-fallback": providerConfig("https://spawn-fallback.example/v1", [{ id: "known" }]),
+					"spawn-fresh": providerConfig("https://spawn-fresh.example/v1", [{ id: "new-preferred" }]),
+				});
+				const nextTime = new Date(Date.now() + 5 * 60 * 1000 + 1);
+				fs.utimesSync(modelsJsonPath, nextTime, nextTime);
+				setSystemTime(nextTime);
+
+				await registry.refreshForSpawn([]);
+
+				expect(registry.find("spawn-fresh", "new-preferred")).toBeDefined();
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+			}
+		});
+
+		test("returns a safe refresh failure and keeps the prior configured model", async () => {
+			writeRawModelsJson({
+				"spawn-failure": {
+					baseUrl: "https://spawn-failure.example/v1",
+					auth: "none",
+					api: "openai-responses",
+					discovery: { type: "openai-models-list" },
+					models: [{ id: "known" }],
+				},
+			});
+			const fetchMock: FetchImpl = async () => {
+				throw new Error("credential=secret-value");
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+
+			const failure = await registry.refreshForSpawn(["spawn-failure/known"], { force: true });
+
+			expect(registry.find("spawn-failure", "known")).toBeDefined();
+			expect(failure).toContain("Model discovery failed");
+			expect(failure).not.toContain("secret-value");
+		});
+
+		test("reports authenticated built-in model-manager failures as a spawn refresh failure", async () => {
+			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+			const targetUrl = "https://api.synthetic.new/openai/v1/models";
+			const requests: string[] = [];
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async input => {
+					const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+					requests.push(url);
+					if (url === targetUrl) {
+						throw new Error("catalog-outage-detail");
+					}
+					throw new Error(`unexpected URL: ${url}`);
+				},
+				snapshotIo: false,
+			});
+			const disabledProviders = [
+				...new Set([
+					...registry.getProviders(),
+					...IMPLICIT_LOCAL_RUNTIME_IDS,
+					...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+				]),
+			].filter(provider => provider !== "synthetic");
+			try {
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+				const failure = await registry.refreshForSpawn(["synthetic/no-model"], { force: true });
+				expect(requests.filter(url => url === targetUrl).length).toBeGreaterThan(0);
+				expect(requests.filter(url => url !== targetUrl)).toEqual([]);
+				expect(failure).toContain("Model discovery failed");
+				expect(failure).not.toContain("catalog-outage-detail");
+				expect(failure).not.toContain("synthetic-test-key");
+			} finally {
+				resetSettingsForTest();
+			}
+		});
+
+		test("does not treat refused optional local runtimes as a spawn refresh failure", async () => {
+			authStorage.setRuntimeApiKey("synthetic", "synthetic-test-key");
+			const targetUrl = "https://api.synthetic.new/openai/v1/models";
+			const modelId = "hf:zai-org/GLM-5.1";
+			const requests: string[] = [];
+			const unexpectedRemoteUrls: string[] = [];
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async input => {
+					const url = String(input);
+					requests.push(url);
+					if (url === targetUrl) {
+						return new Response(JSON.stringify({ data: [{ id: modelId }] }), {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						});
+					}
+					const hostname = new URL(url).hostname;
+					if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1") {
+						throw new Error("connect ECONNREFUSED");
+					}
+					unexpectedRemoteUrls.push(url);
+					throw new Error(`unexpected remote URL: ${url}`);
+				},
+				snapshotIo: false,
+			});
+			const allowedProviders = new Set(["synthetic", ...IMPLICIT_LOCAL_RUNTIME_IDS]);
+			const disabledProviders = [
+				...new Set([
+					...registry.getProviders(),
+					...IMPLICIT_LOCAL_RUNTIME_IDS,
+					...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+				]),
+			].filter(provider => !allowedProviders.has(provider));
+			try {
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+				const result = await registry.refreshForSpawn(["synthetic/hf:zai-org/GLM-5.1"], { force: true });
+				expect(requests.filter(url => url === targetUrl).length).toBeGreaterThan(0);
+				expect(requests.filter(url => {
+					const hostname = new URL(url).hostname;
+					return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+				}).length).toBeGreaterThan(0);
+				expect(unexpectedRemoteUrls).toEqual([]);
+				expect(registry.find("synthetic", modelId)).toBeDefined();
+				expect(result).toBeUndefined();
+			} finally {
+				resetSettingsForTest();
+				authStorage.removeRuntimeApiKey("synthetic");
+			}
+		});
+		test("purges expired suppressions without clearing future cooldowns", async () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			registry.suppressSelector("openai/gpt-4o", Date.now() - 1);
+			registry.suppressSelector("openai/gpt-4.1", Date.now() + 60_000);
+
+			await registry.refreshForSpawn([]);
+
+			expect(registry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
+			expect(registry.isSelectorSuppressed("openai/gpt-4.1")).toBe(true);
+		});
+
+		test("clears a stale preflight discovery warning after a forced refresh succeeds while keeping persistent failure warnings", async () => {
+			vi.useFakeTimers();
+			try {
+				setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+				writeRawModelsJson({
+					"spawn-stale-warning": {
+						baseUrl: "https://spawn-stale-warning.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "fallback" }],
+					},
+				});
+				const targetUrl = "https://spawn-stale-warning.example/v1/models";
+				const disabledProviders = [
+					...new Set([
+						...IMPLICIT_LOCAL_RUNTIME_IDS,
+						...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+					]),
+				];
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+
+				let requests = 0;
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url !== targetUrl) {
+						throw new Error(`Unexpected URL: ${url}`);
+					}
+					requests++;
+					if (requests === 1) {
+						throw new Error("temporary discovery outage");
+					}
+					return new Response(JSON.stringify({ data: [{ id: "new-preferred" }, { id: "fallback" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock, snapshotIo: false });
+				const chain = ["spawn-stale-warning/new-preferred", "spawn-stale-warning/fallback"];
+
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				const first = await resolveAgentModelChain(chain, registry);
+				expect(requests).toBe(2);
+				expect(first.model?.provider).toBe("spawn-stale-warning");
+				expect(first.model?.id).toBe("new-preferred");
+				expect(first.warning).toBeUndefined();
+
+				setSystemTime(new Date(Date.now() + 10_000));
+				const second = await resolveAgentModelChain(chain, registry);
+				expect(requests).toBe(2);
+				expect(second.model?.provider).toBe("spawn-stale-warning");
+				expect(second.model?.id).toBe("new-preferred");
+				expect(second.warning).toBeUndefined();
+
+				let persistentRequests = 0;
+				const persistentRegistry = new ModelRegistry(authStorage, modelsJsonPath, {
+					fetch: async input => {
+						const url = input instanceof Request ? input.url : String(input);
+						if (url !== targetUrl) {
+							throw new Error(`Unexpected URL: ${url}`);
+						}
+						persistentRequests++;
+						throw new Error("persistent discovery outage");
+					},
+					snapshotIo: false,
+				});
+				setSystemTime(new Date(Date.now() + 5 * 60 * 1000 + 1));
+				const persistent = await resolveAgentModelChain(["spawn-stale-warning/fallback"], persistentRegistry);
+				expect(persistentRequests).toBe(1);
+				expect(persistent.model?.id).toBe("fallback");
+				expect(persistent.warning).toContain("Model discovery failed");
+
+				setSystemTime(new Date(Date.now() + 10_000));
+				const persistentCached = await resolveAgentModelChain(
+					["spawn-stale-warning/fallback"],
+					persistentRegistry,
+				);
+				expect(persistentRequests).toBe(1);
+				expect(persistentCached.model?.id).toBe("fallback");
+				expect(persistentCached.warning).toContain("Model discovery failed");
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+				resetSettingsForTest();
+			}
+		});
+
+		test("forces discovery when preferred is missing and every other chain member is under an active cooldown", async () => {
+			vi.useFakeTimers();
+			try {
+				setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+				writeRawModelsJson({
+					"spawn-chain-cooldown": {
+						baseUrl: "https://spawn-chain-cooldown.example/v1",
+						auth: "none",
+						api: "openai-responses",
+						discovery: { type: "openai-models-list" },
+						models: [{ id: "cooldown-fallback" }],
+					},
+				});
+				const targetUrl = "https://spawn-chain-cooldown.example/v1/models";
+				const disabledProviders = [
+					...new Set([
+						...IMPLICIT_LOCAL_RUNTIME_IDS,
+						...PROVIDER_DESCRIPTORS.map(descriptor => descriptor.providerId),
+					]),
+				];
+				await Settings.init({ inMemory: true, overrides: { disabledProviders } });
+
+				let requests = 0;
+				const fetchMock: FetchImpl = async input => {
+					const url = input instanceof Request ? input.url : String(input);
+					if (url !== targetUrl) {
+						throw new Error(`Unexpected URL: ${url}`);
+					}
+					requests++;
+					return new Response(JSON.stringify({ data: [{ id: "new-preferred" }, { id: "cooldown-fallback" }] }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				};
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock, snapshotIo: false });
+				registry.suppressSelector("spawn-chain-cooldown/cooldown-fallback", Date.now() + 60_000);
+
+				const resolved = await resolveAgentModelChain(
+					["spawn-chain-cooldown/new-preferred", "spawn-chain-cooldown/cooldown-fallback"],
+					registry,
+				);
+				expect(requests).toBe(1);
+				expect(resolved.model?.provider).toBe("spawn-chain-cooldown");
+				expect(resolved.model?.id).toBe("new-preferred");
+				expect(registry.isSelectorSuppressed("spawn-chain-cooldown/cooldown-fallback")).toBe(true);
+
+				await expect(
+					resolveAgentModelChain(["spawn-chain-cooldown/cooldown-fallback"], registry),
+				).rejects.toThrow(/suppressed by a rate limit or quota cooldown/);
+				expect(registry.isSelectorSuppressed("spawn-chain-cooldown/cooldown-fallback")).toBe(true);
+			} finally {
+				setSystemTime();
+				vi.useRealTimers();
+				resetSettingsForTest();
+			}
+		});
+	});
 	});
 });
