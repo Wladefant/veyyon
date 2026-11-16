@@ -586,6 +586,13 @@ function boundedScalarTail(parts: string[], tailSegment: string, maxChars: numbe
 	}
 	return chunks.reverse().join("");
 }
+function appendBoundedTail(existing: string, addition: string, maxChars: number): string {
+	if (addition.length >= maxChars) return addition.slice(-maxChars);
+	const total = existing.length + addition.length;
+	if (total <= maxChars) return existing + addition;
+	return existing.slice(total - maxChars) + addition;
+}
+
 /** Keep JSON structure and primitive metadata out of the text-record grammar. */
 export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
 	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
@@ -974,9 +981,10 @@ export class ProducerOutputGuard {
 	#overflowScalarToDropping(segment: string, overflowIndex: number): string {
 		const parts = this.#scalarParts ?? [];
 		const prefixSegment = segment.slice(0, overflowIndex);
+		let tail = "";
 		let pendingPrefix = 0;
 		try {
-			const tail = boundedScalarTail(parts, prefixSegment, MAX_PENDING_LOOKBEHIND_CHARS);
+			tail = boundedScalarTail(parts, prefixSegment, MAX_PENDING_LOOKBEHIND_CHARS);
 			pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(tail)) ?? 0;
 		} catch {
 			return this.#block(OVERSIZED_OUTPUT_RECORD);
@@ -1003,6 +1011,7 @@ export class ProducerOutputGuard {
 		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 		this.#droppingAssignmentState = "rejected";
 		this.#droppingPartOfCandidate = false;
+		this.#pending = this.#pendingPrefixLength ? tail : "";
 		return this.#pushRecords(segment.slice(overflowIndex));
 	}
 
@@ -1037,6 +1046,9 @@ export class ProducerOutputGuard {
 			let scannedDroppedSegment = false;
 			if (this.#dropping) {
 				this.#droppingAssignmentState = advanceEnvAssignmentState(this.#droppingAssignmentState, segment);
+				if (this.#pendingPrefixLength) {
+					this.#pending = appendBoundedTail(this.#pending, segment + separator, MAX_PENDING_LOOKBEHIND_CHARS);
+				}
 			} else {
 				const segmentLength = end - offset;
 				if (this.#oversizedPending) {
@@ -1065,7 +1077,9 @@ export class ProducerOutputGuard {
 						}
 						for (const line of this.#pending.split("\n")) this.#scanStructuredLine(line);
 						this.#scanStructuredLine(segment);
-						this.#pending = "";
+						this.#pending = this.#pendingPrefixLength
+							? appendBoundedTail(this.#pending, segment + separator, MAX_PENDING_LOOKBEHIND_CHARS)
+							: "";
 						this.#oversizedPending = false;
 						this.#dropping = true;
 						this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
@@ -1100,7 +1114,9 @@ export class ProducerOutputGuard {
 						this.#oversizedPendingAssignmentState = advanceEnvAssignmentState(consumed.currentLineState, segment);
 					} else {
 						this.#droppingPartOfCandidate = this.#structured;
-						this.#pending = "";
+						this.#pending = this.#pendingPrefixLength
+							? appendBoundedTail(buffered, segment + separator, MAX_PENDING_LOOKBEHIND_CHARS)
+							: "";
 						this.#dropping = true;
 						this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 						this.#droppingAssignmentState = advanceEnvAssignmentState(consumed.currentLineState, segment);
@@ -1146,7 +1162,15 @@ export class ProducerOutputGuard {
 				this.#oversizedPending = false;
 				this.#oversizedPendingAssignmentState = "ws0";
 				if (this.#consumeCompletedOversizedLine(lineState, "\n", output)) break;
-				if (!wasAssignment) output.push(`${OVERSIZED_OUTPUT_RECORD}\n`);
+				if (this.#structured) {
+					for (const line of sanitized.split("\n")) this.#scanStructuredLine(line);
+					if (!this.#structured) {
+						const flushed = this.#flushCandidate();
+						if (flushed) output.push(flushed);
+					}
+				} else if (!wasAssignment) {
+					output.push(`${OVERSIZED_OUTPUT_RECORD}\n`);
+				}
 				offset = newline + 1;
 				continue;
 			}
@@ -1154,6 +1178,39 @@ export class ProducerOutputGuard {
 				const lineState = this.#droppingAssignmentState;
 				const wasAssignment = lineState === "matched";
 				const partOfCandidate = this.#droppingPartOfCandidate;
+				let pendingPrefix = 0;
+				let sanitizedPending = "";
+				if (this.#pendingPrefixLength && this.#pending) {
+					try {
+						sanitizedPending = sanitizeText(this.#pending);
+						pendingPrefix = this.#pendingPrefixLength(sanitizedPending);
+					} catch {
+						output.push(this.#block(this.#droppingLabel));
+						break;
+					}
+				}
+				if (pendingPrefix > 0) {
+					if (pendingPrefix > MAX_PENDING_LOOKBEHIND_CHARS) {
+						output.push(this.#block(this.#droppingLabel));
+						break;
+					}
+					this.#dropping = false;
+					this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+					this.#droppingAssignmentState = "ws0";
+					this.#droppingPartOfCandidate = false;
+					if (partOfCandidate && !this.#structured) this.#candidateEndsWithNewline = true;
+					if (this.#consumeCompletedOversizedLine(lineState, "\n", output)) break;
+					if (this.#structured) {
+						this.#candidate = "";
+						this.#candidateOversized = true;
+						this.#candidateEndsWithNewline = true;
+					}
+					this.#pending = sanitizedPending.slice(-pendingPrefix);
+					this.#oversizedPending = true;
+					this.#oversizedPendingAssignmentState = "ws0";
+					offset = newline + 1;
+					continue;
+				}
 				this.#pending = "";
 				this.#dropping = false;
 				this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;

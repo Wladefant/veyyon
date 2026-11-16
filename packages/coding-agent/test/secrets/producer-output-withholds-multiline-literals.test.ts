@@ -464,4 +464,75 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(boundaryStreamed).toBe(OVERSIZED_OUTPUT_RECORD);
 		expect(boundaryStreamed).not.toContain(SECRET);
 	}, 25_000);
+	it("withholds multiline registered literals starting after 16 Mi scalar overflow or ordinary oversize while preserving later diagnostics", () => {
+		const tail = "Error: final diagnostic\n";
+		const scalarOverflowInput = `"${"x".repeat(16 * 1024 * 1024 + 8)}${SECRET}\n${tail}`;
+
+		const directScalar = guardFor().sanitize(scalarOverflowInput);
+		expect(directScalar).not.toContain(SECRET);
+		expect(directScalar).not.toContain("synthetic-second-line");
+		expect(directScalar).toContain(tail);
+
+		const wholeScalarGuard = guardFor();
+		const wholeScalar = wholeScalarGuard.push(scalarOverflowInput) + wholeScalarGuard.finish();
+		expect(wholeScalar).not.toContain(SECRET);
+		expect(wholeScalar).not.toContain("synthetic-second-line");
+		expect(wholeScalar).toContain(tail);
+
+		const splitPoints = [
+			16 * 1024 * 1024 + 8,
+			16 * 1024 * 1024 + 8 + "synthetic-first-line".length,
+			16 * 1024 * 1024 + 8 + PREFIX.length,
+		];
+		for (const split of splitPoints) {
+			const splitGuard = guardFor();
+			const splitOut =
+				splitGuard.push(scalarOverflowInput.slice(0, split)) +
+				splitGuard.push(scalarOverflowInput.slice(split)) +
+				splitGuard.finish();
+			expect(splitOut).not.toContain(SECRET);
+			expect(splitOut).not.toContain("synthetic-second-line");
+			expect(splitOut).toContain(tail);
+		}
+
+		const eofScalarGuard = guardFor();
+		const eofScalar =
+			eofScalarGuard.push(`"${"x".repeat(16 * 1024 * 1024 + 8)}`) +
+			eofScalarGuard.push(SECRET) +
+			eofScalarGuard.finish();
+		expect(eofScalar).not.toContain("synthetic-first-line");
+		expect(eofScalar).not.toContain("synthetic-second-line");
+
+		const ordinaryOversizeInput = `${"x".repeat(70_000)}${SECRET}\n${tail}`;
+		const directOrdinary = guardFor().sanitize(ordinaryOversizeInput);
+		expect(directOrdinary).not.toContain(SECRET);
+		expect(directOrdinary).not.toContain("synthetic-second-line");
+		expect(directOrdinary).toContain(tail);
+
+		const wholeOrdinaryGuard = guardFor();
+		const wholeOrdinary = wholeOrdinaryGuard.push(ordinaryOversizeInput) + wholeOrdinaryGuard.finish();
+		expect(wholeOrdinary).not.toContain(SECRET);
+		expect(wholeOrdinary).not.toContain("synthetic-second-line");
+		expect(wholeOrdinary).toContain(tail);
+
+		const splitOrdinaryGuard = guardFor();
+		const ordinaryBreak = 70_000 + PREFIX.length;
+		const splitOrdinary =
+			splitOrdinaryGuard.push(ordinaryOversizeInput.slice(0, ordinaryBreak)) +
+			splitOrdinaryGuard.push(ordinaryOversizeInput.slice(ordinaryBreak)) +
+			splitOrdinaryGuard.finish();
+		expect(splitOrdinary).not.toContain(SECRET);
+		expect(splitOrdinary).not.toContain("synthetic-second-line");
+		expect(splitOrdinary).toContain(tail);
+
+		const pendingToDropGuard = guardFor();
+		let pendingToDrop = pendingToDropGuard.push(PREFIX.repeat(4000));
+		pendingToDrop += pendingToDropGuard.push("x".repeat(2_000_000));
+		pendingToDrop += pendingToDropGuard.push(PREFIX);
+		pendingToDrop += pendingToDropGuard.push(`synthetic-second-line\n${tail}`);
+		pendingToDrop += pendingToDropGuard.finish();
+		expect(pendingToDrop).not.toContain(SECRET);
+		expect(pendingToDrop).not.toContain("synthetic-second-line");
+		expect(pendingToDrop).toContain(tail);
+	}, 25_000);
 });
