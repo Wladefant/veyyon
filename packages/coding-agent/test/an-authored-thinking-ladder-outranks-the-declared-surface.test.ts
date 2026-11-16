@@ -300,4 +300,95 @@ describe("applyModelPatch preserves discovery safety metadata around authored th
 			enabled: true,
 		});
 	});
+
+	test("validates inherited and authored defaults against the final normalized Ollama ladder", () => {
+		const ollamaBase = buildModel({
+			id: "qwen3-coder:30b",
+			name: "Qwen3 Coder",
+			api: "openai-completions",
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+			reasoningOptions: {
+				efforts: [Effort.Minimal, Effort.Low],
+				defaultLevel: Effort.Minimal,
+				requiresEffort: true,
+			},
+		});
+
+		const inheritedMinimal = applyModelPatch(
+			ollamaBase,
+			{ thinking: { mode: "effort", efforts: [Effort.Minimal, Effort.Low] } },
+			"merge",
+		);
+		expect(inheritedMinimal.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.Max]);
+		expect(inheritedMinimal.thinking?.defaultLevel).toBeUndefined();
+		expect(inheritedMinimal.thinking?.requiresEffort).toBe(true);
+
+		const authoredMinimal = applyModelPatch(
+			ollamaBase,
+			{
+				thinking: {
+					mode: "effort",
+					efforts: [Effort.Minimal, Effort.Low],
+					defaultLevel: Effort.Minimal,
+				},
+			},
+			"merge",
+		);
+		expect(authoredMinimal.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.Max]);
+		expect(authoredMinimal.thinking?.defaultLevel).toBeUndefined();
+
+		const compatibleBase = buildModel({
+			id: "qwen3-coder:30b",
+			name: "Qwen3 Coder",
+			api: "openai-completions",
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+			reasoningOptions: {
+				efforts: [Effort.Low, Effort.Medium],
+				defaultLevel: Effort.Low,
+			},
+		});
+		const inheritedLow = applyModelPatch(
+			compatibleBase,
+			{ thinking: { mode: "effort", efforts: [Effort.Minimal, Effort.Low] } },
+			"merge",
+		);
+		expect(inheritedLow.thinking?.efforts).toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.Max]);
+		expect(inheritedLow.thinking?.defaultLevel).toBe(Effort.Low);
+
+		const glm52Base = buildModel({
+			id: "glm-5.2",
+			name: "GLM-5.2",
+			api: "openai-completions",
+			provider: "ollama-cloud",
+			baseUrl: "https://ollama.com/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+			reasoningOptions: {
+				efforts: [Effort.Low, Effort.High],
+				defaultLevel: Effort.Low,
+			},
+		});
+		const glm52Patched = applyModelPatch(
+			glm52Base,
+			{ thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] } },
+			"merge",
+		);
+		expect(glm52Patched.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect(glm52Patched.thinking?.defaultLevel).toBeUndefined();
+	});
 });
