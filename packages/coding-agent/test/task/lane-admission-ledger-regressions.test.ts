@@ -613,14 +613,14 @@ describe("lane-admission ledger safety regressions", () => {
 			fs.chmodSync(permFile, 0o000);
 		}
 		const realReaddirSync = fs.readdirSync;
-		const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((target, options) => {
+		const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation(((target: fs.PathLike, options?: unknown) => {
 			if (String(target) === terminalsDir) {
 				const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
 				err.code = "EACCES";
 				throw err;
 			}
 			return realReaddirSync(target as fs.PathLike, options as never);
-		});
+		}) as typeof fs.readdirSync);
 		try {
 			const eaccesStatus = await getLaneAdmissionStatus();
 			expect(eaccesStatus.all_host_enforced).toBe(false);
