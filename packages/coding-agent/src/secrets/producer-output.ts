@@ -1036,6 +1036,7 @@ export class ProducerOutputGuard {
 						this.#oversizedPendingAssignmentState,
 						segment,
 					);
+					if (this.#pending.length + segmentLength + separator.length > MAX_PENDING_LOOKBEHIND_CHARS) {
 						const room = Math.max(0, MAX_PENDING_LOOKBEHIND_CHARS - this.#pending.length);
 						const bounded = sanitizeText(this.#pending + segment.slice(0, room));
 						let pendingPrefix = 0;
@@ -1152,6 +1153,7 @@ export class ProducerOutputGuard {
 				this.#droppingPartOfCandidate = false;
 				if (partOfCandidate && !this.#structured) this.#candidateEndsWithNewline = true;
 				if (this.#consumeCompletedOversizedLine(lineState, "\n", output)) break;
+				if (this.#structured) {
 					this.#candidate = "";
 					this.#candidateOversized = true;
 					this.#candidateEndsWithNewline = true;
