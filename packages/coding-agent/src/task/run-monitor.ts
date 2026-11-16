@@ -9,6 +9,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentEvent } from "@veyyon/agent-core";
 import { AGENT_EVENT_TYPES } from "@veyyon/agent-core/types";
 import type { Usage } from "@veyyon/ai";
+import {
+	getOpenAIStreamFirstEventTimeoutMs,
+	getStreamFirstEventTimeoutMs,
+	getStreamIdleTimeoutMs,
+} from "@veyyon/ai/utils/idle-iterator";
 import { emptyUsage } from "@veyyon/catalog/models";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { detachedString, errorMessage, isRecord, logger, popLoopPhase, pushLoopPhase, truncate } from "@veyyon/utils";
@@ -242,13 +247,35 @@ export interface RunMonitorArgs {
  */
 export type WatchdogPhase = "startup" | "streaming" | "tool-running" | "waiting-child";
 
+const DEFAULT_TRANSPORT_WAIT_MS = 300_000;
+
+/**
+ * Extra slack above the provider's first-event/idle budget so pre-dispatch
+ * preparation (context transforms, auth lookup, timer skew) after `agent_start`
+ * never causes the outer monitor to pre-empt a healthy provider stream.
+ */
+export const WATCHDOG_TRANSPORT_SLACK_MS = 30_000;
+
 export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> = {
-	// Do not pre-empt the transport's five-minute default first-event/idle budget.
-	startup: 300_000,
-	streaming: 300_000,
+	// Strictly later than the transport's five-minute default first-event/idle budget
+	// plus pre-dispatch latency and scheduling slack.
+	startup: DEFAULT_TRANSPORT_WAIT_MS + WATCHDOG_TRANSPORT_SLACK_MS,
+	streaming: DEFAULT_TRANSPORT_WAIT_MS + WATCHDOG_TRANSPORT_SLACK_MS,
 	"tool-running": 900_000,
 	"waiting-child": 1_800_000,
 };
+
+function resolveWatchdogPhaseLimitMs(phase: WatchdogPhase): number {
+	const baseLimit = PHASE_WATCHDOG_LIMITS_MS[phase];
+	if (phase !== "startup" && phase !== "streaming") return baseLimit;
+	const effectiveTransportBudget = Math.max(
+		DEFAULT_TRANSPORT_WAIT_MS,
+		getStreamFirstEventTimeoutMs() ?? 0,
+		getOpenAIStreamFirstEventTimeoutMs() ?? 0,
+		getStreamIdleTimeoutMs() ?? 0,
+	);
+	return Math.max(baseLimit, effectiveTransportBudget + WATCHDOG_TRANSPORT_SLACK_MS);
+}
 
 export interface AgentRunMonitor {
 	readonly progress: AgentProgress;
@@ -430,7 +457,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		clearTimeout(watchdogTimer);
 		watchdogTimer = undefined;
 		if (resolved || abortSignal.aborted) return;
-		const limit = PHASE_WATCHDOG_LIMITS_MS[watchdogPhase];
+		const limit = resolveWatchdogPhaseLimitMs(watchdogPhase);
 		watchdogTimer = setTimeout(() => {
 			if (resolved || abortSignal.aborted || Date.now() - lastProgressEventAt < limit) return;
 			requestAbort("stalled");

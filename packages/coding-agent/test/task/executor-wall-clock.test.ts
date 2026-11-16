@@ -4,6 +4,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
+import { PHASE_WATCHDOG_LIMITS_MS } from "@veyyon/coding-agent/task/run-monitor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import {
 	createAssistantStopMessage,
@@ -165,13 +166,13 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		try {
 			await firstPrompt;
-			await advanceTimersAndFlush(300_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			expect(handle.abortCalls()).toBe(1);
 			await secondPrompt;
 			await flushAsync();
 			expect(handle.prompts).toHaveLength(2);
 			expect(handle.prompts[1]?.text).toContain("Continue the same assignment from your existing session state.");
-			await advanceTimersAndFlush(300_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			expect(handle.abortCalls()).toBe(2);
 			const result = await resultPromise;
 			expect(result.abortReason).toContain("stalled");
@@ -181,6 +182,41 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			releaseSecondPrompt?.();
 			await resultPromise;
 		}
+	});
+	it("does not pre-empt a provider response delayed after agent_start within the five-minute provider budget", async () => {
+		vi.useFakeTimers();
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		let promptStarted: (() => void) | undefined;
+		let releaseProvider: (() => void) | undefined;
+		const promptReady = new Promise<void>(resolve => {
+			promptStarted = resolve;
+		});
+		const providerGate = new Promise<void>(resolve => {
+			releaseProvider = resolve;
+		});
+		const handle = createMockSessionHandle(async ({ emit }) => {
+			emit({ type: "agent_start" });
+			emit({ type: "turn_start" });
+			promptStarted?.();
+			await providerGate;
+			emit(yieldSuccessEvent({ ok: true }, "tool-delayed-provider"));
+		});
+		mockCreateAgentSession(handle.session);
+
+		const resultPromise = runSubprocess({
+			...baseOptions,
+			id: "agent-pre-dispatch-slack",
+			settings,
+		});
+		await promptReady;
+		// Simulate 5s pre-dispatch latency + 299.999s provider wait (304.999s total after agent_start).
+		await advanceTimersAndFlush(304_999);
+		expect(handle.abortCalls()).toBe(0);
+		releaseProvider?.();
+		const result = await resultPromise;
+		expect(result.aborted).toBe(false);
+		expect(result.abortReason).toBeUndefined();
+		expect(result.terminalOutcome).toBe("completed");
 	});
 
 	it("aborts a stalled agent and surfaces a runtime-limit reason", async () => {
@@ -245,7 +281,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		try {
 			await firstPrompt;
-			await advanceTimersAndFlush(300_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			await abortHasStarted;
 			await flushAsync();
 			await advanceTimersAndFlush(5_001);
@@ -296,7 +332,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		try {
 			await started;
 			await flushAsync();
-			await advanceTimersAndFlush(300_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			await flushAsync();
 			expect(handle.abortCalls()).toBe(1);
 			const result = await resultPromise;
