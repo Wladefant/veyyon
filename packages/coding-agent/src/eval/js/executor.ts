@@ -12,6 +12,7 @@ import {
 	resolveOutputSinkWindow,
 } from "../../tools/core/output-meta";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
+import { agentEvalSessionKey } from "../session-id";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";
 
@@ -29,6 +30,7 @@ export interface JsExecutorOptions {
 	onStatus?: (event: JsStatusEvent) => void;
 	signal?: AbortSignal;
 	sessionId: string;
+	agentId?: string;
 	/**
 	 * Agent session that owns this eval context, so it is reaped when that session
 	 * ends (mirrors the python/ruby/julia kernels). Unset falls back to per-context
@@ -152,7 +154,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 
 	try {
 		await executeInVmContext({
-			sessionKey: options.sessionId,
+			sessionKey: agentEvalSessionKey(options.sessionId, options.agentId),
 			sessionId: options.sessionId,
 			ownerId: options.kernelOwnerId,
 			cwd: options.cwd ?? options.session.cwd,
