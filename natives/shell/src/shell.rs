@@ -1748,6 +1748,9 @@ async fn read_pipe_chunk_windows(
 						return Ok(None);
 					};
 					let read_len = buf.len();
+					use std::sync::atomic::{AtomicBool, Ordering};
+					let worker_cancelled = Arc::new(AtomicBool::new(false));
+					let worker_cancelled_thread = Arc::clone(&worker_cancelled);
 					let (tx, rx) = tokio::sync::oneshot::channel();
 					let join_handle = std::thread::Builder::new()
 						.name("veyyon-win-nonpipe-read".into())
@@ -1755,10 +1758,17 @@ async fn read_pipe_chunk_windows(
 							let _permit = permit;
 							let mut chunk = vec![0u8; read_len];
 							let res = loop {
+								if worker_cancelled_thread.load(Ordering::Acquire) {
+									break Ok(Vec::new());
+								}
 								match cloned.read(&mut chunk) {
 									Ok(n) => {
 										chunk.truncate(n);
 										break Ok(chunk);
+									},
+									Err(e) if worker_cancelled_thread.load(Ordering::Acquire) => {
+										let _ = e;
+										break Ok(Vec::new());
 									},
 									Err(e) if e.kind() == io::ErrorKind::Interrupted => {},
 									Err(e) => break Err(e),
@@ -1767,17 +1777,36 @@ async fn read_pipe_chunk_windows(
 							let _ = tx.send(res);
 						})
 						.map_err(io::Error::other)?;
+					struct CancelOnDrop {
+						handle: Option<std::thread::JoinHandle<()>>,
+						cancel: Arc<AtomicBool>,
+					}
+					impl Drop for CancelOnDrop {
+						fn drop(&mut self) {
+							self.cancel.store(true, Ordering::Release);
+							if let Some(handle) = self.handle.take() {
+								use std::os::windows::io::AsRawHandle;
+								// SAFETY: `handle` is a live thread handle until dropped.
+								unsafe {
+									CancelSynchronousIo(handle.as_raw_handle());
+								}
+							}
+						}
+					}
+					let mut cancel_guard = CancelOnDrop {
+						handle: Some(join_handle),
+						cancel: worker_cancelled,
+					};
 					let chunk = tokio::select! {
 						biased;
 						() = cancel_token.cancelled() => {
-							use std::os::windows::io::AsRawHandle;
-							// SAFETY: `join_handle` is a live thread handle until `join()` or drop.
-							unsafe {
-								CancelSynchronousIo(join_handle.as_raw_handle());
-							}
+							drop(cancel_guard);
 							return Ok(None);
 						},
-						res = rx => res.map_err(io::Error::other)??,
+						res = rx => {
+							cancel_guard.handle = None;
+							res.map_err(io::Error::other)??
+						},
 					};
 					if chunk.is_empty() {
 						return Ok(None);

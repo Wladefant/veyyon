@@ -2,7 +2,6 @@ use std::{
 	collections::HashSet,
 	env,
 	ffi::OsString,
-	io::Read as _,
 	os::windows::process::CommandExt,
 	path::{Path, PathBuf},
 	process::{Command, Stdio},
@@ -364,6 +363,23 @@ fn query_git_install_path_from_registry() -> Option<String> {
 /// Runs `where git` once with a bounded wait and cancellation polling.
 /// Returns `(discovered_root, completed_cleanly)` so cancelled/timed-out runs
 /// are never cached.
+fn drain_where_stdout(mut stdout: impl std::io::Read) -> String {
+	let mut buf = Vec::with_capacity(512);
+	let mut chunk = [0u8; 512];
+	loop {
+		match stdout.read(&mut chunk) {
+			Ok(0) | Err(_) => break,
+			Ok(n) => {
+				if buf.len() < MAX_WHERE_STDOUT_BYTES {
+					let keep = n.min(MAX_WHERE_STDOUT_BYTES - buf.len());
+					buf.extend_from_slice(&chunk[..keep]);
+				}
+			},
+		}
+	}
+	String::from_utf8_lossy(&buf).into_owned()
+}
+
 fn query_git_install_path_from_where(cancel: Option<&AtomicBool>) -> (Option<String>, bool) {
 	if is_cancelled(cancel) {
 		return (None, false);
@@ -381,23 +397,10 @@ fn query_git_install_path_from_where(cancel: Option<&AtomicBool>) -> (Option<Str
 		return (None, true);
 	};
 
-	let stdout_handle = child.stdout.take().map(|mut stdout| {
+	let stdout_handle = child.stdout.take().map(|stdout| {
 		thread::Builder::new()
 			.name("veyyon-where-git-stdout".into())
-			.spawn(move || {
-				let mut buf = Vec::with_capacity(512);
-				let mut chunk = [0u8; 512];
-				while buf.len() < MAX_WHERE_STDOUT_BYTES {
-					match stdout.read(&mut chunk) {
-						Ok(0) | Err(_) => break,
-						Ok(n) => {
-							let keep = n.min(MAX_WHERE_STDOUT_BYTES - buf.len());
-							buf.extend_from_slice(&chunk[..keep]);
-						},
-					}
-				}
-				String::from_utf8_lossy(&buf).into_owned()
-			})
+			.spawn(move || drain_where_stdout(stdout))
 	});
 
 	let deadline = Instant::now() + WHERE_GIT_TIMEOUT;
@@ -592,6 +595,21 @@ mod tests {
 			normalize_path(Path::new(r"\\offline-server\share\bin")),
 			r"\\offline-server\share\bin"
 		);
+	}
+
+	#[test]
+	fn drain_where_stdout_drains_past_cap_without_closing_pipe() {
+		use std::io::Write;
+		let (reader, mut writer) = std::io::pipe().expect("pipe");
+		let total = MAX_WHERE_STDOUT_BYTES + 8192;
+		let writer_thread = thread::spawn(move || {
+			let payload = vec![b'a'; total];
+			writer.write_all(&payload)
+		});
+		let captured = drain_where_stdout(reader);
+		let write_res = writer_thread.join().expect("writer thread");
+		assert!(write_res.is_ok(), "writer must not hit BrokenPipe: {write_res:?}");
+		assert_eq!(captured.len(), MAX_WHERE_STDOUT_BYTES);
 	}
 }
 

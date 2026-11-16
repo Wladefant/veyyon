@@ -811,3 +811,42 @@ fn shell_session_echo_and_cancel_stay_responsive_under_saturated_pool_and_blocke
 		.expect("aborted Shell::run must return Ok");
 	assert!(aborted.cancelled, "expected cancelled=true, got: {aborted:?}");
 }
+
+#[test]
+fn deeply_nested_command_substitutions_above_32_do_not_deadlock() {
+	let rt = tokio::runtime::Builder::new_multi_thread()
+		.worker_threads(4)
+		.max_blocking_threads(8)
+		.enable_all()
+		.build()
+		.expect("runtime should build");
+
+	let mut cmd = "echo deep-ok".to_string();
+	for _ in 0..40 {
+		cmd = format!("echo $({cmd})");
+	}
+
+	let (res, output) = rt.block_on(async {
+		let (chunk_tx, chunk_rx) = flume::unbounded();
+		let res = tokio::time::timeout(
+			Duration::from_secs(5),
+			execute_shell(
+				ShellExecuteOptions {
+					command: cmd,
+					timeout_ms: Some(4_000),
+					..Default::default()
+				},
+				Some(chunk_tx),
+				CancelToken::default(),
+			),
+		)
+		.await
+		.expect("40-level nested command substitution must not deadlock")
+		.expect("execute_shell must return Ok");
+		(res, chunk_rx.drain().collect::<String>())
+	});
+	rt.shutdown_timeout(Duration::from_millis(100));
+	assert_eq!(res.exit_code, Some(0));
+	assert!(!res.timed_out);
+	assert!(output.contains("deep-ok"), "output: {output:?}");
+}
