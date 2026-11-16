@@ -73,7 +73,8 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		expect(guard.sanitize(input) === input).toBe(true);
 		for (let split = 0; split <= input.length; split++) {
 			const output = stream(input, split);
-			if (output !== input) throw new Error(`JSON string LF stream failed at split ${split} (${output.length}/${input.length})`);
+			if (output !== input)
+				throw new Error(`JSON string LF stream failed at split ${split} (${output.length}/${input.length})`);
 		}
 	});
 
@@ -101,8 +102,9 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 	});
 	it("redacts long top-level JSON string logs across every credential split and keeps the final error", () => {
 		const secret = `ghp_${"D".repeat(36)}`;
-		const lines = Array.from({ length: 800 }, (_, index) =>
-			`row-${index.toString().padStart(4, "0")}: ${"x".repeat(80)}`,
+		const lines = Array.from(
+			{ length: 800 },
+			(_, index) => `row-${index.toString().padStart(4, "0")}: ${"x".repeat(80)}`,
 		);
 		lines[0] = "persist-credentials: false";
 		lines[731] = `persist-credentials: ${secret} following text`;
@@ -132,7 +134,8 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		expect(guard.sanitize(input) === "[line over 65,536 chars, not scanned]").toBe(true);
 		const bounded = new ProducerOutputGuard();
 		let output = "";
-		for (let offset = 0; offset < input.length; offset += 8192) output += bounded.push(input.slice(offset, offset + 8192));
+		for (let offset = 0; offset < input.length; offset += 8192)
+			output += bounded.push(input.slice(offset, offset + 8192));
 		output += bounded.finish();
 		expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
 		expect(output).not.toContain(secret);
@@ -149,7 +152,8 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 			const input = JSON.stringify(`${prefix}${secret}${"z".repeat(30)}`);
 			const bounded = new ProducerOutputGuard();
 			let output = "";
-			for (let offset = 0; offset < input.length; offset += 8192) output += bounded.push(input.slice(offset, offset + 8192));
+			for (let offset = 0; offset < input.length; offset += 8192)
+				output += bounded.push(input.slice(offset, offset + 8192));
 			output += bounded.finish();
 			expect(typeof JSON.parse(output) === "string").toBe(true);
 			expect(output.includes(secret) === false).toBe(true);
@@ -167,7 +171,8 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 			const input = `${"x".repeat(prefixLength)}${secret}${"z".repeat(65536)}`;
 			const bounded = new ProducerOutputGuard();
 			let output = "";
-			for (let offset = 0; offset < input.length; offset += 8192) output += bounded.push(input.slice(offset, offset + 8192));
+			for (let offset = 0; offset < input.length; offset += 8192)
+				output += bounded.push(input.slice(offset, offset + 8192));
 			output += bounded.finish();
 			expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
 			expect(output.includes(secret) === false).toBe(true);
@@ -181,34 +186,32 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		expect(output === "[line over 65,536 chars, not scanned]").toBe(true);
 		expect(output.includes(rawTail) === false).toBe(true);
 	});
-	it.each([
-		"persist-credentials: falseish",
-		"persist-credentials: false0",
-		"persist-credentials: false-secret",
-	])("does not exempt a false prefix with a credential suffix: %s", setting => {
-		const input = `checkout ${setting}\n${sentinel}`;
-		const sanitized = guard.sanitize(input);
-		expect(sanitized).not.toContain(setting);
-		expect(sanitized).toContain(sentinel);
-	});
+	it.each(["persist-credentials: falseish", "persist-credentials: false0", "persist-credentials: false-secret"])(
+		"does not exempt a false prefix with a credential suffix: %s",
+		setting => {
+			const input = `checkout ${setting}\n${sentinel}`;
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(setting);
+			expect(sanitized).toContain(sentinel);
+		},
+	);
 	it('does not treat the quoted string "false" as boolean metadata', () => {
 		const input = 'persist-credentials: "false"\n';
 		expect(guard.sanitize(input)).not.toContain('"false"');
 	});
 
-	it.each([
-		`ghp_${"A".repeat(36)}`,
-		`ghs_${"B".repeat(36)}`,
-		`Bearer ${"C".repeat(36)}`,
-	])("redacts real credential value while retaining following text and newline: %s", credential => {
-		const input = `persist-credentials: ${credential} after\n${sentinel}`;
-		for (let split = 0; split <= input.length; split++) {
-			const output = stream(input, split);
-			expect(output).not.toContain(credential);
-			expect(output).toContain(" after\n");
-			expect(output).toContain(sentinel);
-		}
-	});
+	it.each([`ghp_${"A".repeat(36)}`, `ghs_${"B".repeat(36)}`, `Bearer ${"C".repeat(36)}`])(
+		"redacts real credential value while retaining following text and newline: %s",
+		credential => {
+			const input = `persist-credentials: ${credential} after\n${sentinel}`;
+			for (let split = 0; split <= input.length; split++) {
+				const output = stream(input, split);
+				expect(output).not.toContain(credential);
+				expect(output).toContain(" after\n");
+				expect(output).toContain(sentinel);
+			}
+		},
+	);
 
 	const progressBody = `ok progress line ${"x".repeat(40_000)}\n`.repeat(430);
 	it.each(['"started"\n', '  "started"\n', '"unclosed quote\n'])(
@@ -240,7 +243,10 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		const splitInput = `"started"\n${progressBody}${tail}`;
 		for (const split of [8, 9, 10, splitInput.length - tail.length]) {
 			const splitGuard = new ProducerOutputGuard();
-			const streamed = splitGuard.push(splitInput.slice(0, split)) + splitGuard.push(splitInput.slice(split)) + splitGuard.finish();
+			const streamed =
+				splitGuard.push(splitInput.slice(0, split)) +
+				splitGuard.push(splitInput.slice(split)) +
+				splitGuard.finish();
 			expect(streamed.endsWith(tail)).toBe(true);
 			expect(streamed.startsWith('"started"\n')).toBe(true);
 		}

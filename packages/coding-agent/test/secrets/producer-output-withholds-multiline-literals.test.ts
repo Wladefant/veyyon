@@ -13,11 +13,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
-import {
-	BLOCKED_OUTPUT_RECORD,
-	OVERSIZED_OUTPUT_RECORD,
-	ProducerOutputGuard,
-} from "../../src/secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
 import { runWithProducerSecretOwner } from "../../src/secrets/producer-owner";
 
 const SECRET = "synthetic-first-line\nsynthetic-second-line";
@@ -220,8 +216,13 @@ describe("producer output withholds multiline registered literals", () => {
 			const streamed = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
 			const leaked = streamed.includes(SECRET);
 			expect(leaked, `split=${split} leaked a registered literal`).toBe(false);
-			expect(streamed.includes("[line over 65,536 chars, not scanned]"), `split=${split} did not mask the oversized candidate`).toBe(true);
-			expect(streamed.includes("Error: long checkout failed\n"), `split=${split} lost the final diagnostic`).toBe(true);
+			expect(
+				streamed.includes("[line over 65,536 chars, not scanned]"),
+				`split=${split} did not mask the oversized candidate`,
+			).toBe(true);
+			expect(streamed.includes("Error: long checkout failed\n"), `split=${split} lost the final diagnostic`).toBe(
+				true,
+			);
 		}
 	});
 	it("labels oversized GitHub JSON lines without releasing planted credentials", () => {
@@ -326,11 +327,23 @@ describe("producer output withholds multiline registered literals", () => {
 			expect(whole).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 			expect(whole).not.toContain("opaque-second");
 			expect(whole).not.toContain("opaque-third");
-			const splits = new Set([0, 5, 6, 7, 65_535, 65_536, 65_537, input.indexOf("\n"), input.indexOf("\n") + 1, input.indexOf("THIRD") + 6]);
+			const splits = new Set([
+				0,
+				5,
+				6,
+				7,
+				65_535,
+				65_536,
+				65_537,
+				input.indexOf("\n"),
+				input.indexOf("\n") + 1,
+				input.indexOf("THIRD") + 6,
+			]);
 			for (const split of splits) {
 				if (split < 0 || split > input.length) continue;
 				const splitGuard = new ProducerOutputGuard();
-				const streamed = splitGuard.push(input.slice(0, split)) + splitGuard.push(input.slice(split)) + splitGuard.finish();
+				const streamed =
+					splitGuard.push(input.slice(0, split)) + splitGuard.push(input.slice(split)) + splitGuard.finish();
 				expect(streamed).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
 				expect(streamed).not.toContain("opaque-second");
 				expect(streamed).not.toContain("opaque-third");

@@ -35,8 +35,7 @@ const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>
 const JSON_REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>|#[A-Za-z0-9_]+#)[ \t]*$/;
 const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
-const PERSIST_CREDENTIALS_BOOLEAN =
-	/^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|(?:\\r)?\\n))/;
+const PERSIST_CREDENTIALS_BOOLEAN = /^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|(?:\\r)?\\n))/;
 const PERSIST_CREDENTIALS_LABEL = /(?:^|[^A-Za-z0-9_-])["']?persist-credentials["']?[ \t]*:[ \t]*$/i;
 const EMPTY_CREDENTIAL_VALUE_AT_EOF = /^[ \t]*(?:\r?\n[ \t]*)?$/;
 const SOURCE_COMMIT_PIN = /^[ \t]*(?:-[ \t]+)?Source $/i;
@@ -59,7 +58,11 @@ function pickSentinel(text: string): string | null {
 function wrapRedact(redact: (text: string) => string): (text: string) => string {
 	return (text: string): string => {
 		const direct = redact(text);
-		if (/authori[sz]ation/i.test(text) && text.split("\n").some(isAuthorizationHeading) && direct === redactProviderSecrets(text)) {
+		if (
+			/authori[sz]ation/i.test(text) &&
+			text.split("\n").some(isAuthorizationHeading) &&
+			direct === redactProviderSecrets(text)
+		) {
 			const sentinel = pickSentinel(text);
 			if (!sentinel) return BLOCKED_OUTPUT_RECORD;
 			// Provider header patterns cross newlines. The continuation classifier,
@@ -136,15 +139,19 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		const tail = text.slice(start);
 		// A source pin linking a commit is revision metadata, not a parent PIN.
 		const sourceLineStart = text.lastIndexOf("\n", match.index) + 1;
-		if (match.groups!.key.toLowerCase() === "pin" &&
-			SOURCE_COMMIT_PIN.test(text.slice(sourceLineStart, match.index + match.groups!.boundary.length)) &&
-			MARKDOWN_COMMIT_LINK.test(tail)) continue;
-		const escapedBreak = text.lastIndexOf("\\n", match.index);
-		const logicalLineStart = Math.max(text.lastIndexOf("\n", match.index) + 1, escapedBreak >= 0 ? escapedBreak + 2 : 0);
 		if (
-			PERSIST_CREDENTIALS_LABEL.test(text.slice(logicalLineStart, start)) &&
-			PERSIST_CREDENTIALS_BOOLEAN.test(tail)
-		) continue;
+			match.groups!.key.toLowerCase() === "pin" &&
+			SOURCE_COMMIT_PIN.test(text.slice(sourceLineStart, match.index + match.groups!.boundary.length)) &&
+			MARKDOWN_COMMIT_LINK.test(tail)
+		)
+			continue;
+		const escapedBreak = text.lastIndexOf("\\n", match.index);
+		const logicalLineStart = Math.max(
+			text.lastIndexOf("\n", match.index) + 1,
+			escapedBreak >= 0 ? escapedBreak + 2 : 0,
+		);
+		if (PERSIST_CREDENTIALS_LABEL.test(text.slice(logicalLineStart, start)) && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
+			continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
 		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;
@@ -231,12 +238,12 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 			if (sensitive) {
 				const prefix = redact(sanitizeText(redact(text.slice(span.start, span.valueStart))));
 				// A contextual owner may change the label as well as its value.
-				result += normalized.startsWith(prefix) ? prefix + "[REDACTED]" : "[REDACTED]";
+				result += normalized.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]";
 			} else {
 				result += normalized;
 			}
 		} else {
-			result += sensitive ? text.slice(span.start, span.valueStart) + "[REDACTED]" : fragment;
+			result += sensitive ? `${text.slice(span.start, span.valueStart)}[REDACTED]` : fragment;
 		}
 		cursor = end;
 		if (sensitive) {
@@ -261,9 +268,12 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 	const prefix = owned.slice(0, replacement.index);
 	const suffix = owned.slice(replacement.index + replacement[0].length);
 	const replacementEnd = text.length - suffix.length;
-	if (!text.startsWith(prefix) || !text.endsWith(suffix) ||
+	if (
+		!text.startsWith(prefix) ||
+		!text.endsWith(suffix) ||
 		replacementEnd < prefix.length ||
-		spans.some(span => span.valueStart < prefix.length || span.end > replacementEnd)) {
+		spans.some(span => span.valueStart < prefix.length || span.end > replacementEnd)
+	) {
 		return BLOCKED_OUTPUT_RECORD;
 	}
 	return PEM_START.test(owned) ? BLOCKED_OUTPUT_RECORD : sanitizeText(owned);
@@ -418,7 +428,6 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 	if (consoleArgument && end < line.length && line[end] !== " " && line[end] !== "\t") return 0;
 	return match[0].length - 1;
 }
-
 
 function classifyJsonStringScalar(text: string, first: number): "scalar" | "oversized" | "not-scalar" {
 	const limit = Math.min(text.length, first + MAX_SCALAR_CHARS);
@@ -634,7 +643,6 @@ export class ProducerOutputGuard {
 		return label;
 	}
 
-
 	#holdOversizedCandidateLine(newline: string): void {
 		const entry = `${OVERSIZED_OUTPUT_RECORD}${newline}`;
 		if (!this.#candidateOversized && this.#candidate.length + entry.length > MAX_RECORD_CHARS) {
@@ -667,10 +675,7 @@ export class ProducerOutputGuard {
 		return false;
 	}
 
-	#consumeBufferedOversizedPrefix(
-		buffered: string,
-		output: string[],
-	): { blocked: boolean; currentLine: string } {
+	#consumeBufferedOversizedPrefix(buffered: string, output: string[]): { blocked: boolean; currentLine: string } {
 		const sanitized = sanitizeText(buffered);
 		const lastBreak = sanitized.lastIndexOf("\n");
 		if (lastBreak < 0) return { blocked: false, currentLine: sanitized };
@@ -753,8 +758,12 @@ export class ProducerOutputGuard {
 			return this.#flushCandidate() + BLOCKED_OUTPUT_RECORD + newline;
 		}
 		const emptyLabel = CREDENTIAL_RECORD.exec(record);
-		if (emptyLabel && !emptyLabel.groups?.mdOpen && !isAuthorizationHeading(record) &&
-			!record.slice(emptyLabel.index + emptyLabel[0].length).trim()) {
+		if (
+			emptyLabel &&
+			!emptyLabel.groups?.mdOpen &&
+			!isAuthorizationHeading(record) &&
+			!record.slice(emptyLabel.index + emptyLabel[0].length).trim()
+		) {
 			return this.#block() + newline;
 		}
 		const normalized = sanitizeText(record);
@@ -931,7 +940,8 @@ export class ProducerOutputGuard {
 						this.#block();
 						break;
 					}
-					const hasStructure = this.#structured || prospective.split("\n").some(line => structuredStart(line) >= 0);
+					const hasStructure =
+						this.#structured || prospective.split("\n").some(line => structuredStart(line) >= 0);
 					const consumed = this.#consumeBufferedOversizedPrefix(buffered, output);
 					if (consumed.blocked) break;
 					if (pendingPrefix > 0 && !hasStructure && prospective.length <= MAX_PENDING_LOOKBEHIND_CHARS) {
