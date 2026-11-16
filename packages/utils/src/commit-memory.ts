@@ -31,6 +31,8 @@ export interface MemoryLimits {
 	commitLimitBytes?: number;
 	/** Windows: private committed bytes of this process (`PrivateUsage`). */
 	processCommitBytes?: number;
+	/** Windows: open handle count of this process. */
+	handleCount?: number;
 	/**
 	 * Linux: `memory.current` of the cgroup closest to its limit, or of the
 	 * process's own cgroup when no level sets one.
@@ -140,6 +142,7 @@ function readWindowsCommit(): MemoryLimits | undefined {
 			commitChargeBytes: commit.commitChargeBytes,
 			commitLimitBytes: commit.commitLimitBytes,
 			processCommitBytes: commit.processCommitBytes,
+			...(commit.handleCount !== undefined ? { handleCount: commit.handleCount } : {}),
 		};
 	} catch {
 		// An addon that does not carry the function, or does not load at all.

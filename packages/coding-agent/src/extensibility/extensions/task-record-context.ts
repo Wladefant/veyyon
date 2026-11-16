@@ -54,13 +54,101 @@ type RecordStore = Pick<ReadonlySessionManager,
 	"getSessionId" | "getSessionFile" | "getLeafId" | "getBranch" | "saveArtifact" | "getArtifactPath"
 >;
 
+class DuplicateJsonMemberError extends Error {}
+
+const MAX_TASK_RECORD_JSON_DEPTH = 32;
+
+function assertNoDuplicateJsonMembers(text: string): void {
+	let offset = 0;
+	const skipWhitespace = (): void => {
+		while (offset < text.length) {
+			const char = text[offset]!;
+			if (char !== " " && char !== "\t" && char !== "\r" && char !== "\n") return;
+			offset++;
+		}
+	};
+	const parseString = (): string => {
+		const start = offset;
+		if (text[offset] !== '"') throw new Error("Invalid JSON.");
+		offset++;
+		while (offset < text.length) {
+			const char = text[offset]!;
+			if (char === '"') {
+				offset++;
+				return JSON.parse(text.slice(start, offset)) as string;
+			}
+			if (char === "\\") {
+				offset += 2;
+				continue;
+			}
+			if (char.charCodeAt(0) < 0x20) throw new Error("Invalid JSON.");
+			offset++;
+		}
+		throw new Error("Invalid JSON.");
+	};
+	const parseValue = (depth: number): void => {
+		if (depth > MAX_TASK_RECORD_JSON_DEPTH) throw new Error("Invalid JSON.");
+		skipWhitespace();
+		const char = text[offset];
+		if (char === "{") {
+			offset++;
+			skipWhitespace();
+			const names = new Set<string>();
+			if (text[offset] === "}") { offset++; return; }
+			while (true) {
+				skipWhitespace();
+				const name = parseString();
+				if (names.has(name)) throw new DuplicateJsonMemberError();
+				names.add(name);
+				skipWhitespace();
+				if (text[offset] !== ":") throw new Error("Invalid JSON.");
+				offset++;
+				parseValue(depth + 1);
+				skipWhitespace();
+				if (text[offset] === ",") { offset++; continue; }
+				if (text[offset] === "}") { offset++; return; }
+				throw new Error("Invalid JSON.");
+			}
+		}
+		if (char === "[") {
+			offset++;
+			skipWhitespace();
+			if (text[offset] === "]") { offset++; return; }
+			while (true) {
+				parseValue(depth + 1);
+				skipWhitespace();
+				if (text[offset] === ",") { offset++; continue; }
+				if (text[offset] === "]") { offset++; return; }
+				throw new Error("Invalid JSON.");
+			}
+		}
+		if (char === '"') { parseString(); return; }
+		const start = offset;
+		while (offset < text.length) {
+			const current = text[offset]!;
+			if (current === "," || current === "]" || current === "}" || current === " " || current === "\t" || current === "\r" || current === "\n") break;
+			offset++;
+		}
+		if (offset === start) throw new Error("Invalid JSON.");
+	};
+	parseValue(0);
+	skipWhitespace();
+	if (offset !== text.length) throw new Error("Invalid JSON.");
+}
+
 /** Parse without including supplied task text or secrets in validation errors. */
 export function parseContinuityTaskRecord(text: string): ContinuityTaskRecord {
 	if (Buffer.byteLength(text, "utf8") > MAX_TASK_RECORD_BYTES) {
 		throw new Error("The task record exceeds the 12 KiB limit.");
 	}
 	let value: unknown;
-	try { value = JSON.parse(text); } catch { throw new Error("The task record must be JSON."); }
+	try {
+		assertNoDuplicateJsonMembers(text);
+		value = JSON.parse(text);
+	} catch (error) {
+		if (error instanceof DuplicateJsonMemberError) throw new Error("The task record contains duplicate JSON member names.");
+		throw new Error("The task record must be JSON.");
+	}
 	const parsed = taskRecordSchema.safeParse(value);
 	if (!parsed.success) throw new Error("The task record does not match continuity schema 1.");
 	const ids = [...parsed.data.completed, ...parsed.data.pending].map(item => item.id);
