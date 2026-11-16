@@ -5,6 +5,7 @@
 ### Fixed
 
 - `history://` reads stream stored session prefixes lazily and reuse a validated directory index so post-restart reads stay within the 5-second timeout ([PR #1125](https://github.com/Wladefant/veyyon/pull/1125), [Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
+- Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
 ## [1.10.2] - 2026-11-15
 
 ### Fixed
