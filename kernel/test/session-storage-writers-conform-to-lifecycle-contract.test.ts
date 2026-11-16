@@ -14,6 +14,8 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { loadSessionFile } from "@veyyon/kernel/session/session-loader";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
@@ -166,6 +168,198 @@ describe("session storage writers conform to lifecycle and error contracts", () 
 				if (writer) {
 					await writer.close();
 				}
+				await fsp.rm(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		// fsp.readFile avoids the Bun.file().text() torn-read bug under concurrent complete appends,
+		// though fs.promises.readFile is not an atomic snapshot under partial writeSync or arbitrary concurrent writes.
+		it("readText observes complete records across concurrent single-write appends (Bun torn-read regression)", async () => {
+			const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "veyyon-readtext-race-"));
+			const filePath = path.join(tmpDir, "session.jsonl");
+			const baseLine = `${JSON.stringify({ id: "0", type: "message", text: "x".repeat(1800) })}\n`;
+			await fsp.writeFile(filePath, baseLine.repeat(600), "utf8");
+
+			const storage = new FileSessionStorage();
+			const writer = storage.openWriter(filePath);
+			const appendLine = `${JSON.stringify({
+				id: "1",
+				type: "custom_message",
+				customType: "agent-terminal-outcome",
+				content: 'Agent "Orphan" stalled: Parent session no longer exists.',
+				details: { outcome: "stalled" },
+			})}\n`;
+
+			let badLines = 0;
+			let totalReads = 0;
+			let writing = true;
+			const writerLoop = (async () => {
+				try {
+					for (let i = 0; i < 120; i++) {
+						await writer.append(appendLine);
+						await yieldToEventLoop();
+					}
+				} finally {
+					writing = false;
+				}
+			})();
+
+			const readerLoop = (async () => {
+				while (writing) {
+					const batch = Array.from({ length: 16 }, async () => {
+						const text = await storage.readText(filePath);
+						totalReads++;
+						for (const line of text.split("\n")) {
+							if (line.trim().length === 0) continue;
+							try {
+								JSON.parse(line);
+							} catch {
+								badLines++;
+							}
+						}
+					});
+					await Promise.all(batch);
+				}
+			})();
+
+			try {
+				await Promise.all([writerLoop, readerLoop]);
+				await writer.close();
+				expect(totalReads).toBeGreaterThan(0);
+				expect(badLines).toBe(0);
+			} finally {
+				if (writer.isOpen()) await writer.close().catch(() => {});
+				await fsp.rm(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("handles partial multi-call fs.writeSync appends, mid-record loadSessionFile reads, and Windows EBUSY sharing errors", async () => {
+			const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "veyyon-readtext-interleave-"));
+			const filePath = path.join(tmpDir, "session.jsonl");
+			const midPath = path.join(tmpDir, "mid-record.jsonl");
+			const header = `${JSON.stringify({
+				type: "session",
+				version: 3,
+				id: "s1",
+				timestamp: "2026-11-16T00:00:00.000Z",
+				cwd: tmpDir,
+			})}\n`;
+			const firstMsg = `${JSON.stringify({
+				type: "message",
+				id: "m1",
+				parentId: null,
+				timestamp: "2026-11-16T00:00:01.000Z",
+				message: { role: "user", content: "hello" },
+			})}\n`;
+			const appendLine = `${JSON.stringify({
+				type: "custom_message",
+				id: "m2",
+				parentId: "m1",
+				timestamp: "2026-11-16T00:00:02.000Z",
+				customType: "agent-terminal-outcome",
+				content: "ok",
+				details: { outcome: "stalled" },
+			})}\n`;
+
+			await fsp.writeFile(filePath, `${header}${firstMsg}`, "utf8");
+			const storage = new FileSessionStorage();
+			const writer = storage.openWriter(filePath);
+			const splitAt = Math.floor(appendLine.length / 2);
+			let writeCalls = 0;
+			let midWriteSnapshot = "";
+
+			try {
+				const realWriteSync = fs.writeSync.bind(fs);
+				const writeSpy = vi
+					.spyOn(fs, "writeSync")
+					.mockImplementation(
+						(
+							fd: number,
+							data: NodeJS.ArrayBufferView | string,
+							offset?: number | null,
+							length?: number | null,
+							position?: number | null,
+						) => {
+							writeCalls++;
+							if (
+								writeCalls === 1 &&
+								Buffer.isBuffer(data) &&
+								typeof offset === "number" &&
+								typeof length === "number"
+							) {
+								const chunkLen = Math.min(splitAt, length);
+								const written = realWriteSync(fd, data, offset, chunkLen, position);
+								midWriteSnapshot = fs.readFileSync(filePath, "utf8");
+								return written;
+							}
+							if (typeof data === "string") {
+								return realWriteSync(fd, data, offset ?? undefined);
+							}
+							return realWriteSync(fd, data, offset ?? undefined, length ?? undefined, position ?? undefined);
+						},
+					);
+
+				await writer.append(appendLine);
+				writeSpy.mockRestore();
+
+				expect(writeCalls).toBe(2);
+				expect(midWriteSnapshot).toBe(`${header}${firstMsg}${appendLine.slice(0, splitAt)}`);
+				expect(await storage.readText(filePath)).toBe(`${header}${firstMsg}${appendLine}`);
+
+				await fsp.writeFile(midPath, `${header}${firstMsg}${appendLine.slice(0, splitAt)}`, "utf8");
+				expect(await storage.readText(midPath)).toBe(`${header}${firstMsg}${appendLine.slice(0, splitAt)}`);
+				const midLoaded = await loadSessionFile(midPath, storage);
+				expect(midLoaded.entries.map(entry => entry.type)).toEqual(["session", "message"]);
+				expect(midLoaded.endsMidLine).toBe(true);
+				expect(midLoaded.layout).toBeUndefined();
+
+				await fsp.appendFile(midPath, appendLine.slice(splitAt), "utf8");
+				const fullLoaded = await loadSessionFile(midPath, storage);
+				expect(fullLoaded.entries.map(entry => entry.type)).toEqual(["session", "message", "custom_message"]);
+				expect(fullLoaded.endsMidLine).toBe(false);
+
+				vi.spyOn(fsp, "readFile").mockRejectedValueOnce(
+					Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" }),
+				);
+				let ebusyCode: string | undefined;
+				try {
+					await storage.readText(filePath);
+				} catch (err) {
+					ebusyCode = (err as NodeJS.ErrnoException).code;
+				}
+				expect(ebusyCode).toBe("EBUSY");
+			} finally {
+				if (writer.isOpen()) await writer.close().catch(() => {});
+				await fsp.rm(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("readText strips a leading UTF-8 BOM, preserves CRLF, and keeps ENOENT .code", async () => {
+			const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "veyyon-readtext-bom-"));
+			const filePath = path.join(tmpDir, "bom.jsonl");
+			const line1 = JSON.stringify({ id: "1", type: "session" });
+			const line2 = JSON.stringify({ id: "2", type: "message", text: "ok" });
+			const bytes = Buffer.concat([
+				Buffer.from([0xef, 0xbb, 0xbf]),
+				Buffer.from(`${line1}\r\n${line2}\r\n`, "utf8"),
+			]);
+			await fsp.writeFile(filePath, bytes);
+
+			const storage = new FileSessionStorage();
+			try {
+				const text = await storage.readText(filePath);
+				expect(text.startsWith("\uFEFF")).toBe(false);
+				expect(text).toBe(`${line1}\r\n${line2}\r\n`);
+				expect(JSON.parse(text.split("\r\n")[0]!)).toEqual({ id: "1", type: "session" });
+
+				let enoentCode: string | undefined;
+				try {
+					await storage.readText(path.join(tmpDir, "missing.jsonl"));
+				} catch (err) {
+					enoentCode = (err as NodeJS.ErrnoException).code;
+				}
+				expect(enoentCode).toBe("ENOENT");
+			} finally {
 				await fsp.rm(tmpDir, { recursive: true, force: true });
 			}
 		});
