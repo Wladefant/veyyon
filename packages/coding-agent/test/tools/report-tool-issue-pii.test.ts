@@ -43,6 +43,7 @@ function createToolSession(obfuscateProviderText?: (text: string) => string): To
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionId: () => "test-session",
+		getSessionSpawns: () => null,
 		settings,
 		obfuscateProviderText,
 	};
