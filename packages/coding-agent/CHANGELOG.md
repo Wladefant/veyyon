@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fall back from single-file `local://` promotion in `ReadTool` so semicolon-delimited lists containing `local://` URIs split into per-entry reads while preserving individual selectors.
 - Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
 - Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
