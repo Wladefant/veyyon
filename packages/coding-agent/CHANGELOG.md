@@ -4,6 +4,8 @@
 ### Fixed
 
 - Python eval cancellation targets the request without killing the shared kernel, and only its live primary owner can reset it.
+- Shared eval kernels retain implicit owners when explicit co-owners join or leave during startup and active use.
+- Python eval cancellation releases queued worker custody and completed cancellation records while suppressing output from workers still running.
 
 
 ## [1.10.10] - 2026-11-16
