@@ -12,8 +12,9 @@
  * headless override, and `veyyon grievances push` remains the explicit
  * one-shot command. Tool execution never blocks on the network and never throws.
  */
-import * as os from "node:os";
+
 import type { Database } from "bun:sqlite";
+import * as os from "node:os";
 import type { AgentTool } from "@veyyon/agent-core";
 import type { FetchImpl } from "@veyyon/ai";
 import { type } from "@veyyon/ai/utils/schema/arktype";

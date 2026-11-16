@@ -10,6 +10,7 @@ import {
 	createReportToolIssueTool,
 	flushGrievances,
 	openAutoQaDb,
+	sanitizeAutoQaPayload,
 } from "@veyyon/coding-agent/tools/agent/report-tool-issue";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
@@ -185,6 +186,68 @@ describe("auto-QA grievance PII redaction", () => {
 			expect(result).toEqual({ pushed: 1, ok: true });
 			const parsed = JSON.parse(capturedBody) as { entries: Array<{ report: string }> };
 			expect(parsed.entries[0]?.report).toBe("legacy ~/secret <user>@host [REDACTED_SECRET]");
+		} finally {
+			db.close();
+			homeSpy.mockRestore();
+			userSpy.mockRestore();
+		}
+	});
+	it("sanitizes nested keys and values in outbound payloads and leaves local rows unmutated on flush", async () => {
+		const homeSpy = spyOn(os, "homedir").mockReturnValue("/Users/will");
+		const userSpy = spyOn(os, "userInfo").mockReturnValue({
+			username: "will",
+			uid: 501,
+			gid: 20,
+			shell: "/bin/zsh",
+			homedir: "/Users/will",
+		});
+		const db = createThrowawayDb("nested-and-row-flush.db");
+		try {
+			const nestedKey = "/Users/will/config/TOKEN_XYZ";
+			const nestedValue = { "TOKEN_XYZ@build-host": "com.will.agent TOKEN_XYZ will test bin/node" };
+			const sanitized = sanitizeAutoQaPayload({ [nestedKey]: [nestedValue] }, text =>
+				text.replaceAll("TOKEN_XYZ", "[REDACTED_SECRET]"),
+			);
+			expect(JSON.stringify(sanitized)).toBe(
+				JSON.stringify({
+					"/Users/will/config/[REDACTED_SECRET]": [
+						{ "[REDACTED_SECRET]@build-host": "com.will.agent [REDACTED_SECRET] will test bin/node" },
+					],
+				}),
+			);
+
+			const rawReport = '{"/Users/will/app":"will@build-host"} com.will.agent TOKEN_XYZ will test bin/node';
+			db.prepare("INSERT INTO grievances (model, version, tool, report) VALUES (?, ?, ?, ?)").run(
+				"claude",
+				"1.0.0",
+				"/Users/will/bin/bash",
+				rawReport,
+			);
+			const settings = Settings.isolated();
+			settings.set("dev.autoqa", true);
+			settings.set("dev.autoqaPush.enabled", true);
+			settings.set("dev.autoqaPush.endpoint", "https://collector.example.test/grievances");
+
+			let capturedBody = "";
+			const mockFetch: FetchImpl = async (_input, init) => {
+				capturedBody = String(init?.body ?? "");
+				return new Response("", { status: 200 });
+			};
+
+			const result = await flushGrievances(db, settings, {
+				forceUpload: true,
+				resolveSanitizer: () => text => text.replaceAll("TOKEN_XYZ", "[REDACTED_SECRET]"),
+				fetch: mockFetch,
+			});
+
+			expect(result).toEqual({ pushed: 1, ok: true });
+			const parsed = JSON.parse(capturedBody) as { entries: Array<{ tool: string; report: string }> };
+			expect(parsed.entries[0]?.tool).toBe("~/bin/bash");
+			expect(parsed.entries[0]?.report).toBe(
+				'{"~/app":"<user>@build-host"} com.<user>.agent [REDACTED_SECRET] will test bin/node',
+			);
+			const localRow = db.prepare("SELECT report FROM grievances LIMIT 1").get() as { report: string };
+			expect(localRow.report).toBe(rawReport);
 		} finally {
 			db.close();
 			homeSpy.mockRestore();
