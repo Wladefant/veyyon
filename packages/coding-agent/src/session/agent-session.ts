@@ -984,20 +984,31 @@ export class AgentSession {
 			}
 		}
 		this.#queue.scheduleDrain();
-		const unfinished = this.#ircContinuations?.unfinished() ?? [];
-		const pendingIds = unfinished
-			.filter(entry => !this.#attemptedOutboxReplayIds.has(entry.id))
-			.map(entry => entry.id);
-		if (!this.isStreaming && !this.#ircActivePhase && pendingIds.length > 0 && !this.#ircReplayPending) {
-			for (const id of pendingIds) this.#attemptedOutboxReplayIds.add(id);
-			const replay = this.replayIrcContinuations()
+		const pendingPhases = (this.#ircContinuations?.unfinishedPhases() ?? [])
+			.filter(entry => !this.#attemptedOutboxReplayIds.has(entry.phaseId));
+		if (
+			!this.isStreaming &&
+			!this.#ircActivePhase &&
+			!this.#planMode.enabled &&
+			pendingPhases.length > 0 &&
+			!this.#ircReplayPending
+		) {
+			let wokeContinuation = false;
+			const replay = this.#replayIrcContinuations(false, true)
+				.then(woke => {
+					wokeContinuation = woke;
+				})
 				.catch(error => {
 					logger.warn("Replaying pending IRC continuations failed", { error: errorMessage(error) });
 				})
 				.finally(() => {
 					if (this.#ircReplayPending === replay) this.#ircReplayPending = undefined;
 					if (!this.#isDisposed && !this.isStreaming && !this.#ircActivePhase) {
-						this.#irc.resumeStranded();
+						if (wokeContinuation) {
+							this.#drainStrandedQueuedMessages();
+						} else {
+							this.#irc.resumeStranded();
+						}
 					}
 				});
 			this.#ircReplayPending = replay;
@@ -4144,7 +4155,11 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	}
 
 	setPlanModeState(state: PlanModeState | undefined): void {
+		const wasEnabled = this.#planMode.enabled;
 		this.#planMode.setState(state);
+		if (wasEnabled && !this.#planMode.enabled && !this.#isDisposed && !this.isStreaming && !this.#ircActivePhase) {
+			this.#drainStrandedQueuedMessages();
+		}
 	}
 
 	getGoalModeState(): GoalModeState | undefined {
@@ -5990,6 +6005,10 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 
 	/** Replay durable result deliveries on a retained agent's next native activation. */
 	async replayIrcContinuations(settling = false): Promise<void> {
+		await this.#replayIrcContinuations(settling, false);
+	}
+
+	async #replayIrcContinuations(settling: boolean, skipAttempted: boolean): Promise<boolean> {
 		if (!this.#ircContinuations) {
 			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
 		}
@@ -6031,7 +6050,7 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			this.#planMode.enabled ||
 			this.#ircActivePhase
 		)
-			return;
+			return false;
 		const consumed = new Set(
 			this.sessionManager
 				.getEntries()
@@ -6059,10 +6078,11 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				AgentRegistry.global().actorContext(from).ancestorIds.includes(selfId)
 			) {
 				await this.#wakeForIrc([pendingCompletion], true);
-				return;
+				return true;
 			}
 		}
-		const retained = outbox.unfinished().find(record => {
+		const retained = outbox.unfinishedPhases().find(({ phaseId, record }) => {
+			if (skipAttempted && this.#attemptedOutboxReplayIds.has(phaseId)) return false;
 			const from = Reflect.get(record.details ?? {}, "from");
 			const selfId = this.#config.agentId;
 			if (typeof from !== "string" || selfId === undefined) return false;
@@ -6071,7 +6091,12 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				? registry.actorContext(from).ancestorIds.includes(selfId)
 				: registry.relationTo(selfId, from) === "parent";
 		});
-		if (retained) await this.#wakeForIrc([retained], true);
+		if (retained) {
+			this.#attemptedOutboxReplayIds.add(retained.phaseId);
+			await this.#wakeForIrc([retained.record], true);
+			return true;
+		}
+		return false;
 	}
 
 	/**

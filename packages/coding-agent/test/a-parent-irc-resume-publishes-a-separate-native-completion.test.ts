@@ -1171,10 +1171,14 @@ describe("native retained child resume", () => {
 	it("drains stranded peer IRC into context in plan mode even when parent outbox cannot wake", async () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
-		const parent = await session("owner", [{ content: ["Handled"], stopReason: "stop" }]);
+		const parent = await session("owner", [
+			{ content: ["Handled"], stopReason: "stop" },
+			{ content: ["Handled plan parent"], stopReason: "stop" },
+		]);
 		const child = await session("worker", [
 			{ content: ["Normal prompt done"], stopReason: "stop" },
 			{ content: ["Plan nudge done"], stopReason: "stop" },
+			yielded("Plan parent done"),
 		]);
 		const peer = await session("peer", [{ content: ["Peer idle"], stopReason: "stop" }]);
 		const registry = AgentRegistry.global();
@@ -1199,11 +1203,20 @@ describe("native retained child resume", () => {
 		const outbox = new IrcContinuationOutbox(child.store);
 		outbox.begin("seed-plan-parent", {
 			role: "custom",
-			customType: "irc:message",
+			customType: "irc:incoming",
 			content: "Parent blocked by plan mode",
 			display: true,
-			details: { id: "seed-plan-parent", from: "owner", to: "worker", ts: 1700000011000 },
+			timestamp: 1700000011000,
+			attribution: "agent",
+			details: {
+				id: "seed-plan-parent",
+				from: "owner",
+				source: "agent",
+				relation: "parent",
+				sentAt: 1700000011000,
+			},
 		});
+		expect(outbox.unfinished()).toHaveLength(1);
 
 		const providerStarted = Promise.withResolvers<void>();
 		const providerGate = Promise.withResolvers<void>();
@@ -1240,6 +1253,22 @@ describe("native retained child resume", () => {
 				JSON.stringify(message).includes("Peer message in plan mode"),
 			),
 		).toBe(true);
+
+		// Disabling plan mode replays the deferred parent phase without consuming its attempt budget while gated.
+		child.instance.setPlanModeState(undefined);
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+		const parentDeliveries = child.mock.calls.filter(call =>
+			call.context.messages.some(message =>
+				JSON.stringify(message.content).includes("Parent blocked by plan mode"),
+			),
+		);
+		expect(parentDeliveries).toHaveLength(1);
+		const completions = parent.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		expect(completions).toHaveLength(1);
+		expect(completions[0]?.type === "custom_message" ? completions[0].content : "").toContain("Plan parent done");
 	});
 
 	it("keeps waitForIdle pending while outbox replay awaits receiver ack before waking next phase", async () => {
@@ -1265,10 +1294,12 @@ describe("native retained child resume", () => {
 		const outbox = new IrcContinuationOutbox(child.store);
 		outbox.begin("seed-phase", {
 			role: "custom",
-			customType: "irc:message",
+			customType: "irc:incoming",
 			content: "seed",
 			display: true,
-			details: { id: "seed-phase", from: "owner", to: "worker", ts: 1700000000000 },
+			timestamp: 1700000000000,
+			attribution: "agent",
+			details: { id: "seed-phase", from: "owner", source: "agent", relation: "parent", sentAt: 1700000000000 },
 		});
 		await outbox.complete("worker", "owner", "seed-phase", '{"value":"A"}');
 
@@ -1341,5 +1372,128 @@ describe("native retained child resume", () => {
 		await parent.instance.waitForIdle();
 		expect(idleResolved).toBe(true);
 		expect(child.mock.calls).toHaveLength(2);
+	});
+
+	it("activates a distinct parent phase P2 automatically even after P1 failed once", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [
+			{ content: ["Handled P1"], stopReason: "stop" },
+			{ content: ["Handled P2"], stopReason: "stop" },
+		]);
+		const child = await session("worker", [
+			{ content: ["Normal 1 done"], stopReason: "stop" },
+			yielded("P1"),
+			{ content: ["Normal 2 done"], stopReason: "stop" },
+			yielded("P2"),
+		]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+
+		let callIndex = 0;
+		let providerStarted = Promise.withResolvers<void>();
+		let providerGate = Promise.withResolvers<void>();
+		const originalStreamFn = child.instance.agent.streamFn;
+		child.instance.agent.streamFn = async (model, context, options) => {
+			if (callIndex === 0 || callIndex === 2) {
+				providerStarted.resolve();
+				await providerGate.promise;
+			}
+			callIndex++;
+			return originalStreamFn(model, context, options);
+		};
+
+		let syncStarted = Promise.withResolvers<void>();
+		let syncGate = Promise.withResolvers<void>();
+		const originalSync = child.store.sync.bind(child.store);
+		let interceptNextSync = false;
+		spyOn(child.store, "sync").mockImplementation(async () => {
+			if (interceptNextSync) {
+				interceptNextSync = false;
+				syncStarted.resolve();
+				await syncGate.promise;
+			}
+			return originalSync();
+		});
+
+		let failWrites = true;
+		const origOpen = fs.open.bind(fs);
+		const openSpy = spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+			if (failWrites && String(file).includes(".phase-")) {
+				throw new Error("ENOSPC: disk full");
+			}
+			return origOpen(file, flags, mode);
+		});
+		try {
+			const prompt1 = child.instance.prompt("Normal 1");
+			await providerStarted.promise;
+			interceptNextSync = true;
+			const deliverP1 = child.instance.deliverIrcMessage({
+				id: "distinct-p1",
+				from: "owner",
+				to: "worker",
+				body: "Parent phase P1",
+				ts: 1700000020000,
+			});
+			await syncStarted.promise;
+			providerGate.resolve();
+			for (let i = 0; i < 50 && child.instance.agent.state.isStreaming; i++) {
+				await setImmediate();
+			}
+			syncGate.resolve();
+			await deliverP1;
+			await prompt1;
+			await child.instance.waitForIdle();
+			expect(child.mock.calls).toHaveLength(2);
+
+			// Storage recovers, then a second streaming prompt receives distinct phase P2.
+			failWrites = false;
+			providerStarted = Promise.withResolvers<void>();
+			providerGate = Promise.withResolvers<void>();
+			syncStarted = Promise.withResolvers<void>();
+			syncGate = Promise.withResolvers<void>();
+			const prompt2 = child.instance.prompt("Normal 2");
+			await providerStarted.promise;
+			interceptNextSync = true;
+			const deliverP2 = child.instance.deliverIrcMessage({
+				id: "distinct-p2",
+				from: "owner",
+				to: "worker",
+				body: "Parent phase P2",
+				ts: 1700000021000,
+			});
+			await syncStarted.promise;
+			providerGate.resolve();
+			for (let i = 0; i < 50 && child.instance.agent.state.isStreaming; i++) {
+				await setImmediate();
+			}
+			syncGate.resolve();
+			await deliverP2;
+			await prompt2;
+			await child.instance.waitForIdle();
+			await parent.instance.waitForIdle();
+
+			const p2Calls = child.mock.calls.filter(call =>
+				call.context.messages.some(message => JSON.stringify(message.content).includes("Parent phase P2")),
+			);
+			expect(p2Calls).toHaveLength(1);
+			const completions = parent.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+			expect(completions.some(c => c.type === "custom_message" && c.content.includes('"value":"P2"'))).toBe(true);
+			expect(
+				completions.filter(c => c.type === "custom_message" && c.content.includes('"value":"P2"')),
+			).toHaveLength(1);
+		} finally {
+			openSpy.mockRestore();
+		}
 	});
 });
