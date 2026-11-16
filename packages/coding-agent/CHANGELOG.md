@@ -5,6 +5,8 @@
 ### Changed
 
 - No user-facing behavior changes; ACP model-order regression coverage now verifies 257 session models survive provider sorting without local truncation.
+## [1.10.7] - 2026-11-16
+
 ### Fixed
 
 - Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
@@ -13,6 +15,8 @@
 - Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).
 - Task-run watchdogs allow bounded session initialization before restoring the normal startup deadline on attachment, without extending later running phases.
 - Python eval shutdown waits now have a JavaScript-side deadline, and reset, acquire, and replacement transitions honor caller cancellation without dropping transition ownership ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
 ## [1.10.6] - 2026-11-16
 
 ### Fixed
@@ -23,7 +27,6 @@
 
 ### Fixed
 
-- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
 - Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
 
 ## [1.10.4] - 2026-11-16
