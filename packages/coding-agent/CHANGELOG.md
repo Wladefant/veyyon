@@ -5,6 +5,7 @@
 ### Fixed
 
 - Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+- Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
 ## [1.10.2] - 2026-11-15
 
 ### Fixed

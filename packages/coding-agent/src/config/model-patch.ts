@@ -65,7 +65,26 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 	if (patch.name !== undefined) result.name = patch.name;
 	if (patch.reasoning !== undefined) result.reasoning = patch.reasoning;
 	if (patch.thinking !== undefined) {
-		result.thinking = patch.thinking;
+		const baseRequiresEffort =
+			base.reasoningOptions?.requiresEffort === true || base.thinking?.requiresEffort === true;
+		const candidateDefault =
+			patch.thinking.defaultLevel ?? base.reasoningOptions?.defaultLevel ?? base.thinking?.defaultLevel;
+		const defaultLevel =
+			candidateDefault !== undefined && patch.thinking.efforts.includes(candidateDefault)
+				? candidateDefault
+				: undefined;
+		const nextThinking: ThinkingConfig = { ...patch.thinking };
+		if (defaultLevel !== undefined) {
+			nextThinking.defaultLevel = defaultLevel;
+		} else {
+			delete nextThinking.defaultLevel;
+		}
+		if (baseRequiresEffort) {
+			nextThinking.requiresEffort = true;
+		} else if (patch.thinking.requiresEffort !== undefined) {
+			nextThinking.requiresEffort = patch.thinking.requiresEffort;
+		}
+		result.thinking = nextThinking;
 		result.reasoningOptions = undefined;
 	}
 	if (patch.input !== undefined) result.input = patch.input;

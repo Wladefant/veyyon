@@ -24,9 +24,12 @@ import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Api, Model } from "@veyyon/ai";
+import type { Api, Model, ModelSpec } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { resolveReasoningSelection } from "@veyyon/catalog/model-thinking";
+import { applyModelPatch } from "@veyyon/coding-agent/config/model-patch";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
@@ -146,5 +149,155 @@ describe("an authored thinking ladder outranks the declared surface", () => {
 		// The authored ladder is dropped here on purpose: the endpoint rejects
 		// the field, so offering tiers would be offering an error.
 		expect([...built.values()].map(model => model.thinking)).toEqual([undefined]);
+	});
+});
+
+describe("applyModelPatch preserves discovery safety metadata around authored thinking overrides", () => {
+	function buildDiscoveredBase(
+		reasoningOptions: ModelSpec<"openai-completions">["reasoningOptions"],
+	): Model<"openai-completions"> {
+		return buildModel({
+			id: "custom-discovery-model",
+			name: "Custom Discovery Model",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+			reasoningOptions,
+		});
+	}
+
+	test("same ladder keeps mandatory disabled-intent floor and compatible discovery default", () => {
+		const base = buildDiscoveredBase({
+			efforts: [Effort.Low, Effort.Medium],
+			requiresEffort: true,
+			defaultLevel: Effort.Low,
+		});
+		const patched = applyModelPatch(
+			base,
+			{ thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium] } },
+			"merge",
+		);
+		expect(patched.reasoningOptions).toBeUndefined();
+		expect(patched.thinking?.efforts).toEqual([Effort.Low, Effort.Medium]);
+		expect(patched.thinking?.defaultLevel).toBe(Effort.Low);
+		expect(patched.thinking?.requiresEffort).toBe(true);
+		expect(resolveReasoningSelection(patched, { disabled: true })).toMatchObject({
+			state: "enabled",
+			effort: Effort.Low,
+			forcedByModel: true,
+			enabled: true,
+			mode: "effort",
+		});
+	});
+
+	test("changed ladder high/max drops incompatible low default and raises mandatory floor to high", () => {
+		const base = buildDiscoveredBase({
+			efforts: [Effort.Low, Effort.Medium],
+			requiresEffort: true,
+			defaultLevel: Effort.Low,
+		});
+		const patched = applyModelPatch(
+			base,
+			{ thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] } },
+			"merge",
+		);
+		expect(patched.reasoningOptions).toBeUndefined();
+		expect(patched.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect(patched.thinking?.defaultLevel).toBeUndefined();
+		expect(patched.thinking?.requiresEffort).toBe(true);
+		expect(resolveReasoningSelection(patched, { disabled: true })).toMatchObject({
+			state: "enabled",
+			effort: Effort.High,
+			forcedByModel: true,
+			enabled: true,
+			mode: "effort",
+		});
+		expect(() => resolveReasoningSelection(patched, { effort: Effort.Low })).toThrow(/not supported/);
+	});
+
+	test("preserves explicit authored default when supported and drops unsupported authored default", () => {
+		const base = buildDiscoveredBase({
+			efforts: [Effort.Low, Effort.Medium],
+			requiresEffort: true,
+			defaultLevel: Effort.Low,
+		});
+		const supportedOverride = applyModelPatch(
+			base,
+			{
+				thinking: {
+					mode: "effort",
+					efforts: [Effort.Low, Effort.Medium],
+					defaultLevel: Effort.Medium,
+				},
+			},
+			"merge",
+		);
+		expect(supportedOverride.thinking?.defaultLevel).toBe(Effort.Medium);
+
+		const unsupportedOverride = applyModelPatch(
+			base,
+			{
+				thinking: {
+					mode: "effort",
+					efforts: [Effort.High, Effort.Max],
+					defaultLevel: Effort.Low,
+				},
+			},
+			"merge",
+		);
+		expect(unsupportedOverride.thinking?.defaultLevel).toBeUndefined();
+	});
+
+	test("explicit requiresEffort false does not bypass discovered mandatory provider floor", () => {
+		const base = buildDiscoveredBase({
+			efforts: [Effort.Low, Effort.Medium],
+			requiresEffort: true,
+			defaultLevel: Effort.Low,
+		});
+		const patched = applyModelPatch(
+			base,
+			{
+				thinking: {
+					mode: "effort",
+					efforts: [Effort.High, Effort.Max],
+					requiresEffort: false,
+				},
+			},
+			"merge",
+		);
+		expect(patched.thinking?.requiresEffort).toBe(true);
+		expect(resolveReasoningSelection(patched, { disabled: true })).toMatchObject({
+			state: "enabled",
+			effort: Effort.High,
+			forcedByModel: true,
+			enabled: true,
+		});
+	});
+
+	test("clears stale noEffortControl while keeping discovered requiresEffort", () => {
+		const base = buildDiscoveredBase({
+			noEffortControl: true,
+			requiresEffort: true,
+		});
+		expect(base.thinking).toBeUndefined();
+		const patched = applyModelPatch(
+			base,
+			{ thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] } },
+			"merge",
+		);
+		expect(patched.reasoningOptions).toBeUndefined();
+		expect(patched.thinking?.efforts).toEqual([Effort.Low, Effort.High]);
+		expect(patched.thinking?.requiresEffort).toBe(true);
+		expect(resolveReasoningSelection(patched, { disabled: true })).toMatchObject({
+			state: "enabled",
+			effort: Effort.Low,
+			forcedByModel: true,
+			enabled: true,
+		});
 	});
 });
