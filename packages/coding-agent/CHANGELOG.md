@@ -6,6 +6,7 @@
 
 - The shared Windows daemon broker survives the client process that started it.
 - Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+- Release settled idle failed predecessors on `successorOf` (with conversation ownership and turn-sequence ABA guards) and on settled `job cancel`, propagating disposal failures ([PR #1144](https://github.com/Wladefant/veyyon/pull/1144)).
 ## [1.10.2] - 2026-11-15
 
 ### Fixed

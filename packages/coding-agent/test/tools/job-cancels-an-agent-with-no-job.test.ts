@@ -358,4 +358,67 @@ describe("job cancel on an agent with no job row", () => {
 		expect(AgentRegistry.global().get("Cyclic")).toBeUndefined();
 		expect(AgentRegistry.global().get("Below")).toBeUndefined();
 	});
+
+	test("releases a settled job whose sub agent is still idle with a live session", async () => {
+		register("Parent");
+		AgentRegistry.global().register({
+			id: "SettledIdle",
+			displayName: "worker",
+			kind: "sub",
+			parentId: "Parent",
+			status: "idle",
+			session: trackedSession("SettledIdle"),
+		});
+		const tool = new JobTool(
+			makeToolSession({
+				getAgentId: () => "Parent",
+				agentRegistry: AgentRegistry.global(),
+				asyncJobManager: {
+					...emptyJobManager(),
+					getJob: (id: string) =>
+						id === "SettledIdle" ? { id: "SettledIdle", ownerId: "Parent", status: "failed" } : undefined,
+				},
+			} as never),
+		);
+
+		const text = await cancel(tool, "SettledIdle");
+
+		expect(spy.events).toEqual(["dispose:SettledIdle"]);
+		expect(text).toContain("Killed agent SettledIdle");
+		expect(AgentRegistry.global().get("SettledIdle")).toBeUndefined();
+	});
+
+	test("reports failure and keeps ref registered when idle-session disposal rejects", async () => {
+		register("Parent");
+		AgentRegistry.global().register({
+			id: "FailingDispose",
+			displayName: "worker",
+			kind: "sub",
+			parentId: "Parent",
+			status: "idle",
+			session: {
+				abort: async () => {},
+				dispose: async () => {
+					throw new Error("disk busy");
+				},
+			} as unknown as AgentSession,
+		});
+		const tool = new JobTool(
+			makeToolSession({
+				getAgentId: () => "Parent",
+				agentRegistry: AgentRegistry.global(),
+				asyncJobManager: {
+					...emptyJobManager(),
+					getJob: (id: string) =>
+						id === "FailingDispose" ? { id: "FailingDispose", ownerId: "Parent", status: "failed" } : undefined,
+				},
+			} as never),
+		);
+
+		const text = await cancel(tool, "FailingDispose");
+
+		expect(text).toContain("Could not kill agent FailingDispose");
+		expect(text).toContain("disk busy");
+		expect(AgentRegistry.global().get("FailingDispose")).toBeDefined();
+	});
 });

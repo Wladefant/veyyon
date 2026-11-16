@@ -650,12 +650,29 @@ async function runPreparedSpawn(
 		}
 		const registry = AgentRegistry.global();
 		const predecessor = registry.get(params.successorOf);
-		const isSettledIdle = (ref: { status: string; terminalOutcome?: unknown } | undefined): boolean =>
-			ref?.status === "idle" && ref.terminalOutcome !== undefined;
+		const parentRef = options.parentAgentId ? registry.get(options.parentAgentId) : undefined;
 		if (
 			predecessor &&
-			((!isSettledIdle(predecessor) && predecessor.session !== null) || !predecessor.terminalOutcome)
+			((predecessor.scope && parentRef?.scope && predecessor.scope !== parentRef.scope) ||
+				(predecessor.parentId &&
+					options.parentAgentId &&
+					predecessor.parentId !== options.parentAgentId &&
+					!registry.isDescendant(params.successorOf, options.parentAgentId)))
 		) {
+			return spawnRefusal(
+				`successor-wrong-owner: ${params.successorOf} belongs to another conversation or parent`,
+				projectAgentsDir,
+				Date.now() - startTime,
+			);
+		}
+		const isSettledSuccessorReady = (
+			ref: { status: string; session: unknown; terminalOutcome?: unknown } | undefined,
+		): boolean => {
+			if (!ref) return true;
+			if (!ref.terminalOutcome) return false;
+			return ref.session === null || ref.status === "idle";
+		};
+		if (!isSettledSuccessorReady(predecessor)) {
 			return spawnRefusal(
 				`successor-predecessor-active: ${params.successorOf} has not settled cancellation and cleanup`,
 				projectAgentsDir,
@@ -664,15 +681,16 @@ async function runPreparedSpawn(
 		}
 		const predecessorOutcome = predecessor?.terminalOutcome;
 		const predecessorStatus = predecessor?.status;
+		const predecessorTurnSeq = predecessor?.turnSeq;
 		checkpoint = await claimSuccessorCheckpoint(spawn.artifacts.dir, params.successorOf, agentId, workflow);
 		const current = registry.get(params.successorOf);
 		if (
 			current !== predecessor ||
 			(current &&
-				((!isSettledIdle(current) && current.session !== null) ||
-					!current.terminalOutcome ||
+				(!isSettledSuccessorReady(current) ||
 					current.terminalOutcome !== predecessorOutcome ||
-					current.status !== predecessorStatus))
+					current.status !== predecessorStatus ||
+					current.turnSeq !== predecessorTurnSeq))
 		) {
 			const released = await releasePreDispatchSuccessorClaim(spawn.artifacts.dir, params.successorOf, agentId);
 			return spawnRefusal(

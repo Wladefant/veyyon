@@ -310,6 +310,89 @@ describe("explicit bounded lane successors", () => {
 		expect(disposed).toBe(true);
 		expect(registry.get(predecessor)).toBeUndefined();
 	});
+	it("refuses to release an idle predecessor owned by another conversation", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		let disposed = false;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: "other-main",
+			displayName: "OtherMain",
+			kind: "main",
+			scope: "conv-other",
+			status: "running",
+			session: null,
+		});
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			parentId: "other-main",
+			scope: "conv-other",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402");
+		registry.register({
+			id: "parent",
+			displayName: "Parent",
+			kind: "main",
+			scope: "conv-mine",
+			status: "running",
+			session: null,
+		});
+
+		const refused = await dispatch("CrossConv", predecessor);
+
+		expect(refused.isError).toBe(true);
+		expect(disposed).toBe(false);
+		expect(registry.get(predecessor)).toBeDefined();
+		expect(executed).toHaveLength(1);
+	});
+	it("refuses successor when predecessor runs and settles again (ABA) during checkpoint claim", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		let disposed = false;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "first failure");
+
+		const originalClaim = successorCheckpoint.claimSuccessorCheckpoint;
+		const claimSpy = vi
+			.spyOn(successorCheckpoint, "claimSuccessorCheckpoint")
+			.mockImplementationOnce(async (...args) => {
+				const result = await originalClaim(...args);
+				registry.setStatus(predecessor, "running");
+				registry.setStatus(predecessor, "idle");
+				registry.recordTerminalOutcome(predecessor, "failed", "first failure");
+				return result;
+			});
+
+		try {
+			const refused = await dispatch("AbaRace", predecessor);
+			expect(refused.isError).toBe(true);
+			expect(disposed).toBe(false);
+			expect(executed).toHaveLength(1);
+		} finally {
+			claimSpy.mockRestore();
+		}
+	});
 	it("rejects corrupt and unknown-version checkpoints", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;
