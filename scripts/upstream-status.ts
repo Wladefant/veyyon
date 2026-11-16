@@ -301,18 +301,22 @@ async function gitWithInput(args: string[], input: string, cwd = REPO_ROOT): Pro
 	const child = spawn("git", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
 	const stdoutChunks: Buffer[] = [];
 	const stderrChunks: Buffer[] = [];
+	let stdinError: Error | undefined;
 	child.stdout.on("data", chunk => stdoutChunks.push(chunk));
 	child.stderr.on("data", chunk => stderrChunks.push(chunk));
-	const exited = new Promise<number | null>((resolve, reject) => {
-		child.on("error", reject);
-		child.on("close", resolve);
+	child.stdin.on("error", err => {
+		stdinError = err instanceof Error ? err : new Error(String(err));
 	});
+	const { promise: exited, resolve, reject } = Promise.withResolvers<number | null>();
+	child.on("error", reject);
+	child.on("close", resolve);
 	child.stdin.end(input);
 	const code = await exited;
 	if (code !== 0) {
 		const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
 		throw new Error(`git ${args.slice(0, 3).join(" ")} … exited ${code}: ${stderr}`);
 	}
+	if (stdinError) throw stdinError;
 	return Buffer.concat(stdoutChunks).toString("utf8");
 }
 
@@ -322,7 +326,11 @@ async function gitWithInput(args: string[], input: string, cwd = REPO_ROOT): Pro
  */
 export async function readCommitSummaries(shas: readonly string[], cwd = REPO_ROOT): Promise<string> {
 	if (shas.length === 0) return "";
-	return gitWithInput(["log", "--stdin", "--no-walk=unsorted", "--format=%H%x09%cs%x09%s"], `${shas.join("\n")}\n`, cwd);
+	return gitWithInput(
+		["log", "--stdin", "--no-walk=unsorted", "--format=%H%x09%cs%x09%s"],
+		`${shas.join("\n")}\n`,
+		cwd,
+	);
 }
 
 /** Stream a git command's stdout line by line, failing on a non-zero exit. */
