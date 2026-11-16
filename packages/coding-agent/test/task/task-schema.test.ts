@@ -24,9 +24,7 @@ describe("task admission priority schema", () => {
 					const input = batchEnabled ? { context: "Shared.", tasks: [item] } : item;
 					const parsed = schema(input);
 					expect(parsed instanceof type.errors).toBe(false);
-					expect(parsed).toMatchObject(
-						batchEnabled ? { tasks: [{ priority: "high" }] } : { priority: "high" },
-					);
+					expect(parsed).toMatchObject(batchEnabled ? { tasks: [{ priority: "high" }] } : { priority: "high" });
 					const invalid = { ...item, priority: "urgent" };
 					expect(
 						schema(batchEnabled ? { context: "Shared.", tasks: [invalid] } : invalid) instanceof type.errors,

@@ -30,6 +30,8 @@ export interface BlobPutOptions {
 export interface BlobGetOptions {
 	/** Caller's abort signal. */
 	signal?: AbortSignal;
+	/** Optional upper bound on bytes read from the blob file. */
+	maxBytes?: number;
 }
 
 export interface BlobPutResult {
@@ -199,7 +201,22 @@ export class BlobStore {
 		options?.signal?.throwIfAborted();
 		const blobPath = path.join(this.dir, hash);
 		try {
-			return await fsp.readFile(blobPath, { signal: options?.signal });
+			if (options?.maxBytes === undefined) {
+				return await fsp.readFile(blobPath, { signal: options?.signal });
+			}
+			const maxBytes = Math.max(0, options.maxBytes);
+			const fh = await fsp.open(blobPath, "r");
+			try {
+				const stat = await fh.stat();
+				if (stat.size <= maxBytes) {
+					return await fh.readFile({ signal: options.signal });
+				}
+				const buf = Buffer.allocUnsafe(maxBytes);
+				const { bytesRead } = await fh.read(buf, 0, maxBytes, 0);
+				return trimIncompleteUtf8Tail(buf.subarray(0, bytesRead));
+			} finally {
+				await fh.close();
+			}
 		} catch (err) {
 			options?.signal?.throwIfAborted();
 			if (isEnoent(err)) return null;
@@ -343,6 +360,32 @@ function reportMissingBlob(blobStore: BlobStore, hash: string, warningMessage: s
 	if (reportedMissingBlobs.has(blobPath)) return;
 	reportedMissingBlobs.add(blobPath);
 	logger.warn(warningMessage, { hash, dir: blobStore.dir });
+}
+
+function trimIncompleteUtf8Tail(buf: Buffer): Buffer {
+	let end = buf.length;
+	let continuations = 0;
+	while (end > 0 && continuations < 3 && (buf[end - 1]! & 0xc0) === 0x80) {
+		end--;
+		continuations++;
+	}
+	if (end > 0) {
+		const lead = buf[end - 1]!;
+		const expected =
+			(lead & 0x80) === 0
+				? 1
+				: (lead & 0xe0) === 0xc0
+					? 2
+					: (lead & 0xf0) === 0xe0
+						? 3
+						: (lead & 0xf8) === 0xf0
+							? 4
+							: 1;
+		if (continuations + 1 < expected) {
+			return buf.subarray(0, end - 1);
+		}
+	}
+	return buf;
 }
 
 async function resolveBlobBuffer(

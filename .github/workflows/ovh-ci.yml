@@ -321,7 +321,7 @@ jobs:
         timeout-minutes: 1
         shell: bash
         env:
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.workflow_sha }}
         run: |
           set -euo pipefail
           # The checkout may be an older explicit target lacking --cleanup.
@@ -365,7 +365,7 @@ jobs:
        (github.event_name == 'pull_request' &&
        !github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
-       vars.OVH_CI_PR_ADMISSION == 'verified'))
+      vars.OVH_CI_PR_ADMISSION == 'verified'))
     runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     strategy:
@@ -559,7 +559,7 @@ jobs:
         timeout-minutes: 1
         shell: bash
         env:
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.workflow_sha }}
         run: |
           set -euo pipefail
           # The checkout may be an older explicit target lacking --cleanup.
@@ -645,7 +645,7 @@ jobs:
         timeout-minutes: 1
         shell: bash
         env:
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.workflow_sha }}
         run: |
           set -euo pipefail
           # The checkout may be an older explicit target lacking --cleanup.
