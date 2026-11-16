@@ -245,16 +245,14 @@ impl Shell {
 			cpu_budget_id: options.cpu_budget_id,
 		};
 		task::future(env, "shell.run", async move {
+			let core_cancel = cancel_token.into_core();
 			let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
 			let result = inner
-				.run(run_options, chunk_tx, cancel_token.into_core())
+				.run(run_options, chunk_tx, core_cancel.clone())
 				.await
 				.map(Into::into)
 				.map_err(to_napi);
-			if let Some(handle) = drain_handle {
-				let _ = handle.await;
-			}
-			result
+			await_chunk_drain(drain_handle, &core_cancel, result).await
 		})
 	}
 
@@ -301,15 +299,13 @@ pub fn execute_shell<'env>(
 		cpu_budget_id: options.cpu_budget_id,
 	};
 	task::future(env, "shell.execute", async move {
+		let core_cancel = cancel_token.into_core();
 		let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
-		let result = core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
+		let result = core_execute_shell(exec_options, chunk_tx, core_cancel.clone())
 			.await
 			.map(Into::into)
 			.map_err(to_napi);
-		if let Some(handle) = drain_handle {
-			let _ = handle.await;
-		}
-		result
+		await_chunk_drain(drain_handle, &core_cancel, result).await
 	})
 }
 
@@ -336,6 +332,31 @@ fn bridge_chunks(
 		on_chunk.call_async(Ok(payload)).await.is_ok()
 	}));
 	(Some(tx), Some(handle))
+}
+
+async fn await_chunk_drain(
+	drain_handle: Option<napi::tokio::task::JoinHandle<()>>,
+	cancel_token: &veyyon_shell::cancel::CancelToken,
+	result: Result<ShellRunResult>,
+) -> Result<ShellRunResult> {
+	let Some(mut handle) = drain_handle else {
+		return result;
+	};
+	tokio::select! {
+		biased;
+		_ = &mut handle => result,
+		reason = cancel_token.wait() => {
+			handle.abort();
+			let _ = handle.await;
+			match result {
+				Ok(res) if res.cancelled || res.timed_out => Ok(res),
+				Ok(_) => Err(Error::from_reason(format!(
+					"Shell output callback drain aborted ({reason:?})"
+				))),
+				Err(err) => Err(err),
+			}
+		}
+	}
 }
 
 /// Drain `rx`, greedily coalescing queued chunks into ≤64 KiB batches, and
@@ -384,7 +405,7 @@ mod tests {
 		cancel::{AbortReason, CancelToken},
 	};
 
-	use super::{BRIDGE_QUEUE_CHUNKS, CoreShell, pump_chunks};
+	use super::{BRIDGE_QUEUE_CHUNKS, CoreShell, ShellRunResult, await_chunk_drain, pump_chunks};
 
 	/// Regression for #4078: the reader→JS bridge queue must stay bounded when
 	/// the JS side (here: a deliberately slow `forward`) cannot keep up with a
@@ -580,5 +601,130 @@ mod tests {
 			.expect("shell task should not panic")
 			.expect("shell run should return");
 		assert!(result.cancelled);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_stalled_forward_settles_on_cancellation_and_releases_resources() {
+		let shell = CoreShell::new(None);
+		let mut cancel = CancelToken::default();
+		let abort = cancel.emplace_abort_token();
+		let (tx, rx) = flume::bounded::<String>(4);
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain_handle = tokio::spawn(pump_chunks(rx, move |_payload: String| {
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move { std::future::pending::<bool>().await }
+		}));
+
+		let run_task = tokio::spawn(async move {
+			let result = shell
+				.run(
+					CoreShellRunOptions {
+						command:       "echo hello; sleep 30".to_string(),
+						cwd:           None,
+						env:           None,
+						timeout_ms:    None,
+						cpu_budget_id: None,
+					},
+					Some(tx),
+					cancel.clone(),
+				)
+				.await
+				.map(Into::into)
+				.map_err(crate::napi_error::to_napi);
+			await_chunk_drain(Some(drain_handle), &cancel, result).await
+		});
+
+		time::sleep(Duration::from_millis(50)).await;
+		abort.abort(AbortReason::Signal);
+
+		let settled = time::timeout(Duration::from_secs(5), run_task)
+			.await
+			.expect("cancelled shell must settle even when on_chunk stalls")
+			.expect("run task should not panic")
+			.expect("cancelled shell should return ShellRunResult");
+		assert!(settled.cancelled, "expected cancelled=true");
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"stalled pump task and callback resources must be released",
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_stalled_forward_after_success_returns_transport_error_on_deadline() {
+		let (tx, rx) = flume::bounded::<String>(4);
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain_handle = tokio::spawn(pump_chunks(rx, move |_payload: String| {
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move { std::future::pending::<bool>().await }
+		}));
+		tx.send_async("chunk\n".to_string()).await.expect("send chunk");
+		drop(tx);
+
+		let cancel = CancelToken::with_timeout(Some(Duration::from_millis(50)));
+		let ok_result = Ok(ShellRunResult {
+			exit_code:         Some(0),
+			signal:            None,
+			cancelled:         false,
+			timed_out:         false,
+			output_incomplete: false,
+			captured_output:   None,
+			minimized:         None,
+			working_dir:       None,
+		});
+		let settled = time::timeout(
+			Duration::from_secs(2),
+			await_chunk_drain(Some(drain_handle), &cancel, ok_result),
+		)
+		.await
+		.expect("deadline must bound stalled drain after core completes");
+		assert!(
+			settled.is_err(),
+			"stalled drain after normal core completion must surface an explicit error, not truncate silently",
+		);
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"stalled pump task and callback resources must be released",
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_normal_slow_forward_preserves_full_output() {
+		let (tx, rx) = flume::bounded::<String>(4);
+		let received = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
+		let received_clone = std::sync::Arc::clone(&received);
+		let drain_handle = tokio::spawn(pump_chunks(rx, move |payload: String| {
+			let received_clone = std::sync::Arc::clone(&received_clone);
+			async move {
+				time::sleep(Duration::from_millis(10)).await;
+				received_clone.lock().push_str(&payload);
+				true
+			}
+		}));
+		tx.send_async("hello ".to_string()).await.expect("send 1");
+		tx.send_async("world\n".to_string()).await.expect("send 2");
+		drop(tx);
+
+		let cancel = CancelToken::default();
+		let ok_result = Ok(ShellRunResult {
+			exit_code:         Some(0),
+			signal:            None,
+			cancelled:         false,
+			timed_out:         false,
+			output_incomplete: false,
+			captured_output:   None,
+			minimized:         None,
+			working_dir:       None,
+		});
+		let settled = time::timeout(
+			Duration::from_secs(2),
+			await_chunk_drain(Some(drain_handle), &cancel, ok_result),
+		)
+		.await
+		.expect("slow healthy drain should finish")
+		.expect("healthy drain should succeed");
+		assert_eq!(settled.exit_code, Some(0));
+		assert_eq!(received.lock().as_str(), "hello world\n");
 	}
 }
