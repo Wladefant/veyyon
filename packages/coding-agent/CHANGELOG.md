@@ -5,6 +5,12 @@
 ### Fixed
 
 - Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).
+## [1.10.5] - 2026-11-16
+
+### Fixed
+
+- Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
+
 ## [1.10.4] - 2026-11-16
 
 ### Fixed
