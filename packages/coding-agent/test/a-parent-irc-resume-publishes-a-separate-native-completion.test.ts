@@ -814,7 +814,7 @@ describe("native retained child resume", () => {
 					Reflect.get(entry.data ?? {}, "phaseId") === "streaming-resume-1",
 			);
 		expect(phaseEntry).toBeDefined();
-		if (!phaseEntry || phaseEntry.type !== "custom") throw new Error("Expected custom phase entry");
+		if (phaseEntry?.type !== "custom") throw new Error("Expected custom phase entry");
 		const phaseData = phaseEntry.data;
 		const record = phaseData ? Reflect.get(phaseData, "record") : undefined;
 		expect(record).toBeDefined();
@@ -840,7 +840,7 @@ describe("native retained child resume", () => {
 			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(completions).toHaveLength(1);
 		const firstCompletion = completions[0];
-		if (!firstCompletion || firstCompletion.type !== "custom_message") throw new Error("Expected completion entry");
+		if (firstCompletion?.type !== "custom_message") throw new Error("Expected completion entry");
 		expect(Reflect.get(firstCompletion.details ?? {}, "phaseId")).toBe("streaming-resume-1");
 	});
 
@@ -1064,7 +1064,7 @@ describe("native retained child resume", () => {
 			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(completions).toHaveLength(1);
 		const completion = completions[0];
-		if (!completion || completion.type !== "custom_message") throw new Error("Expected native completion");
+		if (completion?.type !== "custom_message") throw new Error("Expected native completion");
 		expect(completion.content).toContain('"value":"B"');
 	});
 
@@ -1804,16 +1804,10 @@ describe("native retained child resume", () => {
 			const completions = parent.store
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
-			expect(
-				completions.some(
-					c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"'),
-				),
-			).toBe(true);
-			expect(
-				completions.filter(
-					c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"'),
-				),
-			).toHaveLength(1);
+			const hasP2 = (content: string | readonly unknown[]): boolean =>
+				(typeof content === "string" ? content : JSON.stringify(content)).includes('"value":"P2"');
+			expect(completions.some(c => c.type === "custom_message" && hasP2(c.content))).toBe(true);
+			expect(completions.filter(c => c.type === "custom_message" && hasP2(c.content))).toHaveLength(1);
 		} finally {
 			openSpy.mockRestore();
 		}

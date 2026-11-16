@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.10.7] - 2026-11-16
+
 ### Fixed
 
 - Serialize ordinary session rewrites, async/sync journal-lock contention, queue cleanup, and source-path locking during session relocation ([#774](https://github.com/Wladefant/veyyon/issues/774)).
@@ -42,6 +44,7 @@
 - A failed session fork refuses a detected foreign append between rereading the original journal and publishing its rollback, leaving the source available for a safe retry ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork repairs its own aborted `session_switched` marker on the original JSONL before the rejected fork returns, so reopening without a later caller flush cannot mistake the source for a completed switch; keep genuine foreign-writer tails and original history intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - `FileSessionStorage.readText` reads via `fs.promises.readFile` so concurrent appends on Windows do not produce torn trailing JSONL lines.
+
 ## [1.10.3] - 2026-11-16
 
 ### Fixed
