@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- Serialize ordinary session rewrites, async/sync journal-lock contention, queue cleanup, and source-path locking during session relocation ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Flush copied fork artifact files before child-session publication and flush POSIX directory entries deepest-first ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 - Refuse first append to a newly opened empty session journal if a peer already wrote foreign contents to its pinned inode before this writer's own header ([#774](https://github.com/Wladefant/veyyon/issues/774)).

@@ -4,6 +4,7 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { describe, expect, it, spyOn } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -16,7 +17,16 @@ import {
 import { loadEntriesFromFile } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { serializeTitleSlot } from "@veyyon/kernel/session/session-title-slot";
-import { FileSessionStorage, MemorySessionStorage, type SessionFileBody, type SessionStorageWriter, type WriteTextAtomicOptions } from "@veyyon/kernel/session/session-storage";
+import {
+	__journalLockInternalsForTesting,
+	FileSessionStorage,
+	MemorySessionStorage,
+	type SessionFileBody,
+	type SessionStorageWriter,
+	type WriteTextAtomicOptions,
+	withJournalLock,
+	withJournalLockSync,
+} from "@veyyon/kernel/session/session-storage";
 import { getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { getTerminalId } from "@veyyon/utils/ttyid";
@@ -4327,4 +4337,190 @@ describe("SessionManager.fork artifact durability", () => {
 		},
 	);
 
+});
+
+describe("SessionStorage and SessionManager journal lock coordination", () => {
+	it("cleans up async inProcessJournalQueues entries on release, error, and reentrancy", async () => {
+		using temp = TempDir.createSync("@veyyon-journal-queue-cleanup-");
+		const baselineSize = __journalLockInternalsForTesting.queueSize();
+		const paths = Array.from({ length: 4 }, (_, index) => path.join(temp.path(), `s-${index}.jsonl`));
+		const order: string[] = [];
+
+		// Same-path FIFO + nested reentrancy
+		await Promise.all([
+			withJournalLock(paths[0]!, async () => {
+				order.push("a-start");
+				await withJournalLock(paths[0]!, async () => {
+					order.push("a-nested");
+				});
+				await Promise.resolve();
+				order.push("a-end");
+			}),
+			withJournalLock(paths[0]!, async () => {
+				order.push("b");
+			}),
+		]);
+
+		// Distinct paths + throwing callback
+		await withJournalLock(paths[1]!, async () => {});
+		await expect(
+			withJournalLock(paths[2]!, async () => {
+				throw new Error("boom");
+			}),
+		).rejects.toThrow("boom");
+		await withJournalLock(paths[3]!, async () => {});
+
+		expect(__journalLockInternalsForTesting.queueSize()).toBe(baselineSize);
+	});
+
+	it("does not drop cooperating peer appends during ordinary async or sync rewrites", async () => {
+		using temp = TempDir.createSync("@veyyon-ordinary-rewrite-lock-");
+		const sessions = path.join(temp.path(), "sessions");
+		await fs.mkdir(sessions, { recursive: true });
+
+		// 1) Async ordinary rewrite (rewriteEntries) vs peer append
+		let injectPeerOnAsyncRewrite: (() => Promise<void>) | undefined;
+		class AsyncBarrierStorage extends FileSessionStorage {
+			override async writeTextAtomic(
+				fpath: string,
+				body: SessionFileBody,
+				options?: WriteTextAtomicOptions,
+			): Promise<void> {
+				const hook = injectPeerOnAsyncRewrite;
+				injectPeerOnAsyncRewrite = undefined;
+				if (hook) await hook();
+				await super.writeTextAtomic(fpath, body, options);
+			}
+		}
+		const storageA = new AsyncBarrierStorage();
+		const managerA = SessionManager.create(temp.path(), sessions, storageA);
+		managerA.appendMessage({ role: "user", content: "u1", timestamp: Date.now() });
+		managerA.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "a1" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude",
+			usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await managerA.flush();
+		const sessionFile = managerA.getSessionFile()!;
+		const peerStorage = new FileSessionStorage();
+		const outsideContext = AsyncLocalStorage.snapshot();
+		let asyncHookRan = false;
+		let peerTitlePromise: Promise<void> | undefined;
+		injectPeerOnAsyncRewrite = async () => {
+			asyncHookRan = true;
+			peerTitlePromise = outsideContext(() =>
+				peerStorage.updateSessionTitle(sessionFile, {
+					title: "peer-title",
+					source: "user",
+				}),
+			);
+		};
+		await managerA.rewriteEntries();
+		if (peerTitlePromise) await peerTitlePromise;
+		expect(asyncHookRan).toBe(true);
+		const afterAsyncText = await fs.readFile(sessionFile, "utf8");
+		expect(afterAsyncText).toContain("peer-title");
+		await managerA.close();
+	});
+
+	it("avoids same-process async/sync journal-lock deadlock on FileSessionStorageWriter.append", async () => {
+		using temp = TempDir.createSync("@veyyon-async-sync-lock-");
+		const filePath = path.join(temp.path(), "journal.jsonl");
+		await fs.writeFile(filePath, '{"type":"session","version":3,"id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}\n');
+
+		const storage = new FileSessionStorage();
+		const writer = storage.openWriter(filePath);
+		let releaseHolder!: () => void;
+		const holderGate = new Promise<void>(resolve => {
+			releaseHolder = resolve;
+		});
+		let holderEntered!: () => void;
+		const holderEnteredPromise = new Promise<void>(resolve => {
+			holderEntered = resolve;
+		});
+
+		const holderPromise = withJournalLock(filePath, async () => {
+			holderEntered();
+			await holderGate;
+		});
+		await holderEnteredPromise;
+
+		const appendLine = '{"type":"message","id":"m1","parentId":null,"timestamp":"2026-01-01T00:00:01.000Z","message":{"role":"user","content":"hello","timestamp":1}}\n';
+		const appendPromise = writer.append(appendLine);
+		// Release async holder on next microtask; if append blocked the event loop with sleepSync,
+		// the microtask cannot run for ~5s and append fails with "Failed to acquire lock".
+		queueMicrotask(() => releaseHolder());
+
+		await Promise.all([holderPromise, appendPromise]);
+		await writer.sync();
+		await writer.close();
+
+		const content = await fs.readFile(filePath, "utf8");
+		expect(content).toContain('"id":"m1"');
+
+		// Reciprocal: sync holder then async waiter
+		let asyncRanAfterSync = false;
+		const syncDone = withJournalLockSync(filePath, () => {
+			return true;
+		});
+		expect(syncDone).toBe(true);
+		await withJournalLock(filePath, async () => {
+			asyncRanAfterSync = true;
+		});
+		expect(asyncRanAfterSync).toBe(true);
+	});
+
+	it("serializes moveSessionWithArtifacts against source journal locks and avoids reverse-move deadlock", async () => {
+		using temp = TempDir.createSync("@veyyon-move-source-lock-");
+		const srcDir = path.join(temp.path(), "src");
+		const dstDir = path.join(temp.path(), "dst");
+		await fs.mkdir(srcDir, { recursive: true });
+		await fs.mkdir(dstDir, { recursive: true });
+		const sourcePath = path.join(srcDir, "sess.jsonl");
+		const targetPath = path.join(dstDir, "sess.jsonl");
+		await fs.writeFile(sourcePath, '{"type":"session","version":3,"id":"s1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}\n');
+
+		const storage = new FileSessionStorage();
+		let releaseSourceLock!: () => void;
+		const sourceLockGate = new Promise<void>(resolve => {
+			releaseSourceLock = resolve;
+		});
+		let sourceLockEntered!: () => void;
+		const sourceLockEnteredPromise = new Promise<void>(resolve => {
+			sourceLockEntered = resolve;
+		});
+
+		const events: string[] = [];
+		const holderPromise = withJournalLock(sourcePath, async () => {
+			sourceLockEntered();
+			await sourceLockGate;
+			events.push("source-lock-released");
+		});
+		await sourceLockEnteredPromise;
+
+		const movePromise = storage.moveSessionWithArtifacts(sourcePath, targetPath).then(() => {
+			events.push("move-finished");
+		});
+		// Yield several microtasks so move would finish if it were NOT locking sourcePath
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		releaseSourceLock();
+		await Promise.all([holderPromise, movePromise]);
+
+		expect(events).toEqual(["source-lock-released", "move-finished"]);
+
+		// Concurrent reverse moves A->B and B->A must not deadlock
+		const pathA = path.join(srcDir, "a.jsonl");
+		const pathB = path.join(dstDir, "b.jsonl");
+		await fs.writeFile(pathA, '{"type":"session","version":3,"id":"sa","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}\n');
+		await fs.writeFile(pathB, '{"type":"session","version":3,"id":"sb","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}\n');
+		await Promise.allSettled([
+			storage.moveSessionWithArtifacts(pathA, pathB),
+			storage.moveSessionWithArtifacts(pathB, pathA),
+		]);
+	});
 });

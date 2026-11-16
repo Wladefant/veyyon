@@ -1340,8 +1340,12 @@ export class SessionManager {
 			this.#noteDiskFailure(err);
 		}
 	};
-	if (repairingFailedFork && this.#storage.withJournalLockSync) {
-		this.#storage.withJournalLockSync(sessionFile, runRewrite);
+	if (this.#storage.withJournalLockSync) {
+		try {
+			this.#storage.withJournalLockSync(sessionFile, runRewrite);
+		} catch (err) {
+			this.#noteDiskFailure(err);
+		}
 	} else {
 		runRewrite();
 	}
@@ -1491,7 +1495,7 @@ export class SessionManager {
 				if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = undefined;
 			}
 		};
-		if (repairingFailedFork && this.#storage.withJournalLock) {
+		if (this.#storage.withJournalLock) {
 			return await this.#storage.withJournalLock(sessionFile, runRewrite);
 		}
 		return await runRewrite();

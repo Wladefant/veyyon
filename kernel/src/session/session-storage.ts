@@ -21,6 +21,11 @@ const journalLockStorage = new AsyncLocalStorage<Set<string>>();
 const inProcessJournalQueues = new Map<string, Promise<void>>();
 const syncJournalLockDepths = new Map<string, number>();
 
+/** @internal Test-only handle for verifying async journal queue cleanup. */
+export const __journalLockInternalsForTesting = {
+	queueSize: (): number => inProcessJournalQueues.size,
+};
+
 export async function withJournalLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
 	const canonical = path.resolve(filePath);
 	const held = journalLockStorage.getStore();
@@ -32,7 +37,8 @@ export async function withJournalLock<T>(filePath: string, fn: () => Promise<T>)
 		releaseQueue = resolve;
 	});
 	const priorQueue = inProcessJournalQueues.get(canonical) ?? Promise.resolve();
-	inProcessJournalQueues.set(canonical, priorQueue.then(() => gate));
+	const queued = priorQueue.then(() => gate);
+	inProcessJournalQueues.set(canonical, queued);
 	await priorQueue;
 	const nextHeld = new Set(held);
 	nextHeld.add(canonical);
@@ -43,10 +49,21 @@ export async function withJournalLock<T>(filePath: string, fn: () => Promise<T>)
 		});
 	} finally {
 		releaseQueue!();
-		if (inProcessJournalQueues.get(canonical) === gate) {
+		if (inProcessJournalQueues.get(canonical) === queued) {
 			inProcessJournalQueues.delete(canonical);
 		}
 	}
+}
+
+async function withJournalLocks<T>(filePaths: readonly string[], fn: () => Promise<T>): Promise<T> {
+	const canonicalPaths = [...new Set(filePaths.map(filePath => path.resolve(filePath)))].sort();
+	const acquireNext = async (index: number): Promise<T> => {
+		if (index >= canonicalPaths.length) {
+			return await fn();
+		}
+		return await withJournalLock(canonicalPaths[index]!, () => acquireNext(index + 1));
+	};
+	return await acquireNext(0);
 }
 
 export function withJournalLockSync<T>(filePath: string, fn: () => T): T {
@@ -54,6 +71,9 @@ export function withJournalLockSync<T>(filePath: string, fn: () => T): T {
 	const held = journalLockStorage.getStore();
 	if (held?.has(canonical)) {
 		return fn();
+	}
+	if (inProcessJournalQueues.has(canonical)) {
+		throw new Error(`Journal lock for ${canonical} is held asynchronously in this process`);
 	}
 	const currentDepth = syncJournalLockDepths.get(canonical) ?? 0;
 	if (currentDepth > 0) {
@@ -598,6 +618,10 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	#sessionIdAtOpen: string | undefined;
 	/** Any prior append could be lost when a replacement lacks this writer\'s history, even after fsync. */
 	#hasAppendedToPinnedJournal = false;
+	readonly #emptyAtOpen: boolean;
+	#pendingAppends: Promise<void> = Promise.resolve();
+	#pendingAppendCount = 0;
+	#closePromise: Promise<void> | undefined;
 
 	constructor(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
 		super(options);
@@ -611,6 +635,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		}
 		// Open file once, keep fd for lifetime
 		this.#fd = fs.openSync(fpath, flags === "w" ? "w" : "a");
+		this.#emptyAtOpen = this.#appendMode && fs.fstatSync(this.#fd).size === 0;
 		this.#sessionIdAtOpen = this.#appendMode ? openedJournalSessionId(fpath, this.#fd) : undefined;
 		// Register for cleanup if abandoned without close()
 		writerRegistry.register(this, this.#fd, this);
@@ -632,7 +657,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			// would mix our new session with the peer's on the same inode.
 			// Prior appends (including an owned title-slot prefix) are allowed
 			// to complete our own session header on a subsequent call.
-			if (!this.#sessionIdAtOpen && !this.#hasAppendedToPinnedJournal && fs.fstatSync(this.#fd).size > 0) {
+			if (this.#emptyAtOpen && !this.#sessionIdAtOpen && !this.#hasAppendedToPinnedJournal && fs.fstatSync(this.#fd).size > 0) {
 				throw new Error("Session writer journal gained content before first append");
 			}
 			// A peer can truncate and overwrite an existing regular journal in place.
@@ -696,7 +721,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	}
 	async append(line: string): Promise<void> {
 		this.ensureOpen();
-		withJournalLockSync(this.#path, () => {
+		const writeLocked = (): void => {
 			try {
 				// A post-rename append must not silently write to a displaced inode.
 				// This observation cannot serialize arbitrary concurrent OS writers.
@@ -721,7 +746,28 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			} catch (err) {
 				throw this.recordError(err);
 			}
-		});
+		};
+		const canonical = path.resolve(this.#path);
+		if ((inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) || this.#pendingAppendCount > 0) {
+			this.#pendingAppendCount++;
+			const next = this.#pendingAppends.then(
+				() => withJournalLock(this.#path, async () => { writeLocked(); }),
+				() => withJournalLock(this.#path, async () => { writeLocked(); }),
+			);
+			this.#pendingAppends = next.catch(() => {});
+			try {
+				await next;
+			} finally {
+				this.#pendingAppendCount--;
+			}
+			return;
+		}
+		withJournalLockSync(this.#path, writeLocked);
+	}
+
+	override async flush(): Promise<void> {
+		await this.#pendingAppends;
+		this.ensureNoError();
 	}
 	async sync(): Promise<void> {
 		await this.flush();
@@ -749,27 +795,27 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	}
 
 	async close(): Promise<void> {
+		if (this.#closePromise) {
+			await this.#closePromise;
+			return;
+		}
 		if (this.isClosed) return;
 		this.markClosed();
-		// Unregister from finalization - we're closing properly
-		writerRegistry.unregister(this);
-		try {
-			fs.closeSync(this.#fd);
-		} catch (err) {
-			// A failing close is not cosmetic: on a delayed-allocation or network
-			// filesystem it is where a write error surfaces, so the session
-			// transcript can be short by whatever did not land. This used to be
-			// ignored outright, which made a truncated transcript indistinguishable
-			// from a complete one (Law 10). It goes through the same path as a write
-			// error, so `getError()` reports it and the `onError` callback fires.
-			// Still does not throw: close runs on shutdown and teardown paths where
-			// throwing would mask the reason the session is ending.
-			const error = this.recordError(err);
-			logger.warn("Could not close the session file cleanly; the transcript may be missing its last writes", {
-				error: error.message,
-				fix: "Check that the session directory is writable and not out of space. The session's earlier messages are unaffected.",
-			});
-		}
+		this.#closePromise = (async () => {
+			await this.#pendingAppends;
+			// Unregister from finalization - we're closing properly
+			writerRegistry.unregister(this);
+			try {
+				fs.closeSync(this.#fd);
+			} catch (err) {
+				const error = this.recordError(err);
+				logger.warn("Could not close the session file cleanly; the transcript may be missing its last writes", {
+					error: error.message,
+					fix: "Check that the session directory is writable and not out of space. The session's earlier messages are unaffected.",
+				});
+			}
+		})();
+		await this.#closePromise;
 	}
 }
 
@@ -1276,10 +1322,10 @@ export class FileSessionStorage implements SessionStorage {
 		}
 	}
 
-	async rename(path: string, nextPath: string): Promise<void> {
+	async rename(sourcePath: string, nextPath: string): Promise<void> {
 		try {
-			await withJournalLock(nextPath, async () => {
-				await fs.promises.rename(path, nextPath);
+			await withJournalLocks([sourcePath, nextPath], async () => {
+				await fs.promises.rename(sourcePath, nextPath);
 			});
 		} catch (err) {
 			throw toError(err);
@@ -1293,38 +1339,40 @@ export class FileSessionStorage implements SessionStorage {
 		const artifactPathChanged = path.resolve(sourceArtifacts) !== path.resolve(targetArtifacts);
 		this.ensureDirSync(path.dirname(targetPath));
 
-		let sessionMoved = false;
-		let artifactsMoved = false;
-		try {
-			if (sessionPathChanged && this.existsStateSync(sourcePath) !== "absent") {
-				await this.rename(sourcePath, targetPath);
-				sessionMoved = true;
-			}
-			if (artifactPathChanged && this.existsStateSync(sourceArtifacts) !== "absent") {
-				await this.rename(sourceArtifacts, targetArtifacts);
-				artifactsMoved = true;
-			}
-		} catch (error) {
-			const rollbackErrors: Error[] = [];
-			if (artifactsMoved) {
-				try {
-					await this.rename(targetArtifacts, sourceArtifacts);
-				} catch (rollbackError) {
-					rollbackErrors.push(toError(rollbackError));
+		await withJournalLocks([sourcePath, targetPath], async () => {
+			let sessionMoved = false;
+			let artifactsMoved = false;
+			try {
+				if (sessionPathChanged && this.existsStateSync(sourcePath) !== "absent") {
+					await this.rename(sourcePath, targetPath);
+					sessionMoved = true;
 				}
-			}
-			if (sessionMoved) {
-				try {
-					await this.rename(targetPath, sourcePath);
-				} catch (rollbackError) {
-					rollbackErrors.push(toError(rollbackError));
+				if (artifactPathChanged && this.existsStateSync(sourceArtifacts) !== "absent") {
+					await this.rename(sourceArtifacts, targetArtifacts);
+					artifactsMoved = true;
 				}
+			} catch (error) {
+				const rollbackErrors: Error[] = [];
+				if (artifactsMoved) {
+					try {
+						await this.rename(targetArtifacts, sourceArtifacts);
+					} catch (rollbackError) {
+						rollbackErrors.push(toError(rollbackError));
+					}
+				}
+				if (sessionMoved) {
+					try {
+						await this.rename(targetPath, sourcePath);
+					} catch (rollbackError) {
+						rollbackErrors.push(toError(rollbackError));
+					}
+				}
+				if (rollbackErrors.length > 0) {
+					throw new AggregateError([toError(error), ...rollbackErrors], "Session relocation and rollback failed");
+				}
+				throw error;
 			}
-			if (rollbackErrors.length > 0) {
-				throw new AggregateError([toError(error), ...rollbackErrors], "Session relocation and rollback failed");
-			}
-			throw error;
-		}
+		});
 	}
 
 	unlink(path: string): Promise<void> {
