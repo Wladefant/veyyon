@@ -9,7 +9,7 @@ import { readOwnerOnlyFileSync } from "@veyyon/utils/owner-only-read";
 import { getProcessStartIdentity, isProcessAlive, isToolCallProcessAlive } from "@veyyon/utils/process-liveness";
 
 export const LANE_ADMISSION_VERSION = 1 as const;
-export const DEFAULT_HOST_LANE_CAP = 40;
+export const DEFAULT_HOST_LANE_CAP = 100;
 export const LANE_ADMISSION_CAPABILITY = "lane-admission" as const;
 
 const LEDGER_FILENAME = "lane-admission.json";

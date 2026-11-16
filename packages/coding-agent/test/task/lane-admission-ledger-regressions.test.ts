@@ -394,7 +394,7 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(first.admitted).toBe(true);
 		expect(first.cap).toBe(1);
 
-		// Later acquire omitting cap MUST respect persisted cap=1 (never silently reset to 40)
+		// Later acquire omitting cap MUST respect persisted cap=1 (never silently reset to 100)
 		const omittedCap = await acquireLaneAdmission({
 			owner: "cap-one-second-omitted",
 			kind: "native",
@@ -406,12 +406,12 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(omittedCap.cap).toBe(1);
 		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(1);
 
-		// Later acquire requesting higher cap=40 MUST still enforce persisted cap=1
+		// Later acquire requesting higher cap=100 MUST still enforce persisted cap=1
 		const higherCap = await acquireLaneAdmission({
 			owner: "cap-one-second-higher",
 			kind: "native",
 			workerPid: 202,
-			cap: 40,
+			cap: 100,
 			liveness: probe,
 		});
 		expect(higherCap.admitted).toBe(false);
@@ -419,20 +419,20 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(higherCap.cap).toBe(1);
 		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(1);
 
-		// Reclaiming dead slot with status({ cap: 40 }) or releasing with cap: 40 must NOT raise persisted cap
+		// Reclaiming dead slot with status({ cap: 100 }) or releasing with cap: 100 must NOT raise persisted cap
 		fakeLive.delete("101");
 		fakeLive.delete("101:test:101:1");
-		const statusHigh = await getLaneAdmissionStatus({ cap: 40, liveness: probe });
+		const statusHigh = await getLaneAdmissionStatus({ cap: 100, liveness: probe });
 		expect(statusHigh.cap).toBe(1);
 		expect(statusHigh.reclaimed_count).toBe(1);
 		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(1);
 
-		// New acquire requesting cap=40 still sees persisted cap=1
+		// New acquire requesting cap=100 still sees persisted cap=1
 		const secondAdmitted = await acquireLaneAdmission({
 			owner: "cap-one-after-reclaim",
 			kind: "native",
 			workerPid: 202,
-			cap: 40,
+			cap: 100,
 			liveness: probe,
 		});
 		expect(secondAdmitted.admitted).toBe(true);
@@ -442,7 +442,7 @@ describe("lane-admission ledger safety regressions", () => {
 		const releaseHigh = await releaseLaneAdmission({
 			slotId: secondAdmitted.slot_id!,
 			leaseToken: secondAdmitted.lease_token!,
-			cap: 40,
+			cap: 100,
 		});
 		expect(releaseHigh.ok).toBe(true);
 		expect(releaseHigh.n_free).toBe(1);

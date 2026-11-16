@@ -1,6 +1,6 @@
 /**
  * WHY: native subagent spawns and external Python `WorkerBackend` runs share one
- * host-wide concurrency budget (default cap 40) via `<globalConfigRoot>/run/lane-admission.json`.
+ * host-wide concurrency budget (default cap 100) via `<globalConfigRoot>/run/lane-admission.json`.
  * An in-memory semaphore per process cannot see other Veyyon processes or external
  * launchers, and a naive timer-based reaper drops live slow workers or gets fooled by
  * caller death while a detached worker lives.
@@ -108,16 +108,23 @@ describe("host-wide shared lane admission", () => {
 		isolated.restore();
 	});
 
-	it("stores the ledger under <globalConfigRoot>/run/lane-admission.json with default cap 40", async () => {
-		expect(DEFAULT_HOST_LANE_CAP).toBe(40);
+	it("stores the ledger under <globalConfigRoot>/run/lane-admission.json with default cap 100", async () => {
+		expect(DEFAULT_HOST_LANE_CAP).toBe(100);
 		expect(getLaneAdmissionLedgerPath()).toBe(path.join(getGlobalConfigRootDir(), "run", "lane-admission.json"));
 
 		const status = await getLaneAdmissionStatus();
 		expect(status.ok).toBe(true);
-		expect(status.cap).toBe(40);
+		expect(status.cap).toBe(100);
 		expect(status.active_lanes).toBe(0);
-		expect(status.n_free).toBe(40);
+		expect(status.n_free).toBe(100);
 		expect(status.all_host_enforced).toBe(true);
+
+		// Cap > 40 (e.g. 41..100) must be accepted; 101 must fail closed as invalid_cap
+		const status41 = await getLaneAdmissionStatus({ cap: 41 });
+		expect(status41.cap).toBe(41);
+		const status100 = await getLaneAdmissionStatus({ cap: 100 });
+		expect(status100.cap).toBe(100);
+		await expect(getLaneAdmissionStatus({ cap: 101 })).rejects.toThrow("between 1 and 100");
 	});
 
 	it("enforces atomic acquire, adopt, heartbeat, fenced release, and idempotent double release", async () => {
@@ -382,7 +389,7 @@ describe("host-wide shared lane admission", () => {
 		fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
 		fs.writeFileSync(ledgerPath, "{not valid json", "utf8");
 
-		const onCorrupt = await acquireLaneAdmission({ owner: "disp-corrupt", kind: "external", cap: 40 });
+		const onCorrupt = await acquireLaneAdmission({ owner: "disp-corrupt", kind: "external", cap: 100 });
 		expect(onCorrupt.ok).toBe(false);
 		expect(onCorrupt.admitted).toBe(false);
 		expect(onCorrupt.reason).toBe("corrupt_admission_ledger");
@@ -390,10 +397,10 @@ describe("host-wide shared lane admission", () => {
 
 		fs.writeFileSync(
 			ledgerPath,
-			JSON.stringify({ version: LANE_ADMISSION_VERSION + 99, cap: 40, reservations: [] }),
+			JSON.stringify({ version: LANE_ADMISSION_VERSION + 99, cap: 100, reservations: [] }),
 			"utf8",
 		);
-		const onBadVersion = await acquireLaneAdmission({ owner: "disp-ver", kind: "external", cap: 40 });
+		const onBadVersion = await acquireLaneAdmission({ owner: "disp-ver", kind: "external", cap: 100 });
 		expect(onBadVersion.ok).toBe(false);
 		expect(onBadVersion.admitted).toBe(false);
 		expect(onBadVersion.reason).toBe("unsupported_ledger_version");
@@ -426,7 +433,7 @@ describe("host-wide shared lane admission", () => {
 		expect(status.unregistered_live_owners.length).toBe(1);
 		expect(status.unregistered_live_owners[0]?.sessionId).toBe("legacy-session");
 
-		const ext = await acquireLaneAdmission({ owner: "ext-upgrade-guard", kind: "external", cap: 40 });
+		const ext = await acquireLaneAdmission({ owner: "ext-upgrade-guard", kind: "external", cap: 100 });
 		expect(ext.ok).toBe(false);
 		expect(ext.admitted).toBe(false);
 		expect(ext.all_host_enforced).toBe(false);
@@ -437,7 +444,7 @@ describe("host-wide shared lane admission", () => {
 			owner: "nat-upgrade-ok",
 			kind: "native",
 			workerPid: process.pid,
-			cap: 40,
+			cap: 100,
 		});
 		expect(nat.ok).toBe(true);
 		expect(nat.admitted).toBe(true);
@@ -446,7 +453,7 @@ describe("host-wide shared lane admission", () => {
 
 		// Once live terminals advertise lane-admission, external callers are admitted
 		await writeOwnerRecord(["deliver-ack", "session-notices", LANE_ADMISSION_CAPABILITY]);
-		const extOk = await acquireLaneAdmission({ owner: "ext-upgrade-ok", kind: "external", cap: 40 });
+		const extOk = await acquireLaneAdmission({ owner: "ext-upgrade-ok", kind: "external", cap: 100 });
 		expect(extOk.ok).toBe(true);
 		expect(extOk.admitted).toBe(true);
 		expect(extOk.all_host_enforced).toBe(true);
@@ -841,7 +848,7 @@ describe("host-wide shared lane admission", () => {
 		await wakeReleased.promise;
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 
-		// Fill all 40 host slots -> subagent wake must wait without double-starting, while main wakes without child slot
+		// Fill all 100 host slots -> subagent wake must wait without double-starting, while main wakes without child slot
 		const fillers: Array<{ slotId: string; leaseToken: string }> = [];
 		for (let i = 0; i < DEFAULT_HOST_LANE_CAP; i += 1) {
 			const acq = await acquireLaneAdmission({
@@ -871,7 +878,7 @@ describe("host-wide shared lane admission", () => {
 		await mainDone.promise;
 		expect(mainPrompted).toBe(1);
 
-		// Send two concurrent IRC messages to idle subagent while cap 40 is full
+		// Send two concurrent IRC messages to idle subagent while cap 100 is full
 		promptCalls = 0;
 		activeDuringPrompt = -1;
 		promptStarted = Promise.withResolvers<void>();
@@ -902,7 +909,7 @@ describe("host-wide shared lane admission", () => {
 		});
 		expect(secondOutcome).toBe("injected");
 
-		// Free one slot -> queued wake proceeds with active_lanes === 40 and drops to 39 when done
+		// Free one slot -> queued wake proceeds with active_lanes === 100 and drops to 99 when done
 		const freed = fillers.pop()!;
 		await releaseLaneAdmission({ slotId: freed.slotId, leaseToken: freed.leaseToken });
 		await promptStarted.promise;

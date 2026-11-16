@@ -4,7 +4,7 @@
 
 ### Added
 
-- Enforce host-wide shared lane admission ledger (cap 40) and `veyyon lane-admission` CLI ([Refs #1113](https://github.com/Wladefant/veyyon/issues/1113)).
+- Enforce host-wide shared lane admission ledger (cap 100) and `veyyon lane-admission` CLI ([Refs #1113](https://github.com/Wladefant/veyyon/issues/1113)).
 ### Fixed
 
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.

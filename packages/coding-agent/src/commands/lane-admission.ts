@@ -40,7 +40,7 @@ export default class LaneAdmissionCommand extends Command {
 		"worker-pid": Flags.integer({ description: "Spawned worker PID to bind immediately on acquire" }),
 		"slot-id": Flags.string({ description: "Reservation slot ID (for adopt, heartbeat, release)" }),
 		"lease-token": Flags.string({ description: "Fencing lease token (for adopt, heartbeat, release)" }),
-		cap: Flags.integer({ description: "Override host cap (1..40)" }),
+		cap: Flags.integer({ description: "Override host cap (1..100)" }),
 		json: Flags.boolean({ description: "Emit machine-readable JSON", default: false }),
 	};
 
