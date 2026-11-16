@@ -3,21 +3,21 @@
  * Gap: it proves the mock-provider turn path, not delivery through an external provider or host process.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { setTimeout as delay } from "node:timers/promises";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Message } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
-import { type } from "arktype";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { isRecord, TempDir } from "@veyyon/utils";
+import { type } from "arktype";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { AgentRegistry } from "../src/registry/agent-registry";
 import { AgentSession } from "../src/session/agent-session";
 import { convertToLlm } from "../src/session/messages";
 import { IrcBus } from "../src/task/irc-bus";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 const resources: { session: AgentSession; auth: AuthStorage; temp: TempDir }[] = [];
 afterEach(async () => {
@@ -41,7 +41,12 @@ async function makeSession(id: string, response: MockResponse | MockResponse[], 
 	const sessionManager = SessionManager.create(temp.path(), temp.path());
 	const agent = new Agent({
 		getApiKey: () => "fake-test-key",
-		initialState: { model: mock, systemPrompt: ["Read-only test session."], tools, messages: sessionManager.buildSessionContext().messages },
+		initialState: {
+			model: mock,
+			systemPrompt: ["Read-only test session."],
+			tools,
+			messages: sessionManager.buildSessionContext().messages,
+		},
 		convertToLlm,
 		streamFn: mock.stream,
 	});
@@ -49,7 +54,12 @@ async function makeSession(id: string, response: MockResponse | MockResponse[], 
 		agent,
 		agentId: id,
 		sessionManager,
-		settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "todo.enabled": false, "todo.reminders": false }),
+		settings: Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"todo.enabled": false,
+			"todo.reminders": false,
+		}),
 		modelRegistry,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
 	});
@@ -100,7 +110,14 @@ describe("parent IRC delivery to an active child", () => {
 		const child = await makeSession("child", { content: ["child response"], stopReason: "stop", delayMs: 2_000 });
 		const registry = AgentRegistry.global();
 		registry.register({ id: "parent", displayName: "Parent", kind: "main", scope: "test", session: parent.session });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "test",
+			session: child.session,
+		});
 		const received: string[] = [];
 		child.session.subscribe(event => {
 			if (event.type === "irc_message" && isRecord(event.message.details)) {
@@ -111,7 +128,11 @@ describe("parent IRC delivery to an active child", () => {
 		try {
 			for (let attempt = 0; child.mock.calls.length === 0 && attempt < 100; attempt++) await delay(10);
 			expect(child.mock.calls).toHaveLength(1);
-			const receipt = await IrcBus.global().send({ from: "parent", to: "child", body: "Pause edits and report current status." });
+			const receipt = await IrcBus.global().send({
+				from: "parent",
+				to: "child",
+				body: "Pause edits and report current status.",
+			});
 			expect(receipt).toMatchObject({ to: "child", outcome: "injected" });
 			expect(child.session.isStreaming).toBe(true);
 			expect(received).toEqual(["Pause edits and report current status."]);
@@ -131,7 +152,10 @@ describe("parent IRC delivery to an active child", () => {
 		const child = await makeSession(
 			"child",
 			[
-				{ content: [{ type: "toolCall", id: "block-1", name: blocker.tool.name, arguments: {} }], stopReason: "toolUse" },
+				{
+					content: [{ type: "toolCall", id: "block-1", name: blocker.tool.name, arguments: {} }],
+					stopReason: "toolUse",
+				},
 				{ content: ["child done"], stopReason: "stop" },
 			],
 			[blocker.tool],
@@ -139,7 +163,14 @@ describe("parent IRC delivery to an active child", () => {
 		child.session.agent.setSteeringMode("all");
 		const registry = AgentRegistry.global();
 		registry.register({ id: "parent", displayName: "Parent", kind: "main", scope: "test", session: parent.session });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "test",
+			session: child.session,
+		});
 		const turn = child.session.prompt("Run the blocking tool.", { attribution: "agent" });
 		try {
 			await blocker.started;
@@ -177,14 +208,24 @@ describe("parent IRC delivery to an active child", () => {
 		const child = await makeSession(
 			"child",
 			[
-				{ content: [{ type: "toolCall", id: "wake-block-1", name: blocker.tool.name, arguments: {} }], stopReason: "toolUse" },
+				{
+					content: [{ type: "toolCall", id: "wake-block-1", name: blocker.tool.name, arguments: {} }],
+					stopReason: "toolUse",
+				},
 				{ content: ["wake done"], stopReason: "stop" },
 			],
 			[blocker.tool],
 		);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "parent", displayName: "Parent", kind: "main", scope: "test", session: parent.session });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "test",
+			session: child.session,
+		});
 		const wakeBody = "Wake phase: run blocking tool.";
 		const steerBody = "Mid-wake steer: include summary.";
 		try {
@@ -217,7 +258,10 @@ describe("parent IRC delivery to an active child", () => {
 		const child = await makeSession(
 			"child",
 			[
-				{ content: [{ type: "toolCall", id: "block-seq-1", name: blocker.tool.name, arguments: {} }], stopReason: "toolUse" },
+				{
+					content: [{ type: "toolCall", id: "block-seq-1", name: blocker.tool.name, arguments: {} }],
+					stopReason: "toolUse",
+				},
 				{ content: ["after first steer"], stopReason: "stop" },
 				{ content: ["after second steer"], stopReason: "stop" },
 			],
@@ -225,7 +269,14 @@ describe("parent IRC delivery to an active child", () => {
 		);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "parent", displayName: "Parent", kind: "main", scope: "test", session: parent.session });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "test",
+			session: child.session,
+		});
 		const turn = child.session.prompt("Run blocking tool in default mode.", { attribution: "agent" });
 		try {
 			await blocker.started;
@@ -260,7 +311,10 @@ describe("parent IRC delivery to an active child", () => {
 		const child = await makeSession(
 			"child",
 			[
-				{ content: [{ type: "toolCall", id: "block-sync-1", name: blocker.tool.name, arguments: {} }], stopReason: "toolUse" },
+				{
+					content: [{ type: "toolCall", id: "block-sync-1", name: blocker.tool.name, arguments: {} }],
+					stopReason: "toolUse",
+				},
 				{ content: ["initial turn done"], stopReason: "stop" },
 				{ content: ["recovered steer done"], stopReason: "stop" },
 			],
@@ -268,7 +322,14 @@ describe("parent IRC delivery to an active child", () => {
 		);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "parent", displayName: "Parent", kind: "main", scope: "test", session: parent.session });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "test",
+			session: child.session,
+		});
 		const origSync = child.sessionManager.sync.bind(child.sessionManager);
 		const syncEntered = Promise.withResolvers<void>();
 		const releaseSync = Promise.withResolvers<void>();
@@ -317,7 +378,10 @@ describe("parent IRC delivery to an active child", () => {
 		const child = await makeSession(
 			"child",
 			[
-				{ content: [{ type: "toolCall", id: "wake-sync-1", name: blocker.tool.name, arguments: {} }], stopReason: "toolUse" },
+				{
+					content: [{ type: "toolCall", id: "wake-sync-1", name: blocker.tool.name, arguments: {} }],
+					stopReason: "toolUse",
+				},
 				{ content: ["wake phase done"], stopReason: "stop" },
 				{ content: ["recovered steer done"], stopReason: "stop" },
 			],
@@ -325,7 +389,14 @@ describe("parent IRC delivery to an active child", () => {
 		);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "parent", displayName: "Parent", kind: "main", scope: "test", session: parent.session });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "test", session: child.session });
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "test",
+			session: child.session,
+		});
 		const origSync = child.sessionManager.sync.bind(child.sessionManager);
 		const syncEntered = Promise.withResolvers<void>();
 		const releaseSync = Promise.withResolvers<void>();
