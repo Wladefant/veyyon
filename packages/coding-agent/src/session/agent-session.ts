@@ -5959,15 +5959,22 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 					outbox.begin(msg.id, record);
 					await this.sessionManager.ensureOnDisk();
 					await this.sessionManager.sync();
-					if (this.agent.state.isStreaming) {
-						this.agent.steer(record);
-					} else if (!this.#ircActivePhase && !this.isStreaming) {
-						await this.replayIrcContinuations();
+					if (this.#isDisposed) return "injected";
+					const alreadyRecovered =
+						this.#ircActivePhase === msg.id ||
+						!outbox.unfinishedPhases().some(entry => entry.phaseId === msg.id);
+					if (!alreadyRecovered) {
+						if (this.agent.state.isStreaming) {
+							this.agent.steer(record);
+						} else if (!this.#ircActivePhase && !this.isStreaming) {
+							await this.replayIrcContinuations();
+						}
 					}
 				} else {
 					outbox.begin(msg.id, record);
 					await this.sessionManager.ensureOnDisk();
 					await this.sessionManager.sync();
+					if (this.#isDisposed) return "injected";
 					if (!this.#ircActivePhase && !this.isStreaming) {
 						await this.replayIrcContinuations();
 					}
