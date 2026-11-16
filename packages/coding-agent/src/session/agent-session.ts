@@ -4670,6 +4670,9 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		} finally {
 			queued?.release();
 			this.#endInFlight();
+			if (!this.#ircActivePhase && !this.isStreaming && this.#ircContinuations?.unfinished().length) {
+				await this.replayIrcContinuations();
+			}
 		}
 	}
 
@@ -5898,33 +5901,42 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			return "woken";
 		}
 		void this.#events.send({ type: "irc_message", message: record });
-		if (this.agent.state.isStreaming) {
+		if (this.isStreaming) {
 			if (relation === "parent") {
 				if (!this.#ircContinuations) {
 					this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
 				}
 				const outbox = this.#ircContinuations;
-				record = {
-					...record,
-					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
-						from: msg.from,
-						selfId: msg.to,
-						message: msg.body,
-					}),
-					details: {
-						...(record.details && typeof record.details === "object" ? record.details : {}),
-						streamingSteer: true,
-					},
-				};
-				// Claim before yielding to disk I/O or enqueueing the steer. A retry cannot
-				// inject twice, and a restart can recover until message_end persists it.
-				outbox.begin(msg.id, record);
-				await this.sessionManager.ensureOnDisk();
-				await this.sessionManager.sync();
 				if (this.agent.state.isStreaming) {
-					this.agent.steer(record);
-				} else if (!this.#ircActivePhase) {
-					await this.replayIrcContinuations();
+					record = {
+						...record,
+						content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
+							from: msg.from,
+							selfId: msg.to,
+							message: msg.body,
+						}),
+						details: {
+							...(record.details && typeof record.details === "object" ? record.details : {}),
+							streamingSteer: true,
+						},
+					};
+					// Claim before yielding to disk I/O or enqueueing the steer. A retry cannot
+					// inject twice, and a restart can recover until message_end persists it.
+					outbox.begin(msg.id, record);
+					await this.sessionManager.ensureOnDisk();
+					await this.sessionManager.sync();
+					if (this.agent.state.isStreaming) {
+						this.agent.steer(record);
+					} else if (!this.#ircActivePhase && !this.isStreaming) {
+						await this.replayIrcContinuations();
+					}
+				} else {
+					outbox.begin(msg.id, record);
+					await this.sessionManager.ensureOnDisk();
+					await this.sessionManager.sync();
+					if (!this.#ircActivePhase && !this.isStreaming) {
+						await this.replayIrcContinuations();
+					}
 				}
 			} else {
 				this.#irc.inbox.queueInterrupt(record);

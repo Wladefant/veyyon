@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
@@ -811,5 +812,155 @@ describe("native retained child resume", () => {
 			),
 		);
 		expect(followUpCalls).toHaveLength(1);
+	});
+
+	it("replays parent IRC queued during normal-prompt post-loop recovery once after in-flight ends", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Handled"], stopReason: "stop" }]);
+		const child = await session("worker", [{ content: ["Normal prompt done"], stopReason: "stop" }, yielded("C")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+
+		const providerStarted = Promise.withResolvers<void>();
+		const providerGate = Promise.withResolvers<void>();
+		const originalStreamFn = child.instance.agent.streamFn;
+		let callIndex = 0;
+		child.instance.agent.streamFn = async (model, context, options) => {
+			if (callIndex++ === 0) {
+				providerStarted.resolve();
+				await providerGate.promise;
+			}
+			return originalStreamFn(model, context, options);
+		};
+
+		const syncStarted = Promise.withResolvers<void>();
+		const syncGate = Promise.withResolvers<void>();
+		const originalSync = child.store.sync.bind(child.store);
+		let interceptNextSync = false;
+		spyOn(child.store, "sync").mockImplementation(async () => {
+			if (interceptNextSync) {
+				interceptNextSync = false;
+				syncStarted.resolve();
+				await syncGate.promise;
+			}
+			return originalSync();
+		});
+
+		const normalPrompt = child.instance.prompt("Normal user work");
+		await providerStarted.promise;
+		expect(child.instance.agent.state.isStreaming).toBe(true);
+
+		interceptNextSync = true;
+		const deliverPromise = child.instance.deliverIrcMessage({
+			id: "parent-during-normal-prompt",
+			from: "owner",
+			to: "worker",
+			body: "Follow up after normal prompt",
+			ts: 1700000005000,
+		});
+		await syncStarted.promise;
+
+		// Finish the core agent loop while sync is still held, before releasing sync.
+		providerGate.resolve();
+		for (let i = 0; i < 50 && child.instance.agent.state.isStreaming; i++) {
+			await setImmediate();
+		}
+		expect(child.instance.agent.state.isStreaming).toBe(false);
+
+		syncGate.resolve();
+		await deliverPromise;
+		await normalPrompt;
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		const followUpCalls = child.mock.calls.filter(call =>
+			call.context.messages.some(message =>
+				JSON.stringify(message.content).includes("Follow up after normal prompt"),
+			),
+		);
+		expect(followUpCalls).toHaveLength(1);
+		const completions = parent.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		expect(completions).toHaveLength(1);
+	});
+
+	it("queues non-parent peer IRC during wake settlement instead of starting an overlapping wake", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Handled A"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("A"), { content: ["Peer reply"], stopReason: "stop" }]);
+		const peer = await session("peer", [{ content: ["Peer idle"], stopReason: "stop" }]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+		registry.register({
+			id: "peer",
+			displayName: "Peer",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: peer.instance,
+		});
+
+		const settlingStarted = Promise.withResolvers<void>();
+		const settlingGate = Promise.withResolvers<void>();
+		const originalParentDeliver = parent.instance.deliverIrcMessage.bind(parent.instance);
+		let parentDeliverCount = 0;
+		spyOn(parent.instance, "deliverIrcMessage").mockImplementation(async msg => {
+			if (parentDeliverCount++ === 0) {
+				settlingStarted.resolve();
+				await settlingGate.promise;
+			}
+			return originalParentDeliver(msg);
+		});
+
+		const phase1Promise = child.instance.deliverIrcMessage({
+			id: "phase-peer-settle-1",
+			from: "owner",
+			to: "worker",
+			body: "Initial wake",
+			ts: 1700000006000,
+		});
+		await settlingStarted.promise;
+
+		let idleResolved = false;
+		const idlePromise = child.instance.waitForIdle().then(() => {
+			idleResolved = true;
+		});
+		const peerDelivery = await child.instance.deliverIrcMessage({
+			id: "peer-during-settlement",
+			from: "peer",
+			to: "worker",
+			body: "Sibling question during publish",
+			ts: 1700000007000,
+		});
+		expect(peerDelivery).toBe("injected");
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(child.mock.calls).toHaveLength(1);
+		expect(idleResolved).toBe(false);
+
+		settlingGate.resolve();
+		await phase1Promise;
+		await idlePromise;
+		await parent.instance.waitForIdle();
+		expect(idleResolved).toBe(true);
 	});
 });
