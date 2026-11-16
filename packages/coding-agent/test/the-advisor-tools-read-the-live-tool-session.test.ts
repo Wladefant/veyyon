@@ -36,7 +36,7 @@ import { TempDir } from "@veyyon/utils";
  * cleared because the advisor runs its own conversation: a read the advisor makes must not be
  * refused against output that only the primary's context holds.
  */
-const ADVISOR_OVERRIDES = ["getAgentId", "getLiveMessages", "getSessionId", "hasEditTool", "requireYieldTool"];
+const ADVISOR_OVERRIDES = ["getAgentId", "getLiveMessages", "getOwningAgentSession", "getSessionId", "hasEditTool", "requireYieldTool"];
 
 interface Launched {
 	result: CreateAgentSessionResult;
@@ -152,6 +152,8 @@ describe("the advisor's tool session", () => {
 		expect(advisor.getAgentId?.()).toBe("advisor");
 		expect(advisor.getSessionId?.()).toBe(`${result.session.sessionManager.getSessionId()}-advisor`);
 		expect(primary.getSessionId?.()).toBe(result.session.sessionManager.getSessionId());
+		expect(primary.getOwningAgentSession?.()).toBe(result.session);
+		expect(advisor.getOwningAgentSession?.()).toBeUndefined();
 		expect(advisor.hasEditTool).toBe(true);
 		expect(advisor.requireYieldTool).toBe(false);
 	});

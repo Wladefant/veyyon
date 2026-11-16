@@ -64,6 +64,9 @@ describe("task spawn executor cwd routing", () => {
 	it("creates each spawned session in its routed cwd, including nested relative and inherited paths", async () => {
 		const createdCwds: string[] = [];
 		const sdkSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			if (!options || !options.sessionManager) {
+				throw new Error("expected createAgentSession options and sessionManager to be defined");
+			}
 			const cwd = options.sessionManager.getCwd();
 			createdCwds.push(cwd);
 			return createSessionResult(
@@ -134,7 +137,21 @@ describe("task spawn executor cwd routing", () => {
 
 		expect(sdkSpy).toHaveBeenCalledTimes(3);
 		expect(createdCwds).toEqual([explicitCwd, nestedCwd, explicitCwd]);
-		expect(sdkSpy.mock.calls.map(([options]) => options.cwd)).toEqual(createdCwds);
-		expect(sdkSpy.mock.calls.map(([options]) => options.sessionManager.getCwd())).toEqual(createdCwds);
+		expect(
+			sdkSpy.mock.calls.map(([options]) => {
+				if (!options) {
+					throw new Error("expected createAgentSession options to be defined");
+				}
+				return options.cwd;
+			}),
+		).toEqual(createdCwds);
+		expect(
+			sdkSpy.mock.calls.map(([options]) => {
+				if (!options || !options.sessionManager) {
+					throw new Error("expected createAgentSession options and sessionManager to be defined");
+				}
+				return options.sessionManager.getCwd();
+			}),
+		).toEqual(createdCwds);
 	});
 });

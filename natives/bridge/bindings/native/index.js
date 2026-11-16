@@ -33,7 +33,7 @@ export const Shell = lazyNativeClass("Shell");
 
 // functions
 export const __veyyonInstallTokioRuntime = lazyNativeFn("__veyyonInstallTokioRuntime");
-export const __veyyonNativesV1_8_16 = lazyNativeFn("__veyyonNativesV1_8_16");
+export const __veyyonNativesV1_10_6 = lazyNativeFn("__veyyonNativesV1_10_6");
 export const astEdit = lazyNativeFn("astEdit");
 export const astGrep = lazyNativeFn("astGrep");
 export const astMatch = lazyNativeFn("astMatch");
@@ -54,6 +54,7 @@ export const hasMatch = lazyNativeFn("hasMatch");
 export const highlightCode = lazyNativeFn("highlightCode");
 export const highlightCodeBatch = lazyNativeFn("highlightCodeBatch");
 export const htmlToMarkdown = lazyNativeFn("htmlToMarkdown");
+export const installConsoleCtrlHandler = lazyNativeFn("installConsoleCtrlHandler");
 export const invalidateFsScanCache = lazyNativeFn("invalidateFsScanCache");
 export const isoBackend = lazyNativeFn("isoBackend");
 export const isoDiff = lazyNativeFn("isoDiff");
@@ -72,6 +73,7 @@ export const readCommitMemory = lazyNativeFn("readCommitMemory");
 export const readImageFromClipboard = lazyNativeFn("readImageFromClipboard");
 export const releaseEmbeddedModulePages = lazyNativeFn("releaseEmbeddedModulePages");
 export const releaseFreeHeapPages = lazyNativeFn("releaseFreeHeapPages");
+export const removeConsoleCtrlHandler = lazyNativeFn("removeConsoleCtrlHandler");
 export const search = lazyNativeFn("search");
 export const setHangulCompatJamoWidthOverride = lazyNativeFn("setHangulCompatJamoWidthOverride");
 export const skimSessionFile = lazyNativeFn("skimSessionFile");

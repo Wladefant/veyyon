@@ -9,7 +9,6 @@ import type { KernelExecuteOptions, KernelExecutor } from "@veyyon/coding-agent/
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
-import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
 import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
 useIsolatedAgentDir();
@@ -370,6 +369,7 @@ describe("executeJs", () => {
 	});
 
 	it("delegates URI reads through the read tool with positional slicing", async () => {
+		const controller = new AbortController();
 		const execute = vi.fn(async (_toolCallId: string, args: unknown): Promise<AgentToolResult> => {
 			const record = args as { path: string };
 			return { content: [{ type: "text", text: record.path.endsWith(":1-1400") ? "wide" : "limited" }] };
@@ -389,6 +389,7 @@ describe("executeJs", () => {
 				sessionId,
 				session: toolSession,
 				sessionFile,
+				signal: controller.signal,
 			},
 		);
 
@@ -403,16 +404,16 @@ describe("executeJs", () => {
 		expect(execute).toHaveBeenNthCalledWith(
 			1,
 			expect.stringMatching(/^js-read-/),
-			{ path: "artifact://15:raw:1-1400", [INTENT_FIELD]: "js prelude" },
-			expect.any(AbortSignal),
+			{ path: "artifact://15:raw:1-1400" },
+			controller.signal,
 			undefined,
 			undefined,
 		);
 		expect(execute).toHaveBeenNthCalledWith(
 			2,
 			expect.stringMatching(/^js-read-/),
-			{ path: "artifact://15:raw:1-2", [INTENT_FIELD]: "js prelude" },
-			expect.any(AbortSignal),
+			{ path: "artifact://15:raw:1-2" },
+			controller.signal,
 			undefined,
 			undefined,
 		);
@@ -464,8 +465,8 @@ describe("executeJs", () => {
 			agentOutput: "from-agent",
 		});
 		expect(execute).toHaveBeenCalledTimes(2);
-		expect(execute.mock.calls[0]?.[1]).toEqual({ path: "package.json", [INTENT_FIELD]: "js prelude" });
-		expect(execute.mock.calls[1]?.[1]).toEqual({ path: "agent://agent-42", [INTENT_FIELD]: "js prelude" });
+		expect(execute.mock.calls[0]?.[1]).toEqual({ path: "package.json" });
+		expect(execute.mock.calls[1]?.[1]).toEqual({ path: "agent://agent-42" });
 	});
 
 	it("auto-displays the final awaited expression result", async () => {
@@ -591,14 +592,14 @@ describe("executeJs", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("7");
 	});
-	it("states a final value structuredClone cannot copy as text, with its functions and symbols marked in place", async () => {
+	it("states a final value structuredClone cannot copy as an opaque type label", async () => {
 		const result = await executeJs("({ name: 'probe', run() { return 1; }, tag: Symbol('marker') });", {
 			sessionId,
 			session,
 			sessionFile,
 		});
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toBe('{\n  "name": "probe",\n  "run": "[Function: run]",\n  "tag": "Symbol(marker)"\n}\n');
+		expect(result.output).toBe("[object Object]\n");
 		expect(result.displayOutputs.filter(o => o.type === "json")).toHaveLength(0);
 	});
 
