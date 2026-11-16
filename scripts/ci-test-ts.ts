@@ -962,9 +962,7 @@ export async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 						env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
 						extraArgs: [
 							...onlyFailuresArgs,
-							...(pkg === "packages/utils"
-								? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
-								: []),
+							...(pkg === "packages/utils" ? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"] : []),
 						],
 					}),
 				];
@@ -1249,9 +1247,7 @@ export function parseCiTestShard(value: string | undefined): CiTestShard | undef
 	return { index, count };
 }
 
-export function resolveCiTestShard(
-	env: Record<string, string | undefined> = Bun.env,
-): CiTestShard | undefined {
+export function resolveCiTestShard(env: Record<string, string | undefined> = Bun.env): CiTestShard | undefined {
 	const testShardVal = env.VEYYON_CI_TEST_SHARD;
 	const vShard = env.VEYYON_CI_SHARD;
 	const vShards = env.VEYYON_CI_SHARDS;
@@ -1303,9 +1299,7 @@ export function resolveCiTestShard(
 			throw new Error(`Invalid CF_SHARD_COUNT ${JSON.stringify(cfCount)}; expected positive integer`);
 		}
 		if (!Number.isSafeInteger(indexNum) || indexNum < 0 || indexNum >= countNum) {
-			throw new Error(
-				`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`,
-			);
+			throw new Error(`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`);
 		}
 		normB = { index: indexNum + 1, count: countNum };
 	}
@@ -1371,11 +1365,7 @@ function resolveWorkspaceCloudflareOverride(label: string): number | undefined {
 	return undefined;
 }
 
-export function allocateCloudflareTestCommands<T>(
-	mode: string,
-	commands: readonly T[],
-	shard: CiTestShard,
-): T[] {
+export function allocateCloudflareTestCommands<T>(mode: string, commands: readonly T[], shard: CiTestShard): T[] {
 	if (shard.count !== 3) {
 		return partitionTestCommands(commands, shard);
 	}
@@ -1548,7 +1538,6 @@ export function reportNodeTestTotals(totals: NodeTestTotals): void {
 		`CLOUDFLARE_CI_NODE_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} files=${totals.files} runs=${totals.runs}\n`,
 	);
 }
-
 
 // Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
 // above. Used by the progress line and footer so timings read like `bun test`.
@@ -1846,7 +1835,6 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 		process.stdout.write(
 			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds, testTotals)}\n`,
 		);
-
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
@@ -2318,12 +2306,11 @@ if (import.meta.main) {
 
 	const bucketStartedAt = performance.now();
 	try {
-		if (
-			!isDryRun &&
-			testCommands.length > 0 &&
-			(junitReportDir !== null || (!isCI() && testCommands.length > 1))
-		) {
-			await runTestCommandsInParallel(testCommands, chunksAtOnce(requestedMode as Mode, isCI(), testCommands.length));
+		if (!isDryRun && testCommands.length > 0 && (junitReportDir !== null || (!isCI() && testCommands.length > 1))) {
+			await runTestCommandsInParallel(
+				testCommands,
+				chunksAtOnce(requestedMode as Mode, isCI(), testCommands.length),
+			);
 		} else {
 			await runTestCommandsInSequence(testCommands);
 		}
