@@ -472,25 +472,42 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 	) -> ExecutionSpawnResult {
 		let last_arg = Self::take_last_arg(&args);
 		let rt = tokio::runtime::Handle::current();
-		let (tx, rx) = tokio::sync::oneshot::channel();
-		let spawn_res = std::thread::Builder::new()
-			.name("brush-builtin".into())
-			.spawn(move || {
-				let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
-				let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
-				shell.update_last_arg_variable(last_arg);
-				let _ = tx.send(result);
-			});
-
-		let join_handle = tokio::spawn(async move {
-			if let Err(err) = spawn_res {
-				return Err(std::io::Error::other(err).into());
-			}
-			match rx.await {
-				Ok(res) => res,
-				Err(err) => Err(std::io::Error::other(err).into()),
-			}
+		#[cfg(not(windows))]
+		let join_handle = tokio::task::spawn_blocking(move || {
+			let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
+			let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
+			shell.update_last_arg_variable(last_arg);
+			result
 		});
+		#[cfg(windows)]
+		let join_handle = {
+			static BUILTIN_SEMAPHORE: std::sync::LazyLock<
+				std::sync::Arc<tokio::sync::Semaphore>,
+			> = std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(32)));
+			tokio::spawn(async move {
+				let permit = std::sync::Arc::clone(&BUILTIN_SEMAPHORE)
+					.acquire_owned()
+					.await
+					.map_err(|err| std::io::Error::other(err))?;
+				let (tx, rx) = tokio::sync::oneshot::channel();
+				let spawn_res = std::thread::Builder::new()
+					.name("brush-builtin".into())
+					.spawn(move || {
+						let _permit = permit;
+						let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
+						let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
+						shell.update_last_arg_variable(last_arg);
+						let _ = tx.send(result);
+					});
+				if let Err(err) = spawn_res {
+					return Err(std::io::Error::other(err).into());
+				}
+				match rx.await {
+					Ok(res) => res,
+					Err(err) => Err(std::io::Error::other(err).into()),
+				}
+			})
+		};
 
 		ExecutionSpawnResult::StartedTask(join_handle)
 	}

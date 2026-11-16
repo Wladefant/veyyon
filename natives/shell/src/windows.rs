@@ -22,6 +22,10 @@ use winreg::{RegKey, enums::HKEY_LOCAL_MACHINE};
 
 const WHERE_GIT_TIMEOUT: Duration = Duration::from_secs(2);
 const WHERE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const MAX_WHERE_STDOUT_BYTES: usize = 16 * 1024;
+const GIT_ENV_CACHE_TTL: Duration = Duration::from_secs(30);
+const MAX_WIN_INIT_WORKERS: usize = 64;
+const WIN_INIT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Default)]
 struct GitEnvironment {
@@ -31,12 +35,14 @@ struct GitEnvironment {
 
 #[derive(Default)]
 struct GitEnvCacheState {
-	cached:    Option<(Option<OsString>, GitEnvironment)>,
+	cached:    Option<(Option<OsString>, Instant, GitEnvironment)>,
 	in_flight: bool,
 }
 
 static GIT_ENV_CACHE: LazyLock<(Mutex<GitEnvCacheState>, Condvar)> =
 	LazyLock::new(|| (Mutex::new(GitEnvCacheState::default()), Condvar::new()));
+static WIN_INIT_SEMAPHORE: LazyLock<Arc<tokio::sync::Semaphore>> =
+	LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_WIN_INIT_WORKERS)));
 pub fn configure_windows_path(shell: &mut BrushShell) -> Result<()> {
 	let hook_key = test_hook_key(shell);
 	let existing_path = existing_shell_path(shell);
@@ -66,6 +72,21 @@ pub(crate) async fn configure_windows_session_cancellable(
 			Some((key, value))
 		})
 		.collect();
+	let permit = if let Some(token) = cancel_token {
+		tokio::select! {
+			biased;
+			() = token.cancelled() => return Err(Error::msg("Windows session initialization cancelled")),
+			res = tokio::time::timeout(WIN_INIT_ACQUIRE_TIMEOUT, Arc::clone(&WIN_INIT_SEMAPHORE).acquire_owned()) => {
+				res.map_err(|_| Error::msg("Windows session initialization worker pool saturated"))?
+					.map_err(|err| Error::msg(format!("Windows session initialization semaphore closed: {err}")))?
+			}
+		}
+	} else {
+		tokio::time::timeout(WIN_INIT_ACQUIRE_TIMEOUT, Arc::clone(&WIN_INIT_SEMAPHORE).acquire_owned())
+			.await
+			.map_err(|_| Error::msg("Windows session initialization worker pool saturated"))?
+			.map_err(|err| Error::msg(format!("Windows session initialization semaphore closed: {err}")))?
+	};
 	let cancel_flag = Arc::new(AtomicBool::new(false));
 	let thread_cancel = Arc::clone(&cancel_flag);
 
@@ -73,6 +94,7 @@ pub(crate) async fn configure_windows_session_cancellable(
 	thread::Builder::new()
 		.name("veyyon-win-init".into())
 		.spawn(move || {
+			let _permit = permit;
 			let mut expanded_temps = Vec::with_capacity(temp_vars.len());
 			for (key, value) in temp_vars {
 				if thread_cancel.load(Ordering::Relaxed) {
@@ -263,8 +285,9 @@ fn discover_git_environment(cancel: Option<&AtomicBool>) -> GitEnvironment {
 	let mut is_leader = false;
 	if let Ok(mut state) = lock.lock() {
 		loop {
-			if let Some((cached_path, cached_env)) = state.cached.as_ref()
+			if let Some((cached_path, cached_at, cached_env)) = state.cached.as_ref()
 				&& *cached_path == host_path
+				&& cached_at.elapsed() < GIT_ENV_CACHE_TTL
 			{
 				return cached_env.clone();
 			}
@@ -317,7 +340,7 @@ fn discover_git_environment(cancel: Option<&AtomicBool>) -> GitEnvironment {
 		&& !is_cancelled(cancel)
 		&& let Ok(mut state) = lock.lock()
 	{
-		state.cached = Some((host_path, discovered.clone()));
+		state.cached = Some((host_path, Instant::now(), discovered.clone()));
 	}
 	discovered
 }
@@ -358,6 +381,25 @@ fn query_git_install_path_from_where(cancel: Option<&AtomicBool>) -> (Option<Str
 		return (None, true);
 	};
 
+	let stdout_handle = child.stdout.take().map(|mut stdout| {
+		thread::Builder::new()
+			.name("veyyon-where-git-stdout".into())
+			.spawn(move || {
+				let mut buf = Vec::with_capacity(512);
+				let mut chunk = [0u8; 512];
+				while buf.len() < MAX_WHERE_STDOUT_BYTES {
+					match stdout.read(&mut chunk) {
+						Ok(0) | Err(_) => break,
+						Ok(n) => {
+							let keep = n.min(MAX_WHERE_STDOUT_BYTES - buf.len());
+							buf.extend_from_slice(&chunk[..keep]);
+						},
+					}
+				}
+				String::from_utf8_lossy(&buf).into_owned()
+			})
+	});
+
 	let deadline = Instant::now() + WHERE_GIT_TIMEOUT;
 	let status = loop {
 		if is_cancelled(cancel) || Instant::now() >= deadline {
@@ -380,14 +422,23 @@ fn query_git_install_path_from_where(cancel: Option<&AtomicBool>) -> (Option<Str
 		return (None, true);
 	}
 
-	let mut stdout_buf = String::new();
-	if let Some(mut stdout) = child.stdout.take() {
-		let _ = stdout.read_to_string(&mut stdout_buf);
-	}
+	let stdout_buf = match stdout_handle {
+		Some(Ok(handle)) => {
+			let mut finished = handle.is_finished();
+			while !finished {
+				if is_cancelled(cancel) || Instant::now() >= deadline {
+					return (None, false);
+				}
+				thread::sleep(WHERE_POLL_INTERVAL);
+				finished = handle.is_finished();
+			}
+			handle.join().unwrap_or_default()
+		},
+		_ => String::new(),
+	};
 	let Some(line) = stdout_buf.lines().next().map(str::trim).filter(|s| !s.is_empty()) else {
 		return (None, true);
 	};
-
 	let git_path = Path::new(line);
 	let root = git_install_root_from_path(git_path)
 		.map(|install_root| install_root.to_string_lossy().into_owned());

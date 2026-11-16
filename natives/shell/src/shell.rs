@@ -1731,14 +1731,28 @@ async fn read_pipe_chunk_windows(
 						Err(e) => return Err(e),
 					}
 				} else {
+					static NONPIPE_READ_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+						std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(32)));
+					#[cfg(windows)]
+					unsafe extern "system" {
+						fn CancelSynchronousIo(h_thread: *mut std::ffi::c_void) -> i32;
+					}
+					let permit = tokio::select! {
+						biased;
+						() = cancel_token.cancelled() => return Ok(None),
+						res = Arc::clone(&NONPIPE_READ_SEMAPHORE).acquire_owned() => {
+							res.map_err(io::Error::other)?
+						},
+					};
 					let Ok(mut cloned) = reader.try_clone() else {
 						return Ok(None);
 					};
 					let read_len = buf.len();
 					let (tx, rx) = tokio::sync::oneshot::channel();
-					std::thread::Builder::new()
+					let join_handle = std::thread::Builder::new()
 						.name("veyyon-win-nonpipe-read".into())
 						.spawn(move || {
+							let _permit = permit;
 							let mut chunk = vec![0u8; read_len];
 							let res = loop {
 								match cloned.read(&mut chunk) {
@@ -1755,7 +1769,14 @@ async fn read_pipe_chunk_windows(
 						.map_err(io::Error::other)?;
 					let chunk = tokio::select! {
 						biased;
-						() = cancel_token.cancelled() => return Ok(None),
+						() = cancel_token.cancelled() => {
+							use std::os::windows::io::AsRawHandle;
+							// SAFETY: `join_handle` is a live thread handle until `join()` or drop.
+							unsafe {
+								CancelSynchronousIo(join_handle.as_raw_handle());
+							}
+							return Ok(None);
+						},
 						res = rx => res.map_err(io::Error::other)??,
 					};
 					if chunk.is_empty() {

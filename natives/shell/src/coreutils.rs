@@ -41,16 +41,48 @@ pub async fn run_cancellable_blocking(
 ) -> i32 {
 	let cancel_flag = Arc::new(AtomicBool::new(false));
 	let thread_flag = Arc::clone(&cancel_flag);
-	let (tx, mut rx) = tokio::sync::oneshot::channel();
-	let spawn_res = std::thread::Builder::new()
-		.name("veyyon-coreutil".into())
-		.spawn(move || {
-			let code = task(thread_flag);
-			let _ = tx.send(code);
+	#[cfg(not(windows))]
+	let mut rx = {
+		let handle = tokio::task::spawn_blocking(move || task(thread_flag));
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		tokio::spawn(async move {
+			let _ = tx.send(handle.await.unwrap_or(1));
 		});
-	if spawn_res.is_err() {
-		return 1;
-	}
+		rx
+	};
+	#[cfg(windows)]
+	let mut rx = {
+		static COREUTIL_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+			std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(32)));
+		let permit = match cancel.as_ref() {
+			Some(token) => tokio::select! {
+				biased;
+				() = token.cancelled() => return 130,
+				res = Arc::clone(&COREUTIL_SEMAPHORE).acquire_owned() => {
+					let Ok(permit) = res else { return 1; };
+					permit
+				},
+			},
+			None => {
+				let Ok(permit) = Arc::clone(&COREUTIL_SEMAPHORE).acquire_owned().await else {
+					return 1;
+				};
+				permit
+			},
+		};
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		let spawn_res = std::thread::Builder::new()
+			.name("veyyon-coreutil".into())
+			.spawn(move || {
+				let _permit = permit;
+				let code = task(thread_flag);
+				let _ = tx.send(code);
+			});
+		if spawn_res.is_err() {
+			return 1;
+		}
+		rx
+	};
 
 	match cancel {
 		Some(token) => {
@@ -86,6 +118,9 @@ impl Read for CancellableWindowsStdin {
 
 		const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+		if buf.is_empty() {
+			return Ok(0);
+		}
 		if self.cancel.load(Ordering::Relaxed) {
 			return Ok(0);
 		}
@@ -363,7 +398,7 @@ mod tests {
 	use std::{
 		collections::HashMap,
 		ffi::OsString,
-		io::{self, Write},
+		io::{self, Read, Write},
 		path::PathBuf,
 		sync::{Arc, atomic::AtomicBool},
 	};
@@ -371,6 +406,8 @@ mod tests {
 	use flume::Sender;
 
 	use super::{UutilRun, run_caught};
+	#[cfg(windows)]
+	use super::{CancellableWindowsStdin, OpenFile};
 
 	/// `Send` writer that forwards every write onto a channel so a test can
 	/// inspect what the utility wrote to the scope's stderr.
@@ -429,5 +466,21 @@ mod tests {
 		let (code, err) = run_in_scope(boom, vec![OsString::from("tail")]);
 		assert_eq!(code, 1, "a panic in the utility becomes a failed command");
 		assert_eq!(err, "tail: internal error\n", "diagnostic names the command");
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn cancellable_windows_stdin_empty_buffer_returns_zero_without_panic() {
+		let (reader, mut writer) = std::io::pipe().expect("create pipe");
+		writer.write_all(b"hello").expect("write pipe");
+		let mut stdin = CancellableWindowsStdin {
+			inner:  OpenFile::PipeReader(reader),
+			cancel: Arc::new(AtomicBool::new(false)),
+		};
+		let n = stdin.read(&mut []).expect("empty read must return Ok(0)");
+		assert_eq!(n, 0);
+		let mut buf = [0u8; 5];
+		let n2 = stdin.read(&mut buf).expect("subsequent read must succeed");
+		assert_eq!(&buf[..n2], b"hello");
 	}
 }
