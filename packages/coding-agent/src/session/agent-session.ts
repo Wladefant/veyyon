@@ -936,6 +936,8 @@ export class AgentSession {
 	#ircContinuations: IrcContinuationOutbox | undefined;
 	#ircActivePhase: string | undefined;
 	#ircWakeSettled: Promise<void> | undefined;
+	#ircReplayPending: Promise<void> | undefined;
+	#attemptedOutboxReplayIds = new Set<string>();
 	/**
 	 * Recent raw SSE traffic for the debug viewer and the report bundle, which read the session the
 	 * terminal displays. Undefined on a spawned agent's session unless the caller passes a buffer:
@@ -982,10 +984,23 @@ export class AgentSession {
 			}
 		}
 		this.#queue.scheduleDrain();
-		if (!this.isStreaming && !this.#ircActivePhase && this.#ircContinuations?.unfinished().length) {
-			void this.replayIrcContinuations().catch(error =>
-				logger.warn("Replaying pending IRC continuations failed", { error: errorMessage(error) }),
-			);
+		const unfinished = this.#ircContinuations?.unfinished() ?? [];
+		const pendingIds = unfinished
+			.filter(entry => !this.#attemptedOutboxReplayIds.has(entry.id))
+			.map(entry => entry.id);
+		if (!this.isStreaming && !this.#ircActivePhase && pendingIds.length > 0 && !this.#ircReplayPending) {
+			for (const id of pendingIds) this.#attemptedOutboxReplayIds.add(id);
+			const replay = this.replayIrcContinuations()
+				.catch(error => {
+					logger.warn("Replaying pending IRC continuations failed", { error: errorMessage(error) });
+				})
+				.finally(() => {
+					if (this.#ircReplayPending === replay) this.#ircReplayPending = undefined;
+					if (!this.#isDisposed && !this.isStreaming && !this.#ircActivePhase) {
+						this.#irc.resumeStranded();
+					}
+				});
+			this.#ircReplayPending = replay;
 			return;
 		}
 		this.#irc.resumeStranded();
@@ -3610,8 +3625,9 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
-		while (this.#ircWakeSettled) {
-			await this.#ircWakeSettled;
+		while (this.#ircWakeSettled || this.#ircReplayPending) {
+			if (this.#ircReplayPending) await this.#ircReplayPending;
+			if (this.#ircWakeSettled) await this.#ircWakeSettled;
 			await this.agent.waitForIdle();
 			await this.#waitForPostPromptRecovery();
 		}
