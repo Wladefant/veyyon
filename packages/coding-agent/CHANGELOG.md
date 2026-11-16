@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
+
 ## [1.10.1] - 2026-11-15
 
 ### Fixed

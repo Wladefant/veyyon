@@ -36,6 +36,7 @@ import {
 } from "./kernel-base";
 import { ensureKernelToolBridge, type KernelToolBridgeInfo, registerKernelToolBridge } from "./kernel-tool-bridge";
 import type { KernelDisplayOutput } from "./py/display";
+import { agentEvalSessionKey } from "./session-id";
 
 /**
  * Constructor for a language executor's cancellation error. Each backend
@@ -86,6 +87,7 @@ export interface KernelExecutorBaseOptions {
 	artifactId?: string;
 	artifactPath?: string;
 	sessionId?: string;
+	agentId?: string;
 	kernelOwnerId?: string;
 	kernelMode?: KernelMode;
 	interpreter?: string;
@@ -129,8 +131,8 @@ export function normalizeSessionCwd(cwd: string): string {
 }
 
 /**
- * The key a retained kernel session is stored under: the session id, the
- * explicit interpreter if the caller named one, and otherwise the part of the
+ * The key a retained kernel session is stored under: the session and agent ids,
+ * the explicit interpreter if the caller named one, and otherwise the part of the
  * cwd that selects the default runtime (a project venv for Python, nothing for
  * Ruby and Julia).
  *
@@ -156,6 +158,7 @@ export function normalizeSessionCwd(cwd: string): string {
  */
 export function buildEvalSessionKey(options: {
 	sessionId: string;
+	agentId?: string;
 	cwd: string;
 	/** The interpreter the caller asked for, or undefined to let the runtime choose. */
 	interpreter: string | undefined;
@@ -168,8 +171,9 @@ export function buildEvalSessionKey(options: {
 	resolveDefaultRuntimeScope?: (cwd: string) => string;
 }): string {
 	const cwd = normalizeSessionCwd(options.cwd);
+	const agentSession = agentEvalSessionKey(options.sessionId, options.agentId);
 	if (options.interpreter === undefined) {
-		return `${options.sessionId}\0\0${options.resolveDefaultRuntimeScope?.(cwd) ?? ""}`;
+		return `${agentSession}\0\0${options.resolveDefaultRuntimeScope?.(cwd) ?? ""}`;
 	}
 	const resolved = options.resolveInterpreterPath(options.interpreter, cwd);
 	// A path that cannot be canonicalised is keyed as written. This is not a
@@ -182,7 +186,7 @@ export function buildEvalSessionKey(options: {
 	} catch {
 		interpreter = resolved;
 	}
-	return `${options.sessionId}\0${interpreter}\0`;
+	return `${agentSession}\0${interpreter}\0`;
 }
 
 export function getExecutionDeadlineMs(options?: { deadlineMs?: number; timeoutMs?: number }): number | undefined {
@@ -1259,6 +1263,7 @@ export function createKernelExecutionDriver<
 		const sessionId = options.sessionId ?? `session:${cwd}`;
 		const sessionKey = buildEvalSessionKey({
 			sessionId,
+			agentId: options.agentId,
 			cwd,
 			interpreter: options.interpreter,
 			resolveInterpreterPath,
