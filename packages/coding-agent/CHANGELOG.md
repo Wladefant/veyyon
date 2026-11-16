@@ -10,6 +10,7 @@
 - The shared Windows daemon broker survives the client process that started it.
 - Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
 - Steer live streaming retained children immediately on parent IRC during an active wake phase while deferring post-loop messages to the continuation outbox ([PR #1146](https://github.com/Wladefant/veyyon/pull/1146)).
+- Release settled idle failed predecessors on `successorOf` (with conversation ownership and turn-sequence ABA guards) and on settled `job cancel`, propagating disposal failures ([PR #1144](https://github.com/Wladefant/veyyon/pull/1144)).
 - Scope non-UsageLimit retry fallback cooldowns to the active session instead of globally suppressing selectors in `ModelRegistry` ([PR #1143](https://github.com/Wladefant/veyyon/pull/1143)).
 ## [1.10.2] - 2026-11-15
 

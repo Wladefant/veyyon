@@ -280,6 +280,177 @@ describe("explicit bounded lane successors", () => {
 		expect(reviveCalls).toBe(0);
 		expect(await fs.readFile(transcript, "utf8")).toBe(transcriptBytes);
 	});
+	it("releases and succeeds a settled idle failed predecessor with a live session", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		let disposed = false;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402 Insufficient Balance");
+		AgentLifecycleManager.global().adopt(predecessor, {
+			idleTtlMs: 60_000,
+			revive: async () => ({}) as AgentSession,
+		});
+
+		const successor = await dispatch("Replacement", predecessor);
+
+		expect(successor.isError).not.toBe(true);
+		expect(executed).toHaveLength(2);
+		expect(disposed).toBe(true);
+		expect(registry.get(predecessor)).toBeUndefined();
+	});
+	it("refuses to release an idle predecessor owned by another conversation", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		let disposed = false;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: "other-main",
+			displayName: "OtherMain",
+			kind: "main",
+			scope: "conv-other",
+			status: "running",
+			session: null,
+		});
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			parentId: "other-main",
+			scope: "conv-other",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402");
+		registry.register({
+			id: "parent",
+			displayName: "Parent",
+			kind: "main",
+			scope: "conv-mine",
+			status: "running",
+			session: null,
+		});
+
+		const refused = await dispatch("CrossConv", predecessor);
+
+		expect(refused.isError).toBe(true);
+		expect(disposed).toBe(false);
+		expect(registry.get(predecessor)).toBeDefined();
+		expect(executed).toHaveLength(1);
+		expect(refused.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain("successor-wrong-owner");
+
+		// Also fail closed when parent ref is unregistered (no scope on caller) and when parentId differs without scope.
+		registry.unregister("parent");
+		const refusedNoParentRef = await dispatch("CrossConvNoParentRef", predecessor);
+		expect(refusedNoParentRef.isError).toBe(true);
+		expect(refusedNoParentRef.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain(
+			"successor-wrong-owner",
+		);
+		expect(disposed).toBe(false);
+
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			parentId: "other-main",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402");
+		const refusedDiffParent = await dispatch("DiffParentNoScope", predecessor);
+		expect(refusedDiffParent.isError).toBe(true);
+		expect(refusedDiffParent.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain(
+			"successor-wrong-owner",
+		);
+		expect(disposed).toBe(false);
+
+		// Missing scope + coincident fallback parentId "Main" with no registered Main must still fail closed.
+		registry.unregister("other-main");
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			parentId: "Main",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("other-conv", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402");
+		const refusedCoincidentMain = await dispatch("CoincidentMain", predecessor);
+		expect(refusedCoincidentMain.isError).toBe(true);
+		expect(refusedCoincidentMain.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain(
+			"successor-wrong-owner",
+		);
+		expect(disposed).toBe(false);
+		expect(registry.get(predecessor)).toBeDefined();
+		expect(executed).toHaveLength(1);
+		const claimFiles = (await fs.readdir(dir.join("parent"))).filter(name => name.endsWith(".claim.json"));
+		expect(claimFiles).toHaveLength(0);
+	});
+	it("refuses successor when predecessor runs and settles again (ABA) during checkpoint claim", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		let disposed = false;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "first failure");
+
+		const originalClaim = successorCheckpoint.claimSuccessorCheckpoint;
+		const claimSpy = vi
+			.spyOn(successorCheckpoint, "claimSuccessorCheckpoint")
+			.mockImplementationOnce(async (...args) => {
+				const result = await originalClaim(...args);
+				registry.setStatus(predecessor, "running");
+				registry.setStatus(predecessor, "idle");
+				registry.recordTerminalOutcome(predecessor, "failed", "first failure");
+				return result;
+			});
+
+		try {
+			const refused = await dispatch("AbaRace", predecessor);
+			expect(refused.isError).toBe(true);
+			expect(disposed).toBe(false);
+			expect(executed).toHaveLength(1);
+		} finally {
+			claimSpy.mockRestore();
+		}
+	});
 	it("rejects corrupt and unknown-version checkpoints", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;
