@@ -286,6 +286,59 @@ export function chunksAtOnce(mode: Mode, ci: boolean, total: number): number {
 	return Math.max(1, Math.min(bucket ? codingAgentBucketPlans[bucket].ciChunksAtOnce : 1, total));
 }
 
+export interface TestDispatchPlan {
+	runner: "parallel" | "sequence";
+	concurrency: number;
+}
+
+export function selectTestExecution(options: {
+	mode: Mode;
+	ci: boolean;
+	commandCount: number;
+	dryRun: boolean;
+	junitReportDir: string | null;
+}): TestDispatchPlan {
+	const concurrency = chunksAtOnce(options.mode, options.ci, options.commandCount);
+	if (
+		!options.dryRun &&
+		options.commandCount > 0 &&
+		(options.junitReportDir !== null || (concurrency > 1 && options.commandCount > 1))
+	) {
+		return { runner: "parallel", concurrency };
+	}
+	return { runner: "sequence", concurrency };
+}
+
+export async function dispatchTestCommands(
+	options: {
+		mode: Mode;
+		ci: boolean;
+		commands: TestCommand[];
+		dryRun: boolean;
+		junitReportDir: string | null;
+	},
+	runners: {
+		runParallel: (commands: TestCommand[], concurrency: number) => Promise<void>;
+		runSequence: (commands: TestCommand[]) => Promise<void>;
+	} = {
+		runParallel: runTestCommandsInParallel,
+		runSequence: runTestCommandsInSequence,
+	},
+): Promise<TestDispatchPlan> {
+	const plan = selectTestExecution({
+		mode: options.mode,
+		ci: options.ci,
+		commandCount: options.commands.length,
+		dryRun: options.dryRun,
+		junitReportDir: options.junitReportDir,
+	});
+	if (plan.runner === "parallel") {
+		await runners.runParallel(options.commands, plan.concurrency);
+	} else {
+		await runners.runSequence(options.commands);
+	}
+	return plan;
+}
 // Smaller workspace packages stay separate from native/TUI/integration suites so
 // their short TS suites can run together. CI still downloads the Linux x64 native
 // addon before this bucket: shared utility barrels may load native-backed modules.
@@ -2293,8 +2346,9 @@ if (import.meta.main) {
 				`available_commands=${availableTestCommands.length}`,
 		);
 	}
-	// Outside CI, fan the independent chunk processes out across cores; CI keeps the
-	// sequential, fail-fast path so each memory-capped runner job stays bounded.
+	// Route both ordinary and JUnit execution through chunksAtOnce(mode, ci, total):
+	// CI uses each coding-agent bucket's ciChunksAtOnce width (1 for singleton, 2 for UI, 3 for
+	// runtime/native, 1 for all other modes); local runs honor testConcurrency(total).
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
 	// child, and the tripwire preload) are meant to make real-data writes
 	// impossible, but a safety mechanism believed to work and never checked is how
@@ -2307,14 +2361,13 @@ if (import.meta.main) {
 
 	const bucketStartedAt = performance.now();
 	try {
-		if (!isDryRun && testCommands.length > 0 && (junitReportDir !== null || (!isCI() && testCommands.length > 1))) {
-			await runTestCommandsInParallel(
-				testCommands,
-				chunksAtOnce(requestedMode as Mode, isCI(), testCommands.length),
-			);
-		} else {
-			await runTestCommandsInSequence(testCommands);
-		}
+		await dispatchTestCommands({
+			mode: requestedMode as Mode,
+			ci: isCI(),
+			commands: testCommands,
+			dryRun: isDryRun,
+			junitReportDir,
+		});
 	} finally {
 		// In `finally` on purpose: a failing or interrupted run is exactly when a
 		// half-finished suite is most likely to have left damage behind.
