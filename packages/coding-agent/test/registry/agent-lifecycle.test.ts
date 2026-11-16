@@ -1102,7 +1102,7 @@ describe("AgentLifecycleManager", () => {
 		registry.register({
 			id: "LiveParent",
 			displayName: "LiveParent",
-			kind: "root",
+			kind: "main",
 			session: parentStub.session as unknown as AgentSession,
 			status: "running",
 		});
