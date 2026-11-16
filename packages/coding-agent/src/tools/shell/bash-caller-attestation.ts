@@ -111,7 +111,11 @@ function isStoredReceiptLive(entry: StoredCallerReceipt): boolean {
 		if (current.actor.kind !== receipt.caller_kind) return false;
 		if (current.agentId !== receipt.caller_id) return false;
 		if (current.sessionId !== receipt.session_id) return false;
-		if (!current.actor.session || current.actor.session !== binding.actorSession || current.actor.session.isDisposed) {
+		if (
+			!current.actor.session ||
+			current.actor.session !== binding.actorSession ||
+			current.actor.session.isDisposed
+		) {
 			return false;
 		}
 		if (readLiveSessionFile(current.actor, true) !== receipt.session_file) {

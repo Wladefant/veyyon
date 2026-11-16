@@ -668,7 +668,10 @@ describe("BashTool caller attestation", () => {
 		});
 		const liveEnv = parseFourEnvLines(
 			toolResultText(
-				await new BashTool(liveSibling.toolSession).execute("sib", { command: PRINT_CALLER_ENV_COMMAND, timeout: 15 }),
+				await new BashTool(liveSibling.toolSession).execute("sib", {
+					command: PRINT_CALLER_ENV_COMMAND,
+					timeout: 15,
+				}),
 				"",
 			),
 		);
@@ -1059,7 +1062,9 @@ describe("BashTool caller attestation", () => {
 
 			if (testCase.restoreRoot) {
 				testCase.restoreRoot({ rootId, rootSessionId, rootSessionFile, scope, rootOwnerSession });
-				expect((await fetch(subEnv.url, { headers: { Authorization: `Bearer ${subEnv.token}` } })).status).toBe(401);
+				expect((await fetch(subEnv.url, { headers: { Authorization: `Bearer ${subEnv.token}` } })).status).toBe(
+					401,
+				);
 			}
 
 			// Unaffected live subagent remains 200
