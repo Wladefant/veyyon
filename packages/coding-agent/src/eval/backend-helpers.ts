@@ -101,6 +101,7 @@ export function createKernelBackend<TOptions extends KernelExecutorBaseOptions>(
 				idleTimeoutMs: opts.idleTimeoutMs,
 				signal: opts.signal,
 				sessionId: namespaceSessionId(opts.sessionId, sessionPrefix),
+				agentId: opts.session.getAgentId?.() ?? undefined,
 				interpreter,
 				sessionFile: opts.sessionFile,
 				artifactsDir: opts.session.getArtifactsDir?.() ?? undefined,

@@ -40,6 +40,26 @@
 - A failed session fork refuses to rewrite incomplete, blank-line, or malformed independent JSONL history during aborted-switch recovery, preserving original bytes for explicit repair ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork refuses a detected foreign append between rereading the original journal and publishing its rollback, leaving the source available for a safe retry ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - A failed session fork repairs its own aborted `session_switched` marker on the original JSONL before the rejected fork returns, so reopening without a later caller flush cannot mistake the source for a completed switch; keep genuine foreign-writer tails and original history intact ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- `FileSessionStorage.readText` reads via `fs.promises.readFile` so concurrent appends on Windows do not produce torn trailing JSONL lines.
+## [1.10.3] - 2026-11-16
+
+### Fixed
+
+- Preserved storage directory spelling in `recoverOrphanedBackups` when resolving primary session keys ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
+
+## [1.8.23] - 2026-11-10
+
+### Added
+
+- `loadSessionMessagesReadOnly` and read-only session loading interfaces accept an optional `AbortSignal` for cooperative transcript loading cancellation ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- `BlobStore.get` and session blob reference resolution accept an optional `AbortSignal` for abortable history blob reads ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Bounded history reads cap nested tool arguments, preserve accurate block line counts, and prioritize cancellation over a missing fallback ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+
+## [1.8.20] - 2026-11-09
+
+### Fixed
+
+- First-use session artifact storage flushes the parent session directory before reserving IDs or returning file-backed artifact references, refusing supported flush failures ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.8.0] - 2026-11-05
 

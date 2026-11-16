@@ -3,13 +3,13 @@
  * registered agent sessions.
  */
 
-import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { isMissingPath } from "@veyyon/utils/fs-error";
 import { isSessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { AgentRegistry } from "../registry/agent-registry";
+import { HistoryDirectoryIndex } from "./history-directory-index";
 
 const extraArtifactsDirs = new Set<string>();
 
@@ -63,9 +63,12 @@ export function liveConversationScopes(): string[] {
  */
 export function artifactsDirsFromRegistry(): string[] {
 	const dirs: string[] = [];
+	const seen = new Set<string>();
 	const addDir = (dir: string | null | undefined) => {
 		if (!dir) return;
-		if (!dirs.includes(dir)) dirs.push(dir);
+		if (seen.has(dir)) return;
+		seen.add(dir);
+		dirs.push(dir);
 	};
 	for (const ref of AgentRegistry.global().list()) {
 		addDir(ref.session?.sessionManager?.getArtifactsDir());
@@ -127,8 +130,8 @@ export async function artifactFileNamesFromRegistry(): Promise<string[]> {
  * which would make the collision impossible rather than merely detected. Not
  * done here: it changes the on-disk layout and every existing reference.
  */
-export async function sessionFilesFromDisk(): Promise<Map<string, string>> {
-	const { files } = await scanSessionFilesFromDisk();
+export async function sessionFilesFromDisk(signal?: AbortSignal): Promise<Map<string, string>> {
+	const { files } = await scanSessionFilesFromDisk(signal);
 	return files;
 }
 
@@ -138,12 +141,20 @@ export async function sessionFilesFromDisk(): Promise<Map<string, string>> {
  * "no such agent" from "several agents share that name in this process", which are
  * different problems with different remedies.
  */
-export async function ambiguousSessionFileIds(): Promise<Set<string>> {
-	const { ambiguous } = await scanSessionFilesFromDisk();
+export async function ambiguousSessionFileIds(signal?: AbortSignal): Promise<Set<string>> {
+	const { ambiguous } = await scanSessionFilesFromDisk(signal);
 	return ambiguous;
 }
 
-async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>; ambiguous: Set<string> }> {
+const ARTIFACT_RESERVATION_DIR_PATTERN = /^\.artifact-id-\d+$/;
+const ARTIFACT_ID_DATABASE_PATTERN = /^\.artifact-ids\.sqlite.*$/;
+
+export interface SessionFileScan {
+	files: Map<string, string>;
+	ambiguous: Set<string>;
+}
+
+export async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<SessionFileScan> {
 	const found = new Map<string, string>();
 	const ambiguous = new Set<string>();
 	// Preserve public display casing, but compare the same folded IDs as history://.
@@ -153,47 +164,62 @@ async function scanSessionFilesFromDisk(): Promise<{ files: Map<string, string>;
 	// visit a nested root near depth 8; revisit it when a nearer root can
 	// reach descendants that the initial traversal could not inspect.
 	const minVisitedDepth = new Map<string, number>();
-	const scan = async (dir: string, depth: number): Promise<void> => {
-		if (depth > 8) return;
-		const priorDepth = minVisitedDepth.get(dir);
-		if (priorDepth !== undefined && priorDepth <= depth) return;
-		minVisitedDepth.set(dir, depth);
-		let entries: Dirent[];
-		try {
-			entries = await fs.readdir(dir, { withFileTypes: true });
-		} catch (err) {
-			if (isMissingPath(err)) return;
-			throw err;
+	const pending = artifactsDirsFromRegistry().map(dir => ({ dir, depth: 0 }));
+	const directoryIndex = new HistoryDirectoryIndex(
+		pending.map(item => item.dir),
+		signal,
+	);
+	await directoryIndex.load();
+	for (let cursor = 0; cursor < pending.length; ) {
+		signal?.throwIfAborted();
+		const batch: { dir: string; depth: number }[] = [];
+		while (cursor < pending.length && batch.length < 16) {
+			const item = pending[cursor++]!;
+			if (item.depth > 8) continue;
+			const priorDepth = minVisitedDepth.get(item.dir);
+			if (priorDepth !== undefined && priorDepth <= item.depth) continue;
+			minVisitedDepth.set(item.dir, item.depth);
+			batch.push(item);
 		}
-		for (const entry of entries) {
-			if (entry.isDirectory()) {
-				await scan(path.join(dir, entry.name), depth + 1);
-				continue;
+		// A large conversation has thousands of tiny child directories. Awaiting
+		// each listing serially makes unrelated agents delay every history read.
+		const listings = await Promise.all(
+			batch.map(async ({ dir, depth }) => ({ dir, depth, entries: await directoryIndex.entries(dir) })),
+		);
+		for (const { dir, depth, entries } of listings) {
+			for (const entry of entries) {
+				if (signal?.aborted) signal.throwIfAborted();
+				if (ARTIFACT_RESERVATION_DIR_PATTERN.test(entry.name) || ARTIFACT_ID_DATABASE_PATTERN.test(entry.name))
+					continue;
+				if (entry.kind === "d") {
+					pending.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
+					continue;
+				}
+				if (entry.kind !== "f") continue;
+				const name = entry.name;
+				if (!isSessionFileName(name)) continue;
+				if (name.startsWith("__advisor")) continue;
+				const id = sessionFileStem(name);
+				const full = path.join(dir, name);
+				const foldedId = id.toLowerCase();
+				// Once ambiguous, a third or later hit must never resurrect this ID.
+				if (rejectedFoldedIds.has(foldedId)) continue;
+				const existing = seenByFoldedId.get(foldedId);
+				if (existing === undefined) {
+					seenByFoldedId.set(foldedId, { id, full });
+					found.set(id, full);
+					continue;
+				}
+				// Overlapping roots can observe the same path more than once; that is
+				// not a distinct transcript, unlike differently cased IDs or paths.
+				if (existing.full === full) continue;
+				rejectedFoldedIds.add(foldedId);
+				ambiguous.add(existing.id);
+				seenByFoldedId.delete(foldedId);
+				found.delete(existing.id);
 			}
-			if (!entry.isFile()) continue;
-			const name = entry.name;
-			if (!isSessionFileName(name)) continue;
-			if (name.startsWith("__advisor")) continue;
-			const id = sessionFileStem(name);
-			const full = path.join(dir, name);
-			const foldedId = id.toLowerCase();
-			// Once ambiguous, a third or later hit must never resurrect this ID.
-			if (rejectedFoldedIds.has(foldedId)) continue;
-			const existing = seenByFoldedId.get(foldedId);
-			if (existing === undefined) {
-				seenByFoldedId.set(foldedId, { id, full });
-				found.set(id, full);
-				continue;
-			}
-			// Overlapping roots can observe the same path more than once; that is
-			// not a distinct transcript, unlike differently cased IDs or paths.
-			if (existing.full === full) continue;
-			rejectedFoldedIds.add(foldedId);
-			ambiguous.add(existing.id);
-			seenByFoldedId.delete(foldedId);
-			found.delete(existing.id);
 		}
-	};
-	for (const dir of artifactsDirsFromRegistry()) await scan(dir, 0);
+	}
+	await directoryIndex.save();
 	return { files: found, ambiguous };
 }

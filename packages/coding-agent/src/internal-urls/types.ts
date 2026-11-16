@@ -7,6 +7,7 @@
 
 import type { Skill } from "../extensibility/skills";
 import type { LocalProtocolOptions } from "./local-protocol";
+import type { HistoryCallerCapability } from "./history-caller";
 
 /**
  * Raw resource payload returned by protocol handlers. The `immutable` flag is
@@ -40,6 +41,8 @@ export interface InternalResource {
 	 * must never be mistaken for the directory's contents.
 	 */
 	isDirectory?: boolean;
+	/** The handler stopped after a prefix; the transcript's total line count is unknown. */
+	contentIncomplete?: boolean;
 }
 
 /**
@@ -99,6 +102,8 @@ export interface ResolveContext {
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Calling session's loaded skills. Prefer this over process-global skill state. */
 	skills?: readonly Skill[];
+	/** Opaque host-minted authority for one caller-bound archived-history read. */
+	historyCaller?: HistoryCallerCapability;
 	/**
 	 * When set, handlers that would otherwise materialize an expensive directory
 	 * listing (e.g. the ssh:// handler draining a full remote `ls`) instead return
@@ -116,6 +121,8 @@ export interface ResolveContext {
 	 * ignore the flag.
 	 */
 	pathOnly?: boolean;
+	/** Concise history prefix required by a bounded read, including display context. */
+	historyMaxLines?: number;
 }
 
 /**

@@ -47,6 +47,11 @@ Artifact types share this directory:
 
 Agents can adopt the parent `ArtifactManager`; in that case parent and agent tree share one artifact directory and numeric artifact ID space.
 
+### First-use artifact durability
+
+On first use, `ArtifactManager` creates the session sidecar directory and flushes the parent session directory before reserving an artifact ID or returning a file-backed reference. Each artifact write then flushes its file and the sidecar directory through the shared atomic writer. A supported parent-directory flush failure refuses allocation/publication; unsupported directory handles retain the shared helper's platform behavior. In particular, Windows directory-entry durability is not claimed to be POSIX-equivalent.
+
+
 A live `SessionManager.fork()` refuses before publishing when the effective (possibly adopted) artifact directory is different from the current JSONL file's own sidecar. A child JSONL nested in its parent's artifact tree must not copy a stale, same-numbered child sidecar as though it were the parent's evidence, or recursively copy the parent's tree into its own descendant. This is a conservative **unsupported-adopted-fork** boundary, not a promise to import shared-parent artifacts. Historical `forkFrom()` has only the persisted source filename, not the running `ArtifactManager` ownership; resolving that separate provenance contract requires explicit mapping and qualification rather than guessing a parent directory.
 
 **Required fork-copy durability contract:** A live fork must not publish its child JSONL until the copied artifact sidecar is durable. A successful `fs.promises.cp`, a byte-for-byte hash comparison, or a later fsync of the child JSONL does not flush the copied artifact files. Before publication, flush every copied regular file, then copied directories deepest-first, the sidecar root, and its parent session directory. If a supported flush fails, abort before child-JSONL publication and leave the original session and source artifact tree unchanged. Directory-entry flush is platform-dependent; unsupported Windows directory-fsync behavior must remain an explicit limitation and separate host qualification, not be reported as POSIX-equivalent durability.
