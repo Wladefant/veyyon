@@ -66,6 +66,7 @@ export class RetryFallback {
 	readonly #session: RetryFallbackSession;
 	readonly #host: RetryFallbackHost;
 	#activeFallback: ActiveRetryFallbackState | undefined = undefined;
+	#sessionCooldowns = new Map<string, number>();
 
 	constructor(session: RetryFallbackSession, host: RetryFallbackHost) {
 		this.#session = session;
@@ -108,15 +109,30 @@ export class RetryFallback {
 	}
 
 	#isSuppressed(selector: RetryFallbackSelector): boolean {
+		const sessionUntil = this.#sessionCooldowns.get(selector.raw);
+		if (sessionUntil !== undefined) {
+			if (sessionUntil > Date.now()) return true;
+			this.#sessionCooldowns.delete(selector.raw);
+		}
 		return this.#session.modelRegistry.isSelectorSuppressed(selector.raw);
 	}
 
-	noteCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): void {
+	noteCooldown(
+		currentSelector: string,
+		retryAfterMs: number | undefined,
+		errorMessage: string,
+		options?: { scope?: "global" | "session" },
+	): void {
 		const cooldownMs =
 			retryAfterMs && retryAfterMs > 0
 				? retryAfterMs
 				: calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "selector-suppression");
-		this.#session.modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
+		const until = Date.now() + cooldownMs;
+		if (options?.scope === "session") {
+			this.#sessionCooldowns.set(currentSelector, until);
+			return;
+		}
+		this.#session.modelRegistry.suppressSelector(currentSelector, until);
 	}
 
 	/** Switch to a fallback model for the rest of the retry sequence, recording what to restore. */

@@ -114,4 +114,81 @@ describe("retry fallback selector suppression", () => {
 
 		expect(modelRegistry.isSelectorSuppressed(primarySelector)).toBe(true);
 	});
+
+	it("keeps the active session on fallback across prompts on persistent 502 while a sibling session can still use primary", async () => {
+		const primary = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallback = requireBundledModel("anthropic", "claude-haiku-4-5");
+		const primarySelector = `${primary.provider}/${primary.id}`;
+		const fallbackSelector = `${fallback.provider}/${fallback.id}`;
+
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		let agent!: Agent;
+		agent = new Agent({
+			getApiKey: requested => modelRegistry.resolver(requested, agent.sessionId),
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requested, context, options) => {
+				requestedModels.push(`${requested.provider}/${requested.id}`);
+				mock.push(
+					requested.id === primary.id
+						? { throw: "HTTP 502 Bad Gateway" }
+						: { content: ["recovered on fallback"] },
+				);
+				return mock.stream(requested, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": { [primarySelector]: [fallbackSelector] },
+		});
+		settings.setDefaultModel(primarySelector);
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+
+		await session.prompt("Prompt 1 hits 502 and falls back");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([primarySelector, fallbackSelector]);
+		expect(modelRegistry.isSelectorSuppressed(primarySelector)).toBe(false);
+
+		requestedModels.length = 0;
+		await session.prompt("Prompt 2 stays on fallback during session cooldown");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([fallbackSelector]);
+
+		const siblingRequestedModels: string[] = [];
+		const siblingMock = createMockModel();
+		let siblingAgent!: Agent;
+		siblingAgent = new Agent({
+			getApiKey: requested => modelRegistry.resolver(requested, siblingAgent.sessionId),
+			initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requested, context, options) => {
+				siblingRequestedModels.push(`${requested.provider}/${requested.id}`);
+				siblingMock.push({ content: ["primary works in sibling"] });
+				return siblingMock.stream(requested, context, options);
+			},
+		});
+		const siblingSettings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": { [primarySelector]: [fallbackSelector] },
+		});
+		siblingSettings.setDefaultModel(primarySelector);
+		const siblingSession = new AgentSession({
+			agent: siblingAgent,
+			sessionManager: SessionManager.inMemory(),
+			settings: siblingSettings,
+			modelRegistry,
+		});
+		try {
+			await siblingSession.prompt("Sibling uses primary");
+			await siblingSession.waitForIdle();
+			expect(siblingRequestedModels).toEqual([primarySelector]);
+		} finally {
+			await siblingSession.dispose();
+		}
+	});
 });

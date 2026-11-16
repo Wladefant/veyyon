@@ -618,8 +618,11 @@ export class RetryRuntime {
 		// A refusal chain stops at the retry budget: the exhausted-attempt
 		// last resort is for provider failures, not classifier decisions.
 		const chainEnabled = this.#fallback.chainEnabled;
-		if (allowModelFallback && !attempt.classifierRefusal && AIError.is(attempt.id, AIError.Flag.UsageLimit)) {
-			this.#fallback.noteCooldown(currentSelector, attempt.parsedRetryAfterMs, attempt.errorMessage);
+		const isUsageLimit = AIError.is(attempt.id, AIError.Flag.UsageLimit);
+		if (allowModelFallback && !attempt.classifierRefusal && (chainEnabled || isUsageLimit)) {
+			this.#fallback.noteCooldown(currentSelector, attempt.parsedRetryAfterMs, attempt.errorMessage, {
+				scope: isUsageLimit ? "global" : "session",
+			});
 		}
 		if (allowModelFallback && chainEnabled && !(attempt.budgetExhausted && attempt.classifierRefusal)) {
 			attempt.switchedModel = await this.#fallback.tryChain(currentSelector, {
