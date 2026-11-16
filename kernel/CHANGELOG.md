@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.10.8] - 2026-11-16
+
 ### Fixed
 
 - Serialize ordinary session rewrites, async/sync journal-lock contention, queue cleanup, and source-path locking during session relocation ([#774](https://github.com/Wladefant/veyyon/issues/774)).
