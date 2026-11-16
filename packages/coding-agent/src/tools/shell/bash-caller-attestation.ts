@@ -1,6 +1,11 @@
 import { postmortem } from "@veyyon/utils";
-import { resolveLiveToolCaller } from "../../internal-urls/history-caller";
+import {
+	createHistoryCallerCapability,
+	type HistoryCallerCapability,
+	resolveHistoryCallerCapability,
+} from "../../internal-urls/history-caller";
 import type { AgentRef } from "../../registry/agent-registry";
+import type { AgentSession } from "../../session/agent-session";
 import type { ToolSession } from "..";
 
 export const CALLER_ATTESTATION_PATH = "/v1/caller";
@@ -42,9 +47,18 @@ export interface AttestedBashCaller {
 	readonly rootSessionFile: string | null;
 }
 
+interface StoredCallerBinding {
+	readonly capability: HistoryCallerCapability;
+	readonly actorSession: AgentSession;
+	readonly root: AgentRef;
+	readonly rootSession: AgentSession;
+	readonly rootSessionId: string;
+}
+
 interface StoredCallerReceipt {
 	readonly receipt: CallerAttestationReceipt;
 	readonly expiresAtMs: number;
+	readonly binding: StoredCallerBinding;
 }
 
 interface AttestationHostState {
@@ -61,13 +75,14 @@ const state: AttestationHostState = {
 	receipts: new Map(),
 };
 
-function readLiveSessionFile(ref: AgentRef): string | null {
+function readLiveSessionFile(ref: AgentRef, strict = false): string | null {
 	try {
 		const fromManager = ref.session?.sessionManager?.getSessionFile?.();
 		if (typeof fromManager === "string" && fromManager.trim().length > 0) {
 			return fromManager;
 		}
-	} catch {
+	} catch (error) {
+		if (strict) throw error;
 		// Fall back to the registry's recorded path if SessionManager throws during teardown.
 	}
 	return typeof ref.sessionFile === "string" && ref.sessionFile.trim().length > 0 ? ref.sessionFile : null;
@@ -85,6 +100,54 @@ function parseBearerToken(header: string | null): string | undefined {
 	if (!header) return undefined;
 	const match = /^Bearer\s+(\S+)$/.exec(header.trim());
 	return match?.[1];
+}
+
+function isStoredReceiptLive(entry: StoredCallerReceipt): boolean {
+	try {
+		const { binding, receipt } = entry;
+		const current = resolveHistoryCallerCapability(binding.capability);
+		if (!current) return false;
+
+		if (current.actor.kind !== receipt.caller_kind) return false;
+		if (current.agentId !== receipt.caller_id) return false;
+		if (current.sessionId !== receipt.session_id) return false;
+		if (!current.actor.session || current.actor.session !== binding.actorSession || current.actor.session.isDisposed) {
+			return false;
+		}
+		if (readLiveSessionFile(current.actor, true) !== receipt.session_file) {
+			return false;
+		}
+
+		const root = current.registry.mainInScope(current.scope);
+		if (
+			!root ||
+			root !== binding.root ||
+			root.id !== receipt.root_id ||
+			root.kind !== "main" ||
+			root.scope !== current.scope ||
+			(root.status !== "running" && root.status !== "idle") ||
+			!root.session ||
+			root.session !== binding.rootSession ||
+			root.session.isDisposed
+		) {
+			return false;
+		}
+		if (current.actor.kind === "main" && root.id !== current.actor.id) {
+			return false;
+		}
+
+		const currentRootSessionId = root.session.sessionManager?.getSessionId?.();
+		if (currentRootSessionId !== binding.rootSessionId) {
+			return false;
+		}
+		if (readLiveSessionFile(root, true) !== receipt.root_session_file) {
+			return false;
+		}
+
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function handleCallerRequest(request: Request): Response {
@@ -108,7 +171,7 @@ function handleCallerRequest(request: Request): Response {
 	}
 
 	const entry = state.receipts.get(token);
-	if (!entry || nowMs >= entry.expiresAtMs) {
+	if (!entry || nowMs >= entry.expiresAtMs || !isStoredReceiptLive(entry)) {
 		if (entry) state.receipts.delete(token);
 		return new Response("Unauthorized", { status: 401 });
 	}
@@ -159,6 +222,7 @@ function mintOpaqueToken(): string {
 
 function mintCallerReceipt(
 	caller: AttestedBashCaller,
+	binding: StoredCallerBinding,
 	options: { nowMs?: number; ttlSeconds?: number } = {},
 ): { url: string; token: string; receipt: CallerAttestationReceipt } {
 	const nowMs = options.nowMs ?? Date.now();
@@ -188,8 +252,73 @@ function mintCallerReceipt(
 		issued_at: issuedAt,
 		expires_at: expiresAt,
 	};
-	state.receipts.set(token, { receipt, expiresAtMs });
+	state.receipts.set(token, { receipt, expiresAtMs, binding });
 	return { url, token, receipt };
+}
+
+interface AttestedCallerWithBinding {
+	readonly caller: AttestedBashCaller;
+	readonly binding: StoredCallerBinding;
+}
+
+function resolveAttestedBashCallerWithBinding(session: ToolSession): AttestedCallerWithBinding | undefined {
+	try {
+		const capability = createHistoryCallerCapability(session);
+		if (!capability) return undefined;
+
+		const caller = resolveHistoryCallerCapability(capability);
+		if (!caller) return undefined;
+
+		const { actor, agentId, registry, scope, sessionId } = caller;
+		if (actor.kind !== "main" && actor.kind !== "sub") {
+			return undefined;
+		}
+		if (!actor.session || actor.session.isDisposed) {
+			return undefined;
+		}
+
+		const root = registry.mainInScope(scope);
+		if (
+			root?.kind !== "main" ||
+			root.scope !== scope ||
+			(root.status !== "running" && root.status !== "idle") ||
+			!root.session ||
+			root.session.isDisposed
+		) {
+			return undefined;
+		}
+		if (actor.kind === "main" && root.id !== actor.id) {
+			return undefined;
+		}
+
+		const rootSessionId = root.session.sessionManager?.getSessionId?.();
+		if (typeof rootSessionId !== "string" || rootSessionId.length === 0) {
+			return undefined;
+		}
+		if (actor.kind === "main" && rootSessionId !== sessionId) {
+			return undefined;
+		}
+
+		return {
+			caller: {
+				callerId: agentId,
+				callerKind: actor.kind,
+				sessionId,
+				sessionFile: readLiveSessionFile(actor),
+				rootId: root.id,
+				rootSessionFile: readLiveSessionFile(root),
+			},
+			binding: {
+				capability,
+				actorSession: actor.session,
+				root,
+				rootSession: root.session,
+				rootSessionId,
+			},
+		};
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -198,36 +327,7 @@ function mintCallerReceipt(
  * Returns undefined for advisor, synthetic, disposed, mismatched, or unrooted sessions.
  */
 export function resolveAttestedBashCaller(session: ToolSession): AttestedBashCaller | undefined {
-	const caller = resolveLiveToolCaller(session);
-	if (!caller) return undefined;
-
-	const { actor, agentId, registry, scope, sessionId } = caller;
-	if (actor.kind !== "main" && actor.kind !== "sub") {
-		return undefined;
-	}
-
-	const root = registry.mainInScope(scope);
-	if (
-		root?.kind !== "main" ||
-		root.scope !== scope ||
-		(root.status !== "running" && root.status !== "idle") ||
-		!root.session ||
-		root.session.isDisposed
-	) {
-		return undefined;
-	}
-	if (actor.kind === "main" && root.id !== actor.id) {
-		return undefined;
-	}
-
-	return {
-		callerId: agentId,
-		callerKind: actor.kind,
-		sessionId,
-		sessionFile: readLiveSessionFile(actor),
-		rootId: root.id,
-		rootSessionFile: readLiveSessionFile(root),
-	};
+	return resolveAttestedBashCallerWithBinding(session)?.caller;
 }
 
 /**
@@ -236,26 +336,30 @@ export function resolveAttestedBashCaller(session: ToolSession): AttestedBashCal
  * mismatched), returns empty strings so inherited Main receipts are stripped.
  */
 export function resolveBashCallerEnv(session: ToolSession): Readonly<Record<string, string>> {
-	const caller = resolveAttestedBashCaller(session);
-	if (!caller) {
+	const resolved = resolveAttestedBashCallerWithBinding(session);
+	if (!resolved) {
 		return CLEARED_CALLER_ENV;
 	}
 
-	const { url, token } = mintCallerReceipt(caller);
+	const { url, token } = mintCallerReceipt(resolved.caller, resolved.binding);
 	return {
 		VEYYON_CALLER_URL: url,
 		VEYYON_CALLER_TOKEN: token,
-		VEYYON_AGENT_ID: caller.callerId,
-		VEYYON_SESSION_FILE: caller.sessionFile ?? "",
+		VEYYON_AGENT_ID: resolved.caller.callerId,
+		VEYYON_SESSION_FILE: resolved.caller.sessionFile ?? "",
 	};
 }
 
 /** Test-only helper for deterministic expiry/pruning tests without waiting 24 hours. */
 export function mintCallerReceiptForTests(
-	caller: AttestedBashCaller,
+	session: ToolSession,
 	options: { nowMs?: number; ttlSeconds?: number } = {},
 ): { url: string; token: string; receipt: CallerAttestationReceipt } {
-	return mintCallerReceipt(caller, options);
+	const resolved = resolveAttestedBashCallerWithBinding(session);
+	if (!resolved) {
+		throw new Error("mintCallerReceiptForTests requires a live attested ToolSession");
+	}
+	return mintCallerReceipt(resolved.caller, resolved.binding, options);
 }
 
 /** Test-only helper returning the active receipt count after pruning expired entries. */

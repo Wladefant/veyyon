@@ -597,17 +597,15 @@ describe("BashTool caller attestation", () => {
 
 	it("expires and prunes tokens past their bounded lifetime", async () => {
 		const baseNowMs = 1_700_000_000_000;
-		const minted = mintCallerReceiptForTests(
-			{
-				callerId: "main:ttl",
-				callerKind: "main",
-				sessionId: "ttl-sess",
-				sessionFile: null,
-				rootId: "main:ttl",
-				rootSessionFile: null,
-			},
-			{ nowMs: baseNowMs, ttlSeconds: 5 },
-		);
+		const main = registerLiveAgent({
+			cwd: tmpDir,
+			id: "main:ttl",
+			kind: "main",
+			sessionId: "ttl-sess",
+			sessionFile: null,
+			scope: "ttl-sess",
+		});
+		const minted = mintCallerReceiptForTests(main.toolSession, { nowMs: baseNowMs, ttlSeconds: 5 });
 		expect(minted.receipt.issued_at).toBe(1_700_000_000);
 		expect(minted.receipt.expires_at).toBe(1_700_000_005);
 
@@ -618,7 +616,7 @@ describe("BashTool caller attestation", () => {
 				headers: { Authorization: `Bearer ${minted.token}` },
 			});
 			expect(okRes.status).toBe(200);
-			const body = (await okRes.json()) as { session_file: string | null };
+			const body = (await okRes.json()) as Record<string, unknown>;
 			expect(body.session_file).toBeNull();
 
 			// Expired at >= expiresAtMs -> returns 401 and prunes entry
@@ -630,6 +628,447 @@ describe("BashTool caller attestation", () => {
 			expect(activeCallerReceiptCountForTests()).toBe(0);
 		} finally {
 			dateNowSpy.mockRestore();
+		}
+	});
+
+	it("caps active receipts at 4096 and evicts the oldest token on overflow", async () => {
+		const main = registerLiveAgent({
+			cwd: tmpDir,
+			id: "main:cap",
+			kind: "main",
+			sessionId: "cap-sess",
+			sessionFile: null,
+			scope: "cap-sess",
+		});
+
+		const first = mintCallerReceiptForTests(main.toolSession);
+		let latest = first;
+		for (let i = 1; i < 4096; i++) {
+			latest = mintCallerReceiptForTests(main.toolSession);
+		}
+		expect(activeCallerReceiptCountForTests()).toBe(4096);
+		expect((await fetch(first.url, { headers: { Authorization: `Bearer ${first.token}` } })).status).toBe(200);
+
+		const overflow = mintCallerReceiptForTests(main.toolSession);
+		expect(activeCallerReceiptCountForTests()).toBe(4096);
+		expect((await fetch(first.url, { headers: { Authorization: `Bearer ${first.token}` } })).status).toBe(401);
+		expect((await fetch(latest.url, { headers: { Authorization: `Bearer ${latest.token}` } })).status).toBe(200);
+		expect((await fetch(overflow.url, { headers: { Authorization: `Bearer ${overflow.token}` } })).status).toBe(200);
+	});
+
+	it("allows idle callers but permanently revokes bearer tokens on caller lifecycle invalidation", async () => {
+		const registry = AgentRegistry.global();
+		const liveSibling = registerLiveAgent({
+			cwd: tmpDir,
+			id: "main:unaffected",
+			kind: "main",
+			sessionId: "unaffected-sess",
+			sessionFile: path.join(tmpDir, "unaffected.jsonl"),
+			scope: "unaffected-sess",
+		});
+		const liveEnv = parseFourEnvLines(
+			toolResultText(
+				await new BashTool(liveSibling.toolSession).execute("sib", { command: PRINT_CALLER_ENV_COMMAND, timeout: 15 }),
+				"",
+			),
+		);
+
+		const cases: Array<{
+			name: string;
+			invalidate: (ctx: {
+				id: string;
+				sessionId: string;
+				sessionFile: string;
+				scope: string;
+				dispose: () => void;
+				throwOnTeardown: () => void;
+			}) => void;
+			restore?: (ctx: {
+				id: string;
+				sessionId: string;
+				sessionFile: string;
+				scope: string;
+				ownerSession: AgentSession;
+			}) => void;
+		}> = [
+			{
+				name: "parked",
+				invalidate: ({ id }) => {
+					registry.setStatus(id, "parked");
+					registry.detachSession(id);
+				},
+				restore: ({ id, ownerSession }) => {
+					registry.attachSession(id, ownerSession);
+					registry.setStatus(id, "idle");
+				},
+			},
+			{
+				name: "aborted",
+				invalidate: ({ id }) => registry.setStatus(id, "aborted"),
+				restore: ({ id, sessionId, sessionFile, scope }) => {
+					registerLiveAgent({ cwd: tmpDir, id, kind: "main", sessionId, sessionFile, scope });
+				},
+			},
+			{
+				name: "unregistered",
+				invalidate: ({ id }) => registry.unregister(id),
+				restore: ({ id, sessionId, sessionFile, scope }) => {
+					registerLiveAgent({ cwd: tmpDir, id, kind: "main", sessionId, sessionFile, scope });
+				},
+			},
+			{
+				name: "detached",
+				invalidate: ({ id }) => registry.detachSession(id),
+				restore: ({ id, ownerSession }) => registry.attachSession(id, ownerSession),
+			},
+			{
+				name: "disposed",
+				invalidate: ({ dispose }) => dispose(),
+			},
+			{
+				name: "session-replaced-attach",
+				invalidate: ({ id, sessionId, sessionFile }) => {
+					const replacement = {
+						sessionManager: {
+							getSessionId: () => sessionId,
+							getSessionFile: () => sessionFile,
+							getArtifactsDir: () => null,
+						},
+						messages: [],
+						isDisposed: false,
+					} as unknown as AgentSession;
+					registry.attachSession(id, replacement, sessionFile);
+				},
+			},
+			{
+				name: "ref-replaced-register",
+				invalidate: ({ id, sessionId, sessionFile, scope }) => {
+					registerLiveAgent({ cwd: tmpDir, id, kind: "main", sessionId, sessionFile, scope });
+				},
+			},
+			{
+				name: "rescoped",
+				invalidate: ({ id }) => registry.rescope(id, "other-scope"),
+				restore: ({ id, scope }) => registry.rescope(id, scope),
+			},
+			{
+				name: "teardown-throws",
+				invalidate: ({ throwOnTeardown }) => throwOnTeardown(),
+			},
+		];
+
+		for (const testCase of cases) {
+			const id = `main:case-${testCase.name}`;
+			const sessionId = `sess-${testCase.name}`;
+			const sessionFile = path.join(tmpDir, `${testCase.name}.jsonl`);
+			const scope = `scope-${testCase.name}`;
+			let disposed = false;
+			let shouldThrow = false;
+
+			const sessionManager = {
+				getSessionId: () => {
+					if (shouldThrow) throw new Error("teardown");
+					return sessionId;
+				},
+				getSessionFile: () => {
+					if (shouldThrow) throw new Error("teardown");
+					return sessionFile;
+				},
+				getArtifactsDir: () => null,
+			};
+			const ownerSession = {
+				sessionManager,
+				messages: [],
+				get isDisposed() {
+					return disposed;
+				},
+			} as unknown as AgentSession;
+			registry.register({
+				id,
+				displayName: id,
+				kind: "main",
+				session: ownerSession,
+				sessionFile,
+				scope,
+				status: "running",
+			});
+			const toolSession = makeToolSession({
+				cwd: tmpDir,
+				hasUI: false,
+				skills: [],
+				settings: makeBashSettings(false),
+				getSessionFile: () => sessionFile,
+				getSessionId: () => sessionId,
+				getAgentId: () => id,
+				getOwningAgentSession: () => ownerSession,
+				agentRegistry: registry,
+				allocateOutputArtifact: async kind => ({
+					id: `${kind}-1`,
+					path: path.join(tmpDir, `${kind}-1.txt`),
+				}),
+			});
+
+			const env = parseFourEnvLines(
+				toolResultText(
+					await new BashTool(toolSession).execute(`mint-${testCase.name}`, {
+						command: PRINT_CALLER_ENV_COMMAND,
+						timeout: 15,
+					}),
+					"",
+				),
+			);
+
+			// Transition to idle remains valid (200)
+			registry.setStatus(id, "idle");
+			expect((await fetch(env.url, { headers: { Authorization: `Bearer ${env.token}` } })).status).toBe(200);
+
+			// Invalidate -> 401 and permanent eviction
+			testCase.invalidate({
+				id,
+				sessionId,
+				sessionFile,
+				scope,
+				dispose: () => {
+					disposed = true;
+				},
+				throwOnTeardown: () => {
+					shouldThrow = true;
+				},
+			});
+			expect((await fetch(env.url, { headers: { Authorization: `Bearer ${env.token}` } })).status).toBe(401);
+
+			// Even if the same actor is restored/re-registered with identical IDs, the evicted token stays 401
+			if (testCase.restore) {
+				testCase.restore({ id, sessionId, sessionFile, scope, ownerSession });
+				expect((await fetch(env.url, { headers: { Authorization: `Bearer ${env.token}` } })).status).toBe(401);
+			}
+
+			// Unaffected live caller remains 200
+			expect((await fetch(liveEnv.url, { headers: { Authorization: `Bearer ${liveEnv.token}` } })).status).toBe(200);
+			registry.unregister(id);
+		}
+	});
+
+	it("permanently revokes a live subagent bearer token when its root is invalidated or replaced with identical IDs", async () => {
+		const registry = AgentRegistry.global();
+		const otherRoot = registerLiveAgent({
+			cwd: tmpDir,
+			id: "main:other-root",
+			kind: "main",
+			sessionId: "other-root-sess",
+			sessionFile: path.join(tmpDir, "other-root.jsonl"),
+			scope: "other-root-scope",
+		});
+		const otherSub = registerLiveAgent({
+			cwd: tmpDir,
+			id: "SubOtherLive",
+			kind: "sub",
+			parentId: otherRoot.agentId,
+			sessionId: "sub-other-sess",
+			sessionFile: path.join(tmpDir, "sub-other.jsonl"),
+		});
+		const otherSubEnv = parseFourEnvLines(
+			toolResultText(
+				await new BashTool(otherSub.toolSession).execute("other-sub", {
+					command: PRINT_CALLER_ENV_COMMAND,
+					timeout: 15,
+				}),
+				"",
+			),
+		);
+
+		const rootCases: Array<{
+			name: string;
+			invalidateRoot: (ctx: {
+				rootId: string;
+				rootSessionId: string;
+				rootSessionFile: string;
+				scope: string;
+				disposeRoot: () => void;
+				throwOnRootTeardown: () => void;
+			}) => void;
+			restoreRoot?: (ctx: {
+				rootId: string;
+				rootSessionId: string;
+				rootSessionFile: string;
+				scope: string;
+				rootOwnerSession: AgentSession;
+			}) => void;
+		}> = [
+			{
+				name: "root-parked",
+				invalidateRoot: ({ rootId }) => {
+					registry.setStatus(rootId, "parked");
+					registry.detachSession(rootId);
+				},
+				restoreRoot: ({ rootId, rootOwnerSession }) => {
+					registry.attachSession(rootId, rootOwnerSession);
+					registry.setStatus(rootId, "idle");
+				},
+			},
+			{
+				name: "root-aborted",
+				invalidateRoot: ({ rootId }) => registry.setStatus(rootId, "aborted"),
+				restoreRoot: ({ rootId, rootSessionId, rootSessionFile, scope }) => {
+					registerLiveAgent({
+						cwd: tmpDir,
+						id: rootId,
+						kind: "main",
+						sessionId: rootSessionId,
+						sessionFile: rootSessionFile,
+						scope,
+					});
+				},
+			},
+			{
+				name: "root-unregistered",
+				invalidateRoot: ({ rootId }) => registry.unregister(rootId),
+				restoreRoot: ({ rootId, rootSessionId, rootSessionFile, scope }) => {
+					registerLiveAgent({
+						cwd: tmpDir,
+						id: rootId,
+						kind: "main",
+						sessionId: rootSessionId,
+						sessionFile: rootSessionFile,
+						scope,
+					});
+				},
+			},
+			{
+				name: "root-detached",
+				invalidateRoot: ({ rootId }) => registry.detachSession(rootId),
+				restoreRoot: ({ rootId, rootOwnerSession }) => registry.attachSession(rootId, rootOwnerSession),
+			},
+			{
+				name: "root-disposed",
+				invalidateRoot: ({ disposeRoot }) => disposeRoot(),
+			},
+			{
+				name: "root-session-replaced-same-ids",
+				invalidateRoot: ({ rootId, rootSessionId, rootSessionFile }) => {
+					const replacement = {
+						sessionManager: {
+							getSessionId: () => rootSessionId,
+							getSessionFile: () => rootSessionFile,
+							getArtifactsDir: () => null,
+						},
+						messages: [],
+						isDisposed: false,
+					} as unknown as AgentSession;
+					registry.attachSession(rootId, replacement, rootSessionFile);
+				},
+			},
+			{
+				name: "root-ref-replaced-same-ids",
+				invalidateRoot: ({ rootId, rootSessionId, rootSessionFile, scope }) => {
+					registerLiveAgent({
+						cwd: tmpDir,
+						id: rootId,
+						kind: "main",
+						sessionId: rootSessionId,
+						sessionFile: rootSessionFile,
+						scope,
+					});
+				},
+			},
+			{
+				name: "root-rescoped",
+				invalidateRoot: ({ rootId }) => registry.rescope(rootId, "moved-scope"),
+				restoreRoot: ({ rootId, scope }) => registry.rescope(rootId, scope),
+			},
+			{
+				name: "root-teardown-throws",
+				invalidateRoot: ({ throwOnRootTeardown }) => throwOnRootTeardown(),
+			},
+		];
+
+		for (const testCase of rootCases) {
+			const rootId = `main:${testCase.name}`;
+			const rootSessionId = `root-sess-${testCase.name}`;
+			const rootSessionFile = path.join(tmpDir, `${testCase.name}.jsonl`);
+			const scope = `root-scope-${testCase.name}`;
+			let rootDisposed = false;
+			let rootShouldThrow = false;
+
+			const rootSessionManager = {
+				getSessionId: () => {
+					if (rootShouldThrow) throw new Error("root teardown");
+					return rootSessionId;
+				},
+				getSessionFile: () => {
+					if (rootShouldThrow) throw new Error("root teardown");
+					return rootSessionFile;
+				},
+				getArtifactsDir: () => null,
+			};
+			const rootOwnerSession = {
+				sessionManager: rootSessionManager,
+				messages: [],
+				get isDisposed() {
+					return rootDisposed;
+				},
+			} as unknown as AgentSession;
+			registry.register({
+				id: rootId,
+				displayName: rootId,
+				kind: "main",
+				session: rootOwnerSession,
+				sessionFile: rootSessionFile,
+				scope,
+				status: "running",
+			});
+
+			const subId = `Sub-${testCase.name}`;
+			const sub = registerLiveAgent({
+				cwd: tmpDir,
+				id: subId,
+				kind: "sub",
+				parentId: rootId,
+				sessionId: `sub-sess-${testCase.name}`,
+				sessionFile: path.join(tmpDir, `sub-${testCase.name}.jsonl`),
+			});
+
+			const subEnv = parseFourEnvLines(
+				toolResultText(
+					await new BashTool(sub.toolSession).execute(`mint-sub-${testCase.name}`, {
+						command: PRINT_CALLER_ENV_COMMAND,
+						timeout: 15,
+					}),
+					"",
+				),
+			);
+
+			// Idle root remains valid (200)
+			registry.setStatus(rootId, "idle");
+			expect((await fetch(subEnv.url, { headers: { Authorization: `Bearer ${subEnv.token}` } })).status).toBe(200);
+
+			// Invalidate root while subagent stays completely live -> 401 and permanent eviction
+			testCase.invalidateRoot({
+				rootId,
+				rootSessionId,
+				rootSessionFile,
+				scope,
+				disposeRoot: () => {
+					rootDisposed = true;
+				},
+				throwOnRootTeardown: () => {
+					rootShouldThrow = true;
+				},
+			});
+			expect((await fetch(subEnv.url, { headers: { Authorization: `Bearer ${subEnv.token}` } })).status).toBe(401);
+
+			if (testCase.restoreRoot) {
+				testCase.restoreRoot({ rootId, rootSessionId, rootSessionFile, scope, rootOwnerSession });
+				expect((await fetch(subEnv.url, { headers: { Authorization: `Bearer ${subEnv.token}` } })).status).toBe(401);
+			}
+
+			// Unaffected live subagent remains 200
+			expect(
+				(await fetch(otherSubEnv.url, { headers: { Authorization: `Bearer ${otherSubEnv.token}` } })).status,
+			).toBe(200);
+
+			registry.unregister(subId);
+			registry.unregister(rootId);
 		}
 	});
 });
