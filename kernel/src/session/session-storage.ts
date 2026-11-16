@@ -412,6 +412,10 @@ export interface SessionStorage {
 	 * the source if any part of the relocation fails.
 	 */
 	moveSessionWithArtifacts(path: string, nextPath: string): Promise<void>;
+	/** Remove one file in the backend's namespace. */
+	unlink(path: string): Promise<void>;
+	/** Remove a session transcript and its sibling artifact directory. */
+	deleteSessionWithArtifacts(path: string): Promise<void>;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
 	withJournalLock?<T>(filePath: string, fn: () => Promise<T>): Promise<T>;
 	withJournalLockSync?<T>(filePath: string, fn: () => T): T;
