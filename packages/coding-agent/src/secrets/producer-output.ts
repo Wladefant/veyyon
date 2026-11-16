@@ -481,7 +481,15 @@ type EnvAssignmentState =
 	| "rejected";
 
 function isWhitespaceCode(code: number): boolean {
-	if (code === 0x20 || code === 0x09 || code === 0x0d || code === 0x0a || code === 0x0b || code === 0x0c || code === 0xa0) {
+	if (
+		code === 0x20 ||
+		code === 0x09 ||
+		code === 0x0d ||
+		code === 0x0a ||
+		code === 0x0b ||
+		code === 0x0c ||
+		code === 0xa0
+	) {
 		return true;
 	}
 	return code >= 0x1680 && /\s/.test(String.fromCharCode(code));

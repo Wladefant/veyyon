@@ -440,10 +440,13 @@ describe("producer output withholds multiline registered literals", () => {
 	it("preserves registered-literal protection across a 16 Mi quoted first record", () => {
 		const tail = "Error: final diagnostic\n";
 		const input = `"${"x".repeat(16 * 1024 * 1024 + 1)}"\n${SECRET}\n${tail}`;
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: SECRET, name: "MULTILINE_CANARY" },
+		]);
 		const direct = runWithProducerSecretOwner(
 			{
-				redact: text => new SecretObfuscator([{ type: "plain", origin: "config", content: SECRET, name: "MULTILINE_CANARY" }]).obfuscate(text),
-				pendingPrefixLength: text => new SecretObfuscator([{ type: "plain", origin: "config", content: SECRET, name: "MULTILINE_CANARY" }]).pendingRedactionPrefixLength(text),
+				redact: text => obfuscator.obfuscate(text),
+				pendingPrefixLength: text => obfuscator.pendingRedactionPrefixLength(text),
 			},
 			() => new ProducerOutputGuard().sanitize(input),
 		);
