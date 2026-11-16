@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [1.10.6] - 2026-11-16
+
+### Fixed
+
+- Ci(ovh): pin PR cleanup WORKFLOW_SHA and keep verified-only OVH_CI_PR_ADMISSION gate ([PR #1150](https://github.com/Wladefant/veyyon/pull/1150)).
+
 ## [1.10.5] - 2026-11-16
 
 ### Fixed
