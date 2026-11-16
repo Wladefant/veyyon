@@ -30,9 +30,11 @@ export interface OAuthSuccessPageSink {
 /** State shape the page's inline script reads from the embedded JSON block. */
 export type OAuthResultState = { ok: true; code?: string; state?: string } | { ok?: false; error?: string };
 
-/** Substitute the result state into the page template. */
+/** Substitute the result state into the page template; escape `<` so JSON stays inside `<script>`. */
 export function renderOAuthResultHtml(state: OAuthResultState): string {
-	return (templateHtml as unknown as string).replaceAll("__OAUTH_STATE__", JSON.stringify(state));
+	return (templateHtml as unknown as string).replaceAll("__OAUTH_STATE__", () =>
+		JSON.stringify(state).replaceAll("<", "\\u003c"),
+	);
 }
 
 /** Handle for an ephemeral success-page server. */

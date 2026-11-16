@@ -2,8 +2,7 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEexist, isEnoent, postmortem, ptree } from "@veyyon/utils";
-import { toError } from "@veyyon/utils";
+import { isEexist, isEnoent, postmortem, toError } from "@veyyon/utils";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { brokerHoldsLease } from "./broker-lease";
@@ -277,7 +276,9 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			stdin: "ignore",
 			stdout: "ignore",
 			stderr: "ignore",
-			...ptree.detachedSpawnOptions(),
+			// Bun's Windows kill-on-close job must not tie a shared broker to its first client.
+			detached: true,
+			windowsHide: true,
 		});
 		this.#adoptSpawnedPid?.(child.pid);
 		child.unref();
