@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Exact stored-history reads and searches reject ambiguous or duplicate session/entry identity claims, including impossible nested openers, object suffixes, and array/scalar prefixes, while preserving identity-free legacy title lines (including brace-leading titles) and valid nested metadata ([Refs #984](https://github.com/Wladefant/veyyon/issues/984), [Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Redacted home directory paths and identity-form login names from auto-QA grievances at both local storage and outbound flush boundaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 841cfcf79650204c646f73bf306a64ca480e407b, 99680efef69f846a8a52c8c4726403ab61781a24, d765811a8d6dafe718da2361a7e47c8c4ecb3f43).
 - Redacted URL userinfo and query credentials from both `url` and `error` fields in `ModelRegistry` provider discovery failure logs ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 79a2e395726eef756402f71ec1d1ef78c6a943fe).
 ## [1.10.7] - 2026-11-16
