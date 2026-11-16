@@ -391,8 +391,13 @@ pub fn execute_shell<'env>(
 /// process memory (#4078).
 const BRIDGE_QUEUE_CHUNKS: usize = 64;
 
+// Adopted from oh-my-pi's shell bridge (#12657 and #10308). A deadline applies
+// to one callback, not the whole transcript: progressing output remains
+// lossless.
+const FORWARD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+
 struct ChunkDrain {
-	handle:      napi::tokio::task::JoinHandle<()>,
+	handle:      napi::tokio::task::JoinHandle<bool>,
 	progress_rx: napi::tokio::sync::watch::Receiver<u64>,
 }
 
@@ -421,11 +426,12 @@ fn bridge_chunks(
 async fn await_chunk_drain(
 	drain: Option<ChunkDrain>,
 	cancel_token: &CoreCancelToken,
-	result: Result<ShellRunResult>,
+	mut result: Result<ShellRunResult>,
 ) -> Result<ShellRunResult> {
 	let Some(ChunkDrain { mut handle, mut progress_rx }) = drain else {
 		return result;
 	};
+	let allow_cancel_abort = !matches!(&result, Ok(res) if res.cancelled || res.timed_out);
 	let idle_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_IDLE_GRACE);
 	napi::tokio::pin!(idle_sleep);
 	let deadline_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_DEADLINE);
@@ -434,12 +440,22 @@ async fn await_chunk_drain(
 	loop {
 		tokio::select! {
 			biased;
-			_ = &mut handle => return result,
-			reason = cancel_token.wait() => {
+			completed = &mut handle => {
+				if !matches!(completed, Ok(true))
+					&& let Ok(res) = &mut result
+				{
+					res.output_incomplete = true;
+				}
+				return result;
+			}
+			reason = cancel_token.wait(), if allow_cancel_abort => {
 				handle.abort();
 				let _ = handle.await;
 				return match result {
-					Ok(res) if res.cancelled || res.timed_out => Ok(res),
+					Ok(mut res) if res.cancelled || res.timed_out => {
+						res.output_incomplete = true;
+						Ok(res)
+					}
 					Ok(_) => Err(Error::from_reason(format!(
 						"Shell output callback drain aborted ({reason:?})"
 					))),
@@ -450,7 +466,10 @@ async fn await_chunk_drain(
 				handle.abort();
 				let _ = handle.await;
 				return match result {
-					Ok(res) if res.cancelled || res.timed_out => Ok(res),
+					Ok(mut res) if res.cancelled || res.timed_out => {
+						res.output_incomplete = true;
+						Ok(res)
+					}
 					Ok(_) => Err(Error::from_reason(
 						"Shell output callback drain exceeded deadline after command completion"
 					)),
@@ -470,7 +489,10 @@ async fn await_chunk_drain(
 				handle.abort();
 				let _ = handle.await;
 				return match result {
-					Ok(res) if res.cancelled || res.timed_out => Ok(res),
+					Ok(mut res) if res.cancelled || res.timed_out => {
+						res.output_incomplete = true;
+						Ok(res)
+					}
 					Ok(_) => Err(Error::from_reason(
 						"Shell output callback drain stalled after command completion"
 					)),
@@ -487,15 +509,15 @@ async fn await_chunk_drain(
 /// the consumer is gone; dropping `rx` then disconnects the channel so
 /// parked/future senders fail fast and the pipe readers keep draining the
 /// child instead of wedging it.
-async fn pump_chunks(rx: flume::Receiver<String>, forward: impl AsyncFnMut(String) -> bool) {
-	pump_chunks_with_progress(rx, None, forward).await;
+async fn pump_chunks(rx: flume::Receiver<String>, forward: impl AsyncFnMut(String) -> bool) -> bool {
+	pump_chunks_with_progress(rx, None, forward).await
 }
 
 async fn pump_chunks_with_progress(
 	rx: flume::Receiver<String>,
 	progress_tx: Option<napi::tokio::sync::watch::Sender<u64>>,
 	mut forward: impl AsyncFnMut(String) -> bool,
-) {
+) -> bool {
 	// Hard cap on one coalesced batch so the JS main thread never sees a
 	// multi-MB napi callback (a giant single string would stall sanitize +
 	// tail-buffer maintenance for the whole copy).
@@ -519,20 +541,25 @@ async fn pump_chunks_with_progress(
 			}
 		}
 		let payload = std::mem::replace(&mut batch, String::with_capacity(INITIAL_BATCH_CAP));
-		let keep_going = forward(payload).await;
+		// Disconnect a wedged JS consumer so readers and child writers can continue.
+		let forwarded = napi::tokio::time::timeout(FORWARD_STALL_TIMEOUT, forward(payload)).await;
+		if !matches!(forwarded, Ok(true)) {
+			return false;
+		}
 		if let Some(tx) = &progress_tx {
 			seq = seq.wrapping_add(1);
 			let _ = tx.send(seq);
 		}
-		if !keep_going {
-			return;
-		}
 	}
+	true
 }
 
 #[cfg(test)]
 mod tests {
-	use std::time::Duration;
+	use std::{
+		sync::Arc,
+		time::Duration,
+	};
 
 	use flume;
 	use tokio::time;
@@ -558,6 +585,87 @@ mod tests {
 			async move |payload: String| forward(payload).await,
 		));
 		ChunkDrain { handle, progress_rx }
+	}
+
+	fn drain_result(cancelled: bool, timed_out: bool) -> napi::Result<ShellRunResult> {
+		Ok(ShellRunResult {
+			exit_code: Some(0),
+			signal: None,
+			cancelled,
+			timed_out,
+			output_incomplete: false,
+			captured_output: None,
+			minimized: None,
+			working_dir: None,
+		})
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn interrupted_drain_disconnects_orphaned_senders() {
+		for (cancelled, timed_out) in [(true, false), (false, true)] {
+			let (orphan, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
+			let drain = spawn_test_drain(rx, |_payload: String| async { true });
+			let cancel = CancelToken::default();
+			let result = time::timeout(
+				Duration::from_secs(5),
+				await_chunk_drain(Some(drain), &cancel, drain_result(cancelled, timed_out)),
+			)
+			.await
+			.expect("interrupted drain must not wait for an orphaned sender");
+			assert!(orphan.send("late".to_string()).is_err(), "drain must disconnect the orphan");
+			assert!(
+				result.expect("native result").output_incomplete,
+				"abandoned output must be marked incomplete"
+			);
+		}
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn successful_and_failed_runs_preserve_slow_accepted_output() {
+		for failed in [false, true] {
+			let (tx, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
+			let received = Arc::new(parking_lot::Mutex::new(String::new()));
+			let observed = Arc::clone(&received);
+			let drain = spawn_test_drain(rx, move |payload: String| {
+				let observed = Arc::clone(&observed);
+				async move {
+					time::sleep(Duration::from_millis(500)).await;
+					observed.lock().push_str(&payload);
+					true
+				}
+			});
+			for _ in 0..4 {
+				tx.send("accepted".to_string()).expect("connected");
+			}
+			drop(tx);
+			let cancel = CancelToken::default();
+			let result = if failed {
+				Err(napi::Error::from_reason("run failed"))
+			} else {
+				drain_result(false, false)
+			};
+			let result = time::timeout(
+				Duration::from_secs(5),
+				await_chunk_drain(Some(drain), &cancel, result),
+			)
+			.await
+			.expect("accepted output must finish draining");
+			assert_eq!(received.lock().as_str(), "acceptedacceptedacceptedaccepted", "accepted output must not be dropped");
+			if let Ok(result) = result {
+				assert!(!result.output_incomplete, "fully drained output must remain complete");
+			}
+		}
+	}
+
+	#[tokio::test]
+	async fn abandoned_forward_reports_incomplete_output() {
+		let (tx, rx) = flume::bounded::<String>(1);
+		tx.send("accepted".to_string()).expect("connected");
+		drop(tx);
+		let drain = spawn_test_drain(rx, |_payload: String| async { false });
+		let cancel = CancelToken::default();
+		let result = await_chunk_drain(Some(drain), &cancel, drain_result(false, false)).await;
+		assert!(result.expect("native result").output_incomplete);
 	}
 
 	/// Regression for #4078: the reader→JS bridge queue must stay bounded when
@@ -634,6 +742,39 @@ mod tests {
 			.await
 			.expect("pump should exit after forward fails")
 			.expect("pump task");
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn stalled_bridge_callbacks_release_concurrent_producers() {
+		let mut runs = tokio::task::JoinSet::new();
+		for _ in 0..32 {
+			runs.spawn(async {
+				let (tx, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
+				let pump = tokio::spawn(pump_chunks(rx, async |_payload: String| {
+					std::future::pending::<bool>().await
+				}));
+				let producer = tokio::spawn(async move {
+					for _ in 0..BRIDGE_QUEUE_CHUNKS + 2 {
+						if tx.send_async("x".repeat(64 * 1024)).await.is_err() {
+							return;
+						}
+					}
+					panic!("stalled consumer must disconnect its producer");
+				});
+				let completed = time::timeout(Duration::from_secs(32), async {
+					producer.await.expect("producer");
+					assert!(
+						!pump.await.expect("pump"),
+						"stalled forwarding must report incomplete capture"
+					);
+				})
+				.await;
+				assert!(completed.is_ok(), "a stalled JS callback must not retain the bridge forever");
+			});
+		}
+		while let Some(result) = runs.join_next().await {
+			result.expect("every concurrent bridge must recover");
+		}
 	}
 
 	mod child_session_action_tests {
