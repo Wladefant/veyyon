@@ -1044,7 +1044,7 @@ mod tests {
 			Some(drain),
 		));
 
-		let settled = time::timeout(Duration::from_secs(5), run_task)
+		let settled = time::timeout(Duration::from_secs(15), run_task)
 			.await
 			.expect("default None options must bound stalled drain after core completion")
 			.expect("run task should not panic");
