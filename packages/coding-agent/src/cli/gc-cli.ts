@@ -563,8 +563,12 @@ function sqliteNumber(value: number | bigint | null | undefined): number {
 	return 0;
 }
 
+// Every statement below is scoped with `using`: an unfinalized statement keeps the SQLite
+// connection (and its db/-wal/-shm files) open after close() until GC, and Windows refuses
+// to delete or replace a file that is still open.
 function historyHasSessionId(db: Database): boolean {
-	const rows = db.prepare("PRAGMA table_info(history)").all() as Array<{ name?: string | null }>;
+	using stmt = db.prepare("PRAGMA table_info(history)");
+	const rows = stmt.all() as Array<{ name?: string | null }>;
 	return rows.some(row => row.name === "session_id");
 }
 
@@ -576,7 +580,7 @@ function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { d
 		if (!tableExists(db, "history")) return { deleted: 0, ftsRebuilt: false };
 		if (!historyHasSessionId(db)) return { deleted: 0, ftsRebuilt: false };
 		const hasFts = tableExists(db, "history_fts");
-		const deleteStmt = db.prepare("DELETE FROM history WHERE session_id = ?");
+		using deleteStmt = db.prepare("DELETE FROM history WHERE session_id = ?");
 		let deleted = 0;
 		const tx = db.transaction((ids: string[]) => {
 			for (const id of ids) {
@@ -720,7 +724,8 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 	let checkpointAttempted = false;
 	try {
 		db.run("PRAGMA busy_timeout = 5000");
-		const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as WalCheckpointRow | null;
+		using checkpointStmt = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)");
+		const row = checkpointStmt.get() as WalCheckpointRow | null;
 		checkpointAttempted = true;
 		result.busy = sqliteNumber(row?.busy);
 		result.log = sqliteNumber(row?.log);
