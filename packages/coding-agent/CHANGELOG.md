@@ -5,6 +5,12 @@
 ### Fixed
 
 - Redacted home directory paths and identity-form login names from auto-QA grievances at both local storage and outbound flush boundaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 841cfcf79650204c646f73bf306a64ca480e407b, 99680efef69f846a8a52c8c4726403ab61781a24, d765811a8d6dafe718da2361a7e47c8c4ecb3f43).
+- Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
 
 ## [1.10.1] - 2026-11-15
 

@@ -33,6 +33,34 @@ afterEach(async () => {
 }, 30_000);
 
 describeRequiringTool("python3", "Python kernel subprocess lifecycle", () => {
+	it("isolates agents sharing a session and resets only the requesting agent", async () => {
+		using tempDir = TempDir.createSync("@veyyon-python-agent-state-");
+		const shared = {
+			cwd: tempDir.path(),
+			sessionId: `py-agents:${crypto.randomUUID()}`,
+			kernelOwnerId: PYTHON_OWNER,
+		};
+		const agentA = { ...shared, agentId: "agent-a" };
+		const agentB = { ...shared, agentId: "agent-b" };
+
+		expect((await executePython("agent_value = 'A'", agentA)).exitCode).toBe(0);
+		const unseen = await executePython("print('agent_value' in globals())", agentB);
+		expect(unseen.exitCode).toBe(0);
+		expect(unseen.output.trim()).toBe("False");
+		expect((await executePython("agent_value = 'B'", agentB)).exitCode).toBe(0);
+
+		const retained = await executePython("print(agent_value)", agentA);
+		expect(retained.exitCode).toBe(0);
+		expect(retained.output.trim()).toBe("A");
+
+		const reset = await executePython("print('agent_value' in globals())", { ...agentB, reset: true });
+		expect(reset.exitCode).toBe(0);
+		expect(reset.output.trim()).toBe("False");
+		const unaffected = await executePython("print(agent_value)", agentA);
+		expect(unaffected.exitCode).toBe(0);
+		expect(unaffected.output.trim()).toBe("A");
+	}, 30_000);
+
 	it("persists state across cells in the same session", async () => {
 		using tempDir = TempDir.createSync("@veyyon-python-state-");
 		const sessionId = `py-state:${crypto.randomUUID()}`;
