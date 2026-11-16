@@ -702,14 +702,14 @@ export class ModelRegistry {
 	async #refreshForSpawnNow(force: boolean): Promise<string | undefined> {
 		return this.#withSerializedRefresh(async () => {
 			const previousModels = this.#models;
-			const previousProviderModels = new Map(
-				[...this.#providerModels].map(([provider, models]) => [provider, [...models]] as const),
+			const previousProviderModels = new Map<string, Model<Api>[]>(
+				[...this.#providerModels].map(([provider, models]) => [provider, [...models]]),
 			);
-			const previousStandard = new Map(
-				[...this.#cachedStandardByProvider].map(([provider, models]) => [provider, [...models]] as const),
+			const previousStandard = new Map<string, Model<Api>[]>(
+				[...this.#cachedStandardByProvider].map(([provider, models]) => [provider, [...models]]),
 			);
-			const previousDiscoveries = new Map(
-				[...this.#cachedDiscoveriesByProvider].map(([provider, models]) => [provider, [...models]] as const),
+			const previousDiscoveries = new Map<string, Model<Api>[]>(
+				[...this.#cachedDiscoveriesByProvider].map(([provider, models]) => [provider, [...models]]),
 			);
 			try {
 				this.#reloadStaticModels();
