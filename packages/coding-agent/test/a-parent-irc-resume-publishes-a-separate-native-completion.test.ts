@@ -1488,9 +1488,13 @@ describe("native retained child resume", () => {
 			const completions = parent.store
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
-			expect(completions.some(c => c.type === "custom_message" && c.content.includes('"value":"P2"'))).toBe(true);
 			expect(
-				completions.filter(c => c.type === "custom_message" && c.content.includes('"value":"P2"')),
+				completions.some(c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"')),
+			).toBe(true);
+			expect(
+				completions.filter(
+					c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"'),
+				),
 			).toHaveLength(1);
 		} finally {
 			openSpy.mockRestore();
