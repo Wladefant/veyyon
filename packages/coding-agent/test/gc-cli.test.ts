@@ -520,7 +520,8 @@ describe("runGcCommand history checkpoint", () => {
 
 		expect(result.wal?.checkpointed).toBe(true);
 		expect(result.wal?.walBytes).toBe(0);
-		expect((await fs.stat(`${dbPath}-wal`)).size).toBe(0);
+		// gc holds the last connection, so closing it after the TRUNCATE checkpoint deletes the WAL.
+		expect(await Bun.file(`${dbPath}-wal`).exists()).toBe(false);
 	});
 
 	test("--apply propagates WAL checkpoint failures and releases the gc lock", async () => {
@@ -545,7 +546,7 @@ describe("runGcCommand history checkpoint", () => {
 			writer.run("INSERT INTO history (prompt) VALUES ('before-reader')");
 			reader.run("PRAGMA journal_mode=WAL");
 			reader.run("BEGIN");
-			reader.prepare("SELECT * FROM history").all();
+			reader.query("SELECT * FROM history").all();
 			writer.run("INSERT INTO history (prompt) VALUES ('after-reader')");
 
 			await expect(runGcCommand({ flags: { agentDir: root, wal: true, apply: true } })).rejects.toThrow(
@@ -655,9 +656,9 @@ describe("runGcCommand cold-session archive", () => {
 		});
 
 		const check = new Database(dbPath);
-		const rows = check.prepare("SELECT session_id FROM history ORDER BY id").all() as Array<{ session_id: string }>;
+		const rows = check.query("SELECT session_id FROM history ORDER BY id").all() as Array<{ session_id: string }>;
 		const ftsRows = check
-			.prepare("SELECT h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid ORDER BY h.id")
+			.query("SELECT h.session_id FROM history_fts f JOIN history h ON h.id = f.rowid ORDER BY h.id")
 			.all() as Array<{ session_id: string }>;
 		check.close();
 
@@ -710,7 +711,7 @@ describe("runGcCommand cold-session archive", () => {
 		});
 
 		const check = new Database(dbPath);
-		const rows = check.prepare("SELECT session_id FROM history ORDER BY id").all();
+		const rows = check.query("SELECT session_id FROM history ORDER BY id").all();
 		check.close();
 
 		expect(second.archive?.archived).toBe(0);
