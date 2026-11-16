@@ -982,6 +982,12 @@ export class AgentSession {
 			}
 		}
 		this.#queue.scheduleDrain();
+		if (!this.isStreaming && !this.#ircActivePhase && this.#ircContinuations?.unfinished().length) {
+			void this.replayIrcContinuations().catch(error =>
+				logger.warn("Replaying pending IRC continuations failed", { error: errorMessage(error) }),
+			);
+			return;
+		}
 		this.#irc.resumeStranded();
 	}
 
@@ -4670,9 +4676,6 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 		} finally {
 			queued?.release();
 			this.#endInFlight();
-			if (!this.#ircActivePhase && !this.isStreaming && this.#ircContinuations?.unfinished().length) {
-				await this.replayIrcContinuations();
-			}
 		}
 	}
 

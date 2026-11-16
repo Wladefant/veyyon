@@ -962,5 +962,114 @@ describe("native retained child resume", () => {
 		await idlePromise;
 		await parent.instance.waitForIdle();
 		expect(idleResolved).toBe(true);
+		// Verify the queued peer message was actually delivered after settlement, not discarded.
+		const peerCalls = child.mock.calls.filter(call =>
+			call.context.messages.some(message =>
+				JSON.stringify(message.content).includes("Sibling question during publish"),
+			),
+		);
+		expect(peerCalls).toHaveLength(1);
+	});
+
+	it("replays pending parent outbox before stranded peer interrupt when normal prompt settles", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Handled"], stopReason: "stop" }]);
+		const child = await session("worker", [
+			{ content: ["Normal prompt done"], stopReason: "stop" },
+			yielded("B"),
+			{ content: ["Peer handled"], stopReason: "stop" },
+		]);
+		const peer = await session("peer", [{ content: ["Peer idle"], stopReason: "stop" }]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+		registry.register({
+			id: "peer",
+			displayName: "Peer",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: peer.instance,
+		});
+
+		const providerStarted = Promise.withResolvers<void>();
+		const providerGate = Promise.withResolvers<void>();
+		const originalStreamFn = child.instance.agent.streamFn;
+		let callIndex = 0;
+		child.instance.agent.streamFn = async (model, context, options) => {
+			if (callIndex++ === 0) {
+				providerStarted.resolve();
+				await providerGate.promise;
+			}
+			return originalStreamFn(model, context, options);
+		};
+
+		const syncStarted = Promise.withResolvers<void>();
+		const syncGate = Promise.withResolvers<void>();
+		const originalSync = child.store.sync.bind(child.store);
+		let interceptNextSync = false;
+		spyOn(child.store, "sync").mockImplementation(async () => {
+			if (interceptNextSync) {
+				interceptNextSync = false;
+				syncStarted.resolve();
+				await syncGate.promise;
+			}
+			return originalSync();
+		});
+
+		const normalPrompt = child.instance.prompt("Normal prompt");
+		await providerStarted.promise;
+		interceptNextSync = true;
+		const parentDeliver = child.instance.deliverIrcMessage({
+			id: "parent-before-peer",
+			from: "owner",
+			to: "worker",
+			body: "Parent continuation B",
+			ts: 1700000008000,
+		});
+		await syncStarted.promise;
+
+		providerGate.resolve();
+		for (let i = 0; i < 50 && child.instance.agent.state.isStreaming; i++) {
+			await setImmediate();
+		}
+		expect(child.instance.agent.state.isStreaming).toBe(false);
+
+		// Queue peer C while parent B is still in the outbox and the normal prompt is settling.
+		await child.instance.deliverIrcMessage({
+			id: "peer-while-b-pending",
+			from: "peer",
+			to: "worker",
+			body: "Peer message C",
+			ts: 1700000009000,
+		});
+
+		syncGate.resolve();
+		await parentDeliver;
+		await normalPrompt;
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		const lastContextMessages = child.mock.calls.at(-1)?.context.messages ?? [];
+		const bMessages = lastContextMessages.filter(message =>
+			JSON.stringify(message.content).includes("Parent continuation B"),
+		);
+		expect(bMessages).toHaveLength(1);
+		const completions = parent.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		expect(completions).toHaveLength(1);
+		const cCalls = child.mock.calls.filter(call =>
+			call.context.messages.some(message => JSON.stringify(message.content).includes("Peer message C")),
+		);
+		expect(cCalls).toHaveLength(1);
 	});
 });
