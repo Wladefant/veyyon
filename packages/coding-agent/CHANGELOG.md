@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- The shared Windows daemon broker survives the client process that started it.
 - Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
 ## [1.10.2] - 2026-11-15
 
