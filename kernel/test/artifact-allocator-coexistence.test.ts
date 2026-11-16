@@ -125,6 +125,7 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 			"import importlib.util, sys",
 			"spec = importlib.util.spec_from_file_location('cleanup_mod', sys.argv[1])",
 			"mod = importlib.util.module_from_spec(spec)",
+			"sys.modules[spec.name] = mod",
 			"spec.loader.exec_module(mod)",
 			"mod.get_live_process_command_lines = lambda: (True, [])",
 			"sys.argv = [sys.argv[1], '--session-dir', sys.argv[2], '--execute', '--min-age-hours', '0', '--json']",
@@ -595,6 +596,7 @@ process.stdout.write(JSON.stringify(ids));
 			"import importlib.util, sys",
 			"spec = importlib.util.spec_from_file_location('cleanup_mod', sys.argv[1])",
 			"mod = importlib.util.module_from_spec(spec)",
+			"sys.modules[spec.name] = mod",
 			"spec.loader.exec_module(mod)",
 			"mod.get_live_process_command_lines = lambda: (True, [])",
 			"sys.argv = [sys.argv[1], '--session-dir', sys.argv[2], '--execute', '--min-age-hours', '24']",
@@ -667,10 +669,11 @@ run().catch(err => { console.error(err); process.exit(1); });
 		await fs.writeFile(path.join(dir, "0.legacy.log"), "legacy-0", "utf8");
 
 		const artifactsModuleUrl = path.resolve(import.meta.dirname, "../src/session/artifacts").replace(/\\/g, "/");
+		const sleepModuleUrl = path.resolve(import.meta.dirname, "../../packages/utils/src/sleep").replace(/\\/g, "/");
 		const slowScanStartedPath = path.join(dir, "slow-scan-started");
 		const slowWorkerScript = `
 import * as fsSync from "node:fs";
-import { sleepSync } from "@veyyon/utils/sleep";
+import { sleepSync } from "${sleepModuleUrl}";
 import { ArtifactManager } from "${artifactsModuleUrl}";
 
 const dir = process.argv[2];
