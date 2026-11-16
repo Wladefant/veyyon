@@ -246,7 +246,7 @@ export interface RunMonitorArgs {
  * processing, abort/budget machinery, usage accumulation, and output capture
  * for one assignment run.
  */
-export type WatchdogPhase = "startup" | "streaming" | "tool-running" | "waiting-child";
+export type WatchdogPhase = "startup" | "session-initializing" | "streaming" | "tool-running" | "waiting-child";
 
 const DEFAULT_TRANSPORT_WAIT_MS = 300_000;
 
@@ -261,6 +261,7 @@ export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> =
 	// Strictly later than the transport's five-minute default first-event/idle budget
 	// plus pre-dispatch latency and scheduling slack.
 	startup: DEFAULT_TRANSPORT_WAIT_MS + WATCHDOG_TRANSPORT_SLACK_MS,
+	"session-initializing": 900_000,
 	streaming: DEFAULT_TRANSPORT_WAIT_MS + WATCHDOG_TRANSPORT_SLACK_MS,
 	"tool-running": 900_000,
 	"waiting-child": 1_800_000,
@@ -314,6 +315,7 @@ export interface AgentRunMonitor {
 	hasExplicitAbortReason(): boolean;
 	isAbortedRun(): boolean;
 	requestAbort(reason: AbortReason): void;
+	beginSessionInitialization(): void;
 	abortActiveSession(): Promise<void>;
 	waitForActiveSessionAbort(): Promise<void>;
 	resolveSignalAbortReason(): string;
@@ -491,6 +493,11 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		}, limit);
 	};
 	armPhaseWatchdog();
+	const beginSessionInitialization = (): void => {
+		watchdogPhase = "session-initializing";
+		lastProgressEventAt = Date.now();
+		armPhaseWatchdog();
+	};
 
 	// Soft-budget stop: cancel the free-running turn WITHOUT aborting the
 	// monitor, so driveSessionToYield can still drive one forced final yield.
@@ -1142,6 +1149,11 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	};
 
 	const attach = (session: AgentSession): (() => void) => {
+		if (watchdogPhase === "session-initializing") {
+			watchdogPhase = "startup";
+			lastProgressEventAt = Date.now();
+			armPhaseWatchdog();
+		}
 		const unsubscribe = session.subscribe(event => {
 			emitAgentEvent(event);
 			if (applyRetryEvent(event)) {
@@ -1240,6 +1252,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		},
 		attach,
 		captureSalvage,
+		beginSessionInitialization,
 		lastAssistantSalvageText: () => lastAssistantSalvageText,
 		rawOutput: () => (finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("")),
 		scheduleProgress,
