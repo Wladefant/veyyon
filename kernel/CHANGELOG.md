@@ -7,6 +7,12 @@
 ### Fixed
 
 - Artifact counters use WAL and skip directory scans when already initialized, while marker cleanup rechecks all session locks and rejects unsafe PIDs and age limits ([#1057](https://github.com/Wladefant/veyyon/issues/1057)).
+- Restore session deletion methods to the storage type contract and clear completed rewrite fences with the declared empty state ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+## [1.10.8] - 2026-11-16
+
+### Fixed
+
 - Serialize ordinary session rewrites, async/sync journal-lock contention, queue cleanup, and source-path locking during session relocation ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Flush copied fork artifact files before child-session publication and flush POSIX directory entries deepest-first ([#774](https://github.com/Wladefant/veyyon/issues/774)).
 - Refuse first append to a newly opened empty session journal if a peer already wrote foreign contents to its pinned inode before this writer's own header ([#774](https://github.com/Wladefant/veyyon/issues/774)).

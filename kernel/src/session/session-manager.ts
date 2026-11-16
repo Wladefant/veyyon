@@ -1492,7 +1492,7 @@ export class SessionManager {
 				// epoch, and that task may have taken ownership of the fence while
 				// this stale rewrite was still awaiting storage. Clearing it here
 				// would tear down the newer rewrite's fence.
-				if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = undefined;
+				if (this.#atomicRewriteFenceEpoch === epoch) this.#atomicRewriteFenceEpoch = null;
 			}
 		};
 		if (this.#storage.withJournalLock) {

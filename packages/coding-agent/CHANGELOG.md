@@ -2,9 +2,37 @@
 
 ## [Unreleased]
 
+## [1.10.10] - 2026-11-16
+
 ### Fixed
 
+- Keep CI logs complete during credential redaction ([PR #1096](https://github.com/Wladefant/veyyon/pull/1096)).
+- Keep serialized CI logs and later diagnostic records complete while redacting credentials, including printed ANSI codes and inline code suggestions.
+- Bound producer-output scalar serialization and diagnose oversized records without exposing credential-bearing lines.
+- Preserve environment-inventory taint across oversized assignment records, bound repeating-prefix lookbehind, and keep quoted multi-record logs out of scalar mode.
+- Keep caret-escaped ANSI CSI sequences out of producer output container and inventory detection while preserving credential redaction ([PR #1087](https://github.com/Wladefant/veyyon/pull/1087)).
+- Fall back from single-file `local://` promotion in `ReadTool` so semicolon-delimited lists containing `local://` URIs split into per-entry reads while preserving individual selectors.
+
+## [1.10.9] - 2026-11-16
+
+### Changed
+
+- No user-facing behavior changes; ACP model-order regression coverage now verifies 257 session models survive provider sorting without local truncation.
+
+### Fixed
+
+- Give child startup and streaming the provider's default five-minute response window, count reasoning and retry progress, and refuse stall recovery while the session remains busy.
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
+## [1.10.8] - 2026-11-16
+
+### Fixed
+
+- Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Exact stored-history reads and searches reject ambiguous or duplicate session/entry identity claims, including impossible nested openers, object suffixes, and array/scalar prefixes, while preserving identity-free legacy title lines (including brace-leading titles) and valid nested metadata ([Refs #984](https://github.com/Wladefant/veyyon/issues/984), [Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Redacted home directory paths and identity-form login names from auto-QA grievances at both local storage and outbound flush boundaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 841cfcf79650204c646f73bf306a64ca480e407b, 99680efef69f846a8a52c8c4726403ab61781a24, d765811a8d6dafe718da2361a7e47c8c4ecb3f43).
 - Redacted URL userinfo and query credentials from both `url` and `error` fields in `ModelRegistry` provider discovery failure logs ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 79a2e395726eef756402f71ec1d1ef78c6a943fe).
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed
