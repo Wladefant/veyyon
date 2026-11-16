@@ -337,7 +337,7 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		await flushMicrotasks();
 		vi.advanceTimersByTime(30);
 		await flushMicrotasks();
-		expect(timeoutOutcome).toBe("rejected");
+		expect(timeoutOutcome as string).toBe("rejected");
 		await expect(acquireTimeout).rejects.toThrow(KernelExecutionCancelledError);
 
 		retireGate.resolve({ confirmed: true });
@@ -376,7 +376,7 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		await flushMicrotasks();
 		abortWaiter.abort(new Error("caller gave up"));
 		await flushMicrotasks();
-		expect(failedOutcome).toBe("rejected");
+		expect(failedOutcome as string).toBe("rejected");
 		await expect(waitingFailed).rejects.toThrow(KernelExecutionCancelledError);
 	});
 
