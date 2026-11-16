@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- `history://` reads stream stored session prefixes lazily and reuse a validated directory index so post-restart reads stay within the 5-second timeout ([PR #1125](https://github.com/Wladefant/veyyon/pull/1125), [Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
 - Scoped one-off `gc` SQLite statements with `using` so `db.close()` releases database and WAL handles immediately on Windows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
 - Preserved an existing text file's CRLF line endings and UTF-8 BOM across `WriteTool` overwrites and verified persisted conventions on ACP editor-bridge writes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0ffd42c7146ac69cf18c8561ccf4febea32403ac, f77456fe1d75fdcf38b893081a6a7d12cedd89d2).
 - The shared Windows daemon broker survives the client process that started it.
@@ -31,6 +32,9 @@
 ### Fixed
 
 - Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
+### Fixed
+
+- Bounded `history://` reads stop markdown rendering after the requested prefix and keep later messages untouched. History discovery reads child directories in bounded concurrent batches and deduplicates registry roots without quadratic scans ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
 
 ## [1.9.3] - 2026-11-13
 
