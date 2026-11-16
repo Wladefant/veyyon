@@ -5,13 +5,39 @@
 ### Added
 
 - Native `BashTool` commands attest the live main or subagent caller through `VEYYON_CALLER_URL` and `VEYYON_CALLER_TOKEN` over a lazy loopback HTTP endpoint, rejecting user `env` overrides and clearing inherited receipt variables when no live actor owns the session.
+## [1.10.9] - 2026-11-16
+
+### Changed
+
+- No user-facing behavior changes; ACP model-order regression coverage now verifies 257 session models survive provider sorting without local truncation.
+
 ### Fixed
 
+- Give child startup and streaming the provider's default five-minute response window, count reasoning and retry progress, and refuse stall recovery while the session remains busy.
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
+## [1.10.8] - 2026-11-16
+
+### Fixed
+
+- Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Exact stored-history reads and searches reject ambiguous or duplicate session/entry identity claims, including impossible nested openers, object suffixes, and array/scalar prefixes, while preserving identity-free legacy title lines (including brace-leading titles) and valid nested metadata ([Refs #984](https://github.com/Wladefant/veyyon/issues/984), [Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Redacted home directory paths and identity-form login names from auto-QA grievances at both local storage and outbound flush boundaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 841cfcf79650204c646f73bf306a64ca480e407b, 99680efef69f846a8a52c8c4726403ab61781a24, d765811a8d6dafe718da2361a7e47c8c4ecb3f43).
+- Redacted URL userinfo and query credentials from both `url` and `error` fields in `ModelRegistry` provider discovery failure logs ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 79a2e395726eef756402f71ec1d1ef78c6a943fe).
+
+## [1.10.7] - 2026-11-16
+
+### Fixed
+
+- Fall back from single-file `local://` promotion in `ReadTool` so semicolon-delimited lists containing `local://` URIs split into per-entry reads while preserving individual selectors.
+- Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
 - Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
 - Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).
 - Task-run watchdogs allow bounded session initialization before restoring the normal startup deadline on attachment, without extending later running phases.
 - Python eval shutdown waits now have a JavaScript-side deadline, and reset, acquire, and replacement transitions honor caller cancellation without dropping transition ownership ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
 ## [1.10.6] - 2026-11-16
 
 ### Fixed
@@ -22,7 +48,6 @@
 
 ### Fixed
 
-- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
 - Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
 
 ## [1.10.4] - 2026-11-16
