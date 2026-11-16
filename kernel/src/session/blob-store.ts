@@ -27,6 +27,13 @@ export interface BlobPutOptions {
 	extension?: string;
 }
 
+export interface BlobGetOptions {
+	/** Caller's abort signal. */
+	signal?: AbortSignal;
+	/** Optional upper bound on bytes read from the blob file. */
+	maxBytes?: number;
+}
+
 export interface BlobPutResult {
 	hash: string;
 	/** Canonical content-addressed path, always `<dir>/<sha256-hex>`. */
@@ -190,13 +197,28 @@ export class BlobStore {
 	}
 
 	/** Read blob by hash, returns Buffer or null if not found. */
-	async get(hash: string): Promise<Buffer | null> {
+	async get(hash: string, options?: BlobGetOptions): Promise<Buffer | null> {
+		options?.signal?.throwIfAborted();
 		const blobPath = path.join(this.dir, hash);
 		try {
-			const file = Bun.file(blobPath);
-			const ab = await file.arrayBuffer();
-			return Buffer.from(ab);
+			if (options?.maxBytes === undefined) {
+				return await fsp.readFile(blobPath, { signal: options?.signal });
+			}
+			const maxBytes = Math.max(0, options.maxBytes);
+			const fh = await fsp.open(blobPath, "r");
+			try {
+				const stat = await fh.stat();
+				if (stat.size <= maxBytes) {
+					return await fh.readFile({ signal: options.signal });
+				}
+				const buf = Buffer.allocUnsafe(maxBytes);
+				const { bytesRead } = await fh.read(buf, 0, maxBytes, 0);
+				return trimIncompleteUtf8Tail(buf.subarray(0, bytesRead));
+			} finally {
+				await fh.close();
+			}
 		} catch (err) {
+			options?.signal?.throwIfAborted();
 			if (isEnoent(err)) return null;
 			throw err;
 		}
@@ -340,15 +362,43 @@ function reportMissingBlob(blobStore: BlobStore, hash: string, warningMessage: s
 	logger.warn(warningMessage, { hash, dir: blobStore.dir });
 }
 
+function trimIncompleteUtf8Tail(buf: Buffer): Buffer {
+	let end = buf.length;
+	let continuations = 0;
+	while (end > 0 && continuations < 3 && (buf[end - 1]! & 0xc0) === 0x80) {
+		end--;
+		continuations++;
+	}
+	if (end > 0) {
+		const lead = buf[end - 1]!;
+		const expected =
+			(lead & 0x80) === 0
+				? 1
+				: (lead & 0xe0) === 0xc0
+					? 2
+					: (lead & 0xf0) === 0xe0
+						? 3
+						: (lead & 0xf8) === 0xf0
+							? 4
+							: 1;
+		if (continuations + 1 < expected) {
+			return buf.subarray(0, end - 1);
+		}
+	}
+	return buf;
+}
+
 async function resolveBlobBuffer(
 	blobStore: BlobStore,
 	data: string,
 	parser: (data: string) => string | null,
 	warningMessage: string,
+	options?: BlobGetOptions,
 ): Promise<Buffer | null> {
 	const hash = parser(data);
 	if (!hash) return null;
-	const buffer = await blobStore.get(hash);
+	const buffer = await blobStore.get(hash, options);
+	options?.signal?.throwIfAborted();
 	if (!buffer) reportMissingBlob(blobStore, hash, warningMessage);
 	return buffer;
 }
@@ -371,12 +421,17 @@ function resolveBlobBufferSync(
  * through unchanged. A missing blob logs a warning and returns the reference as-is
  * rather than crashing the load.
  */
-export async function resolveTextBlobRef(blobStore: BlobStore, data: string): Promise<string> {
+export async function resolveTextBlobRef(
+	blobStore: BlobStore,
+	data: string,
+	options?: BlobGetOptions,
+): Promise<string> {
 	const buffer = await resolveBlobBuffer(
 		blobStore,
 		data,
 		parseTextBlobRef,
 		"Blob not found for persisted text reference",
+		options,
 	);
 	return buffer ? buffer.toString("utf8") : data;
 }
@@ -445,8 +500,18 @@ export function externalizeImageDataSync(blobStore: BlobStore, base64Data: strin
  * If the data is not a blob reference, returns it unchanged.
  * If the blob is missing, logs a warning and returns the reference as-is.
  */
-export async function resolveImageDataUrl(blobStore: BlobStore, data: string): Promise<string> {
-	const buffer = await resolveBlobBuffer(blobStore, data, parseBlobRef, "Blob not found for persisted image data URL");
+export async function resolveImageDataUrl(
+	blobStore: BlobStore,
+	data: string,
+	options?: BlobGetOptions,
+): Promise<string> {
+	const buffer = await resolveBlobBuffer(
+		blobStore,
+		data,
+		parseBlobRef,
+		"Blob not found for persisted image data URL",
+		options,
+	);
 	return buffer ? buffer.toString("utf8") : data;
 }
 
@@ -461,8 +526,8 @@ export function resolveImageDataUrlSync(blobStore: BlobStore, data: string): str
  * If the data is not a blob reference, returns it unchanged.
  * If the blob is missing, logs a warning and returns a placeholder.
  */
-export async function resolveImageData(blobStore: BlobStore, data: string): Promise<string> {
-	const buffer = await resolveBlobBuffer(blobStore, data, parseBlobRef, "Blob not found for image reference");
+export async function resolveImageData(blobStore: BlobStore, data: string, options?: BlobGetOptions): Promise<string> {
+	const buffer = await resolveBlobBuffer(blobStore, data, parseBlobRef, "Blob not found for image reference", options);
 	return buffer ? buffer.toString("base64") : data;
 }
 

@@ -1271,3 +1271,81 @@ describe("executeBash :async: background retention", () => {
 		},
 	);
 });
+
+describe("executeBash outputIncomplete and callback lifecycle", () => {
+	it("preserves native outputIncomplete when native settles within the backstop grace after explicit timeout", async () => {
+		const nativeResult = Promise.withResolvers<ShellRunResult>();
+		const dispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "partial line\n");
+			dispatched.resolve();
+			return nativeResult.promise;
+		});
+
+		const pending = executeBash("sleep 10", {
+			cwd: os.tmpdir(),
+			timeout: 1000,
+		});
+		await dispatched.promise;
+		nativeResult.resolve({
+			exitCode: undefined,
+			cancelled: false,
+			timedOut: true,
+			outputIncomplete: true,
+			capturedOutput: "partial line\n",
+		});
+		const result = await pending;
+
+		expect(result.cancelled).toBe(true);
+		expect(result.outputIncomplete).toBe(true);
+		expect(result.output).toContain("Shell output capture is incomplete");
+	});
+
+	it("marks outputIncomplete when JS abort fallback wins before native settles", async () => {
+		const dispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "before abort\n");
+			dispatched.resolve();
+			return Promise.withResolvers<ShellRunResult>().promise;
+		});
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const controller = new AbortController();
+		const promise = executeBash("sleep 10", {
+			cwd: os.tmpdir(),
+			timeout: 5000,
+			signal: controller.signal,
+		});
+		await dispatched.promise;
+		controller.abort();
+
+		const result = await promise;
+		expect(result.cancelled).toBe(true);
+		expect(result.outputIncomplete).toBe(true);
+		expect(result.output).toContain("Shell output capture is incomplete");
+	});
+
+	it("ignores late onChunk callbacks after native result settles", async () => {
+		let capturedCallback: ((err: Error | null, chunk: string) => void) | undefined | null;
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(async (_options, onChunk) => {
+			capturedCallback = onChunk;
+			onChunk?.(null, "clean output\n");
+			return {
+				exitCode: 0,
+				cancelled: false,
+				timedOut: false,
+				outputIncomplete: false,
+			};
+		});
+
+		const streamed: string[] = [];
+		const result = await executeBash("echo clean output", {
+			cwd: os.tmpdir(),
+			onChunk: chunk => streamed.push(chunk),
+		});
+
+		expect(result.output.trim()).toBe("clean output");
+		capturedCallback?.(null, "late chunk after completion\n");
+		expect(streamed.join("")).toBe("clean output\n");
+	});
+});

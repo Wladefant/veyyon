@@ -218,7 +218,7 @@ describe("issue #2115: ConPTY large-session resume truncates at logical lines", 
 
 			try {
 				tui.start({ clearScrollback: true });
-				await term.waitForRender();
+				await term.waitForRender(tui);
 
 				// The premise: this host really does bound a bulk replay, so the
 				// assertions below cannot pass merely because ConPTY was not modelled.
@@ -235,7 +235,7 @@ describe("issue #2115: ConPTY large-session resume truncates at logical lines", 
 				// The opt-out is one-shot: the replacement that follows is bounded again.
 				writes.length = 0;
 				tui.requestRender(true, { clearScrollback: true });
-				await term.waitForRender();
+				await term.waitForRender(tui);
 
 				const replace = writes.join("");
 				expect(replace).toContain("older lines hidden");

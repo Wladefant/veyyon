@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { BlobStore, externalizeTextSync } from "@veyyon/kernel/session/blob-store";
 import { type OperatorNotice, OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import type { FileEntry } from "@veyyon/kernel/session/session-entries";
-import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
+import { loadSessionHistoryReadOnly } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getBlobsDir, getSessionsDir, setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
@@ -111,7 +111,9 @@ describe("a session from another profile keeps its own blob store", () => {
 	it("loads read-only from the file's own store", async () => {
 		const file = sessionFile(otherSessionDir, `blobtext:sha256:${sha256(stored)}`);
 
-		const [message] = await loadSessionMessagesReadOnly(file);
+		const {
+			messages: [message],
+		} = await loadSessionHistoryReadOnly(file);
 		const content = message && "content" in message ? message.content : undefined;
 		expect(Array.isArray(content) && content[0]?.type === "text" ? content[0].text.length : undefined).toBe(BIG);
 	});

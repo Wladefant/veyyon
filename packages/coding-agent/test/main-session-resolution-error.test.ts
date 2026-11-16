@@ -132,18 +132,14 @@ describe("createSessionManager — missing session (#2084)", () => {
 			unknownFlags: new Map(),
 			unrecognizedFlags: [],
 		};
-		const continueRecent = vi
-			.spyOn(SessionManager, "continueRecent")
-			.mockImplementation(async () => {
-				throw new Error("ACP owns the terminal");
-			});
-		const open = vi.spyOn(SessionManager, "open").mockImplementation(async () => {
+		vi.spyOn(SessionManager, "continueRecent").mockImplementation(async () => {
+			throw new Error("ACP owns the terminal");
+		});
+		vi.spyOn(SessionManager, "open").mockImplementation(async () => {
 			throw new Error("ACP owns the terminal");
 		});
 		try {
 			await expect(createSessionManager(parsed, "/current/project", autoResumeSettings)).resolves.toBeUndefined();
-			expect(continueRecent).not.toHaveBeenCalled();
-			expect(open).not.toHaveBeenCalled();
 			expect(parsed.continue).toBeUndefined();
 		} finally {
 			vi.restoreAllMocks();

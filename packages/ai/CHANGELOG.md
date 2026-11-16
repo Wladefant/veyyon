@@ -25,6 +25,11 @@
 - Retire an old auth-broker SSE connection after canonical same-ID credential reauthorization or replacement, so queued higher-generation frames cannot override the refreshed broker state ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Keep broker-authoritatively removed grants unavailable when a stale authenticated SSE connection replays equal- or higher-generation entry and full-snapshot frames from an earlier broker incarnation; only a later canonical GET can confirm legitimate reuse ([#602](https://github.com/Wladefant/veyyon/issues/602)).
 - Pace unchanged conditional auth-broker snapshot replies to the full monotonic canonical-verification deadline, including fractional timer delays, so repeated stale HTTP 200s cannot trigger another conditional poll just before the broker truth check ([#602](https://github.com/Wladefant/veyyon/issues/602)).
+## [1.10.4] - 2026-11-16
+
+### Fixed
+
+- Escaped `<` as `\u003c` and used a replacer function in `renderOAuthResultHtml` so `</script>` markup and `$` replacement patterns in OAuth callback values stay inert JSON data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c767616cfc3ba221fa6695bcccf96aa2c3e4dbd4).
 
 ## [1.8.3] - 2026-11-05
 
