@@ -8,9 +8,10 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { AgentEvent } from "@veyyon/agent-core";
 import { AGENT_EVENT_TYPES } from "@veyyon/agent-core/types";
-import type { Usage } from "@veyyon/ai";
+import type { Api, Model, Usage } from "@veyyon/ai";
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
+	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
 } from "@veyyon/ai/utils/idle-iterator";
@@ -265,14 +266,37 @@ export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> =
 	"waiting-child": 1_800_000,
 };
 
-function resolveWatchdogPhaseLimitMs(phase: WatchdogPhase): number {
+function timeoutSecondsToMs(value: number | undefined): number | undefined {
+	if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
+	if (value === 0) return 0;
+	return Math.max(1, Math.trunc(value * 1000));
+}
+
+function modelCompatStreamIdleTimeoutMs(model: Model<Api> | undefined): number | undefined {
+	if (!model || !("compat" in model) || !isRecord(model.compat)) return undefined;
+	const value = model.compat.streamIdleTimeoutMs;
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined;
+}
+
+function resolveWatchdogPhaseLimitMs(
+	phase: WatchdogPhase,
+	options?: { model?: Model<Api>; settings?: Settings },
+): number {
 	const baseLimit = PHASE_WATCHDOG_LIMITS_MS[phase];
 	if (phase !== "startup" && phase !== "streaming") return baseLimit;
+	const settingsIdleMs = timeoutSecondsToMs(options?.settings?.get("providers.streamIdleTimeoutSeconds"));
+	const settingsFirstEventMs = timeoutSecondsToMs(options?.settings?.get("providers.streamFirstEventTimeoutSeconds"));
+	const compatIdleMs = modelCompatStreamIdleTimeoutMs(options?.model);
+	const genericIdleMs = settingsIdleMs ?? getStreamIdleTimeoutMs();
+	const genericFirstEventMs = settingsFirstEventMs ?? getStreamFirstEventTimeoutMs(genericIdleMs);
+	const openAIIdleMs = settingsIdleMs ?? getOpenAIStreamIdleTimeoutMs(compatIdleMs);
+	const openAIFirstEventMs = settingsFirstEventMs ?? getOpenAIStreamFirstEventTimeoutMs(openAIIdleMs);
 	const effectiveTransportBudget = Math.max(
 		DEFAULT_TRANSPORT_WAIT_MS,
-		getStreamFirstEventTimeoutMs() ?? 0,
-		getOpenAIStreamFirstEventTimeoutMs() ?? 0,
-		getStreamIdleTimeoutMs() ?? 0,
+		genericIdleMs ?? 0,
+		genericFirstEventMs ?? 0,
+		openAIIdleMs ?? 0,
+		openAIFirstEventMs ?? 0,
 	);
 	return Math.max(baseLimit, effectiveTransportBudget + WATCHDOG_TRANSPORT_SLACK_MS);
 }
@@ -457,7 +481,10 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		clearTimeout(watchdogTimer);
 		watchdogTimer = undefined;
 		if (resolved || abortSignal.aborted) return;
-		const limit = resolveWatchdogPhaseLimitMs(watchdogPhase);
+		const limit = resolveWatchdogPhaseLimitMs(watchdogPhase, {
+			model: activeSession?.model,
+			settings: args.settings,
+		});
 		watchdogTimer = setTimeout(() => {
 			if (resolved || abortSignal.aborted || Date.now() - lastProgressEventAt < limit) return;
 			requestAbort("stalled");
@@ -1201,6 +1228,9 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		setActiveSession: session => {
 			if (session !== activeSession) clearWaitHints();
 			activeSession = session;
+			if (session && !resolved && !abortSignal.aborted) {
+				armPhaseWatchdog();
+			}
 		},
 		takeActiveSession: () => {
 			clearWaitHints();

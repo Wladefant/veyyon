@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import {
@@ -15,12 +16,13 @@ const agent: AgentDefinition = {
 	source: "bundled",
 };
 
-function createMonitor() {
+function createMonitor(options?: { model?: Record<string, unknown>; settings?: Settings }) {
 	const monitor = createAgentRunMonitor({
 		index: 0,
 		id: "phase-test",
 		agent,
 		task: "test phase watchdog",
+		settings: options?.settings,
 		softRequestBudget: 0,
 		softRequestBudgetNotice: false,
 		maxRuntimeMs: 0,
@@ -28,7 +30,7 @@ function createMonitor() {
 	let listener: ((event: AgentSessionEvent) => void) | undefined;
 	const abort = vi.fn(async () => {});
 	const session = {
-		model: { id: "test-model" },
+		model: options?.model ?? { id: "test-model" },
 		subscribe: vi.fn((callback: (event: AgentSessionEvent) => void) => {
 			listener = callback;
 			return vi.fn();
@@ -261,5 +263,31 @@ describe("run monitor phase supervision", () => {
 			if (previous === undefined) delete process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
 			else process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS = previous;
 		}
+	});
+
+	it("scales the startup and streaming watchdogs from model.compat.streamIdleTimeoutMs", () => {
+		vi.useFakeTimers();
+		const { monitor } = createMonitor({
+			model: { id: "slow-local-model", compat: { streamIdleTimeoutMs: 420_000 } },
+		});
+		vi.advanceTimersByTime(420_000 + WATCHDOG_TRANSPORT_SLACK_MS - 1);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
+	});
+
+	it("scales the streaming watchdog from providers.streamIdleTimeoutSeconds settings", () => {
+		vi.useFakeTimers();
+		const settings = Settings.isolated({ "providers.streamIdleTimeoutSeconds": 420 });
+		const { monitor, emit } = createMonitor({ settings });
+		emit(event("agent_start"));
+		vi.advanceTimersByTime(420_000 + WATCHDOG_TRANSPORT_SLACK_MS - 1);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
 	});
 });

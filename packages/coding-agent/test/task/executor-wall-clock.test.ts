@@ -218,6 +218,60 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		expect(result.abortReason).toBeUndefined();
 		expect(result.terminalOutcome).toBe("completed");
 	});
+	it("inherits OpenAI-specific stream idle timeout precedence over generic stream idle timeout", async () => {
+		vi.useFakeTimers();
+		const prevGenericIdle = process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS;
+		const prevOpenAIIdle = process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+		const prevGenericFirst = process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		const prevOpenAIFirst = process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS = "300000";
+		process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS = "420000";
+		delete process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		delete process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		try {
+			const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+			let promptStarted: (() => void) | undefined;
+			let releaseProvider: (() => void) | undefined;
+			const promptReady = new Promise<void>(resolve => {
+				promptStarted = resolve;
+			});
+			const providerGate = new Promise<void>(resolve => {
+				releaseProvider = resolve;
+			});
+			const handle = createMockSessionHandle(async ({ emit }) => {
+				emit({ type: "agent_start" });
+				emit({ type: "turn_start" });
+				promptStarted?.();
+				await providerGate;
+				emit(yieldSuccessEvent({ ok: true }, "tool-openai-idle-override"));
+			});
+			mockCreateAgentSession(handle.session);
+
+			const resultPromise = runSubprocess({
+				...baseOptions,
+				id: "agent-openai-idle-precedence",
+				settings,
+			});
+			await promptReady;
+			// Provider responds at 340s (past the 330s generic ceiling, within the 420s OpenAI idle budget).
+			await advanceTimersAndFlush(340_000);
+			expect(handle.abortCalls()).toBe(0);
+			releaseProvider?.();
+			const result = await resultPromise;
+			expect(result.aborted).toBe(false);
+			expect(result.abortReason).toBeUndefined();
+			expect(result.terminalOutcome).toBe("completed");
+		} finally {
+			if (prevGenericIdle === undefined) delete process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS;
+			else process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS = prevGenericIdle;
+			if (prevOpenAIIdle === undefined) delete process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+			else process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS = prevOpenAIIdle;
+			if (prevGenericFirst === undefined) delete process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			else process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS = prevGenericFirst;
+			if (prevOpenAIFirst === undefined) delete process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			else process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = prevOpenAIFirst;
+		}
+	});
 
 	it("aborts a stalled agent and surfaces a runtime-limit reason", async () => {
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 1_000 });
