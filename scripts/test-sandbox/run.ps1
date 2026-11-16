@@ -26,11 +26,13 @@ function Test-IsUnderOrSame([string]$childPath, [string]$parentPath) {
 }
 
 function Assert-NoJunctionOrReparse([string]$pathToCheck) {
-    $curr = [System.IO.Path]::GetFullPath($pathToCheck)
-    while ($curr -and (Test-Path -LiteralPath $curr)) {
-        $item = Get-Item -LiteralPath $curr -Force
-        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-            Die "Scratch path or ancestor is a junction/reparse point: $curr"
+    $curr = [System.IO.Path]::GetFullPath($pathToCheck).TrimEnd('\', '/')
+    while ($curr) {
+        if (Test-Path -LiteralPath $curr) {
+            $item = Get-Item -LiteralPath $curr -Force
+            if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                Die "Scratch path or ancestor is a junction/reparse point: $curr"
+            }
         }
         $parent = [System.IO.Path]::GetDirectoryName($curr)
         if (-not $parent -or $parent -eq $curr) {
@@ -40,10 +42,61 @@ function Assert-NoJunctionOrReparse([string]$pathToCheck) {
     }
 }
 
+function Assert-NoSourceReparsePoints([string]$dirPath) {
+    $rootItem = Get-Item -LiteralPath $dirPath -Force
+    if ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        Die "Source directory is a junction/reparse point: $dirPath"
+    }
+    $stack = [System.Collections.Generic.Stack[string]]::new()
+    $stack.Push($dirPath)
+    while ($stack.Count -gt 0) {
+        $current = $stack.Pop()
+        foreach ($entry in [System.IO.Directory]::EnumerateFileSystemEntries($current)) {
+            $attr = [System.IO.File]::GetAttributes($entry)
+            if ($attr -band [System.IO.FileAttributes]::ReparsePoint) {
+                Die "Source tree contains a junction/reparse point: $entry"
+            }
+            if ($attr -band [System.IO.FileAttributes]::Directory) {
+                $stack.Push($entry)
+            }
+        }
+    }
+}
+
+function Expand-WorkspacePattern([string]$repoDir, [string]$pattern) {
+    $norm = $pattern.Replace('/', '\').Trim('\')
+    if (-not $norm) { return @() }
+    $parts = $norm.Split('\')
+    $candidates = @($repoDir)
+    foreach ($part in $parts) {
+        $next = @()
+        foreach ($base in $candidates) {
+            if (-not (Test-Path -LiteralPath $base)) { continue }
+            if ($part -eq "*") {
+                foreach ($d in [System.IO.Directory]::EnumerateDirectories($base)) {
+                    $next += $d
+                }
+            } elseif ($part.Contains("*") -or $part.Contains("?")) {
+                foreach ($d in [System.IO.Directory]::EnumerateDirectories($base, $part)) {
+                    $next += $d
+                }
+            } else {
+                $sub = Join-Path $base $part
+                if (Test-Path -LiteralPath $sub -PathType Container) {
+                    $next += $sub
+                }
+            }
+        }
+        $candidates = $next
+    }
+    return $candidates
+}
+
 
 # Parse custom arguments manually from $args to support '--' syntax seamlessly
 $RepoRoot = $null
 $ScratchRoot = $null
+$TimeoutSec = if ($env:VEYYON_TEST_SANDBOX_TIMEOUT_SEC) { [int]$env:VEYYON_TEST_SANDBOX_TIMEOUT_SEC } else { 600 }
 $actualCmdArgs = @()
 
 $i = 0
@@ -68,6 +121,14 @@ while ($i -lt $args.Count) {
             $i++
             if ($i -lt $args.Count) {
                 $ScratchRoot = $args[$i]
+            }
+            $i++
+            continue
+        }
+        if ($arg -eq "-TimeoutSec" -or $arg -eq "--TimeoutSec" -or $arg -eq "-timeout-sec") {
+            $i++
+            if ($i -lt $args.Count) {
+                $TimeoutSec = [int]$args[$i]
             }
             $i++
             continue
@@ -129,6 +190,7 @@ try {
 } catch {
     Die "failed to create ScratchRoot directory '$ScratchRoot': $($_.Exception.Message)"
 }
+Assert-NoJunctionOrReparse $ScratchRoot
 
 # Compile / load P/Invoke AppContainer launcher
 $csPath = Join-Path $scriptDir "windows-appcontainer.cs"
@@ -158,14 +220,31 @@ if (-not (Test-IsUnderOrSame $sessionScratch $ScratchRoot)) {
 }
 
 try {
-    New-Item -ItemType Directory -Path $sessionScratch -Force | Out-Null
+    $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $ds = New-Object System.Security.AccessControl.DirectorySecurity
+    $ds.SetAccessRuleProtection($true, $false)
+    $inheritFlags = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $propFlags = [System.Security.AccessControl.PropagationFlags]::None
+    $allowType = [System.Security.AccessControl.AccessControlType]::Allow
+    $fullRights = [System.Security.AccessControl.FileSystemRights]::FullControl
+    $ds.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($currentUserSid, $fullRights, $inheritFlags, $propFlags, $allowType)))
+    $ds.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")), $fullRights, $inheritFlags, $propFlags, $allowType)))
+    $ds.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")), $fullRights, $inheritFlags, $propFlags, $allowType)))
+    [System.IO.Directory]::CreateDirectory($sessionScratch, $ds) | Out-Null
 } catch {
-    Die "failed to allocate session scratch directory '$sessionScratch': $($_.Exception.Message)"
+    Die "failed to allocate private session scratch directory '$sessionScratch': $($_.Exception.Message)"
+}
+
+Assert-NoJunctionOrReparse $sessionScratch
+if (Test-IsUnderOrSame $sessionScratch $realHome) {
+    Die "sessionScratch resolved under host user home: $sessionScratch"
 }
 
 $pSid = [IntPtr]::Zero
 $profileCreated = $false
 $sentinelPath = $null
+$exitCode = 1
+$cleanupFailed = $false
 
 try {
     # 1. Create AppContainer Profile
@@ -173,12 +252,23 @@ try {
     $profileCreated = $true
     Log-Message "Created AppContainer profile $profileName ($sidStr)"
 
-    # 2. Grant AppContainer Package SID to sessionScratch with (OI)(CI)(F) BEFORE populating
-    # This enables instant inheritance on all files copied or created subsequently without slow recursive icacls.
+    # 2. Grant AppContainer Package SID to private sessionScratch with (OI)(CI)(F) BEFORE populating
     $grantAcl = "*$sidStr`:(OI)(CI)(F)"
     & icacls $sessionScratch /grant $grantAcl /Q | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Die "icacls grant on scratch failed with exit code $LASTEXITCODE"
+    }
+
+    $scratchAcl = Get-Acl -LiteralPath $sessionScratch
+    if (-not $scratchAcl.AreAccessRulesProtected) {
+        Die "sessionScratch DACL inheritance is not protected: $sessionScratch"
+    }
+    $forbiddenSids = @("S-1-1-0", "S-1-5-32-545", "S-1-5-11")
+    foreach ($rule in $scratchAcl.Access) {
+        $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($forbiddenSids -contains $ruleSid) {
+            Die "sessionScratch DACL contains public/shared ACE ($ruleSid): $sessionScratch"
+        }
     }
 
     # 3. Stage Bun executable into scratch
@@ -198,19 +288,40 @@ try {
     # 5. Stage execution environment and workspace source trees into disposable scratch
     $stageRepo = Join-Path $sessionScratch "repo"
     New-Item -ItemType Directory -Path $stageRepo -Force | Out-Null
-    # Stage root configuration files (package.json, tsconfig.json, bunfig.toml, etc.)
-    Get-ChildItem -Path $RepoRoot -File | ForEach-Object {
-        Copy-Item -Path $_.FullName -Destination (Join-Path $stageRepo $_.Name) -Force
+    # Stage explicit allowlist of root runtime/build configuration files (never stage .env, .npmrc, etc.)
+    $allowedRootFiles = @(
+        "package.json",
+        "bunfig.toml",
+        "bun.lock",
+        "bun.lockb",
+        "tsconfig.json",
+        "tsconfig.base.json",
+        "biome.json",
+        "biome.jsonc",
+        "Cargo.toml",
+        "Cargo.lock"
+    )
+    foreach ($fileName in $allowedRootFiles) {
+        $srcFile = Join-Path $RepoRoot $fileName
+        if (Test-Path -LiteralPath $srcFile) {
+            $item = Get-Item -LiteralPath $srcFile -Force
+            if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                Die "Root config file is a junction/reparse point: $srcFile"
+            }
+            if (-not $item.PSIsContainer) {
+                Copy-Item -LiteralPath $srcFile -Destination (Join-Path $stageRepo $fileName) -Force
+            }
+        }
     }
 
-
-    # Robocopy workspace trees (packages, plugins, contracts, kernel, hosts, clients, tests, apps, scripts)
+    # Robocopy workspace trees (rejecting any source reparse points and passing /XJ)
     $workspaceDirs = @("packages", "plugins", "contracts", "kernel", "hosts", "clients", "tests", "apps", "scripts", "natives", "types")
     foreach ($d in $workspaceDirs) {
         $srcDir = Join-Path $RepoRoot $d
-        if (Test-Path $srcDir) {
+        if (Test-Path -LiteralPath $srcDir) {
+            Assert-NoSourceReparsePoints $srcDir
             $dstDir = Join-Path $stageRepo $d
-            & robocopy $srcDir $dstDir /E /MT:32 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+            & robocopy $srcDir $dstDir /E /XJ /MT:32 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
             if ($LASTEXITCODE -ge 8) {
                 Die "robocopy failed for $d with exit code $LASTEXITCODE"
             }
@@ -230,61 +341,51 @@ try {
         }
     }
 
-    # Setup workspace symlinks in staged node_modules (e.g. node_modules/argot, node_modules/@veyyon/*)
-    if (Test-Path $srcNm) {
-        # 1. Root-level workspace symlinks/junctions in node_modules (like argot, veybot-web)
-        Get-ChildItem -Path $srcNm | Where-Object { $_.LinkType } | ForEach-Object {
-            $t = $_.Target
-            $targetPath = if ($t -is [array]) { $t[0] } else { $t }
-            if ($targetPath) {
-                $targetPath = $targetPath -replace '^\\\\\?\\', ''
-                if (-not [System.IO.Path]::IsPathRooted($targetPath)) {
-                    $targetPath = [System.IO.Path]::GetFullPath((Join-Path $srcNm $targetPath))
-                }
-                if ($targetPath.StartsWith($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $rel = $targetPath.Substring($RepoRoot.Length).TrimStart('\', '/')
-                    $stagedTarget = Join-Path $stageRepo $rel
-                    if (Test-Path $stagedTarget) {
-                        $linkPath = Join-Path $dstNm $_.Name
-                        if (-not (Test-Path $linkPath)) {
-                            cmd.exe /c "mklink /J ""$linkPath"" ""$stagedTarget""" | Out-Null
-                            if ($LASTEXITCODE -ne 0) {
-                                Die "mklink /J failed for $linkPath with exit code $LASTEXITCODE"
-                            }
-                        }
-                    }
-                }
+    # Rebuild workspace aliases from staged package manifests rather than host shared-store target paths
+    $stagedRootPkgPath = Join-Path $stageRepo "package.json"
+    if ((Test-Path -LiteralPath $dstNm) -and (Test-Path -LiteralPath $stagedRootPkgPath)) {
+        $stagedRootPkg = Get-Content -LiteralPath $stagedRootPkgPath -Raw | ConvertFrom-Json
+        $wsPatterns = @()
+        if ($stagedRootPkg.workspaces) {
+            if ($stagedRootPkg.workspaces -is [System.Array]) {
+                $wsPatterns = $stagedRootPkg.workspaces
+            } elseif ($stagedRootPkg.workspaces.packages) {
+                $wsPatterns = $stagedRootPkg.workspaces.packages
             }
         }
+        $seenAliases = @{}
+        foreach ($pat in $wsPatterns) {
+            foreach ($wsDir in (Expand-WorkspacePattern $stageRepo ([string]$pat))) {
+                $wsPkgPath = Join-Path $wsDir "package.json"
+                if (-not (Test-Path -LiteralPath $wsPkgPath)) { continue }
+                $wsPkg = Get-Content -LiteralPath $wsPkgPath -Raw | ConvertFrom-Json
+                $pkgName = [string]$wsPkg.name
+                if (-not $pkgName -or $seenAliases.ContainsKey($pkgName)) { continue }
+                $seenAliases[$pkgName] = $true
 
-        # 2. Scoped workspace symlinks/junctions in node_modules/@veyyon
-        $srcNmVeyyon = Join-Path $srcNm "@veyyon"
-        $dstNmVeyyon = Join-Path $dstNm "@veyyon"
-        if (Test-Path $srcNmVeyyon) {
-            if (-not (Test-Path $dstNmVeyyon)) {
-                New-Item -ItemType Directory -Path $dstNmVeyyon -Force | Out-Null
-            }
-            Get-ChildItem -Path $srcNmVeyyon | ForEach-Object {
-                $t = $_.Target
-                $targetPath = if ($t -is [array]) { $t[0] } else { $t }
-                if ($targetPath) {
-                    $targetPath = $targetPath -replace '^\\\\\?\\', ''
-                    if (-not [System.IO.Path]::IsPathRooted($targetPath)) {
-                        $targetPath = [System.IO.Path]::GetFullPath((Join-Path $srcNmVeyyon $targetPath))
+                if ($pkgName.StartsWith("@") -and $pkgName.Contains("/")) {
+                    $parts = $pkgName.Split("/", 2)
+                    $scopeDir = Join-Path $dstNm $parts[0]
+                    if (-not (Test-Path -LiteralPath $scopeDir)) {
+                        New-Item -ItemType Directory -Path $scopeDir -Force | Out-Null
                     }
-                    if ($targetPath.StartsWith($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-                        $rel = $targetPath.Substring($RepoRoot.Length).TrimStart('\', '/')
-                        $stagedTarget = Join-Path $stageRepo $rel
-                        if (Test-Path $stagedTarget) {
-                            $linkPath = Join-Path $dstNmVeyyon $_.Name
-                            if (-not (Test-Path $linkPath)) {
-                                cmd.exe /c "mklink /J ""$linkPath"" ""$stagedTarget""" | Out-Null
-                                if ($LASTEXITCODE -ne 0) {
-                                    Die "mklink /J failed for $linkPath with exit code $LASTEXITCODE"
-                                }
-                            }
-                        }
+                    $linkPath = Join-Path $scopeDir $parts[1]
+                } else {
+                    $linkPath = Join-Path $dstNm $pkgName
+                }
+
+                if (Test-Path -LiteralPath $linkPath) {
+                    $existingItem = Get-Item -LiteralPath $linkPath -Force
+                    if ($existingItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                        [System.IO.Directory]::Delete($linkPath)
+                    } else {
+                        Remove-Item -LiteralPath $linkPath -Recurse -Force
                     }
+                }
+
+                cmd.exe /c "mklink /J ""$linkPath"" ""$wsDir""" | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Die "mklink /J failed for workspace alias $pkgName -> $wsDir with exit code $LASTEXITCODE"
                 }
             }
         }
@@ -309,12 +410,19 @@ try {
         $actualCmdArgs[0] = $scratchBun
     }
 
-    # Remap test paths in arguments if they point to RepoRoot
+    # Remap test paths in arguments using strict directory boundary containment
     $remappedArgs = @()
+    $repoRootNorm = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
     foreach ($cmdArg in $actualCmdArgs) {
         $val = $cmdArg
-        if ($val.StartsWith($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $val = Join-Path $stageRepo $val.Substring($RepoRoot.Length).TrimStart('\')
+        if ($val -match '^[A-Za-z]:[\\/]' -and (Test-IsUnderOrSame $val $repoRootNorm)) {
+            $fullVal = [System.IO.Path]::GetFullPath($val).TrimEnd('\', '/')
+            if ($fullVal.Equals($repoRootNorm, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $val = $stageRepo
+            } else {
+                $rel = $fullVal.Substring($repoRootNorm.Length).TrimStart('\', '/')
+                $val = Join-Path $stageRepo $rel
+            }
         }
         $remappedArgs += $val
     }
@@ -446,6 +554,7 @@ child.on('error', (err) => {
     # Launch inside AppContainer
     $outLog = Join-Path $sessionScratch "guest_out.log"
     $launchCmd = 'cmd.exe /c ""' + $scratchBun + '" "' + $guestProbeScript + '" > "' + $outLog + '" 2>&1"'
+    $timeoutMs = if ($TimeoutSec -gt 0) { $TimeoutSec * 1000 } else { 600000 }
     $exitCode = [AppContainerLauncher]::Launch(
         $pSid,
         "C:\Windows\System32\cmd.exe",
@@ -453,23 +562,43 @@ child.on('error', (err) => {
         $stageRepo,
         $cleanEnv,
         $false,
-        $true
+        $true,
+        $timeoutMs
     )
 
-    if (Test-Path $outLog) {
-        $content = Get-Content $outLog -Raw
+    if (Test-Path -LiteralPath $outLog) {
+        $content = Get-Content -LiteralPath $outLog -Raw
         [Console]::Out.Write($content)
     }
-
-    exit $exitCode
 } finally {
-    # Lifecycle cleanup
-    if ($sentinelPath -and (Test-Path $sentinelPath)) {
+    # Lifecycle cleanup: delete only own sentinel, verify profile & scratch removal
+    if ($sentinelPath -and (Test-Path -LiteralPath $sentinelPath)) {
+        try {
+            Remove-Item -LiteralPath $sentinelPath -Force -ErrorAction Stop
+        } catch {
+            Log-Message "cleanup error: failed to remove own sentinel '$sentinelPath': $($_.Exception.Message)"
+            $cleanupFailed = $true
+        }
     }
     if ($profileCreated) {
-        [AppContainerLauncher]::DeleteProfile($profileName)
+        try {
+            [AppContainerLauncher]::DeleteProfile($profileName)
+        } catch {
+            Log-Message "cleanup error: failed to delete AppContainer profile '$profileName': $($_.Exception.Message)"
+            $cleanupFailed = $true
+        }
     }
-    if (Test-Path $sessionScratch) {
-        Remove-Item -Recurse -Force $sessionScratch -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $sessionScratch) {
+        try {
+            Remove-Item -LiteralPath $sessionScratch -Recurse -Force -ErrorAction Stop
+        } catch {
+            Log-Message "cleanup error: failed to remove session scratch '$sessionScratch': $($_.Exception.Message)"
+            $cleanupFailed = $true
+        }
     }
 }
+
+if ($cleanupFailed -and $exitCode -eq 0) {
+    exit 1
+}
+exit $exitCode

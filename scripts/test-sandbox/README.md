@@ -132,13 +132,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-sandbox/run.ps1
    Access tokens pass through `UpdateProcThreadAttribute` with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`.
 2. Clean environment and scratch staging:
    Environment variables inherit an explicit whitelist (`SystemRoot`, `PATH`, `ComSpec`).
-   Directories (`HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TMP`, `TEMP`) point to disposable scratch under `ProgramData`.
-   The repository source trees and workspace symlinks stage into scratch before launch.
-3. Denied sentinel admission:
-   `run.ps1` creates an unreadable host sentinel file in the operator's real user profile.
-   The in-container guest entry tests real home and sentinel accessibility before admitting test execution.
-   If any host path is readable, execution halts with code 126.
-4. Exact limitations:
+   Directories (`HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TMP`, `TEMP`) point to a private-DACL disposable scratch directory under `ProgramData` (inheritance disabled, no public ACEs, ancestor reparse points rejected).
+   Only allowlisted root runtime configs (`package.json`, `bunfig.toml`, `tsconfig*.json`, `biome.json*`, `Cargo.*`, lockfiles) and reparse-free workspace source trees stage into scratch; workspace aliases in `node_modules` are rebuilt from staged package manifests.
+3. Denied sentinel admission and job lifecycle:
+   `run.ps1` creates a temporary host sentinel in the operator's real user profile and removes only that file in `finally`.
+   The in-container guest entry tests real home and sentinel accessibility before admitting test execution; if any host path is readable, execution halts with code 126.
+   `AppContainerLauncher` assigns the suspended guest to a kill-on-close Windows Job Object (no breakaway) before resuming, terminating all descendants on exit or timeout.
    Windows kernel isolation does not allow write access to `C:\` outside the granted scratch directory.
    Tests that attempt `fs.mkdir` directly on `C:\` (such as `path-literal-colon-selector.test.ts` fixture `C:\veyyon-reg-*`) trigger real-data tripwires or filesystem permission errors.
    Pure kernel isolation disallows runtime monkeypatching or fake redirection shims.

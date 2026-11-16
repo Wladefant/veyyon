@@ -8,11 +8,16 @@ using System.Text;
 
 public static class AppContainerLauncher
 {
+    private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     private const int PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009;
     private const uint INFINITE = 0xFFFFFFFF;
+    private const uint WAIT_TIMEOUT = 0x00000102;
+    private const uint WAIT_FAILED = 0xFFFFFFFF;
+    private const int JobObjectExtendedLimitInformation = 9;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct STARTUPINFOEX
@@ -60,6 +65,42 @@ public static class AppContainerLauncher
         public IntPtr Capabilities;
         public uint CapabilityCount;
         public uint Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
     }
 
     [DllImport("userenv.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -137,6 +178,29 @@ public static class AppContainerLauncher
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObjectW(IntPtr lpJobAttributes, string lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        IntPtr hJob,
+        int JobObjectInfoClass,
+        IntPtr lpJobObjectInfo,
+        uint cbJobObjectInfoLength
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateJobObject(IntPtr hJob, uint uExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(IntPtr hThread);
+
 
     public static string CreateProfile(string profileName, out IntPtr pSid)
     {
@@ -179,11 +243,13 @@ public static class AppContainerLauncher
 
     public static void DeleteProfile(string profileName)
     {
-        try
+        const int ERROR_FILE_NOT_FOUND = unchecked((int)0x80070002);
+        const int ERROR_PATH_NOT_FOUND = unchecked((int)0x80070003);
+        int hr = DeleteAppContainerProfile(profileName);
+        if (hr != 0 && hr != ERROR_FILE_NOT_FOUND && hr != ERROR_PATH_NOT_FOUND)
         {
-            DeleteAppContainerProfile(profileName);
+            throw new Win32Exception(hr, string.Format("DeleteAppContainerProfile failed with HRESULT 0x{0:X8}", hr));
         }
-        catch { }
     }
 
 
@@ -205,13 +271,31 @@ public static class AppContainerLauncher
         string workingDirectory,
         IDictionary<string, string> environmentVariables = null,
         bool inheritHandles = false,
-        bool hideWindow = true)
+        bool hideWindow = true,
+        int timeoutMs = 600000)
     {
         IntPtr lpAttributeList = IntPtr.Zero;
         IntPtr lpEnvironment = IntPtr.Zero;
+        IntPtr hJob = IntPtr.Zero;
+        IntPtr lpJobInfo = IntPtr.Zero;
         PROCESS_INFORMATION procInfo = new PROCESS_INFORMATION();
         try
         {
+            hJob = CreateJobObjectW(IntPtr.Zero, null);
+            if (hJob == IntPtr.Zero)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObjectW failed");
+            }
+
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            jobInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            int jobInfoSize = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+            lpJobInfo = Marshal.AllocHGlobal(jobInfoSize);
+            Marshal.StructureToPtr(jobInfo, lpJobInfo, false);
+            if (!SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, lpJobInfo, (uint)jobInfoSize))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject failed");
+            }
             SECURITY_CAPABILITIES secCaps = new SECURITY_CAPABILITIES
             {
                 AppContainerSid = pAppContainerSid,
@@ -253,7 +337,7 @@ public static class AppContainerLauncher
             startupInfoEx.StartupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFOEX));
             startupInfoEx.lpAttributeList = lpAttributeList;
 
-            uint creationFlags = EXTENDED_STARTUPINFO_PRESENT;
+            uint creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
             if (hideWindow)
             {
                 creationFlags |= CREATE_NO_WINDOW;
@@ -304,7 +388,33 @@ public static class AppContainerLauncher
                 throw new Win32Exception(Marshal.GetLastWin32Error(), string.Format("CreateProcessW failed for {0}", applicationPath));
             }
 
-            WaitForSingleObject(procInfo.hProcess, INFINITE);
+            if (!AssignProcessToJobObject(hJob, procInfo.hProcess))
+            {
+                int err = Marshal.GetLastWin32Error();
+                TerminateProcess(procInfo.hProcess, 1);
+                throw new Win32Exception(err, "AssignProcessToJobObject failed");
+            }
+
+            if (ResumeThread(procInfo.hThread) == 0xFFFFFFFF)
+            {
+                int err = Marshal.GetLastWin32Error();
+                TerminateJobObject(hJob, 1);
+                throw new Win32Exception(err, "ResumeThread failed");
+            }
+
+            uint waitMs = timeoutMs > 0 ? (uint)timeoutMs : INFINITE;
+            uint waitResult = WaitForSingleObject(procInfo.hProcess, waitMs);
+            if (waitResult == WAIT_TIMEOUT)
+            {
+                TerminateJobObject(hJob, 124);
+                return 124;
+            }
+            if (waitResult == WAIT_FAILED)
+            {
+                int err = Marshal.GetLastWin32Error();
+                TerminateJobObject(hJob, 1);
+                throw new Win32Exception(err, "WaitForSingleObject failed");
+            }
 
             uint exitCode;
             if (!GetExitCodeProcess(procInfo.hProcess, out exitCode))
@@ -312,13 +422,19 @@ public static class AppContainerLauncher
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "GetExitCodeProcess failed");
             }
 
+            TerminateJobObject(hJob, exitCode);
             return (int)exitCode;
         }
         finally
         {
+            if (hJob != IntPtr.Zero) CloseHandle(hJob);
             if (procInfo.hProcess != IntPtr.Zero) CloseHandle(procInfo.hProcess);
             if (procInfo.hThread != IntPtr.Zero) CloseHandle(procInfo.hThread);
 
+            if (lpJobInfo != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(lpJobInfo);
+            }
             if (lpAttributeList != IntPtr.Zero)
             {
                 DeleteProcThreadAttributeList(lpAttributeList);
