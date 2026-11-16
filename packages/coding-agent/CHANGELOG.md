@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.10.3] - 2026-11-16
+
 ### Fixed
 
 - `history://` reads stream stored session prefixes lazily and reuse a validated directory index so post-restart reads stay within the 5-second timeout ([PR #1125](https://github.com/Wladefant/veyyon/pull/1125), [Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
@@ -11,6 +13,7 @@
 - Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
 - Release settled idle failed predecessors on `successorOf` (with conversation ownership and turn-sequence ABA guards) and on settled `job cancel`, propagating disposal failures ([PR #1144](https://github.com/Wladefant/veyyon/pull/1144)).
 - Scope non-UsageLimit retry fallback cooldowns to the active session instead of globally suppressing selectors in `ModelRegistry` ([PR #1143](https://github.com/Wladefant/veyyon/pull/1143)).
+
 ## [1.10.2] - 2026-11-15
 
 ### Fixed
@@ -34,8 +37,6 @@
 ### Fixed
 
 - Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
-### Fixed
-
 - Bounded `history://` reads stop markdown rendering after the requested prefix and keep later messages untouched. History discovery reads child directories in bounded concurrent batches and deduplicates registry roots without quadratic scans ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
 
 ## [1.9.3] - 2026-11-13
