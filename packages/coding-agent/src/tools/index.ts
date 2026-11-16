@@ -297,6 +297,12 @@ export interface ToolSession extends ToolSessionLocalState {
 	/** Get session ID */
 	getSessionId?: () => string | null;
 	/**
+	 * Exact AgentSession that owns this ToolSession. It is absent before session
+	 * construction; identity-sensitive callers must compare this object with the
+	 * registry's current actor rather than trusting stable IDs alone.
+	 */
+	getOwningAgentSession?: () => { readonly isDisposed: boolean } | undefined;
+	/**
 	 * Whether a `/` command has granted this agent type for the turn in flight.
 	 *
 	 * `agent.agents.<name>.enabled` governs THE MODEL: enabled means the model

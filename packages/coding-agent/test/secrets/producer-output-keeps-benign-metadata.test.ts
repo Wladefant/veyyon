@@ -1,4 +1,5 @@
-import { ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard, sanitizeProducerJson } from "../../src/secrets/producer-output";
+import { PR1699_BODY_FIXTURE } from "./fixtures/pr1699-body-fixture";
 import { describe, expect, it } from "bun:test";
 import { redactProviderSecrets } from "@veyyon/ai/error/error-body";
 
@@ -33,6 +34,38 @@ describe("producer output keeps benign metadata", () => {
 
 		expect(parsed.token).not.toContain(token);
 		expect(parsed.commit).toBe(commit);
+	});
+
+	it("keeps gcloud log fields readable while masking auth values", () => {
+		const token = "opaqueAuthToken1234567890";
+		const input = JSON.stringify({
+			timestamp: "2026-01-02T03:04:05Z",
+			severity: "ERROR",
+			message: "request failed",
+			jsonPayload: {
+				auth: token,
+				authorization: { principal: "alice@example.test", value: token },
+			},
+		});
+		const output = guard.sanitize(input);
+		expect(output).not.toContain(token);
+		expect(output).toContain('"auth":"[REDACTED]"');
+		expect(output).toContain('"authorization":"[REDACTED]"');
+		expect(output).toContain('"timestamp"');
+		expect(output).toContain('"severity":"ERROR"');
+		expect(output).toContain('"message":"request failed"');
+	});
+
+	it("keeps structured UTC window metadata outside environment inventory matching", () => {
+		const record = {
+			until: "2026-11-10T13:34:56Z",
+			since15: "2026-11-10T13:19:56Z",
+			since60: "2026-11-10T12:34:56Z",
+		};
+
+		expect(guard.sanitize(JSON.stringify(record))).toBe(JSON.stringify(record));
+		expect(guard.sanitize("T=2026-11-10T13:34:56Z\nSTART15=2026-11-10T13:19:56Z\nSTART60=2026-11-10T12:34:56Z\n"))
+			.toBe("[credential output withheld]");
 	});
 
 	it("keeps plain defs-style metadata unchanged", () => {
@@ -179,6 +212,392 @@ describe("producer output keeps benign metadata", () => {
 		const output = ownerGuard.sanitize(`before token=${token} after`);
 		expect(output).not.toContain(token);
 		expect(output).toContain(" after");
+	});
+	it("preserves benign Markdown headings and labels for Driver and Native Authorization", () => {
+		const benignInputs = [
+			"- **Driver & Native Authorization:**\n",
+			"- **Driver & Native Authorization:**",
+			"- **Driver & Native Authorization**:\n",
+			"- **Driver & Native Authorization**:",
+			"## Driver & Native Authorization:\n",
+			"### Driver & Native Authorization:\n",
+			"# Driver & Native Authorization:\n",
+			"## Authorization:\n",
+			"### Authorization:\n",
+			"# Authorization:\n",
+			"- **Authorization:**\n",
+			"- **Authorization:**",
+			"- **Authorization**:\n",
+			"- **Authorization**:",
+			"**Authorization:**\n",
+			"**Authorization:**",
+			"**Authorization**:\n",
+			"**Authorization**:",
+		];
+
+		for (const input of benignInputs) {
+			expect(guard.sanitize(input)).toBe(input);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).toBe(input);
+			}
+		}
+	});
+
+	it("protects real Authorization credentials in headings and preceding prose across splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const counterexamples = [
+			`# Authorization: ${token}\n`,
+			`## Authorization: Bearer ${token}\n`,
+			`### Authorization: Basic ${basicAuth}\n`,
+			`header Authorization: ${token}\n`,
+			`sent Authorization: Bearer ${token}\n`,
+			`received Authorization: Basic ${basicAuth}\n`,
+		];
+
+		for (const input of counterexamples) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			const unownedGuard = new ProducerOutputGuard();
+			const unownedSanitized = unownedGuard.sanitize(input);
+			expect(unownedSanitized).not.toContain(token);
+			expect(unownedSanitized).not.toContain(basicAuth);
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+
+	it("preserves unrelated Markdown colon forms unchanged", () => {
+		const unrelated = [
+			"Note:**important**\n",
+			"Warning:**caution**\n",
+			"section:**title**\n",
+			"- Note:**important**\n",
+			"- Warning:**caution**\n",
+		];
+		for (const input of unrelated) {
+			expect(guard.sanitize(input)).toBe(input);
+		}
+	});
+
+	it("protects real Authorization credentials when wrapped in Markdown across splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const credentialInputs = [
+			`Authorization: Bearer ${token}\n`,
+			`Authorization: Basic ${basicAuth}\n`,
+			`Authorization: ${token}\n`,
+			`**Authorization:** Bearer ${token}\n`,
+			`**Authorization**: Bearer ${token}\n`,
+			`- **Authorization:** Bearer ${token}\n`,
+			`- **Authorization**: Bearer ${token}\n`,
+			`**Authorization:** Basic ${basicAuth}\n`,
+			`**Authorization**: Basic ${basicAuth}\n`,
+			`- **Authorization:** Basic ${basicAuth}\n`,
+			`- **Authorization**: Basic ${basicAuth}\n`,
+			`**Authorization:** ${token}\n`,
+			`**Authorization**: ${token}\n`,
+			`- **Authorization:** ${token}\n`,
+			`- **Authorization**: ${token}\n`,
+		];
+
+		for (const input of credentialInputs) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+	it("redacts mixed-form valued Markdown colon placements", () => {
+		const mixedValued = "**Authorization:** valueOne\n**Authorization**: valueTwo\n";
+		expect(guard.sanitize(mixedValued)).toBe(
+			"**Authorization:** [REDACTED]\n**Authorization**: [REDACTED]\n",
+		);
+	});
+
+	it("protects real credentials in compound labels across schemes and splits", () => {
+		const token = "opaqueSyntheticAuthToken1234567890";
+		const basicAuth = "dXNlcjpwYXNz";
+		const compoundCredentials = [
+			`- **Driver & Native Authorization:** Bearer ${token}\n`,
+			`- **Driver & Native Authorization**: Bearer ${token}\n`,
+			`- **Driver & Native Authorization:** Basic ${basicAuth}\n`,
+			`- **Driver & Native Authorization**: Basic ${basicAuth}\n`,
+			`- **Driver & Native Authorization:** Digest ${token}\n`,
+			`- **Driver & Native Authorization**: Digest ${token}\n`,
+			`- **Driver & Native Authorization:** Negotiate ${token}\n`,
+			`- **Driver & Native Authorization**: Negotiate ${token}\n`,
+			`- **Driver & Native Authorization:** Token ${token}\n`,
+			`- **Driver & Native Authorization**: Token ${token}\n`,
+		];
+
+		for (const input of compoundCredentials) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain(token);
+			expect(sanitized).not.toContain(basicAuth);
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain(token);
+				expect(streamed).not.toContain(basicAuth);
+			}
+		}
+	});
+	it("retains custom owner redactions spanning Markdown authorization without sentinel interference", () => {
+		const customLiteral = "Authorization:** customSecretKey12345";
+		const customRedacted = "Authorization:** [CUSTOM_REDACTED_LITERAL]";
+		const customRedactor = (text: string) => text.replaceAll(customLiteral, customRedacted);
+		const customGuard = new ProducerOutputGuard(customRedactor);
+
+		const input = `- **Driver & Native ${customLiteral}\n`;
+		const sanitized = customGuard.sanitize(input);
+		expect(sanitized).not.toContain("customSecretKey12345");
+
+		for (let split = 0; split <= input.length; split++) {
+			const streamGuard = new ProducerOutputGuard(customRedactor);
+			const streamed =
+				streamGuard.push(input.slice(0, split)) +
+				streamGuard.push(input.slice(split)) +
+				streamGuard.finish();
+			expect(streamed).not.toContain("customSecretKey12345");
+		}
+	});
+
+	it("preserves user-supplied literal U+E000 sentinels without corruption", () => {
+		const inputWithSentinel =
+			"- **Driver & Native Authorization:** Bearer opaqueToken1234567890\n- **Authorization\uE000**: user literal \uE000 preserved\n";
+		const sanitized = guard.sanitize(inputWithSentinel);
+		expect(sanitized).toContain("\uE000");
+		expect(sanitized).toContain("**Authorization\uE000**: user literal \uE000 preserved");
+		expect(sanitized).not.toContain("opaqueToken1234567890");
+
+		for (let split = 0; split <= inputWithSentinel.length; split++) {
+			const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+			const streamed =
+				streamGuard.push(inputWithSentinel.slice(0, split)) +
+				streamGuard.push(inputWithSentinel.slice(split)) +
+				streamGuard.finish();
+			expect(streamed).toContain("\uE000");
+			expect(streamed).toContain("**Authorization\uE000**: user literal \uE000 preserved");
+			expect(streamed).not.toContain("opaqueToken1234567890");
+		}
+	});
+	// WHY: Authorization context must cover unknown values and physical line breaks.
+	// These cases exercise owner and unowned paths, not encoded exfiltration.
+	it("fails closed on opaque compound authorization values across every split", () => {
+		for (const label of ["- **Driver & Native Authorization:**", "- **Driver & Native Authorization**:"]) {
+			for (const value of ["arbitraryCredentialABC123"]) {
+				const input = `${label} ${value}\n`;
+				for (const owner of [undefined, redactProviderSecrets]) {
+					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
+					for (let split = 0; split <= input.length; split++) {
+						const stream = new ProducerOutputGuard(owner);
+						const output = stream.push(input.slice(0, split)) + stream.push(input.slice(split)) + stream.finish();
+						expect(output).not.toContain(value);
+					}
+				}
+			}
+		}
+	});
+
+	it("protects the immediate physical value after an empty authorization heading", () => {
+		const value = "arbitraryCredentialABC123";
+		for (const label of ["### Authorization:", "- **Authorization:**", "- **Driver & Native Authorization**:"]) {
+			for (const separator of ["\n", "\r\n"]) {
+				const input = `${label}${separator}  ${value}\n`;
+				for (const owner of [undefined, redactProviderSecrets]) {
+					expect(new ProducerOutputGuard(owner).sanitize(input)).not.toContain(value);
+					for (let split = 0; split <= input.length; split++) {
+						const stream = new ProducerOutputGuard(owner);
+						const output = stream.push(input.slice(0, split)) + stream.push(input.slice(split)) + stream.finish();
+						expect(output).not.toContain(value);
+					}
+					const stream = new ProducerOutputGuard(owner);
+					let output = "";
+					for (const character of input) output += stream.push(character);
+					output += stream.finish();
+					expect(output).not.toContain(value);
+				}
+			}
+		}
+	});
+
+	it("never emits an injected sentinel when an owner rewrites Markdown delimiters", () => {
+		for (const rewrite of [
+			(text: string) => redactProviderSecrets(text).replaceAll("**:", ":"),
+			(text: string) => redactProviderSecrets(text).replaceAll("**:", ""),
+		]) {
+			const input = "- **Driver & Native Authorization:**\n";
+			const stream = new ProducerOutputGuard(rewrite);
+			expect(stream.sanitize(input)).not.toMatch(/[\uE000-\uE0FF]/);
+			expect(stream.push(input) + stream.finish()).not.toMatch(/[\uE000-\uE0FF]/);
+		}
+	});
+
+	it("preserves benign authorization headings and resets across splits", () => {
+		const benignInputs = [
+			"### Authorization:\n\n## Next steps\nReview the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n\n  Native drivers require kernel approval.\n",
+			"### Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- Authorization:\n\n- Next steps:\n  Review the documented permissions.\n",
+			"- Authorization:\n\n  arbitraryCredentialABC123\n",
+			"### Authorization:\n## Next steps\nReview the documented permissions.\n",
+			"- **Driver & Native Authorization:**\n- Next bullet item\n",
+			"- Authorization:\n- Next bullet item\n",
+			"### Authorization:\n- Next bullet item\n",
+		];
+		for (const input of benignInputs) {
+			for (const owner of [undefined, redactProviderSecrets]) {
+				const sanitized = new ProducerOutputGuard(owner).sanitize(input);
+				expect(sanitized).toBe(input);
+
+				const lineStream = new ProducerOutputGuard(owner);
+				const lines = input.split(/(?<=\n)/);
+				let lineOutput = "";
+				for (const line of lines) {
+					lineOutput += lineStream.push(line);
+				}
+				lineOutput += lineStream.finish();
+				expect(lineOutput).toBe(input);
+
+				for (let split = 0; split <= input.length; split++) {
+					const splitStream = new ProducerOutputGuard(owner);
+					const streamed =
+						splitStream.push(input.slice(0, split)) +
+						splitStream.push(input.slice(split)) +
+						splitStream.finish();
+					expect(streamed).toBe(input);
+				}
+			}
+		}
+	});
+
+	it("preserves PR 1699 body with Source commit pin metadata across sanitize, JSON wrapper, and stream splits", () => {
+		expect(guard.sanitize(PR1699_BODY_FIXTURE)).toBe(PR1699_BODY_FIXTURE);
+
+		const jsonWrapped = JSON.stringify({ body: PR1699_BODY_FIXTURE });
+		expect(guard.sanitize(jsonWrapped)).toBe(jsonWrapped);
+		expect(sanitizeProducerJson({ body: PR1699_BODY_FIXTURE }, guard)).toEqual({
+			body: PR1699_BODY_FIXTURE,
+		});
+
+		const representativeDelimiters = [
+			"\n",
+			"\n\n",
+			"- Source pin:",
+			"Source pin: [",
+			"https://github.com",
+			"74e89ad9f7d2467f5449590ebe4b0b378902de45",
+			"## CI evidence",
+			"## Existing controls",
+			"## Native AFTER checklist",
+		];
+		for (const delim of representativeDelimiters) {
+			let pos = 0;
+			while (true) {
+				const idx = PR1699_BODY_FIXTURE.indexOf(delim, pos);
+				if (idx === -1) break;
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(PR1699_BODY_FIXTURE.slice(0, idx)) +
+					streamGuard.push(PR1699_BODY_FIXTURE.slice(idx)) +
+					streamGuard.finish();
+				expect(streamed).toBe(PR1699_BODY_FIXTURE);
+				pos = idx + delim.length;
+				if (delim === "\n" && pos > 500) break;
+			}
+		}
+	});
+
+	it("withholds ordinary pin bracket literals without Source commit pin context", () => {
+		const plainPin = "pin: [1234, 5678]";
+		expect(guard.sanitize(plainPin)).toBe(BLOCKED_OUTPUT_RECORD);
+
+		const bulletPin =
+			"- pin: [pinned source commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad9f7d2467f5449590ebe4b0b378902de45)\n";
+		expect(guard.sanitize(bulletPin)).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+
+	it("redacts numeric Source pin values that lack a markdown commit link", () => {
+		const bulletNumeric = "- Source pin: 123456\n";
+		expect(guard.sanitize(bulletNumeric)).toBe("- Source pin: [REDACTED]\n");
+
+		const plainNumeric = "Source pin: 987654\n";
+		expect(guard.sanitize(plainNumeric)).toBe("Source pin: [REDACTED]\n");
+	});
+
+	it("withholds Source pin links that do not link to a 40-hex commit", () => {
+		const treeLink = "- Source pin: [pinned branch](https://github.com/Wladefant/heylolo-app/tree/main)\n";
+		expect(guard.sanitize(treeLink)).toBe(BLOCKED_OUTPUT_RECORD);
+
+		const issueLink = "- Source pin: [issue](https://github.com/Wladefant/heylolo-app/issues/1224)\n";
+		expect(guard.sanitize(issueLink)).toBe(BLOCKED_OUTPUT_RECORD);
+
+		const shortCommitLink =
+			"- Source pin: [short commit](https://github.com/Wladefant/heylolo-app/commit/74e89ad)\n";
+		expect(guard.sanitize(shortCommitLink)).toBe(BLOCKED_OUTPUT_RECORD);
+	});
+
+	it("redacts Source pin values when a PIN appears in the link label or after the commit link", () => {
+		const commitUrl = "https://github.com/Wladefant/veyyon/commit/1a99fe8224c857bc61c18c136a134e59f4dd9ca2";
+		const trailingPin = `- Source pin: [pinned source commit](${commitUrl}) 843219\n`;
+		const labelPin = `- Source pin: [843219](${commitUrl})\n`;
+		const trailingToken = `- Source pin: [pinned source commit](${commitUrl}) token=ghp_syntheticOpaqueTokenVal123456789012\n`;
+
+		for (const input of [trailingPin, labelPin, trailingToken]) {
+			const sanitized = guard.sanitize(input);
+			expect(sanitized).not.toContain("843219");
+			expect(sanitized).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
+
+			const jsonWrapped = { message: input, sibling: "safe" };
+			const sanitizedJson = sanitizeProducerJson(jsonWrapped, guard) as typeof jsonWrapped;
+			expect(sanitizedJson.message).not.toContain("843219");
+			expect(sanitizedJson.message).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
+			expect(guard.sanitize(JSON.stringify(jsonWrapped))).not.toContain("843219");
+
+			for (let split = 0; split <= input.length; split++) {
+				const streamGuard = new ProducerOutputGuard(redactProviderSecrets);
+				const streamed =
+					streamGuard.push(input.slice(0, split)) +
+					streamGuard.push(input.slice(split)) +
+					streamGuard.finish();
+				expect(streamed).not.toContain("843219");
+				expect(streamed).not.toContain("ghp_syntheticOpaqueTokenVal123456789012");
+			}
+		}
+	});
+	it("withholds output when three ENV assignments are appended to the body", () => {
+		const textWithEnv = PR1699_BODY_FIXTURE + "\nENV_A=1\nENV_B=2\nENV_C=3\n";
+		expect(guard.sanitize(textWithEnv)).toBe(BLOCKED_OUTPUT_RECORD);
 	});
 
 });

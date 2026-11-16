@@ -76,6 +76,7 @@ export async function buildInMemoryTextResult(
 		ignoreResultLimits?: boolean;
 		raw?: boolean;
 		immutable?: boolean;
+		contentIncomplete?: boolean;
 	},
 ): Promise<AgentToolResult<ReadToolDetails>> {
 	const displayMode = resolveFileDisplayMode(session, {
@@ -192,7 +193,13 @@ export async function buildInMemoryTextResult(
 		details.truncation = truncationSummary(truncation);
 		truncationInfo = {
 			result: truncation,
-			options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines, maxBytes: budget },
+			options: {
+				direction: "head",
+				startLine: startLineDisplay,
+				totalFileLines: options.contentIncomplete ? undefined : totalLines,
+				totalLinesUnknown: options.contentIncomplete,
+				maxBytes: budget,
+			},
 		};
 	} else if (truncation.truncated) {
 		const outputLines = truncation.outputLines ?? countTextLines(truncation.content);
@@ -206,7 +213,13 @@ export async function buildInMemoryTextResult(
 		details.truncation = truncationSummary(truncation);
 		truncationInfo = {
 			result: truncation,
-			options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines, maxBytes: budget },
+			options: {
+				direction: "head",
+				startLine: startLineDisplay,
+				totalFileLines: options.contentIncomplete ? undefined : totalLines,
+				totalLinesUnknown: options.contentIncomplete,
+				maxBytes: budget,
+			},
 		};
 	} else if (userLimitedLines !== undefined && startLine + userLimitedLines < allLines.length) {
 		const remaining = allLines.length - (startLine + userLimitedLines);
@@ -218,7 +231,9 @@ export async function buildInMemoryTextResult(
 		} else {
 			outputText = formatLineEntries(await buildLineEntries(endLine), startLineDisplay);
 		}
-		outputText += `\n\n[${formatMoreLines(remaining)} in ${options.entityLabel}. Use :${nextOffset} to continue]`;
+		outputText += options.contentIncomplete
+			? `\n\n[More lines in ${options.entityLabel}; total line count is unknown. Use :${nextOffset} to continue]`
+			: `\n\n[${formatMoreLines(remaining)} in ${options.entityLabel}. Use :${nextOffset} to continue]`;
 	} else {
 		if (options.raw === true) {
 			rawSeenLines = contiguousLineNumbers(startLineDisplay, endLine - startLine);
@@ -349,6 +364,7 @@ export async function buildInMemoryResult(
 		ignoreResultLimits?: boolean;
 		raw?: boolean;
 		immutable?: boolean;
+		contentIncomplete?: boolean;
 	},
 ): Promise<AgentToolResult<ReadToolDetails>> {
 	if (isMultiRange(parsed) && parsed.kind === "lines") {

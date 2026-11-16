@@ -418,7 +418,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			};
 
 			if let Some(path) = path {
-				self.execute_via_external(&path)
+				self.execute_via_external(&path).await
 			} else {
 				// Bash updates $_ even when the command is not found, so mirror
 				// that here before reporting the error.
@@ -433,7 +433,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			}
 		} else {
 			let command_name = PathBuf::from(self.command_name.clone());
-			self.execute_via_external(command_name.as_path())
+			self.execute_via_external(command_name.as_path()).await
 		}
 	}
 
@@ -471,17 +471,43 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 		args: Vec<CommandArg>,
 	) -> ExecutionSpawnResult {
 		let last_arg = Self::take_last_arg(&args);
+		let rt = tokio::runtime::Handle::current();
+		#[cfg(not(windows))]
 		let join_handle = tokio::task::spawn_blocking(move || {
 			let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
-
-			let rt = tokio::runtime::Handle::current();
 			let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
-
-			// Update $_ after command execution.
 			shell.update_last_arg_variable(last_arg);
-
 			result
 		});
+		#[cfg(windows)]
+		let join_handle = {
+			static BUILTIN_SEMAPHORE: std::sync::LazyLock<
+				std::sync::Arc<tokio::sync::Semaphore>,
+			> = std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(32)));
+			tokio::spawn(async move {
+				let permit = std::sync::Arc::clone(&BUILTIN_SEMAPHORE)
+					.acquire_owned()
+					.await
+					.map_err(|err| std::io::Error::other(err))?;
+				let (tx, rx) = tokio::sync::oneshot::channel();
+				let spawn_res = std::thread::Builder::new()
+					.name("brush-builtin".into())
+					.spawn(move || {
+						let _permit = permit;
+						let cmd_context = ExecutionContext { shell: &mut shell, command_name, params };
+						let result = rt.block_on(execute_builtin_command(&builtin, cmd_context, args));
+						shell.update_last_arg_variable(last_arg);
+						let _ = tx.send(result);
+					});
+				if let Err(err) = spawn_res {
+					return Err(std::io::Error::other(err).into());
+				}
+				match rx.await {
+					Ok(res) => res,
+					Err(err) => Err(std::io::Error::other(err).into()),
+				}
+			})
+		};
 
 		ExecutionSpawnResult::StartedTask(join_handle)
 	}
@@ -545,7 +571,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 		result
 	}
 
-	fn execute_via_external(self, path: &Path) -> Result<ExecutionSpawnResult, error::Error> {
+	async fn execute_via_external(self, path: &Path) -> Result<ExecutionSpawnResult, error::Error> {
 		let mut shell = self.shell;
 		let last_arg = Self::take_last_arg(&self.args);
 
@@ -563,8 +589,8 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			self.process_group_id,
 			self.argv0.as_deref(),
 			&self.args[1..],
-		);
-
+		)
+		.await;
 		// Update $_ after command execution.
 		shell.update_last_arg_variable(last_arg);
 
@@ -576,7 +602,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 	}
 }
 
-pub(crate) fn execute_external_command(
+pub(crate) async fn execute_external_command(
 	context: ExecutionContext<'_, impl extensions::ShellExtensions>,
 	executable_path: &str,
 	in_pipeline: bool,
@@ -683,7 +709,7 @@ pub(crate) fn execute_external_command(
 	if let Some(observer) = context.params.spawn_observer() {
 		observer.before_spawn();
 	}
-	match sys::process::spawn(cmd) {
+	match sys::process::spawn(cmd).await {
 		Ok(child) => {
 			// Retrieve the pid.
 			#[expect(clippy::cast_possible_wrap)]

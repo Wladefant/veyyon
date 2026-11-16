@@ -54,12 +54,12 @@ describe("exact history pages keep their record revision", () => {
 		}
 	});
 
-	it("binds live revisions to the selected branch leaf", () => {
+	it("binds live revisions to the selected branch leaf", async () => {
 		const manager = SessionManager.inMemory("/repo");
 		const a = manager.appendMessage({ role: "user", content: "first", timestamp: 0 });
 		const b = manager.appendMessage({ role: "user", content: "second", timestamp: 1 });
-		const first = readLiveHistoryEntry(manager.getBranch(), { entryId: a, leafId: a, offset: 0, limit: 10 });
-		const changed = readLiveHistoryEntry(manager.getBranch(), {
+		const first = await readLiveHistoryEntry(manager.getBranch(), { entryId: a, leafId: a, offset: 0, limit: 10 });
+		const changed = await readLiveHistoryEntry(manager.getBranch(), {
 			entryId: a, leafId: b, offset: 10, limit: 10, revision: first.revision,
 		});
 		expect(changed.status).toBe("stale");
