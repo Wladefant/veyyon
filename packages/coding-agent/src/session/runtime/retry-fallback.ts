@@ -109,10 +109,11 @@ export class RetryFallback {
 	}
 
 	#isSuppressed(selector: RetryFallbackSelector): boolean {
-		const sessionUntil = this.#sessionCooldowns.get(selector.raw);
+		const key = this.#session.modelRegistry.normalizeSuppressedSelector(selector.raw);
+		const sessionUntil = this.#sessionCooldowns.get(key);
 		if (sessionUntil !== undefined) {
 			if (sessionUntil > Date.now()) return true;
-			this.#sessionCooldowns.delete(selector.raw);
+			this.#sessionCooldowns.delete(key);
 		}
 		return this.#session.modelRegistry.isSelectorSuppressed(selector.raw);
 	}
@@ -129,7 +130,8 @@ export class RetryFallback {
 				: calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "selector-suppression");
 		const until = Date.now() + cooldownMs;
 		if (options?.scope === "session") {
-			this.#sessionCooldowns.set(currentSelector, until);
+			const key = this.#session.modelRegistry.normalizeSuppressedSelector(currentSelector);
+			this.#sessionCooldowns.set(key, until);
 			return;
 		}
 		this.#session.modelRegistry.suppressSelector(currentSelector, until);
