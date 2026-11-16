@@ -616,9 +616,9 @@ describe("atomicWriteFile", () => {
 			await realRename(oldPath, newPath);
 		});
 		try {
-			await expect(
-				atomicWriteFile(target, "NEW", { mode: 0o600, requireAtomicReplace: true }),
-			).rejects.toThrow("operation not permitted");
+			await expect(atomicWriteFile(target, "NEW", { mode: 0o600, requireAtomicReplace: true })).rejects.toThrow(
+				"operation not permitted",
+			);
 		} finally {
 			renameSpy.mockRestore();
 			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
@@ -878,9 +878,9 @@ describe("atomicWriteFile", () => {
 				realRename(oldPath, newPath);
 			});
 			try {
-				expect(() =>
-					atomicWriteFileSync(target, "NEW", { mode: 0o600, requireAtomicReplace: true }),
-				).toThrow("operation not permitted");
+				expect(() => atomicWriteFileSync(target, "NEW", { mode: 0o600, requireAtomicReplace: true })).toThrow(
+					"operation not permitted",
+				);
 			} finally {
 				renameSpy.mockRestore();
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });

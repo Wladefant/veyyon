@@ -3,7 +3,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type PtyRunResult, Process, PtySession } from "@veyyon/natives";
+import { Process, type PtyRunResult, PtySession } from "@veyyon/natives";
 import {
 	atomicWriteFile,
 	clamp,
@@ -352,7 +352,6 @@ function connectPort(host: string, port: number): Promise<boolean> {
 	socket.setTimeout(250, () => finish(false));
 	return promise;
 }
-
 
 type TreeState = "alive" | "dead" | "unknown";
 
@@ -1146,7 +1145,11 @@ export class DaemonBroker {
 		// handle is unavailable, is not a settled death: the reap either proves the tree dead or holds the record.
 		// A missing exit code or a rejected observer is not a death. A tree still alive is held and never
 		// signalled, unless a stop asked for termination.
-		if (!record.stopRequested && (exitCode === undefined || error !== undefined) && record.tree?.state() === "alive") {
+		if (
+			!record.stopRequested &&
+			(exitCode === undefined || error !== undefined) &&
+			record.tree?.state() === "alive"
+		) {
 			this.#hold(record, generation, "alive", exitCode, error, ptySignal);
 			return;
 		}
@@ -1261,7 +1264,14 @@ export class DaemonBroker {
 	}
 
 	/** Keep the root and its handles and mark the record non-terminal. A live tree is re-checked later; an unknown one is not. */
-	#hold(record: ManagedDaemon, generation: number, state: TreeState, exitCode?: number, error?: string, ptySignal?: string): void {
+	#hold(
+		record: ManagedDaemon,
+		generation: number,
+		state: TreeState,
+		exitCode?: number,
+		error?: string,
+		ptySignal?: string,
+	): void {
 		record.snapshot.state = "stopping";
 		record.snapshot.exitReason =
 			state === "alive"
@@ -1713,7 +1723,9 @@ export class DaemonBroker {
 					spec.detached &&
 					!wasTerminal &&
 					snapshot.state !== "stopping" &&
-					(processRef ? processRef.status() === "running" : snapshot.pid !== undefined && isProcessAlive(snapshot.pid));
+					(processRef
+						? processRef.status() === "running"
+						: snapshot.pid !== undefined && isProcessAlive(snapshot.pid));
 				const ownershipUncertain = true;
 				if (!detached && !wasTerminal) {
 					// A persisted PID is not a process identity. Recovery cannot establish that a

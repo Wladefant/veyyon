@@ -567,7 +567,13 @@ async function atomicWriteFileWithImpl(
 	writer: AtomicTempWriter,
 	options: AtomicWriteInternalOptions,
 ): Promise<void> {
-	const { fsync = true, fsyncTempFile = true, mode = 0o600, requireAtomicReplace = false, retryRename = false } = options;
+	const {
+		fsync = true,
+		fsyncTempFile = true,
+		mode = 0o600,
+		requireAtomicReplace = false,
+		retryRename = false,
+	} = options;
 	const { target, viaSymlink } = await resolveWriteTarget(filePath);
 	const dir = path.dirname(target);
 	if (!viaSymlink) await fsp.mkdir(dir, { recursive: true });
