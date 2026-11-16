@@ -1378,7 +1378,7 @@ async def _handle_request_async(req: dict) -> None:
         _trim_freed_heap()
         with _STATE.cancel_lock:
             has_active_worker = _STATE.active_thread_workers.get(rid, 0) > 0
-            if cancelled:
+            if cancelled and has_active_worker:
                 _STATE.suppressed_cancelled_rids.add(rid)
         _emit({"type": "done", "id": rid, "status": status,
                "executionCount": execution_count, "cancelled": cancelled,
@@ -1491,27 +1491,27 @@ class _TrackingThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
         with _STATE.cancel_lock:
             _STATE.active_thread_workers[rid] = _STATE.active_thread_workers.get(rid, 0) + 1
 
-        def _run_tracked(*w_args, **w_kwargs):
-            try:
-                return fn(*w_args, **w_kwargs)
-            finally:
-                with _STATE.cancel_lock:
-                    remaining = _STATE.active_thread_workers.get(rid, 0) - 1
-                    if remaining > 0:
-                        _STATE.active_thread_workers[rid] = remaining
-                    else:
-                        _STATE.active_thread_workers.pop(rid, None)
-
-        try:
-            return super().submit(_run_tracked, *args, **kwargs)
-        except BaseException:
+        def _release_worker(_future=None):
+            # Drain this worker's buffered output while cancellation suppression
+            # still applies. A cancelled queued future never ran and has no output.
+            _flush_stream_proxies(rid)
             with _STATE.cancel_lock:
                 remaining = _STATE.active_thread_workers.get(rid, 0) - 1
                 if remaining > 0:
                     _STATE.active_thread_workers[rid] = remaining
                 else:
                     _STATE.active_thread_workers.pop(rid, None)
+                    _STATE.suppressed_cancelled_rids.discard(rid)
+
+        try:
+            future = super().submit(fn, *args, **kwargs)
+        except BaseException:
+            _release_worker()
             raise
+        # A future completes even when it is cancelled before a worker starts.
+        # Running futures cannot be cancelled, so their custody lasts until exit.
+        future.add_done_callback(_release_worker)
+        return future
 
 
 async def _main_async() -> None:

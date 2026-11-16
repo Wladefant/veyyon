@@ -466,28 +466,17 @@ export function buildManagedKernelEnv(options: ManagedKernelEnvOptions): Record<
 }
 
 export function attachSessionOwner(
-	session: { ownerIds: Set<string>; hasFallbackOwner: boolean; primaryOwnerId?: string },
+	session: { ownerIds: Set<string>; primaryOwnerId?: string },
 	sessionId: string,
 	ownerId: string | undefined,
 ): void {
-	if (ownerId !== undefined) {
-		if (session.hasFallbackOwner) {
-			session.ownerIds.delete(sessionId);
-			session.hasFallbackOwner = false;
-		}
-		session.ownerIds.add(ownerId);
-		if (session.primaryOwnerId === undefined) session.primaryOwnerId = ownerId;
-		return;
-	}
-	if (session.hasFallbackOwner || session.ownerIds.size === 0) {
-		session.ownerIds.add(sessionId);
-		session.hasFallbackOwner = true;
-		if (session.primaryOwnerId === undefined) session.primaryOwnerId = sessionId;
-	}
+	const ownerKey = ownerId ?? sessionId;
+	session.ownerIds.add(ownerKey);
+	if (session.primaryOwnerId === undefined) session.primaryOwnerId = ownerKey;
 }
 
 export function detachSessionOwner(
-	session: { ownerIds: Set<string>; hasFallbackOwner?: boolean; primaryOwnerId?: string },
+	session: { ownerIds: Set<string>; primaryOwnerId?: string },
 	ownerId: string,
 ): void {
 	session.ownerIds.delete(ownerId);
@@ -734,7 +723,6 @@ export async function executeWithKernelBase<
 
 export interface SessionOwnerState {
 	ownerIds: Set<string>;
-	hasFallbackOwner: boolean;
 	primaryOwnerId: string | undefined;
 }
 
@@ -751,7 +739,7 @@ export interface StartingManagedKernelSession<TKernel extends SessionKernel = Se
 	startupAbort: AbortController;
 	/** Callers currently awaiting this startup, by owner key. An owner leaves only with its last waiter. */
 	waiters: Map<string, number>;
-	/** Owners explicitly released during startup, distinct from fallback-owner adoption. */
+	/** Owners explicitly released while their acquisition still awaits startup. */
 	disposedOwnerIds: Set<string>;
 }
 
