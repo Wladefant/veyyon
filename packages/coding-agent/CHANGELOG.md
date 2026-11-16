@@ -5,6 +5,17 @@
 ### Fixed
 
 - The shared Windows daemon broker survives the client process that started it.
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
+
+## [1.10.1] - 2026-11-15
+
+### Fixed
+
+- Count only indented untracked entries in git status/stash pop + topic ledger ([PR #1127](https://github.com/Wladefant/veyyon/pull/1127)).
 
 ## [1.10.0] - 2026-11-14
 
