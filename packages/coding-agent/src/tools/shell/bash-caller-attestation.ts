@@ -208,8 +208,7 @@ export function resolveAttestedBashCaller(session: ToolSession): AttestedBashCal
 
 	const root = registry.mainInScope(scope);
 	if (
-		!root ||
-		root.kind !== "main" ||
+		root?.kind !== "main" ||
 		root.scope !== scope ||
 		(root.status !== "running" && root.status !== "idle") ||
 		!root.session ||

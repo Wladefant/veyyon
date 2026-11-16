@@ -14,7 +14,7 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-import { errorMessage, isEnoent, lazy, logger, normalizePathForComparison, prompt, settleWithin } from "@veyyon/utils";
+import { errorMessage, isEnoent, logger, normalizePathForComparison, prompt, settleWithin } from "@veyyon/utils";
 import { SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils/signal-exit";
 import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
@@ -50,8 +50,8 @@ import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
 import { bashApprovalPattern } from "./bash-approval-pattern";
-import { registerForegroundBashWait } from "./bash-foreground-registry";
 import { RESERVED_CALLER_ENV_KEYS, resolveBashCallerEnv } from "./bash-caller-attestation";
+import { registerForegroundBashWait } from "./bash-foreground-registry";
 import {
 	bashCredentialTargets,
 	findCriticalBashRisk,
@@ -748,7 +748,6 @@ export class BashTool
 		// already held to the budget is not cut again for the bytes a notice adds. A
 		// sink that spilled saved the full stream already, so a cut here points at that
 		// artifact rather than saving the sink's window as a second one.
-		const sinkArtifactId = result.artifactId;
 		const cappedBody = await enforceInlineByteCap(body, {
 			...inlineOutputPricing(this.session),
 			saveArtifact:

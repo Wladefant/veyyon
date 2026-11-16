@@ -12,7 +12,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
-import { AgentRegistry, type AgentKind, type AgentStatus } from "@veyyon/coding-agent/registry/agent-registry";
+import { type AgentKind, AgentRegistry, type AgentStatus } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { deriveToolSession } from "@veyyon/coding-agent/session/tool-session";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
@@ -544,7 +544,13 @@ describe("BashTool caller attestation", () => {
 		expect(acpMap.VEYYON_AGENT_ID).toBe("main:routes");
 		expect(acpMap.VEYYON_SESSION_FILE).toBe(mainFile);
 		expect(acpMap.VEYYON_CALLER_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1\/caller$/);
-		expect((await fetch(acpMap.VEYYON_CALLER_URL!, { headers: { Authorization: `Bearer ${acpMap.VEYYON_CALLER_TOKEN}` } })).status).toBe(200);
+		expect(
+			(
+				await fetch(acpMap.VEYYON_CALLER_URL!, {
+					headers: { Authorization: `Bearer ${acpMap.VEYYON_CALLER_TOKEN}` },
+				})
+			).status,
+		).toBe(200);
 
 		// 4. Interactive PTY route
 		const ptyCapturedEnvs: Array<Record<string, string> | undefined> = [];
@@ -577,7 +583,13 @@ describe("BashTool caller attestation", () => {
 			const ptyEnv = ptyCapturedEnvs[0]!;
 			expect(ptyEnv.VEYYON_AGENT_ID).toBe("main:routes");
 			expect(ptyEnv.VEYYON_SESSION_FILE).toBe(mainFile);
-			expect((await fetch(ptyEnv.VEYYON_CALLER_URL!, { headers: { Authorization: `Bearer ${ptyEnv.VEYYON_CALLER_TOKEN}` } })).status).toBe(200);
+			expect(
+				(
+					await fetch(ptyEnv.VEYYON_CALLER_URL!, {
+						headers: { Authorization: `Bearer ${ptyEnv.VEYYON_CALLER_TOKEN}` },
+					})
+				).status,
+			).toBe(200);
 		} finally {
 			ptySpy.mockRestore();
 		}
