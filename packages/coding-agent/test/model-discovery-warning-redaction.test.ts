@@ -45,9 +45,7 @@ describe("ModelRegistry discovery warning redaction", () => {
 			const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), { fetch: failingFetch });
 			await registry.refresh();
 
-			const discoveryCalls = warnSpy.mock.calls.filter(
-				call => call[0] === "model discovery failed for provider",
-			);
+			const discoveryCalls = warnSpy.mock.calls.filter(call => call[0] === "model discovery failed for provider");
 			expect(discoveryCalls.length).toBeGreaterThan(0);
 			const payload = JSON.stringify(discoveryCalls[0]?.[1] ?? {});
 			expect(payload).toContain("ollama.typo:11434");
@@ -71,9 +69,7 @@ describe("ModelRegistry discovery warning redaction", () => {
 			const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), { fetch: refusedFetch });
 			await registry.refresh();
 
-			const discoveryCalls = debugSpy.mock.calls.filter(
-				call => call[0] === "model discovery failed for provider",
-			);
+			const discoveryCalls = debugSpy.mock.calls.filter(call => call[0] === "model discovery failed for provider");
 			expect(discoveryCalls.length).toBeGreaterThan(0);
 			const payload = JSON.stringify(discoveryCalls[0]?.[1] ?? {});
 			expect(payload).toContain("127.0.0.1:11434");
