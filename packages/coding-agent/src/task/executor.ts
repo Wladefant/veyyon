@@ -41,10 +41,9 @@ import { type SettingPath, Settings } from "../config/settings";
 import type { Rule } from "../discovery/capability/rule";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
-import { sessionExtensionActions } from "../extensibility/extensions/session-actions";
-import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
+import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { LocalProtocolOptions } from "../internal-urls";
 import type { MCPManager } from "../mcp/manager";
@@ -58,9 +57,8 @@ import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { discoverAuthStorage } from "../session/auth-broker-config";
 import { rootBudgetGroupOwnerId, withInheritedBudgetGroup } from "../session/cpu-limit";
-import { USER_INTERRUPT_LABEL } from "../session/messages";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { truncateTail } from "../session/streaming-output";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
@@ -2714,6 +2712,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 			softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice") ?? false,
 			maxRuntimeMs: nonNegativeInt(options.maxRuntimeMs ?? settings.get("agent.maxRuntimeMs")),
 		});
+		monitor.beginSessionInitialization();
 
 		const done = await driveChildRun(
 			{

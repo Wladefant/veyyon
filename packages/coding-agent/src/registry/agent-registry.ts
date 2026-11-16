@@ -200,6 +200,8 @@ export interface AgentRef {
 	/** Final result of this assignment, retained on the ref for roster/history consumers. */
 	terminalOutcome?: AgentTerminalOutcome;
 	terminalOutcomeReason?: string;
+	/** Monotonic counter incremented each time the agent enters `running`. */
+	turnSeq?: number;
 }
 
 /** Host-resolved lineage. Names and message bodies never establish a relationship. */
@@ -427,6 +429,7 @@ export class AgentRegistry {
 	#applyStatus(ref: AgentRef, status: AgentStatus): void {
 		ref.status = status;
 		if (status === "running") {
+			ref.turnSeq = (ref.turnSeq ?? 0) + 1;
 			// A new turn is a new assignment; retain the prior outcome only until
 			// activity resumes, then accept the new run's terminal report.
 			ref.terminalOutcome = undefined;

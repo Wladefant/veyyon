@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Api, Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { kNoAuth } from "@veyyon/coding-agent/config/auth-state";
@@ -64,32 +65,31 @@ describe("ordered agent model auth resolution", () => {
 			templateId: "anthropic.claude-sonnet-4-6",
 			requestedId: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/test-profile",
 		},
-	])("keeps supported synthetic selectors inside the available scope ($provider)", async ({
-		provider,
-		templateId,
-		requestedId,
-	}) => {
-		const template = buildModel({ ...parentModel, provider, id: templateId });
-		const registry = {
-			getAll: () => [parentModel, template],
-			getAvailable: () => [parentModel, template],
-			getApiKey: async () => "test-key",
-			isSelectorSuppressed: () => false,
-		};
-		const pattern = `${provider}/${requestedId}`;
+	])(
+		"keeps supported synthetic selectors inside the available scope ($provider)",
+		async ({ provider, templateId, requestedId }) => {
+			const template = buildModel({ ...parentModel, provider, id: templateId });
+			const registry = {
+				getAll: () => [parentModel, template],
+				getAvailable: () => [parentModel, template],
+				getApiKey: async () => "test-key",
+				isSelectorSuppressed: () => false,
+			};
+			const pattern = `${provider}/${requestedId}`;
 
-		const result = await resolveAgentModelChain([pattern], registry);
-		expect(result.model?.provider).toBe(provider);
-		expect(result.model?.id).toBe(requestedId);
+			const result = await resolveAgentModelChain([pattern], registry);
+			expect(result.model?.provider).toBe(provider);
+			expect(result.model?.id).toBe(requestedId);
 
-		// Authentication alone cannot make a disabled supporting model available.
-		await expect(
-			resolveAgentModelChain([pattern], {
-				...registry,
-				getAvailable: () => [parentModel],
-			}),
-		).rejects.toThrow(/unavailable in the model registry/);
-	});
+			// Authentication alone cannot make a disabled supporting model available.
+			await expect(
+				resolveAgentModelChain([pattern], {
+					...registry,
+					getAvailable: () => [parentModel],
+				}),
+			).rejects.toThrow(/unavailable in the model registry/);
+		},
+	);
 
 	test("selects the third configured member when earlier members are unavailable", async () => {
 		const third = buildModel({
@@ -138,7 +138,7 @@ describe("ordered agent model auth resolution", () => {
 			registry,
 		);
 		expect(result.model?.provider).toBe("preferred");
-		expect(result.thinkingLevel).toBe("high");
+		expect(result.thinkingLevel).toBe(ThinkingLevel.High);
 		expect(result.skipped).not.toContain("preferred/new-model:high: not found in the model catalog");
 		expect(result.skipped).toContain("missing-provider/missing-model: not found in the model catalog");
 		expect(refreshes).toBe(2);
