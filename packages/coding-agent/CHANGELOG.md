@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.10.10] - 2026-11-16
+
+### Fixed
+
+- Keep CI logs complete during credential redaction ([PR #1096](https://github.com/Wladefant/veyyon/pull/1096)).
+- Keep serialized CI logs and later diagnostic records complete while redacting credentials, including printed ANSI codes and inline code suggestions.
+- Bound producer-output scalar serialization and diagnose oversized records without exposing credential-bearing lines.
+- Preserve environment-inventory taint across oversized assignment records, bound repeating-prefix lookbehind, and keep quoted multi-record logs out of scalar mode.
+- Keep caret-escaped ANSI CSI sequences out of producer output container and inventory detection while preserving credential redaction ([PR #1087](https://github.com/Wladefant/veyyon/pull/1087)).
+- Fall back from single-file `local://` promotion in `ReadTool` so semicolon-delimited lists containing `local://` URIs split into per-entry reads while preserving individual selectors.
+
 ## [1.10.9] - 2026-11-16
 
 ### Changed
@@ -17,10 +28,6 @@
 
 ### Fixed
 
-- Keep serialized CI logs and later diagnostic records complete while redacting credentials, including printed ANSI codes and inline code suggestions.
-- Bound producer-output scalar serialization and diagnose oversized records without exposing credential-bearing lines.
-- Preserve environment-inventory taint across oversized assignment records, bound repeating-prefix lookbehind, and keep quoted multi-record logs out of scalar mode.
-- Keep caret-escaped ANSI CSI sequences out of producer output container and inventory detection while preserving credential redaction ([PR #1087](https://github.com/Wladefant/veyyon/pull/1087)).
 - Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Exact stored-history reads and searches reject ambiguous or duplicate session/entry identity claims, including impossible nested openers, object suffixes, and array/scalar prefixes, while preserving identity-free legacy title lines (including brace-leading titles) and valid nested metadata ([Refs #984](https://github.com/Wladefant/veyyon/issues/984), [Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Redacted home directory paths and identity-form login names from auto-QA grievances at both local storage and outbound flush boundaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 841cfcf79650204c646f73bf306a64ca480e407b, 99680efef69f846a8a52c8c4726403ab61781a24, d765811a8d6dafe718da2361a7e47c8c4ecb3f43).
@@ -30,7 +37,6 @@
 
 ### Fixed
 
-- Fall back from single-file `local://` promotion in `ReadTool` so semicolon-delimited lists containing `local://` URIs split into per-entry reads while preserving individual selectors.
 - Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
 - Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.

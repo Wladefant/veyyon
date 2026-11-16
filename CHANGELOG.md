@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [1.10.10] - 2026-11-16
+
+### Fixed
+
+- Keep CI logs complete during credential redaction ([PR #1096](https://github.com/Wladefant/veyyon/pull/1096)).
+- Keep serialized CI logs and later diagnostic records complete while redacting credentials, including printed ANSI codes and inline code suggestions.
+- Bound producer-output scalar serialization and diagnose oversized records without exposing credential-bearing lines.
+- Preserve environment-inventory taint across oversized assignment records, bound repeating-prefix lookbehind, and keep quoted multi-record logs out of scalar mode.
+- Keep caret-escaped ANSI CSI sequences out of producer output container and inventory detection while preserving credential redaction ([PR #1087](https://github.com/Wladefant/veyyon/pull/1087)).
+- Fall back from single-file `local://` promotion in `ReadTool` so semicolon-delimited lists containing `local://` URIs split into per-entry reads while preserving individual selectors.
+
 ## [1.10.9] - 2026-11-16
 
 ### Changed
