@@ -242,11 +242,13 @@ class ProcessSnapshotCache:
         """Force refresh of Win32_Process command line snapshot with generation coherence."""
         for _ in range(max_attempts):
             fp_before = get_native_process_identities()
+            if fp_before is None:
+                continue
             success, cmdlines = get_live_process_command_lines()
             if not success:
                 break
             fp_after = get_native_process_identities()
-            if fp_before != fp_after:
+            if fp_after is None or fp_before != fp_after:
                 continue
             self.command_lines = cmdlines
             self.active_tokens = extract_active_session_identifiers(cmdlines)
@@ -381,6 +383,22 @@ def extract_active_session_identifiers(command_lines: list[str]) -> set[str]:
     return active_tokens
 
 
+def _extract_executable_name(cmdline: str) -> str | None:
+    """Extract the lowercased executable basename from a command line string."""
+    stripped = cmdline.strip()
+    if not stripped:
+        return None
+    if stripped[0] in ('"', "'"):
+        quote = stripped[0]
+        end_idx = stripped.find(quote, 1)
+        token = stripped[1:end_idx] if end_idx != -1 else stripped[1:]
+    else:
+        exe_match = re.match(r'^([^\s]+(?:\s+[^\s]+)*?\.exe)(?:\s|$)', stripped, re.IGNORECASE)
+        token = exe_match.group(1) if exe_match else stripped.split(None, 1)[0]
+    base = os.path.basename(token.replace("\\", "/")).lower()
+    return base or None
+
+
 def is_session_directory_live(
     session_dir: Path,
     active_tokens: set[str],
@@ -400,6 +418,13 @@ def is_session_directory_live(
         cmd_lower = cmd.lower().replace("\\", "/")
         if dir_name_lower in cmd_lower or dir_path_lower in cmd_lower:
             return True
+        # Fail closed when any live potential Veyyon host process (bun, node, veyyon)
+        # omits session scoping from its command line, since living session ownership
+        # cannot be excluded without a session-lifetime lease.
+        exe_name = _extract_executable_name(cmd)
+        if is_potential_veyyon_executable(exe_name):
+            if not extract_active_session_identifiers([cmd]):
+                return True
 
     return False
 
@@ -898,7 +923,6 @@ def process_session_markers(
             metrics.error_details.append(f"Failed reconciling SQLite counter in {session_dir}")
             return
 
-        checked_custom_internal = False
         for m_id, m_path_str in verified_candidates:
             if max_deletions is not None and metrics.deleted >= max_deletions:
                 metrics.remaining += 1
@@ -927,13 +951,12 @@ def process_session_markers(
                 continue
             if is_session_directory_locked(
                 session_dir,
-                check_internal=not checked_custom_internal,
+                check_internal=True,
                 ignore_lock_token=lock_token,
             ):
                 metrics.skipped_locked += 1
                 metrics.remaining += 1
                 continue
-            checked_custom_internal = True
             if not is_directory_empty(marker_path):
                 metrics.skipped_nonempty += 1
                 metrics.remaining += 1

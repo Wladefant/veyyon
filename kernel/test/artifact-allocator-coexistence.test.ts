@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fsSync from "node:fs";
@@ -121,8 +121,17 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 
 		const script = path.resolve(import.meta.dirname, "../../scripts/cleanup-artifact-markers.py");
 		const pyBin = Bun.which("python3") ?? Bun.which("python") ?? "python3";
+		const pyWrapper = [
+			"import importlib.util, sys",
+			"spec = importlib.util.spec_from_file_location('cleanup_mod', sys.argv[1])",
+			"mod = importlib.util.module_from_spec(spec)",
+			"spec.loader.exec_module(mod)",
+			"mod.get_live_process_command_lines = lambda: (True, [])",
+			"sys.argv = [sys.argv[1], '--session-dir', sys.argv[2], '--execute', '--min-age-hours', '0', '--json']",
+			"raise SystemExit(mod.main())",
+		].join("; ");
 		const result = await new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
-			const proc = spawn(pyBin, [script, "--session-dir", dir, "--execute", "--min-age-hours", "0", "--json"], {
+			const proc = spawn(pyBin, ["-c", pyWrapper, script, dir], {
 				stdio: ["ignore", "pipe", "inherit"],
 			});
 			let stdout = "";
@@ -178,7 +187,11 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 		const dir = freshDir();
 		let busyAttempts = 0;
 		const origRun = Database.prototype.run;
-		const spy = spyOn(Database.prototype, "run").mockImplementation(function (this: Database, sql: string, ...args: unknown[]) {
+		const spy = spyOn(Database.prototype, "run").mockImplementation(function (
+			this: Database,
+			sql: string,
+			...args: unknown[]
+		) {
 			if (typeof sql === "string" && sql.includes("PRAGMA journal_mode = WAL") && busyAttempts < 2) {
 				busyAttempts++;
 				const busyErr = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
@@ -199,7 +212,11 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 		const dir = freshDir();
 		let busyAttempts = 0;
 		const origRun = Database.prototype.run;
-		const spy = spyOn(Database.prototype, "run").mockImplementation(function (this: Database, sql: string, ...args: unknown[]) {
+		const spy = spyOn(Database.prototype, "run").mockImplementation(function (
+			this: Database,
+			sql: string,
+			...args: unknown[]
+		) {
 			if (typeof sql === "string" && sql.includes("PRAGMA journal_mode = WAL")) {
 				busyAttempts++;
 				const busyErr = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
@@ -220,7 +237,11 @@ describe("artifact allocator multi-manager, multi-process, and legacy coexistenc
 		const dir = freshDir();
 		let attempts = 0;
 		const origRun = Database.prototype.run;
-		const spy = spyOn(Database.prototype, "run").mockImplementation(function (this: Database, sql: string, ...args: unknown[]) {
+		const spy = spyOn(Database.prototype, "run").mockImplementation(function (
+			this: Database,
+			sql: string,
+			...args: unknown[]
+		) {
 			if (typeof sql === "string" && sql.includes("PRAGMA journal_mode = WAL")) {
 				attempts++;
 				const err = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
@@ -570,12 +591,17 @@ process.stdout.write(JSON.stringify(ids));
 		}
 		const cleanupScript = path.resolve(import.meta.dirname, "../../scripts/cleanup-artifact-markers.py");
 		const pyBin = Bun.which("python3") ?? Bun.which("python") ?? "python3";
+		const pyWrapper = [
+			"import importlib.util, sys",
+			"spec = importlib.util.spec_from_file_location('cleanup_mod', sys.argv[1])",
+			"mod = importlib.util.module_from_spec(spec)",
+			"spec.loader.exec_module(mod)",
+			"mod.get_live_process_command_lines = lambda: (True, [])",
+			"sys.argv = [sys.argv[1], '--session-dir', sys.argv[2], '--execute', '--min-age-hours', '24']",
+			"raise SystemExit(mod.main())",
+		].join("; ");
 		await new Promise<void>((resolve, reject) => {
-			const proc = spawn(
-				pyBin,
-				[cleanupScript, "--session-dir", dir, "--execute", "--min-age-hours", "24"],
-				{ stdio: ["ignore", "pipe", "pipe"] },
-			);
+			const proc = spawn(pyBin, ["-c", pyWrapper, cleanupScript, dir], { stdio: ["ignore", "pipe", "pipe"] });
 			let stderr = "";
 			proc.stderr.on("data", chunk => {
 				stderr += chunk;
@@ -633,4 +659,71 @@ run().catch(err => { console.error(err); process.exit(1); });
 		expect(idA).toBe(151);
 		expect(idB).toBe(152);
 	});
+
+	it("does not block competing processes when directory scan exceeds 15s lock retry budget (initial and EEXIST)", async () => {
+		const dir = freshDir();
+		await fs.mkdir(dir, { recursive: true });
+		await fs.mkdir(path.join(dir, ".artifact-id-0"));
+		await fs.writeFile(path.join(dir, "0.legacy.log"), "legacy-0", "utf8");
+
+		const artifactsModuleUrl = path.resolve(import.meta.dirname, "../src/session/artifacts").replace(/\\/g, "/");
+		const slowScanStartedPath = path.join(dir, "slow-scan-started");
+		const slowWorkerScript = `
+import * as fsSync from "node:fs";
+import { sleepSync } from "@veyyon/utils/sleep";
+import { ArtifactManager } from "${artifactsModuleUrl}";
+
+const dir = process.argv[2];
+const startedPath = process.argv[3];
+const origReaddirSync = fsSync.readdirSync;
+let delayed = false;
+(fsSync as { readdirSync: typeof fsSync.readdirSync }).readdirSync = ((...args: Parameters<typeof fsSync.readdirSync>) => {
+  if (!delayed && String(args[0]) === dir) {
+    delayed = true;
+    fsSync.writeFileSync(startedPath, "started", "utf8");
+    sleepSync(16_000);
+  }
+  return origReaddirSync(...args);
+}) as typeof fsSync.readdirSync;
+
+const mgr = new ArtifactManager(dir);
+const id = mgr.allocateId();
+process.stdout.write(JSON.stringify(id));
+`;
+		const slowScriptPath = path.join(dir, "slow_scanner_worker.ts");
+		await fs.writeFile(slowScriptPath, slowWorkerScript, "utf8");
+
+		const fastWorkerScript = `
+import { ArtifactManager } from "${artifactsModuleUrl}";
+const dir = process.argv[2];
+const mgr = new ArtifactManager(dir);
+const t0 = Date.now();
+const id1 = mgr.allocateId();
+const id2 = mgr.allocateId();
+const elapsedMs = Date.now() - t0;
+process.stdout.write(JSON.stringify({ id1, id2, elapsedMs }));
+`;
+		const fastScriptPath = path.join(dir, "fast_allocator_worker.ts");
+		await fs.writeFile(fastScriptPath, fastWorkerScript, "utf8");
+
+		const slowPromise = runProcess<number>(slowScriptPath, [dir, slowScanStartedPath]);
+
+		// Wait until Process A is actively inside its >15s #scanDirectoryMax()
+		const deadline = Date.now() + 10_000;
+		while (!fsSync.existsSync(slowScanStartedPath) && Date.now() < deadline) {
+			await Bun.sleep(50);
+		}
+		expect(fsSync.existsSync(slowScanStartedPath)).toBe(true);
+
+		// Process B must allocate without waiting 16s or hitting lock retry exhaustion
+		const fastResult = await runProcess<{ id1: number; id2: number; elapsedMs: number }>(fastScriptPath, [dir]);
+		expect(fastResult.elapsedMs).toBeLessThan(10_000);
+
+		const slowId = await slowPromise;
+		const allIds = [fastResult.id1, fastResult.id2, slowId];
+		expect(new Set(allIds).size).toBe(3);
+		for (const id of allIds) {
+			expect(id).toBeGreaterThanOrEqual(1);
+		}
+	}, 35_000);
 });

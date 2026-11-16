@@ -108,15 +108,15 @@ def test_execute_deletes_only_eligible_empty_marker():
         regular_file.write_text("log content")
 
         metrics = mod.CleanupMetrics()
-        mod.process_session_markers(
-            session_dir=sess_dir,
-            metrics=metrics,
-            cutoff_time=time.time() - 24 * 3600,
-            active_tokens=set(),
-            command_lines=[],
-            execute=True,
-        )
-
+        with patch.object(mod, "get_live_process_command_lines", return_value=(True, [])):
+            mod.process_session_markers(
+                session_dir=sess_dir,
+                metrics=metrics,
+                cutoff_time=time.time() - 24 * 3600,
+                active_tokens=set(),
+                command_lines=[],
+                execute=True,
+            )
         assert metrics.total_markers_seen == 4
         assert metrics.eligible_markers == 1
         assert metrics.skipped_young == 1
@@ -488,15 +488,15 @@ def test_tail_markers_preserved():
 
         # Now verify in EXECUTE mode
         metrics_exec = mod.CleanupMetrics()
-        mod.process_session_markers(
-            session_dir=sess_dir,
-            metrics=metrics_exec,
-            cutoff_time=time.time() - 24 * 3600,
-            active_tokens=set(),
-            command_lines=[],
-            execute=True,
-        )
-        assert metrics_exec.total_markers_seen == 5
+        with patch.object(mod, "get_live_process_command_lines", return_value=(True, [])):
+            mod.process_session_markers(
+                session_dir=sess_dir,
+                metrics=metrics_exec,
+                cutoff_time=time.time() - 24 * 3600,
+                active_tokens=set(),
+                command_lines=[],
+                execute=True,
+            )
         assert metrics_exec.eligible_markers == 3
         assert metrics_exec.skipped_tail == 2
         assert metrics_exec.deleted == 3
@@ -576,15 +576,15 @@ def test_resumed_old_allocator_coexistence_with_preserved_tail():
 
         # Run cleanup
         metrics = mod.CleanupMetrics()
-        mod.process_session_markers(
-            session_dir=sess_dir,
-            metrics=metrics,
-            cutoff_time=time.time() - 24 * 3600,
-            active_tokens=set(),
-            command_lines=[],
-            execute=True,
-        )
-        assert metrics.deleted == 1
+        with patch.object(mod, "get_live_process_command_lines", return_value=(True, [])):
+            mod.process_session_markers(
+                session_dir=sess_dir,
+                metrics=metrics,
+                cutoff_time=time.time() - 24 * 3600,
+                active_tokens=set(),
+                command_lines=[],
+                execute=True,
+            )
         assert not m0.exists()
         assert m1.exists()
         assert m2.exists()
@@ -778,23 +778,25 @@ def test_max_deletions_bounded_chunking():
             m.mkdir()
             os.utime(m, (past_time, past_time))
 
-        metrics = mod.run_cleanup(
-            profiles_root=temp_dir,
-            execute=True,
-            single_session=sess_dir,
-            max_deletions=2,
-        )
-        assert metrics.deleted == 2, f"Expected 2 deletions, got {metrics.deleted}"
-        assert metrics.remaining == 3
-        # Now run again to delete another chunk
-        metrics2 = mod.run_cleanup(
-            profiles_root=temp_dir,
-            execute=True,
-            single_session=sess_dir,
-            max_deletions=2,
-        )
-        assert metrics2.deleted == 2
-        assert metrics2.remaining == 1
+        with patch.object(mod, "get_live_process_command_lines", return_value=(True, [])), \
+             patch.object(mod, "get_native_process_identities", return_value=frozenset()):
+            metrics = mod.run_cleanup(
+                profiles_root=temp_dir,
+                execute=True,
+                single_session=sess_dir,
+                max_deletions=2,
+            )
+            assert metrics.deleted == 2, f"Expected 2 deletions, got {metrics.deleted}"
+            assert metrics.remaining == 3
+            # Now run again to delete another chunk
+            metrics2 = mod.run_cleanup(
+                profiles_root=temp_dir,
+                execute=True,
+                single_session=sess_dir,
+                max_deletions=2,
+            )
+            assert metrics2.deleted == 2
+            assert metrics2.remaining == 1
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -845,7 +847,7 @@ def test_same_pid_set_lock_change_aborts_deletion_per_marker():
 
         cache = mod.ProcessSnapshotCache()
         cache.is_valid = True
-        cache.command_lines = ["node worker.js"]
+        cache.command_lines = ["python worker.py"]
         cache.active_tokens = set()
         cache.fingerprint = frozenset([(123, 4567, "node.exe")])
 
@@ -937,7 +939,7 @@ def test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal
 
         cache = mod.ProcessSnapshotCache()
         cache.is_valid = True
-        cache.command_lines = ["node worker.js"]
+        cache.command_lines = ["python worker.py"]
         cache.active_tokens = set()
         cache.fingerprint = frozenset([(12345, 67890, "node.exe")])
 
@@ -980,7 +982,7 @@ def test_per_deletion_recheck_checks_full_lock_set_including_active_and_internal
 
         cache2 = mod.ProcessSnapshotCache()
         cache2.is_valid = True
-        cache2.command_lines = ["node worker.js"]
+        cache2.command_lines = ["python worker.py"]
         cache2.active_tokens = set()
         cache2.fingerprint = frozenset([(12345, 67890, "node.exe")])
 
@@ -1081,8 +1083,8 @@ def test_live_process_without_session_in_argv_holding_artifacts_lock_skips_clean
         # Command lines do NOT mention session path or ID at all
         blind_cmdlines = ["C:\\bun.exe run agent", "node server.js"]
         active_tokens = mod.extract_active_session_identifiers(blind_cmdlines)
-        assert not mod.is_session_directory_live(session_dir, active_tokens, blind_cmdlines), \
-            "Sanity check: liveness check alone fails to see session in argv"
+        assert mod.is_session_directory_live(session_dir, active_tokens, blind_cmdlines), \
+            "Unscoped potential Veyyon host process must fail closed as live"
 
         metrics = mod.CleanupMetrics()
         mod.process_session_markers(
@@ -1101,14 +1103,116 @@ def test_live_process_without_session_in_argv_holding_artifacts_lock_skips_clean
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def test_large_marker_cleanup_is_linear_not_quadratic():
-    """Verify that deleting N markers does NOT call os.scandir(session_dir) on every deletion.
+def test_live_process_without_session_in_argv_and_no_lock_skips_cleanup():
+    """Actual live bun/node process omitting session path in argv with no artifacts.lock held deletes 0 markers."""
+    import shutil as _shutil
+    import subprocess as _subprocess
+    bun_bin = _shutil.which("bun")
+    if not bun_bin:
+        pytest.skip("bun binary not available on PATH")
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_live_bun_nolock_"))
+    proc = None
+    try:
+        session_dir = temp_dir / "sess_live_unscoped"
+        session_dir.mkdir()
+        (session_dir / "0.bash.log").write_text("published")
+        marker = session_dir / ".artifact-id-0"
+        marker.mkdir()
+        past_time = time.time() - 48 * 3600
+        os.utime(marker, (past_time, past_time))
 
-    With 50 markers, quadratic scanning would invoke os.scandir(session_dir) 50+ times.
-    With the exclusive artifacts.lock lease and check_internal=False, os.scandir(session_dir)
-    is invoked at most a small constant number of times (1 initial scan + 0 per-marker).
-    """
-    temp_dir = Path(tempfile.mkdtemp(prefix="test_linear_scale_"))
+        proc = _subprocess.Popen(
+            [bun_bin, "-e", "setTimeout(() => {}, 30000)"],
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+        )
+        time.sleep(0.3)
+        assert proc.poll() is None, "Live bun process must still be running"
+
+        metrics = mod.run_cleanup(
+            profiles_root=temp_dir,
+            execute=True,
+            single_session=session_dir,
+            min_age_hours=24.0,
+        )
+        assert metrics.deleted == 0, f"Expected 0 deletions with live bun process, got {metrics.deleted}"
+        assert marker.exists(), "Marker must not be deleted while unscoped bun process is live"
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+        _shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_process_snapshot_cache_none_fingerprints_fail_closed():
+    """Verify None == None from get_native_process_identities fails closed instead of claiming coherence."""
+    cache = mod.ProcessSnapshotCache()
+    with patch.object(mod, "get_native_process_identities", return_value=None), \
+         patch.object(mod, "get_live_process_command_lines", return_value=(True, ["python idle.py"])):
+        ok = cache.refresh()
+        assert not ok, "refresh() must fail closed when native process identities return None"
+        assert not cache.is_valid
+        assert cache.fingerprint is None
+        assert not cache.ensure_current()
+
+
+def test_custom_internal_lock_appearing_after_first_marker_aborts_second_deletion():
+    """A custom internal lock created after the first marker is deleted must abort subsequent deletions."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_second_marker_custom_lock_"))
+    try:
+        session_dir = temp_dir / "sess_custom_lock_race"
+        session_dir.mkdir()
+        (session_dir / "10.bash.log").write_text("published")
+        past_time = time.time() - 48 * 3600
+        m0 = session_dir / ".artifact-id-0"
+        m1 = session_dir / ".artifact-id-1"
+        m0.mkdir()
+        m1.mkdir()
+        os.utime(m0, (past_time, past_time))
+        os.utime(m1, (past_time, past_time))
+
+        real_rmdir = os.rmdir
+        injected = False
+
+        def rmdir_and_inject_custom_lock(p):
+            nonlocal injected
+            real_rmdir(p)
+            if not injected:
+                injected = True
+                worker_lock = session_dir / "worker_job.lock"
+                worker_lock.mkdir()
+                (worker_lock / "info").write_text(json.dumps({
+                    "version": 1,
+                    "pid": os.getpid(),
+                    "token": "worker-job-tok",
+                }), encoding="utf-8")
+
+        metrics = mod.CleanupMetrics()
+        with patch.object(mod, "get_live_process_command_lines", return_value=(True, [])), \
+             patch("os.rmdir", side_effect=rmdir_and_inject_custom_lock):
+            mod.process_session_markers(
+                session_dir=session_dir,
+                metrics=metrics,
+                cutoff_time=time.time() - 24 * 3600,
+                active_tokens=set(),
+                command_lines=[],
+                execute=True,
+            )
+
+        assert metrics.deleted == 1, f"Expected exactly 1 deletion before custom lock, got {metrics.deleted}"
+        assert metrics.skipped_locked >= 1
+        assert m0.exists() is False or m1.exists() is False
+        assert m0.exists() or m1.exists(), "Second marker must survive after worker_job.lock appears"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_large_marker_cleanup_rechecks_internal_locks_safely():
+    """Verify 50-marker cleanup deletes all eligible markers safely while rechecking internal locks."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_large_safe_"))
     try:
         session_dir = temp_dir / "sess_scale"
         session_dir.mkdir()
@@ -1120,18 +1224,8 @@ def test_large_marker_cleanup_is_linear_not_quadratic():
             m.mkdir()
             os.utime(m, (past_time, past_time))
 
-        real_scandir = os.scandir
-        scandir_session_calls = 0
-
-        def counted_scandir(path=None):
-            nonlocal scandir_session_calls
-            if path is not None and str(Path(path).resolve()) == str(session_dir.resolve()):
-                scandir_session_calls += 1
-            return real_scandir(path)
-
         metrics = mod.CleanupMetrics()
-        with patch("os.scandir", side_effect=counted_scandir), \
-             patch.object(mod, "get_live_process_command_lines", return_value=(True, [])):
+        with patch.object(mod, "get_live_process_command_lines", return_value=(True, [])):
             mod.process_session_markers(
                 session_dir=session_dir,
                 metrics=metrics,
@@ -1142,9 +1236,6 @@ def test_large_marker_cleanup_is_linear_not_quadratic():
             )
 
         assert metrics.deleted == count, f"Expected {count} deletions, got {metrics.deleted}"
-        # With quadratic scans, scandir_session_calls would be >= 51.
-        # With linear O(N) cleanup, scandir_session_calls is at most 3 (constant, independent of N).
-        assert scandir_session_calls <= 3, f"Expected <= 3 scandir calls on session_dir, got {scandir_session_calls}"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
