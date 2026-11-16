@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [1.10.4] - 2026-11-16
+
+### Fixed
+
+- Escaped `<` as `\u003c` and used a replacer function in `renderOAuthResultHtml` so `</script>` markup and `$` replacement patterns in OAuth callback values stay inert JSON data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c767616cfc3ba221fa6695bcccf96aa2c3e4dbd4).
+- Steer live streaming retained children immediately on parent IRC during an active wake phase while deferring post-loop messages to the continuation outbox ([PR #1146](https://github.com/Wladefant/veyyon/pull/1146)).
+
 ## [1.10.3] - 2026-11-16
 
 ### Fixed
