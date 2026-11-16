@@ -122,7 +122,7 @@
 		"fuzz": "bun scripts/fuzz.ts",
 		"fuzz:triage": "bun scripts/fuzz-triage.ts",
 		"check": "bun run --parallel check:ts check:rs",
-		"check:ts": "bun run check:types && bun run --workspaces --if-present check:types",
+		"check:ts": "bun scripts/check-ts.ts",
 		"check:types": "tsgo -p tsconfig.tools.json --noEmit",
 		"check:tools": "biome check . --no-errors-on-unmatched",
 		"check:rs": "bun scripts/run-rs-task.ts check:rs",

@@ -12,9 +12,9 @@ import {
 	toError,
 } from "@veyyon/utils";
 import { Settings } from "../config/settings";
+import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import { gateSessionCpuSpawn, sessionCpuAdoption } from "../session/cpu-limit";
 import { DEFAULT_MAX_BYTES, OutputSink } from "../session/streaming-output";
-import { ProducerOutputGuard, sanitizeProducerJson } from "../secrets/producer-output";
 import type { ToolSession } from "../tools";
 import { inlineBudgetFor } from "../tools/core/output-artifact";
 import {
@@ -545,24 +545,6 @@ export async function executeWithKernelBase<
 	});
 
 	const displayOutputs: KernelDisplayOutput[] = [];
-	/** The run's result over everything the sink holds, with `annotation` appended to the output. */
-	const finish = async (
-		outcome: Pick<KernelExecutionResult, "exitCode" | "cancelled" | "stdinRequested">,
-		annotation?: string,
-	): Promise<KernelExecutionResult> => {
-		const dumped = await sink.dump(annotation);
-		return {
-			...outcome,
-			truncated: dumped.truncated,
-			output: dumped.output,
-			artifactId: dumped.artifactId ?? undefined,
-			totalLines: dumped.totalLines,
-			totalBytes: dumped.totalBytes,
-			outputLines: dumped.outputLines,
-			outputBytes: dumped.outputBytes,
-			displayOutputs,
-		};
-	};
 	const deadlineMs = (resolveDeadlineMs ?? getExecutionDeadlineMs)(options);
 	let executionTimeoutMs: number | undefined;
 	const abortShield = createBridgeAbortShield(options?.signal);
@@ -805,11 +787,15 @@ export class KernelSessionPool<
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (this.#failedStartups.has(sessionKey)) {
-			await this.#retireFailedStartup(sessionKey);
+			await waitForPromiseWithCancellation(
+				this.#retireFailedStartup(sessionKey),
+				options,
+				this.#cancelledErrorClass,
+			);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (existing && this.#retiring.has(existing)) {
-			await this.#retireSession(existing);
+			await waitForPromiseWithCancellation(this.#retireSession(existing), options, this.#cancelledErrorClass);
 			return await this.acquireSession(sessionKey, sessionId, cwd, options);
 		}
 		if (existing) {
@@ -920,19 +906,22 @@ export class KernelSessionPool<
 		const oldKernel = session.kernel;
 		let pending = this.#transitions.get(session.sessionKey);
 		while (pending) {
-			await pending;
+			await waitForPromiseWithCancellation(pending, options, this.#cancelledErrorClass);
 			if (session.kernel !== oldKernel) return;
 			pending = this.#transitions.get(session.sessionKey);
 		}
 		this.#retiring.add(session);
 		const replacing = (async () => {
 			if (this.#failedStartups.has(session.sessionKey)) await this.#confirmFailedStartupShutdown(session.sessionKey);
-			await this.#confirmShutdown(session, getRemainingTimeoutMs(options.deadlineMs));
+			await this.#confirmShutdown(session);
 			if (!this.hasSession(session.sessionKey, session)) throw new this.#cancelledErrorClass(false);
-			requireRemainingTimeoutMs(options.deadlineMs, this.#cancelledErrorClass);
 			let nextKernel: TKernel;
 			try {
-				nextKernel = await this.#options.startKernel(cwd, options);
+				nextKernel = await this.#options.startKernel(cwd, {
+					...options,
+					signal: undefined,
+					deadlineMs: undefined,
+				});
 			} catch (error) {
 				throw this.#retainFailedStartup(error, session.sessionKey, session.sessionId, cwd, session);
 			}
@@ -941,11 +930,12 @@ export class KernelSessionPool<
 			this.#logOwnership(session, "owned");
 		})();
 		this.#transitions.set(session.sessionKey, replacing);
-		try {
-			await replacing;
-		} finally {
-			if (this.#transitions.get(session.sessionKey) === replacing) this.#transitions.delete(session.sessionKey);
-		}
+		void replacing
+			.finally(() => {
+				if (this.#transitions.get(session.sessionKey) === replacing) this.#transitions.delete(session.sessionKey);
+			})
+			.catch(() => {});
+		await waitForPromiseWithCancellation(replacing, options, this.#cancelledErrorClass);
 	}
 
 	#logOwnership(session: ManagedKernelSession<SessionKernel>, state: "owned" | "retiring" | "released"): void {
@@ -1273,20 +1263,22 @@ export function createKernelExecutionDriver<
 			options.bridgeSessionId = sessionId;
 		}
 		if (options.reset) {
-			const inFlight = pool.resettingSessions.get(sessionKey);
-			if (inFlight) await inFlight;
-			else {
-				const resetPromise = pool.resetSession(sessionKey);
+			let resetPromise = pool.resettingSessions.get(sessionKey);
+			if (!resetPromise) {
+				resetPromise = pool.resetSession(sessionKey);
 				pool.resettingSessions.set(sessionKey, resetPromise);
-				try {
-					await resetPromise;
-				} finally {
-					pool.resettingSessions.delete(sessionKey);
-				}
+				void resetPromise
+					.finally(() => {
+						if (pool.resettingSessions.get(sessionKey) === resetPromise) {
+							pool.resettingSessions.delete(sessionKey);
+						}
+					})
+					.catch(() => {});
 			}
+			await waitForPromiseWithCancellation(resetPromise, options, cancelledErrorClass);
 		} else {
 			const inFlight = pool.resettingSessions.get(sessionKey);
-			if (inFlight) await inFlight;
+			if (inFlight) await waitForPromiseWithCancellation(inFlight, options, cancelledErrorClass);
 		}
 		const session = await pool.acquireSession(sessionKey, sessionId, cwd, options);
 		if (options.signal?.aborted) {
