@@ -679,11 +679,11 @@ describe("native retained child resume", () => {
 		expect(Reflect.get(ordered.details ?? {}, "arrivedAfter")).toBeUndefined();
 	});
 
-	it("steers a streaming retained child immediately even when an irc wake phase is already active", async () => {
+	it("steers a live streaming retained child immediately on parent IRC during an active wake phase", async () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Handled"], stopReason: "stop" }]);
-		const child = await session("worker", [yielded("B")]);
+		const child = await session("worker", [{ content: ["First turn done"], stopReason: "stop" }, yielded("B")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
 		registry.register({
@@ -697,22 +697,15 @@ describe("native retained child resume", () => {
 
 		const started = Promise.withResolvers<void>();
 		const gate = Promise.withResolvers<void>();
-		const originalPrompt = child.instance.agent.prompt.bind(child.instance.agent);
-		spyOn(child.instance.agent, "prompt").mockImplementation(async (...args) => {
-			child.instance.agent.state.isStreaming = true;
-			started.resolve();
-			try {
+		const originalStreamFn = child.instance.agent.streamFn;
+		let callIndex = 0;
+		child.instance.agent.streamFn = async (model, context, options) => {
+			if (callIndex++ === 0) {
+				started.resolve();
 				await gate.promise;
-				return await originalPrompt(...args);
-			} finally {
-				child.instance.agent.state.isStreaming = false;
 			}
-		});
-
-		const steered: unknown[] = [];
-		spyOn(child.instance.agent, "steer").mockImplementation((record: unknown) => {
-			steered.push(record);
-		});
+			return originalStreamFn(model, context, options);
+		};
 
 		const phase1Promise = child.instance.deliverIrcMessage({
 			id: "phase-active-1",
@@ -722,24 +715,101 @@ describe("native retained child resume", () => {
 			ts: 1700000001000,
 		});
 		await started.promise;
-		await child.instance.deliverIrcMessage({
+		expect(child.instance.agent.state.isStreaming).toBe(true);
+
+		const delivery = await child.instance.deliverIrcMessage({
 			id: "steer-during-active-phase",
 			from: "owner",
 			to: "worker",
 			body: "2 GiB installer approved",
 			ts: 1700000002000,
 		});
-
-		expect(steered).toHaveLength(1);
-		const firstSteer = steered[0];
-		const details =
-			firstSteer && typeof firstSteer === "object" && "details" in firstSteer ? firstSteer.details : undefined;
-		const steeredId = details && typeof details === "object" && "id" in details ? details.id : undefined;
-		expect(steeredId).toBe("steer-during-active-phase");
+		expect(delivery).toBe("injected");
 
 		gate.resolve();
 		await phase1Promise;
 		await child.instance.waitForIdle();
 		await parent.instance.waitForIdle();
+
+		// The steered parent message arrived in the second turn of the SAME active wake phase.
+		expect(child.mock.calls).toHaveLength(2);
+		const secondTurnMessages = child.mock.calls[1]?.context.messages ?? [];
+		expect(
+			secondTurnMessages.some(
+				message => JSON.stringify(message.content).includes("2 GiB installer approved"),
+			),
+		).toBe(true);
+
+		const completions = parent.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		expect(completions).toHaveLength(1);
+		const completion = completions[0];
+		if (!completion || completion.type !== "custom_message") throw new Error("Expected native completion");
+		expect(completion.content).toContain('"value":"B"');
+	});
+
+	it("queues parent IRC once in outbox when agent loop already ended during wake settlement", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [
+			{ content: ["Handled A"], stopReason: "stop" },
+			{ content: ["Handled B"], stopReason: "stop" },
+		]);
+		const child = await session("worker", [yielded("A"), yielded("B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+
+		const settlingStarted = Promise.withResolvers<void>();
+		const settlingGate = Promise.withResolvers<void>();
+		const originalParentDeliver = parent.instance.deliverIrcMessage.bind(parent.instance);
+		let parentDeliverCount = 0;
+		spyOn(parent.instance, "deliverIrcMessage").mockImplementation(async msg => {
+			if (parentDeliverCount++ === 0) {
+				settlingStarted.resolve();
+				await settlingGate.promise;
+			}
+			return originalParentDeliver(msg);
+		});
+
+		const phase1Promise = child.instance.deliverIrcMessage({
+			id: "phase-settle-1",
+			from: "owner",
+			to: "worker",
+			body: "Initial wake",
+			ts: 1700000003000,
+		});
+		await settlingStarted.promise;
+		// Agent loop finished, while wake publication/settlement is still in flight.
+		expect(child.instance.agent.state.isStreaming).toBe(false);
+		expect(child.instance.isStreaming).toBe(true);
+
+		const delivery = await child.instance.deliverIrcMessage({
+			id: "after-provider-settlement",
+			from: "owner",
+			to: "worker",
+			body: "Follow-up after provider finished",
+			ts: 1700000004000,
+		});
+		expect(delivery).toBe("injected");
+
+		settlingGate.resolve();
+		await phase1Promise;
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+		const followUpCalls = child.mock.calls.filter(call =>
+			call.context.messages.some(message =>
+				JSON.stringify(message.content).includes("Follow-up after provider finished"),
+			),
+		);
+		expect(followUpCalls).toHaveLength(1);
 	});
 });

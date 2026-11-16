@@ -5898,11 +5898,12 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			return "woken";
 		}
 		void this.#events.send({ type: "irc_message", message: record });
-		if (this.isStreaming) {
+		if (this.agent.state.isStreaming) {
 			if (relation === "parent") {
 				if (!this.#ircContinuations) {
 					this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
 				}
+				const outbox = this.#ircContinuations;
 				record = {
 					...record,
 					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
@@ -5917,10 +5918,14 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 				};
 				// Claim before yielding to disk I/O or enqueueing the steer. A retry cannot
 				// inject twice, and a restart can recover until message_end persists it.
-				this.#ircContinuations.begin(msg.id, record);
+				outbox.begin(msg.id, record);
 				await this.sessionManager.ensureOnDisk();
 				await this.sessionManager.sync();
-				this.agent.steer(record);
+				if (this.agent.state.isStreaming) {
+					this.agent.steer(record);
+				} else if (!this.#ircActivePhase) {
+					await this.replayIrcContinuations();
+				}
 			} else {
 				this.#irc.inbox.queueInterrupt(record);
 			}

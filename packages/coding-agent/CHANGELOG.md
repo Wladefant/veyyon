@@ -6,6 +6,7 @@
 
 - The shared Windows daemon broker survives the client process that started it.
 - Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+- Steer live streaming retained children immediately on parent IRC during an active wake phase while deferring post-loop messages to the continuation outbox ([PR #1146](https://github.com/Wladefant/veyyon/pull/1146)).
 ## [1.10.2] - 2026-11-15
 
 ### Fixed
