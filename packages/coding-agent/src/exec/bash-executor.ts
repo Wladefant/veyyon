@@ -14,9 +14,9 @@ import {
 } from "@veyyon/natives";
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
-import { sessionCpuLimit } from "../session/cpu-limit";
-import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output"
 import { ProducerOutputGuard } from "../secrets/producer-output";
+import { sessionCpuLimit } from "../session/cpu-limit";
+import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
 import {
 	type OutputArtifactError,
 	resolveOutputMaxColumns,
@@ -389,6 +389,8 @@ async function releaseShell(sessionKey: string, lease: ShellLease, reset: boolea
 	if (!reset) await retainShellWithLiveBackgroundJobs(lease.persistent);
 }
 
+const NATIVE_TIMEOUT_BACKSTOP_GRACE_MS = 200;
+
 /**
  * The two ways a run ends before its result: the caller's signal and the executor deadline. Either aborts
  * the run and settles `stopped` with the annotation of the first that fired.
@@ -402,13 +404,7 @@ class RunStop {
 	readonly #stopped = Promise.withResolvers<string>();
 	#timer: NodeJS.Timeout | undefined;
 	#shellAbort: Promise<void> | undefined;
-
-	constructor(
-		shell: Shell,
-		timeoutMs: number | undefined,
-		userSignal: AbortSignal | undefined,
-		setupElapsedMs = 0,
-	) {
+	constructor(shell: Shell, timeoutMs: number | undefined, userSignal: AbortSignal | undefined, setupElapsedMs = 0) {
 		this.#shell = shell;
 		this.#userSignal = userSignal;
 		const deadlineMs = timeoutMs === 0 ? undefined : Math.max(1_000, timeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
@@ -417,7 +413,11 @@ class RunStop {
 			timeoutMs !== undefined && timeoutMs > 0 ? Math.max(1, timeoutMs - setupElapsedMs) : undefined;
 		userSignal?.addEventListener("abort", this.#onUserAbort, { once: true });
 		if (remainingDeadlineMs !== undefined) {
-			this.#timer = setTimeout(() => this.#onDeadline(deadlineMs!), remainingDeadlineMs);
+			const backstopMs =
+				this.nativeTimeoutMs !== undefined
+					? remainingDeadlineMs + NATIVE_TIMEOUT_BACKSTOP_GRACE_MS
+					: remainingDeadlineMs;
+			this.#timer = setTimeout(() => this.#onDeadline(deadlineMs!), backstopMs);
 		}
 	}
 
@@ -613,12 +613,16 @@ async function runBash(
 	const plan = await planCommand(settings, command, options);
 	// Output sink for truncation and artifact handling. sink.push() is synchronous: buffer management,
 	// counters and onChunk all run inline, and artifact file writes run asynchronously inside the sink.
-	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard(options?.redactOutput),
+	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(options?.redactOutput),
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
-		artifactMaxBytes: options?.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings), ...resolveOutputSinkWindow(settings, options?.spillThreshold ?? DEFAULT_MAX_BYTES), maxColumns: resolveOutputMaxColumns(settings),
-		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0, });
+		artifactMaxBytes: options?.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings),
+		...resolveOutputSinkWindow(settings, options?.spillThreshold ?? DEFAULT_MAX_BYTES),
+		maxColumns: resolveOutputMaxColumns(settings),
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0,
+	});
 	if (options?.signal?.aborted) return cancelledResult(sink, "Command cancelled");
 
 	const cpuBudgetId = await joinCpuBudget(options);
@@ -660,12 +664,12 @@ async function runBash(
 			runPromise.then(result => ({ result })),
 			stop.stopped.then(stopped => ({ stopped })),
 		]);
+		acceptingChunks = false;
 		if ("stopped" in outcome) {
-			acceptingChunks = false;
 			resetSession = lease.persistent !== undefined;
 			abandonStoppedRun(sessionKey, lease, runPromise, stop);
 			const timedOut = outcome.stopped.startsWith("Command timed out");
-			return await cancelledResult(sink, outcome.stopped, timedOut);
+			return await cancelledResult(sink, `${outcome.stopped}\n${INCOMPLETE_CAPTURE_NOTICE}`, timedOut, true);
 		}
 		stop.disarmDeadline();
 		const { result } = outcome;
@@ -704,6 +708,7 @@ async function runBash(
 		resetSession = true;
 		throw err;
 	} finally {
+		acceptingChunks = false;
 		stop.dispose();
 		await releaseShell(sessionKey, lease, resetSession, options?.sessionKey?.includes(":async:") === true);
 	}
