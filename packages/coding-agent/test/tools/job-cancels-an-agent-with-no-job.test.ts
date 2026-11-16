@@ -403,6 +403,7 @@ describe("job cancel on an agent with no job row", () => {
 				},
 			} as unknown as AgentSession,
 		});
+		AgentLifecycleManager.global().adopt("FailingDispose", { idleTtlMs: 60_000 });
 		const tool = new JobTool(
 			makeToolSession({
 				getAgentId: () => "Parent",
@@ -420,5 +421,6 @@ describe("job cancel on an agent with no job row", () => {
 		expect(text).toContain("Could not kill agent FailingDispose");
 		expect(text).toContain("disk busy");
 		expect(AgentRegistry.global().get("FailingDispose")).toBeDefined();
+		expect(AgentLifecycleManager.global().has("FailingDispose")).toBe(true);
 	});
 });

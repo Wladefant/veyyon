@@ -468,10 +468,6 @@ export class AgentLifecycleManager {
 
 	/** Hard removal: dispose if live, unregister from registry, drop deadlines. */
 	async release(id: string, options?: { throwOnDisposeError?: boolean }): Promise<void> {
-		const adopted = this.#adopted.get(id);
-		if (adopted) disarm(adopted);
-		this.#adopted.delete(id);
-		this.#scheduleNext();
 		const ref = this.#registry.get(id);
 		if (ref?.session) {
 			try {
@@ -483,6 +479,10 @@ export class AgentLifecycleManager {
 				logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: errorMessage(error) });
 			}
 		}
+		const adopted = this.#adopted.get(id);
+		if (adopted) disarm(adopted);
+		this.#adopted.delete(id);
+		this.#scheduleNext();
 		this.#registry.unregister(id);
 	}
 	/**

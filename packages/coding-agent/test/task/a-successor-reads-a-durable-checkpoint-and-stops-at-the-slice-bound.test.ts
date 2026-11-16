@@ -353,6 +353,37 @@ describe("explicit bounded lane successors", () => {
 		expect(disposed).toBe(false);
 		expect(registry.get(predecessor)).toBeDefined();
 		expect(executed).toHaveLength(1);
+		expect(refused.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain("successor-wrong-owner");
+
+		// Also fail closed when parent ref is unregistered (no scope on caller) and when parentId differs without scope.
+		registry.unregister("parent");
+		const refusedNoParentRef = await dispatch("CrossConvNoParentRef", predecessor);
+		expect(refusedNoParentRef.isError).toBe(true);
+		expect(refusedNoParentRef.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain(
+			"successor-wrong-owner",
+		);
+		expect(disposed).toBe(false);
+
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			parentId: "other-main",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402");
+		const refusedDiffParent = await dispatch("DiffParentNoScope", predecessor);
+		expect(refusedDiffParent.isError).toBe(true);
+		expect(refusedDiffParent.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain(
+			"successor-wrong-owner",
+		);
+		expect(disposed).toBe(false);
 	});
 	it("refuses successor when predecessor runs and settles again (ABA) during checkpoint claim", async () => {
 		await dispatch("Original");

@@ -651,14 +651,13 @@ async function runPreparedSpawn(
 		const registry = AgentRegistry.global();
 		const predecessor = registry.get(params.successorOf);
 		const parentRef = options.parentAgentId ? registry.get(options.parentAgentId) : undefined;
-		if (
-			predecessor &&
-			((predecessor.scope && parentRef?.scope && predecessor.scope !== parentRef.scope) ||
-				(predecessor.parentId &&
-					options.parentAgentId &&
-					predecessor.parentId !== options.parentAgentId &&
-					!registry.isDescendant(params.successorOf, options.parentAgentId)))
-		) {
+		const wrongScope = predecessor?.scope !== undefined && predecessor.scope !== parentRef?.scope;
+		const wrongParent =
+			predecessor?.parentId !== undefined &&
+			(!options.parentAgentId ||
+				(predecessor.parentId !== options.parentAgentId &&
+					!registry.descendantsOf(options.parentAgentId).includes(params.successorOf)));
+		if (predecessor && (wrongScope || wrongParent)) {
 			return spawnRefusal(
 				`successor-wrong-owner: ${params.successorOf} belongs to another conversation or parent`,
 				projectAgentsDir,
