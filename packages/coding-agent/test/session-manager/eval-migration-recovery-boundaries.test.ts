@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { ArtifactManager } from "@veyyon/kernel/session/artifacts";
 import { BlobStore, externalizeTextSync } from "@veyyon/kernel/session/blob-store";
 import type { FileEntry } from "@veyyon/kernel/session/session-entries";
-import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
+import { loadSessionHistoryReadOnly } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { migrateSessionEntries, migrateToCurrentVersion } from "@veyyon/kernel/session/session-migrations";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
@@ -65,7 +65,7 @@ for (const nested of [false, true]) {
 
 			const original = await fs.readFile(sessionFile, "utf8");
 			const originalStat = await fs.stat(sessionFile);
-			await loadSessionMessagesReadOnly(sessionFile);
+			await loadSessionHistoryReadOnly(sessionFile);
 			const artifacts = new ArtifactManager(sessionFileStem(sessionFile));
 			expect(await artifacts.listFiles()).toEqual([]);
 			expect(await fs.readFile(sessionFile, "utf8")).toBe(original);
@@ -164,7 +164,7 @@ it("a read-only reader and a session migrator preserve both complete recovery va
 				.join("\n")}\n`,
 		);
 		const [, manager] = await Promise.all([
-			loadSessionMessagesReadOnly(sessionFile),
+			loadSessionHistoryReadOnly(sessionFile),
 			SessionManager.open(sessionFile, root),
 		]);
 		await manager.flush();
