@@ -503,7 +503,8 @@ export class AgentLifecycleManager {
 			this.#orphanCleanupPending = true;
 			return this.#orphanCleanupInFlight;
 		}
-		const run = (async () => {
+		let run!: Promise<void>;
+		run = (async () => {
 			await Promise.resolve();
 			try {
 				while (!this.#disposed) {
