@@ -11,10 +11,20 @@ import { daemonBrokerTokenPath, managedDaemonMetaPath } from "../../src/launch/p
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-rename-retry");
 let testRoot = "";
+const realRename = fs.rename.bind(fs);
+let renameInterceptor: ((source: string, target: string) => Promise<void> | undefined) | undefined;
+let renameSpy: { mockRestore(): void } | undefined;
 
 beforeAll(async () => {
 	await fs.mkdir(TEST_PARENT, { recursive: true });
 	testRoot = await fs.mkdtemp(path.join(TEST_PARENT, "run-"));
+	renameSpy = spyOn(fs, "rename").mockImplementation(async (source, target) => {
+		if (renameInterceptor) {
+			const handled = renameInterceptor(String(source), String(target));
+			if (handled) return handled;
+		}
+		return realRename(source, target);
+	});
 });
 let patchedChildren = false;
 
@@ -28,6 +38,8 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+	renameSpy?.mockRestore();
+	renameSpy = undefined;
 	await fs.rm(testRoot, { recursive: true, force: true });
 });
 
@@ -83,26 +95,25 @@ describe("daemon metadata rename retries", () => {
 		const metadataPath = managedDaemonMetaPath(path.join(runtimeDir, "daemons", "rename"));
 		const { client } = await startInProcessBroker(projectDir, runtimeDir);
 
-		const realRename = fs.rename;
 		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 		let denials = 0;
 		let targetMovedAside = false;
-		const renameSpy = spyOn(fs, "rename").mockImplementation(async (source, target) => {
-			if (String(source) === metadataPath) {
+		renameInterceptor = (source, target) => {
+			if (source === metadataPath) {
 				targetMovedAside = true;
 			}
-			if (
-				denials < 2 &&
-				String(target) === metadataPath &&
-				(await fs.readFile(String(source), "utf8")).includes('"state":"exited"')
-			) {
-				Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-				const code = denials++ === 0 ? "EEXIST" : "EPERM";
-				throw Object.assign(new Error(`rename denied by reader (${code})`), { code });
+			if (denials < 2 && target === metadataPath) {
+				return (async () => {
+					if ((await fs.readFile(source, "utf8")).includes('"state":"exited"')) {
+						Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+						const code = denials++ === 0 ? "EEXIST" : "EPERM";
+						throw Object.assign(new Error(`rename denied by reader (${code})`), { code });
+					}
+					return realRename(source, target);
+				})();
 			}
-			return realRename(source, target);
-		});
-
+			return undefined;
+		};
 		try {
 			await client.request({
 				op: "start",
@@ -124,8 +135,63 @@ describe("daemon metadata rename retries", () => {
 			// Wait for the broker's persistQueue to flush before inspecting meta.json on disk.
 			await client.request({ op: "shutdown" });
 		} finally {
+			renameInterceptor = undefined;
 			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
-			renameSpy.mockRestore();
+		}
+
+		expect(denials).toBe(2);
+		expect(targetMovedAside).toBe(false);
+		expect(await Bun.file(metadataPath).json()).toMatchObject({ daemon: { state: "exited" } });
+	}, 20_000);
+
+	it("retries transient Windows EBUSY rename denials in broker persist", async () => {
+		const projectDir = await tempDir("project-ebusy-");
+		const runtimeDir = await tempDir("runtime-ebusy-");
+		const metadataPath = managedDaemonMetaPath(path.join(runtimeDir, "daemons", "rename-ebusy"));
+		const { client } = await startInProcessBroker(projectDir, runtimeDir);
+
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		let denials = 0;
+		let targetMovedAside = false;
+		renameInterceptor = (source, target) => {
+			if (source === metadataPath) {
+				targetMovedAside = true;
+			}
+			if (denials < 2 && target === metadataPath) {
+				return (async () => {
+					if ((await fs.readFile(source, "utf8")).includes('"state":"exited"')) {
+						Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+						denials++;
+						throw Object.assign(new Error("rename denied by reader (EBUSY)"), { code: "EBUSY" });
+					}
+					return realRename(source, target);
+				})();
+			}
+			return undefined;
+		};
+
+		try {
+			await client.request({
+				op: "start",
+				spec: {
+					name: "rename-ebusy",
+					application: process.execPath,
+					args: ["-e", "process.exit(0)"],
+					env: {},
+					cwd: projectDir,
+					pty: false,
+					restart: "no",
+					persist: false,
+					detached: false,
+				},
+			});
+			const waited = await client.request({ op: "wait", name: "rename-ebusy", for: "exit", timeoutMs: 10_000 });
+			if (waited.op !== "wait") throw new Error("unexpected wait result");
+			expect(waited.daemon.state).toBe("exited");
+			await client.request({ op: "shutdown" });
+		} finally {
+			renameInterceptor = undefined;
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 		}
 
 		expect(denials).toBe(2);

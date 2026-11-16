@@ -56,11 +56,17 @@ export interface AtomicWriteOptions {
 	 */
 	requireAtomicReplace?: boolean;
 	/**
-	 * Retry transient Windows `EPERM`/`EACCES`/`EEXIST` rename denials up to 2s
-	 * without moving the existing target aside.
+	 * Retry transient Windows `EPERM`/`EACCES`/`EEXIST`/`EBUSY` rename denials
+	 * up to 2s without moving the existing target aside. Async-only
+	 * (`atomicWriteFile` / `atomicWriteFileWith`). Pair with
+	 * `requireAtomicReplace: true` to fail instead of falling back to the
+	 * displacing backup path after the retry budget is exhausted; on its own,
+	 * `retryRename: true` retries before the existing displacing fallback.
 	 */
 	retryRename?: boolean;
 }
+
+export type AtomicWriteSyncOptions = Omit<AtomicWriteOptions, "retryRename">;
 
 // Monotonic per-process counter gives every in-flight writer a distinct name.
 // The temp is then reserved with O_EXCL, so wraparound or debris from a killed
@@ -147,6 +153,14 @@ function isRenameClobberError(error: unknown): boolean {
 		process.platform === "win32" &&
 		isFsError(error) &&
 		(error.code === "EPERM" || error.code === "EEXIST" || error.code === "EACCES")
+	);
+}
+
+function isRetryableWindowsRenameError(error: unknown): boolean {
+	return (
+		process.platform === "win32" &&
+		isFsError(error) &&
+		(error.code === "EPERM" || error.code === "EEXIST" || error.code === "EACCES" || error.code === "EBUSY")
 	);
 }
 
@@ -337,8 +351,8 @@ async function renameTempOverTarget(
 	requireAtomicReplace = false,
 	retryRename = false,
 ): Promise<void> {
-	// Windows readers briefly deny replacement with EPERM/EACCES/EEXIST; when
-	// retryRename is enabled, retry the same staged sibling rename first so
+	// Windows readers briefly deny replacement with EPERM/EACCES/EEXIST/EBUSY;
+	// when retryRename is enabled, retry the same staged sibling rename first so
 	// readers never observe a missing target.
 	const deadline = retryRename ? Date.now() + RENAME_RETRY_BUDGET_MS : 0;
 	for (let failures = 0; ; failures++) {
@@ -346,14 +360,14 @@ async function renameTempOverTarget(
 			await fsp.rename(tmpPath, target);
 			return;
 		} catch (error) {
-			if (!isRenameClobberError(error)) throw error;
 			if (!retryRename) {
-				if (requireAtomicReplace) throw error;
+				if (!isRenameClobberError(error) || requireAtomicReplace) throw error;
 				break;
 			}
+			if (!isRetryableWindowsRenameError(error)) throw error;
 			const remaining = deadline - Date.now();
 			if (remaining <= 0) {
-				if (requireAtomicReplace) throw error;
+				if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
 				break;
 			}
 			await Bun.sleep(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
@@ -617,7 +631,7 @@ async function fillTempFromPath(
 export function atomicWriteFileSync(
 	filePath: string,
 	data: string | NodeJS.ArrayBufferView,
-	options: AtomicWriteOptions = {},
+	options: AtomicWriteSyncOptions = {},
 ): void {
 	const { mode = 0o600, fsync = true, requireAtomicReplace = false } = options;
 	const { target, viaSymlink } = resolveWriteTargetSync(filePath);
