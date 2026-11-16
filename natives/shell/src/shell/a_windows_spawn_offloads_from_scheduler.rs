@@ -38,17 +38,24 @@ fn helper_long_lived_command() -> std::process::Command {
 
 fn wait_for_pid_exit(pid: u32, timeout_ms: u32) -> bool {
 	use windows_sys::Win32::{
-		Foundation::{CloseHandle, WAIT_OBJECT_0},
+		Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, WAIT_OBJECT_0},
 		System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
 	};
 
-	// SAFETY: OpenProcess with PROCESS_SYNCHRONIZE is safe for any PID; handle is closed before return.
+	// SAFETY: OpenProcess with PROCESS_SYNCHRONIZE is safe for any PID; handle is checked and closed before return.
 	let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
 	if handle.is_null() {
-		// Process already exited and its handle table entry is gone.
+		// SAFETY: GetLastError reads the calling thread's last-error code set by OpenProcess.
+		let err = unsafe { GetLastError() };
+		assert_eq!(
+			err, ERROR_INVALID_PARAMETER,
+			"OpenProcess(pid={pid}) failed unexpectedly with GetLastError={err}"
+		);
 		return true;
 	}
+	// SAFETY: `handle` is a valid non-null process handle opened above with PROCESS_SYNCHRONIZE.
 	let wait = unsafe { WaitForSingleObject(handle, timeout_ms) };
+	// SAFETY: `handle` is a valid open handle and is closed exactly once before returning.
 	unsafe {
 		CloseHandle(handle);
 	}
@@ -174,6 +181,116 @@ fn cancelled_windows_spawn_kills_late_child_without_orphan() {
 	assert!(
 		wait_for_pid_exit(pid, 3000),
 		"late child (pid={pid}) returned after caller cancellation must be killed, not orphaned"
+	);
+}
+
+#[test]
+fn cancelled_queued_windows_spawn_never_enters_closure() {
+	let rt = tokio::runtime::Builder::new_current_thread()
+		.max_blocking_threads(1)
+		.enable_time()
+		.build()
+		.expect("current_thread runtime with 1 blocking thread");
+
+	let blocker_entered = Arc::new(AtomicBool::new(false));
+	let blocker_gate = Arc::new((Mutex::new(false), Condvar::new()));
+	let spawn_entered = Arc::new(AtomicBool::new(false));
+
+	let be = Arc::clone(&blocker_entered);
+	let bg = Arc::clone(&blocker_gate);
+	let blocker_handle = rt.spawn_blocking(move || {
+		be.store(true, Ordering::Release);
+		let (lock, cvar) = &*bg;
+		let guard = lock.lock().expect("blocker mutex");
+		let _guard = cvar
+			.wait_timeout_while(guard, Duration::from_secs(5), |released| !*released)
+			.expect("blocker wait");
+	});
+
+	rt.block_on(async {
+		while !blocker_entered.load(Ordering::Acquire) {
+			tokio::time::sleep(Duration::from_millis(2)).await;
+		}
+		let se = Arc::clone(&spawn_entered);
+		let spawn_fut = brush_core::sys::tokio_process::spawn_with_op(helper_sleep_command(), move |mut cmd| {
+			se.store(true, Ordering::Release);
+			cmd.spawn()
+		});
+		let mut spawn_fut = std::pin::pin!(spawn_fut);
+		tokio::select! {
+			_ = &mut spawn_fut => panic!("queued spawn should not complete while blocking pool is saturated"),
+			_ = tokio::time::sleep(Duration::from_millis(30)) => {}
+		}
+		drop(spawn_fut);
+	});
+
+	{
+		let (lock, cvar) = &*blocker_gate;
+		let mut released = lock.lock().expect("blocker mutex");
+		*released = true;
+		cvar.notify_all();
+	}
+	rt.block_on(blocker_handle).expect("blocker task finishes");
+	assert!(
+		!spawn_entered.load(Ordering::Acquire),
+		"cancelled queued spawn closure must never execute"
+	);
+}
+
+#[test]
+fn cancelled_windows_spawn_after_child_creation_kills_late_child() {
+	let rt = tokio::runtime::Builder::new_current_thread()
+		.enable_time()
+		.build()
+		.expect("current_thread runtime");
+
+	let created = Arc::new(AtomicBool::new(false));
+	let gate = Arc::new((Mutex::new(false), Condvar::new()));
+	let (pid_tx, pid_rx) = std::sync::mpsc::channel::<u32>();
+
+	let created_op = Arc::clone(&created);
+	let gate_op = Arc::clone(&gate);
+	let spawn_fut =
+		brush_core::sys::tokio_process::spawn_with_op(helper_long_lived_command(), move |mut cmd| {
+			let child = cmd.spawn()?;
+			if let Some(pid) = child.id() {
+				let _ = pid_tx.send(pid);
+			}
+			created_op.store(true, Ordering::Release);
+			let (lock, cvar) = &*gate_op;
+			let guard = lock.lock().expect("gate mutex");
+			let _guard = cvar
+				.wait_timeout_while(guard, Duration::from_secs(5), |released| !*released)
+				.expect("gate wait");
+			Ok(child)
+		});
+
+	rt.block_on(async {
+		let mut spawn_fut = std::pin::pin!(spawn_fut);
+		tokio::select! {
+			_ = &mut spawn_fut => panic!("spawn_fut should still be held after child creation"),
+			_ = async {
+				while !created.load(Ordering::Acquire) {
+					tokio::time::sleep(Duration::from_millis(5)).await;
+				}
+				tokio::time::sleep(Duration::from_millis(20)).await;
+			} => {}
+		}
+	});
+
+	{
+		let (lock, cvar) = &*gate;
+		let mut released = lock.lock().expect("gate mutex");
+		*released = true;
+		cvar.notify_all();
+	}
+
+	let pid = pid_rx
+		.recv_timeout(Duration::from_secs(5))
+		.expect("post-creation op must report child PID");
+	assert!(
+		wait_for_pid_exit(pid, 3000),
+		"late child (pid={pid}) created before cancellation must be killed, not orphaned"
 	);
 }
 
