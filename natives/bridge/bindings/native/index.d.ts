@@ -530,6 +530,20 @@ export interface CommitMemory {
   commitLimitBytes: number
   /** Private committed bytes of this process (`PrivateUsage`). */
   processCommitBytes: number
+  /** Total open handles in this process. */
+  handleCount?: number
+}
+
+/** Result of installing the console control event recorder. */
+export interface ConsoleCtrlInstallResult {
+  /** True if the handler is installed and actively recording. */
+  installed: boolean
+  /** True if this platform supports Windows console control events. */
+  supported: boolean
+  /** File path where console control events are logged, if installed. */
+  path?: string
+  /** Status code or description: "installed", "reinstalled", "empty_path", "unsupported_platform", or error message. */
+  status: string
 }
 
 /** A context line (before or after a match). */
@@ -1045,6 +1059,16 @@ export interface HtmlToMarkdownOptions {
 }
 
 /**
+ * Install native Windows console event recorder.
+ *
+ * Registers a `SetConsoleCtrlHandler` callback to synchronously append
+ * `CTRL_CLOSE_EVENT` (2), `CTRL_LOGOFF_EVENT` (5), and `CTRL_SHUTDOWN_EVENT` (6)
+ * to `path` before returning `FALSE`.
+ */
+export declare function installConsoleCtrlHandler(path: string): ConsoleCtrlInstallResult
+
+
+/**
  * Invalidate the walker scan cache.
  *
  * When called with a path, removes entries for roots containing that path.
@@ -1523,6 +1547,9 @@ export declare function releaseEmbeddedModulePages(): number
  */
 export declare function releaseFreeHeapPages(): Promise<boolean>
 
+/** Remove the native console control event recorder. */
+export declare function removeConsoleCtrlHandler(): boolean
+
 /**
  * Search content for a pattern (one-shot, compiles pattern each time).
  * For repeated searches with the same pattern, use [`grep`] with file filters.
@@ -1716,6 +1743,7 @@ export interface ShellRunResult {
   /** Shell working directory after command completion. */
   workingDir?: string
 }
+
 
 /**
  * Skim the session file open at descriptor `fd` from byte `start`, reading it

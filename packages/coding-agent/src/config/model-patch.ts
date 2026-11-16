@@ -64,7 +64,19 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 	const result = { ...base };
 	if (patch.name !== undefined) result.name = patch.name;
 	if (patch.reasoning !== undefined) result.reasoning = patch.reasoning;
-	if (patch.thinking !== undefined) result.thinking = patch.thinking;
+	if (patch.thinking !== undefined) {
+		const baseRequiresEffort =
+			base.reasoningOptions?.requiresEffort === true || base.thinking?.requiresEffort === true;
+		const nextThinking: ThinkingConfig = { ...patch.thinking };
+		delete nextThinking.defaultLevel;
+		if (baseRequiresEffort) {
+			nextThinking.requiresEffort = true;
+		} else if (patch.thinking.requiresEffort !== undefined) {
+			nextThinking.requiresEffort = patch.thinking.requiresEffort;
+		}
+		result.thinking = nextThinking;
+		result.reasoningOptions = undefined;
+	}
 	if (patch.input !== undefined) result.input = patch.input;
 	if (patch.supportsTools !== undefined) result.supportsTools = patch.supportsTools;
 	if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
@@ -91,7 +103,15 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 		result.headers = patch.headers;
 		compat = patch.compat;
 	}
-	return buildModel({ ...result, compat } as ModelSpec<Api>);
+	const built = buildModel({ ...result, compat } as ModelSpec<Api>);
+	if (patch.thinking !== undefined && built.thinking !== undefined) {
+		const candidateDefault =
+			patch.thinking.defaultLevel ?? base.reasoningOptions?.defaultLevel ?? base.thinking?.defaultLevel;
+		if (candidateDefault !== undefined && built.thinking.efforts.includes(candidateDefault)) {
+			built.thinking = { ...built.thinking, defaultLevel: candidateDefault };
+		}
+	}
+	return built;
 }
 
 export function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<Api> {
