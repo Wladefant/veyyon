@@ -1,6 +1,6 @@
 import { deepStrictEqual } from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -158,12 +158,7 @@ function validate(workflow: Workflow): void {
 	}
 
 	check("ready/open/update/reopen subscriptions without duplicate push trigger", () => {
-		equal(workflow.on.pull_request?.types.slice().sort(), [
-			"opened",
-			"ready_for_review",
-			"reopened",
-			"synchronize",
-		]);
+		equal(workflow.on.pull_request?.types.slice().sort(), ["opened", "ready_for_review", "reopened", "synchronize"]);
 		equal(workflow.on.push, undefined);
 		equal(typeof workflow.on.workflow_dispatch?.inputs, "object");
 	});
@@ -177,7 +172,10 @@ function validate(workflow: Workflow): void {
 		const normalDispatch = context({ event: "workflow_dispatch", target: head });
 		equal(evaluate(workflow.concurrency?.group, tmpPr), evaluate(workflow.concurrency?.group, nextTmpPr));
 		equal(evaluate(workflow.concurrency?.group, tmpPr), evaluate(workflow.concurrency?.group, tmpDispatch));
-		equal(evaluate(workflow.concurrency?.group, tmpPr) === evaluate(workflow.concurrency?.group, anotherTmpPr), false);
+		equal(
+			evaluate(workflow.concurrency?.group, tmpPr) === evaluate(workflow.concurrency?.group, anotherTmpPr),
+			false,
+		);
 		equal(evaluate(workflow.concurrency?.group, normalDispatch), `OVH CI-${head}`);
 		equal(evaluate(workflow.concurrency?.["cancel-in-progress"], tmpPr), true);
 		equal(evaluate(workflow.concurrency?.["cancel-in-progress"], tmpDispatch), true);
@@ -206,13 +204,13 @@ function validate(workflow: Workflow): void {
 	});
 
 	for (const event of ["push", "schedule", "pull_request_target"]) {
-		check("unexpected event allocates no job: " + event, () => {
+		check(`unexpected event allocates no job: ${event}`, () => {
 			equal(eligibleJobs(context({ event })), []);
 		});
 	}
 
 	for (const prepared of ["failure", "cancelled", "skipped"]) {
-		check("shards cannot start after preparation is " + prepared, () => {
+		check(`shards cannot start after preparation is ${prepared}`, () => {
 			equal(evaluate(workflow.jobs.test!.if, context({ prepared })), false);
 		});
 	}
@@ -231,9 +229,7 @@ function validate(workflow: Workflow): void {
 			equal(runnerLabels.slice(0, 3), ["self-hosted", "Linux", "X64"]);
 			equal(runnerLabels[3], "${{ inputs.runner_label || 'veyyon' }}");
 		}
-		const runnerLabel = workflow.on.workflow_dispatch?.inputs.runner_label as
-			| Record<string, unknown>
-			| undefined;
+		const runnerLabel = workflow.on.workflow_dispatch?.inputs.runner_label as Record<string, unknown> | undefined;
 		equal(runnerLabel?.default, "veyyon");
 	});
 
@@ -242,7 +238,7 @@ function validate(workflow: Workflow): void {
 		["manual exact source", context({ event: "workflow_dispatch", target: head }), head],
 		["manual workflow source", context({ event: "workflow_dispatch" }), mergeCommit],
 	] as const) {
-		check("checkout and identity assertion use exact " + name + " commit in every job", () => {
+		check(`checkout and identity assertion use exact ${name} commit in every job`, () => {
 			for (const job of Object.values(workflow.jobs)) {
 				const checkout = job.steps.find(step => step.uses?.startsWith("actions/checkout@"));
 				const identity = job.steps.find(step => step.name === "Record checkout identity");
@@ -257,52 +253,61 @@ function validate(workflow: Workflow): void {
 			const cleanup = job.steps.find(step => step.name === "Clean orphaned processes");
 			equal(cleanup?.shell, "bash");
 			equal(cleanup?.if, "always()");
-			equal(evaluate(cleanup?.env?.WORKFLOW_SHA,
-				context({ event: "workflow_dispatch", target: head })), workflowCommit);
+			equal(
+				evaluate(cleanup?.env?.WORKFLOW_SHA, context({ event: "workflow_dispatch", target: head })),
+				workflowCommit,
+			);
 			if (typeof cleanup?.run !== "string") throw new Error("Cleanup command missing");
 			const sandbox = mkdtempSync(join(tmpdir(), "veyyon-ovh-reaper-"));
 			try {
 				const bin = join(sandbox, "bin");
 				mkdirSync(bin);
 				const git = join(bin, "git");
-				writeFileSync(git, [
-					"#!/bin/sh",
-					'if [ "$1" = "cat-file" ] && [ "$2" = "-e" ]; then',
-					'  printf "cat:%s\\n" "$3" >> "$RUNNER_TEMP/trace"',
-					'  [ "$TEST_MISSING_WORKFLOW_COMMIT" != "1" ] || exit 88',
-					"  exit 0",
-					"fi",
-					'if [ "$1" = "show" ]; then',
-					'  printf "show:%s\\n" "$2" >> "$RUNNER_TEMP/trace"',
-					'  printf \'echo "executed:$1" >> "$RUNNER_TEMP/trace"\\n\'',
-					"  exit 0",
-					"fi",
-					"exit 89",
-				].join("\n") + "\n");
+				writeFileSync(
+					git,
+					`${[
+						"#!/bin/sh",
+						'if [ "$1" = "cat-file" ] && [ "$2" = "-e" ]; then',
+						'  printf "cat:%s\\n" "$3" >> "$RUNNER_TEMP/trace"',
+						'  [ "$TEST_MISSING_WORKFLOW_COMMIT" != "1" ] || exit 88',
+						"  exit 0",
+						"fi",
+						'if [ "$1" = "show" ]; then',
+						'  printf "show:%s\\n" "$2" >> "$RUNNER_TEMP/trace"',
+						'  printf \'echo "executed:$1" >> "$RUNNER_TEMP/trace"\\n\'',
+						"  exit 0",
+						"fi",
+						"exit 89",
+					].join("\n")}\n`,
+				);
 				chmodSync(git, 0o755);
 				const env = {
 					...process.env,
-					PATH: bin + ":" + process.env.PATH,
+					PATH: `${bin}:${process.env.PATH}`,
 					RUNNER_TEMP: sandbox,
 					WORKFLOW_SHA: workflowCommit,
 				};
 				const run = spawnSync("bash", ["-c", cleanup.run], {
-					cwd: sandbox, env, encoding: "utf8", timeout: 10_000,
+					cwd: sandbox,
+					env,
+					encoding: "utf8",
+					timeout: 10_000,
 				});
 				equal(run.status, 0);
 				equal(readFileSync(join(sandbox, "trace"), "utf8").trim().split("\n"), [
-					"cat:" + workflowCommit + "^{commit}",
-					"show:" + workflowCommit + ":scripts/ovh-process-group.sh",
+					`cat:${workflowCommit}^{commit}`,
+					`show:${workflowCommit}:scripts/ovh-process-group.sh`,
 					"executed:--cleanup",
 				]);
 				writeFileSync(join(sandbox, "trace"), "");
 				const missing = spawnSync("bash", ["-c", cleanup.run], {
-					cwd: sandbox, env: { ...env, TEST_MISSING_WORKFLOW_COMMIT: "1" },
-					encoding: "utf8", timeout: 10_000,
+					cwd: sandbox,
+					env: { ...env, TEST_MISSING_WORKFLOW_COMMIT: "1" },
+					encoding: "utf8",
+					timeout: 10_000,
 				});
 				equal(missing.status === 0, false);
-				equal(readFileSync(join(sandbox, "trace"), "utf8").trim(),
-					"cat:" + workflowCommit + "^{commit}");
+				equal(readFileSync(join(sandbox, "trace"), "utf8").trim(), `cat:${workflowCommit}^{commit}`);
 			} finally {
 				rmSync(sandbox, { recursive: true, force: true });
 			}
@@ -319,10 +324,16 @@ function validate(workflow: Workflow): void {
 		["changed workflow", context(), true],
 		["unrelated change", context({ workflowChanged: "false" }), false],
 		["failed install", context({ installed: "failure" }), false],
-		["explicit focused tests", context({ event: "workflow_dispatch", focusedTests: '["scripts/example.test.ts"]' }), false],
+		[
+			"explicit focused tests",
+			context({ event: "workflow_dispatch", focusedTests: '["scripts/example.test.ts"]' }),
+			false,
+		],
 	] as const) {
-		check("configuration validator respects scope: " + name, () => {
-			const step = workflow.jobs.prepare!.steps.find(candidate => candidate.name === "Validate OVH pull-request workflow");
+		check(`configuration validator respects scope: ${name}`, () => {
+			const step = workflow.jobs.prepare!.steps.find(
+				candidate => candidate.name === "Validate OVH pull-request workflow",
+			);
 			equal(evaluate(step?.if, fixture), expected);
 		});
 	}
@@ -342,7 +353,7 @@ function validate(workflow: Workflow): void {
 		const nativeStep = steps[nativeIndex];
 		equal(nativeStep?.env?.CARGO_BUILD_JOBS, "2");
 		equal(nativeStep?.run?.includes("bun run ci:build:native"), true);
-		equal(nativeStep?.run?.includes("-s \"$RELATED_TESTS\"") || nativeStep?.run?.includes("-s $RELATED_TESTS"), true);
+		equal(nativeStep?.run?.includes('-s "$RELATED_TESTS"') || nativeStep?.run?.includes("-s $RELATED_TESTS"), true);
 		equal(nativeStep?.run?.includes("native_ready=true"), true);
 
 		const shardNativeBuild = workflow.jobs.test.steps.find(step => step.run?.includes("ci:build:native"));
@@ -354,21 +365,30 @@ function validate(workflow: Workflow): void {
 		equal(nativeStep !== undefined, true);
 		equal(nativeStep?.run?.includes("natives/bridge/bindings/native/veyyon_natives.linux-x64*.node"), true);
 		equal(nativeStep?.run?.includes("::error::"), true);
-		equal(nativeStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'), true);
+		equal(
+			nativeStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'),
+			true,
+		);
 
-		const verifyStep = workflow.jobs.test.steps.find(step =>
-			step.name === "Verify native addon" ||
-			(typeof step.run === "string" && step.run.includes("@veyyon/natives") && step.run.includes("getSupportedLanguages")),
+		const verifyStep = workflow.jobs.test.steps.find(
+			step =>
+				step.name === "Verify native addon" ||
+				(typeof step.run === "string" &&
+					step.run.includes("@veyyon/natives") &&
+					step.run.includes("getSupportedLanguages")),
 		);
 		equal(verifyStep !== undefined, true);
 		equal(verifyStep?.run?.includes("::error::"), true);
 		equal(verifyStep?.run?.includes("exit 1"), true);
-		equal(verifyStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'), true);
+		equal(
+			verifyStep?.run?.includes('import { getSupportedLanguages } from "@veyyon/natives"; getSupportedLanguages()'),
+			true,
+		);
 	});
 
 	check("artifact handoff", () => {
-		const uploadStep = workflow.jobs.prepare.steps.find(step =>
-			step.uses?.startsWith("actions/upload-artifact@") && step.with?.name?.includes("ovh-native-"),
+		const uploadStep = workflow.jobs.prepare.steps.find(
+			step => step.uses?.startsWith("actions/upload-artifact@") && step.with?.name?.includes("ovh-native-"),
 		);
 		equal(uploadStep !== undefined, true);
 		equal(uploadStep?.with?.name, "ovh-native-${{ github.run_id }}-${{ github.run_attempt }}");
@@ -378,8 +398,8 @@ function validate(workflow: Workflow): void {
 		equal(evaluate(uploadStep?.if, context({ nativeReady: "true" })), true);
 		equal(evaluate(uploadStep?.if, context({ nativeReady: "false" })), false);
 
-		const downloadStep = workflow.jobs.test.steps.find(step =>
-			step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
+		const downloadStep = workflow.jobs.test.steps.find(
+			step => step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
 		);
 		equal(downloadStep !== undefined, true);
 		equal(downloadStep?.with?.name, "ovh-native-${{ github.run_id }}-${{ github.run_attempt }}");
@@ -392,12 +412,15 @@ function validate(workflow: Workflow): void {
 	check("shard preflight order", () => {
 		const steps = workflow.jobs.test.steps;
 		const installIndex = steps.findIndex(step => step.id === "install" || step.uses?.includes("bun-install"));
-		const downloadIndex = steps.findIndex(step =>
-			step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
+		const downloadIndex = steps.findIndex(
+			step => step.uses?.startsWith("actions/download-artifact@") && step.with?.name?.includes("ovh-native-"),
 		);
-		const verifyIndex = steps.findIndex(step =>
-			step.name === "Verify native addon" ||
-			(typeof step.run === "string" && step.run.includes("@veyyon/natives") && step.run.includes("getSupportedLanguages")),
+		const verifyIndex = steps.findIndex(
+			step =>
+				step.name === "Verify native addon" ||
+				(typeof step.run === "string" &&
+					step.run.includes("@veyyon/natives") &&
+					step.run.includes("getSupportedLanguages")),
 		);
 		const bwrapIndex = steps.findIndex(step => step.id === "bwrap" || step.name === "Prepare bwrap runtime");
 		const testIndex = steps.findIndex(step => step.name === "Run selected tests serially");
@@ -424,7 +447,13 @@ try {
 }
 
 console.log(
-	"OVH_WORKFLOW_VALIDATION cases=" + (passed + failed) +
-		" pass=" + passed + " fail=" + failed + " assertions=" + assertions,
+	"OVH_WORKFLOW_VALIDATION cases=" +
+		(passed + failed) +
+		" pass=" +
+		passed +
+		" fail=" +
+		failed +
+		" assertions=" +
+		assertions,
 );
 process.exitCode = failed === 0 && passed > 0 && assertions > 0 ? 0 : 1;
