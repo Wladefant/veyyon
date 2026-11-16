@@ -1433,4 +1433,155 @@ describe("task spawn routing", () => {
 		gates.get("Fifth")!.resolve();
 		await Promise.all(jobs.map(job => job.promise));
 	});
+
+	it("rolls back a detached native dispatch claim and reservation when binding rejects after job acceptance", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-detached-rollback-"));
+		try {
+			const ledgerPath = path.join(tempDir, "ledger.json");
+			await fs.writeFile(
+				ledgerPath,
+				JSON.stringify({
+					version: 2,
+					requests: {
+						"ticket-detached-rollback": {
+							prompt: "Work on detached rollback ticket.",
+							state: "pending",
+							head: "0".repeat(40),
+							repo_root: process.cwd(),
+							authorization: {
+								status: "authorized",
+								timestamp: "2026-11-15T00:00:00Z",
+								scope: "staging",
+								authorized_by: "operator",
+							},
+						},
+					},
+				}),
+				"utf8",
+			);
+
+			const manager = createManager();
+			const lifecycleEvents: string[] = [];
+			const jobs: AsyncJob[] = [];
+			let dispatchAttempt = 0;
+			const firstBindEntered = Promise.withResolvers<void>();
+			const firstBindGate = Promise.withResolvers<void>();
+			const realRecordNativeDispatch = replenishmentModule.recordNativeDispatch;
+			vi.spyOn(replenishmentModule, "recordNativeDispatch").mockImplementation(
+				async (runId, taskHandle, targetLedgerPath, ticketId) => {
+					dispatchAttempt += 1;
+					if (dispatchAttempt === 1) {
+						firstBindEntered.resolve();
+						await firstBindGate.promise;
+						throw new Error("bridge binding refused");
+					}
+					return await realRecordNativeDispatch(runId, taskHandle, targetLedgerPath, ticketId);
+				},
+			);
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
+				makeResult(options.id, {
+					output: JSON.stringify({
+						stage: "build",
+						verdict: "pass",
+						checks: [
+							{
+								name: "verify",
+								command: ["git", "status"],
+								exit_code: 0,
+								observed: "clean",
+								purpose: "verification",
+							},
+						],
+					}),
+				}),
+			);
+
+			let tool!: TaskTool;
+			const engine = new replenishmentModule.TopicReplenishmentEngine({
+				ledgerPath,
+				minFloor: 1,
+				targetCount: 1,
+				maxCeiling: 1,
+				maxRamPct: 100,
+				memoryProvider: () => ({ ramUsedPct: 10 }),
+				executor: async ticket => {
+					const result = await tool.execute(`tc-detached-${dispatchAttempt}`, {
+						agent: "task",
+						task: ticket.prompt,
+						ticketId: ticket.id,
+						runId: ticket.runId,
+						ledgerPath: ticket.ledgerPath,
+					} as TaskParams);
+					jobs.push(manager.getJob(result.details!.async!.jobId)!);
+				},
+			});
+
+			tool = await TaskTool.create(
+				makeToolSession({
+					cwd: process.cwd(),
+					settings: Settings.isolated({ "async.enabled": true }),
+					asyncJobManager: manager,
+					onSubagentStart: record => {
+						lifecycleEvents.push(`start:${record.agentId}`);
+						engine.onWorkerStart(record);
+					},
+					onSubagentDispatchFailed: async record => {
+						lifecycleEvents.push(`dispatch-failed:${record.ticketId}`);
+						await engine.onWorkerDispatchFailed(record);
+					},
+					onSubagentStartFailed: record => {
+						lifecycleEvents.push(`start-failed:${record.agentId}`);
+						engine.onWorkerStartFailed(record);
+					},
+					onSubagentComplete: async record => {
+						lifecycleEvents.push(`complete:${record.agentId}`);
+						await engine.onWorkerComplete(
+							{
+								agentId: record.agentId,
+								agentName: record.agentName,
+								task: record.task,
+								status: record.status,
+								exitCode: record.exitCode,
+								durationMs: record.durationMs,
+								error: record.error,
+								ticketId: record.ticketId,
+								runId: record.runId,
+								structuredResult: record.structuredResult,
+							},
+							[],
+						);
+					},
+				}),
+			);
+
+			const firstOutcome = await engine.replenish([]);
+			expect(firstOutcome.status).toBe("replenished");
+			expect(firstOutcome.dispatchedCount).toBe(1);
+			await firstBindEntered.promise;
+			firstBindGate.resolve();
+			await jobs[0]!.promise.catch(() => undefined);
+			expect(jobs[0]!.status).toBe("failed");
+			expect(lifecycleEvents).toEqual(["dispatch-failed:ticket-detached-rollback"]);
+
+			const rolledBackLedger = JSON.parse(await fs.readFile(ledgerPath, "utf8")) as {
+				requests: Record<string, { state?: string }>;
+			};
+			expect(rolledBackLedger.requests["ticket-detached-rollback"]?.state).toBe("pending");
+
+			const secondOutcome = await engine.replenish([]);
+			expect(secondOutcome.status).toBe("replenished");
+			expect(secondOutcome.dispatchedCount).toBe(1);
+			await jobs[1]!.promise;
+			expect(jobs[1]!.status).toBe("completed");
+			expect(lifecycleEvents).toHaveLength(3);
+			expect(lifecycleEvents[1]).toStartWith("start:");
+			expect(lifecycleEvents[2]).toStartWith("complete:");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 });

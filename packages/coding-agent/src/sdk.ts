@@ -908,6 +908,11 @@ class SessionStartup {
 				onSubagentStart: record => {
 					this.#replenishmentEngine?.onWorkerStart(record);
 				},
+				onSubagentDispatchFailed: async record => {
+					const engine = this.#replenishmentEngine;
+					if (!engine) return;
+					await engine.onWorkerDispatchFailed(record);
+				},
 				onSubagentStartFailed: record => {
 					const engine = this.#replenishmentEngine;
 					if (!engine) return;

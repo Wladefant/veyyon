@@ -403,6 +403,10 @@ export interface ToolSession extends ToolSessionLocalState {
 	onSubagentStartFailed?: (
 		record: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId">,
 	) => void;
+	/** Roll back a detached native dispatch claim when binding fails before child start. */
+	onSubagentDispatchFailed?: (
+		record: Pick<AgentSpawnRecord, "agentId" | "agentName" | "runId" | "ticketId">,
+	) => void | Promise<void>;
 	/** Get the ArtifactManager backing this session (shared across parent + agents). */
 	getArtifactManager?: () => ArtifactManager | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */

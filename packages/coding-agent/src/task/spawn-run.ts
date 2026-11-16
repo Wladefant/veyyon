@@ -738,20 +738,36 @@ async function runPreparedSpawn(
 			Date.now() - startTime,
 		);
 	}
-	if (
-		!params.nativeDispatchBound &&
-		typeof params.runId === "string" &&
-		typeof params.ledgerPath === "string" &&
-		typeof params.ticketId === "string"
-	) {
-		await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
-	}
 	const lifecycle = {
 		agentId,
 		agentName: spawn.agent.name,
 		ticketId: typeof params.ticketId === "string" ? params.ticketId : undefined,
 		runId: typeof params.runId === "string" ? params.runId : undefined,
 	};
+	if (
+		!params.nativeDispatchBound &&
+		typeof params.runId === "string" &&
+		typeof params.ledgerPath === "string" &&
+		typeof params.ticketId === "string"
+	) {
+		try {
+			await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
+		} catch (error) {
+			if (request.detached) {
+				try {
+					await session.onSubagentDispatchFailed?.(lifecycle);
+				} catch (rollbackError) {
+					logger.warn("Failed to roll back detached native dispatch after binding refusal", {
+						agentId,
+						ticketId: params.ticketId,
+						runId: params.runId,
+						error: errorMessage(rollbackError),
+					});
+				}
+			}
+			throw error;
+		}
+	}
 	let result: SingleResult | undefined;
 	let mergeSummary = "";
 	let completionStarted = false;

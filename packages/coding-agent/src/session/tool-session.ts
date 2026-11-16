@@ -61,6 +61,7 @@ export interface SessionToolSessionInputs {
 		| "asyncJobManager"
 		| "onSubagentStart"
 		| "onSubagentStartFailed"
+		| "onSubagentDispatchFailed"
 		| "onSubagentComplete"
 	>;
 }

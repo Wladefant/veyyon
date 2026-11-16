@@ -1051,7 +1051,23 @@ export class TopicReplenishmentEngine {
 	}
 
 	onWorkerStartFailed(event: VerificationWorkerStart): void {
+		if (event.ticketId) {
+			replenishmentReservations.get(this.ledgerPath)?.delete(event.ticketId);
+		}
 		this.#removeVerificationWorker(event);
+	}
+
+	async onWorkerDispatchFailed(event: Pick<VerificationWorkerStart, "agentId" | "ticketId" | "runId">): Promise<void> {
+		if (event.ticketId) {
+			replenishmentReservations.get(this.ledgerPath)?.delete(event.ticketId);
+		}
+		if (event.ticketId && fs.existsSync(this.ledgerPath)) {
+			await this.rollbackClaimedTicket(
+				event.ticketId,
+				`Native dispatch binding failed before child ${event.agentId} started`,
+				event.runId,
+			);
+		}
 	}
 
 	#reconcileVerificationWorkers(currentRoster: readonly (NativeActorSnapshot | Record<string, unknown>)[]): void {
