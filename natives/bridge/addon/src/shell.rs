@@ -534,11 +534,10 @@ mod tests {
 		pump_chunks, pump_chunks_with_progress,
 	};
 
-	fn spawn_test_drain<F, Fut>(rx: flume::Receiver<String>, forward: F) -> ChunkDrain
-	where
-		F: FnMut(String) -> Fut + Send + 'static,
-		Fut: Future<Output = bool> + Send,
-	{
+	fn spawn_test_drain(
+		rx: flume::Receiver<String>,
+		forward: impl AsyncFnMut(String) -> bool + Send + 'static,
+	) -> ChunkDrain {
 		let (progress_tx, progress_rx) = tokio::sync::watch::channel(0u64);
 		let handle = tokio::spawn(pump_chunks_with_progress(rx, Some(progress_tx), forward));
 		ChunkDrain { handle, progress_rx }
@@ -749,6 +748,7 @@ mod tests {
 		let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
 		let started_tx = std::sync::Arc::new(parking_lot::Mutex::new(Some(started_tx)));
 		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
 		let drain = spawn_test_drain(rx, move |payload: String| {
 			if payload.contains("READY")
 				&& let Some(tx) = started_tx.lock().take()
