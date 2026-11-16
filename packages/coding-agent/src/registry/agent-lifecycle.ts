@@ -365,17 +365,22 @@ export class AgentLifecycleManager {
 	}
 
 	/** Hard removal: dispose if live, unregister from registry, drop deadlines. */
-	async release(id: string): Promise<void> {
-		this.#adopted.delete(id);
-		this.#scheduleNext();
+	async release(id: string, options?: { throwOnDisposeError?: boolean }): Promise<void> {
 		const ref = this.#registry.get(id);
 		if (ref?.session) {
 			try {
 				await ref.session.dispose();
 			} catch (error) {
+				if (options?.throwOnDisposeError) {
+					throw error;
+				}
 				logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: errorMessage(error) });
 			}
 		}
+		const adopted = this.#adopted.get(id);
+		if (adopted) disarm(adopted);
+		this.#adopted.delete(id);
+		this.#scheduleNext();
 		this.#registry.unregister(id);
 	}
 	/**
@@ -493,7 +498,7 @@ export class AgentLifecycleManager {
 		for (const target of [...this.#registry.descendantsOf(id).reverse(), id]) {
 			const ref = this.#registry.get(target);
 			if (ref?.status === "running" && ref.session) await ref.session.abort({ reason });
-			await this.release(target);
+			await this.release(target, { throwOnDisposeError: true });
 		}
 	}
 
