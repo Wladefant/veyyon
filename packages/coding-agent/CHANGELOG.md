@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Read cold session payloads for ACP replay without warming the retained transcript ([Refs #1019](https://github.com/Wladefant/veyyon/issues/1019)).
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed
 
-- Read cold session payloads for ACP replay without warming the retained transcript ([Refs #1019](https://github.com/Wladefant/veyyon/issues/1019)).
 - Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
 - Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
