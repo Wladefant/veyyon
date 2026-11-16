@@ -618,6 +618,7 @@ export const repoScriptTests = [
 	"cloud/shared-tools/a-tool-budget-survives-restart.test.ts",
 	"cloud/shared-tools/admission-stops-unauthorized-tool-dispatch.test.ts",
 	"cloud/shared-tools/only-admitted-users-can-use-their-own-secrets.test.ts",
+	"scripts/check-ts-runs-workspaces-even-when-tools-fails.test.ts",
 ];
 
 /**
