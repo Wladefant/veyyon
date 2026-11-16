@@ -200,4 +200,54 @@ describe("google-gemini-cli Gemini 3.x thinking mapping", () => {
 		expect(parsed.model).toBe("gemini-3.7-flash-low");
 		expect(parsed.request?.generationConfig?.thinkingConfig?.thinkingLevel).toBe("LOW");
 	});
+	it("sends Hydrogen xhigh as XHIGH without changing its model identity", async () => {
+		let requestBody: string | undefined;
+		const fetchMock = createFetchMock(body => {
+			requestBody = body;
+		});
+		const model = buildModel({
+			id: "gemini-3.1-hydrogen",
+			name: "Gemini 3.1 Hydrogen",
+			api: "google-gemini-cli",
+			provider: "google-antigravity",
+			baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+			reasoning: true,
+			thinking: {
+				mode: "google-level",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			},
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_536,
+		});
+
+		const stream = streamSimple(model, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			reasoning: Effort.XHigh,
+			fetch: fetchMock,
+		});
+		await stream.result();
+
+		const parsed = JSON.parse(requestBody ?? "{}") as CapturedRequestBody;
+		expect(parsed.model).toBe("gemini-3.1-hydrogen");
+		expect(parsed.request?.generationConfig?.thinkingConfig?.thinkingLevel).toBe("XHIGH");
+		expect(parsed.request?.generationConfig?.thinkingConfig?.thinkingBudget).toBeUndefined();
+	});
+
+	it("rejects unsupported xhigh before sending a request", () => {
+		let requestBody: string | undefined;
+		const fetchMock = createFetchMock(body => {
+			requestBody = body;
+		});
+
+		expect(() =>
+			streamSimple(createModel("gemini-3.1-pro-preview"), context, {
+				apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+				reasoning: Effort.XHigh,
+				fetch: fetchMock,
+			}),
+		).toThrow(/Supported efforts: low, high/);
+		expect(requestBody).toBeUndefined();
+	});
 });
