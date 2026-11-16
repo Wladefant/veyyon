@@ -71,6 +71,7 @@ export interface SuperviseProcessOptions {
 	maxStderrLogFiles?: number;
 	forwardStderr?: boolean;
 	stderrSink?: NodeJS.WritableStream;
+	stderrDrainTimeoutMs?: number;
 	renameSync?: (oldPath: string, newPath: string) => void;
 }
 
@@ -170,6 +171,7 @@ export async function superviseProcess(options: SuperviseProcessOptions = {}): P
 		forwardStderr: options.forwardStderr,
 		renameSync: options.renameSync,
 		stderrSink: options.stderrSink,
+		drainTimeoutMs: options.stderrDrainTimeoutMs,
 	});
 
 	let exitCode: number | null;

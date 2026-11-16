@@ -6,7 +6,7 @@ import { getLogsDir } from "@veyyon/utils/dirs";
 export const DEFAULT_MAX_STDERR_LOG_BYTES = 1024 * 1024; // 1 MiB
 export const DEFAULT_MAX_STDERR_LOG_FILES = 3;
 
-export type StderrStatus = "captured" | "empty" | "error" | "rotation_error" | "spawn_error" | "disabled";
+export type StderrStatus = "captured" | "empty" | "truncated" | "error" | "rotation_error" | "spawn_error" | "disabled";
 
 export interface StderrCaptureOptions {
 	sessionStderrDir?: string;
@@ -14,6 +14,8 @@ export interface StderrCaptureOptions {
 	maxFiles?: number;
 	forwardStderr?: boolean;
 	stderrSink?: NodeJS.WritableStream;
+	drainTimeoutMs?: number;
+	flushTimeoutMs?: number;
 	renameSync?: (oldPath: string, newPath: string) => void;
 }
 
@@ -41,16 +43,22 @@ export function startStderrCapture(
 	const forwardStderr = options.forwardStderr ?? true;
 	const rename = options.renameSync ?? fs.renameSync;
 	const stderrSink = options.stderrSink ?? process.stderr;
+	const drainTimeoutMs = Math.max(1, options.drainTimeoutMs ?? 2000);
+	const flushTimeoutMs = Math.max(1, options.flushTimeoutMs ?? Math.min(drainTimeoutMs, 500));
 
 	let spawnError: string | undefined;
 	let writeError: string | undefined;
 	let rotationError: string | undefined;
+	let truncationError: string | undefined;
 	let totalBytesWritten = 0;
 	let currentBytes = 0;
 	let pausedForDrain = false;
+	let forwardingStopped = false;
+	let truncated = false;
+	let stderrEnded = Boolean(child?.stderr && (child.stderr.readableEnded || child.stderr.destroyed));
 	const onSinkDrain = () => {
 		pausedForDrain = false;
-		if (child?.stderr && !child.stderr.destroyed && typeof child.stderr.resume === "function") {
+		if (!forwardingStopped && child?.stderr && !child.stderr.destroyed && typeof child.stderr.resume === "function") {
 			child.stderr.resume();
 		}
 	};
@@ -118,7 +126,7 @@ export function startStderrCapture(
 
 	const onData = (chunk: Buffer | string) => {
 		const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-		if (forwardStderr) {
+		if (forwardStderr && !forwardingStopped) {
 			let ok = true;
 			try {
 				ok = stderrSink.write(buf);
@@ -168,33 +176,67 @@ export function startStderrCapture(
 		child.stderr.on("error", err => {
 			writeError ??= err instanceof Error ? err.message : String(err);
 		});
+		child.stderr.once("end", () => {
+			stderrEnded = true;
+		});
+		child.stderr.once("close", () => {
+			stderrEnded = true;
+		});
 	}
+
+	const waitForStderrEnd = (timeoutMs: number): Promise<boolean> => {
+		if (!child?.stderr || stderrEnded || child.stderr.readableEnded || child.stderr.destroyed) {
+			return Promise.resolve(true);
+		}
+		return new Promise<boolean>(resolve => {
+			let timer: NodeJS.Timeout | undefined;
+			const cleanup = () => {
+				clearTimeout(timer);
+				child.stderr?.off("end", onEnd);
+				child.stderr?.off("close", onEnd);
+				child.stderr?.off("error", onEnd);
+			};
+			const onEnd = () => {
+				cleanup();
+				resolve(true);
+			};
+			child.stderr?.once("end", onEnd);
+			child.stderr?.once("close", onEnd);
+			child.stderr?.once("error", onEnd);
+			timer = setTimeout(() => {
+				cleanup();
+				resolve(false);
+			}, timeoutMs);
+			if (timer.unref) timer.unref();
+		});
+	};
 
 	return {
 		recordSpawnError(err: unknown) {
 			spawnError = err instanceof Error ? err.message : String(err);
 		},
 		async drain(): Promise<StderrCaptureResult> {
-			if (child?.stderr && !child.stderr.readableEnded && !child.stderr.destroyed) {
-				await new Promise<void>(resolve => {
-					let timer: NodeJS.Timeout | undefined;
-					const onEnd = () => {
-						if (timer) clearTimeout(timer);
-						child.stderr?.off("end", onEnd);
-						child.stderr?.off("close", onEnd);
-						child.stderr?.off("error", onEnd);
-						resolve();
-					};
-					child.stderr?.once("end", onEnd);
-					child.stderr?.once("close", onEnd);
-					child.stderr?.once("error", onEnd);
-					timer = setTimeout(onEnd, 2000);
-					if (timer.unref) timer.unref();
-				});
-			}
+			const completedBeforeTimeout = await waitForStderrEnd(drainTimeoutMs);
 			pausedForDrain = false;
 			if (typeof stderrSink.removeListener === "function") {
 				stderrSink.removeListener("drain", onSinkDrain);
+			}
+			if (
+				!completedBeforeTimeout &&
+				child?.stderr &&
+				!stderrEnded &&
+				!child.stderr.readableEnded &&
+				!child.stderr.destroyed
+			) {
+				forwardingStopped = true;
+				if (typeof child.stderr.resume === "function") {
+					child.stderr.resume();
+				}
+				const flushedAfterResume = await waitForStderrEnd(flushTimeoutMs);
+				if (!flushedAfterResume && !stderrEnded && !child.stderr.readableEnded && !child.stderr.destroyed) {
+					truncated = true;
+					truncationError = "stderr drain timed out before stream ended";
+				}
 			}
 
 			const files: string[] = [];
@@ -217,6 +259,8 @@ export function startStderrCapture(
 				status = "error";
 			} else if (!child?.stderr) {
 				status = "disabled";
+			} else if (truncated) {
+				status = "truncated";
 			} else if (totalBytesWritten > 0) {
 				status = "captured";
 			} else {
@@ -228,7 +272,7 @@ export function startStderrCapture(
 				files,
 				bytesWritten: totalBytesWritten,
 				status,
-				error: spawnError ?? rotationError ?? writeError,
+				error: spawnError ?? rotationError ?? writeError ?? truncationError,
 			};
 		},
 	};

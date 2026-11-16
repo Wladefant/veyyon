@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import {
 	DEFAULT_DUMP_FOLDER,
 	disableLocalDumps,
@@ -964,6 +965,168 @@ describe("process supervisor", () => {
 			expect(Buffer.concat(sinkChunks).toString("utf8")).toBe("chunk-1\nchunk-2\n");
 			expect(result.report?.stderrStatus).toBe("captured");
 			expect(result.report?.stderrBytes).toBe(16);
+			expect(sinkEmitter.listenerCount("drain")).toBe(0);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("paused stderr flushes unread tail to disk and cleans up when sink stays backed up past drain timeout", async () => {
+		const ctx = createTestContext();
+		const childStderr = new PassThrough();
+		try {
+			const pid = 4546;
+			ctx.writeHeartbeat(pid, { sessionId: "session-drain-timeout", phase: "tool" });
+
+			const childEmitter = new EventEmitter();
+			const child = {
+				pid,
+				stderr: childStderr,
+				on(event: string, cb: (...args: unknown[]) => void) {
+					childEmitter.on(event, cb);
+					return child;
+				},
+			} as unknown as ChildProcess;
+
+			const sinkEmitter = new EventEmitter();
+			const sinkChunks: Buffer[] = [];
+			const blockedSink = Object.assign(sinkEmitter, {
+				write(chunk: Buffer | string) {
+					sinkChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+					return false;
+				},
+			}) as unknown as NodeJS.WritableStream;
+
+			queueMicrotask(() => {
+				childStderr.write("prefix\n");
+				childStderr.write("tail-after-pause\n");
+				childStderr.end();
+				childEmitter.emit("exit", 1, null);
+			});
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: [],
+				spawn: () => child,
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				stderrSink: blockedSink,
+				stderrDrainTimeoutMs: 25,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report?.stderrStatus).toBe("captured");
+			expect(result.report?.stderrBytes).toBe(24);
+			expect(fs.readFileSync(result.report!.stderrLogPath, "utf8")).toBe("prefix\ntail-after-pause\n");
+			expect(childStderr.readableEnded).toBe(true);
+			expect(sinkEmitter.listenerCount("drain")).toBe(0);
+
+			// Late sink drain after timeout must not throw or leave listeners attached
+			sinkEmitter.emit("drain");
+			expect(sinkEmitter.listenerCount("drain")).toBe(0);
+		} finally {
+			childStderr.destroy();
+			ctx.cleanup();
+		}
+	});
+
+	test("paused stderr that stays open past drain timeout flushes buffered bytes and reports truncated", async () => {
+		const ctx = createTestContext();
+		const childStderr = new PassThrough();
+		try {
+			const pid = 4547;
+			ctx.writeHeartbeat(pid, { sessionId: "session-drain-truncated", phase: "tool" });
+
+			const childEmitter = new EventEmitter();
+			const child = {
+				pid,
+				stderr: childStderr,
+				on(event: string, cb: (...args: unknown[]) => void) {
+					childEmitter.on(event, cb);
+					return child;
+				},
+			} as unknown as ChildProcess;
+
+			const sinkEmitter = new EventEmitter();
+			const blockedSink = Object.assign(sinkEmitter, {
+				write() {
+					return false;
+				},
+			}) as unknown as NodeJS.WritableStream;
+
+			queueMicrotask(() => {
+				childStderr.write("prefix\n");
+				childStderr.write("buffered-tail\n");
+				childEmitter.emit("exit", 1, null);
+			});
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: [],
+				spawn: () => child,
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				stderrSink: blockedSink,
+				stderrDrainTimeoutMs: 25,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.report?.stderrStatus).toBe("truncated");
+			expect(result.report?.stderrError).toContain("timed out");
+			expect(result.report?.stderrBytes).toBe(21);
+			expect(fs.readFileSync(result.report!.stderrLogPath, "utf8")).toBe("prefix\nbuffered-tail\n");
+			expect(sinkEmitter.listenerCount("drain")).toBe(0);
+		} finally {
+			childStderr.destroy();
+			ctx.cleanup();
+		}
+	});
+
+	test("real spawned child flushes stderr to disk when sink stays backed up past drain timeout", async () => {
+		const ctx = createTestContext();
+		const fixturePath = path.resolve(__dirname, "fixtures/supervisor-death-smoke.ts");
+		try {
+			const sinkEmitter = new EventEmitter();
+			const sinkChunks: Buffer[] = [];
+			const blockedSink = Object.assign(sinkEmitter, {
+				write(chunk: Buffer | string) {
+					sinkChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+					return false;
+				},
+			}) as unknown as NodeJS.WritableStream;
+
+			const result = await superviseProcess({
+				execPath: process.execPath,
+				argv: [
+					fixturePath,
+					"--heartbeat-dir",
+					ctx.heartbeatDir,
+					"--bytes",
+					"2500",
+					"--chunk-size",
+					"700",
+					"--exit-code",
+					"42",
+				],
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				maxStderrLogBytes: 1024 * 1024,
+				maxStderrLogFiles: 3,
+				stderrSink: blockedSink,
+				stderrDrainTimeoutMs: 25,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(result.exitCode).toBe(42);
+			expect(result.report?.stderrStatus).toBe("captured");
+			expect(result.report?.stderrBytes).toBeGreaterThanOrEqual(2500);
+			expect(fs.readFileSync(result.report!.stderrLogPath, "utf8").length).toBe(result.report?.stderrBytes);
+			expect(sinkEmitter.listenerCount("drain")).toBe(0);
+
+			sinkEmitter.emit("drain");
 			expect(sinkEmitter.listenerCount("drain")).toBe(0);
 		} finally {
 			ctx.cleanup();
