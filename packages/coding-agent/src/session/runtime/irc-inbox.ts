@@ -147,8 +147,8 @@ export class IrcContinuationOutbox {
 			Reflect.get(entry.data, "version") === 1 && Reflect.get(entry.data, "phaseId") === phaseId);
 	}
 
-	/** Retained native input lets activation recover a phase interrupted before its result was saved. */
-	unfinished(): CustomMessage[] {
+	/** Retained native input with its durable phase ID lets activation recover a phase interrupted before its result was saved. */
+	unfinishedPhases(): Array<{ phaseId: string; record: CustomMessage }> {
 		const completed = new Set(this.#results().map(result => result.phaseId));
 		const consumedSteers = new Set(this.#store.getEntries().flatMap(entry =>
 			entry.type === "custom_message" && entry.customType === "irc:incoming" &&
@@ -161,8 +161,15 @@ export class IrcContinuationOutbox {
 			const record = Reflect.get(entry.data, "record") as CustomMessage | undefined;
 			return typeof phaseId === "string" && !completed.has(phaseId) && !consumedSteers.has(phaseId) &&
 				record?.role === "custom" &&
-				(record.customType === "irc:incoming" || record.customType === "task:continuation") ? [record] : [];
+				(record.customType === "irc:incoming" || record.customType === "task:continuation")
+				? [{ phaseId, record }]
+				: [];
 		});
+	}
+
+	/** Retained native input lets activation recover a phase interrupted before its result was saved. */
+	unfinished(): CustomMessage[] {
+		return this.unfinishedPhases().map(entry => entry.record);
 	}
 
 	/** Describe late continuation input without treating independent instructions as replacements. */
