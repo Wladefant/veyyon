@@ -650,7 +650,12 @@ async function runPreparedSpawn(
 		}
 		const registry = AgentRegistry.global();
 		const predecessor = registry.get(params.successorOf);
-		if (predecessor && (predecessor.session !== null || !predecessor.terminalOutcome)) {
+		const isSettledIdle = (ref: { status: string; terminalOutcome?: unknown } | undefined): boolean =>
+			ref?.status === "idle" && ref.terminalOutcome !== undefined;
+		if (
+			predecessor &&
+			((!isSettledIdle(predecessor) && predecessor.session !== null) || !predecessor.terminalOutcome)
+		) {
 			return spawnRefusal(
 				`successor-predecessor-active: ${params.successorOf} has not settled cancellation and cleanup`,
 				projectAgentsDir,
@@ -664,7 +669,7 @@ async function runPreparedSpawn(
 		if (
 			current !== predecessor ||
 			(current &&
-				(current.session !== null ||
+				((!isSettledIdle(current) && current.session !== null) ||
 					!current.terminalOutcome ||
 					current.terminalOutcome !== predecessorOutcome ||
 					current.status !== predecessorStatus))

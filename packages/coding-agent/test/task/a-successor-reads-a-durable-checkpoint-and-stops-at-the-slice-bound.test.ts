@@ -280,6 +280,36 @@ describe("explicit bounded lane successors", () => {
 		expect(reviveCalls).toBe(0);
 		expect(await fs.readFile(transcript, "utf8")).toBe(transcriptBytes);
 	});
+	it("releases and succeeds a settled idle failed predecessor with a live session", async () => {
+		await dispatch("Original");
+		const predecessor = executed[0].id;
+		let disposed = false;
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402 Insufficient Balance");
+		AgentLifecycleManager.global().adopt(predecessor, {
+			idleTtlMs: 60_000,
+			revive: async () => ({}) as AgentSession,
+		});
+
+		const successor = await dispatch("Replacement", predecessor);
+
+		expect(successor.isError).not.toBe(true);
+		expect(executed).toHaveLength(2);
+		expect(disposed).toBe(true);
+		expect(registry.get(predecessor)).toBeUndefined();
+	});
 	it("rejects corrupt and unknown-version checkpoints", async () => {
 		await dispatch("Original");
 		const predecessor = executed[0].id;
