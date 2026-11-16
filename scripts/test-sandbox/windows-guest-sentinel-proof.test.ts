@@ -4,91 +4,95 @@ import * as path from "node:path";
 import * as veyyonModel from "@veyyon/model";
 
 test.skipIf(process.platform !== "win32")("sandbox admission probe and sentinel denial hold in guest", () => {
-  const marker = process.env.VEYYON_TEST_SANDBOX;
-  expect(marker).toBe("windows-appcontainer");
+	const marker = process.env.VEYYON_TEST_SANDBOX;
+	expect(marker).toBe("windows-appcontainer");
 
-  const hostHome = process.env.VEYYON_TEST_HOST_HOME;
-  expect(hostHome).toBeDefined();
+	const hostHome = process.env.VEYYON_TEST_HOST_HOME;
+	expect(hostHome).toBeDefined();
 
-  const sentinel = process.env.VEYYON_TEST_HOST_SENTINEL;
-  expect(sentinel).toBeDefined();
+	const sentinel = process.env.VEYYON_TEST_HOST_SENTINEL;
+	expect(sentinel).toBeDefined();
 
-  // Re-verify that in-container guest cannot read host sentinel
-  let sentinelErrorCode: string | undefined;
-  try {
-    fs.readFileSync(sentinel!, "utf8");
-  } catch (e: unknown) {
-    if (e && typeof e === "object" && "code" in e && typeof e.code === "string") {
-      sentinelErrorCode = e.code;
-    }
-  }
-  expect(sentinelErrorCode).toBeDefined();
-  expect(["EPERM", "EACCES"]).toContain(sentinelErrorCode!);
+	// Re-verify that in-container guest cannot read host sentinel
+	let sentinelErrorCode: string | undefined;
+	try {
+		fs.readFileSync(sentinel!, "utf8");
+	} catch (e: unknown) {
+		if (e && typeof e === "object" && "code" in e && typeof e.code === "string") {
+			sentinelErrorCode = e.code;
+		}
+	}
+	expect(sentinelErrorCode).toBeDefined();
+	expect(["EPERM", "EACCES"]).toContain(sentinelErrorCode!);
 
-  // Re-verify that in-container guest cannot read host .veyyon or shared-auth
-  const veyyonDir = path.join(hostHome!, ".veyyon");
-  let veyyonErrorCode: string | undefined;
-  try {
-    fs.readdirSync(veyyonDir);
-  } catch (e: unknown) {
-    if (e && typeof e === "object" && "code" in e && typeof e.code === "string") {
-      veyyonErrorCode = e.code;
-    }
-  }
-  expect(veyyonErrorCode).toBeDefined();
-  expect(["EPERM", "EACCES", "ENOENT"]).toContain(veyyonErrorCode!);
+	// Re-verify that in-container guest cannot read host .veyyon or shared-auth
+	const veyyonDir = path.join(hostHome!, ".veyyon");
+	let veyyonErrorCode: string | undefined;
+	try {
+		fs.readdirSync(veyyonDir);
+	} catch (e: unknown) {
+		if (e && typeof e === "object" && "code" in e && typeof e.code === "string") {
+			veyyonErrorCode = e.code;
+		}
+	}
+	expect(veyyonErrorCode).toBeDefined();
+	expect(["EPERM", "EACCES", "ENOENT"]).toContain(veyyonErrorCode!);
 
-  const sharedAuthDir = path.join(veyyonDir, "shared-auth");
-  let sharedAuthErrorCode: string | undefined;
-  try {
-    fs.readdirSync(sharedAuthDir);
-  } catch (e: unknown) {
-    if (e && typeof e === "object" && "code" in e && typeof e.code === "string") {
-      sharedAuthErrorCode = e.code;
-    }
-  }
-  expect(sharedAuthErrorCode).toBeDefined();
-  expect(["EPERM", "EACCES", "ENOENT"]).toContain(sharedAuthErrorCode!);
-  expect(process.env.GITHUB_TOKEN).toBeUndefined();
-  expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
-  expect(process.env.OPENAI_API_KEY).toBeUndefined();
-  expect(process.env.BITWARDEN_SESSION).toBeUndefined();
+	const sharedAuthDir = path.join(veyyonDir, "shared-auth");
+	let sharedAuthErrorCode: string | undefined;
+	try {
+		fs.readdirSync(sharedAuthDir);
+	} catch (e: unknown) {
+		if (e && typeof e === "object" && "code" in e && typeof e.code === "string") {
+			sharedAuthErrorCode = e.code;
+		}
+	}
+	expect(sharedAuthErrorCode).toBeDefined();
+	expect(["EPERM", "EACCES", "ENOENT"]).toContain(sharedAuthErrorCode!);
+	expect(process.env.GITHUB_TOKEN).toBeUndefined();
+	expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+	expect(process.env.OPENAI_API_KEY).toBeUndefined();
+	expect(process.env.BITWARDEN_SESSION).toBeUndefined();
 
-  // Verify in-container guest cannot write files or directories into real host home
-  const hostileFile = path.join(hostHome!, `.veyyon-hostile-write-${process.pid}-${Date.now()}.tmp`);
-  let writeErr: unknown;
-  try {
-    fs.writeFileSync(hostileFile, "hostile-write-should-fail", "utf8");
-  } catch (e: unknown) {
-    writeErr = e;
-  } finally {
-    if (fs.existsSync(hostileFile)) {
-      try { fs.unlinkSync(hostileFile); } catch {}
-    }
-  }
-  expect(writeErr).toBeDefined();
-  if (writeErr && typeof writeErr === "object" && "code" in writeErr && typeof writeErr.code === "string") {
-    expect(["EPERM", "EACCES"]).toContain(writeErr.code);
-  }
+	// Verify in-container guest cannot write files or directories into real host home
+	const hostileFile = path.join(hostHome!, `.veyyon-hostile-write-${process.pid}-${Date.now()}.tmp`);
+	let writeErr: unknown;
+	try {
+		fs.writeFileSync(hostileFile, "hostile-write-should-fail", "utf8");
+	} catch (e: unknown) {
+		writeErr = e;
+	} finally {
+		if (fs.existsSync(hostileFile)) {
+			try {
+				fs.unlinkSync(hostileFile);
+			} catch {}
+		}
+	}
+	expect(writeErr).toBeDefined();
+	if (writeErr && typeof writeErr === "object" && "code" in writeErr && typeof writeErr.code === "string") {
+		expect(["EPERM", "EACCES"]).toContain(writeErr.code);
+	}
 
-  const hostileDir = path.join(hostHome!, `.veyyon-hostile-dir-${process.pid}-${Date.now()}`);
-  let mkdirErr: unknown;
-  try {
-    fs.mkdirSync(hostileDir);
-  } catch (e: unknown) {
-    mkdirErr = e;
-  } finally {
-    if (fs.existsSync(hostileDir)) {
-      try { fs.rmdirSync(hostileDir); } catch {}
-    }
-  }
-  expect(mkdirErr).toBeDefined();
-  if (mkdirErr && typeof mkdirErr === "object" && "code" in mkdirErr && typeof mkdirErr.code === "string") {
-    expect(["EPERM", "EACCES"]).toContain(mkdirErr.code);
-  }
+	const hostileDir = path.join(hostHome!, `.veyyon-hostile-dir-${process.pid}-${Date.now()}`);
+	let mkdirErr: unknown;
+	try {
+		fs.mkdirSync(hostileDir);
+	} catch (e: unknown) {
+		mkdirErr = e;
+	} finally {
+		if (fs.existsSync(hostileDir)) {
+			try {
+				fs.rmdirSync(hostileDir);
+			} catch {}
+		}
+	}
+	expect(mkdirErr).toBeDefined();
+	if (mkdirErr && typeof mkdirErr === "object" && "code" in mkdirErr && typeof mkdirErr.code === "string") {
+		expect(["EPERM", "EACCES"]).toContain(mkdirErr.code);
+	}
 
-  // Verify workspace aliases resolve inside the staged sandbox
-  const utilsResolved = import.meta.resolve("@veyyon/utils");
-  expect(utilsResolved.toLowerCase()).toContain("packages");
-  expect(veyyonModel).toBeDefined();
+	// Verify workspace aliases resolve inside the staged sandbox
+	const utilsResolved = import.meta.resolve("@veyyon/utils");
+	expect(utilsResolved.toLowerCase()).toContain("packages");
+	expect(veyyonModel).toBeDefined();
 });
