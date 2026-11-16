@@ -47,7 +47,7 @@ async function readBrokerLeasePid(runtimeDir: string): Promise<number> {
 	return claim.pid;
 }
 
-async function readLine(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+async function readLine(reader: { read(): Promise<{ done: boolean; value?: Uint8Array }> }): Promise<string> {
 	let text = "";
 	while (!text.includes("\n")) {
 		const chunk = await reader.read();
