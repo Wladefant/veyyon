@@ -31,6 +31,8 @@ const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>
 const JSON_REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>|#[A-Za-z0-9_]+#)[ \t]*$/;
 const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
+const PERSIST_CREDENTIALS_BOOLEAN =
+	/^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|\\n))/;
 const SOURCE_COMMIT_PIN = /^[ \t]*(?:-[ \t]+)?Source $/i;
 const MARKDOWN_COMMIT_LINK =
 	/^\[(?:pinned )?source commit\]\(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/commit\/[a-f0-9]{40}\)(?:\.[ \t]+This PR head is `[a-f0-9]{40}`\.)?(?=[ \t]*(?:\r?\n|$))/i;
@@ -87,6 +89,8 @@ function knownCredentialLength(text: string): number {
 		if (pem?.index === 0) return pem[0].length;
 	}
 	const redacted = redactProviderSecrets(text);
+	const bearer = /^(Bearer[ \t]+)<redacted (\d+) chars>/i.exec(redacted);
+	if (bearer) return bearer[1]!.length + Number(bearer[2]);
 	const marker = text.startsWith("<redacted ") || redacted === text ? null : /^<redacted (\d+) chars>/.exec(redacted);
 	if (marker) return Number(marker[1]);
 	EXTRA_PREFIXED_KEY.lastIndex = 0;
@@ -129,6 +133,8 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		if (match.groups!.key.toLowerCase() === "pin" &&
 			SOURCE_COMMIT_PIN.test(text.slice(sourceLineStart, match.index + match.groups!.boundary.length)) &&
 			MARKDOWN_COMMIT_LINK.test(tail)) continue;
+		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
+			continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
 		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;

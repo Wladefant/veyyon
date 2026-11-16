@@ -27,7 +27,11 @@ impl Child {
 	}
 }
 
-pub(crate) fn spawn(mut command: std::process::Command) -> std::io::Result<Child> {
+#[allow(
+	clippy::unused_async,
+	reason = "matches async sys::process::spawn API across platforms"
+)]
+pub(crate) async fn spawn(mut command: std::process::Command) -> std::io::Result<Child> {
 	let child = command.spawn()?;
 	Ok(Child { inner: child })
 }
