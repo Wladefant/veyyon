@@ -609,9 +609,16 @@ mod tests {
 		let mut cancel = CancelToken::default();
 		let abort = cancel.emplace_abort_token();
 		let (tx, rx) = flume::bounded::<String>(4);
+		let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+		let started_tx = std::sync::Arc::new(parking_lot::Mutex::new(Some(started_tx)));
 		let callback_resource = std::sync::Arc::new(());
 		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
-		let drain_handle = tokio::spawn(pump_chunks(rx, move |_payload: String| {
+		let drain_handle = tokio::spawn(pump_chunks(rx, move |payload: String| {
+			if payload.contains("READY") {
+				if let Some(tx) = started_tx.lock().take() {
+					let _ = tx.send(());
+				}
+			}
 			let _keep_alive = std::sync::Arc::clone(&callback_resource);
 			async move { std::future::pending::<bool>().await }
 		}));
@@ -620,7 +627,7 @@ mod tests {
 			let result = shell
 				.run(
 					CoreShellRunOptions {
-						command:       "echo hello; sleep 30".to_string(),
+						command:       "sh -c 'echo READY; sleep 30'".to_string(),
 						cwd:           None,
 						env:           None,
 						timeout_ms:    None,
@@ -635,7 +642,10 @@ mod tests {
 			await_chunk_drain(Some(drain_handle), &cancel, result).await
 		});
 
-		time::sleep(Duration::from_millis(50)).await;
+		time::timeout(Duration::from_secs(15), started_rx)
+			.await
+			.expect("external child output should reach on_chunk before cancellation")
+			.expect("forward started signal should not drop");
 		abort.abort(AbortReason::Signal);
 
 		let settled = time::timeout(Duration::from_secs(5), run_task)
