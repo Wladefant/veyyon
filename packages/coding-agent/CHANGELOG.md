@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed
 
-- Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
 - Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
