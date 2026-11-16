@@ -189,15 +189,17 @@ function validate(workflow: Workflow): void {
 		equal(eligibleJobs(context({ draft: true })), []);
 	});
 
-	for (const admission of ["", "pending", "false"]) {
-		check("automatic admission fails closed: " + (admission || "(unset)"), () => {
+	for (const admission of ["pending", "false", "disabled"]) {
+		check("automatic admission fails closed: " + admission, () => {
 			equal(eligibleJobs(context({ admission })), []);
 		});
 	}
 
-	check("admitted ready same-repository PR runs related-test path", () => {
-		equal(eligibleJobs(context()), ["prepare", "test"]);
-	});
+	for (const admission of ["", "verified"]) {
+		check("admitted ready same-repository PR runs related-test path: " + (admission || "(unset)"), () => {
+			equal(eligibleJobs(context({ admission })), ["prepare", "test"]);
+		});
+	}
 
 	check("fork PR allocates no job", () => {
 		equal(eligibleJobs(context({ fork: true })), []);
