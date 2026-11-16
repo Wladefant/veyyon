@@ -222,7 +222,7 @@ describe("history:// across conversations", () => {
 				parentId: "acp:a",
 				session: null,
 				sessionFile: file,
-				status: "parked",
+				status: "asleep",
 			});
 			const result = await new HistoryProtocolHandler().resolve(
 				new URL("history://Scout?entry=record-one&limit=1000") as never,

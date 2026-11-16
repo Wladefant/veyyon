@@ -120,6 +120,7 @@ const STATUS_AFTER_ABORT = {
 	terminate: "asleep",
 	timeout: "asleep",
 	budget: "idle",
+	stalled: "asleep",
 } satisfies Record<AbortReason, AgentStatus>;
 
 interface RunEnding {

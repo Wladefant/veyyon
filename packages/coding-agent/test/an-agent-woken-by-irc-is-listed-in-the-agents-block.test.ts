@@ -197,7 +197,7 @@ describe("an agent woken by IRC is listed in the Agents block while it runs", ()
 			// 3. For the parked path, also setStatus(id, 'parked') and then 'idle'
 			if (wakePath === "parked") {
 				await flushUi(() => {
-					AgentRegistry.global().setStatus(id, "parked");
+					AgentRegistry.global().setStatus(id, "asleep");
 				});
 				await flushUi(() => {
 					AgentRegistry.global().setStatus(id, "idle");
@@ -395,8 +395,8 @@ describe("a woken agent's row after the wake", () => {
 
 		observer.mirrorAgentStatus({ id, status: "running" });
 		expect(observer.getSessions().find(session => session.id === id)?.status).toBe("active");
-		observer.mirrorAgentStatus({ id, status: "aborted" });
-		expect(observer.getSessions().find(session => session.id === id)?.status).toBe("aborted");
+		observer.mirrorAgentStatus({ id, status: "asleep" });
+		expect(observer.getSessions().find(session => session.id === id)?.status).toBe("completed");
 		observer.dispose();
 	});
 });

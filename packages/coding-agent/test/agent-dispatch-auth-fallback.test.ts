@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Api, Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { kNoAuth } from "@veyyon/coding-agent/config/auth-state";
@@ -138,7 +139,7 @@ describe("ordered agent model auth resolution", () => {
 			registry,
 		);
 		expect(result.model?.provider).toBe("preferred");
-		expect(result.thinkingLevel).toBe("high");
+		expect(result.thinkingLevel).toBe(ThinkingLevel.High);
 		expect(result.skipped).not.toContain("preferred/new-model:high: not found in the model catalog");
 		expect(result.skipped).toContain("missing-provider/missing-model: not found in the model catalog");
 		expect(refreshes).toBe(2);

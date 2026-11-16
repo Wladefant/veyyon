@@ -27,7 +27,7 @@ function register(id: string, live = false): void {
 			? ({ messages: [], sessionManager: { getArtifactsDir: () => null } } as unknown as AgentSession)
 			: null,
 		sessionFile: null,
-		status: live ? "running" : "parked",
+		status: live ? "running" : "asleep",
 	});
 }
 
@@ -42,7 +42,7 @@ function scopedRoot(id: string, scope: string, live: boolean): void {
 			? ({ messages: [], sessionManager: { getArtifactsDir: () => null } } as unknown as AgentSession)
 			: null,
 		sessionFile: null,
-		status: live ? "running" : "parked",
+		status: live ? "running" : "asleep",
 	});
 }
 
@@ -54,7 +54,7 @@ function scopedParkedScout(parentId: string, sessionFile: string): void {
 		parentId,
 		session: null,
 		sessionFile,
-		status: "parked",
+		status: "asleep",
 	});
 }
 
@@ -255,7 +255,7 @@ describe("history:// case-folded disk roster", () => {
 				kind: "advisor",
 				session: null,
 				sessionFile: path.join(temp.path(), "saved", "Guide.jsonl"),
-				status: "parked",
+				status: "asleep",
 			});
 			register("Scout", true);
 
@@ -297,7 +297,7 @@ describe("history:// case-folded disk roster", () => {
 				kind: "advisor",
 				session: null,
 				sessionFile: path.join(temp.path(), "saved", "Guide.jsonl"),
-				status: "parked",
+				status: "asleep",
 			});
 			register("guide", true);
 
@@ -326,7 +326,7 @@ describe("history:// case-folded disk roster", () => {
 				kind: "advisor",
 				session: null,
 				sessionFile: path.join(temp.path(), "saved", "Guide.jsonl"),
-				status: "parked",
+				status: "asleep",
 			});
 			register("guide"); // Legitimate visible agent, but no session or retained sessionFile.
 			const handler = new HistoryProtocolHandler();
@@ -355,7 +355,7 @@ describe("history:// case-folded disk roster", () => {
 				kind: "sub",
 				session: null,
 				sessionFile: file,
-				status: "parked",
+				status: "asleep",
 			});
 			const handler = new HistoryProtocolHandler();
 			for (const suffix of ["", "?q=saved", "?entry=saved-entry&limit=1000"]) {
@@ -380,7 +380,7 @@ describe("history:// case-folded disk roster", () => {
 				kind: "sub",
 				session: null,
 				sessionFile: file,
-				status: "parked",
+				status: "asleep",
 			});
 			expect((await handler.resolve(parseInternalUrl("history://Reviewer"))).notes).toContain(
 				"Source: live session",

@@ -1826,7 +1826,7 @@ describe("AgentSession handoff", () => {
 			id: "init-contract-child",
 			displayName: "Child",
 			kind: "sub",
-			status: "parked",
+			status: "asleep",
 			session: null,
 			sessionFile: successorFile,
 			createdAt: Date.now(),

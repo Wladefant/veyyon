@@ -192,7 +192,7 @@ describe("explicit bounded lane successors", () => {
 			id: predecessor,
 			displayName: predecessor,
 			kind: "sub",
-			status: "parked",
+			status: "asleep",
 			session: null,
 			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
 		});
@@ -221,7 +221,7 @@ describe("explicit bounded lane successors", () => {
 			id: predecessor,
 			displayName: predecessor,
 			kind: "sub",
-			status: "parked",
+			status: "asleep",
 			session: null,
 			sessionFile: dir.join("parent", `${predecessor}.jsonl`),
 		});
@@ -240,7 +240,7 @@ describe("explicit bounded lane successors", () => {
 		expect(executed).toHaveLength(1);
 
 		race.mockRestore();
-		registry.mirrorStatus(predecessor, "parked");
+		registry.mirrorStatus(predecessor, "asleep");
 		registry.recordTerminalOutcome(predecessor, "completed");
 		await dispatch("Safe retry", predecessor);
 		expect(executed).toHaveLength(2);
@@ -258,7 +258,7 @@ describe("explicit bounded lane successors", () => {
 			id: predecessor,
 			displayName: predecessor,
 			kind: "sub",
-			status: "parked",
+			status: "asleep",
 			session: null,
 			sessionFile: transcript,
 		});

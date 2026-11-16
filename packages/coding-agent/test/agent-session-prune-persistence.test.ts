@@ -396,7 +396,7 @@ describe("AgentSession per-turn prune", () => {
 		try {
 			AgentRegistry.global().register({
 				id: "Scout", displayName: "scout", kind: "sub", parentId: "Main",
-				session: null, status: "parked",
+				session: null, status: "asleep",
 			});
 			const payload = JSON.parse((await new HistoryProtocolHandler().resolve(
 				new URL("history://Scout?entry=stored-only-entry") as never,

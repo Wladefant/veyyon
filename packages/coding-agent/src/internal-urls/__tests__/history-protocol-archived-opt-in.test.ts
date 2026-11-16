@@ -182,7 +182,7 @@ function registerArchivedRef(
 	id: string,
 	scope: string,
 	sessionFile: string,
-	status: "parked" | "aborted" = "parked",
+	status: "asleep" | "idle" | "running" = "asleep",
 	kind: "main" | "sub" | "advisor" = "sub",
 ): void {
 	const sessionId =
@@ -246,10 +246,10 @@ describe("history:// caller-bound archived opt-in", () => {
 			]);
 			registerArtifactsDir(temp.path());
 
-			registerArchivedRef("Scout", "session-a", scoutFile, "parked");
-			registerArchivedRef("Aborted", "session-a", abortedFile, "aborted");
-			registerArchivedRef("Foreign", "session-b", foreignFile, "parked");
-			registerArchivedRef("scout", "session-b", foreignFile, "parked");
+			registerArchivedRef("Scout", "session-a", scoutFile, "asleep");
+			registerArchivedRef("Aborted", "session-a", abortedFile, "asleep");
+			registerArchivedRef("Foreign", "session-b", foreignFile, "asleep");
+			registerArchivedRef("scout", "session-b", foreignFile, "asleep");
 			registerLiveRef("Live", "live-session", "session-a", "sub");
 			AgentRegistry.global().register({
 				id: "Live",
@@ -263,7 +263,7 @@ describe("history:// caller-bound archived opt-in", () => {
 				scope: "session-a",
 				status: "idle",
 			});
-			registerArchivedRef("Advisor", "session-a", advisorFile, "parked", "advisor");
+			registerArchivedRef("Advisor", "session-a", advisorFile, "asleep", "advisor");
 
 			const exact = JSON.parse(await read(caller, "history://Scout?archived=1&entry=record-one&limit=1000")) as {
 				status: string;
@@ -277,7 +277,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			const namespacedFile = await archive(temp.path(), "Namespaced", "sub-session", [
 				{ id: "namespaced-entry", parentId: null, message: "namespaced target evidence" },
 			]);
-			registerArchivedRef("sub:session-a", "session-a", namespacedFile, "parked", "sub");
+			registerArchivedRef("sub:session-a", "session-a", namespacedFile, "asleep", "sub");
 			const namespaced = JSON.parse(
 				await read(caller, "history://sub:session-a?archived=1&entry=namespaced-entry"),
 			) as { status: string; fragment?: string };
@@ -300,7 +300,7 @@ describe("history:// caller-bound archived opt-in", () => {
 
 			const index = await read(caller, "history://?archived=1");
 			expect(index).toContain("Scout");
-			expect(index).not.toContain("Aborted");
+			expect(index).toContain("Aborted");
 			expect(index).not.toContain("Foreign");
 			expect(index).not.toContain("scout");
 			expect(index).not.toContain("DiskOnly");
@@ -364,7 +364,7 @@ describe("history:// caller-bound archived opt-in", () => {
 				kind: "sub",
 				session: null,
 				sessionFile,
-				status: "parked",
+				status: "asleep",
 			});
 			await expect(read(caller, "history://LegacyUnscoped?archived=1&entry=legacy-entry")).rejects.toThrow(
 				ARCHIVED_UNAVAILABLE,
@@ -734,7 +734,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			session: null,
 			sessionFile: "/synthetic/poison.jsonl",
 			scope: "session-a",
-			status: "parked",
+			status: "asleep",
 		});
 		for (const prop of ["kind", "status", "scope", "sessionFile", "id", "lastActivity"] as const) {
 			Object.defineProperty(poisonRef, prop, {
@@ -768,7 +768,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			session: null,
 			sessionFile: "/synthetic/oversized.jsonl",
 			scope: "session-a",
-			status: "parked",
+			status: "asleep",
 		});
 
 		Object.defineProperty(oversizedRef, "lastActivity", {
@@ -863,7 +863,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			const validFile = await archive(validDir, "Target", "trusted-session", [
 				{ id: "record-1", parentId: null, message: "trusted content needle" },
 			]);
-			registerArchivedRef("Target", "session-a", validFile, "parked");
+			registerArchivedRef("Target", "session-a", validFile, "asleep");
 
 			// Positive controls: exact and search work before any mutation
 			const exactBefore = JSON.parse(await read(caller, "history://Target?archived=1&entry=record-1")) as {
@@ -889,7 +889,7 @@ describe("history:// caller-bound archived opt-in", () => {
 				"trusted-session",
 				[{ id: "record-1", parentId: null, message: "needle content" }],
 			);
-			registerArchivedRef("Overwritten", "session-a", overwrittenFile, "parked");
+			registerArchivedRef("Overwritten", "session-a", overwrittenFile, "asleep");
 			const content = await fs.readFile(overwrittenFile, "utf-8");
 			const lines = content.split("\n");
 			lines[0] = JSON.stringify({ type: "session", id: "foreign-session-id" });
@@ -911,7 +911,7 @@ describe("history:// caller-bound archived opt-in", () => {
 				"symlink-session",
 				[{ id: "record-1", parentId: null, message: "symlink needle" }],
 			);
-			registerArchivedRef("SymlinkTarget", "session-a", symlinkTargetFile, "parked");
+			registerArchivedRef("SymlinkTarget", "session-a", symlinkTargetFile, "asleep");
 
 			let symlinkCreated = false;
 			try {
@@ -949,7 +949,7 @@ describe("history:// caller-bound archived opt-in", () => {
 				"foreign-path-session",
 				[{ id: "record-1", parentId: null, message: "foreign path needle" }],
 			);
-			registerArchivedRef("ForeignPathTarget", "session-a", foreignPathFile, "parked");
+			registerArchivedRef("ForeignPathTarget", "session-a", foreignPathFile, "asleep");
 			const targetRef = AgentRegistry.global().get("ForeignPathTarget")!;
 			targetRef.sessionFile = foreignFile;
 			await expect(read(caller, "history://ForeignPathTarget?archived=1&entry=record-foreign")).rejects.toThrow(
@@ -967,7 +967,7 @@ describe("history:// caller-bound archived opt-in", () => {
 				session: null,
 				sessionFile: restoredFile,
 				scope: "session-a",
-				status: "parked",
+				status: "asleep",
 			});
 			await expect(read(caller, "history://RestoredNoLive?archived=1&entry=record-1")).rejects.toThrow(
 				ARCHIVED_UNAVAILABLE,
@@ -979,7 +979,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			const raceFile = await archive(path.join(temp.path(), "race"), "RaceTarget", "race-session", [
 				{ id: "record-1", parentId: null, message: "race needle" },
 			]);
-			registerArchivedRef("RaceTarget", "session-a", raceFile, "parked");
+			registerArchivedRef("RaceTarget", "session-a", raceFile, "asleep");
 
 			// 5a. Exact: unregister target during real suspended handle.read
 			let exactRaceHookActive = true;
@@ -1007,7 +1007,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			}
 
 			// 5b. Search: mutate target status to running via mirrorStatus during real suspended handle.read
-			registerArchivedRef("RaceSearchTarget", "session-a", raceFile, "parked");
+			registerArchivedRef("RaceSearchTarget", "session-a", raceFile, "asleep");
 			let searchRaceHookActive = true;
 			let searchHookFired = false;
 			const searchOpenSpy = spyOn(fs, "open").mockImplementation(async (...openArgs) => {
@@ -1049,7 +1049,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			const origFile = await archive(validDir, "SameDirSub", "same-dir-session", [
 				{ id: "orig-entry", parentId: null, message: "orig needle" },
 			]);
-			registerArchivedRef("SameDirSub", "session-a", origFile, "parked");
+			registerArchivedRef("SameDirSub", "session-a", origFile, "asleep");
 
 			// Assert positive control for original file before mutation
 			const sameDirExactBefore = JSON.parse(
@@ -1103,7 +1103,7 @@ describe("history:// caller-bound archived opt-in", () => {
 					}),
 				].join("\n") + "\n",
 			);
-			registerArchivedRef("MalformedPrefix", "session-a", malformedPrefixFile, "parked");
+			registerArchivedRef("MalformedPrefix", "session-a", malformedPrefixFile, "asleep");
 			await expect(read(caller, "history://MalformedPrefix?archived=1&entry=prefix-entry-1")).rejects.toThrow(
 				ARCHIVED_UNAVAILABLE,
 			);
@@ -1127,7 +1127,7 @@ describe("history:// caller-bound archived opt-in", () => {
 					}),
 				].join("\n") + "\n",
 			);
-			registerArchivedRef("DupKeyPrefix", "session-a", dupKeyPrefixFile, "parked");
+			registerArchivedRef("DupKeyPrefix", "session-a", dupKeyPrefixFile, "asleep");
 			await expect(read(caller, "history://DupKeyPrefix?archived=1&entry=prefix-entry-2")).rejects.toThrow(
 				ARCHIVED_UNAVAILABLE,
 			);
@@ -1158,7 +1158,7 @@ describe("history:// caller-bound archived opt-in", () => {
 					}),
 				].join("\n") + "\n",
 			);
-			registerArchivedRef("JsonArrayPreHeader", "session-a", file, "parked");
+			registerArchivedRef("JsonArrayPreHeader", "session-a", file, "asleep");
 
 			await expect(read(caller, "history://JsonArrayPreHeader?archived=1&entry=entry-one")).rejects.toThrow(
 				ARCHIVED_UNAVAILABLE,
@@ -1206,7 +1206,7 @@ describe("history:// caller-bound archived opt-in", () => {
 					].join("\n") + "\n",
 				);
 				const targetId = `PlainTitleTarget_${idx}`;
-				registerArchivedRef(targetId, "session-a", file, "parked");
+				registerArchivedRef(targetId, "session-a", file, "asleep");
 
 				const exact = JSON.parse(await read(caller, `history://${targetId}?archived=1&entry=entry-one`)) as {
 					status: string;
@@ -1266,7 +1266,7 @@ describe("history:// caller-bound archived opt-in", () => {
 					}),
 				].join("\n") + "\n",
 			);
-			registerArchivedRef("DupSecondHeader", "session-a", file, "parked");
+			registerArchivedRef("DupSecondHeader", "session-a", file, "asleep");
 
 			await expect(
 				read(caller, "history://DupSecondHeader?archived=1&entry=entry-one&leaf=entry-one"),
@@ -1293,7 +1293,7 @@ describe("history:// caller-bound archived opt-in", () => {
 			const file = await archive(temp.path(), "AbortTarget", "abort-session", [
 				{ id: "e1", parentId: null, message: "needle in archived record" },
 			]);
-			registerArchivedRef("AbortTarget", "session-a", file, "parked");
+			registerArchivedRef("AbortTarget", "session-a", file, "asleep");
 
 			const handler = new HistoryProtocolHandler();
 			const controller = new AbortController();
