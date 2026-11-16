@@ -4,6 +4,58 @@
 
 ## [Unreleased]
 
+## [1.10.5] - 2026-11-16
+
+### Fixed
+
+- Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
+
+## [1.10.4] - 2026-11-16
+
+### Fixed
+
+- Escaped `<` as `\u003c` and used a replacer function in `renderOAuthResultHtml` so `</script>` markup and `$` replacement patterns in OAuth callback values stay inert JSON data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c767616cfc3ba221fa6695bcccf96aa2c3e4dbd4).
+- Steer live streaming retained children immediately on parent IRC during an active wake phase while deferring post-loop messages to the continuation outbox ([PR #1146](https://github.com/Wladefant/veyyon/pull/1146)).
+
+## [1.10.3] - 2026-11-16
+
+### Fixed
+
+- `history://` reads stream stored session prefixes lazily and reuse a validated directory index so post-restart reads stay within the 5-second timeout ([PR #1125](https://github.com/Wladefant/veyyon/pull/1125), [Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
+- Scoped one-off `gc` SQLite statements with `using` so `db.close()` releases database and WAL handles immediately on Windows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
+- Preserved an existing text file's CRLF line endings and UTF-8 BOM across `WriteTool` overwrites and verified persisted conventions on ACP editor-bridge writes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0ffd42c7146ac69cf18c8561ccf4febea32403ac, f77456fe1d75fdcf38b893081a6a7d12cedd89d2).
+- The shared Windows daemon broker survives the client process that started it.
+- Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+- Release settled idle failed predecessors on `successorOf` (with conversation ownership and turn-sequence ABA guards) and on settled `job cancel`, propagating disposal failures ([PR #1144](https://github.com/Wladefant/veyyon/pull/1144)).
+- Scope non-UsageLimit retry fallback cooldowns to the active session instead of globally suppressing selectors in `ModelRegistry` ([PR #1143](https://github.com/Wladefant/veyyon/pull/1143)).
+- Preserved storage directory spelling in `recoverOrphanedBackups` when resolving primary session keys ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
+- Exported `BINARY_SNIFF_BYTES` from `binary.ts` for `WriteTool` header sniffing (no user-facing effect) ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
+
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
+
+## [1.10.1] - 2026-11-15
+
+### Fixed
+
+- Count only indented untracked entries in git status/stash pop + topic ledger ([PR #1127](https://github.com/Wladefant/veyyon/pull/1127)).
+
+## [1.10.0] - 2026-11-14
+
+### Fixed
+
+- Add explicit priority slot admission ([PR #1108](https://github.com/Wladefant/veyyon/pull/1108)).
+
+## [1.9.4] - 2026-11-14
+
+### Fixed
+
+- Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
+- Bounded `history://` reads stop markdown rendering after the requested prefix and keep later messages untouched. History discovery reads child directories in bounded concurrent batches and deduplicates registry roots without quadratic scans ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+
 ## [1.9.3] - 2026-11-13
 
 ### Fixed
