@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Redacted URL userinfo and query credentials from both `url` and `error` fields in `ModelRegistry` provider discovery failure logs ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 79a2e395726eef756402f71ec1d1ef78c6a943fe).
 ## [1.10.7] - 2026-11-16
 
 ### Fixed
