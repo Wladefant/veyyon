@@ -408,7 +408,7 @@ function isInventory(text: string): boolean {
 		assignments = ENV_ASSIGNMENT.test(line) ? assignments + 1 : 0;
 		if (assignments >= 3) return true;
 	}
-	return hasInventoryKeys(text);
+	return hasInventoryKeys(plain);
 }
 
 // util.inspect prints a RegExp bare (`{ pattern: /\{/ }`), so a delimiter it escapes or
@@ -552,8 +552,9 @@ export class ProducerOutputGuard {
 	}
 
 	#record(record: string, newline: string): string {
-		const continuation = this.#authorizationHeading && isAuthorizationContinuation(record);
-		this.#authorizationHeading = isAuthorizationHeading(record);
+		const plainRecord = stripCaretCsi(record);
+		const continuation = this.#authorizationHeading && isAuthorizationContinuation(plainRecord);
+		this.#authorizationHeading = isAuthorizationHeading(plainRecord);
 		if (continuation) {
 			// Replace only this record; unrelated output must not enter withholding.
 			return this.#flushCandidate() + BLOCKED_OUTPUT_RECORD + newline;

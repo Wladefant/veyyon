@@ -112,4 +112,68 @@ describe("producer output keeps caret-escaped ANSI", () => {
 			expect(output).not.toContain("synthetic-three");
 		}
 	});
+
+	it("withholds opaque continuation after caret-colored Markdown Authorization headings across splits", () => {
+		const canary = "opaqueSyntheticContinuationCanary123";
+		const benignAfter = "after-section-safe-line";
+		const ownerRedact = (text: string) => text.replaceAll(canary, "#CANARY#");
+		const headingCases = [
+			`^[[36m- **Authorization:**^[[0m\n${canary}\n`,
+			`^[[36m## Authorization:^[[0m\n${canary}\n`,
+			`^[[36m- **Authorization:**\n${canary}\n`,
+			`- **Authorization:**^[[0m\n${canary}\n`,
+			`^[[36m- **Authorization:**^[[0m\n^[[33m${canary}^[[0m\n`,
+		];
+		for (const body of headingCases) {
+			const input = `before\n${body}${benignAfter}\n`;
+			for (const redact of [undefined, redactProviderSecrets, ownerRedact]) {
+				const direct = new ProducerOutputGuard(redact).sanitize(input);
+				expect(direct).not.toContain(canary);
+				expect(direct).toContain("before\n");
+				expect(direct).toContain(benignAfter);
+				for (let split = 0; split <= input.length; split++) {
+					const g = new ProducerOutputGuard(redact);
+					const output = g.push(input.slice(0, split)) + g.push(input.slice(split)) + g.finish();
+					expect(output).not.toContain(canary);
+					expect(output).toContain("before\n");
+					expect(output).toContain(benignAfter);
+				}
+			}
+		}
+		// Blank/CSI-only line or new Markdown heading ends the one-record continuation context.
+		const resetCases = [
+			`^[[36m- **Authorization:**^[[0m\n^[[36m^[[0m\n${benignAfter}\n`,
+			`^[[36m- **Authorization:**^[[0m\n^[[36m- **Status:**^[[0m\n${benignAfter}\n`,
+		];
+		for (const input of resetCases) {
+			expect(new ProducerOutputGuard(redactProviderSecrets).sanitize(input)).toBe(input);
+			for (let split = 0; split <= input.length; split++) {
+				expect(streamed(input, split)).toBe(input);
+			}
+		}
+	});
+
+	it("detects three-key object inventories when CSI is embedded inside key names", () => {
+		const inline = "{ AL^[[36mPHA: 'synthetic-one', BE^[[36mTA: 'synthetic-two', GA^[[36mMMA: 'synthetic-three' }\n";
+		const multiline =
+			"{\n  AL^[[36mPHA: 'synthetic-one',\n  BE^[[36mTA: 'synthetic-two',\n  GA^[[36mMMA: 'synthetic-three'\n}\n";
+		const arrayOfObjects =
+			"[{ AL^[[36mPHA: 'synthetic-one' }, { BE^[[36mTA: 'synthetic-two', GA^[[36mMMA: 'synthetic-three' }]\n";
+		for (const input of [inline, multiline, arrayOfObjects]) {
+			expect(new ProducerOutputGuard().sanitize(input)).toBe(BLOCKED_OUTPUT_RECORD);
+			expect(new ProducerOutputGuard(redactProviderSecrets).sanitize(input)).toBe(BLOCKED_OUTPUT_RECORD);
+			for (let split = 0; split <= input.length; split++) {
+				const g = new ProducerOutputGuard();
+				const output = g.push(input.slice(0, split)) + g.push(input.slice(split)) + g.finish();
+				expect(output).toContain(BLOCKED_OUTPUT_RECORD);
+				expect(output).not.toContain("synthetic-three");
+			}
+		}
+		// Neighboring benign two-key object with CSI inside key names stays readable.
+		const benignTwoKeys = "{ AL^[[36mPHA: 'safe-one', BE^[[36mTA: 'safe-two' }\n";
+		expect(new ProducerOutputGuard(redactProviderSecrets).sanitize(benignTwoKeys)).toBe(benignTwoKeys);
+		for (let split = 0; split <= benignTwoKeys.length; split++) {
+			expect(streamed(benignTwoKeys, split)).toBe(benignTwoKeys);
+		}
+	});
 });
