@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
 - Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).
 - Task-run watchdogs allow bounded session initialization before restoring the normal startup deadline on attachment, without extending later running phases.
