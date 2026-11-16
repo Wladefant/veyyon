@@ -66,7 +66,6 @@ describe("auth-broker snapshot cache", () => {
 		});
 	});
 
-
 	test("publishes the latest full snapshot even when an older AES write is delayed", async () => {
 		await withCachePath(async cachePath => {
 			const old = makeSnapshot(1_000_000);
@@ -96,14 +95,26 @@ describe("auth-broker snapshot cache", () => {
 				expect(encryptions).toBe(2);
 				release.resolve();
 				await Promise.all([first, second]);
-				expect(await readAuthBrokerSnapshotCache({
-					path: cachePath, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
-				})).toEqual(latest);
+				expect(
+					await readAuthBrokerSnapshotCache({
+						path: cachePath,
+						token: TOKEN,
+						url: URL,
+						ttlMs: 60_000,
+						now: () => 1_001_000,
+					}),
+				).toEqual(latest);
 				expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o600);
 				expect(new TextDecoder().decode(await fs.readFile(cachePath))).not.toContain("secret-api-key");
-				expect(await readAuthBrokerSnapshotCache({
-					path: otherPath, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
-				})).toEqual(latest);
+				expect(
+					await readAuthBrokerSnapshotCache({
+						path: otherPath,
+						token: TOKEN,
+						url: URL,
+						ttlMs: 60_000,
+						now: () => 1_001_000,
+					}),
+				).toEqual(latest);
 			} finally {
 				release.resolve();
 				await Promise.allSettled([first, ...(second ? [second] : []), ...(unrelated ? [unrelated] : [])]);
@@ -139,7 +150,10 @@ describe("auth-broker snapshot cache", () => {
 				await started.promise;
 				second = writeAuthBrokerSnapshotCache({ path: aliasPath, token: TOKEN, url: URL, snapshot: revoked });
 				unrelated = writeAuthBrokerSnapshotCache({
-					path: otherPath, token: TOKEN, url: URL, snapshot: revoked,
+					path: otherPath,
+					token: TOKEN,
+					url: URL,
+					snapshot: revoked,
 				});
 				await unrelated;
 				// If alias and target have separate FIFO keys, the second
@@ -148,9 +162,15 @@ describe("auth-broker snapshot cache", () => {
 				release.resolve();
 				await Promise.all([first, second]);
 				for (const cacheFile of [cachePath, aliasPath]) {
-					expect(await readAuthBrokerSnapshotCache({
-						path: cacheFile, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
-					})).toEqual(revoked);
+					expect(
+						await readAuthBrokerSnapshotCache({
+							path: cacheFile,
+							token: TOKEN,
+							url: URL,
+							ttlMs: 60_000,
+							now: () => 1_001_000,
+						}),
+					).toEqual(revoked);
 				}
 				expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o600);
 				expect(new TextDecoder().decode(await fs.readFile(cachePath))).not.toContain("secret-api-key");
@@ -197,17 +217,26 @@ describe("auth-broker snapshot cache", () => {
 				return nativeEncrypt(algorithm, key, bytes);
 			});
 			const first = writeAuthBrokerSnapshotCache({
-				path: cachePath, token: TOKEN, url: URL, snapshot: old,
+				path: cachePath,
+				token: TOKEN,
+				url: URL,
+				snapshot: old,
 			});
 			let second: Promise<void> | undefined;
 			let unrelated: Promise<void> | undefined;
 			try {
 				await started.promise;
 				second = writeAuthBrokerSnapshotCache({
-					path: alternateCase, token: TOKEN, url: URL, snapshot: revoked,
+					path: alternateCase,
+					token: TOKEN,
+					url: URL,
+					snapshot: revoked,
 				});
 				unrelated = writeAuthBrokerSnapshotCache({
-					path: unrelatedPath, token: TOKEN, url: URL, snapshot: revoked,
+					path: unrelatedPath,
+					token: TOKEN,
+					url: URL,
+					snapshot: revoked,
 				});
 				await unrelated;
 				// Before the older AES operation is released only the first and
@@ -215,9 +244,14 @@ describe("auth-broker snapshot cache", () => {
 				expect(encryptions).toBe(2);
 				release.resolve();
 				await Promise.all([first, second]);
-				const read = (p: string) => readAuthBrokerSnapshotCache({
-					path: p, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
-				});
+				const read = (p: string) =>
+					readAuthBrokerSnapshotCache({
+						path: p,
+						token: TOKEN,
+						url: URL,
+						ttlMs: 60_000,
+						now: () => 1_001_000,
+					});
 				expect(await read(alternateCase)).toEqual(revoked);
 				// On case-insensitive volumes both spellings name the same file:
 				// no revoked credential may be resurrected by the late old write.
@@ -242,9 +276,14 @@ describe("auth-broker snapshot cache", () => {
 			const otherPath = path.join(path.dirname(cachePath), "cycle.enc");
 			await fs.symlink(path.basename(otherPath), cachePath);
 			await fs.symlink(path.basename(cachePath), otherPath);
-			await expect(writeAuthBrokerSnapshotCache({
-				path: cachePath, token: TOKEN, url: URL, snapshot: makeSnapshot(1_000_000),
-			})).rejects.toMatchObject({ code: "ELOOP" });
+			await expect(
+				writeAuthBrokerSnapshotCache({
+					path: cachePath,
+					token: TOKEN,
+					url: URL,
+					snapshot: makeSnapshot(1_000_000),
+				}),
+			).rejects.toMatchObject({ code: "ELOOP" });
 			expect((await fs.lstat(cachePath)).isSymbolicLink()).toBe(true);
 			expect((await fs.lstat(otherPath)).isSymbolicLink()).toBe(true);
 		});
@@ -252,9 +291,14 @@ describe("auth-broker snapshot cache", () => {
 		// mutating a symlink fixture. The same nonregular-target refusal still runs.
 		await withCachePath(async cachePath => {
 			await fs.mkdir(cachePath);
-			await expect(writeAuthBrokerSnapshotCache({
-				path: cachePath, token: TOKEN, url: URL, snapshot: makeSnapshot(1_000_000),
-			})).rejects.toThrow("Refusing to write");
+			await expect(
+				writeAuthBrokerSnapshotCache({
+					path: cachePath,
+					token: TOKEN,
+					url: URL,
+					snapshot: makeSnapshot(1_000_000),
+				}),
+			).rejects.toThrow("Refusing to write");
 			expect((await fs.stat(cachePath)).isDirectory()).toBe(true);
 		});
 	});
@@ -274,9 +318,15 @@ describe("auth-broker snapshot cache", () => {
 				const next = writeAuthBrokerSnapshotCache({ path: cachePath, token: TOKEN, url: URL, snapshot: latest });
 				await expect(failed).rejects.toThrow("synthetic encryption failure");
 				await next;
-				expect(await readAuthBrokerSnapshotCache({
-					path: cachePath, token: TOKEN, url: URL, ttlMs: 60_000, now: () => 1_001_000,
-				})).toEqual(latest);
+				expect(
+					await readAuthBrokerSnapshotCache({
+						path: cachePath,
+						token: TOKEN,
+						url: URL,
+						ttlMs: 60_000,
+						now: () => 1_001_000,
+					}),
+				).toEqual(latest);
 				expect((await fs.stat(cachePath)).mode & 0o777).toBe(0o600);
 			} finally {
 				spy.mockRestore();

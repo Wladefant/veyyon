@@ -173,7 +173,11 @@ function assertBrokerOAuthRefresh(
  * Refuse an unrelated grant before broker-side refresh and a revoked grant after reply.
  * The broker alone rotates refresh credentials; this is a client identity fence.
  */
-function requireLocalOAuthRefresh(snapshot: SnapshotResponse, credentialId: number, provider?: string): SnapshotEntry & { credential: OAuthCredential } {
+function requireLocalOAuthRefresh(
+	snapshot: SnapshotResponse,
+	credentialId: number,
+	provider?: string,
+): SnapshotEntry & { credential: OAuthCredential } {
 	const current = snapshot.credentials.find(candidate => candidate.id === credentialId);
 	if (
 		!current ||
@@ -181,7 +185,9 @@ function requireLocalOAuthRefresh(snapshot: SnapshotResponse, credentialId: numb
 		current.credential.type !== "oauth" ||
 		current.credential.refresh !== REMOTE_REFRESH_SENTINEL
 	) {
-		throw new AIError.AuthBrokerError(`Broker refresh refused unknown or mismatched OAuth credential id=${credentialId}`);
+		throw new AIError.AuthBrokerError(
+			`Broker refresh refused unknown or mismatched OAuth credential id=${credentialId}`,
+		);
 	}
 	return current as SnapshotEntry & { credential: OAuthCredential };
 }
@@ -437,8 +443,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const reauthorized = [...incomingIds].some(id => this.#canonicallyRemovedCredentialIds.has(id));
 		const replaced = snapshot.credentials.some(entry => {
 			const previous = previousById.get(entry.id);
-			return previous !== undefined && (
-				previous.provider !== entry.provider || !isDeepStrictEqual(previous.credential, entry.credential)
+			return (
+				previous !== undefined &&
+				(previous.provider !== entry.provider || !isDeepStrictEqual(previous.credential, entry.credential))
 			);
 		});
 		for (const id of incomingIds) this.#canonicallyRemovedCredentialIds.delete(id);
@@ -511,9 +518,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			isDeepStrictEqual(
 				snapshot.credentials
 					.map(entry =>
-						credentialSseProgressState(this.#retainPendingCredentialBlocks(
-							normalizeSnapshotEntryBlocks(entry, Date.now()), previousById.get(entry.id),
-						)),
+						credentialSseProgressState(
+							this.#retainPendingCredentialBlocks(
+								normalizeSnapshotEntryBlocks(entry, Date.now()),
+								previousById.get(entry.id),
+							),
+						),
 					)
 					.sort((a, b) => a.id - b.id),
 				this.#snapshot.credentials.map(credentialSseProgressState).sort((a, b) => a.id - b.id),
@@ -560,8 +570,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (canonical.status !== 200) {
 					throw new AIError.AuthBrokerError("Unconditional broker snapshot verification returned no snapshot");
 				}
-				if (!this.#isNoProgressSnapshot(canonical.snapshot, true) &&
-					this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtRequest)) {
+				if (
+					!this.#isNoProgressSnapshot(canonical.snapshot, true) &&
+					this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtRequest)
+				) {
 					return;
 				}
 				// The replay was changed but broker truth was not. Pace the unused
@@ -653,7 +665,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
 				if (!current) return false;
 				const incoming = this.#retainPendingCredentialBlocks(
-					normalizeSnapshotEntryBlocks(event.entry, Date.now()), current,
+					normalizeSnapshotEntryBlocks(event.entry, Date.now()),
+					current,
 				);
 				return (
 					isDeepStrictEqual(credentialSseProgressState(current), credentialSseProgressState(incoming)) &&
@@ -698,8 +711,12 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				// later frames on this transport, but must NOT renew the idle canonical
 				// GET deadline or advance the accepted snapshot revision. A new SSE
 				// connection gets a new watermark so broker generation resets still work.
-				if (!firstFrame && highestGenerationSeenOnStream !== undefined &&
-					event.generation < highestGenerationSeenOnStream) continue;
+				if (
+					!firstFrame &&
+					highestGenerationSeenOnStream !== undefined &&
+					event.generation < highestGenerationSeenOnStream
+				)
+					continue;
 				if (highestGenerationSeenOnStream === undefined || event.generation > highestGenerationSeenOnStream) {
 					highestGenerationSeenOnStream = event.generation;
 				}
@@ -725,7 +742,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					// verification, not a reason to reject before the GET that can
 					// distinguish a stale replay from legitimate same-ID reauthorization.
 					const firstFrameConflictsWithCanonicalRevocation = snapshot.credentials.some(entry =>
-						this.#isCanonicallyRemovedFromStream(entry.id)
+						this.#isCanonicallyRemovedFromStream(entry.id),
 					);
 					// A first frame cannot establish broker incarnation by itself.
 					// If it differs from the accepted view OR numeric generation, only
@@ -739,7 +756,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 						const revisionAtVerification = this.#appliedSnapshotRevision;
 						const canonical = await this.#client.fetchSnapshot({ signal: streamSignal });
 						if (canonical.status !== 200) {
-							throw new AIError.AuthBrokerError("Broker stream initial snapshot verification returned no snapshot");
+							throw new AIError.AuthBrokerError(
+								"Broker stream initial snapshot verification returned no snapshot",
+							);
 						}
 						if (!this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtVerification)) {
 							throw new AIError.AuthBrokerError("Broker stream initial snapshot superseded during verification");
@@ -815,9 +834,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				}
 				// A stale full frame from an old stream must not put a
 				// canonically revoked grant back into the local selection set.
-				if (snapshot.credentials.some(entry =>
-					this.#isCanonicallyRemovedFromStream(entry.id)
-				)) return;
+				if (snapshot.credentials.some(entry => this.#isCanonicallyRemovedFromStream(entry.id))) return;
 				// Replayed unchanged state is not progress, even when a stale relay
 				// advertises increasing generations: accepting it repeatedly would
 				// starve the canonical idle GET and invalidate
@@ -833,13 +850,18 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				if (this.#isCanonicallyRemovedFromStream(event.entry.id)) return;
 				const current = this.#snapshot.credentials.find(entry => entry.id === event.entry.id);
 				const effectiveIncoming = this.#retainPendingCredentialBlocks(
-					normalizeSnapshotEntryBlocks(event.entry, Date.now()), current,
+					normalizeSnapshotEntryBlocks(event.entry, Date.now()),
+					current,
 				);
 				if (
 					current &&
 					isDeepStrictEqual(credentialSseProgressState(current), credentialSseProgressState(effectiveIncoming)) &&
-					isDeepStrictEqual(refresherSseProgressState(event.refresher), refresherSseProgressState(this.#snapshot.refresher))
-				) return;
+					isDeepStrictEqual(
+						refresherSseProgressState(event.refresher),
+						refresherSseProgressState(this.#snapshot.refresher),
+					)
+				)
+					return;
 				this.#applyStreamEntry(event.entry, event.refresher, event.generation, event.serverNowMs);
 				return;
 			}
@@ -1007,7 +1029,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			this.#credentialBlockReconciliationInFlight ||
 			this.#pendingCredentialBlockMutations.size > 0 ||
 			this.#credentialBlockReconciliationPending.size === 0
-		) return;
+		)
+			return;
 		this.#credentialBlockReconciliationInFlight = true;
 		// A newer write can settle while an earlier reconciliation GET is still
 		// in flight, preventing its settlement from starting a fresh read.
@@ -1023,7 +1046,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				// a GET started before that write was sent.
 				if (this.#pendingCredentialBlockMutations.size > 0) return;
 				if (mutationEpochAtRequest !== this.#credentialBlockMutationEpoch) continue;
-				if (result.status === 200 && this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)) {
+				if (
+					result.status === 200 &&
+					this.#applyFetchedSnapshot(result.snapshot, result.generation, revisionAtRequest)
+				) {
 					this.#credentialBlockReconciliationPending.clear();
 					return;
 				}
@@ -1031,7 +1057,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			this.#reportStaleSnapshot(
 				cause,
 				new AIError.AuthBrokerError("Broker credential block reconciliation superseded repeatedly"),
-				{ credentialIds: [...this.#credentialBlockReconciliationPending], attempts: MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS },
+				{
+					credentialIds: [...this.#credentialBlockReconciliationPending],
+					attempts: MAX_FAILED_BLOCK_RECONCILE_ATTEMPTS,
+				},
 			);
 		} catch (error) {
 			this.#reportStaleSnapshot(cause, error, { credentialIds: [...this.#credentialBlockReconciliationPending] });
@@ -1050,7 +1079,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			}
 		}
 	}
-
 
 	upsertCredentialBlock(block: StoredCredentialBlock): void {
 		const mutation = Symbol("block-upsert");
@@ -1083,7 +1111,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				this.#settleCredentialBlockMutation(block.credentialId, mutation, true);
 			});
 	}
-
 
 	deleteCredentialBlocks(credentialId: number): void {
 		// A DELETE covers every block scope for this ID. Its success cannot
@@ -1207,8 +1234,10 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			// A conditional change confirmed by the canonical broker may reuse
 			// the old generation. Do not apply an unconfirmed replay or let a
 			// concurrent newer local revision be overwritten by this earlier wait.
-			if (!this.#isNoProgressSnapshot(canonical.snapshot, true) &&
-				this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtRequest)) {
+			if (
+				!this.#isNoProgressSnapshot(canonical.snapshot, true) &&
+				this.#applyFetchedSnapshot(canonical.snapshot, canonical.generation, revisionAtRequest)
+			) {
 				return true;
 			}
 		} else {
@@ -1243,7 +1272,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		assertBrokerOAuthRefresh(entry, credentialId, current.provider);
 		const reconciled = requireLocalOAuthRefresh(this.#snapshot, credentialId, current.provider);
 		if (reconciled.credential.access !== selectedAccess && reconciled.credential.access !== entry.credential.access) {
-			throw new AIError.AuthBrokerError(`Broker suspect refresh superseded by newer OAuth credential id=${credentialId}`);
+			throw new AIError.AuthBrokerError(
+				`Broker suspect refresh superseded by newer OAuth credential id=${credentialId}`,
+			);
 		}
 		this.#applyCredentialEntry(entry);
 		this.#maybeRefreshSnapshot("suspect credential refresh");
@@ -1366,11 +1397,15 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 				throw new AIError.AuthBrokerError(`Broker upload identity mismatch for provider=${provider}`);
 			}
 			if (returnedIds.has(entry.id) || retainedIds.has(entry.id)) {
-				throw new AIError.AuthBrokerError(`Broker upload identity collision for credential id=${entry.id} provider=${provider}`);
+				throw new AIError.AuthBrokerError(
+					`Broker upload identity collision for credential id=${entry.id} provider=${provider}`,
+				);
 			}
 			returnedIds.add(entry.id);
 			if (entry.credential.type === "oauth" && entry.credential.refresh !== REMOTE_REFRESH_SENTINEL) {
-				throw new AIError.AuthBrokerError(`Broker upload returned unredacted OAuth refresh for provider=${provider}`);
+				throw new AIError.AuthBrokerError(
+					`Broker upload returned unredacted OAuth refresh for provider=${provider}`,
+				);
 			}
 		}
 		// A later GET/SSE or local write can supersede a response formed before
@@ -1391,12 +1426,16 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
 		const incoming = entries.map(entry => credentialEntryWithBlocks(entry, existingBlocks.get(entry.id)));
 		const priorProviderById = new Map(
-			this.#snapshot.credentials.filter(entry => entry.provider === provider).map(entry => [entry.id, entry] as const),
+			this.#snapshot.credentials
+				.filter(entry => entry.provider === provider)
+				.map(entry => [entry.id, entry] as const),
 		);
-		const credentialStateChanged = priorProviderById.size !== incoming.length || incoming.some(entry => {
-			const prior = priorProviderById.get(entry.id);
-			return !prior || !isDeepStrictEqual(prior.credential, entry.credential);
-		});
+		const credentialStateChanged =
+			priorProviderById.size !== incoming.length ||
+			incoming.some(entry => {
+				const prior = priorProviderById.get(entry.id);
+				return !prior || !isDeepStrictEqual(prior.credential, entry.credential);
+			});
 		this.#snapshot = { ...this.#snapshot, credentials: others.concat(incoming) };
 		this.#appliedSnapshotRevision += 1;
 		// A broker-acknowledged upload outranks already queued frames on the old
@@ -1407,8 +1446,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
 		const previous = index === -1 ? undefined : this.#snapshot.credentials[index];
 		const incoming = credentialEntryWithBlocks(entry, previous?.blocks);
-		const credentialStateChanged = !previous ||
-			previous.provider !== entry.provider || !isDeepStrictEqual(previous.credential, entry.credential);
+		const credentialStateChanged =
+			!previous || previous.provider !== entry.provider || !isDeepStrictEqual(previous.credential, entry.credential);
 		if (index === -1) {
 			this.#snapshot = { ...this.#snapshot, credentials: this.#snapshot.credentials.concat([incoming]) };
 			this.#appliedSnapshotRevision += 1;
