@@ -1862,7 +1862,6 @@ function persist(record: ManagedDaemon): void {
 	record.persistQueue = record.persistQueue
 		.then(() =>
 			atomicWriteFile(metaPath, JSON.stringify({ daemon: record.snapshot, spec: record.spec }), {
-				requireAtomicReplace: true,
 				retryRename: true,
 			}),
 		)

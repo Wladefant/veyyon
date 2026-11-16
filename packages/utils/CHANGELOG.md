@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve existing Windows destination DACLs and security attributes during atomic file replacement. Failed replacements no longer fall back to renaming an unprotected temporary file over the destination ([Refs #1157](https://github.com/Wladefant/veyyon/issues/1157)).
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed

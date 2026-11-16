@@ -28,13 +28,14 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, isFsError, nonRegularKind } from "./fs-error";
+import { publishWindowsFile } from "./windows-file-replace";
 
 export interface AtomicWriteOptions {
 	/**
 	 * Permission bits for the created file. Defaults to `0o600` (owner
-	 * read/write only) because config files routinely hold tokens. The final
-	 * file inherits the temp file's permissions, so this also governs the
-	 * replacement even when the previous file was more permissive.
+	 * read/write only) because config files routinely hold tokens. On POSIX the
+	 * replacement takes the temp's mode. Windows replacements preserve the
+	 * destination's DACL and security attributes.
 	 */
 	mode?: number;
 	/**
@@ -46,22 +47,9 @@ export interface AtomicWriteOptions {
 	 */
 	fsync?: boolean;
 	/**
-	 * Require atomic replacement without fallback. When `true`, if renaming
-	 * the temporary file over the destination fails, the writer rejects
-	 * immediately with the original rename error without displacing,
-	 * backing up, or removing the destination file (bypassing the Windows
-	 * `EPERM`/`EACCES`/`EEXIST` rename-clobber workaround).
-	 *
-	 * Defaults to `false`.
-	 */
-	requireAtomicReplace?: boolean;
-	/**
-	 * Retry transient Windows `EPERM`/`EACCES`/`EEXIST`/`EBUSY` rename denials
-	 * up to 2s without moving the existing target aside. Async-only
-	 * (`atomicWriteFile` / `atomicWriteFileWith`). Pair with
-	 * `requireAtomicReplace: true` to fail instead of falling back to the
-	 * displacing backup path after the retry budget is exhausted; on its own,
-	 * `retryRename: true` retries before the existing displacing fallback.
+	 * Retry transient Windows access/sharing denials up to 2s. Async-only
+	 * (`atomicWriteFile` / `atomicWriteFileWith`). Exhaustion fails the write;
+	 * it never falls back to a replacement that discards destination security.
 	 */
 	retryRename?: boolean;
 }
@@ -145,29 +133,10 @@ function reserveTempFileSync(
 	}
 }
 
-// Windows can reject renaming a temp over an existing file. Never apply this
-// destructive compatibility path on POSIX: EACCES/EPERM there describes a real
-// permissions failure and removing the destination would turn it into data loss.
-function isRenameClobberError(error: unknown): boolean {
-	return (
-		process.platform === "win32" &&
-		isFsError(error) &&
-		(error.code === "EPERM" || error.code === "EEXIST" || error.code === "EACCES")
-	);
-}
-
 function isRetryableWindowsRenameError(error: unknown): boolean {
-	return (
-		process.platform === "win32" &&
-		isFsError(error) &&
-		(error.code === "EPERM" || error.code === "EEXIST" || error.code === "EACCES" || error.code === "EBUSY")
-	);
+	return process.platform === "win32" && isFsError(error) &&
+		(error.code === "EACCES" || error.code === "EBUSY");
 }
-
-// The bytes writer and the path writer share the tricky, drift-prone parts of an
-// atomic write — symlink resolution, the rename-clobber fallback, the directory
-// fsync. These three helpers are that single home; both public writers call them
-// so the behavior can only ever be defined once.
 
 // Follow every basename symlink ourselves instead of using realpath. realpath
 // cannot return the resolved prefix of a dangling chain; falling back to a
@@ -348,58 +317,24 @@ const RENAME_RETRY_MAX_MS = 100;
 async function renameTempOverTarget(
 	tmpPath: string,
 	target: string,
-	requireAtomicReplace = false,
 	retryRename = false,
 ): Promise<void> {
-	// Windows readers briefly deny replacement with EPERM/EACCES/EEXIST/EBUSY;
-	// when retryRename is enabled, retry the same staged sibling rename first so
-	// readers never observe a missing target.
-	const deadline = retryRename ? Date.now() + RENAME_RETRY_BUDGET_MS : 0;
-	for (let failures = 0; ; failures++) {
-		try {
-			await fsp.rename(tmpPath, target);
-			return;
-		} catch (error) {
-			if (!retryRename) {
-				if (!isRenameClobberError(error) || requireAtomicReplace) throw error;
-				break;
-			}
-			if (!isRetryableWindowsRenameError(error)) throw error;
-			const remaining = deadline - Date.now();
-			if (remaining <= 0) {
-				if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
-				break;
-			}
-			await Bun.sleep(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
-		}
-	}
-	// Windows lacks a consistently atomic replace-existing rename. Preserve the
-	// displaced inode under an owned sibling until the replacement succeeds, so
-	// a failed second rename can restore the caller's original bytes.
-	await assertReplaceableTarget(target);
-	const backupPath = nextTempPath(path.dirname(target), `${path.basename(target)}.previous`);
-	try {
-		await fsp.rename(target, backupPath);
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-		// Another writer removed the target after our failed clobber attempt.
+	if (process.platform !== "win32") {
 		await fsp.rename(tmpPath, target);
 		return;
 	}
-	try {
-		await fsp.rename(tmpPath, target);
-	} catch (replacementError) {
+	const deadline = retryRename ? Date.now() + RENAME_RETRY_BUDGET_MS : 0;
+	for (let failures = 0; ; failures++) {
 		try {
-			await fsp.rename(backupPath, target);
-		} catch (restoreError) {
-			throw new AggregateError(
-				[replacementError, restoreError],
-				`Failed to replace ${target}, then failed to restore its previous contents`,
-			);
+			publishWindowsFile(tmpPath, target, nextTempPath(path.dirname(target), `${path.basename(target)}.previous`));
+			return;
+		} catch (error) {
+			if (!retryRename || !isRetryableWindowsRenameError(error)) throw error;
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) throw error;
+			await Bun.sleep(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
 		}
-		throw replacementError;
 	}
-	await fsp.rm(backupPath, { force: true, recursive: true });
 }
 
 const DIRECTORY_FSYNC_UNSUPPORTED: Readonly<Record<string, true>> = {
@@ -447,8 +382,8 @@ export async function atomicWriteFile(
 	data: string | NodeJS.ArrayBufferView,
 	options: AtomicWriteOptions = {},
 ): Promise<void> {
-	const { mode = 0o600, fsync = true, requireAtomicReplace = false, retryRename = false } = options;
-	await atomicWriteBytes(filePath, data, mode, fsync, false, requireAtomicReplace, retryRename);
+	const { mode = 0o600, fsync = true, retryRename = false } = options;
+	await atomicWriteBytes(filePath, data, mode, fsync, false, retryRename);
 }
 
 async function atomicWriteBytes(
@@ -457,7 +392,6 @@ async function atomicWriteBytes(
 	mode: number,
 	fsync: boolean,
 	preserveModeExactly: boolean,
-	requireAtomicReplace = false,
 	retryRename = false,
 ): Promise<void> {
 	await atomicWriteFileWithImpl(
@@ -470,7 +404,7 @@ async function atomicWriteBytes(
 				if (fsync) await handle.sync();
 			},
 		},
-		{ fsync, mode, requireAtomicReplace, retryRename },
+		{ fsync, mode, retryRename },
 	);
 }
 
@@ -493,9 +427,9 @@ async function atomicWriteBytes(
 export async function atomicWriteFilePreservingMode(
 	filePath: string,
 	data: string | NodeJS.ArrayBufferView,
-	options: { fsync?: boolean; defaultMode?: number; requireAtomicReplace?: boolean } = {},
+	options: { fsync?: boolean; defaultMode?: number } = {},
 ): Promise<void> {
-	const { fsync = true, defaultMode = 0o644, requireAtomicReplace = false } = options;
+	const { fsync = true, defaultMode = 0o644 } = options;
 	let mode = defaultMode;
 	let existed = true;
 	try {
@@ -504,7 +438,7 @@ export async function atomicWriteFilePreservingMode(
 		if (!isEnoent(error)) throw error;
 		existed = false;
 	}
-	await atomicWriteBytes(filePath, data, mode, fsync, existed, requireAtomicReplace);
+	await atomicWriteBytes(filePath, data, mode, fsync, existed);
 }
 
 /**
@@ -571,7 +505,6 @@ async function atomicWriteFileWithImpl(
 		fsync = true,
 		fsyncTempFile = true,
 		mode = 0o600,
-		requireAtomicReplace = false,
 		retryRename = false,
 	} = options;
 	const { target, viaSymlink } = await resolveWriteTarget(filePath);
@@ -595,7 +528,7 @@ async function atomicWriteFileWithImpl(
 		// swapped staging entry.
 		assertRegularFileTarget(await fsp.lstat(tmpPath), tmpPath);
 		await assertReplaceableTarget(target);
-		await renameTempOverTarget(tmpPath, target, requireAtomicReplace, retryRename);
+		await renameTempOverTarget(tmpPath, target, retryRename);
 		pendingTemps.delete(tmpPath);
 	} catch (error) {
 		pendingTemps.delete(tmpPath);
@@ -639,7 +572,7 @@ export function atomicWriteFileSync(
 	data: string | NodeJS.ArrayBufferView,
 	options: AtomicWriteSyncOptions = {},
 ): void {
-	const { mode = 0o600, fsync = true, requireAtomicReplace = false } = options;
+	const { mode = 0o600, fsync = true } = options;
 	const { target, viaSymlink } = resolveWriteTargetSync(filePath);
 	const dir = path.dirname(target);
 	if (!viaSymlink) fs.mkdirSync(dir, { recursive: true });
@@ -655,7 +588,7 @@ export function atomicWriteFileSync(
 		);
 		assertRegularFileTarget(fs.lstatSync(tmpPath), tmpPath);
 		assertReplaceableTargetSync(target);
-		renameTempOverTargetSync(tmpPath, target, requireAtomicReplace);
+		renameTempOverTargetSync(tmpPath, target);
 	} catch (error) {
 		try {
 			removeTempSync(tmpPath);
@@ -666,38 +599,12 @@ export function atomicWriteFileSync(
 }
 
 /** Blocking twin of {@link renameTempOverTarget}; see that function for the reasoning. */
-function renameTempOverTargetSync(tmpPath: string, target: string, requireAtomicReplace = false): void {
-	try {
+function renameTempOverTargetSync(tmpPath: string, target: string): void {
+	if (process.platform === "win32") {
+		publishWindowsFile(tmpPath, target, nextTempPath(path.dirname(target), `${path.basename(target)}.previous`));
+	} else {
 		fs.renameSync(tmpPath, target);
-		return;
-	} catch (error) {
-		if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
 	}
-
-	assertReplaceableTargetSync(target);
-	const backupPath = nextTempPath(path.dirname(target), `${path.basename(target)}.previous`);
-	try {
-		fs.renameSync(target, backupPath);
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-		// Another writer removed the target after our failed clobber attempt.
-		fs.renameSync(tmpPath, target);
-		return;
-	}
-	try {
-		fs.renameSync(tmpPath, target);
-	} catch (replacementError) {
-		try {
-			fs.renameSync(backupPath, target);
-		} catch (restoreError) {
-			throw new AggregateError(
-				[replacementError, restoreError],
-				`Failed to replace ${target}, then failed to restore its previous contents`,
-			);
-		}
-		throw replacementError;
-	}
-	removeTempSync(backupPath);
 }
 
 /** Synchronous twin of {@link fsyncDirEntry}. */

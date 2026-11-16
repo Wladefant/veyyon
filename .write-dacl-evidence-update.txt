@@ -1,0 +1,9 @@
+## Native Windows repro and replacement matrix
+
+The original native repro exercised the production `atomicWriteFileWith` overwrite path against a protected scratch file. The overwrite completed, then the existing validator rejected the result with `recovery file requires a private, non-inherited ACL`. This is the expected-old-failure evidence: [red repro log](local://write-dacl-red.log).
+
+The same validator runner now accepts the protected file after overwrite: [post-fix green log](local://write-dacl-green.log). The separate native replacement matrix exercised async bytes, async producer, sync overwrite, new-file creation, and a denied overwrite. It reports ACL and content preserved for each protected successful overwrite, successful new-file creation with a Unicode filename, and fail-closed denied replacement with original bytes and ACL unchanged: [native matrix log](local://write-dacl-native-matrix.log).
+
+The matrix's denied case explicitly reports `DENIED_REPLACE original bytes + ACL PASS 'immutable-old'`. Its expected-old-failure harness uses exit code 42 intentionally; that status represents the reproduced failure, not a green exit. No claim is made from that harness's exit code alone.
+
+Implementation direction remains `ReplaceFileW` with flags 0. It does not use ACL-ignore flags or rename-over-existing fallback. ReplaceFileW's FFI substrate follows the existing Windows native FFI convention but remains experimental and requires security review. No merge, install, or deployment is claimed.

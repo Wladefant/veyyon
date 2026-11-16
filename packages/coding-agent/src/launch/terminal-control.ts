@@ -897,7 +897,6 @@ export async function serveTerminalControl(
 					mode: 0o600,
 					// This credential dies with the process. No fallible flush may follow its atomic replacement.
 					fsync: false,
-					requireAtomicReplace: true,
 				},
 			);
 		});
