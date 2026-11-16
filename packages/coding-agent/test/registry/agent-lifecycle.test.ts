@@ -1058,15 +1058,18 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get(child.id)).toBeUndefined();
 	});
 
-	it("stops an in-flight orphan sweep when lifecycle.dispose() runs", async () => {
+	it("stops an in-flight orphan sweep when lifecycle.dispose() runs without post-dispose append", async () => {
 		const gate = deferred();
 		const firstOpen = deferred();
 		let openCount = 0;
+		const openedStubs: SessionStub[] = [];
 		vi.spyOn(SessionManager, "open").mockImplementation(async () => {
 			openCount++;
 			firstOpen.resolve();
 			await gate.promise;
-			return makeSessionStub().session.sessionManager as unknown as SessionManager;
+			const stub = makeSessionStub();
+			openedStubs.push(stub);
+			return stub.session.sessionManager as unknown as SessionManager;
 		});
 
 		for (let i = 0; i < 3; i++) {
@@ -1088,5 +1091,96 @@ describe("AgentLifecycleManager", () => {
 		await Promise.all([sweep, disposing]);
 
 		expect(openCount).toBe(1);
+		expect(openedStubs).toHaveLength(1);
+		expect(openedStubs[0]!.customMessages()).toHaveLength(0);
+		expect(openedStubs[0]!.flushCalls()).toBe(0);
+	});
+
+	it("coalesces synchronous re-entrant sweeps when parked orphans already have terminalOutcome", async () => {
+		const parentStub = makeSessionStub();
+		registry.register({
+			id: "LiveParent",
+			displayName: "LiveParent",
+			kind: "root",
+			session: parentStub.session as unknown as AgentSession,
+			status: "running",
+		});
+		for (let i = 0; i < 5; i++) {
+			const child = registry.register({
+				id: `TerminalChild${i}`,
+				displayName: `TerminalChild${i}`,
+				kind: "sub",
+				parentId: "LiveParent",
+				session: null,
+				status: "parked",
+			});
+			registry.recordTerminalOutcome(child.id, "completed", "done");
+		}
+
+		const sweepSpy = vi.spyOn(lifecycle, "cleanupParkedOrphans");
+		const openSpy = vi.spyOn(SessionManager, "open");
+		const unregisterSpy = vi.spyOn(registry, "unregister");
+		registry.unregister("LiveParent");
+		await drainMicrotasks(50);
+
+		expect(openSpy).not.toHaveBeenCalled();
+		for (let i = 0; i < 5; i++) {
+			expect(registry.get(`TerminalChild${i}`)).toBeUndefined();
+			expect(unregisterSpy.mock.calls.filter(args => args[0] === `TerminalChild${i}`)).toHaveLength(1);
+		}
+		expect(sweepSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("consumes a removed event that arrives at the sweep completion boundary", async () => {
+		const gate = deferred();
+		const openStarted = deferred();
+		let openCount = 0;
+		vi.spyOn(SessionManager, "open").mockImplementation(async () => {
+			openCount++;
+			if (openCount === 1) {
+				openStarted.resolve();
+				await gate.promise;
+			}
+			return makeSessionStub().session.sessionManager as unknown as SessionManager;
+		});
+
+		registry.register({
+			id: "FirstOrphan",
+			displayName: "FirstOrphan",
+			kind: "sub",
+			parentId: "MissingParent",
+			session: null,
+			sessionFile: "/tmp/FirstOrphan.jsonl",
+			status: "parked",
+		});
+
+		const sweep = lifecycle.cleanupParkedOrphans();
+		await openStarted.promise;
+		gate.resolve();
+		// Register a second orphan and trigger a removed event right as the first sweep completes
+		registry.register({
+			id: "BoundaryOrphan",
+			displayName: "BoundaryOrphan",
+			kind: "sub",
+			parentId: "MissingParent",
+			session: null,
+			sessionFile: "/tmp/BoundaryOrphan.jsonl",
+			status: "parked",
+		});
+		registry.register({
+			id: "BoundaryTrigger",
+			displayName: "BoundaryTrigger",
+			kind: "sub",
+			session: null,
+			status: "parked",
+		});
+		registry.unregister("BoundaryTrigger");
+
+		await sweep;
+		await drainMicrotasks(50);
+
+		expect(registry.get("FirstOrphan")).toBeUndefined();
+		expect(registry.get("BoundaryOrphan")).toBeUndefined();
+		expect(openCount).toBe(2);
 	});
 });

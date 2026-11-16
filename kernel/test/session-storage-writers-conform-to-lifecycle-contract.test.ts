@@ -229,6 +229,33 @@ describe("session storage writers conform to lifecycle and error contracts", () 
 				await fsp.rm(tmpDir, { recursive: true, force: true });
 			}
 		});
+
+		it("readText strips a leading UTF-8 BOM, preserves CRLF, and keeps ENOENT .code", async () => {
+			const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "veyyon-readtext-bom-"));
+			const filePath = path.join(tmpDir, "bom.jsonl");
+			const line1 = JSON.stringify({ id: "1", type: "session" });
+			const line2 = JSON.stringify({ id: "2", type: "message", text: "ok" });
+			const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`${line1}\r\n${line2}\r\n`, "utf8")]);
+			await fsp.writeFile(filePath, bytes);
+
+			const storage = new FileSessionStorage();
+			try {
+				const text = await storage.readText(filePath);
+				expect(text.startsWith("\uFEFF")).toBe(false);
+				expect(text).toBe(`${line1}\r\n${line2}\r\n`);
+				expect(JSON.parse(text.split("\r\n")[0]!)).toEqual({ id: "1", type: "session" });
+
+				let enoentCode: string | undefined;
+				try {
+					await storage.readText(path.join(tmpDir, "missing.jsonl"));
+				} catch (err) {
+					enoentCode = (err as NodeJS.ErrnoException).code;
+				}
+				expect(enoentCode).toBe("ENOENT");
+			} finally {
+				await fsp.rm(tmpDir, { recursive: true, force: true });
+			}
+		});
 	});
 
 	describe("IndexedSessionStorage / SqlSessionStorage writer", () => {

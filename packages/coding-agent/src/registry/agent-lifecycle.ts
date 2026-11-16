@@ -504,19 +504,24 @@ export class AgentLifecycleManager {
 			return this.#orphanCleanupInFlight;
 		}
 		const run = (async () => {
-			do {
-				this.#orphanCleanupPending = false;
-				await this.#runParkedOrphanSweep();
-			} while (this.#orphanCleanupPending && !this.#disposed);
+			await Promise.resolve();
+			try {
+				while (!this.#disposed) {
+					this.#orphanCleanupPending = false;
+					await this.#runParkedOrphanSweep();
+					if (!this.#orphanCleanupPending) break;
+				}
+			} finally {
+				if (this.#orphanCleanupInFlight === run) {
+					this.#orphanCleanupInFlight = undefined;
+				}
+				if (this.#orphanCleanupPending && !this.#disposed) {
+					void this.cleanupParkedOrphans();
+				}
+			}
 		})();
 		this.#orphanCleanupInFlight = run;
-		try {
-			await run;
-		} finally {
-			if (this.#orphanCleanupInFlight === run) {
-				this.#orphanCleanupInFlight = undefined;
-			}
-		}
+		await run;
 	}
 
 	async #runParkedOrphanSweep(): Promise<void> {
@@ -566,10 +571,11 @@ export class AgentLifecycleManager {
 		let ownedManager = false;
 		try {
 			if (!manager) {
-				if (!ref.sessionFile) return false;
+				if (!ref.sessionFile || this.#disposed) return false;
 				manager = await SessionManager.open(ref.sessionFile, undefined, undefined, { suppressBreadcrumb: true });
 				ownedManager = true;
 			}
+			if (this.#disposed) return false;
 			const content = `Agent "${ref.id}" stalled: ${reason}`;
 			manager.appendCustomMessageEntry(
 				"agent-terminal-outcome",
@@ -742,6 +748,10 @@ export class AgentLifecycleManager {
 		this.#clearTimer();
 		const ids = Array.from(this.#adopted.keys());
 		await Promise.all(ids.map(id => this.release(id)));
+		const inFlight = this.#orphanCleanupInFlight;
+		if (inFlight) {
+			await inFlight.catch(() => {});
+		}
 		this.#revivals.clear();
 		this.#parking.clear();
 		this.#stalling.clear();
