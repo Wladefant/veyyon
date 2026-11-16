@@ -24,7 +24,7 @@ function verifier(respond: (child: FakeProcess, id: string, target: string) => v
 	process.env.SystemRoot = "C:\\Windows";
 	const children: FakeProcess[] = [];
 	const paths: string[] = [];
-	const spawnProcess = (() => {
+	const spawnProcess = ((_command: string, _args?: readonly string[], _options?: unknown) => {
 		const child = Object.assign(new EventEmitter(), {
 			stdin: new PassThrough(),
 			stdout: new PassThrough(),

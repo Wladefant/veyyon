@@ -8,6 +8,7 @@ import { formatBytes } from "@veyyon/utils/format";
 import { readImageMetadata } from "@veyyon/utils/mime";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { InternalUrlRouter, resolveLocalUrlToFile } from "../../internal-urls";
+import { createHistoryCallerCapability } from "../../internal-urls/history-caller";
 import { parseInternalUrl } from "../../internal-urls/parse";
 import type { InternalUrl } from "../../internal-urls/types";
 import { truncateHeadBytes } from "../../session/streaming-output";
@@ -68,6 +69,18 @@ export async function handleInternalUrl(
 		throw new ToolError("Cannot combine query extraction with line selectors");
 	}
 
+	// Archived history is the one history path that needs an authenticated caller.
+	// Mint the opaque capability here from this real ToolSession, never from URL fields.
+	const historyCaller =
+		scheme === "history" && urlMeta.searchParams.has("archived")
+			? createHistoryCallerCapability(ctx.session)
+			: undefined;
+
+	const lastRange = parsedSel.kind === "lines" ? parsedSel.ranges.at(-1) : undefined;
+	const historyMaxLines =
+		scheme === "history" && lastRange?.endLine !== undefined
+			? lastRange.endLine + (parsedSel.kind === "lines" && parsedSel.raw ? 0 : 3)
+			: undefined;
 	// Resolve the internal URL
 	const resource = await internalRouter.resolve(url, {
 		cwd: ctx.session.cwd,
@@ -75,6 +88,8 @@ export async function handleInternalUrl(
 		signal,
 		localProtocolOptions: ctx.session.localProtocolOptions,
 		skills: ctx.session.skills,
+		historyCaller,
+		historyMaxLines,
 	});
 	const details: ReadToolDetails = { resolvedPath: resource.sourcePath, contentType: resource.contentType };
 
@@ -94,14 +109,22 @@ export async function handleInternalUrl(
 		return toolResult(details).text(text).sourceInternal(url).done();
 	}
 
-	return buildInMemoryResult(ctx.session, resource.content, parsedSel, {
+	const result = await buildInMemoryResult(ctx.session, resource.content, parsedSel, {
 		details,
 		sourcePath: resource.sourcePath,
 		sourceInternal: url,
 		entityLabel: "resource",
 		ignoreResultLimits: scheme === "skill",
 		immutable: resource.immutable,
+		contentIncomplete: resource.contentIncomplete,
 	});
+	if (resource.contentIncomplete) {
+		result.content.push({
+			type: "text",
+			text: "[Transcript prefix only. Later lines were not rendered; total line count is unknown. Read a later bounded range to continue.]",
+		});
+	}
+	return result;
 }
 
 /**
