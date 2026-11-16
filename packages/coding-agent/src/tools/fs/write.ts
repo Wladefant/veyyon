@@ -13,8 +13,10 @@ import { toolSchema } from "@veyyon/ai/utils/schema/tool-schema";
 import { BARE_LITERAL_VALUE_RE, formatHashlineHeader } from "@veyyon/hashline";
 import {
 	atomicWriteFileWith,
+	BINARY_SNIFF_BYTES,
 	errorMessage,
 	isEnoent,
+	isProbablyBinaryHeader,
 	isRecord,
 	prompt,
 	statIfPresentOrThrow,
@@ -24,7 +26,7 @@ import {
 import { readFileText } from "@veyyon/utils/fs-io";
 
 import { allLineNumbers, canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
-import { normalizeToLF } from "../../edit/normalize";
+import { detectLineEnding, normalizeToLF, restoreLineEndings } from "../../edit/normalize";
 import { InternalUrlRouter } from "../../internal-urls";
 import { parseInternalUrl } from "../../internal-urls/parse";
 import { DeferredDiagnostics } from "../../lsp/deferred-diagnostics";
@@ -1041,16 +1043,25 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			// operator greps for a filename that does not exist. No-op for a new
 			// file (nothing is stored yet) and on a case-sensitive filesystem.
 			const reportedPath = overwritingExistingFile ? resolveStoredPathCase(absolutePath) : absolutePath;
+			const existingConventions = existing?.isFile()
+				? await detectExistingTextConventions(absolutePath)
+				: undefined;
+			const { text: writeContent, applied: appliedConventions } = applyExistingTextConventions(
+				content,
+				existingConventions,
+			);
 			const displayPath = formatPathRelativeToCwd(reportedPath, this.session.cwd);
-			emitWriteProgress(onUpdate, content, displayPath, absolutePath);
+			emitWriteProgress(onUpdate, writeContent, displayPath, absolutePath);
 
 			// Try ACP bridge first for editor-visible filesystem paths. Internal
 			// artifacts such as local:// plans are owned by veyyon, not the editor.
-			if (await routeWriteThroughBridge(this.session, path, absolutePath, content, signal)) {
+			if (await routeWriteThroughBridge(this.session, path, absolutePath, writeContent, signal)) {
 				const { resultText, madeExecutable } = await this.#formatSuccessfulWriteResult(
 					absolutePath,
 					displayPath,
-					content,
+					writeContent,
+					appliedConventions,
+					true,
 				);
 				return {
 					content: [{ type: "text", text: resultText }],
@@ -1058,7 +1069,7 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 				};
 			}
 
-			const diagnostics = await this.#writethrough(absolutePath, content, signal, batchRequest, dst =>
+			const diagnostics = await this.#writethrough(absolutePath, writeContent, signal, batchRequest, dst =>
 				this.#deferredDiagnostics?.begin(dst),
 			);
 			invalidateFsScanAfterWrite(absolutePath);
@@ -1068,7 +1079,9 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 			const { resultText, madeExecutable } = await this.#formatSuccessfulWriteResult(
 				absolutePath,
 				displayPath,
-				content,
+				writeContent,
+				appliedConventions,
+				false,
 			);
 			if (!diagnostics) {
 				return {
@@ -1095,14 +1108,128 @@ export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolD
 		absolutePath: string,
 		displayPath: string,
 		content: string,
+		appliedConventions: AppliedTextConventions,
+		routedThroughBridge: boolean,
 	): Promise<{ resultText: string; madeExecutable?: boolean }> {
 		const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, content);
 		const header = maybeWriteSnapshotHeader(this.session, absolutePath, content);
-		const writeLine = `Successfully wrote ${content.length} bytes to ${displayPath}`;
+		const writeBytes = Buffer.byteLength(content, "utf8");
+		const conventionText =
+			routedThroughBridge && (appliedConventions.crlf || appliedConventions.bom)
+				? await fs.readFile(absolutePath, "utf8").catch(() => undefined)
+				: content;
+		const note = conventionText !== undefined ? textFileConventionNote(appliedConventions, conventionText) : undefined;
+		const writeLine = note
+			? `Successfully wrote ${writeBytes} bytes to ${displayPath}\n${note}`
+			: `Successfully wrote ${writeBytes} bytes to ${displayPath}`;
 		const resultText = header ? `${header}\n${writeLine}` : writeLine;
 		const fullResultText = madeExecutable ? `${resultText}\n${EXECUTABLE_NOTICE}` : resultText;
 		return { resultText: fullResultText, madeExecutable: madeExecutable || undefined };
 	}
+}
+
+interface FileTextConventions {
+	lineEnding: "\r\n" | "\n";
+	hasBom: boolean;
+}
+
+interface AppliedTextConventions {
+	crlf: boolean;
+	bom: boolean;
+}
+
+async function detectExistingTextConventions(filePath: string): Promise<FileTextConventions | undefined> {
+	let handle: fs.FileHandle | undefined;
+	try {
+		handle = await fs.open(filePath, "r");
+		const headerBuf = Buffer.allocUnsafe(BINARY_SNIFF_BYTES);
+		const { bytesRead } = await handle.read(headerBuf, 0, BINARY_SNIFF_BYTES, 0);
+		if (bytesRead === 0) return undefined;
+		const header = headerBuf.subarray(0, bytesRead);
+		if (isProbablyBinaryHeader(header)) return undefined;
+
+		const hasBom = header.length >= 3 && header[0] === 0xef && header[1] === 0xbb && header[2] === 0xbf;
+		const startOffset = hasBom ? 3 : 0;
+		let lineEnding: "\r\n" | "\n" = "\n";
+		let foundLineBreak = false;
+		let prevByte = -1;
+
+		for (let i = startOffset; i < header.length; i++) {
+			const b = header[i];
+			if (b === 0x0a) {
+				lineEnding = prevByte === 0x0d ? "\r\n" : "\n";
+				foundLineBreak = true;
+				break;
+			}
+			prevByte = b;
+		}
+
+		// First line may exceed the 8 KiB sniff window (or split CRLF across its edge); keep scanning for the first LF.
+		if (!foundLineBreak && bytesRead === BINARY_SNIFF_BYTES) {
+			const chunkBuf = Buffer.allocUnsafe(BINARY_SNIFF_BYTES);
+			let offset = bytesRead;
+			while (!foundLineBreak) {
+				const next = await handle.read(chunkBuf, 0, BINARY_SNIFF_BYTES, offset);
+				if (next.bytesRead === 0) break;
+				for (let i = 0; i < next.bytesRead; i++) {
+					const b = chunkBuf[i];
+					if (b === 0x0a) {
+						lineEnding = prevByte === 0x0d ? "\r\n" : "\n";
+						foundLineBreak = true;
+						break;
+					}
+					prevByte = b;
+				}
+				offset += next.bytesRead;
+			}
+		}
+
+		return { lineEnding, hasBom };
+	} catch {
+		return undefined;
+	} finally {
+		await handle?.close();
+	}
+}
+
+function applyExistingTextConventions(
+	content: string,
+	conventions: FileTextConventions | undefined,
+): { text: string; applied: AppliedTextConventions } {
+	if (!conventions || content.length === 0) {
+		return { text: content, applied: { crlf: false, bom: false } };
+	}
+
+	let text = content;
+	let crlf = false;
+	if (conventions.lineEnding === "\r\n" && !content.includes("\r")) {
+		const converted = restoreLineEndings(content, "\r\n");
+		crlf = converted !== content;
+		text = converted;
+	}
+
+	let bom = false;
+	if (conventions.hasBom && !text.startsWith("\uFEFF")) {
+		text = `\uFEFF${text}`;
+		bom = true;
+	}
+
+	return { text, applied: { crlf, bom } };
+}
+
+function textFileConventionNote(applied: AppliedTextConventions, persistedText: string): string | undefined {
+	const keptCrlf = applied.crlf && detectLineEnding(persistedText) === "\r\n";
+	const keptBom = applied.bom && persistedText.startsWith("\uFEFF");
+	if (keptCrlf && keptBom) {
+		return "Note: kept the replaced file's CRLF line endings and UTF-8 BOM.";
+	}
+	if (keptCrlf) {
+		return "Note: kept the replaced file's CRLF line endings.";
+	}
+	if (keptBom) {
+		return "Note: kept the replaced file's UTF-8 BOM.";
+	}
+	return undefined;
 }
 
 async function writeSqliteRow(
