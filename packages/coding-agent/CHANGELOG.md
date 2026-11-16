@@ -2,9 +2,17 @@
 
 ## [Unreleased]
 
+## [1.10.9] - 2026-11-16
+
 ### Changed
 
 - No user-facing behavior changes; ACP model-order regression coverage now verifies 257 session models survive provider sorting without local truncation.
+
+### Fixed
+
+- Give child startup and streaming the provider's default five-minute response window, count reasoning and retry progress, and refuse stall recovery while the session remains busy.
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
 ## [1.10.8] - 2026-11-16
 
 ### Fixed
@@ -36,8 +44,6 @@
 
 ### Fixed
 
-- Give child startup and streaming the provider's default five-minute response window, count reasoning and retry progress, and refuse stall recovery while the session remains busy.
-- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
 - Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
 
 ## [1.10.4] - 2026-11-16
