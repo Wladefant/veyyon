@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Python eval shutdown waits now have a JavaScript-side deadline, and reset, acquire, and replacement transitions honor caller cancellation without dropping transition ownership ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
 ## [1.10.6] - 2026-11-16
 
 ### Fixed
