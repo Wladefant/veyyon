@@ -1,6 +1,13 @@
 //! Brush-based shell execution exported via N-API.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+	collections::HashMap,
+	sync::{
+		Arc,
+		atomic::{AtomicU64, Ordering},
+	},
+	time::Duration,
+};
 
 use napi::{
 	Env, Result,
@@ -12,6 +19,10 @@ use veyyon_shell::{
 	MinimizerResult as CoreMinimizerResult, Shell as CoreShell,
 	ShellExecuteOptions as CoreShellExecuteOptions, ShellOptions as CoreShellOptions,
 	ShellRunOptions as CoreShellRunOptions, ShellRunResult as CoreShellRunResult,
+	cancel::{
+		AbortReason as CoreAbortReason, AbortToken as CoreAbortToken,
+		CancelToken as CoreCancelToken,
+	},
 	execute_shell as core_execute_shell, minimizer,
 };
 
@@ -206,10 +217,73 @@ impl From<CoreShellRunResult> for ShellRunResult {
 	}
 }
 
+/// Idle callbacks fail promptly; progress cannot extend the absolute deadline
+/// because a surviving child can keep the output channel open indefinitely.
+const POST_COMPLETION_DRAIN_IDLE_GRACE: Duration = Duration::from_secs(1);
+const POST_COMPLETION_DRAIN_DEADLINE: Duration = Duration::from_secs(3);
+
+#[derive(Default)]
+struct ActiveRunRegistry {
+	runs:    parking_lot::Mutex<HashMap<u64, CoreAbortToken>>,
+	next_id: AtomicU64,
+}
+
+impl ActiveRunRegistry {
+	fn register(self: &Arc<Self>, cancel_token: &mut CoreCancelToken) -> ActiveRunGuard {
+		let abort_token = cancel_token.emplace_abort_token();
+		let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+		self.runs.lock().insert(id, abort_token);
+		ActiveRunGuard { registry: Arc::clone(self), id }
+	}
+
+	fn abort_all(&self, reason: CoreAbortReason) {
+		let tokens: Vec<CoreAbortToken> = self.runs.lock().values().cloned().collect();
+		for token in tokens {
+			token.abort(reason);
+		}
+	}
+
+	#[cfg(test)]
+	fn active_count(&self) -> usize {
+		self.runs.lock().len()
+	}
+}
+
+struct ActiveRunGuard {
+	registry: Arc<ActiveRunRegistry>,
+	id:       u64,
+}
+
+impl Drop for ActiveRunGuard {
+	fn drop(&mut self) {
+		self.registry.runs.lock().remove(&self.id);
+	}
+}
+
 /// Persistent brush-core shell session.
 #[napi]
 pub struct Shell {
-	inner: Arc<CoreShell>,
+	inner:       Arc<CoreShell>,
+	active_runs: Arc<ActiveRunRegistry>,
+}
+
+impl Shell {
+	async fn run_with_bridge(
+		inner: Arc<CoreShell>,
+		run_guard: ActiveRunGuard,
+		run_options: CoreShellRunOptions,
+		core_cancel: CoreCancelToken,
+		chunk_tx: Option<flume::Sender<String>>,
+		drain: Option<ChunkDrain>,
+	) -> Result<ShellRunResult> {
+		let _run_guard = run_guard;
+		let result = inner
+			.run(run_options, chunk_tx, core_cancel.clone())
+			.await
+			.map(Into::into)
+			.map_err(to_napi);
+		await_chunk_drain(drain, &core_cancel, result).await
+	}
 }
 
 #[napi]
@@ -219,7 +293,10 @@ impl Shell {
 	/// The options set session-scoped environment variables and a snapshot path.
 	#[napi(constructor)]
 	pub fn new(options: Option<ShellOptions>) -> Self {
-		Self { inner: Arc::new(CoreShell::new(options.map(Into::into))) }
+		Self {
+			inner:       Arc::new(CoreShell::new(options.map(Into::into))),
+			active_runs: Arc::new(ActiveRunRegistry::default()),
+		}
 	}
 
 	/// Run a shell command using the provided options.
@@ -236,6 +313,8 @@ impl Shell {
 		on_chunk: Option<ThreadsafeFunction<String, UnknownReturnValue>>,
 	) -> Result<PromiseRaw<'env, ShellRunResult>> {
 		let cancel_token = task::CancelToken::new(options.timeout_ms, options.signal);
+		let mut core_cancel = cancel_token.into_core();
+		let run_guard = self.active_runs.register(&mut core_cancel);
 		let inner = Arc::clone(&self.inner);
 		let run_options = CoreShellRunOptions {
 			command:       options.command,
@@ -245,16 +324,8 @@ impl Shell {
 			cpu_budget_id: options.cpu_budget_id,
 		};
 		task::future(env, "shell.run", async move {
-			let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
-			let result = inner
-				.run(run_options, chunk_tx, cancel_token.into_core())
-				.await
-				.map(Into::into)
-				.map_err(to_napi);
-			if let Some(handle) = drain_handle {
-				let _ = handle.await;
-			}
-			result
+			let (chunk_tx, drain) = bridge_chunks(on_chunk);
+			Self::run_with_bridge(inner, run_guard, run_options, core_cancel, chunk_tx, drain).await
 		})
 	}
 
@@ -263,6 +334,7 @@ impl Shell {
 	/// Returns `Ok(())` even when no commands are running.
 	#[napi]
 	pub async fn abort(&self) -> Result<()> {
+		self.active_runs.abort_all(CoreAbortReason::Signal);
 		self.inner.abort().await;
 		Ok(())
 	}
@@ -301,15 +373,13 @@ pub fn execute_shell<'env>(
 		cpu_budget_id: options.cpu_budget_id,
 	};
 	task::future(env, "shell.execute", async move {
-		let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
-		let result = core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
+		let core_cancel = cancel_token.into_core();
+		let (chunk_tx, drain) = bridge_chunks(on_chunk);
+		let result = core_execute_shell(exec_options, chunk_tx, core_cancel.clone())
 			.await
 			.map(Into::into)
 			.map_err(to_napi);
-		if let Some(handle) = drain_handle {
-			let _ = handle.await;
-		}
-		result
+		await_chunk_drain(drain, &core_cancel, result).await
 	})
 }
 
@@ -321,21 +391,94 @@ pub fn execute_shell<'env>(
 /// process memory (#4078).
 const BRIDGE_QUEUE_CHUNKS: usize = 64;
 
+struct ChunkDrain {
+	handle:      napi::tokio::task::JoinHandle<()>,
+	progress_rx: napi::tokio::sync::watch::Receiver<u64>,
+}
+
 fn bridge_chunks(
 	on_chunk: Option<ThreadsafeFunction<String, UnknownReturnValue>>,
-) -> (Option<flume::Sender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
+) -> (Option<flume::Sender<String>>, Option<ChunkDrain>) {
 	let Some(on_chunk) = on_chunk else {
 		return (None, None);
 	};
 	let (tx, rx) = flume::bounded::<String>(BRIDGE_QUEUE_CHUNKS);
-	let handle = napi::tokio::spawn(pump_chunks(rx, async move |payload: String| {
-		// `call_async` resolves only after the JS callback ran, so at most
-		// one batch sits in the napi queue at a time and the JS event loop's
-		// actual consumption rate backpressures the whole pipeline. An error
-		// means the JS side is gone (env teardown) — stop forwarding.
-		on_chunk.call_async(Ok(payload)).await.is_ok()
-	}));
-	(Some(tx), Some(handle))
+	let (progress_tx, progress_rx) = napi::tokio::sync::watch::channel(0u64);
+	let handle = napi::tokio::spawn(pump_chunks_with_progress(
+		rx,
+		Some(progress_tx),
+		async move |payload: String| {
+			// `call_async` resolves only after the JS callback ran, so at most
+			// one batch sits in the napi queue at a time and the JS event loop's
+			// actual consumption rate backpressures the whole pipeline. An error
+			// means the JS side is gone (env teardown) — stop forwarding.
+			on_chunk.call_async(Ok(payload)).await.is_ok()
+		},
+	));
+	(Some(tx), Some(ChunkDrain { handle, progress_rx }))
+}
+
+async fn await_chunk_drain(
+	drain: Option<ChunkDrain>,
+	cancel_token: &CoreCancelToken,
+	result: Result<ShellRunResult>,
+) -> Result<ShellRunResult> {
+	let Some(ChunkDrain { mut handle, mut progress_rx }) = drain else {
+		return result;
+	};
+	let idle_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_IDLE_GRACE);
+	napi::tokio::pin!(idle_sleep);
+	let deadline_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_DEADLINE);
+	napi::tokio::pin!(deadline_sleep);
+	let mut progress_open = true;
+	loop {
+		tokio::select! {
+			biased;
+			_ = &mut handle => return result,
+			reason = cancel_token.wait() => {
+				handle.abort();
+				let _ = handle.await;
+				return match result {
+					Ok(res) if res.cancelled || res.timed_out => Ok(res),
+					Ok(_) => Err(Error::from_reason(format!(
+						"Shell output callback drain aborted ({reason:?})"
+					))),
+					Err(err) => Err(err),
+				};
+			}
+			() = &mut deadline_sleep => {
+				handle.abort();
+				let _ = handle.await;
+				return match result {
+					Ok(res) if res.cancelled || res.timed_out => Ok(res),
+					Ok(_) => Err(Error::from_reason(
+						"Shell output callback drain exceeded deadline after command completion"
+					)),
+					Err(err) => Err(err),
+				};
+			}
+			changed = progress_rx.changed(), if progress_open => {
+				if changed.is_ok() {
+					idle_sleep.as_mut().reset(
+						napi::tokio::time::Instant::now() + POST_COMPLETION_DRAIN_IDLE_GRACE,
+					);
+				} else {
+					progress_open = false;
+				}
+			}
+			() = &mut idle_sleep => {
+				handle.abort();
+				let _ = handle.await;
+				return match result {
+					Ok(res) if res.cancelled || res.timed_out => Ok(res),
+					Ok(_) => Err(Error::from_reason(
+						"Shell output callback drain stalled after command completion"
+					)),
+					Err(err) => Err(err),
+				};
+			}
+		}
+	}
 }
 
 /// Drain `rx`, greedily coalescing queued chunks into ≤64 KiB batches, and
@@ -344,7 +487,15 @@ fn bridge_chunks(
 /// the consumer is gone; dropping `rx` then disconnects the channel so
 /// parked/future senders fail fast and the pipe readers keep draining the
 /// child instead of wedging it.
-async fn pump_chunks(rx: flume::Receiver<String>, mut forward: impl AsyncFnMut(String) -> bool) {
+async fn pump_chunks(rx: flume::Receiver<String>, forward: impl AsyncFnMut(String) -> bool) {
+	pump_chunks_with_progress(rx, None, forward).await;
+}
+
+async fn pump_chunks_with_progress(
+	rx: flume::Receiver<String>,
+	progress_tx: Option<napi::tokio::sync::watch::Sender<u64>>,
+	mut forward: impl AsyncFnMut(String) -> bool,
+) {
 	// Hard cap on one coalesced batch so the JS main thread never sees a
 	// multi-MB napi callback (a giant single string would stall sanitize +
 	// tail-buffer maintenance for the whole copy).
@@ -353,6 +504,7 @@ async fn pump_chunks(rx: flume::Receiver<String>, mut forward: impl AsyncFnMut(S
 	// each batch because `String` ownership is moved into the napi call.
 	const INITIAL_BATCH_CAP: usize = 8 * 1024;
 	let mut batch = String::with_capacity(INITIAL_BATCH_CAP);
+	let mut seq = 0u64;
 	while let Ok(first) = rx.recv_async().await {
 		batch.push_str(&first);
 		// Greedily drain everything already queued. Child processes that
@@ -367,7 +519,12 @@ async fn pump_chunks(rx: flume::Receiver<String>, mut forward: impl AsyncFnMut(S
 			}
 		}
 		let payload = std::mem::replace(&mut batch, String::with_capacity(INITIAL_BATCH_CAP));
-		if !forward(payload).await {
+		let keep_going = forward(payload).await;
+		if let Some(tx) = &progress_tx {
+			seq = seq.wrapping_add(1);
+			let _ = tx.send(seq);
+		}
+		if !keep_going {
 			return;
 		}
 	}
@@ -384,7 +541,24 @@ mod tests {
 		cancel::{AbortReason, CancelToken},
 	};
 
-	use super::{BRIDGE_QUEUE_CHUNKS, CoreShell, pump_chunks};
+	use super::{
+		BRIDGE_QUEUE_CHUNKS, ChunkDrain, CoreShell, Shell, ShellRunResult, await_chunk_drain,
+		pump_chunks, pump_chunks_with_progress,
+	};
+
+	fn spawn_test_drain<F, Fut>(rx: flume::Receiver<String>, mut forward: F) -> ChunkDrain
+	where
+		F: FnMut(String) -> Fut + Send + 'static,
+		Fut: Future<Output = bool> + Send,
+	{
+		let (progress_tx, progress_rx) = tokio::sync::watch::channel(0u64);
+		let handle = tokio::spawn(pump_chunks_with_progress(
+			rx,
+			Some(progress_tx),
+			async move |payload: String| forward(payload).await,
+		));
+		ChunkDrain { handle, progress_rx }
+	}
 
 	/// Regression for #4078: the reader→JS bridge queue must stay bounded when
 	/// the JS side (here: a deliberately slow `forward`) cannot keep up with a
@@ -580,5 +754,479 @@ mod tests {
 			.expect("shell task should not panic")
 			.expect("shell run should return");
 		assert!(result.cancelled);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_stalled_forward_settles_on_cancellation_and_releases_resources() {
+		let shell = CoreShell::new(None);
+		let mut cancel = CancelToken::default();
+		let abort = cancel.emplace_abort_token();
+		let (tx, rx) = flume::bounded::<String>(4);
+		let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+		let started_tx = std::sync::Arc::new(parking_lot::Mutex::new(Some(started_tx)));
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain = spawn_test_drain(rx, move |payload: String| {
+			if payload.contains("READY")
+				&& let Some(tx) = started_tx.lock().take()
+			{
+				let _ = tx.send(());
+			}
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move { std::future::pending::<bool>().await }
+		});
+
+		let run_task = tokio::spawn(async move {
+			let result = shell
+				.run(
+					CoreShellRunOptions {
+						command:       "sh -c 'echo READY; sleep 30'".to_string(),
+						cwd:           None,
+						env:           None,
+						timeout_ms:    None,
+						cpu_budget_id: None,
+					},
+					Some(tx),
+					cancel.clone(),
+				)
+				.await
+				.map(Into::into)
+				.map_err(crate::napi_error::to_napi);
+			await_chunk_drain(Some(drain), &cancel, result).await
+		});
+
+		time::timeout(Duration::from_secs(15), started_rx)
+			.await
+			.expect("external child output should reach on_chunk before cancellation")
+			.expect("forward started signal should not drop");
+		abort.abort(AbortReason::Signal);
+
+		let settled = time::timeout(Duration::from_secs(5), run_task)
+			.await
+			.expect("cancelled shell must settle even when on_chunk stalls")
+			.expect("run task should not panic")
+			.expect("cancelled shell should return ShellRunResult");
+		assert!(settled.cancelled, "expected cancelled=true");
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"stalled pump task and callback resources must be released",
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_stalled_forward_after_success_returns_transport_error_on_deadline() {
+		let (tx, rx) = flume::bounded::<String>(4);
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain = spawn_test_drain(rx, move |_payload: String| {
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move { std::future::pending::<bool>().await }
+		});
+		tx.send_async("chunk\n".to_string()).await.expect("send chunk");
+		drop(tx);
+
+		let cancel = CancelToken::with_timeout(Some(Duration::from_millis(50)));
+		let ok_result = Ok(ShellRunResult {
+			exit_code:         Some(0),
+			signal:            None,
+			cancelled:         false,
+			timed_out:         false,
+			output_incomplete: false,
+			captured_output:   None,
+			minimized:         None,
+			working_dir:       None,
+		});
+		let settled = time::timeout(
+			Duration::from_secs(2),
+			await_chunk_drain(Some(drain), &cancel, ok_result),
+		)
+		.await
+		.expect("deadline must bound stalled drain after core completes");
+		assert!(
+			settled.is_err(),
+			"stalled drain after normal core completion must surface an explicit error, not truncate silently",
+		);
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"stalled pump task and callback resources must be released",
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_normal_slow_forward_preserves_full_output() {
+		let (tx, rx) = flume::bounded::<String>(4);
+		let received = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
+		let received_clone = std::sync::Arc::clone(&received);
+		let drain = spawn_test_drain(rx, move |payload: String| {
+			let received_clone = std::sync::Arc::clone(&received_clone);
+			async move {
+				time::sleep(Duration::from_millis(10)).await;
+				received_clone.lock().push_str(&payload);
+				true
+			}
+		});
+		tx.send_async("hello ".to_string()).await.expect("send 1");
+		tx.send_async("world\n".to_string()).await.expect("send 2");
+		drop(tx);
+
+		let cancel = CancelToken::default();
+		let ok_result = Ok(ShellRunResult {
+			exit_code:         Some(0),
+			signal:            None,
+			cancelled:         false,
+			timed_out:         false,
+			output_incomplete: false,
+			captured_output:   None,
+			minimized:         None,
+			working_dir:       None,
+		});
+		let settled = time::timeout(
+			Duration::from_secs(2),
+			await_chunk_drain(Some(drain), &cancel, ok_result),
+		)
+		.await
+		.expect("slow healthy drain should finish")
+		.expect("healthy drain should succeed");
+		assert_eq!(settled.exit_code, Some(0));
+		assert_eq!(received.lock().as_str(), "hello world\n");
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn shell_abort_without_signal_settles_stalled_drain_during_active_core() {
+		let shell = Shell::new(None);
+		let mut core_cancel = CancelToken::default();
+		let run_guard = shell.active_runs.register(&mut core_cancel);
+		let (tx, rx) = flume::bounded::<String>(4);
+		let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+		let started_tx = std::sync::Arc::new(parking_lot::Mutex::new(Some(started_tx)));
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain = spawn_test_drain(rx, move |payload: String| {
+			if payload.contains("READY")
+				&& let Some(tx) = started_tx.lock().take()
+			{
+				let _ = tx.send(());
+			}
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move { std::future::pending::<bool>().await }
+		});
+
+		let inner = std::sync::Arc::clone(&shell.inner);
+		let run_task = tokio::spawn(Shell::run_with_bridge(
+			inner,
+			run_guard,
+			CoreShellRunOptions {
+				command:       "sh -c 'echo READY; sleep 30'".to_string(),
+				cwd:           None,
+				env:           None,
+				timeout_ms:    None,
+				cpu_budget_id: None,
+			},
+			core_cancel,
+			Some(tx),
+			Some(drain),
+		));
+
+		time::timeout(Duration::from_secs(15), started_rx)
+			.await
+			.expect("external child output should reach on_chunk before Shell.abort()")
+			.expect("forward started signal should not drop");
+		assert_eq!(shell.active_runs.active_count(), 1);
+		shell.abort().await.expect("Shell.abort should succeed");
+
+		let settled = time::timeout(Duration::from_secs(5), run_task)
+			.await
+			.expect("Shell.abort() without signal must settle stalled drain during active core")
+			.expect("run task should not panic")
+			.expect("cancelled shell should return ShellRunResult");
+		assert!(settled.cancelled, "expected cancelled=true");
+		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run");
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"stalled pump task and callback resources must be released",
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn shell_abort_without_signal_settles_stalled_drain_after_core_completion() {
+		let shell = Shell::new(None);
+		let mut core_cancel = CancelToken::default();
+		let run_guard = shell.active_runs.register(&mut core_cancel);
+		let (tx, rx) = flume::bounded::<String>(4);
+		let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+		let started_tx = std::sync::Arc::new(parking_lot::Mutex::new(Some(started_tx)));
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain = spawn_test_drain(rx, move |payload: String| {
+			if payload.contains("READY")
+				&& let Some(tx) = started_tx.lock().take()
+			{
+				let _ = tx.send(());
+			}
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move { std::future::pending::<bool>().await }
+		});
+
+		let core_result = shell
+			.inner
+			.run(
+				CoreShellRunOptions {
+					command:       "sh -c 'echo READY'".to_string(),
+					cwd:           None,
+					env:           None,
+					timeout_ms:    None,
+					cpu_budget_id: None,
+				},
+				Some(tx),
+				core_cancel.clone(),
+			)
+			.await
+			.map(ShellRunResult::from)
+			.map_err(crate::napi_error::to_napi);
+		assert!(
+			core_result
+				.as_ref()
+				.is_ok_and(|res| !res.cancelled && !res.timed_out && res.exit_code == Some(0)),
+			"core command must finish cleanly before testing post-completion abort",
+		);
+		time::timeout(Duration::from_secs(15), started_rx)
+			.await
+			.expect("short command output should reach on_chunk")
+			.expect("forward started signal should not drop");
+		assert_eq!(shell.active_runs.active_count(), 1);
+		let drain_task = tokio::spawn(async move {
+			let _run_guard = run_guard;
+			await_chunk_drain(Some(drain), &core_cancel, core_result).await
+		});
+		shell.abort().await.expect("Shell.abort should succeed");
+
+		let settled = time::timeout(Duration::from_secs(5), drain_task)
+			.await
+			.expect("Shell.abort() must settle stalled drain even after core completion")
+			.expect("drain task should not panic");
+		assert!(
+			settled.is_err(),
+			"aborting stalled post-completion drain must return an explicit error, not truncate silently",
+		);
+		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run");
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"stalled pump task and callback resources must be released",
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_stalled_forward_after_success_with_default_none_options_returns_error() {
+		let shell = Shell::new(None);
+		let mut core_cancel = CancelToken::default();
+		let run_guard = shell.active_runs.register(&mut core_cancel);
+		let (tx, rx) = flume::bounded::<String>(4);
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain = spawn_test_drain(rx, move |_payload: String| {
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move { std::future::pending::<bool>().await }
+		});
+
+		let inner = std::sync::Arc::clone(&shell.inner);
+		let run_task = tokio::spawn(Shell::run_with_bridge(
+			inner,
+			run_guard,
+			CoreShellRunOptions {
+				command:       "sh -c 'echo READY'".to_string(),
+				cwd:           None,
+				env:           None,
+				timeout_ms:    None,
+				cpu_budget_id: None,
+			},
+			core_cancel,
+			Some(tx),
+			Some(drain),
+		));
+
+		let settled = time::timeout(Duration::from_secs(15), run_task)
+			.await
+			.expect("default None options must bound stalled drain after core completion")
+			.expect("run task should not panic");
+		assert!(
+			settled.is_err(),
+			"stalled drain after normal core completion with default options must surface an explicit error",
+		);
+		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run on error");
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"stalled pump task and callback resources must be released",
+		);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_healthy_slow_forward_exceeding_idle_grace_preserves_all_output() {
+		const CHUNKS: usize = 25;
+		const CHUNK_BYTES: usize = 64 * 1024;
+		let (tx, rx) = flume::bounded::<String>(CHUNKS);
+		let received = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
+		let received_clone = std::sync::Arc::clone(&received);
+		let drain = spawn_test_drain(rx, move |payload: String| {
+			let received_clone = std::sync::Arc::clone(&received_clone);
+			async move {
+				time::sleep(Duration::from_millis(100)).await;
+				received_clone.lock().push_str(&payload);
+				true
+			}
+		});
+		let mut expected = String::with_capacity(CHUNKS * CHUNK_BYTES);
+		for i in 0..CHUNKS {
+			let chunk = format!("[{i:02}]{}", "a".repeat(CHUNK_BYTES - 4));
+			expected.push_str(&chunk);
+			tx.send_async(chunk).await.expect("send chunk");
+		}
+		drop(tx);
+
+		let cancel = CancelToken::default();
+		let ok_result = Ok(ShellRunResult {
+			exit_code:         Some(0),
+			signal:            None,
+			cancelled:         false,
+			timed_out:         false,
+			output_incomplete: false,
+			captured_output:   None,
+			minimized:         None,
+			working_dir:       None,
+		});
+		let settled = time::timeout(
+			Duration::from_secs(10),
+			await_chunk_drain(Some(drain), &cancel, ok_result),
+		)
+		.await
+		.expect("healthy slow drain with ongoing progress should finish")
+		.expect("healthy slow drain should succeed");
+		assert_eq!(settled.exit_code, Some(0));
+		assert_eq!(received.lock().len(), expected.len(), "output must not be truncated");
+		assert_eq!(received.lock().as_str(), expected);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_continuous_child_output_after_success_hits_absolute_deadline() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+
+		use tokio::io::{AsyncBufReadExt, BufReader};
+
+		let shell = Shell::new(None);
+		let core_cancel = CancelToken::default();
+		let core_result = shell
+			.inner
+			.run(
+				CoreShellRunOptions {
+					command:       "sh -c 'echo READY'".to_string(),
+					cwd:           None,
+					env:           None,
+					timeout_ms:    None,
+					cpu_budget_id: None,
+				},
+				None,
+				core_cancel.clone(),
+			)
+			.await
+			.map(ShellRunResult::from)
+			.map_err(crate::napi_error::to_napi);
+		assert!(
+			core_result
+				.as_ref()
+				.is_ok_and(|res| !res.cancelled && !res.timed_out && res.exit_code == Some(0)),
+			"core command must finish cleanly before testing continuous post-completion drain",
+		);
+
+		#[cfg(windows)]
+		let mut child = {
+			const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+			tokio::process::Command::new("powershell")
+				.args([
+					"-NoProfile",
+					"-NonInteractive",
+					"-WindowStyle",
+					"Hidden",
+					"-Command",
+					"while ($true) { [Console]::Out.WriteLine('tick'); Start-Sleep -Milliseconds 30 }",
+				])
+				.creation_flags(CREATE_NO_WINDOW)
+				.stdin(std::process::Stdio::null())
+				.stdout(std::process::Stdio::piped())
+				.stderr(std::process::Stdio::null())
+				.kill_on_drop(true)
+				.spawn()
+				.expect("spawn continuous output child")
+		};
+		#[cfg(not(windows))]
+		let mut child = tokio::process::Command::new("sh")
+			.arg("-c")
+			.arg("while :; do printf 'tick\\n'; sleep 0.03; done")
+			.stdin(std::process::Stdio::null())
+			.stdout(std::process::Stdio::piped())
+			.stderr(std::process::Stdio::null())
+			.kill_on_drop(true)
+			.spawn()
+			.expect("spawn continuous output child");
+		let stdout = child.stdout.take().expect("child stdout must be piped");
+
+		let (tx, rx) = flume::bounded::<String>(4);
+		let retained_tx = tx.clone();
+		let reader_task = tokio::spawn(async move {
+			let mut lines = BufReader::new(stdout).lines();
+			while let Ok(Some(line)) = lines.next_line().await {
+				if tx.send_async(format!("{line}\n")).await.is_err() {
+					break;
+				}
+			}
+		});
+
+		let delivered = std::sync::Arc::new(AtomicUsize::new(0));
+		let delivered_clone = std::sync::Arc::clone(&delivered);
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain = spawn_test_drain(rx, move |_payload: String| {
+			let delivered_clone = std::sync::Arc::clone(&delivered_clone);
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move {
+				delivered_clone.fetch_add(1, Ordering::SeqCst);
+				true
+			}
+		});
+
+		let settled_result = time::timeout(
+			Duration::from_secs(4),
+			await_chunk_drain(Some(drain), &core_cancel, core_result),
+		)
+		.await;
+		let receiver_dropped = retained_tx.is_disconnected();
+
+		let _ = child.kill().await;
+		let _ = child.wait().await;
+		reader_task.abort();
+		let _ = reader_task.await;
+		drop(retained_tx);
+
+		let settled = settled_result
+			.expect("continuous post-completion child output must hit absolute drain deadline within 4s");
+		let Err(err) = settled else {
+			panic!(
+				"continuous post-completion output exceeding absolute deadline must surface an explicit transport error"
+			);
+		};
+		assert_eq!(
+			err.reason,
+			"Shell output callback drain exceeded deadline after command completion",
+		);
+		assert!(
+			delivered.load(Ordering::SeqCst) >= 3,
+			"expected several chunks to be delivered before hitting absolute deadline",
+		);
+		assert!(
+			receiver_dropped,
+			"await_chunk_drain must drop the chunk receiver when hitting absolute deadline",
+		);
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"pump task and callback resources must be released",
+		);
 	}
 }
