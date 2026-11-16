@@ -217,11 +217,10 @@ impl From<CoreShellRunResult> for ShellRunResult {
 	}
 }
 
-/// Maximum idle time without chunk-forwarder progress after core shell
-/// execution completes. Healthy slow callbacks refresh this window whenever
-/// a batch settles, so total stream duration is unbounded while genuine stalls
-/// abort, reap, and surface an explicit transport error.
+/// Idle callbacks fail promptly; progress cannot extend the absolute deadline
+/// because a surviving child can keep the output channel open indefinitely.
 const POST_COMPLETION_DRAIN_IDLE_GRACE: Duration = Duration::from_secs(1);
+const POST_COMPLETION_DRAIN_DEADLINE: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
 struct ActiveRunRegistry {
@@ -429,6 +428,8 @@ async fn await_chunk_drain(
 	};
 	let idle_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_IDLE_GRACE);
 	napi::tokio::pin!(idle_sleep);
+	let deadline_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_DEADLINE);
+	napi::tokio::pin!(deadline_sleep);
 	let mut progress_open = true;
 	loop {
 		tokio::select! {
@@ -442,6 +443,17 @@ async fn await_chunk_drain(
 					Ok(_) => Err(Error::from_reason(format!(
 						"Shell output callback drain aborted ({reason:?})"
 					))),
+					Err(err) => Err(err),
+				};
+			}
+			() = &mut deadline_sleep => {
+				handle.abort();
+				let _ = handle.await;
+				return match result {
+					Ok(res) if res.cancelled || res.timed_out => Ok(res),
+					Ok(_) => Err(Error::from_reason(
+						"Shell output callback drain exceeded deadline after command completion"
+					)),
 					Err(err) => Err(err),
 				};
 			}
@@ -969,7 +981,7 @@ mod tests {
 				core_cancel.clone(),
 			)
 			.await
-			.map(Into::into)
+			.map(ShellRunResult::from)
 			.map_err(crate::napi_error::to_napi);
 		assert!(
 			core_result
@@ -1091,5 +1103,130 @@ mod tests {
 		assert_eq!(settled.exit_code, Some(0));
 		assert_eq!(received.lock().len(), expected.len(), "output must not be truncated");
 		assert_eq!(received.lock().as_str(), expected);
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn drain_continuous_child_output_after_success_hits_absolute_deadline() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+
+		use tokio::io::{AsyncBufReadExt, BufReader};
+
+		let shell = Shell::new(None);
+		let core_cancel = CancelToken::default();
+		let core_result = shell
+			.inner
+			.run(
+				CoreShellRunOptions {
+					command:       "sh -c 'echo READY'".to_string(),
+					cwd:           None,
+					env:           None,
+					timeout_ms:    None,
+					cpu_budget_id: None,
+				},
+				None,
+				core_cancel.clone(),
+			)
+			.await
+			.map(ShellRunResult::from)
+			.map_err(crate::napi_error::to_napi);
+		assert!(
+			core_result
+				.as_ref()
+				.is_ok_and(|res| !res.cancelled && !res.timed_out && res.exit_code == Some(0)),
+			"core command must finish cleanly before testing continuous post-completion drain",
+		);
+
+		#[cfg(windows)]
+		let mut child = {
+			const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+			tokio::process::Command::new("powershell")
+				.args([
+					"-NoProfile",
+					"-NonInteractive",
+					"-WindowStyle",
+					"Hidden",
+					"-Command",
+					"while ($true) { [Console]::Out.WriteLine('tick'); Start-Sleep -Milliseconds 30 }",
+				])
+				.creation_flags(CREATE_NO_WINDOW)
+				.stdin(std::process::Stdio::null())
+				.stdout(std::process::Stdio::piped())
+				.stderr(std::process::Stdio::null())
+				.kill_on_drop(true)
+				.spawn()
+				.expect("spawn continuous output child")
+		};
+		#[cfg(not(windows))]
+		let mut child = tokio::process::Command::new("sh")
+			.arg("-c")
+			.arg("while :; do printf 'tick\\n'; sleep 0.03; done")
+			.stdin(std::process::Stdio::null())
+			.stdout(std::process::Stdio::piped())
+			.stderr(std::process::Stdio::null())
+			.kill_on_drop(true)
+			.spawn()
+			.expect("spawn continuous output child");
+		let stdout = child.stdout.take().expect("child stdout must be piped");
+
+		let (tx, rx) = flume::bounded::<String>(4);
+		let retained_tx = tx.clone();
+		let reader_task = tokio::spawn(async move {
+			let mut lines = BufReader::new(stdout).lines();
+			while let Ok(Some(line)) = lines.next_line().await {
+				if tx.send_async(format!("{line}\n")).await.is_err() {
+					break;
+				}
+			}
+		});
+
+		let delivered = std::sync::Arc::new(AtomicUsize::new(0));
+		let delivered_clone = std::sync::Arc::clone(&delivered);
+		let callback_resource = std::sync::Arc::new(());
+		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
+		let drain = spawn_test_drain(rx, move |_payload: String| {
+			let delivered_clone = std::sync::Arc::clone(&delivered_clone);
+			let _keep_alive = std::sync::Arc::clone(&callback_resource);
+			async move {
+				delivered_clone.fetch_add(1, Ordering::SeqCst);
+				true
+			}
+		});
+
+		let settled_result = time::timeout(
+			Duration::from_secs(4),
+			await_chunk_drain(Some(drain), &core_cancel, core_result),
+		)
+		.await;
+		let receiver_dropped = retained_tx.is_disconnected();
+
+		let _ = child.kill().await;
+		let _ = child.wait().await;
+		reader_task.abort();
+		let _ = reader_task.await;
+		drop(retained_tx);
+
+		let settled = settled_result
+			.expect("continuous post-completion child output must hit absolute drain deadline within 4s");
+		let Err(err) = settled else {
+			panic!(
+				"continuous post-completion output exceeding absolute deadline must surface an explicit transport error"
+			);
+		};
+		assert_eq!(
+			err.reason,
+			"Shell output callback drain exceeded deadline after command completion",
+		);
+		assert!(
+			delivered.load(Ordering::SeqCst) >= 3,
+			"expected several chunks to be delivered before hitting absolute deadline",
+		);
+		assert!(
+			receiver_dropped,
+			"await_chunk_drain must drop the chunk receiver when hitting absolute deadline",
+		);
+		assert!(
+			callback_weak.upgrade().is_none(),
+			"pump task and callback resources must be released",
+		);
 	}
 }
