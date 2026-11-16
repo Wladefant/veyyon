@@ -152,6 +152,7 @@ export interface Frame {
 	status?: "ok" | "error";
 	executionCount?: number;
 	cancelled?: boolean;
+	cancellationPending?: boolean;
 }
 
 interface PendingExecution {
@@ -1131,7 +1132,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				if (frame.cancelled) {
 					pending.cancelled = true;
 				}
-				pending.cancellationPending = false;
+				pending.cancellationPending = Boolean(frame.cancellationPending);
 				pending.finalize?.();
 				return;
 			}

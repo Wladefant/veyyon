@@ -3,9 +3,7 @@
 ## [Unreleased]
 ### Fixed
 
-- Python eval cancellation targets the request without killing the shared kernel, and only its original primary owner can reset it.
-
-### Fixed
+- Python eval cancellation targets the request without killing the shared kernel, and only its live primary owner can reset it.
 
 - `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
 - Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).

@@ -186,3 +186,57 @@ test("a done frame clears Python cancellation pending state", async () => {
 		exitedResolve(0);
 	}
 }, 5000);
+
+test("a done frame with cancellationPending true preserves pending cancellation state", async () => {
+	let stdout!: ReadableStreamDefaultController<Uint8Array>;
+	let exitedResolve!: (code: number) => void;
+	const exited = new Promise<number>(resolve => {
+		exitedResolve = resolve;
+	});
+	let cancelResolve!: (frame: unknown) => void;
+	const cancelWritten = new Promise<unknown>(resolve => {
+		cancelResolve = resolve;
+	});
+	const proc = {
+		stdin: {
+			write(line: string) {
+				const parsed = JSON.parse(line.trim());
+				if (parsed.type === "cancel") cancelResolve(parsed);
+				return line.length;
+			},
+			flush() {},
+			end() {},
+		},
+		stdout: new ReadableStream<Uint8Array>({
+			start(c) {
+				stdout = c;
+			},
+		}),
+		stderr: new ReadableStream<Uint8Array>({
+			start(c) {
+				c.close();
+			},
+		}),
+		exited,
+		kill() {},
+	} as unknown as Subprocess<"pipe", "pipe", "pipe">;
+	const kernel = new PythonCancellationKernel();
+	kernel.setProcess(proc);
+	try {
+		const execution = kernel.execute("work", { id: "pending-worker", timeoutMs: 5 });
+		await cancelWritten;
+		stdout.enqueue(
+			new TextEncoder().encode(
+				JSON.stringify({ type: "done", id: "pending-worker", status: "error", cancelled: true, cancellationPending: true }) + "\n",
+			),
+		);
+		const result = await execution;
+		expect(result).toMatchObject({ cancelled: true, cancellationPending: true, kernelKilled: false });
+		expect(kernel.isAlive()).toBe(true);
+	} finally {
+		try {
+			stdout.close();
+		} catch {}
+		exitedResolve(0);
+	}
+}, 5000);

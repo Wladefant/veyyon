@@ -474,7 +474,6 @@ export function attachSessionOwner(
 		if (session.hasFallbackOwner) {
 			session.ownerIds.delete(sessionId);
 			session.hasFallbackOwner = false;
-			if (session.primaryOwnerId === sessionId) session.primaryOwnerId = ownerId;
 		}
 		session.ownerIds.add(ownerId);
 		if (session.primaryOwnerId === undefined) session.primaryOwnerId = ownerId;
@@ -1074,7 +1073,7 @@ export class KernelSessionPool<
 		const owner =
 			this.#sessions.get(sessionKey) ?? this.#startingSessions.get(sessionKey) ?? this.#failedStartups.get(sessionKey);
 		const resettingOwner = this.#resettingOwners.get(sessionKey);
-		if (owner && (!owner.ownerIds.has(ownerId) || owner.primaryOwnerId !== ownerId)) {
+		if (owner && owner.primaryOwnerId !== ownerId) {
 			throw new Error("Only the primary kernel owner may reset this session");
 		}
 		if (!owner && resettingOwner !== undefined && resettingOwner !== ownerId) {
@@ -1131,8 +1130,8 @@ export class KernelSessionPool<
 		const failedDisposal = this.#failedStartups.size ? this.#disposeFailedStartups(ownerId) : undefined;
 		const toShutdown: ManagedKernelSession<TKernel>[] = [];
 		for (const session of [...this.#sessions.values()]) {
-			if (!session.ownerIds.has(ownerId)) continue;
-			if (session.ownerIds.size === 1) {
+			if (!session.ownerIds.has(ownerId) && session.primaryOwnerId !== ownerId) continue;
+			if (session.ownerIds.size === 1 && session.ownerIds.has(ownerId)) {
 				toShutdown.push(session);
 				continue;
 			}
@@ -1140,7 +1139,7 @@ export class KernelSessionPool<
 			this.#logOwnership(session, "owned");
 		}
 		for (const [sessionKey, starting] of [...this.#startingSessions.entries()]) {
-			if (this.#sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
+			if (this.#sessions.has(sessionKey) || (!starting.ownerIds.has(ownerId) && starting.primaryOwnerId !== ownerId)) continue;
 			detachSessionOwner(starting, ownerId);
 			starting.disposedOwnerIds.add(ownerId);
 			if (starting.ownerIds.size === 0) starting.startupAbort.abort(new this.#cancelledErrorClass(false));

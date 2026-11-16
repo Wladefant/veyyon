@@ -195,4 +195,57 @@ describe("Python runner request-specific cancellation protocol", () => {
 			await runner.close();
 		}
 	}, 8_000);
+
+	it("marks cancellationPending when cancelling an awaiting asyncio.to_thread worker that remains blocked", async () => {
+		const runner = spawnRunner();
+		try {
+			await submit(
+				runner,
+				"seed",
+				lines(
+					"import asyncio, threading",
+					"gate = threading.Event()",
+					"worker_done = threading.Event()",
+					"def blocked_worker():",
+					"    print('WORKER_STARTED', flush=True)",
+					"    gate.wait()",
+					"    print('WORKER_LATE_STDOUT', flush=True)",
+					"    worker_done.set()",
+					"    return 'worker-finished'",
+				),
+			);
+			expect((await doneFor(runner, "seed")).status).toBe("ok");
+
+			await submit(runner, "thread-a", "await asyncio.to_thread(blocked_worker)");
+			expect((await frameFor(runner, "thread-a", ["started"])).type).toBe("started");
+			const startedOut = await frameFor(runner, "thread-a", ["stdout"]);
+			expect(startedOut.data).toContain("WORKER_STARTED");
+
+			await runner.send({ type: "cancel", id: "thread-a" });
+			const cancelledDone = await doneFor(runner, "thread-a");
+			expect(cancelledDone.status).toBe("error");
+			expect(cancelledDone.cancelled).toBe(true);
+			expect(cancelledDone.cancellationPending).toBe(true);
+
+			// Sibling request B still runs and completes while A's worker is blocked.
+			const sibling = await submitAndDone(runner, "sibling-b", "'sibling-ok'");
+			expect(sibling.status).toBe("ok");
+			expect(sibling.result).toBe("'sibling-ok'");
+
+			// Release worker and verify it finishes cleanly without emitting late frames for thread-a.
+			const releaseRes = await submitAndDone(
+				runner,
+				"release-worker",
+				lines("gate.set()", "assert worker_done.wait(timeout=2.0)", "'released'"),
+			);
+			expect(releaseRes.status).toBe("ok");
+			expect(releaseRes.result).toBe("'released'");
+
+			const after = await submitAndDone(runner, "after-worker", "123");
+			expect(after.status).toBe("ok");
+			expect(after.result).toBe("123");
+		} finally {
+			await runner.close();
+		}
+	}, 8_000);
 });

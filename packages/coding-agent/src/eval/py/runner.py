@@ -31,6 +31,7 @@ import asyncio
 import base64
 import builtins
 import codecs
+import concurrent.futures
 import contextvars
 import inspect
 import io
@@ -188,6 +189,12 @@ def _json_default(o: Any) -> Any:
 
 def _emit(frame: dict) -> None:
     """Serialize a frame and write it to the host as a single NDJSON line."""
+    if frame.get("type") != "done":
+        rid = frame.get("id")
+        if rid is not None:
+            with _STATE.cancel_lock:
+                if str(rid) in _STATE.suppressed_cancelled_rids:
+                    return
     line = json.dumps(frame, ensure_ascii=False, default=_json_default)
     with _OUT_LOCK:
         _RAW_STDOUT.write(line)
@@ -300,6 +307,8 @@ class _RunnerState:
         self.cancel_lock = threading.RLock()
         self.known_requests: set[str] = set()
         self.started_requests: set[str] = set()
+        self.active_thread_workers: dict[str, int] = {}
+        self.suppressed_cancelled_rids: set[str] = set()
 
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -1367,8 +1376,13 @@ async def _handle_request_async(req: dict) -> None:
                 pass
         _flush_stream_proxies(rid)
         _trim_freed_heap()
+        with _STATE.cancel_lock:
+            has_active_worker = _STATE.active_thread_workers.get(rid, 0) > 0
+            if cancelled:
+                _STATE.suppressed_cancelled_rids.add(rid)
         _emit({"type": "done", "id": rid, "status": status,
-               "executionCount": execution_count, "cancelled": cancelled})
+               "executionCount": execution_count, "cancelled": cancelled,
+               "cancellationPending": bool(cancelled and has_active_worker)})
     finally:
         with _STATE.cancel_lock:
             _STATE.request_tasks.pop(rid, None)
@@ -1469,6 +1483,37 @@ def _read_stdin(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stdin) ->
     loop.call_soon_threadsafe(queue.put_nowait, {"type": "exit"})
 
 
+class _TrackingThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
+    def submit(self, fn, /, *args, **kwargs):
+        rid = _CURRENT_RID.get()
+        if rid is None:
+            return super().submit(fn, *args, **kwargs)
+        with _STATE.cancel_lock:
+            _STATE.active_thread_workers[rid] = _STATE.active_thread_workers.get(rid, 0) + 1
+
+        def _run_tracked(*w_args, **w_kwargs):
+            try:
+                return fn(*w_args, **w_kwargs)
+            finally:
+                with _STATE.cancel_lock:
+                    remaining = _STATE.active_thread_workers.get(rid, 0) - 1
+                    if remaining > 0:
+                        _STATE.active_thread_workers[rid] = remaining
+                    else:
+                        _STATE.active_thread_workers.pop(rid, None)
+
+        try:
+            return super().submit(_run_tracked, *args, **kwargs)
+        except BaseException:
+            with _STATE.cancel_lock:
+                remaining = _STATE.active_thread_workers.get(rid, 0) - 1
+                if remaining > 0:
+                    _STATE.active_thread_workers[rid] = remaining
+                else:
+                    _STATE.active_thread_workers.pop(rid, None)
+            raise
+
+
 async def _main_async() -> None:
     sys.stdout = _StreamProxy("stdout")
     sys.stderr = _StreamProxy("stderr")
@@ -1483,6 +1528,7 @@ async def _main_async() -> None:
 
     loop = asyncio.get_running_loop()
     _STATE.loop = loop
+    loop.set_default_executor(_TrackingThreadPoolExecutor())
     queue: asyncio.Queue = asyncio.Queue()
     reader = threading.Thread(
         target=_read_stdin,
