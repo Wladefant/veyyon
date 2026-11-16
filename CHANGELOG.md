@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
+
+## [1.10.1] - 2026-11-15
+
+### Fixed
+
+- Count only indented untracked entries in git status/stash pop + topic ledger ([PR #1127](https://github.com/Wladefant/veyyon/pull/1127)).
+
+## [1.10.0] - 2026-11-14
+
+### Fixed
+
+- Add explicit priority slot admission ([PR #1108](https://github.com/Wladefant/veyyon/pull/1108)).
+
+## [1.9.4] - 2026-11-14
+
+### Fixed
+
+- Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
+
 ## [1.9.3] - 2026-11-13
 
 ### Fixed
