@@ -523,6 +523,18 @@ describe("host-wide shared lane admission", () => {
 			const status = runCli(["status", "--cap", "1", "--json"]);
 			expect(status.exitCode).toBe(0);
 			expect(JSON.parse(status.stdout).active_lanes).toBe(1);
+			const beforePolicyChange = JSON.parse(status.stdout).reservations;
+			const missingCap = runCli(["set-cap", "--json"]);
+			expect(missingCap.exitCode).toBe(1);
+			expect(JSON.parse(missingCap.stdout).reason).toBe("missing_arguments");
+			for (const cap of ["40", "100"]) {
+				const policy = runCli(["set-cap", "--cap", cap, "--json"]);
+				expect(policy.exitCode).toBe(0);
+				expect(JSON.parse(policy.stdout)).toMatchObject({ ok: true, action: "set-cap", cap: Number(cap) });
+				const afterPolicyChange = JSON.parse(runCli(["status", "--json"]).stdout);
+				expect(afterPolicyChange.cap).toBe(Number(cap));
+				expect(afterPolicyChange.reservations).toEqual(beforePolicyChange);
+			}
 
 			const release = runCli([
 				"release",
@@ -823,12 +835,13 @@ describe("host-wide shared lane admission", () => {
 		});
 		const realAcquire = laneModule.laneAdmissionDriver.acquire;
 		let capDeniedObserved = Promise.withResolvers<void>();
+		let deniedOwner = subOwner;
 		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementation(async opts => {
 			const res = await realAcquire(opts);
 			if (res.admitted && opts.owner === subOwner) {
 				wakeSlotIdToWatch = res.slot_id;
 			}
-			if (!res.admitted && res.reason === "host_lane_cap_reached" && opts.owner === subOwner) {
+			if (!res.admitted && res.reason === "host_lane_cap_reached" && opts.owner === deniedOwner) {
 				capDeniedObserved.resolve();
 			}
 			return res;
@@ -934,6 +947,7 @@ describe("host-wide shared lane admission", () => {
 			disposedPrompted += 1;
 		});
 		capDeniedObserved = Promise.withResolvers<void>();
+		deniedOwner = path.resolve(disposeSub.sessionManager.getSessionFile() ?? disposeSub.sessionId);
 		expect(
 			await disposeSub.deliverIrcMessage({
 				id: "wake-dispose",

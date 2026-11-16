@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { logger } from "@veyyon/utils";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { getGlobalConfigRootDir, getGlobalRunDir, PROFILES_DIR_NAME } from "@veyyon/utils/config-root";
 import { withFileLock } from "@veyyon/utils/file-lock";
@@ -192,6 +193,19 @@ export class LaneAdmissionError extends Error {
 		super(message);
 		this.name = "LaneAdmissionError";
 	}
+}
+export async function setLaneAdmissionCap(options: {
+	cap: number;
+	globalConfigRoot?: string;
+}): Promise<void> {
+	const requestedCap = resolveCap(options.cap);
+	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
+	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
+
+	await withLedgerLock(ledgerPath, async () => {
+		const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
+		await writeLedgerUnderLock(ledgerPath, { ...ledger, cap: requestedCap });
+	});
 }
 
 export function getLaneAdmissionLedgerPath(globalConfigRoot?: string): string {
@@ -558,15 +572,14 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 			const ledger = await readLedgerUnderLock(ledgerPath, requestedCap ?? DEFAULT_HOST_LANE_CAP);
 			const effectiveCap = resolveDurableCap(ledger.cap, requestedCap);
 			observedCap = effectiveCap;
-			const capReduced = effectiveCap < ledger.cap;
 			const { retained, reclaimedCount } = reclaimProvenDeadReservations(ledger.reservations, liveness);
 			observedActiveLanes = retained.length;
 
 			if (retained.some(r => r.owner === owner)) {
-				if (reclaimedCount > 0 || capReduced) {
+				if (reclaimedCount > 0) {
 					await writeLedgerUnderLock(ledgerPath, {
 						version: LANE_ADMISSION_VERSION,
-						cap: effectiveCap,
+						cap: ledger.cap,
 						reservations: retained,
 					});
 				}
@@ -585,10 +598,10 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 				};
 			}
 			if (retained.length >= effectiveCap) {
-				if (reclaimedCount > 0 || capReduced) {
+				if (reclaimedCount > 0) {
 					await writeLedgerUnderLock(ledgerPath, {
 						version: LANE_ADMISSION_VERSION,
-						cap: effectiveCap,
+						cap: ledger.cap,
 						reservations: retained,
 					});
 				}
@@ -609,10 +622,10 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 
 			const callerPid = options.callerPid === undefined ? null : options.callerPid;
 			if (callerPid !== null && !isValidPid(callerPid)) {
-				if (reclaimedCount > 0 || capReduced) {
+				if (reclaimedCount > 0) {
 					await writeLedgerUnderLock(ledgerPath, {
 						version: LANE_ADMISSION_VERSION,
-						cap: effectiveCap,
+						cap: ledger.cap,
 						reservations: retained,
 					});
 				}
@@ -620,10 +633,10 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 			}
 			const workerPid = options.workerPid !== undefined ? options.workerPid : kind === "native" ? process.pid : null;
 			if (workerPid !== null && !isValidPid(workerPid)) {
-				if (reclaimedCount > 0 || capReduced) {
+				if (reclaimedCount > 0) {
 					await writeLedgerUnderLock(ledgerPath, {
 						version: LANE_ADMISSION_VERSION,
-						cap: effectiveCap,
+						cap: ledger.cap,
 						reservations: retained,
 					});
 				}
@@ -633,10 +646,10 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 			let workerProcessIdentity: string | null = null;
 			if (workerPid !== null) {
 				if (!liveness.isPidAlive(workerPid)) {
-					if (reclaimedCount > 0 || capReduced) {
+					if (reclaimedCount > 0) {
 						await writeLedgerUnderLock(ledgerPath, {
 							version: LANE_ADMISSION_VERSION,
-							cap: effectiveCap,
+							cap: ledger.cap,
 							reservations: retained,
 						});
 					}
@@ -647,10 +660,10 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 				}
 				workerProcessIdentity = liveness.getStartIdentity(workerPid);
 				if (workerProcessIdentity === null) {
-					if (reclaimedCount > 0 || capReduced) {
+					if (reclaimedCount > 0) {
 						await writeLedgerUnderLock(ledgerPath, {
 							version: LANE_ADMISSION_VERSION,
-							cap: effectiveCap,
+							cap: ledger.cap,
 							reservations: retained,
 						});
 					}
@@ -660,10 +673,10 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 					);
 				}
 				if (!liveness.isInstanceAlive(workerPid, workerProcessIdentity)) {
-					if (reclaimedCount > 0 || capReduced) {
+					if (reclaimedCount > 0) {
 						await writeLedgerUnderLock(ledgerPath, {
 							version: LANE_ADMISSION_VERSION,
-							cap: effectiveCap,
+							cap: ledger.cap,
 							reservations: retained,
 						});
 					}
@@ -695,7 +708,7 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 			const nextReservations = [...retained, reservation];
 			await writeLedgerUnderLock(ledgerPath, {
 				version: LANE_ADMISSION_VERSION,
-				cap: effectiveCap,
+				cap: ledger.cap,
 				reservations: nextReservations,
 			});
 
@@ -919,6 +932,7 @@ interface ActiveNativeLeaseEntry {
 	lease: NativeHostLaneLease;
 	count: number;
 	inFlightFinalRelease: Promise<void> | null;
+	releaseRequested: boolean;
 }
 
 interface NativeAcquireWaiter {
@@ -946,26 +960,45 @@ interface PendingNativeAcquireEntry {
 const activeNativeAgentLeases = new Map<string, ActiveNativeLeaseEntry>();
 const pendingNativeAgentAcquires = new Map<string, PendingNativeAcquireEntry>();
 
-async function releaseSlotDurably(options: {
-	slotId: string;
-	leaseToken: string;
-	cap?: number;
-	globalConfigRoot?: string;
-}): Promise<void> {
-	// Teardown and abort compensation have no later caller to retry a lost handle.
-	// Keep the fenced release owned by this promise until the ledger settles.
-	for (;;) {
+interface PendingNativeRelease extends LaneAdmissionReleaseOptions {
+	owner: string;
+}
+
+// Failed compensation has no returned handle. Retain its fence for a same-owner retry;
+// the durable reservation also remains available to the operator's fenced release command.
+const pendingNativeReleases = new Map<string, PendingNativeRelease>();
+
+function nativeReleaseKey(options: { owner: string; globalConfigRoot?: string }): string {
+	return `${getLaneAdmissionLedgerPath(options.globalConfigRoot)}\0${options.owner}`;
+}
+
+async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> {
+	const key = nativeReleaseKey(options);
+	for (let attempt = 0; attempt < 3; attempt += 1) {
 		try {
 			const res = await laneAdmissionDriver.release(options);
-			if (res.ok) return;
+			if (res.ok) {
+				pendingNativeReleases.delete(key);
+				return;
+			}
 			if (res.reason === "lease_token_mismatch") {
 				throw new LaneAdmissionError(res.reason, `Host lane slot ${options.slotId} belongs to another lease`);
 			}
 		} catch (error) {
 			if (error instanceof LaneAdmissionError && error.code === "lease_token_mismatch") throw error;
 		}
-		await waitAbortably(100);
+		if (attempt < 2) await waitAbortably(100);
 	}
+	pendingNativeReleases.set(key, options);
+	logger.error("Host lane release requires reconciliation", {
+		operation: "lane-release",
+		stage: "durable-release",
+		errorCode: "lane_release_reconciliation_required",
+	});
+	throw new LaneAdmissionError(
+		"lane_release_reconciliation_required",
+		"Host lane remains reserved after 3 release attempts. Repair ledger access, then retry release or use lane-admission status and fenced release. No capacity was freed.",
+	);
 }
 
 async function awaitSettleAbortably(promise: Promise<unknown>, signal?: AbortSignal): Promise<void> {
@@ -1022,6 +1055,7 @@ function createBorrowedLeaseHandle(key: string, entry: ActiveNativeLeaseEntry): 
 				return wrapped;
 			}
 
+			entry.releaseRequested = true;
 			let finalPending: Promise<void>;
 			finalPending = entry.lease.release().then(
 				() => {
@@ -1120,6 +1154,8 @@ export async function acquireNativeHostLaneWait(options: {
 	const waitIfFull = options.waitIfFull ?? true;
 
 	while (!options.signal?.aborted) {
+		const pendingRelease = pendingNativeReleases.get(nativeReleaseKey(options));
+		if (pendingRelease) await releaseSlotDurably(pendingRelease);
 		const res = await laneAdmissionDriver.acquire({
 			owner: options.owner,
 			kind: "native",
@@ -1133,6 +1169,7 @@ export async function acquireNativeHostLaneWait(options: {
 			const leaseToken = res.lease_token;
 			if (options.signal?.aborted) {
 				await releaseSlotDurably({
+					owner: options.owner,
 					slotId,
 					leaseToken,
 					cap: options.cap,
@@ -1160,8 +1197,10 @@ export async function acquireNativeHostLaneWait(options: {
 				release(): Promise<void> {
 					if (released) return Promise.resolve();
 					if (inFlightRelease) return inFlightRelease;
+					clearInterval(timer);
 					let pending: Promise<void>;
 					pending = releaseSlotDurably({
+						owner: options.owner,
 						slotId,
 						leaseToken,
 						cap: options.cap,
@@ -1233,6 +1272,10 @@ export async function acquireSubagentHostLane(options: {
 			if (existing.inFlightFinalRelease) {
 				await awaitSettleAbortably(existing.inFlightFinalRelease, options.signal);
 				if (options.signal?.aborted) return null;
+				continue;
+			}
+			if (existing.releaseRequested) {
+				await createBorrowedLeaseHandle(key, existing).release();
 				continue;
 			}
 			existing.count += 1;
@@ -1326,6 +1369,7 @@ export async function acquireSubagentHostLane(options: {
 					lease: underlyingLease,
 					count: activeWaiters.length,
 					inFlightFinalRelease: null,
+					releaseRequested: false,
 				};
 				activeNativeAgentLeases.set(key, activeEntry);
 				for (const waiter of activeWaiters) {

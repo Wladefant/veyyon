@@ -14,11 +14,12 @@
  *   manual repair or a caller retaining the lease handle.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
-import { runSubprocess } from "@veyyon/coding-agent/task/executor";
+import { runSubagentFollowUpTurn, runSubprocess } from "@veyyon/coding-agent/task/executor";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import * as laneModule from "@veyyon/coding-agent/task/lane-admission";
 import {
@@ -26,6 +27,7 @@ import {
 	acquireNativeHostLaneWait,
 	acquireSubagentHostLane,
 	getLaneAdmissionStatus,
+	getLaneAdmissionLedgerPath,
 	LaneAdmissionError,
 	releaseLaneAdmission,
 } from "@veyyon/coding-agent/task/lane-admission";
@@ -297,6 +299,40 @@ describe("native host-lane admission regressions", () => {
 
 		await releaseLaneAdmission({ slotId: filler.slot_id!, leaseToken: filler.lease_token! });
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
+	it("surfaces persistent ledger faults from initial and follow-up executor finalization", async () => {
+		for (const followUp of [false, true]) {
+			const ledgerPath = getLaneAdmissionLedgerPath();
+			let original = "";
+			const session = createMockSession(async ({ emit }) => {
+				original = fs.readFileSync(ledgerPath, "utf8");
+				fs.writeFileSync(ledgerPath, "{");
+				emit(yieldSuccessEvent({ ok: true }));
+			}, { activeToolNames: ["yield"] });
+			vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+			vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockResolvedValue(session);
+			try {
+				const result = followUp
+					? runSubagentFollowUpTurn({
+						id: "PersistentFollowUp", agent: testAgent, message: "continue",
+						eventBus: new EventBus(), artifactsDir: makeArtifactsDir(),
+					})
+					: runSubprocess({
+						cwd: "/repo", agent: testAgent, task: "finish", index: 0, id: "PersistentInitial",
+						settings: Settings.isolated(),
+						modelRegistry: { refresh: async () => {}, getAvailable: () => [], getApiKey: async () => "k" } as never,
+						enableLsp: false, eventBus: new EventBus(), artifactsDir: makeArtifactsDir(),
+					});
+				await expect(result).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
+			} finally {
+				if (original) fs.writeFileSync(ledgerPath, original);
+			}
+			const held = (await getLaneAdmissionStatus()).reservations;
+			expect(held).toHaveLength(1);
+			const release = await releaseLaneAdmission({ slotId: held[0]!.slotId, leaseToken: held[0]!.leaseToken });
+			expect(release.released).toBe(true);
+		}
 	});
 
 	it("settles transient release failure without handing retry ownership to the caller", async () => {

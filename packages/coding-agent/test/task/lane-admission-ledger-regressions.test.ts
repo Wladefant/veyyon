@@ -24,6 +24,7 @@ import {
 	type LaneAdmissionLedger,
 	type LaneLivenessProbe,
 	releaseLaneAdmission,
+	setLaneAdmissionCap,
 } from "@veyyon/coding-agent/task/lane-admission";
 import { TempDir } from "@veyyon/utils";
 import { getGlobalConfigRootDir } from "@veyyon/utils/config-root";
@@ -344,6 +345,38 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(goodAdopt.adopted).toBe(true);
 	});
 
+	it("keeps admission ceilings separate from explicit persisted policy updates", async () => {
+		const first = await acquireLaneAdmission({ owner: "policy-first", kind: "native", cap: 100 });
+		expect(first.admitted).toBe(true);
+		for (const owner of ["policy-other", "policy-first"]) {
+			const refused = await acquireLaneAdmission({ owner, kind: "native", cap: 1 });
+			expect(refused.admitted).toBe(false);
+			expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(100);
+		}
+		const second = await acquireLaneAdmission({ owner: "policy-second", kind: "native", cap: 2 });
+		expect(second.admitted).toBe(true);
+		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(100);
+		await setLaneAdmissionCap({ cap: 40 });
+		const before = readLedgerSnapshot(getLaneAdmissionLedgerPath());
+		await setLaneAdmissionCap({ cap: 100 });
+		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath())).toEqual({ ...before, cap: 100 });
+	});
+
+	it("refuses explicit cap updates for invalid caps and stale or corrupt ledgers without replacing them", async () => {
+		await acquireLaneAdmission({ owner: "policy-validation", kind: "native", cap: 40 });
+		const ledgerPath = getLaneAdmissionLedgerPath();
+		const original = fs.readFileSync(ledgerPath, "utf8");
+		for (const cap of [0, 101, 1.5]) {
+			await expect(setLaneAdmissionCap({ cap })).rejects.toMatchObject({ code: "invalid_cap" });
+			expect(fs.readFileSync(ledgerPath, "utf8")).toBe(original);
+		}
+		for (const content of ["{", JSON.stringify({ version: 0, cap: 40, reservations: [] })]) {
+			fs.writeFileSync(ledgerPath, content);
+			await expect(setLaneAdmissionCap({ cap: 100 })).rejects.toBeInstanceOf(Error);
+			expect(fs.readFileSync(ledgerPath, "utf8")).toBe(content);
+		}
+	});
+
 	it("does not persist lower caps from status reclamation or absent release", async () => {
 		let alive = true;
 		const liveness: LaneLivenessProbe = {
@@ -448,7 +481,7 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(releaseHigh.n_free).toBe(1);
 		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(1);
 
-		// Explicit lower cap reduces the durable ceiling from 5 down to 2
+		// Admission only narrows this call; the explicit policy action changes the durable ceiling.
 		const freshRoot = makeTempDir("@veyyon-cap-reduce-");
 		const start5 = await acquireLaneAdmission({
 			owner: "cap-five-1",
@@ -472,7 +505,8 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(reduceTo2.admitted).toBe(true);
 		expect(reduceTo2.cap).toBe(2);
 		expect(reduceTo2.n_free).toBe(0);
-		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath(freshRoot)).cap).toBe(2);
+		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath(freshRoot)).cap).toBe(5);
+		await setLaneAdmissionCap({ cap: 2, globalConfigRoot: freshRoot });
 
 		const thirdBlocked = await acquireLaneAdmission({
 			owner: "cap-reduce-3",

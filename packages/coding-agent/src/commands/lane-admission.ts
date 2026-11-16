@@ -14,16 +14,17 @@ import {
 	LaneAdmissionError,
 	type LaneAdmissionKind,
 	releaseLaneAdmission,
+	setLaneAdmissionCap,
 } from "../task/lane-admission";
 
-const ACTIONS = ["status", "acquire", "adopt", "heartbeat", "release"] as const;
+const ACTIONS = ["status", "acquire", "adopt", "heartbeat", "release", "set-cap"] as const;
 
 export default class LaneAdmissionCommand extends Command {
 	static description = "Manage host-wide shared lane admission slots";
 
 	static args = {
 		action: Args.string({
-			description: "Admission action (status, acquire, adopt, heartbeat, release)",
+			description: "Admission action (status, acquire, adopt, heartbeat, release, set-cap)",
 			required: true,
 			options: [...ACTIONS],
 		}),
@@ -40,7 +41,7 @@ export default class LaneAdmissionCommand extends Command {
 		"worker-pid": Flags.integer({ description: "Spawned worker PID to bind immediately on acquire" }),
 		"slot-id": Flags.string({ description: "Reservation slot ID (for adopt, heartbeat, release)" }),
 		"lease-token": Flags.string({ description: "Fencing lease token (for adopt, heartbeat, release)" }),
-		cap: Flags.integer({ description: "Override host cap (1..100)" }),
+		cap: Flags.integer({ description: "Per-call ceiling, or persisted host policy for set-cap (1..100)" }),
 		json: Flags.boolean({ description: "Emit machine-readable JSON", default: false }),
 	};
 
@@ -50,6 +51,7 @@ export default class LaneAdmissionCommand extends Command {
 		"veyyon lane-admission adopt --slot-id <uuid> --lease-token <uuid> --pid 12345 --json",
 		"veyyon lane-admission heartbeat --slot-id <uuid> --lease-token <uuid> --json",
 		"veyyon lane-admission release --slot-id <uuid> --lease-token <uuid> --json",
+		"veyyon lane-admission set-cap --cap 100 --json",
 	];
 
 	private emit(payload: unknown, asJson: boolean): void {
@@ -152,6 +154,15 @@ export default class LaneAdmissionCommand extends Command {
 					});
 					this.emit(result, asJson);
 					if (!result.ok) process.exitCode = 1;
+					return;
+				}
+				case "set-cap": {
+					if (flags.cap === undefined) {
+						this.fail(action, "missing_arguments", "set-cap requires --cap", asJson);
+						return;
+					}
+					await setLaneAdmissionCap({ cap: flags.cap });
+					this.emit({ ok: true, action, cap: flags.cap }, asJson);
 					return;
 				}
 				default:
