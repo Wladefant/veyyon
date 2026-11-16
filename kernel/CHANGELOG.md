@@ -7,6 +7,13 @@
 ### Fixed
 
 - Artifact counters use WAL and skip directory scans when already initialized, while marker cleanup rechecks all session locks and rejects unsafe PIDs and age limits ([#1057](https://github.com/Wladefant/veyyon/issues/1057)).
+- `FileSessionStorage.readText` reads via `fs.promises.readFile` so concurrent appends on Windows do not produce torn trailing JSONL lines.
+## [1.10.3] - 2026-11-16
+
+### Fixed
+
+- Preserved storage directory spelling in `recoverOrphanedBackups` when resolving primary session keys ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
+
 ## [1.8.23] - 2026-11-10
 
 ### Added
