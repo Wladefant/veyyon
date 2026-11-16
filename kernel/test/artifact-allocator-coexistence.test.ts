@@ -672,6 +672,7 @@ run().catch(err => { console.error(err); process.exit(1); });
 		const sleepModuleUrl = path.resolve(import.meta.dirname, "../../packages/utils/src/sleep").replace(/\\/g, "/");
 		const slowScanStartedPath = path.join(dir, "slow-scan-started");
 		const slowWorkerScript = `
+import { spyOn } from "bun:test";
 import * as fsSync from "node:fs";
 import { sleepSync } from "${sleepModuleUrl}";
 import { ArtifactManager } from "${artifactsModuleUrl}";
@@ -680,14 +681,14 @@ const dir = process.argv[2];
 const startedPath = process.argv[3];
 const origReaddirSync = fsSync.readdirSync;
 let delayed = false;
-(fsSync as { readdirSync: typeof fsSync.readdirSync }).readdirSync = ((...args: Parameters<typeof fsSync.readdirSync>) => {
+spyOn(fsSync, "readdirSync").mockImplementation(((...args: Parameters<typeof fsSync.readdirSync>) => {
   if (!delayed && String(args[0]) === dir) {
     delayed = true;
     fsSync.writeFileSync(startedPath, "started", "utf8");
     sleepSync(16_000);
   }
   return origReaddirSync(...args);
-}) as typeof fsSync.readdirSync;
+}) as typeof fsSync.readdirSync);
 
 const mgr = new ArtifactManager(dir);
 const id = mgr.allocateId();
