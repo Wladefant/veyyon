@@ -53,4 +53,63 @@ describe("producer output keeps caret-escaped ANSI", () => {
 			}
 		}
 	});
+
+	it("keeps benign private-mode, intermediate, and tilde CSI sequences", () => {
+		for (const seq of ["^[[?25h", "^[[2 q", "^[[15~"]) {
+			const input = `before\n${seq}ok\nafter\n`;
+			expect(new ProducerOutputGuard(redactProviderSecrets).sanitize(input)).toBe(input);
+			for (let split = 0; split <= input.length; split++) {
+				expect(streamed(input, split)).toBe(input);
+			}
+		}
+	});
+
+	it("does not let malformed bracket or quote CSI prefixes hide an unterminated container", () => {
+		for (const prefix of ["^[[ [", '^[["key"']) {
+			const envObject = `${prefix}\n  DATABASE_URL: 'fake-db',\n  AWS_REGION: 'us-east-1',\n  MY_ENV: 'val'\n}\n`;
+			const output = streamed(envObject, 0);
+			expect(output).toContain(BLOCKED_OUTPUT_RECORD);
+			expect(output).not.toContain("fake-db");
+		}
+	});
+
+	it("redacts credential labels preceded or followed by caret-escaped ANSI", () => {
+		const canary = "opaqueSyntheticCanary123";
+		const cases = [
+			`^[[36mPASSWORD=${canary}^[[0m\n`,
+			`^[[36mDB_PASSWORD=^[[31m${canary}^[[0m\n`,
+			`^[[36mSECRET^[[0m: ${canary}\n`,
+			`^[[36mTOKEN^[[0m=^[[33m${canary}^[[0m\n`,
+		];
+		const ownerRedact = (text: string) => text.replaceAll(canary, "#CANARY#");
+		for (const input of cases) {
+			for (const redact of [undefined, redactProviderSecrets, ownerRedact]) {
+				const guard = new ProducerOutputGuard(redact);
+				expect(guard.sanitize(input)).not.toContain(canary);
+				for (let split = 0; split <= input.length; split++) {
+					const g = new ProducerOutputGuard(redact);
+					const output = g.push(input.slice(0, split)) + g.push(input.slice(split)) + g.finish();
+					expect(output).not.toContain(canary);
+				}
+			}
+		}
+	});
+
+	it("keeps 1 or 2 caret-colored env assignments but withholds 3 or more", () => {
+		const one = "^[[36mALPHA=synthetic-one^[[0m\n";
+		const two = `${one}^[[36mexport BETA=synthetic-two^[[0m\n`;
+		const three = `${two}^[[36m^[[1mGAMMA=synthetic-three^[[0m\n`;
+		for (const benign of [one, two]) {
+			expect(new ProducerOutputGuard(redactProviderSecrets).sanitize(benign)).toBe(benign);
+			for (let split = 0; split <= benign.length; split++) {
+				expect(streamed(benign, split)).toBe(benign);
+			}
+		}
+		expect(new ProducerOutputGuard(redactProviderSecrets).sanitize(three)).toBe(BLOCKED_OUTPUT_RECORD);
+		for (let split = 0; split <= three.length; split++) {
+			const output = streamed(three, split);
+			expect(output).toContain(BLOCKED_OUTPUT_RECORD);
+			expect(output).not.toContain("synthetic-three");
+		}
+	});
 });

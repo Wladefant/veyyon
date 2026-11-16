@@ -31,8 +31,7 @@ const REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>
 const JSON_REDACTION_MARKER = /^(?:\[REDACTED\]|<redacted(?: credential| \d+ chars)?>|#[A-Za-z0-9_]+#)[ \t]*$/;
 const NUMERIC_METADATA_KEY = /[_-](?:count|length|size|limit|ttl)$/i;
 const NUMERIC_METADATA_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?n?(?=[ \t]*(?:\r?\n|$|[,;}\]]))/;
-const PERSIST_CREDENTIALS_BOOLEAN =
-	/^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|\\n))/;
+const PERSIST_CREDENTIALS_BOOLEAN = /^(?:false|true)(?=[ \t]*(?:\r?\n|$|[,}\]]|\\n))/;
 const SOURCE_COMMIT_PIN = /^[ \t]*(?:-[ \t]+)?Source $/i;
 const MARKDOWN_COMMIT_LINK =
 	/^\[(?:pinned )?source commit\]\(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/commit\/[a-f0-9]{40}\)(?:\.[ \t]+This PR head is `[a-f0-9]{40}`\.)?(?=[ \t]*(?:\r?\n|$))/i;
@@ -114,31 +113,40 @@ function isAuthorizationContinuation(record: string): boolean {
 
 function classifyCredentialText(text: string, rawRedact?: (text: string) => string): string {
 	const redact = rawRedact ? wrapRedact(rawRedact) : undefined;
+	const { stripped, toOriginal } = text.includes("^[[")
+		? stripCaretCsiWithMap(text)
+		: { stripped: text, toOriginal: null };
 	const labels = new RegExp(CREDENTIAL_RECORD.source, "gi");
 	const spans: { start: number; valueStart: number; end: number }[] = [];
 	let authorizationHeading = false;
 	let offset = 0;
-	for (const record of text.split("\n")) {
+	for (const record of stripped.split("\n")) {
 		if (authorizationHeading && isAuthorizationContinuation(record)) {
-			spans.push({ start: offset, valueStart: offset, end: offset + record.length });
+			spans.push({
+				start: toOriginal ? toOriginal[offset] : offset,
+				valueStart: toOriginal ? toOriginal[offset] : offset,
+				end: toOriginal ? toOriginal[offset + record.length] : offset + record.length,
+			});
 		}
 		authorizationHeading = isAuthorizationHeading(record);
 		offset += record.length + 1;
 	}
-	for (let match = labels.exec(text); match; match = labels.exec(text)) {
-		const start = labels.lastIndex + /^[ \t]*/.exec(text.slice(labels.lastIndex))![0].length;
-		const tail = text.slice(start);
+	for (let match = labels.exec(stripped); match; match = labels.exec(stripped)) {
+		const start = labels.lastIndex + /^[ \t]*/.exec(stripped.slice(labels.lastIndex))![0].length;
+		const tail = stripped.slice(start);
 		// A source pin linking a commit is revision metadata, not a parent PIN.
-		const sourceLineStart = text.lastIndexOf("\n", match.index) + 1;
-		if (match.groups!.key.toLowerCase() === "pin" &&
-			SOURCE_COMMIT_PIN.test(text.slice(sourceLineStart, match.index + match.groups!.boundary.length)) &&
-			MARKDOWN_COMMIT_LINK.test(tail)) continue;
-		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
+		const sourceLineStart = stripped.lastIndexOf("\n", match.index) + 1;
+		if (
+			match.groups!.key.toLowerCase() === "pin" &&
+			SOURCE_COMMIT_PIN.test(stripped.slice(sourceLineStart, match.index + match.groups!.boundary.length)) &&
+			MARKDOWN_COMMIT_LINK.test(tail)
+		)
 			continue;
+		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail)) continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
-		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(text.slice(0, match.index));
+		const sourceType = /\b(?:type|interface)\s+[A-Za-z_$][\w$]*[^;\n]*[={]/.test(stripped.slice(0, match.index));
 		if (shape && (!shape.groups?.sourceDelimiter || sourceType)) continue;
-		const preceding = text.slice(0, match.index);
+		const preceding = stripped.slice(0, match.index);
 		const isAuth = /authori[sz]ation/i.test(match.groups!.key);
 		const lineStart = Math.max(0, preceding.lastIndexOf("\n") + 1);
 		const lineBefore = preceding.slice(lineStart) + match.groups!.boundary;
@@ -177,16 +185,22 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		const knownLength = quoted ? 0 : knownCredentialLength(tail);
 		if (!quoted && !knownLength && PEM_START.test(tail)) return BLOCKED_OUTPUT_RECORD;
 		const end = quoted ? start + quoteEnd : start + (knownLength || (newline < 0 ? tail.length : newline));
+		const rawStart = match.index + boundaryLength;
+		const rawValueStart = start + (quoted ? 1 : 0);
 		spans.push({
-			start: match.index + boundaryLength,
-			valueStart: start + (quoted ? 1 : 0),
-			end,
+			start: toOriginal ? toOriginal[rawStart] : rawStart,
+			valueStart: toOriginal ? toOriginal[rawValueStart] : rawValueStart,
+			end: toOriginal ? toOriginal[end] : end,
 		});
 		labels.lastIndex = Math.max(end + (quoted ? 1 : 0), start + 1);
 	}
 	PEM_BLOCK.lastIndex = 0;
-	for (const pem of text.matchAll(PEM_BLOCK)) {
-		spans.push({ start: pem.index, valueStart: pem.index, end: pem.index + pem[0].length });
+	for (const pem of stripped.matchAll(PEM_BLOCK)) {
+		spans.push({
+			start: toOriginal ? toOriginal[pem.index] : pem.index,
+			valueStart: toOriginal ? toOriginal[pem.index] : pem.index,
+			end: toOriginal ? toOriginal[pem.index + pem[0].length] : pem.index + pem[0].length,
+		});
 	}
 	spans.sort((left, right) => left.start - right.start);
 	let count = 0;
@@ -249,9 +263,12 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 	const prefix = owned.slice(0, replacement.index);
 	const suffix = owned.slice(replacement.index + replacement[0].length);
 	const replacementEnd = text.length - suffix.length;
-	if (!text.startsWith(prefix) || !text.endsWith(suffix) ||
+	if (
+		!text.startsWith(prefix) ||
+		!text.endsWith(suffix) ||
 		replacementEnd < prefix.length ||
-		spans.some(span => span.valueStart < prefix.length || span.end > replacementEnd)) {
+		spans.some(span => span.valueStart < prefix.length || span.end > replacementEnd)
+	) {
 		return BLOCKED_OUTPUT_RECORD;
 	}
 	return PEM_START.test(owned) ? BLOCKED_OUTPUT_RECORD : sanitizeText(owned);
@@ -278,6 +295,36 @@ function caretCsiLength(text: string, start: number): number {
 	if (text[start] !== "^") return 0;
 	CARET_CSI.lastIndex = start;
 	return CARET_CSI.exec(text)?.[0].length ?? 0;
+}
+
+function stripCaretCsi(text: string): string {
+	if (!text.includes("^[[")) return text;
+	let stripped = "";
+	for (let index = 0; index < text.length; index++) {
+		const escapedCsi = caretCsiLength(text, index);
+		if (escapedCsi) {
+			index += escapedCsi - 1;
+			continue;
+		}
+		stripped += text[index];
+	}
+	return stripped;
+}
+
+function stripCaretCsiWithMap(text: string): { stripped: string; toOriginal: number[] } {
+	let stripped = "";
+	const toOriginal: number[] = [];
+	for (let index = 0; index < text.length; index++) {
+		const escapedCsi = caretCsiLength(text, index);
+		if (escapedCsi) {
+			index += escapedCsi - 1;
+			continue;
+		}
+		toOriginal.push(index);
+		stripped += text[index];
+	}
+	toOriginal.push(text.length);
+	return { stripped, toOriginal };
 }
 
 function structuredStart(text: string): number {
@@ -353,9 +400,10 @@ function hasInventoryKeys(text: string): boolean {
 }
 
 function isInventory(text: string): boolean {
-	if (ENV_TABLE_HEADER.test(text)) return true;
+	const plain = stripCaretCsi(text);
+	if (ENV_TABLE_HEADER.test(plain)) return true;
 	let assignments = 0;
-	for (const line of text.split("\n")) {
+	for (const line of plain.split("\n")) {
 		if (!line.trim()) continue;
 		assignments = ENV_ASSIGNMENT.test(line) ? assignments + 1 : 0;
 		if (assignments >= 3) return true;
@@ -391,7 +439,7 @@ export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard)
 	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
 		cycles: "mark",
 		transformValue: (nested, key) => {
-			if (key !== undefined && CREDENTIAL_RECORD.test(`${key}=`)) {
+			if (key !== undefined && CREDENTIAL_RECORD.test(`${stripCaretCsi(key)}=`)) {
 				if (typeof nested === "number" || typeof nested === "bigint") {
 					if (!NUMERIC_METADATA_KEY.test(key)) return "[REDACTED]";
 				} else if (typeof nested === "string") {
@@ -516,8 +564,9 @@ export class ProducerOutputGuard {
 		// A registered literal can hold several physical records together. Classify every
 		// raw line, but keep the group intact until redaction can see the complete literal.
 		const lines = normalized.split("\n");
-		const assignment = lines.some(line => ENV_ASSIGNMENT.test(line));
-		const separator = this.#candidate.length > 0 && !normalized.trim();
+		const plainLines = lines.map(stripCaretCsi);
+		const assignment = plainLines.some(line => ENV_ASSIGNMENT.test(line));
+		const separator = this.#candidate.length > 0 && !plainLines.some(line => line.trim());
 		let prefix = "";
 		if (this.#candidate && !this.#structured && !assignment && !separator) prefix = this.#flushCandidate();
 		if (this.#withholding) return prefix;
@@ -526,9 +575,11 @@ export class ProducerOutputGuard {
 			if (this.#candidate.length + record.length + newline.length > MAX_RECORD_CHARS)
 				return prefix + this.#block(OVERSIZED_OUTPUT_RECORD) + newline;
 			this.#candidate += record + newline;
-			for (const line of lines) {
-				if (line.trim()) {
-					this.#assignments = ENV_ASSIGNMENT.test(line) ? this.#assignments + 1 : 0;
+			for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+				const line = lines[lineIndex];
+				const plainLine = plainLines[lineIndex];
+				if (plainLine.trim()) {
+					this.#assignments = ENV_ASSIGNMENT.test(plainLine) ? this.#assignments + 1 : 0;
 					if (this.#assignments >= 3) return prefix + this.#block() + newline;
 				}
 				let start = 0;
@@ -621,7 +672,7 @@ export class ProducerOutputGuard {
 
 	finish(): string {
 		if (this.#withholding) return "";
-		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(this.#pending)) {
+		if (!this.#dropping && CREDENTIAL_KEY_PREFIX.test(stripCaretCsi(this.#pending))) {
 			return "";
 		}
 		let pendingPrefix = 0;
