@@ -9,6 +9,8 @@ interface RunnerFrame {
 	message?: string;
 	evalue?: string;
 	bundle?: Record<string, unknown>;
+	cancelled?: boolean;
+	cancellationPending?: boolean;
 }
 
 interface FrameWaiter {
@@ -19,6 +21,7 @@ interface FrameWaiter {
 interface RunnerClient {
 	send(message: object): Promise<void>;
 	nextMatchingFrame(matches: (frame: RunnerFrame) => boolean): Promise<RunnerFrame>;
+	bufferedFrames(matches?: (frame: RunnerFrame) => boolean): RunnerFrame[];
 	close(): Promise<void>;
 }
 
@@ -74,6 +77,9 @@ function spawnRunner(): RunnerClient {
 			const { promise, resolve } = Promise.withResolvers<RunnerFrame>();
 			waiters.push({ matches, resolve });
 			return await promise;
+		},
+		bufferedFrames(matches) {
+			return matches ? queued.filter(matches) : [...queued];
 		},
 		async close() {
 			try {
@@ -204,12 +210,15 @@ describe("Python runner request-specific cancellation protocol", () => {
 				"seed",
 				lines(
 					"import asyncio, threading",
+					"import sys",
 					"gate = threading.Event()",
 					"worker_done = threading.Event()",
 					"def blocked_worker():",
 					"    print('WORKER_STARTED', flush=True)",
-					"    gate.wait()",
+					"    gate.wait(timeout=3.0)",
 					"    print('WORKER_LATE_STDOUT', flush=True)",
+					"    print('WORKER_LATE_PARTIAL', end='')",
+					"    display('WORKER_LATE_DISPLAY')",
 					"    worker_done.set()",
 					"    return 'worker-finished'",
 				),
@@ -236,14 +245,139 @@ describe("Python runner request-specific cancellation protocol", () => {
 			const releaseRes = await submitAndDone(
 				runner,
 				"release-worker",
-				lines("gate.set()", "assert worker_done.wait(timeout=2.0)", "'released'"),
+				lines("gate.set()", "assert worker_done.wait(timeout=2.0)", "for _ in range(200):", "    if not sys.modules['__main__']._STATE.active_thread_workers: break", "    await asyncio.sleep(0.005)", "'released'"),
 			);
 			expect(releaseRes.status).toBe("ok");
 			expect(releaseRes.result).toBe("'released'");
 
+			expect(runner.bufferedFrames(frame => frame.id === "thread-a" && ["stdout", "stderr", "display", "result"].includes(frame.type ?? ""))).toEqual([]);
+
+			const cleanupState = await submitAndDone(
+				runner,
+				"check-cleanup",
+				lines(
+					"import sys",
+					"st = sys.modules['__main__']._STATE",
+					"(dict(st.active_thread_workers), sorted(st.suppressed_cancelled_rids))",
+				),
+			);
+			expect(cleanupState.status).toBe("ok");
+			expect(cleanupState.result).toBe("({}, [])");
 			const after = await submitAndDone(runner, "after-worker", "123");
 			expect(after.status).toBe("ok");
 			expect(after.result).toBe("123");
+		} finally {
+			await runner.close();
+		}
+	}, 8_000);
+
+	it("does not leak worker custody or suppression when cancelling queued to_thread requests", async () => {
+		const runner = spawnRunner();
+		try {
+			await submit(
+				runner,
+				"seed",
+				lines(
+					"import asyncio, sys, threading",
+					"loop = asyncio.get_running_loop()",
+					"TrackingExecutor = type(loop._default_executor)",
+					"bounded_executor = TrackingExecutor(max_workers=1)",
+					"loop.set_default_executor(bounded_executor)",
+					"gate = threading.Event()",
+					"worker_started = threading.Event()",
+					"queued_ran = []",
+					"def occupy():",
+					"    worker_started.set()",
+					"    print('OCCUPIER_STARTED', flush=True)",
+					"    gate.wait(timeout=5.0)",
+					"    return 'occupied-done'",
+					"def queued_fn(idx):",
+					"    queued_ran.append(idx)",
+					"    return f'queued-{idx}'",
+				),
+			);
+			expect((await doneFor(runner, "seed")).status).toBe("ok");
+
+			await submit(runner, "occupier", "await asyncio.to_thread(occupy)");
+			expect((await frameFor(runner, "occupier", ["started"])).type).toBe("started");
+			const occupiedOut = await frameFor(runner, "occupier", ["stdout"]);
+			expect(occupiedOut.data).toContain("OCCUPIER_STARTED");
+
+			for (let i = 0; i < 3; i++) {
+				const rid = `queued-${i}`;
+				await submit(
+					runner,
+					rid,
+					lines(
+						`t = asyncio.create_task(asyncio.to_thread(queued_fn, ${i}))`,
+						"await asyncio.sleep(0)",
+						"print('QUEUED_SUBMITTED', flush=True)",
+						"await t",
+					),
+				);
+				expect((await frameFor(runner, rid, ["started"])).type).toBe("started");
+				const submittedOut = await frameFor(runner, rid, ["stdout"]);
+				expect(submittedOut.data).toContain("QUEUED_SUBMITTED");
+
+				await runner.send({ type: "cancel", id: rid });
+				const cancelledDone = await doneFor(runner, rid);
+				expect(cancelledDone.status).toBe("error");
+				expect(cancelledDone.cancelled).toBe(true);
+				expect(cancelledDone.cancellationPending).toBe(false);
+			}
+
+			const release = await submitAndDone(
+				runner,
+				"release-occupier",
+				lines("gate.set()", "'released'"),
+			);
+			expect(release.status).toBe("ok");
+			expect((await doneFor(runner, "occupier")).status).toBe("ok");
+
+			const stateCheck = await submitAndDone(
+				runner,
+				"check-state",
+				lines(
+					"st = sys.modules['__main__']._STATE",
+					"(queued_ran, dict(st.active_thread_workers), sorted(st.suppressed_cancelled_rids))",
+				),
+			);
+			expect(stateCheck.status).toBe("ok");
+			expect(stateCheck.result).toBe("([], {}, [])");
+			expect(runner.bufferedFrames(frame => (frame.id?.startsWith("queued-") ?? false) && ["stdout", "stderr", "display", "result"].includes(frame.type ?? ""))).toEqual([]);
+		} finally {
+			await runner.close();
+		}
+	}, 8_000);
+
+	it("does not accumulate suppression tombstones for cancelled requests with no worker", async () => {
+		const runner = spawnRunner();
+		try {
+			await submit(runner, "seed", lines("import asyncio, sys", "never = asyncio.Event()"));
+			expect((await doneFor(runner, "seed")).status).toBe("ok");
+
+			for (let i = 0; i < 4; i++) {
+				const rid = `no-worker-${i}`;
+				await submit(runner, rid, lines("print('WAITING', flush=True)", "await never.wait()"));
+				expect((await frameFor(runner, rid, ["started"])).type).toBe("started");
+				await frameFor(runner, rid, ["stdout"]);
+				await runner.send({ type: "cancel", id: rid });
+				const done = await doneFor(runner, rid);
+				expect(done.status).toBe("error");
+				expect(done.cancelled).toBe(true);
+				expect(done.cancellationPending).toBe(false);
+			}
+
+			const stateCheck = await submitAndDone(
+				runner,
+				"check-tombstones",
+				lines(
+					"st = sys.modules['__main__']._STATE",
+					"(dict(st.active_thread_workers), sorted(st.suppressed_cancelled_rids))",
+				),
+			);
+			expect(stateCheck.status).toBe("ok");
+			expect(stateCheck.result).toBe("({}, [])");
 		} finally {
 			await runner.close();
 		}

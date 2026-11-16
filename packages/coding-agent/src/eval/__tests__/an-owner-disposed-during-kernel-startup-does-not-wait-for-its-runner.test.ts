@@ -268,7 +268,7 @@ describe("an owner disposed during kernel startup", () => {
 		expect(starts).toBe(2);
 	});
 
-	it("a fallback-owner startup that a real owner joins completes for both, and the real owner's disposal closes the runner", async () => {
+	it("an implicit owner keeps its runner after an explicit startup co-owner departs", async () => {
 		const ready = Promise.withResolvers<BaseKernel>();
 		const runner = createRunner({ exitOnPayload: true, exitOnSignals: [] });
 		const pool = createPool(() => ready.promise);
@@ -278,10 +278,12 @@ describe("an owner disposed during kernel startup", () => {
 		ready.resolve(runner.kernel);
 		const [fallbackSession, realSession] = await Promise.all([fallback, real]);
 		expect(realSession).toBe(fallbackSession);
-		expect([...realSession.ownerIds]).toEqual(["lane"]);
-		expect(realSession.hasFallbackOwner).toBe(false);
+		expect([...realSession.ownerIds]).toEqual(["session", "lane"]);
 
 		await pool.disposeByOwner("lane");
+		expect(exitRequested(runner.writes)).toBe(false);
+		expect(runner.kernel.isAlive()).toBe(true);
+		await pool.disposeByOwner("session");
 		expect(exitRequested(runner.writes)).toBe(true);
 		expect(runner.kernel.isAlive()).toBe(false);
 		expect(pool.sessions.size).toBe(0);

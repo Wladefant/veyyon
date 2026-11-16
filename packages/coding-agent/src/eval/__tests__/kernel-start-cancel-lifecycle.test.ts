@@ -244,38 +244,32 @@ test("detachSessionOwner transfers primaryOwnerId to next surviving owner", () =
 test("attachSessionOwner preserves primaryOwnerId when a later explicit co-owner attaches", () => {
 	const session = {
 		ownerIds: new Set<string>(),
-		hasFallbackOwner: false,
 		primaryOwnerId: undefined as string | undefined,
 	};
 	attachSessionOwner(session, "session-1", "owner-a");
 	expect(session.primaryOwnerId).toBe("owner-a");
-	expect(session.hasFallbackOwner).toBe(false);
 	expect([...session.ownerIds]).toEqual(["owner-a"]);
 
 	attachSessionOwner(session, "session-1", "owner-b");
 	expect(session.primaryOwnerId).toBe("owner-a");
-	expect(session.hasFallbackOwner).toBe(false);
 	expect([...session.ownerIds]).toEqual(["owner-a", "owner-b"]);
 });
 
 test("attachSessionOwner preserves fallback primaryOwnerId when a later explicit co-owner joins", () => {
 	const session = {
 		ownerIds: new Set<string>(),
-		hasFallbackOwner: false,
 		primaryOwnerId: undefined as string | undefined,
 	};
 	attachSessionOwner(session, "session-fallback", undefined);
 	expect(session.primaryOwnerId).toBe("session-fallback");
-	expect(session.hasFallbackOwner).toBe(true);
 
 	attachSessionOwner(session, "session-fallback", "owner-explicit");
 	expect(session.primaryOwnerId).toBe("session-fallback");
-	expect(session.hasFallbackOwner).toBe(false);
-	expect([...session.ownerIds]).toEqual(["owner-explicit"]);
+	expect([...session.ownerIds]).toEqual(["session-fallback", "owner-explicit"]);
 
 	attachSessionOwner(session, "session-fallback", "owner-second");
 	expect(session.primaryOwnerId).toBe("session-fallback");
-	expect([...session.ownerIds]).toEqual(["owner-explicit", "owner-second"]);
+	expect([...session.ownerIds]).toEqual(["session-fallback", "owner-explicit", "owner-second"]);
 });
 
 test("mixed implicit primary and explicit co-owner protects implicit kernel until implicit owner disposes", async () => {
@@ -323,6 +317,58 @@ test("mixed implicit primary and explicit co-owner protects implicit kernel unti
 		await recoveryReset?.catch(() => {});
 	}
 });
+
+// WHY: Mixed callers must retain independent lifetime membership in either
+// departure order. This exercises pool transitions, not a language process exit.
+for (const phase of ["active", "starting"] as const) {
+	for (const implicitFirst of [true, false]) {
+		for (const departed of ["implicit", "explicit"] as const) {
+			test(`mixed owners retain custody: ${phase}, implicitFirst=${implicitFirst}, departed=${departed}`, async () => {
+				const ready = Promise.withResolvers<SessionKernel>();
+				const counter = { shutdowns: 0 };
+				const kernel = fakeKernel(counter);
+				let startupSignal: AbortSignal | undefined;
+				const pool = new KernelSessionPool({
+					languageName: "Python",
+					logLabel: "mixed-owner-lifetime",
+					startKernel: async (_cwd, options) => {
+						startupSignal = options.signal;
+						return await ready.promise;
+					},
+				});
+				const acquireImplicit = () => pool.acquireSession("shared", "implicit", process.cwd(), {});
+				const acquireExplicit = () => pool.acquireSession("shared", "implicit", process.cwd(), { kernelOwnerId: "explicit" });
+				const first = implicitFirst ? acquireImplicit() : acquireExplicit();
+				if (phase === "active") {
+					ready.resolve(kernel);
+					await first;
+				}
+				const second = implicitFirst ? acquireExplicit() : acquireImplicit();
+				const outcomes = Promise.allSettled([first, second]);
+				const initialPrimary = implicitFirst ? "implicit" : "explicit";
+				const survivor = departed === "implicit" ? "explicit" : "implicit";
+				expect(() => pool.assertResetOwner("shared", initialPrimary)).not.toThrow();
+				expect(() => pool.assertResetOwner("shared", initialPrimary === "implicit" ? "explicit" : "implicit")).toThrow(/primary kernel owner/);
+				await pool.disposeByOwner(departed);
+				expect(counter.shutdowns).toBe(0);
+				expect(startupSignal?.aborted).toBe(false);
+				expect(() => pool.assertResetOwner("shared", departed)).toThrow(/primary kernel owner/);
+				expect(() => pool.assertResetOwner("shared", survivor)).not.toThrow();
+				ready.resolve(kernel);
+				const settled = await outcomes;
+				expect(settled.filter(result => result.status === "fulfilled")).toHaveLength(phase === "starting" ? 1 : 2);
+				const session = pool.sessions.get("shared");
+				expect(session?.kernel).toBe(kernel);
+				expect([...(session?.ownerIds ?? [])]).toEqual([survivor]);
+				expect(session?.primaryOwnerId).toBe(survivor);
+				await pool.resetSession("shared", survivor);
+				expect(counter.shutdowns).toBe(1);
+				expect(pool.sessions.size).toBe(0);
+				expect(pool.startingSessions.size).toBe(0);
+			}, 3000);
+		}
+	}
+}
 
 test("resetSession retires both failed startup and registered session", async () => {
 	const counter = { shutdowns: 0 };
