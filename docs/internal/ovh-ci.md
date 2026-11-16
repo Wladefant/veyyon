@@ -14,33 +14,38 @@ runner admission has been activated**.
 | Event or state | Result |
 | --- | --- |
 | Open or update a draft | All OVH jobs skip before runner allocation. |
-| Open a ready PR, mark ready, update, or reopen it | Related-test path is eligible when `OVH_CI_PR_ADMISSION` is unset or `verified`. |
+| Open a ready PR, mark ready, update, or reopen it | Related-test path is eligible when admission is activated. |
 | Fork PR | All OVH jobs skip, including after activation. |
-| Admission variable set to a non-`verified` value (e.g. `disabled`, `false`, `pending`) | All automatic OVH jobs skip. |
+| Admission variable missing or not accepted | All automatic OVH jobs skip. |
 | Controlled manual dispatch | Existing focused test and explicit full-typecheck modes remain available under the operational admission policy. |
 
-The control variable is the repository Actions variable `OVH_CI_PR_ADMISSION`.
-Runner admission ([issue #676](https://github.com/Wladefant/veyyon/issues/676)) is
-closed and active. Unset or `verified` admits eligible non-draft same-repository
-PRs; any other explicit value (`disabled`, `false`, `pending`) fails closed and
-skips all automatic OVH jobs. This variable is an operational gate, **not** an
-implementation of resource isolation or a substitute for per-job admission hooks.
+The activation variable is the repository Actions variable
+`OVH_CI_PR_ADMISSION`. Its accepted value is `verified`. An unset or different
+value fails closed. It is an acknowledgement of an accepted runner-admission
+receipt, **not** an implementation of resource isolation or a substitute for
+per-job admission hooks.
 
-Every runner eligible for the fixed `[self-hosted, Linux, X64, veyyon]` labels
+**Activation is still blocked by [issue #676](https://github.com/Wladefant/veyyon/issues/676).**
+Before setting the variable, the CI owner must attach and accept evidence that
+every runner eligible for the fixed `[self-hosted, Linux, X64, veyyon]` labels
 provides a total 4 GiB memory limit, 1.5 CPU limit, atomic admission before each
-job, and release after success, failure, cancellation, or timeout. Do not change
-labels or enable legacy workflows to evade these limits.
+job, and release after success, failure, cancellation, or timeout. A verified
+shared pool used for one bounded source-verification job does not by itself
+qualify the dedicated Veyyon label pool. Do not change labels or enable legacy
+workflows to evade this hold.
 
-A variable change does not retrigger old skipped runs. For an existing ready PR,
-an ordinary update or a deliberate rerun provides the next evaluation; do not
-churn every PR through draft just to create duplicate runs. **Emergency stop:**
-set `OVH_CI_PR_ADMISSION` to `disabled` (or any explicit value other than
-`verified`; do **not** merely delete the variable) to close admission for future
-automatic jobs if the runner guarantee is lost.
+After that receipt, set the variable to `verified` and use one ready-for-review
+event or one controlled dispatch to verify the exact checkout, runner identity,
+selected test paths, and parsed nonzero pass / zero failure counts. A variable
+change does not retrigger old skipped runs. For an existing ready PR, an ordinary
+update or a deliberate rerun provides the next evaluation; do not churn every
+PR through draft just to create duplicate runs. Remove or change the variable
+to close admission for future automatic jobs if the runner guarantee is lost.
 
 GitHub reports skipped jobs as successful for merge protection purposes. A skip
 while the admission gate is closed is **not test evidence** and must not be
-reported as green CI.
+reported as green CI. The source rollout and activation receipt are separate
+deliverables.
 
 ## Source identity and work selection
 

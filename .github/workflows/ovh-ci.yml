@@ -47,14 +47,14 @@ permissions:
 
 jobs:
   prepare:
-    # Runner admission (#676) is accepted. Unset or 'verified' admits eligible
-    # non-draft same-repository PRs; any other value closes PR admission.
+    # Automatic PR work stays closed until the runner admission receipt in #676
+    # is accepted. This job condition is evaluated before allocating a runner.
     if: >-
       (github.event_name == 'workflow_dispatch' && !inputs.typecheck) ||
       (github.event_name == 'pull_request' &&
        !github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
-       (!vars.OVH_CI_PR_ADMISSION || vars.OVH_CI_PR_ADMISSION == 'verified'))
+       vars.OVH_CI_PR_ADMISSION == 'verified')
     runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     outputs:
@@ -365,7 +365,7 @@ jobs:
        (github.event_name == 'pull_request' &&
        !github.event.pull_request.draft &&
        github.event.pull_request.head.repo.full_name == github.repository &&
-       (!vars.OVH_CI_PR_ADMISSION || vars.OVH_CI_PR_ADMISSION == 'verified')))
+      vars.OVH_CI_PR_ADMISSION == 'verified'))
     runs-on: [self-hosted, Linux, X64, "${{ inputs.runner_label || 'veyyon' }}"]
     timeout-minutes: 15
     strategy:
