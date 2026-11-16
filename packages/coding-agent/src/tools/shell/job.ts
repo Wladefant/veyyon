@@ -151,6 +151,11 @@ export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails
 				continue;
 			}
 			if (existing.status !== "running") {
+				const ref = this.session.agentRegistry?.get(id);
+				if (ref && ref.kind === "sub" && (ref.session !== null || ref.status === "idle" || ref.status === "running")) {
+					cancelOutcomes.push(await this.#cancelAgent(id, ownerId));
+					continue;
+				}
 				cancelOutcomes.push({
 					id,
 					status: "already_completed",
