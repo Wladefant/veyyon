@@ -5,6 +5,12 @@
 ### Fixed
 
 - Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+- Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
 
 ## [1.10.1] - 2026-11-15
 
