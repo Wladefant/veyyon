@@ -147,15 +147,18 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		}
 	});
 
-	it("bounds BaseKernel.shutdown with a JS-side deadline when native waitForExit never resolves", async () => {
+	it("bounds BaseKernel.shutdown with a JS-side deadline and deduplicates native waitForExit per PID across retries", async () => {
 		vi.useFakeTimers();
-		const neverResolves = Promise.withResolvers<boolean>().promise;
-		let allowRecovery = false;
+		const pendingWait = Promise.withResolvers<boolean>();
+		let waitForExitCalls = 0;
 		const ownedProcess = {
 			pid: 424242,
 			children: () => [],
 			killTree: () => {},
-			waitForExit: () => (allowRecovery ? Promise.resolve(true) : neverResolves),
+			waitForExit: () => {
+				waitForExitCalls += 1;
+				return pendingWait.promise;
+			},
 		} as unknown as Process;
 
 		const kernel = new TestKernel("native-hang", 20);
@@ -173,6 +176,7 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		expect(firstResult).toEqual({ confirmed: false });
 		expect(await first).toEqual({ confirmed: false });
 		expect(kernel.isAlive()).toBe(false);
+		expect(waitForExitCalls).toBe(1);
 
 		let secondResult: KernelShutdownResult | undefined;
 		const second = kernel.shutdown({ timeoutMs: 20 }).then(res => {
@@ -184,8 +188,9 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		await flushMicrotasks();
 		expect(secondResult).toEqual({ confirmed: false });
 		expect(await second).toEqual({ confirmed: false });
+		expect(waitForExitCalls).toBe(1);
 
-		allowRecovery = true;
+		pendingWait.resolve(true);
 		const recovered = await kernel.shutdown({ timeoutMs: 20 });
 		expect(recovered).toEqual({ confirmed: true });
 	});
@@ -429,6 +434,61 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		expect(joinedSession).toBe(session);
 		expect(joinedSession.kernel).toBe(replacement);
 		expect(original.isAlive()).toBe(false);
+		expect([...session.ownerIds]).toEqual(["owner-a", "owner-b"]);
+	});
+
+	it("allows initiating replacement caller to abort during shutdown or startup without failing other active owners", async () => {
+		const shutdownGate = Promise.withResolvers<KernelShutdownResult>();
+		const shutdownStarted = Promise.withResolvers<void>();
+		const startGate = Promise.withResolvers<void>();
+		const startEntered = Promise.withResolvers<void>();
+		const original = new GatedKernel("orig-initiator");
+		original.alive = false;
+		original.shutdownGate = shutdownGate.promise;
+		original.onShutdownStart = () => shutdownStarted.resolve();
+
+		const replacement = new GatedKernel("replacement-initiator");
+		let starts = 0;
+		const receivedStartOptions: Array<{ signal?: AbortSignal; deadlineMs?: number }> = [];
+		const pool = new KernelSessionPool<KernelExecutorBaseOptions, GatedKernel>({
+			languageName: "Python",
+			logLabel: "replace-initiator-cancel-test",
+			startKernel: async (_cwd, opts) => {
+				starts += 1;
+				if (starts === 1) return original;
+				receivedStartOptions.push({ signal: opts.signal, deadlineMs: opts.deadlineMs });
+				startEntered.resolve();
+				await startGate.promise;
+				return replacement;
+			},
+		});
+		disposers.push(async () => {
+			shutdownGate.resolve({ confirmed: true });
+			startGate.resolve();
+			await pool.disposeAll();
+		});
+
+		const session = await pool.acquireSession(KEY, "session", CWD, { kernelOwnerId: "owner-a" });
+		const abortA = new AbortController();
+		const replaceA = pool.replaceSessionKernel(session, CWD, {
+			kernelOwnerId: "owner-a",
+			signal: abortA.signal,
+			deadlineMs: Date.now() + 50,
+		});
+		await shutdownStarted.promise;
+
+		const joinB = pool.acquireSession(KEY, "session", CWD, { kernelOwnerId: "owner-b" });
+		abortA.abort(new Error("initiator-a cancelled during shutdown"));
+		await expect(replaceA).rejects.toThrow(KernelExecutionCancelledError);
+
+		shutdownGate.resolve({ confirmed: true });
+		await startEntered.promise;
+		expect(receivedStartOptions).toEqual([{ signal: undefined, deadlineMs: undefined }]);
+
+		startGate.resolve();
+		const joinedSession = await joinB;
+		expect(joinedSession).toBe(session);
+		expect(joinedSession.kernel).toBe(replacement);
 		expect([...session.ownerIds]).toEqual(["owner-a", "owner-b"]);
 	});
 

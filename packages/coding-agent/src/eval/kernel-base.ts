@@ -650,6 +650,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#stopReason: string | undefined;
 	#exitedPromise: Promise<number> | null = null;
 	#shutdownPromise: Promise<KernelShutdownResult> | null = null;
+	readonly #pendingTreeExitWaits = new Map<number, Promise<boolean>>();
 	#ownedProcess: Process | null | undefined;
 	readonly #ownedTree = new Map<number, Process>();
 	#pending = new Map<string, PendingExecution>();
@@ -908,7 +909,20 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			let treeTimeout: NodeJS.Timeout | undefined;
 			try {
 				const exits = await Promise.race([
-					Promise.all([...this.#ownedTree.values()].map(owned => owned.waitForExit({ timeoutMs }))),
+					Promise.all(
+						[...this.#ownedTree.values()].map(owned => {
+							let wait = this.#pendingTreeExitWaits.get(owned.pid);
+							if (!wait) {
+								wait = Promise.resolve(owned.waitForExit({ timeoutMs })).finally(() => {
+									if (this.#pendingTreeExitWaits.get(owned.pid) === wait) {
+										this.#pendingTreeExitWaits.delete(owned.pid);
+									}
+								});
+								this.#pendingTreeExitWaits.set(owned.pid, wait);
+							}
+							return wait;
+						}),
+					),
 					new Promise<null>(resolve => {
 						treeTimeout = setTimeout(() => resolve(null), Math.max(0, timeoutMs));
 						treeTimeout.unref();

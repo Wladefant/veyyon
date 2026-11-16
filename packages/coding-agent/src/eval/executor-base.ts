@@ -931,12 +931,15 @@ export class KernelSessionPool<
 		this.#retiring.add(session);
 		const replacing = (async () => {
 			if (this.#failedStartups.has(session.sessionKey)) await this.#confirmFailedStartupShutdown(session.sessionKey);
-			await this.#confirmShutdown(session, getRemainingTimeoutMs(options.deadlineMs));
+			await this.#confirmShutdown(session);
 			if (!this.hasSession(session.sessionKey, session)) throw new this.#cancelledErrorClass(false);
-			requireRemainingTimeoutMs(options.deadlineMs, this.#cancelledErrorClass);
 			let nextKernel: TKernel;
 			try {
-				nextKernel = await this.#options.startKernel(cwd, options);
+				nextKernel = await this.#options.startKernel(cwd, {
+					...options,
+					signal: undefined,
+					deadlineMs: undefined,
+				});
 			} catch (error) {
 				throw this.#retainFailedStartup(error, session.sessionKey, session.sessionId, cwd, session);
 			}
