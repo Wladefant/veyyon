@@ -156,10 +156,10 @@ describe("real dispatcher follows chunksAtOnce policy", () => {
 		return { plan, parallelCalls, sequenceCalls };
 	}
 
-	it("keeps singleton, UI, and multi-bucket CI modes at width 1 even with JUnit and VEYYON_TEST_CONCURRENCY=all", async () => {
+	it("keeps singleton and multi-bucket CI modes at width 1 even with JUnit and VEYYON_TEST_CONCURRENCY=all", async () => {
 		Bun.env.VEYYON_TEST_CONCURRENCY = "all";
 
-		for (const mode of ["coding-agent-singleton", "coding-agent-ui", "coding-agent-heavy", "all"] as const) {
+		for (const mode of ["coding-agent-singleton", "coding-agent-heavy", "all"] as const) {
 			const ordinary = await runDispatch({ mode, ci: true, commandCount: 6 });
 			expect(ordinary.plan).toEqual({ runner: "sequence", concurrency: 1 });
 			expect(ordinary.sequenceCalls).toEqual([6]);
@@ -170,6 +170,25 @@ describe("real dispatcher follows chunksAtOnce policy", () => {
 			expect(junit.parallelCalls).toEqual([{ count: 6, concurrency: 1 }]);
 			expect(junit.sequenceCalls).toEqual([]);
 		}
+	});
+
+	it("dispatches CI UI bucket at width 2 in both ordinary and JUnit execution even with VEYYON_TEST_CONCURRENCY=all", async () => {
+		Bun.env.VEYYON_TEST_CONCURRENCY = "all";
+
+		const ordinary = await runDispatch({ mode: "coding-agent-ui", ci: true, commandCount: 6 });
+		expect(ordinary.plan).toEqual({ runner: "parallel", concurrency: 2 });
+		expect(ordinary.parallelCalls).toEqual([{ count: 6, concurrency: 2 }]);
+		expect(ordinary.sequenceCalls).toEqual([]);
+
+		const junit = await runDispatch({
+			mode: "coding-agent-ui",
+			ci: true,
+			commandCount: 6,
+			junitReportDir: "/tmp/junit",
+		});
+		expect(junit.plan).toEqual({ runner: "parallel", concurrency: 2 });
+		expect(junit.parallelCalls).toEqual([{ count: 6, concurrency: 2 }]);
+		expect(junit.sequenceCalls).toEqual([]);
 	});
 
 	it("dispatches CI runtime and native buckets at width 3 in both ordinary and JUnit execution", async () => {
