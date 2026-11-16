@@ -705,6 +705,23 @@ process.stdout.write(JSON.stringify({ id1, id2, elapsedMs }));
 `;
 		const fastScriptPath = path.join(dir, "fast_allocator_worker.ts");
 		await fs.writeFile(fastScriptPath, fastWorkerScript, "utf8");
+		const runProcess = <T>(scriptPath: string, args: string[]): Promise<T> => {
+			const { promise, resolve, reject } = Promise.withResolvers<T>();
+			const proc = spawn("bun", ["run", scriptPath, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+			let stdout = "";
+			let stderr = "";
+			proc.stdout.on("data", chunk => {
+				stdout += chunk;
+			});
+			proc.stderr.on("data", chunk => {
+				stderr += chunk;
+			});
+			proc.on("close", code => {
+				if (code === 0) resolve(JSON.parse(stdout) as T);
+				else reject(new Error(`Worker ${scriptPath} exited ${code}: ${stderr}`));
+			});
+			return promise;
+		};
 
 		const slowPromise = runProcess<number>(slowScriptPath, [dir, slowScanStartedPath]);
 
