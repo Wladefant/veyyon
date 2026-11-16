@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Removed an unused finish helper in the eval base executor and narrowed OVH shard planner test assertions ([PR #1052](https://github.com/Wladefant/veyyon/pull/1052)).
+- Removed an unused `finish` helper in the eval base executor ([PR #1052](https://github.com/Wladefant/veyyon/pull/1052)).
 
 ## [1.10.5] - 2026-11-16
 
