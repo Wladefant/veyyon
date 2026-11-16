@@ -353,6 +353,22 @@ export function getLastAssistantUsage(entries: SessionEntry[]): Usage | undefine
 }
 
 /**
+ * Newest non-aborted assistant usage recorded after `afterIndex`. A usage
+ * anchor at or before the active compaction measured the pre-compaction prompt
+ * and no longer describes the current conversation window.
+ */
+function getLastAssistantUsageAfter(entries: SessionEntry[], afterIndex: number): Usage | undefined {
+	for (let i = entries.length - 1; i > afterIndex; i--) {
+		const entry = entries[i];
+		if (entry.type === "message") {
+			const usage = getAssistantUsage(entry.message);
+			if (usage) return usage;
+		}
+	}
+	return undefined;
+}
+
+/**
  * Context tokens to feed the compaction decision, floored by a local estimate of
  * the stored conversation.
  *
@@ -2476,6 +2492,56 @@ function scaleKeepRecentTokens(
 }
 
 /**
+ * The newest compaction entry that `buildSessionContext` emitted into the prompt, and the tokens it
+ * contributes. A remote compaction entry's `summary` is empty and its entire replacement window lives
+ * on `providerPayload` (`openaiResponsesHistory`), often 50k–90k tokens; omitting it from the
+ * denominator of `scaleKeepRecentTokens` blamed that window on tokenizer undershoot of the entries in
+ * `[boundaryStart, boundaryEnd)` and cut `keepRecentTokens` to a fraction of the configured floor.
+ */
+function activeCompactionPromptEstimate(
+	pathEntries: SessionEntry[],
+	windowIndices: readonly number[],
+	prevCompactionIndex: number,
+	prevCompaction: CompactionEntry | undefined,
+): { activeCompactionIndex: number; tokens: number } {
+	for (const index of windowIndices) {
+		const entry = pathEntries[index];
+		if (entry?.type !== "compaction") continue;
+		const payload = remoteCompactionProviderPayload(entry.preserveData);
+		if (payload) {
+			return {
+				activeCompactionIndex: index,
+				tokens: estimateTokens(
+					createCompactionSummaryMessage(
+						entry.summary,
+						entry.tokensBefore,
+						entry.timestamp,
+						entry.shortSummary,
+						payload,
+					),
+				),
+			};
+		}
+	}
+	if (!prevCompaction) return { activeCompactionIndex: -1, tokens: 0 };
+	const archiveText = legacyArchiveSourceText(prevCompaction.preserveData);
+	return {
+		activeCompactionIndex: prevCompactionIndex,
+		tokens: estimateTokens(
+			createCompactionSummaryMessage(
+				prevCompaction.summary,
+				prevCompaction.tokensBefore,
+				prevCompaction.timestamp,
+				prevCompaction.shortSummary,
+				undefined,
+				undefined,
+				archiveText ? [{ type: "text", text: archiveText }] : undefined,
+			),
+		),
+	};
+}
+
+/**
  * The id of the first entry a cut at `firstKeptEntryIndex` keeps; undefined when that entry has no id
  * and the session needs migration. A cut at `boundaryEnd` keeps nothing: the summary replaces the whole
  * range, which is the only way to free anything when the range is one unbreakable oversized turn. The
@@ -2535,19 +2601,26 @@ export function prepareCompaction(
 	const lastUsage = getLastAssistantUsage(pathEntries);
 	const tokensBefore = lastUsage ? calculateContextTokens(lastUsage) : 0;
 	const cappedKeepRecentTokens = capKeepRecentTokens(settings, options);
-	const keepRecentTokens = lastUsage
+	const activeCompaction = activeCompactionPromptEstimate(
+		pathEntries,
+		windowIndices,
+		prevCompactionIndex,
+		prevCompaction,
+	);
+	const promptUsage = getLastAssistantUsageAfter(pathEntries, activeCompaction.activeCompactionIndex);
+	const excluded = options?.excludedCustomMessageTypes;
+	const keepRecentTokens = promptUsage
 		? scaleKeepRecentTokens(
 				cappedKeepRecentTokens,
-				lastUsage,
+				promptUsage,
 				options?.nonMessageTokens,
-				estimateEntriesTokens(pathEntries, boundaryStart, boundaryEnd),
+				activeCompaction.tokens + estimateEntriesTokens(pathEntries, boundaryStart, boundaryEnd, excluded),
 			)
 		: cappedKeepRecentTokens;
 
 	// The turn a mid-turn cut splits may have opened behind the newest window,
 	// and the local pass reads back to the summary's kept boundary, so the turn
 	// opening is searched for from there.
-	const excluded = options?.excludedCustomMessageTypes;
 	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, keepRecentTokens, summaryStart, excluded);
 
 	const firstKeptEntryId = firstKeptEntryIdAt(pathEntries, cutPoint.firstKeptEntryIndex, boundaryEnd);

@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,14 +50,19 @@ function fixture(): Fixture {
 	const target = join(toolCache, "veyyon-cargo", "runner-one");
 	const buildLog = join(dir, "build.log");
 	const output = join(dir, "github-output");
+	const relatedTests = join(dir, "related-tests");
+	writeFileSync(relatedTests, "selected.test.ts\n");
 	const fakeBun = join(bin, "bun");
-	writeFileSync(fakeBun, [
-		"#!/bin/sh",
-		'printf "%s\\n" "$*" >> "$BUILD_LOG"',
-		'if [ "$1" = run ]; then exit "${BUILD_EXIT:-0}"; fi',
-		'if [ "$1" = -e ]; then exit "${VERIFY_EXIT:-0}"; fi',
-		"exit 91",
-	].join("\n") + "\n");
+	writeFileSync(
+		fakeBun,
+		[
+			"#!/bin/sh",
+			'printf "%s\\n" "$*" >> "$BUILD_LOG"',
+			'if [ "$1" = run ]; then exit "${BUILD_EXIT:-0}"; fi',
+			'if [ "$1" = -e ]; then exit "${VERIFY_EXIT:-0}"; fi',
+			"exit 91",
+		].join("\n") + "\n",
+	);
 	chmodSync(fakeBun, 0o755);
 	const nativeDir = join(workspace, "natives/bridge/bindings/native");
 	mkdirSync(nativeDir, { recursive: true });
@@ -69,7 +83,7 @@ function fixture(): Fixture {
 			GITHUB_WORKSPACE: workspace,
 			RUNNER_TEMP: runnerTemp,
 			CARGO_TARGET_DIR: target,
-			RELATED_TESTS: "selected.test.ts",
+			RELATED_TESTS: relatedTests,
 			NATIVE_INPUT: "false",
 			GITHUB_OUTPUT: output,
 			BUILD_LOG: buildLog,
@@ -134,11 +148,12 @@ describe("OVH native cache behavior", () => {
 		for (const invalid of ["empty-root", "missing-root", "runner-name"] as const) {
 			const f = fixture();
 			const sentinel = makeSentinel(f);
-			const invalidEnv = invalid === "empty-root"
-				? { RUNNER_TOOL_CACHE: "" }
-				: invalid === "missing-root"
-					? { RUNNER_TOOL_CACHE: join(f.dir, "missing-tool-cache") }
-					: { RUNNER_NAME: "../runner" };
+			const invalidEnv =
+				invalid === "empty-root"
+					? { RUNNER_TOOL_CACHE: "" }
+					: invalid === "missing-root"
+						? { RUNNER_TOOL_CACHE: join(f.dir, "missing-tool-cache") }
+						: { RUNNER_NAME: "../runner" };
 			const result = runStep(f, { ...f.env, ...invalidEnv });
 
 			expect(result.status).not.toBe(0);
@@ -192,7 +207,6 @@ describe("OVH native cache behavior", () => {
 			holder.stdin!.end();
 			await once(holder, "exit");
 		}
-
 	});
 
 	linuxIt("retains the compiler failure status after final disk logging", () => {
