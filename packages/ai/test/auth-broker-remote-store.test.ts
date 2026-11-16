@@ -3199,6 +3199,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 			const id = initial.snapshot.credentials[0]!.id;
 			const streamReady = Promise.withResolvers<void>();
 			const peerEntryFrame = Promise.withResolvers<SnapshotResponse>();
+			const peerEntryConsumed = Promise.withResolvers<void>();
 			spyOn(client, "openSnapshotStream").mockImplementation(async function* (opts = {}) {
 				yield { kind: "snapshot" as const, ...initial.snapshot };
 				streamReady.resolve();
@@ -3209,6 +3210,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 					kind: "entry" as const, generation: next.generation, serverNowMs: next.serverNowMs,
 					refresher: next.refresher, entry,
 				};
+				peerEntryConsumed.resolve();
 				await untilAborted(opts.signal);
 			});
 			const realFetch = client.fetchSnapshot.bind(client);
@@ -3250,9 +3252,7 @@ describe("RemoteAuthCredentialStore SSE integration", () => {
 				if (olderSnapshot.status !== 200) throw new Error("expected older broker state");
 				if (incoming === "SSE") {
 					peerEntryFrame.resolve(olderSnapshot.snapshot);
-					await waitUntil(() =>
-						remote!.getCredentialBlock(id, "anthropic", "credential") === newerUntilMs
-					);
+					await peerEntryConsumed.promise;
 				} else {
 					await remote.refreshSnapshot();
 				}
