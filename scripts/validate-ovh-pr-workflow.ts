@@ -257,6 +257,7 @@ function validate(workflow: Workflow): void {
 				evaluate(cleanup?.env?.WORKFLOW_SHA, context({ event: "workflow_dispatch", target: head })),
 				workflowCommit,
 			);
+			equal(evaluate(cleanup?.env?.WORKFLOW_SHA, context({ event: "pull_request" })), head);
 			if (typeof cleanup?.run !== "string") throw new Error("Cleanup command missing");
 			const sandbox = mkdtempSync(join(tmpdir(), "veyyon-ovh-reaper-"));
 			try {
