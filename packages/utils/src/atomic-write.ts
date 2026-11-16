@@ -378,7 +378,8 @@ function isDirectoryFsyncUnsupported(error: unknown): boolean {
 	return process.platform === "win32" && (error.code === "EACCES" || error.code === "EPERM");
 }
 
-async function fsyncDirEntry(dir: string): Promise<void> {
+/** Flush directory-entry metadata when the platform supports directory handles. */
+export async function fsyncDirEntry(dir: string): Promise<void> {
 	let dirHandle: fsp.FileHandle;
 	try {
 		dirHandle = await fsp.open(dir, "r");
@@ -653,7 +654,8 @@ function renameTempOverTargetSync(tmpPath: string, target: string, requireAtomic
 	removeTempSync(backupPath);
 }
 
-function fsyncDirEntrySync(dir: string): void {
+/** Synchronous twin of {@link fsyncDirEntry}. */
+export function fsyncDirEntrySync(dir: string): void {
 	let dirFd: number;
 	try {
 		dirFd = fs.openSync(dir, "r");

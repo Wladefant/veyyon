@@ -2,17 +2,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, setDefaultTimeout
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { executeWithKernelBase } from "@veyyon/coding-agent/eval/executor-base";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import { executeJs, type JsResult } from "@veyyon/coding-agent/eval/js/executor";
+import { executeWithKernelBase } from "@veyyon/coding-agent/eval/executor-base";
 import type { KernelExecuteOptions, KernelExecutor } from "@veyyon/coding-agent/eval/kernel-base";
+import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { TempDir } from "@veyyon/utils";
-import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
 import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
-import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
-
 useIsolatedAgentDir();
 
 // JS eval cold-starts a Bun worker; under --isolate + high CI concurrency that startup
@@ -371,6 +369,7 @@ describe("executeJs", () => {
 	});
 
 	it("delegates URI reads through the read tool with positional slicing", async () => {
+		const controller = new AbortController();
 		const execute = vi.fn(async (_toolCallId: string, args: unknown): Promise<AgentToolResult> => {
 			const record = args as { path: string };
 			return { content: [{ type: "text", text: record.path.endsWith(":1-1400") ? "wide" : "limited" }] };
@@ -390,6 +389,7 @@ describe("executeJs", () => {
 				sessionId,
 				session: toolSession,
 				sessionFile,
+				signal: controller.signal,
 			},
 		);
 
@@ -404,16 +404,16 @@ describe("executeJs", () => {
 		expect(execute).toHaveBeenNthCalledWith(
 			1,
 			expect.stringMatching(/^js-read-/),
-			{ path: "artifact://15:raw:1-1400", [INTENT_FIELD]: "js prelude" },
-			expect.any(AbortSignal),
+			{ path: "artifact://15:raw:1-1400" },
+			controller.signal,
 			undefined,
 			undefined,
 		);
 		expect(execute).toHaveBeenNthCalledWith(
 			2,
 			expect.stringMatching(/^js-read-/),
-			{ path: "artifact://15:raw:1-2", [INTENT_FIELD]: "js prelude" },
-			expect.any(AbortSignal),
+			{ path: "artifact://15:raw:1-2" },
+			controller.signal,
 			undefined,
 			undefined,
 		);
@@ -465,8 +465,8 @@ describe("executeJs", () => {
 			agentOutput: "from-agent",
 		});
 		expect(execute).toHaveBeenCalledTimes(2);
-		expect(execute.mock.calls[0]?.[1]).toEqual({ path: "package.json", [INTENT_FIELD]: "js prelude" });
-		expect(execute.mock.calls[1]?.[1]).toEqual({ path: "agent://agent-42", [INTENT_FIELD]: "js prelude" });
+		expect(execute.mock.calls[0]?.[1]).toEqual({ path: "package.json" });
+		expect(execute.mock.calls[1]?.[1]).toEqual({ path: "agent://agent-42" });
 	});
 
 	it("auto-displays the final awaited expression result", async () => {
@@ -548,8 +548,10 @@ describe("executeJs", () => {
 	it("streams real OutputSink chunks and dumps without credential text", async () => {
 		const credential = "synthetic-output-credential";
 		const chunks: string[] = [];
-		const result = await runKernelDisplay(null, `api_key=${credential}\nstatus: ready\n`, chunk =>
-			chunks.push(chunk),
+		const result = await runKernelDisplay(
+			null,
+			`api_key=${credential}\nstatus: ready\n`,
+			chunk => chunks.push(chunk),
 		);
 
 		expect(chunks.join("")).toContain("status: ready");
@@ -558,11 +560,10 @@ describe("executeJs", () => {
 		expect(result.output).not.toContain(credential);
 	});
 	it("preserves the size diagnosis for aggregate JSON with individually short leaves", async () => {
-		const result = await executeJs(`return Array.from({ length: 1000 }, () => "x".repeat(70));`, {
-			sessionId,
-			session,
-			sessionFile,
-		});
+		const result = await executeJs(
+			`return Array.from({ length: 1000 }, () => "x".repeat(70));`,
+			{ sessionId, session, sessionFile },
+		);
 
 		expect(result.exitCode).toBe(0);
 		expect(getJsonData(result)).toBe("[line over 65,536 chars, not scanned]");
@@ -591,14 +592,14 @@ describe("executeJs", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.output.trim()).toBe("7");
 	});
-	it("states a final value structuredClone cannot copy as text, with its functions and symbols marked in place", async () => {
+	it("states a final value structuredClone cannot copy as an opaque type label", async () => {
 		const result = await executeJs("({ name: 'probe', run() { return 1; }, tag: Symbol('marker') });", {
 			sessionId,
 			session,
 			sessionFile,
 		});
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toBe('{\n  "name": "probe",\n  "run": "[Function: run]",\n  "tag": "Symbol(marker)"\n}\n');
+		expect(result.output).toBe("[object Object]\n");
 		expect(result.displayOutputs.filter(o => o.type === "json")).toHaveLength(0);
 	});
 

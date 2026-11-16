@@ -9,17 +9,23 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
+import { isAbortError } from "@veyyon/utils";
 
 const DEFAULT_PAGE_CHARACTERS = 8_000;
 const MAX_PAGE_CHARACTERS = 12_000;
-const MAX_RECORD_BYTES = 8 * 1024 * 1024;
-const MAX_INDEX_ENTRIES = 100_000;
-const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
+export const MAX_RECORD_BYTES = 8 * 1024 * 1024;
+export const MAX_INDEX_ENTRIES = 100_000;
+export const MAX_SCANNED_BYTES = 128 * 1024 * 1024;
+const RECORD_YIELD_INTERVAL = 256;
 // Unlike an isolated malformed line, a hard scan cap leaves unseen IDs behind.
 const SCAN_BOUND_EXCEEDED = Symbol("stored-history-scan-bound");
 const HARD_BOUND_DETAIL =
 	"Stored history exceeded the 128 MiB or 100,000-entry scan bound; branch identity and unique record IDs cannot be verified";
+const HARD_BOUND_DETAIL_LIVE =
+	"Active in-memory history exceeded the 128 MiB or 100,000-entry scan bound; branch identity and record IDs cannot be verified";
 const DUPLICATE_ID_DETAIL = "Duplicate stored entry ID makes branch identity and exact evidence ambiguous";
 
 function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
@@ -30,15 +36,36 @@ function decodeRecord(parts: Buffer[], bytes: number): string | undefined {
 	}
 }
 
+/** Positional reads keep both search passes on the caller-owned descriptor. */
+async function* descriptorChunks(handle: FileHandle, signal?: AbortSignal): AsyncGenerator<Buffer> {
+	let position = 0;
+	while (true) {
+		signal?.throwIfAborted();
+		const buffer = Buffer.allocUnsafe(64 * 1024);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+		signal?.throwIfAborted();
+		if (bytesRead === 0) return;
+		position += bytesRead;
+		yield buffer.subarray(0, bytesRead);
+	}
+}
+
 /** Discard an oversized line while streaming, before allocating its full text. */
-async function* storedLines(filePath: string): AsyncGenerator<string | undefined | typeof SCAN_BOUND_EXCEEDED> {
-	const input = createReadStream(filePath, { highWaterMark: 64 * 1024 });
+async function* storedLines(
+	filePath: string,
+	handle?: FileHandle,
+	signal?: AbortSignal,
+): AsyncGenerator<string | undefined | typeof SCAN_BOUND_EXCEEDED> {
+	signal?.throwIfAborted();
+	const stream = handle ? undefined : createReadStream(filePath, { highWaterMark: 64 * 1024, signal });
+	const input = handle ? descriptorChunks(handle, signal) : stream!;
 	let parts: Buffer[] = [];
 	let bytes = 0;
 	let oversized = false;
 	let scannedBytes = 0;
 	try {
 		for await (const chunk of input) {
+			signal?.throwIfAborted();
 			const buffer = chunk as Buffer;
 			scannedBytes += buffer.length;
 			if (scannedBytes > MAX_SCANNED_BYTES) {
@@ -59,6 +86,7 @@ async function* storedLines(filePath: string): AsyncGenerator<string | undefined
 					}
 				}
 				if (newline >= 0) {
+					signal?.throwIfAborted();
 					yield oversized ? undefined : decodeRecord(parts, bytes);
 					parts = [];
 					bytes = 0;
@@ -67,9 +95,10 @@ async function* storedLines(filePath: string): AsyncGenerator<string | undefined
 				start = newline < 0 ? buffer.length : newline + 1;
 			}
 		}
+		signal?.throwIfAborted();
 		if (oversized || bytes > 0) yield oversized ? undefined : decodeRecord(parts, bytes);
 	} finally {
-		input.destroy();
+		stream?.destroy();
 	}
 }
 
@@ -91,9 +120,13 @@ type StoredRecordResult =
 	| { kind: "metadata" }
 	| { kind: "invalid"; invalidIdentity: boolean };
 
-function hasDuplicateTopLevelKeys(raw: string): boolean {
+function scanTopLevelMembers(raw: string): { hasDuplicateKeys: boolean; sessionTypeMember: boolean } {
 	const keys = new Set<string>();
+	let hasDuplicateKeys = false;
+	let sessionTypeMember = false;
 	let depth = 0;
+	// JSON array string elements are never root-level object member names.
+	let arrayDepth = 0;
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
 		if (char === '"') {
@@ -105,45 +138,99 @@ function hasDuplicateTopLevelKeys(raw: string): boolean {
 				}
 				if (raw[i++] === '"') break;
 			}
-			if (depth === 1) {
+			// A root string *value* followed by malformed `:` is not a member key.
+			// The full JSON parser still rejects the row; do not invent a duplicate
+			// ID or session boundary from a value that happens to spell "id"/"type".
+			let previous = start - 1;
+			while (previous >= 0 && /\s/.test(raw[previous]!)) previous--;
+			if (depth === 1 && arrayDepth === 0 && raw[previous] !== ":") {
 				let next = i;
 				while (/\s/.test(raw[next] ?? "")) next++;
 				if (raw[next] === ":") {
-					const key = JSON.parse(raw.slice(start, i)) as string;
-					if (keys.has(key)) return true;
-					keys.add(key);
+					let key: string;
+					try {
+						key = JSON.parse(raw.slice(start, i)) as string;
+					} catch {
+						// A malformed member name must not hide a later session type.
+						// The complete record will still fail JSON.parse below.
+						continue;
+					}
+					if (keys.has(key)) hasDuplicateKeys = true;
+					else keys.add(key);
+					if (key === "type") {
+						let valueCursor = next + 1;
+						while (/\s/.test(raw[valueCursor] ?? "")) valueCursor++;
+						if (raw[valueCursor] === '"') {
+							const valueStart = valueCursor++;
+							while (valueCursor < raw.length) {
+								if (raw[valueCursor] === "\\") {
+									valueCursor += 2;
+									continue;
+								}
+								if (raw[valueCursor++] === '"') break;
+							}
+							if (raw[valueCursor - 1] === '"') {
+								try {
+									const member = JSON.parse(raw.slice(valueStart, valueCursor)) as unknown;
+									if (member === "session") sessionTypeMember = true;
+								} catch {
+									// An invalid string member cannot establish a session boundary.
+								}
+							}
+						}
+					}
 				}
 			}
 			continue;
 		}
 		if (char === "{") depth++;
 		else if (char === "}") depth--;
+		else if (char === "[") arrayDepth++;
+		else if (char === "]") arrayDepth = Math.max(0, arrayDepth - 1);
 		i++;
 	}
-	return false;
+	return { hasDuplicateKeys, sessionTypeMember };
+}
+
+function invalidStoredRecord(state: StoredAdmissionState, sessionTypeMember = false): StoredRecordResult {
+	if (!state.headerSeen || sessionTypeMember) {
+		state.invalidIdentity = true;
+		state.sessionId = undefined;
+	}
+	return { kind: "invalid", invalidIdentity: state.invalidIdentity };
 }
 
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
+	let sessionTypeMember = false;
 	try {
-		if (hasDuplicateTopLevelKeys(raw)) return { kind: "invalid", invalidIdentity: false };
+		const scanned = scanTopLevelMembers(raw);
+		sessionTypeMember = scanned.sessionTypeMember;
+		if (scanned.hasDuplicateKeys) return invalidStoredRecord(state, sessionTypeMember);
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		return invalidStoredRecord(state, sessionTypeMember);
 	}
 	let value: unknown;
 	try {
 		value = JSON.parse(raw);
 	} catch {
-		return { kind: "invalid", invalidIdentity: false };
+		return invalidStoredRecord(state, sessionTypeMember);
 	}
-	if (!value || typeof value !== "object" || Array.isArray(value)) return { kind: "invalid", invalidIdentity: false };
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return invalidStoredRecord(state, sessionTypeMember);
 	const entry = value as StoredEntryShape;
 	if (entry.type === "session") {
 		if (state.headerSeen || state.entrySeen) {
 			state.invalidIdentity = true;
+			state.sessionId = undefined;
+			return { kind: "invalid", invalidIdentity: true };
 		} else if (typeof entry.id !== "string") {
-			return { kind: "invalid", invalidIdentity: false };
+			state.invalidIdentity = true;
+			state.sessionId = undefined;
+			return invalidStoredRecord(state, true);
 		} else if (!entry.id.trim()) {
 			state.invalidIdentity = true;
+			state.sessionId = undefined;
+			return { kind: "invalid", invalidIdentity: true };
 		} else {
 			state.headerSeen = true;
 			state.sessionId = entry.id;
@@ -158,6 +245,7 @@ function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRec
 	}
 	if (!state.headerSeen) {
 		state.invalidIdentity = true;
+		state.sessionId = undefined;
 		return { kind: "invalid", invalidIdentity: true };
 	}
 	if (!isStoredEntry(entry)) return { kind: "invalid", invalidIdentity: state.invalidIdentity };
@@ -328,7 +416,12 @@ function selectedBranchIds(parents: ReadonlyMap<string, string | undefined>, lea
 export async function readStoredHistoryEntry(
 	filePath: string,
 	request: ExactHistoryRequest,
+	handleOrSignal?: FileHandle | AbortSignal,
+	maybeSignal?: AbortSignal,
 ): Promise<ExactHistoryResult> {
+	const handle = handleOrSignal && "read" in handleOrSignal ? handleOrSignal : undefined;
+	const signal = handleOrSignal instanceof AbortSignal ? handleOrSignal : maybeSignal;
+	signal?.throwIfAborted();
 	const parents = new Map<string, string | undefined>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
@@ -341,9 +434,17 @@ export async function readStoredHistoryEntry(
 	let raw: string | undefined;
 	let recordType: string | undefined;
 	let incomplete = false;
-	let startedJsonl = false;
+	let initialPlainTitle = false;
+	let initialTitleSeparated = false;
+	let recordCount = 0;
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, handle, signal)) {
+			signal?.throwIfAborted();
+			recordCount++;
+			if (recordCount % RECORD_YIELD_INTERVAL === 0) {
+				await yieldToEventLoop();
+				signal?.throwIfAborted();
+			}
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -355,15 +456,40 @@ export async function readStoredHistoryEntry(
 			}
 			if (line === undefined) {
 				incomplete = true;
+				if (!admission.headerSeen) {
+					admission.invalidIdentity = true;
+					admission.sessionId = undefined;
+				}
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (startedJsonl && line.trim().length > 0) incomplete = true;
+				const trimmed = line.trim();
+				if (!admission.headerSeen && !admission.entrySeen && trimmed.length > 0) {
+					if (initialPlainTitle || trimmed.startsWith("[") || trimmed.startsWith('"')) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+						incomplete = true;
+					} else {
+						initialPlainTitle = true;
+					}
+				} else if (trimmed.length > 0) {
+					incomplete = true;
+					if (!admission.headerSeen) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+					}
+				} else if (initialPlainTitle) {
+					initialTitleSeparated = true;
+				}
 				continue;
 			}
-			startedJsonl = true;
+			if (initialPlainTitle && !initialTitleSeparated) {
+				admission.invalidIdentity = true;
+				admission.sessionId = undefined;
+			}
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
+			if (admission.invalidIdentity) sessionId = undefined;
 			if (decoded.kind === "invalid") {
 				incomplete = true;
 				continue;
@@ -400,6 +526,7 @@ export async function readStoredHistoryEntry(
 			}
 		}
 	} catch (error) {
+		if (signal?.aborted || isAbortError(error)) throw error;
 		if (!isFileReadError(error)) throw error;
 		return {
 			status: "unavailable",
@@ -412,7 +539,7 @@ export async function readStoredHistoryEntry(
 		return {
 			status: "unavailable",
 			entryId: request.entryId,
-			sessionId,
+			sessionId: undefined,
 			source: "stored-jsonl",
 			detail: "Stored session identity is missing or ambiguous",
 		};
@@ -468,18 +595,128 @@ export async function readStoredHistoryEntry(
 }
 
 /** For intentionally non-persistent sessions only; loaded sessions use the disk source. */
-export function readLiveHistoryEntry(
+const MAX_TRAVERSAL_NODES = 100_000;
+
+type TraversalFrame =
+	| { kind: "array"; array: readonly unknown[]; index: number; target: object }
+	| { kind: "object"; keys: readonly string[]; obj: Record<string, unknown>; index: number; target: object };
+
+/** For intentionally non-persistent sessions only; loaded sessions use the disk source. */
+async function measureEntryBytesBounded(
+	root: unknown,
+	maxBytes: number,
+	signal?: AbortSignal,
+): Promise<number | undefined> {
+	if (root === undefined) return 0;
+	signal?.throwIfAborted();
+
+	let bytes = 0;
+	let nodeCount = 0;
+	const ancestors = new Set<object>();
+	const frames: TraversalFrame[] = [];
+
+	let current: unknown = root;
+	let hasCurrent = true;
+
+	while (hasCurrent || frames.length > 0) {
+		nodeCount++;
+		if (nodeCount > MAX_TRAVERSAL_NODES) {
+			return undefined;
+		}
+		if ((nodeCount & 255) === 0) {
+			await yieldToEventLoop();
+			signal?.throwIfAborted();
+		}
+
+		let item: unknown;
+		if (hasCurrent) {
+			item = current;
+			hasCurrent = false;
+		} else {
+			const top = frames[frames.length - 1]!;
+			if (top.kind === "array") {
+				if (top.index < top.array.length) {
+					item = top.array[top.index++];
+					bytes += 1;
+				} else {
+					ancestors.delete(top.target);
+					frames.pop();
+					bytes += 1;
+					continue;
+				}
+			} else {
+				if (top.index < top.keys.length) {
+					const key = top.keys[top.index++]!;
+					bytes += key.length + 3;
+					item = top.obj[key];
+					bytes += 1;
+				} else {
+					ancestors.delete(top.target);
+					frames.pop();
+					bytes += 1;
+					continue;
+				}
+			}
+		}
+
+		if (item === null || typeof item === "boolean" || typeof item === "number") {
+			bytes += 8;
+		} else if (typeof item === "string") {
+			bytes += item.length + 2;
+		} else if (typeof item === "object") {
+			if (ancestors.has(item)) {
+				return undefined;
+			}
+			ancestors.add(item);
+			if (Array.isArray(item)) {
+				bytes += 2;
+				frames.push({ kind: "array", array: item, index: 0, target: item });
+			} else {
+				bytes += 2;
+				const record = item as Record<string, unknown>;
+				frames.push({ kind: "object", keys: Object.keys(record), obj: record, index: 0, target: item });
+			}
+		}
+
+		if (bytes > maxBytes) {
+			return undefined;
+		}
+	}
+
+	return bytes;
+}
+
+/** For intentionally non-persistent sessions only; loaded sessions use the disk source. */
+export async function readLiveHistoryEntry(
 	branch: readonly SessionEntry[],
 	request: ExactHistoryRequest,
 	sessionId?: string,
-): ExactHistoryResult {
+	signal?: AbortSignal,
+): Promise<ExactHistoryResult> {
+	signal?.throwIfAborted();
+	const leafId = request.leafId ?? (branch.length > 0 ? branch[branch.length - 1]?.id : undefined);
+
+	if (branch.length > MAX_INDEX_ENTRIES) {
+		return {
+			status: "unavailable",
+			entryId: request.entryId,
+			leafId,
+			sessionId,
+			source: "live-session",
+			detail: HARD_BOUND_DETAIL_LIVE,
+		};
+	}
+
+	await yieldToEventLoop();
+	signal?.throwIfAborted();
+
 	const leafIndex =
 		request.leafId === null
 			? -1
 			: request.leafId
 				? branch.findIndex(entry => entry.id === request.leafId)
 				: branch.length - 1;
-	const leafId = leafIndex >= 0 ? branch[leafIndex]?.id : (request.leafId ?? undefined);
+
 	const index = branch.findIndex(entry => entry.id === request.entryId);
 	if (index < 0 || leafIndex < 0) {
 		return {
@@ -502,7 +739,30 @@ export function readLiveHistoryEntry(
 		};
 	}
 	const entry = branch[index]!;
-	return page(JSON.stringify(entry), request, leafId!, "live-session", entry.type, sessionId);
+	const estimated = await measureEntryBytesBounded(entry, MAX_RECORD_BYTES, signal);
+	if (estimated === undefined) {
+		return {
+			status: "unavailable",
+			entryId: request.entryId,
+			leafId: leafId!,
+			sessionId,
+			source: "live-session",
+			detail: "Active in-memory entry exceeds the 8 MiB record limit and cannot be read",
+		};
+	}
+	signal?.throwIfAborted();
+	const raw = JSON.stringify(entry);
+	if (Buffer.byteLength(raw, "utf8") > MAX_RECORD_BYTES) {
+		return {
+			status: "unavailable",
+			entryId: request.entryId,
+			leafId: leafId!,
+			sessionId,
+			source: "live-session",
+			detail: "Active in-memory entry exceeds the 8 MiB record limit and cannot be read",
+		};
+	}
+	return page(raw, request, leafId!, "live-session", entry.type, sessionId);
 }
 
 /** A bounded raw-record text search that discovers IDs for exact reads. */
@@ -581,7 +841,12 @@ function previewAt(raw: string, term: string): string {
 export async function searchStoredHistoryEntries(
 	filePath: string,
 	request: HistorySearchRequest,
+	handleOrSignal?: FileHandle | AbortSignal,
+	maybeSignal?: AbortSignal,
 ): Promise<HistorySearchResult> {
+	const handle = handleOrSignal && "read" in handleOrSignal ? handleOrSignal : undefined;
+	const signal = handleOrSignal instanceof AbortSignal ? handleOrSignal : maybeSignal;
+	signal?.throwIfAborted();
 	const parents = new Map<string, string | undefined>();
 	const admission: StoredAdmissionState = {
 		headerSeen: false,
@@ -593,10 +858,18 @@ export async function searchStoredHistoryEntries(
 	let lastId: string | undefined;
 	let sessionId: string | undefined;
 	let unreadable = false;
-	let startedJsonl = false;
+	let initialPlainTitle = false;
+	let initialTitleSeparated = false;
 	const topologyHash = createHash("sha256");
+	let recordCount = 0;
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, handle, signal)) {
+			signal?.throwIfAborted();
+			recordCount++;
+			if (recordCount % RECORD_YIELD_INTERVAL === 0) {
+				await yieldToEventLoop();
+				signal?.throwIfAborted();
+			}
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -610,15 +883,40 @@ export async function searchStoredHistoryEntries(
 			topologyHash.update(line ?? "\0unreadable").update("\n");
 			if (line === undefined) {
 				unreadable = true;
+				if (!admission.headerSeen) {
+					admission.invalidIdentity = true;
+					admission.sessionId = undefined;
+				}
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
-				if (startedJsonl && line.trim().length > 0) unreadable = true;
+				const trimmed = line.trim();
+				if (!admission.headerSeen && !admission.entrySeen && trimmed.length > 0) {
+					if (initialPlainTitle || trimmed.startsWith("[") || trimmed.startsWith('"')) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+						unreadable = true;
+					} else {
+						initialPlainTitle = true;
+					}
+				} else if (trimmed.length > 0) {
+					unreadable = true;
+					if (!admission.headerSeen) {
+						admission.invalidIdentity = true;
+						admission.sessionId = undefined;
+					}
+				} else if (initialPlainTitle) {
+					initialTitleSeparated = true;
+				}
 				continue;
 			}
-			startedJsonl = true;
+			if (initialPlainTitle && !initialTitleSeparated) {
+				admission.invalidIdentity = true;
+				admission.sessionId = undefined;
+			}
 			const decoded = decodeStoredRecord(line, admission);
 			sessionId = admission.sessionId;
+			if (admission.invalidIdentity) sessionId = undefined;
 			if (decoded.kind === "invalid") {
 				unreadable = true;
 				continue;
@@ -653,6 +951,7 @@ export async function searchStoredHistoryEntries(
 			lastId = entry.id;
 		}
 	} catch (error) {
+		if (signal?.aborted || isAbortError(error)) throw error;
 		if (!isFileReadError(error)) throw error;
 		return {
 			status: "unavailable",
@@ -665,7 +964,7 @@ export async function searchStoredHistoryEntries(
 	if (!admission.headerSeen || admission.invalidIdentity) {
 		return {
 			status: "unavailable",
-			sessionId,
+			sessionId: undefined,
 			query: request.query,
 			source: "stored-jsonl",
 			matches: [],
@@ -721,8 +1020,15 @@ export async function searchStoredHistoryEntries(
 		titleSeen: false,
 		invalidIdentity: false,
 	};
+	let replayCount = 0;
 	try {
-		for await (const line of storedLines(filePath)) {
+		for await (const line of storedLines(filePath, handle, signal)) {
+			signal?.throwIfAborted();
+			replayCount++;
+			if (replayCount % RECORD_YIELD_INTERVAL === 0) {
+				await yieldToEventLoop();
+				signal?.throwIfAborted();
+			}
 			if (line === SCAN_BOUND_EXCEEDED) {
 				return {
 					status: "unavailable",
@@ -753,6 +1059,7 @@ export async function searchStoredHistoryEntries(
 			});
 		}
 	} catch (error) {
+		if (signal?.aborted || isAbortError(error)) throw error;
 		if (!isFileReadError(error)) throw error;
 		return {
 			status: "unavailable",
@@ -799,22 +1106,41 @@ export async function searchStoredHistoryEntries(
 }
 
 /** In-memory sessions use their current branch, not a process-wide agent index. */
-export function searchLiveHistoryEntries(
+export async function searchLiveHistoryEntries(
 	branch: readonly SessionEntry[],
 	request: HistorySearchRequest,
 	sessionId?: string,
-): HistorySearchResult {
+	signal?: AbortSignal,
+): Promise<HistorySearchResult> {
+	signal?.throwIfAborted();
+	const leafId = request.leafId ?? (branch.length > 0 ? branch[branch.length - 1]?.id : undefined);
+
+	if (branch.length > MAX_INDEX_ENTRIES) {
+		return {
+			status: "unavailable",
+			leafId,
+			sessionId,
+			query: request.query,
+			source: "live-session",
+			matches: [],
+			detail: HARD_BOUND_DETAIL_LIVE,
+		};
+	}
+
+	await yieldToEventLoop();
+	signal?.throwIfAborted();
+
 	const leafIndex =
 		request.leafId === null
 			? -1
 			: request.leafId
 				? branch.findIndex(entry => entry.id === request.leafId)
 				: branch.length - 1;
-	const leafId = branch[leafIndex]?.id ?? request.leafId ?? undefined;
+	const resolvedLeafId = branch[leafIndex]?.id ?? leafId;
 	if (leafIndex < 0) {
 		return {
 			status: "missing_branch",
-			leafId,
+			leafId: resolvedLeafId,
 			sessionId,
 			query: request.query,
 			source: "live-session",
@@ -822,11 +1148,72 @@ export function searchLiveHistoryEntries(
 			detail: "Requested leaf is not in the active in-memory branch",
 		};
 	}
+
 	const query = request.query.toLowerCase();
 	const matches: HistorySearchResult["matches"] = [];
+	let scannedBytes = 0;
+	let scannedCount = 0;
+	let unreadable = false;
+
 	for (let i = leafIndex; i >= 0 && matches.length < request.limit; i--) {
+		signal?.throwIfAborted();
+		scannedCount++;
+		if (scannedCount % RECORD_YIELD_INTERVAL === 0) {
+			await yieldToEventLoop();
+			signal?.throwIfAborted();
+		}
+
 		const entry = branch[i]!;
+		const estimated = await measureEntryBytesBounded(entry, MAX_RECORD_BYTES, signal);
+		if (estimated === undefined) {
+			unreadable = true;
+			scannedBytes += MAX_RECORD_BYTES;
+			if (scannedBytes > MAX_SCANNED_BYTES) {
+				return {
+					status: "unavailable",
+					leafId,
+					sessionId,
+					query: request.query,
+					source: "live-session",
+					matches: [],
+					detail: HARD_BOUND_DETAIL_LIVE,
+				};
+			}
+			continue;
+		}
+
 		const raw = JSON.stringify(entry);
+		const entryBytes = Buffer.byteLength(raw, "utf8");
+		if (entryBytes > MAX_RECORD_BYTES) {
+			unreadable = true;
+			scannedBytes += entryBytes;
+			if (scannedBytes > MAX_SCANNED_BYTES) {
+				return {
+					status: "unavailable",
+					leafId,
+					sessionId,
+					query: request.query,
+					source: "live-session",
+					matches: [],
+					detail: HARD_BOUND_DETAIL_LIVE,
+				};
+			}
+			continue;
+		}
+
+		scannedBytes += entryBytes;
+		if (scannedBytes > MAX_SCANNED_BYTES) {
+			return {
+				status: "unavailable",
+				leafId,
+				sessionId,
+				query: request.query,
+				source: "live-session",
+				matches: [],
+				detail: HARD_BOUND_DETAIL_LIVE,
+			};
+		}
+
 		if (!raw.toLowerCase().includes(query)) continue;
 		matches.push({
 			entryId: entry.id,
@@ -836,12 +1223,14 @@ export function searchLiveHistoryEntries(
 		});
 	}
 	return {
-		status: "ok",
+		status: unreadable ? "partial" : "ok",
 		leafId,
 		sessionId,
 		query: request.query,
 		source: "live-session",
 		matches,
-		detail: "Bounded newest-first matches in the active in-memory branch",
+		detail: unreadable
+			? "Not exhaustive: malformed/oversized records or the 128 MiB/100,000-entry scan bound; active in-memory text only"
+			: "Bounded newest-first matches in the active in-memory branch",
 	};
 }

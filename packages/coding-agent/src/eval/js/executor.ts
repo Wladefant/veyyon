@@ -12,6 +12,7 @@ import {
 	resolveOutputSinkWindow,
 } from "../../tools/core/output-meta";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
+import { agentEvalSessionKey } from "../session-id";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
 import type { JsStatusEvent } from "./shared/types";
 
@@ -29,6 +30,7 @@ export interface JsExecutorOptions {
 	onStatus?: (event: JsStatusEvent) => void;
 	signal?: AbortSignal;
 	sessionId: string;
+	agentId?: string;
 	/**
 	 * Agent session that owns this eval context, so it is reaped when that session
 	 * ends (mirrors the python/ruby/julia kernels). Unset falls back to per-context
@@ -117,15 +119,11 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			.some(line => /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line))
 			? BLOCKED_OUTPUT_RECORD
 			: outputGuard.sanitize(text);
-	const outputSink = new OutputSink({
-		outputGuard,
+	const outputSink = new OutputSink({ outputGuard,
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
-		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings),
-		...resolveOutputSinkWindow(options.session.settings, inlineBudgetFor(options.session)),
-		maxColumns: resolveOutputMaxColumns(options.session.settings),
-		onChunk: chunk => options.onChunk?.(chunk),
-	});
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings), ...resolveOutputSinkWindow(options.session.settings, inlineBudgetFor(options.session)), maxColumns: resolveOutputMaxColumns(options.session.settings),
+		onChunk: chunk => options.onChunk?.(chunk), });
 	const legacyTimeoutMs = getExecutionTimeoutMs(options);
 	const scopedTimeout =
 		typeof legacyTimeoutMs === "number" && Number.isFinite(legacyTimeoutMs) && legacyTimeoutMs > 0
@@ -156,7 +154,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 
 	try {
 		await executeInVmContext({
-			sessionKey: options.sessionId,
+			sessionKey: agentEvalSessionKey(options.sessionId, options.agentId),
 			sessionId: options.sessionId,
 			ownerId: options.kernelOwnerId,
 			cwd: options.cwd ?? options.session.cwd,

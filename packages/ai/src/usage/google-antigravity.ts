@@ -639,7 +639,7 @@ async function postAntigravityCall(
 					"Content-Type": "application/json",
 					"User-Agent": getAntigravityUserAgent(),
 				},
-				body: JSON.stringify({ project: params.credential.projectId }),
+				body: JSON.stringify(path === FETCH_AVAILABLE_MODELS_PATH ? {} : { project: params.credential.projectId }),
 				signal: params.signal,
 			});
 		} catch (error) {

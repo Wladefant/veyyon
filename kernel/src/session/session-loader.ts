@@ -56,12 +56,16 @@ export const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 export interface SessionLoadOptions {
 	source?: string;
 	operatorNotices?: OperatorNotices;
+	/** Stream records even when the file is smaller than the automatic threshold. */
+	stream?: boolean;
 	/**
 	 * Move compacted history to disk while a streamed file loads (see {@link LoadCooling}). The
 	 * result's `cold` holds the store the moved entries read back through and the usage totals.
 	 * A file read as one string loads whole.
 	 */
 	coolCompactedHistory?: boolean;
+	/** Caller's abort signal. */
+	signal?: AbortSignal;
 }
 
 interface SessionRecordIssue {
@@ -438,6 +442,7 @@ async function forEachFileLine(
 	handle: fs.promises.FileHandle,
 	from: number,
 	onLine: (bytes: Buffer, start: number, end: number) => void,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const limit = streamFrameCeiling();
 	let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
@@ -445,6 +450,7 @@ async function forEachFileLine(
 	// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
 	let carried = 0;
 	for (;;) {
+		signal?.throwIfAborted();
 		if (carried === buffer.length) {
 			const grown = Buffer.allocUnsafe(buffer.length * 2);
 			buffer.copy(grown, 0, 0, carried);
@@ -462,6 +468,7 @@ async function forEachFileLine(
 		carried = filled.length - start;
 		if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
 		if (bytesRead === 0) {
+			signal?.throwIfAborted();
 			if (carried > 0) onLine(filled, start, filled.length);
 			return;
 		}
@@ -562,6 +569,7 @@ async function loadSkimmed(
 	notices: SessionLoadOptions,
 	cooling: LoadCooling,
 ): Promise<SessionRecordLoop | undefined> {
+	const signal = notices.signal;
 	const rules: SessionSkimRules = { ...SKIM_RULES, maxLineBytes: streamFrameCeiling() };
 	const loop = new SessionRecordLoop({ streaming: true, logSource: filePath, notices, cooling });
 	const window = new FileLineWindow(handle.fd);
@@ -570,6 +578,7 @@ async function loadSkimmed(
 	let offset = 0;
 	let yieldAt = STREAM_READ_BYTES;
 	for (;;) {
+		signal?.throwIfAborted();
 		const from = offset;
 		let skim: SessionSkim;
 		try {
@@ -613,6 +622,7 @@ async function loadSkimmed(
 				if (offset >= yieldAt) {
 					yieldAt = offset + STREAM_READ_BYTES;
 					await yieldToEventLoop();
+					signal?.throwIfAborted();
 				}
 			}
 			at = end + 1;
@@ -623,10 +633,11 @@ async function loadSkimmed(
 		}
 		if (offset === from) break;
 	}
-	await forEachFileLine(handle, offset, (bytes, start, end) => loop.pushFileLine(bytes, start, end));
+	await forEachFileLine(handle, offset, (bytes, start, end) => loop.pushFileLine(bytes, start, end), signal);
 	const entries = loop.entries;
 	let reread = 0;
 	for (let i = 0; i < projected.length; i += 3) {
+		signal?.throwIfAborted();
 		const index = projected[i]!;
 		if (coldFieldsOf(entries[index]!) !== undefined) continue;
 		const lineOffset = projected[i + 1]!;
@@ -646,6 +657,7 @@ async function loadSkimmed(
 		if (reread >= STREAM_READ_BYTES) {
 			reread = 0;
 			await yieldToEventLoop();
+			signal?.throwIfAborted();
 		}
 	}
 	return loop;
@@ -702,12 +714,13 @@ export async function loadEntriesFromFileStream(
 				cooling = await loadCoolingFor(handle, filePath, storage);
 			}
 			const full = new SessionRecordLoop({ streaming: true, logSource: filePath, notices, cooling });
-			await forEachFileLine(handle, 0, (bytes, start, end) => full.pushFileLine(bytes, start, end));
+			await forEachFileLine(handle, 0, (bytes, start, end) => full.pushFileLine(bytes, start, end), options.signal);
 			loop = full;
 		}
 		const entries = foldTitleSlot(loop.finish(), loop.titleSlot);
 		const cold = cooling?.finish();
 		cooling = undefined;
+		options.signal?.throwIfAborted();
 		return { entries, titleSlot: loop.titleSlot, layout: loop.layout(), cold };
 	} finally {
 		cooling?.finish();
@@ -779,16 +792,24 @@ export async function loadSessionFile(
 ): Promise<LoadedSessionFile> {
 	let loaded: ParsedSessionContent;
 	let before: SessionStorageStat;
+	options.signal?.throwIfAborted();
 	try {
 		before = storage.statSync(filePath);
+		options.signal?.throwIfAborted();
 		loaded =
-			storage instanceof FileSessionStorage && before.size >= STREAM_LOAD_THRESHOLD_BYTES
+			storage instanceof FileSessionStorage && (options.stream || before.size >= STREAM_LOAD_THRESHOLD_BYTES)
 				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath }, storage)
-				: parseSessionContent(await storage.readText(filePath), { ...options, source: options.source ?? filePath });
+				: parseSessionContent(
+						await (storage instanceof FileSessionStorage && options.signal
+							? fs.promises.readFile(filePath, { encoding: "utf8", signal: options.signal })
+							: storage.readText(filePath)),
+						{ ...options, source: options.source ?? filePath },
+					);
 	} catch (err) {
 		if (isEnoent(err)) return { entries: [], layout: undefined, endsMidLine: false };
 		throw err;
 	}
+	options.signal?.throwIfAborted();
 	const { entries } = loaded;
 
 	if (before.size === 0) return { entries: [], layout: undefined, endsMidLine: false };
@@ -804,6 +825,7 @@ export async function loadSessionFile(
 	// A verified layout ends just past a record's line feed at the file's size, so only a file
 	// without one can end inside a line.
 	const endsMidLine = layout === undefined && (await endsInsideALine(storage, filePath));
+	options.signal?.throwIfAborted();
 	return { entries, layout, cold: loaded.cold, endsMidLine };
 }
 
@@ -1118,17 +1140,24 @@ interface BlobReads {
 	text: Map<string, Promise<string>>;
 }
 
-function readBlobSite(site: BlobSite, reference: string, blobStore: BlobStore, reads: BlobReads): Promise<string> {
+function readBlobSite(
+	site: BlobSite,
+	reference: string,
+	blobStore: BlobStore,
+	reads: BlobReads,
+	signal?: AbortSignal,
+	maxTextBytes?: number,
+): Promise<string> {
 	const started =
 		site.kind === "image-data" ? reads.imageData : site.kind === "image-url" ? reads.imageUrl : reads.text;
 	let read = started.get(reference);
 	if (read === undefined) {
 		read =
 			site.kind === "image-data"
-				? resolveImageData(blobStore, reference)
+				? resolveImageData(blobStore, reference, { signal })
 				: site.kind === "image-url"
-					? resolveImageDataUrl(blobStore, reference)
-					: resolveTextBlobRef(blobStore, reference);
+					? resolveImageDataUrl(blobStore, reference, { signal })
+					: resolveTextBlobRef(blobStore, reference, { signal, maxBytes: maxTextBytes });
 		started.set(reference, read);
 	}
 	return read;
@@ -1140,10 +1169,14 @@ async function resolveBlobSite(
 	lost: LostPayloads,
 	strings: StringPool,
 	reads: BlobReads,
+	signal?: AbortSignal,
+	maxTextBytes?: number,
 ): Promise<void> {
 	const reference = siteReference(site);
 	if (reference === undefined) return;
-	settleBlobSite(site, reference, await readBlobSite(site, reference, blobStore, reads), lost, strings);
+	const resolved = await readBlobSite(site, reference, blobStore, reads, signal, maxTextBytes);
+	signal?.throwIfAborted();
+	settleBlobSite(site, reference, resolved, lost, strings);
 }
 
 function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPayloads, strings: StringPool): void {
@@ -1158,7 +1191,13 @@ function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPay
 	settleBlobSite(site, reference, resolved, lost, strings);
 }
 
-async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
+async function resolveBlobSites(
+	scan: EntryScan,
+	blobStore: BlobStore,
+	lost: LostPayloads,
+	signal?: AbortSignal,
+	maxTextBytes?: number,
+): Promise<void> {
 	const { sites, strings } = scan;
 	if (sites.length === 0) return;
 	const reads: BlobReads = { imageData: new Map(), imageUrl: new Map(), text: new Map() };
@@ -1167,8 +1206,9 @@ async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: Los
 	await Promise.all(
 		Array.from({ length: workers }, async () => {
 			for (let index = next++; index < sites.length; index = next++) {
+				signal?.throwIfAborted();
 				const site = sites[index];
-				if (site) await resolveBlobSite(site, blobStore, lost, strings, reads);
+				if (site) await resolveBlobSite(site, blobStore, lost, strings, reads, signal, maxTextBytes);
 			}
 		}),
 	);
@@ -1199,6 +1239,10 @@ function emitLostPayloadNotice(options: BlobResolutionOptions, lost: number): vo
 export interface BlobResolutionOptions {
 	source?: string;
 	operatorNotices?: OperatorNotices;
+	/** Caller's abort signal. */
+	signal?: AbortSignal;
+	/** Optional upper bound on bytes read per externalized text blob. */
+	maxTextBytes?: number;
 }
 
 /**
@@ -1227,9 +1271,12 @@ export async function resolveBlobRefsInEntries(
 	const scan: EntryScan = { sites: [], strings: new StringPool(true) };
 	const slice = new TimeSlice();
 	let hasCold = false;
+	options?.signal?.throwIfAborted();
 	try {
 		for (const entry of entries) {
+			options?.signal?.throwIfAborted();
 			if (slice.due) await slice.yield();
+			options?.signal?.throwIfAborted();
 			if (entry.type === "session") continue;
 			const cold = coldFieldsOf(entry);
 			if (cold === undefined) {
@@ -1239,13 +1286,14 @@ export async function resolveBlobRefsInEntries(
 				scanResidentValues(entry as unknown as Record<string, unknown>, cold, scan);
 			}
 		}
-		await resolveBlobSites(scan, blobStore, lost);
+		await resolveBlobSites(scan, blobStore, lost, options?.signal, options?.maxTextBytes);
 	} finally {
 		// Each site holds the object its payload restores into, so a scan the engine keeps reachable
 		// past the load would hold every restored text of a session the caller has released.
 		scan.sites.length = 0;
 		scan.strings.clear();
 	}
+	options?.signal?.throwIfAborted();
 	restoreToolResultEntries(hasCold ? entries.filter(entry => coldFieldsOf(entry) === undefined) : entries);
 	if (lost.count > 0) {
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
@@ -1280,17 +1328,47 @@ export function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
 	return entry;
 }
 
+export type ReadOnlySessionHistory = {
+	messages: AgentMessage[];
+	prepareMessage: (message: AgentMessage, opts?: { maxTextBytes?: number }) => Promise<void>;
+};
+
 /**
  * Read-only message view of a session file: load entries, migrate to the
  * current version, resolve blob refs, and build the context along the
  * persisted leaf path (last entry). Does NOT create a writer or take the
  * session lock — safe to call against a file another session is writing.
  */
-export async function loadSessionMessagesReadOnly(filePath: string): Promise<AgentMessage[]> {
-	const entries = await loadEntriesFromFile(filePath);
-	if (entries.length === 0) return [];
-	await resolveBlobRefsInEntries(entries, new BlobStore(blobsDirForSessionDir(path.dirname(filePath))));
+export async function loadSessionHistoryReadOnly(
+	filePath: string,
+	signal?: AbortSignal,
+	options: { deferPayloads?: boolean } = {},
+): Promise<ReadOnlySessionHistory> {
+	signal?.throwIfAborted();
+	const entries = await loadEntriesFromFile(filePath, undefined, { signal, stream: options.deferPayloads });
+	signal?.throwIfAborted();
+	const blobs = new BlobStore(blobsDirForSessionDir(path.dirname(filePath)));
+	if (!options.deferPayloads) await resolveBlobRefsInEntries(entries, blobs, { signal });
+	signal?.throwIfAborted();
 	await migrateToCurrentVersion(entries);
+	signal?.throwIfAborted();
 	const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
-	return buildSessionContext(sessionEntries).messages;
+	const context = buildSessionContext(sessionEntries);
+	const prepared = new WeakSet<AgentMessage>(options.deferPayloads ? [] : context.messages);
+	const prepareMessage = async (message: AgentMessage, prepareOpts?: { maxTextBytes?: number }): Promise<void> => {
+		signal?.throwIfAborted();
+		if (prepared.has(message)) return;
+		// Restoration reads only the payload, not event identity. This transient
+		// message view is never persisted and also covers generated summary messages.
+		await resolveBlobRefsInEntries(
+			[{ type: "message", id: "history-view", parentId: null, timestamp: "", message }],
+			blobs,
+			{ signal, maxTextBytes: prepareOpts?.maxTextBytes },
+		);
+		if (prepareOpts?.maxTextBytes === undefined) {
+			prepared.add(message);
+		}
+	};
+	signal?.throwIfAborted();
+	return { messages: context.messages, prepareMessage };
 }
