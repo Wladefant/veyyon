@@ -246,6 +246,7 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 		trackEvalExecution: (execution, abortController) =>
 			inputs.session()?.trackEvalExecution(execution, abortController) ?? execution,
 		getSessionId: () => sessionManager.getSessionId?.() ?? null,
+		getOwningAgentSession: () => inputs.session(),
 		getTurnIndex: () => inputs.session()?.getTurnIndex() ?? 0,
 		// An extension `context` handler rewrites the messages each request sends, so the live
 		// state no longer states what the model sees; no message counts as in context then.
@@ -342,6 +343,9 @@ export async function createSessionToolSession(inputs: SessionToolSessionInputs)
 			const id = sessionManager.getSessionId?.();
 			return id ? `${id}-advisor` : null;
 		},
+		// The advisor is a derived review context, not the primary AgentSession owner.
+		// It must not inherit the primary's archived-history caller authority.
+		getOwningAgentSession: () => undefined,
 		getAgentId: () => "advisor",
 		// The advisor runs its own conversation; the primary agent's context is not what it sees.
 		getLiveMessages: undefined,

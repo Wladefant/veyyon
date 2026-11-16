@@ -527,6 +527,67 @@ describe("antigravity usage provider", () => {
 		expect(report?.limits).toHaveLength(1);
 		expect(report?.limits[0]?.id).toContain(":claude-gpt:");
 	});
+
+	it("yields merged Gemini limits when summary has 3p-only quota, and verifies request bodies", async () => {
+		const recordedCalls: Array<{ url: string; body: unknown }> = [];
+		const fetch: FetchImpl = async (input, init) => {
+			const url = String(input);
+			const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+			recordedCalls.push({ url, body });
+			if (url.includes("retrieveUserQuotaSummary")) {
+				return new Response(
+					JSON.stringify({
+						groups: [
+							{
+								displayName: "Claude and GPT models",
+								buckets: [
+									{ bucketId: "3p-5h", window: "5h", remainingFraction: 0.8 },
+									{ bucketId: "3p-weekly", window: "weekly", remainingFraction: 0.9 },
+								],
+							},
+						],
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			}
+			if (url.includes("fetchAvailableModels")) {
+				return new Response(
+					JSON.stringify({
+						models: {
+							"gemini-2.5-pro": {
+								displayName: "Gemini 2.5 Pro",
+								modelProvider: "MODEL_PROVIDER_GOOGLE",
+								quotaInfos: [
+									{ remainingFraction: 0.65, windowId: "5h" },
+									{ remainingFraction: 0.75, windowId: "weekly" },
+								],
+							},
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			}
+			return new Response("not found", { status: 404 });
+		};
+
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential({ projectId: "test-proj-123" }), signal: undefined },
+			makeCtx(fetch),
+		);
+
+		expect(report).not.toBeNull();
+		const geminiLimits = report?.limits.filter(limit => limit.label === "Gemini Models");
+		expect(geminiLimits).toHaveLength(2);
+		const gemini5h = geminiLimits?.find(limit => limit.scope.windowId === "5h");
+		const geminiWeekly = geminiLimits?.find(limit => limit.scope.windowId === "weekly");
+		expect(gemini5h?.amount.remainingFraction).toBe(0.65);
+		expect(geminiWeekly?.amount.remainingFraction).toBe(0.75);
+
+		const summaryCall = recordedCalls.find(call => call.url.includes("retrieveUserQuotaSummary"));
+		const listingCall = recordedCalls.find(call => call.url.includes("fetchAvailableModels"));
+		expect(summaryCall?.body).toEqual({ project: "test-proj-123" });
+		expect(listingCall?.body).toEqual({});
+	});
 });
 
 describe("antigravity ranking strategy", () => {

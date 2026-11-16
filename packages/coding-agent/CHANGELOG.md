@@ -5,6 +5,152 @@
 ### Fixed
 
 - Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
+- `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
+- Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).
+- Task-run watchdogs allow bounded session initialization before restoring the normal startup deadline on attachment, without extending later running phases.
+- Python eval shutdown waits now have a JavaScript-side deadline, and reset, acquire, and replacement transitions honor caller cancellation without dropping transition ownership ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
+## [1.10.6] - 2026-11-16
+
+### Fixed
+
+- Ci(ovh): pin PR cleanup WORKFLOW_SHA and keep verified-only OVH_CI_PR_ADMISSION gate ([PR #1150](https://github.com/Wladefant/veyyon/pull/1150)).
+
+## [1.10.5] - 2026-11-16
+
+### Fixed
+
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+- Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
+
+## [1.10.4] - 2026-11-16
+
+### Fixed
+
+- Escaped `<` as `\u003c` and used a replacer function in `renderOAuthResultHtml` so `</script>` markup and `$` replacement patterns in OAuth callback values stay inert JSON data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c767616cfc3ba221fa6695bcccf96aa2c3e4dbd4).
+- Steer live streaming retained children immediately on parent IRC during an active wake phase while deferring post-loop messages to the continuation outbox ([PR #1146](https://github.com/Wladefant/veyyon/pull/1146)).
+
+## [1.10.3] - 2026-11-16
+
+### Fixed
+
+- `history://` reads stream stored session prefixes lazily and reuse a validated directory index so post-restart reads stay within the 5-second timeout ([PR #1125](https://github.com/Wladefant/veyyon/pull/1125), [Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
+- Scoped one-off `gc` SQLite statements with `using` so `db.close()` releases database and WAL handles immediately on Windows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
+- Preserved an existing text file's CRLF line endings and UTF-8 BOM across `WriteTool` overwrites and verified persisted conventions on ACP editor-bridge writes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0ffd42c7146ac69cf18c8561ccf4febea32403ac, f77456fe1d75fdcf38b893081a6a7d12cedd89d2).
+- The shared Windows daemon broker survives the client process that started it.
+- Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+- Release settled idle failed predecessors on `successorOf` (with conversation ownership and turn-sequence ABA guards) and on settled `job cancel`, propagating disposal failures ([PR #1144](https://github.com/Wladefant/veyyon/pull/1144)).
+- Scope non-UsageLimit retry fallback cooldowns to the active session instead of globally suppressing selectors in `ModelRegistry` ([PR #1143](https://github.com/Wladefant/veyyon/pull/1143)).
+
+## [1.10.2] - 2026-11-15
+
+### Fixed
+
+- Mark ad424d5a rework merged-pr1129 in topic ledger ([PR #1130](https://github.com/Wladefant/veyyon/pull/1130)).
+
+## [1.10.1] - 2026-11-15
+
+### Fixed
+
+- Count only indented untracked entries in git status/stash pop + topic ledger ([PR #1127](https://github.com/Wladefant/veyyon/pull/1127)).
+
+## [1.10.0] - 2026-11-14
+
+### Fixed
+
+- Add explicit priority slot admission ([PR #1108](https://github.com/Wladefant/veyyon/pull/1108)).
+
+## [1.9.4] - 2026-11-14
+
+### Fixed
+
+- Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
+- Bounded `history://` reads stop markdown rendering after the requested prefix and keep later messages untouched. History discovery reads child directories in bounded concurrent batches and deduplicates registry roots without quadratic scans ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+
+## [1.9.3] - 2026-11-13
+
+### Fixed
+
+- Preserve exact `persist-credentials` boolean metadata in producer output without exposing credential values or truncating following log text.
+
+## [1.9.2] - 2026-11-12
+
+### Fixed
+
+- `estimateTokens` counts the `openaiResponsesHistory` provider payload of a server-side `compactionSummary` message, and `prepareCompaction` includes the active compaction entry's tokens and post-compaction usage anchor when scaling `keepRecentTokens`, so server-side compactions neither report a zero-token window to the post-compaction guard nor shrink the retained tail budget on subsequent passes.
+
+## [1.9.1] - 2026-11-11
+
+### Fixed
+
+- Preserve readable auth log records ([PR #1079](https://github.com/Wladefant/veyyon/pull/1079)).
+
+## [1.9.0] - 2026-11-10
+
+### Added
+
+- `history://` supports explicit per-read, caller-bound access to bounded same-conversation archived records without changing defaults ([Refs #774]).
+
+### Fixed
+
+- `history://` revalidates case-folded archived-agent aliases after the stored scan, refuses callers as soon as session disposal begins, accepts colon-namespaced registered IDs through the internal URL fallback, and verifies forged-capability rejection with a valid exact request ([Refs #774]).
+- Caller-bound archived-history index pages are byte- and entry-bounded, revision-pinned across continuation, and fail closed when the parked roster changes ([Refs #774]).
+- Archived-history capabilities are bound to the exact live AgentSession that owns the minting ToolSession, so a stale tool session cannot mint authority after same-transcript revival ([Refs #774]).
+- Archived-history indexes stop collecting at the first eligible ref beyond 100,000 before sorting or hashing the roster ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Archived history resolution validates agent registry identity provenance, descriptor regular-file identity, and post-scan metadata invariants against path substitution and symlink races ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Archived-history resolution rejects same-directory session-file substitution, non-object JSON pre-header prefixes, and duplicate-key second session headers on explicit-leaf reads ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Producer output redacts opaque authorization continuations after plain or formatted Markdown labels while preserving benign prose and later sections ([Refs #1069](https://github.com/Wladefant/veyyon/issues/1069)).
+
+## [1.8.23] - 2026-11-10
+
+### Fixed
+
+- History transcript resolution and stored history reading honor caller abort signals, combine caller cancellation with the 5-second deadline, reuse single-pass session file scans, and yield between markdown formatting batches ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- History transcript resolution ignores `.artifact-id-<digits>` reservation markers and `.artifact-ids.sqlite*` metadata during filesystem scans, supports nested dotted identifiers, and applies a 5-second deadline with actionable diagnostics ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Live history entry reads and live history search enforce memory and entry count bounds with cancelable operations ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+- Bounded history previews cap nested tool arguments, preserve accurate block line counts, and prioritize cancellation over a missing fallback ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
+
+## [1.8.22] - 2026-11-09
+
+### Fixed
+
+- Retained IRC turns ignore message IDs already present in durable context. Unseen late instructions still run and identify newer input from the same sender ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+- Parent IRC steering survives a restart before consumption, and continuation retries retain their durable recipient instead of duplicating delivery across ancestors ([Refs #1073](https://github.com/Wladefant/veyyon/issues/1073)).
+
+## [1.8.21] - 2026-11-09
+
+### Fixed
+
+- Send empty object for antigravity fetchAvailableModels ([PR #1061](https://github.com/Wladefant/veyyon/pull/1061)).
+
+## [1.8.20] - 2026-11-09
+
+### Added
+
+- `fsyncDirEntry` and `fsyncDirEntrySync` expose the atomic writer's existing directory-entry flush semantics for callers that must persist a newly created parent before publishing references.
+
+### Fixed
+
+- First-use session artifact storage flushes the parent session directory before reserving IDs or returning file-backed artifact references, refusing supported flush failures ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
+## [1.8.19] - 2026-11-09
+
+### Fixed
+
+- The `launch` tool and daemon broker support incarnation guards (`expectedId` and `expectedGeneration`) to prevent stale operations from targeting replaced daemons or newer generations ([Refs #1071](https://github.com/Wladefant/veyyon/issues/1071)).
+
+## [1.8.18] - 2026-11-09
+
+### Fixed
+
+- Fixed the task-spawn executor cwd test fixture so the coding-agent type check reports no TS18048 errors ([PR #1075](https://github.com/Wladefant/veyyon/pull/1075)).
+
+## [1.8.17] - 2026-11-09
+
+### Fixed
+
+- The `read` tool verifies whether an NTFS alternate data stream exists before treating a selector-shaped Windows path as a literal file ([PR #1059](https://github.com/Wladefant/veyyon/pull/1059)).
+
 ## [1.8.16] - 2026-11-08
 
 ### Changed

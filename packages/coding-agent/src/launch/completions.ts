@@ -32,8 +32,9 @@ import { type DaemonCompletionRecord, type DaemonSpec, parseDaemonCompletionReco
 /**
  * Schema version of the completions file. Bump when the record or envelope shape changes.
  * Version 2 added `state` and `spec` to every record.
+ * Version 3 adds the per-spawn generation used by guarded control.
  */
-export const DAEMON_COMPLETIONS_SCHEMA_VERSION = 2;
+export const DAEMON_COMPLETIONS_SCHEMA_VERSION = 3;
 /** How many completed records are retained. */
 export const DAEMON_COMPLETIONS_LIMIT = 100;
 /** How long a completed record is retained, in milliseconds (24h). */

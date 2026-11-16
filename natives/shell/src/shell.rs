@@ -5835,3 +5835,5 @@ mod a_signal_never_reaches_the_host_or_its_ancestors;
 mod a_windows_pipe_reader_does_not_starve_under_blocking_pool_saturation;
 #[cfg(all(test, windows))]
 mod a_windows_signal_preserves_its_host_and_ancestry;
+#[cfg(all(test, windows))]
+mod a_windows_spawn_offloads_from_scheduler;
