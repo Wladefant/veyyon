@@ -128,7 +128,7 @@ describe("the interpreter in the key", () => {
 	/** No interpreter named means the runtime chooses, and every such call shares one key. */
 	it("is empty when the caller named none", () => {
 		expect(key({})).toBe(key({ interpreter: undefined }));
-		expect(key({})).toBe("python:session-1\0\0");
+		expect(key({})).toBe('["python:session-1",null]\0\0');
 	});
 
 	/**
@@ -173,7 +173,7 @@ describe("the separator between the parts", () => {
 	it("is a NUL byte, which cannot appear in a session id or a path", () => {
 		const built = key({ sessionId: "julia:s1", interpreter: "/opt/julia/bin/julia" });
 
-		expect(built).toBe("julia:s1\0/opt/julia/bin/julia\0");
+		expect(built).toBe('["julia:s1",null]\0/opt/julia/bin/julia\0');
 		expect(built.split("\0")).toHaveLength(3);
 	});
 
