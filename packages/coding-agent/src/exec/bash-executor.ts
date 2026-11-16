@@ -389,6 +389,8 @@ async function releaseShell(sessionKey: string, lease: ShellLease, reset: boolea
 	if (!reset) await retainShellWithLiveBackgroundJobs(lease.persistent);
 }
 
+const NATIVE_TIMEOUT_BACKSTOP_GRACE_MS = 200;
+
 /**
  * The two ways a run ends before its result: the caller's signal and the executor deadline. Either aborts
  * the run and settles `stopped` with the annotation of the first that fired.
@@ -402,7 +404,6 @@ class RunStop {
 	readonly #stopped = Promise.withResolvers<string>();
 	#timer: NodeJS.Timeout | undefined;
 	#shellAbort: Promise<void> | undefined;
-
 	constructor(
 		shell: Shell,
 		timeoutMs: number | undefined,
@@ -417,7 +418,11 @@ class RunStop {
 			timeoutMs !== undefined && timeoutMs > 0 ? Math.max(1, timeoutMs - setupElapsedMs) : undefined;
 		userSignal?.addEventListener("abort", this.#onUserAbort, { once: true });
 		if (remainingDeadlineMs !== undefined) {
-			this.#timer = setTimeout(() => this.#onDeadline(deadlineMs!), remainingDeadlineMs);
+			const backstopMs =
+				this.nativeTimeoutMs !== undefined
+					? remainingDeadlineMs + NATIVE_TIMEOUT_BACKSTOP_GRACE_MS
+					: remainingDeadlineMs;
+			this.#timer = setTimeout(() => this.#onDeadline(deadlineMs!), backstopMs);
 		}
 	}
 
@@ -660,12 +665,12 @@ async function runBash(
 			runPromise.then(result => ({ result })),
 			stop.stopped.then(stopped => ({ stopped })),
 		]);
+		acceptingChunks = false;
 		if ("stopped" in outcome) {
-			acceptingChunks = false;
 			resetSession = lease.persistent !== undefined;
 			abandonStoppedRun(sessionKey, lease, runPromise, stop);
 			const timedOut = outcome.stopped.startsWith("Command timed out");
-			return await cancelledResult(sink, outcome.stopped, timedOut);
+			return await cancelledResult(sink, `${outcome.stopped}\n${INCOMPLETE_CAPTURE_NOTICE}`, timedOut, true);
 		}
 		stop.disarmDeadline();
 		const { result } = outcome;
@@ -704,6 +709,7 @@ async function runBash(
 		resetSession = true;
 		throw err;
 	} finally {
+		acceptingChunks = false;
 		stop.dispose();
 		await releaseShell(sessionKey, lease, resetSession, options?.sessionKey?.includes(":async:") === true);
 	}

@@ -5,6 +5,11 @@
 ### Fixed
 
 - Embedded shell output draining applies a 30 s per-callback forward watchdog, bounds draining to 2 s only for cancelled or timed-out runs, and sets `output_incomplete` when output is abandoned ([#1120](https://github.com/Wladefant/veyyon/pull/1120)).
+## [1.10.5] - 2026-11-16
+
+### Fixed
+
+- Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
 
 ## [1.8.0] - 2026-11-05
 
