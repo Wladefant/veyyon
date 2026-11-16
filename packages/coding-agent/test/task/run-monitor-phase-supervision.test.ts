@@ -135,7 +135,7 @@ describe("run monitor phase supervision", () => {
 		expect(monitor.abortSignal.aborted).toBe(false);
 		expect(monitor.watchdogPhase()).toBe("session-initializing");
 		monitor.attach({ subscribe: vi.fn(() => vi.fn()) } as unknown as AgentSession);
-		vi.advanceTimersByTime(119_999);
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.startup - 1);
 		expect(monitor.abortSignal.aborted).toBe(false);
 		expect(monitor.watchdogPhase()).toBe("startup");
 		vi.advanceTimersByTime(1);
