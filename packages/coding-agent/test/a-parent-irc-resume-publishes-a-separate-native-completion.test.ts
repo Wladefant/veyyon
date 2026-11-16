@@ -678,4 +678,68 @@ describe("native retained child resume", () => {
 		expect(ordered.content).not.toContain("arrived after newer");
 		expect(Reflect.get(ordered.details ?? {}, "arrivedAfter")).toBeUndefined();
 	});
+
+	it("steers a streaming retained child immediately even when an irc wake phase is already active", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Handled"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+
+		const started = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const originalPrompt = child.instance.agent.prompt.bind(child.instance.agent);
+		spyOn(child.instance.agent, "prompt").mockImplementation(async (...args) => {
+			child.instance.agent.state.isStreaming = true;
+			started.resolve();
+			try {
+				await gate.promise;
+				return await originalPrompt(...args);
+			} finally {
+				child.instance.agent.state.isStreaming = false;
+			}
+		});
+
+		const steered: unknown[] = [];
+		spyOn(child.instance.agent, "steer").mockImplementation((record: unknown) => {
+			steered.push(record);
+		});
+
+		const phase1Promise = child.instance.deliverIrcMessage({
+			id: "phase-active-1",
+			from: "owner",
+			to: "worker",
+			body: "First wake instruction",
+			ts: 1700000001000,
+		});
+		await started.promise;
+		await child.instance.deliverIrcMessage({
+			id: "steer-during-active-phase",
+			from: "owner",
+			to: "worker",
+			body: "2 GiB installer approved",
+			ts: 1700000002000,
+		});
+
+		expect(steered).toHaveLength(1);
+		const firstSteer = steered[0];
+		const details =
+			firstSteer && typeof firstSteer === "object" && "details" in firstSteer ? firstSteer.details : undefined;
+		const steeredId = details && typeof details === "object" && "id" in details ? details.id : undefined;
+		expect(steeredId).toBe("steer-during-active-phase");
+
+		gate.resolve();
+		await phase1Promise;
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+	});
 });

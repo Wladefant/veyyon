@@ -5898,22 +5898,11 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			return "woken";
 		}
 		void this.#events.send({ type: "irc_message", message: record });
-		if (relation === "parent") {
-			if (!this.#ircContinuations) {
-				this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
-			}
-			const outbox = this.#ircContinuations;
-			if (this.#ircActivePhase || outbox.unfinished().length > 0) {
-				// Preserve both phase boundaries and the order of input retained across a restart.
-				outbox.begin(msg.id, record);
-				await this.sessionManager.ensureOnDisk();
-				await this.sessionManager.sync();
-				if (!this.#ircActivePhase) await this.replayIrcContinuations();
-				return "injected";
-			}
-		}
 		if (this.isStreaming) {
 			if (relation === "parent") {
+				if (!this.#ircContinuations) {
+					this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+				}
 				record = {
 					...record,
 					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
@@ -5937,6 +5926,20 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			}
 			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
+		}
+		if (relation === "parent") {
+			if (!this.#ircContinuations) {
+				this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+			}
+			const outbox = this.#ircContinuations;
+			if (this.#ircActivePhase || outbox.unfinished().length > 0) {
+				// Preserve both phase boundaries and the order of input retained across a restart.
+				outbox.begin(msg.id, record);
+				await this.sessionManager.ensureOnDisk();
+				await this.sessionManager.sync();
+				if (!this.#ircActivePhase) await this.replayIrcContinuations();
+				return "injected";
+			}
 		}
 		// Plan mode: record into context but do not wake an autonomous turn.
 		if (this.#planMode.enabled) {
