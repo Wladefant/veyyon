@@ -235,7 +235,10 @@ describe("session storage writers conform to lifecycle and error contracts", () 
 			const filePath = path.join(tmpDir, "bom.jsonl");
 			const line1 = JSON.stringify({ id: "1", type: "session" });
 			const line2 = JSON.stringify({ id: "2", type: "message", text: "ok" });
-			const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`${line1}\r\n${line2}\r\n`, "utf8")]);
+			const bytes = Buffer.concat([
+				Buffer.from([0xef, 0xbb, 0xbf]),
+				Buffer.from(`${line1}\r\n${line2}\r\n`, "utf8"),
+			]);
 			await fsp.writeFile(filePath, bytes);
 
 			const storage = new FileSessionStorage();
