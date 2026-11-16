@@ -534,12 +534,17 @@ mod tests {
 		pump_chunks, pump_chunks_with_progress,
 	};
 
-	fn spawn_test_drain(
-		rx: flume::Receiver<String>,
-		forward: impl AsyncFnMut(String) -> bool + Send + 'static,
-	) -> ChunkDrain {
+	fn spawn_test_drain<F, Fut>(rx: flume::Receiver<String>, mut forward: F) -> ChunkDrain
+	where
+		F: FnMut(String) -> Fut + Send + 'static,
+		Fut: Future<Output = bool> + Send,
+	{
 		let (progress_tx, progress_rx) = tokio::sync::watch::channel(0u64);
-		let handle = tokio::spawn(pump_chunks_with_progress(rx, Some(progress_tx), forward));
+		let handle = tokio::spawn(pump_chunks_with_progress(
+			rx,
+			Some(progress_tx),
+			async move |payload: String| forward(payload).await,
+		));
 		ChunkDrain { handle, progress_rx }
 	}
 
