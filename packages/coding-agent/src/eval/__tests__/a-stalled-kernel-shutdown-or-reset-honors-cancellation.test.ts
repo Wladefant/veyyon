@@ -43,10 +43,7 @@ async function flushMicrotasks(turns = 4): Promise<void> {
 	}
 }
 
-function createFakeSubprocess(options?: {
-	exitOnExitPayload?: boolean;
-	exitOnSignals?: readonly string[];
-}): {
+function createFakeSubprocess(options?: { exitOnExitPayload?: boolean; exitOnSignals?: readonly string[] }): {
 	proc: Subprocess<"pipe", "pipe", "pipe">;
 	finish: (code: number | null) => void;
 } {
@@ -491,6 +488,4 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		expect(joinedSession.kernel).toBe(replacement);
 		expect([...session.ownerIds]).toEqual(["owner-a", "owner-b"]);
 	});
-
-
 });

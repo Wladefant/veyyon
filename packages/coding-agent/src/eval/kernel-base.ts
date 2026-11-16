@@ -1,7 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Process } from "@veyyon/natives";
-import { $flag, atomicWriteFile, errorMessage, getKernelRunnerDir, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
+import {
+	$flag,
+	atomicWriteFile,
+	errorMessage,
+	getKernelRunnerDir,
+	isBunTestRuntime,
+	isTimeoutError,
+	logger,
+	readLines,
+	Snowflake,
+} from "@veyyon/utils";
 import { processHandle } from "@veyyon/utils/native-process";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
@@ -406,7 +416,10 @@ export function spawnKernelProcess(
 
 /** A failed initializer still owns this runner until shutdown confirms its exit. */
 export class UnconfirmedKernelStartupError extends Error {
-	constructor(readonly kernel: SessionKernel, cause: unknown) {
+	constructor(
+		readonly kernel: SessionKernel,
+		cause: unknown,
+	) {
 		super(errorMessage(cause), { cause });
 		this.name = cause instanceof Error ? cause.name : "Error";
 	}
@@ -824,9 +837,11 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		if (this.#shutdownPromise) return this.#shutdownPromise;
 		const shuttingDown = this.#shutdown(options);
 		this.#shutdownPromise = shuttingDown;
-		void shuttingDown.finally(() => {
-			if (!this.#shutdownConfirmed) this.#shutdownPromise = null;
-		}).catch(() => {});
+		void shuttingDown
+			.finally(() => {
+				if (!this.#shutdownConfirmed) this.#shutdownPromise = null;
+			})
+			.catch(() => {});
 		return shuttingDown;
 	}
 
@@ -928,7 +943,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 						treeTimeout.unref();
 					}),
 				]);
-				treeExited = exits !== null && exits.every(Boolean);
+				treeExited = exits?.every(Boolean) ?? false;
 			} catch (error) {
 				logger.warn("eval kernel tree exit was not confirmed", { pid: proc.pid, error: errorMessage(error) });
 			} finally {
