@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `FileSessionStorage.readText` reads via `fs.promises.readFile` so concurrent appends on Windows do not produce torn trailing JSONL lines.
 ## [1.10.3] - 2026-11-16
 
 ### Fixed

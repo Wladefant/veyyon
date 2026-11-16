@@ -263,7 +263,7 @@ interface CodingAgentBucketPlan {
 
 export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
 	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 1 },
-	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 2 },
 	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
 	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
 };
@@ -339,7 +339,6 @@ export async function dispatchTestCommands(
 	}
 	return plan;
 }
-
 // Smaller workspace packages stay separate from native/TUI/integration suites so
 // their short TS suites can run together. CI still downloads the Linux x64 native
 // addon before this bucket: shared utility barrels may load native-backed modules.
@@ -672,6 +671,7 @@ export const repoScriptTests = [
 	"cloud/shared-tools/a-tool-budget-survives-restart.test.ts",
 	"cloud/shared-tools/admission-stops-unauthorized-tool-dispatch.test.ts",
 	"cloud/shared-tools/only-admitted-users-can-use-their-own-secrets.test.ts",
+	"scripts/check-ts-runs-workspaces-even-when-tools-fails.test.ts",
 ];
 
 /**
@@ -2347,7 +2347,7 @@ if (import.meta.main) {
 		);
 	}
 	// Route both ordinary and JUnit execution through chunksAtOnce(mode, ci, total):
-	// CI uses each coding-agent bucket's ciChunksAtOnce width (1 for singleton/UI, 3 for
+	// CI uses each coding-agent bucket's ciChunksAtOnce width (1 for singleton, 2 for UI, 3 for
 	// runtime/native, 1 for all other modes); local runs honor testConcurrency(total).
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
 	// child, and the tripwire preload) are meant to make real-data writes
