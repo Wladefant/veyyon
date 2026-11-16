@@ -11,7 +11,6 @@ import { type StderrStatus, startStderrCapture } from "./session-stderr";
 
 export const RECURSION_MARKER_ENV = "VEYYON_SUPERVISED";
 
-
 export interface TerminatorAttribution {
 	available: false;
 	reason: string;
@@ -71,6 +70,7 @@ export interface SuperviseProcessOptions {
 	maxStderrLogBytes?: number;
 	maxStderrLogFiles?: number;
 	forwardStderr?: boolean;
+	stderrSink?: NodeJS.WritableStream;
 	renameSync?: (oldPath: string, newPath: string) => void;
 }
 
@@ -136,7 +136,8 @@ export async function superviseProcess(options: SuperviseProcessOptions = {}): P
 	const log = options.logger ?? logger;
 	const heartbeatDir = options.heartbeatDir ?? path.join(getLogsDir(), "heartbeat");
 	const supervisorPid = options.supervisorPid ?? process.pid;
-	const supervisorCommandLine = options.supervisorCommandLine ?? [process.execPath, ...process.argv.slice(1)].join(" ");
+	const supervisorCommandLine =
+		options.supervisorCommandLine ?? [process.execPath, ...process.argv.slice(1)].join(" ");
 	const childCommand = [execPath, ...argv].join(" ");
 	const attributionReason = "Child exit reports do not provide killer PID";
 
@@ -148,7 +149,17 @@ export async function superviseProcess(options: SuperviseProcessOptions = {}): P
 			env: { ...parentEnv, [RECURSION_MARKER_ENV]: String(supervisorPid) },
 			shell: false,
 		});
-	} catch {
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		const code =
+			typeof err === "object" && err !== null && "code" in err ? (err as NodeJS.ErrnoException).code : undefined;
+		log.errorSync("Supervised child failed to spawn", {
+			execPath,
+			cwd,
+			supervisorPid,
+			error,
+			...(code ? { code } : {}),
+		});
 		return { exitCode: 1, reported: false };
 	}
 
@@ -158,6 +169,7 @@ export async function superviseProcess(options: SuperviseProcessOptions = {}): P
 		maxFiles: options.maxStderrLogFiles,
 		forwardStderr: options.forwardStderr,
 		renameSync: options.renameSync,
+		stderrSink: options.stderrSink,
 	});
 
 	let exitCode: number | null;
@@ -165,14 +177,28 @@ export async function superviseProcess(options: SuperviseProcessOptions = {}): P
 	try {
 		({ exitCode, signal } = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
 			(resolve, reject) => {
-				child.on("error", (err) => {
+				child.on("error", err => {
 					capture.recordSpawnError(err);
 					reject(err);
 				});
 				child.on("exit", (code, sig) => resolve({ exitCode: code, signal: sig }));
 			},
 		));
-	} catch {
+	} catch (err) {
+		const stderr = await capture.drain();
+		const error = err instanceof Error ? err.message : String(err);
+		const code =
+			typeof err === "object" && err !== null && "code" in err ? (err as NodeJS.ErrnoException).code : undefined;
+		log.errorSync("Supervised child emitted spawn error", {
+			pid: child.pid,
+			execPath,
+			cwd,
+			supervisorPid,
+			error,
+			...(code ? { code } : {}),
+			stderrStatus: stderr.status,
+			...(stderr.error ? { stderrError: stderr.error } : {}),
+		});
 		return { exitCode: 1, reported: false };
 	}
 

@@ -2,20 +2,18 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+	_flushHeartbeatForTest,
+	_resetHeartbeatStateForTest,
+	_setConsoleCtrlHandlerForTest,
 	HEARTBEAT_INTERVAL_MS,
-	heartbeatDir,
 	type HeartbeatParticipant,
-	type HeartbeatResourceSample,
+	heartbeatDir,
 	joinHeartbeat,
 	MAX_RESOURCE_SAMPLES,
 	reportSilentDeaths,
 	type SessionHeartbeat,
 	type SessionPhase,
-	_flushHeartbeatForTest,
-	_resetHeartbeatStateForTest,
-	_setConsoleCtrlHandlerForTest,
 } from "../src/session-heartbeat";
-import { type MemoryLimits, readMemoryLimits } from "../src/commit-memory";
 
 describe("session-heartbeat history, handleCount, and console recorder", () => {
 	beforeEach(() => {
@@ -26,7 +24,10 @@ describe("session-heartbeat history, handleCount, and console recorder", () => {
 		_resetHeartbeatStateForTest();
 	});
 
-	function makeParticipant(id = "test-session-1", initialPhase: SessionPhase = "idle"): {
+	function makeParticipant(
+		id = "test-session-1",
+		initialPhase: SessionPhase = "idle",
+	): {
 		participant: HeartbeatParticipant;
 		setPhase: (p: SessionPhase) => void;
 	} {

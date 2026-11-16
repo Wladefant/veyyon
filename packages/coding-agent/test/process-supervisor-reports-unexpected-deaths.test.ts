@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { EventEmitter } from "node:events";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -884,6 +884,160 @@ describe("process supervisor", () => {
 				reason: "Child exit reports do not provide killer PID",
 				killerPid: null,
 			});
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("stderr forwarding respects backpressure under default forwardStderr=true with slow sink", async () => {
+		const ctx = createTestContext();
+		try {
+			const pid = 4545;
+			ctx.writeHeartbeat(pid, { sessionId: "session-backpressure", phase: "tool" });
+
+			const childEmitter = new EventEmitter();
+			const stderrEmitter = new EventEmitter() as EventEmitter & {
+				pause: () => void;
+				resume: () => void;
+				readableEnded: boolean;
+				destroyed: boolean;
+			};
+			let pausedCount = 0;
+			let resumedCount = 0;
+			stderrEmitter.readableEnded = false;
+			stderrEmitter.destroyed = false;
+			stderrEmitter.pause = () => {
+				pausedCount += 1;
+			};
+			stderrEmitter.resume = () => {
+				resumedCount += 1;
+			};
+
+			const child = {
+				pid,
+				stderr: stderrEmitter,
+				on(event: string, cb: (...args: unknown[]) => void) {
+					childEmitter.on(event, cb);
+					return child;
+				},
+			} as unknown as ChildProcess;
+
+			const sinkEmitter = new EventEmitter();
+			const sinkChunks: Buffer[] = [];
+			const slowSink = Object.assign(sinkEmitter, {
+				write(chunk: Buffer | string) {
+					sinkChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+					return false;
+				},
+			}) as unknown as NodeJS.WritableStream;
+
+			queueMicrotask(() => {
+				stderrEmitter.emit("data", Buffer.from("chunk-1\n"));
+				expect(pausedCount).toBe(1);
+				expect(resumedCount).toBe(0);
+
+				sinkEmitter.emit("drain");
+				expect(resumedCount).toBe(1);
+
+				stderrEmitter.emit("data", Buffer.from("chunk-2\n"));
+				expect(pausedCount).toBe(2);
+				sinkEmitter.emit("drain");
+				expect(resumedCount).toBe(2);
+
+				stderrEmitter.readableEnded = true;
+				stderrEmitter.emit("end");
+				stderrEmitter.emit("close");
+				childEmitter.emit("exit", 1, null);
+			});
+
+			const result = await superviseProcess({
+				execPath: "veyyon.exe",
+				argv: [],
+				spawn: () => child,
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+				stderrSink: slowSink,
+			});
+
+			expect(result.reported).toBe(true);
+			expect(Buffer.concat(sinkChunks).toString("utf8")).toBe("chunk-1\nchunk-2\n");
+			expect(result.report?.stderrStatus).toBe("captured");
+			expect(result.report?.stderrBytes).toBe(16);
+			expect(sinkEmitter.listenerCount("drain")).toBe(0);
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("synchronous spawn exception logs error context and returns exitCode 1", async () => {
+		const ctx = createTestContext();
+		try {
+			const result = await superviseProcess({
+				execPath: "/missing/veyyon-bin",
+				argv: [],
+				spawn: () => {
+					const err = Object.assign(new Error("spawn /missing/veyyon-bin ENOENT"), { code: "ENOENT" });
+					throw err;
+				},
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.reported).toBe(false);
+			expect(ctx.logs.length).toBe(1);
+			expect(ctx.logs[0].message).toBe("Supervised child failed to spawn");
+			expect(ctx.logs[0].context?.code).toBe("ENOENT");
+			expect(ctx.logs[0].context?.error).toContain("ENOENT");
+			expect(ctx.logs[0].context?.execPath).toBe("/missing/veyyon-bin");
+		} finally {
+			ctx.cleanup();
+		}
+	});
+
+	test("async child error event logs error context and stderr spawn_error status", async () => {
+		const ctx = createTestContext();
+		try {
+			const childEmitter = new EventEmitter();
+			const stderrEmitter = new EventEmitter() as EventEmitter & {
+				readableEnded: boolean;
+				destroyed: boolean;
+			};
+			stderrEmitter.readableEnded = true;
+			stderrEmitter.destroyed = true;
+			const child = {
+				pid: 4646,
+				stderr: stderrEmitter,
+				on(event: string, cb: (...args: unknown[]) => void) {
+					childEmitter.on(event, cb);
+					return child;
+				},
+			} as unknown as ChildProcess;
+
+			queueMicrotask(() => {
+				const err = Object.assign(new Error("spawn veyyon EACCES"), { code: "EACCES" });
+				childEmitter.emit("error", err);
+			});
+
+			const result = await superviseProcess({
+				execPath: "/unexecutable/veyyon-bin",
+				argv: [],
+				spawn: () => child,
+				logger: ctx.logger,
+				heartbeatDir: ctx.heartbeatDir,
+				sessionStderrDir: ctx.sessionStderrDir,
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.reported).toBe(false);
+			expect(ctx.logs.length).toBe(1);
+			expect(ctx.logs[0].message).toBe("Supervised child emitted spawn error");
+			expect(ctx.logs[0].context?.code).toBe("EACCES");
+			expect(ctx.logs[0].context?.error).toContain("EACCES");
+			expect(ctx.logs[0].context?.stderrStatus).toBe("spawn_error");
+			expect(ctx.logs[0].context?.stderrError).toContain("EACCES");
 		} finally {
 			ctx.cleanup();
 		}

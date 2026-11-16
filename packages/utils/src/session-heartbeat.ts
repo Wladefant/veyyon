@@ -31,9 +31,9 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { installConsoleCtrlHandler, removeConsoleCtrlHandler } from "@veyyon/natives";
 import { atomicWriteFile } from "./atomic-write";
 import { type MemoryLimits, readMemoryLimits } from "./commit-memory";
-import { installConsoleCtrlHandler, removeConsoleCtrlHandler } from "@veyyon/natives";
 import { getLogsDir } from "./dirs";
 import { isMissingPath } from "./fs-error";
 import * as logger from "./logger";
@@ -524,7 +524,8 @@ function readHeartbeat(file: string): SessionHeartbeat | undefined {
 				if (typeof sample.processCommitBytes === "number") clean.processCommitBytes = sample.processCommitBytes;
 				if (typeof sample.handleCount === "number") clean.handleCount = sample.handleCount;
 				if (typeof sample.cgroupMemoryBytes === "number") clean.cgroupMemoryBytes = sample.cgroupMemoryBytes;
-				if (typeof sample.cgroupMemoryMaxBytes === "number") clean.cgroupMemoryMaxBytes = sample.cgroupMemoryMaxBytes;
+				if (typeof sample.cgroupMemoryMaxBytes === "number")
+					clean.cgroupMemoryMaxBytes = sample.cgroupMemoryMaxBytes;
 				sanitized.push(clean);
 			}
 			beat.resourceHistory = sanitized;

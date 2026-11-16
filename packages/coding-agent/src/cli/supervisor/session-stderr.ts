@@ -1,4 +1,4 @@
-import { type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getLogsDir } from "@veyyon/utils/dirs";
@@ -6,19 +6,14 @@ import { getLogsDir } from "@veyyon/utils/dirs";
 export const DEFAULT_MAX_STDERR_LOG_BYTES = 1024 * 1024; // 1 MiB
 export const DEFAULT_MAX_STDERR_LOG_FILES = 3;
 
-export type StderrStatus =
-	| "captured"
-	| "empty"
-	| "error"
-	| "rotation_error"
-	| "spawn_error"
-	| "disabled";
+export type StderrStatus = "captured" | "empty" | "error" | "rotation_error" | "spawn_error" | "disabled";
 
 export interface StderrCaptureOptions {
 	sessionStderrDir?: string;
 	maxBytes?: number;
 	maxFiles?: number;
 	forwardStderr?: boolean;
+	stderrSink?: NodeJS.WritableStream;
 	renameSync?: (oldPath: string, newPath: string) => void;
 }
 
@@ -45,12 +40,20 @@ export function startStderrCapture(
 	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_STDERR_LOG_FILES);
 	const forwardStderr = options.forwardStderr ?? true;
 	const rename = options.renameSync ?? fs.renameSync;
+	const stderrSink = options.stderrSink ?? process.stderr;
 
 	let spawnError: string | undefined;
 	let writeError: string | undefined;
 	let rotationError: string | undefined;
 	let totalBytesWritten = 0;
 	let currentBytes = 0;
+	let pausedForDrain = false;
+	const onSinkDrain = () => {
+		pausedForDrain = false;
+		if (child?.stderr && !child.stderr.destroyed && typeof child.stderr.resume === "function") {
+			child.stderr.resume();
+		}
+	};
 
 	if (typeof pid !== "number" || pid <= 0) {
 		return {
@@ -116,9 +119,15 @@ export function startStderrCapture(
 	const onData = (chunk: Buffer | string) => {
 		const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
 		if (forwardStderr) {
+			let ok = true;
 			try {
-				process.stderr.write(buf);
+				ok = stderrSink.write(buf);
 			} catch {}
+			if (!ok && !pausedForDrain && typeof child?.stderr?.pause === "function") {
+				pausedForDrain = true;
+				child.stderr.pause();
+				stderrSink.once("drain", onSinkDrain);
+			}
 		}
 
 		if (rotationError || writeError) {
@@ -156,7 +165,7 @@ export function startStderrCapture(
 
 	if (child?.stderr) {
 		child.stderr.on("data", onData);
-		child.stderr.on("error", (err) => {
+		child.stderr.on("error", err => {
 			writeError ??= err instanceof Error ? err.message : String(err);
 		});
 	}
@@ -167,7 +176,7 @@ export function startStderrCapture(
 		},
 		async drain(): Promise<StderrCaptureResult> {
 			if (child?.stderr && !child.stderr.readableEnded && !child.stderr.destroyed) {
-				await new Promise<void>((resolve) => {
+				await new Promise<void>(resolve => {
 					let timer: NodeJS.Timeout | undefined;
 					const onEnd = () => {
 						if (timer) clearTimeout(timer);
@@ -182,6 +191,10 @@ export function startStderrCapture(
 					timer = setTimeout(onEnd, 2000);
 					if (timer.unref) timer.unref();
 				});
+			}
+			pausedForDrain = false;
+			if (typeof stderrSink.removeListener === "function") {
+				stderrSink.removeListener("drain", onSinkDrain);
 			}
 
 			const files: string[] = [];
