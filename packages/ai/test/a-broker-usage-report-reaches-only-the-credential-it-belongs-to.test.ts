@@ -38,6 +38,7 @@ const ORG = "org-1";
 const OTHER_ORG = "org-2";
 const LONG_POLL = "GET /v1/snapshot?wait=30000";
 const STREAM = "GET /v1/snapshot/stream";
+const CANONICAL = "GET /v1/snapshot";
 
 type Respond = (request: string, init: RequestInit) => Response | Promise<Response>;
 
@@ -108,13 +109,16 @@ const stores: RemoteAuthCredentialStore[] = [];
 
 function openStore(
 	broker: FakeBroker,
-	opts: { initialSnapshot?: SnapshotResponse; streamSnapshots?: boolean } = {},
+	opts: { initialSnapshot?: SnapshotResponse; streamSnapshots?: boolean; snapshotStreamVerifyIntervalMs?: number } = {},
 ): RemoteAuthCredentialStore {
 	const client = new AuthBrokerClient({ url: "http://broker.test", token: "bearer", fetchImpl: broker.fetchImpl });
 	const store = new RemoteAuthCredentialStore({
 		client,
 		initialSnapshot: opts.initialSnapshot ?? snapshotResponse(1, []),
 		streamSnapshots: opts.streamSnapshots ?? false,
+		...(opts.snapshotStreamVerifyIntervalMs !== undefined
+			? { snapshotStreamVerifyIntervalMs: opts.snapshotStreamVerifyIntervalMs }
+			: {}),
 	});
 	stores.push(store);
 	return store;
@@ -423,16 +427,21 @@ describe("the background sync", () => {
 		vi.spyOn(logger, "warn").mockImplementation((message: string) => {
 			warnings.push(message);
 		});
+		let latestSnapshot = snapshotResponse(1, []);
 		let polls = 0;
 		const broker = fakeBroker((request, init) => {
 			if (request === STREAM) return new Response("not found", { status: 404 });
+			if (request === CANONICAL) return Response.json(latestSnapshot);
 			if (request !== LONG_POLL) return holdUntilAborted(init);
 			polls += 1;
-			if (polls === 1) return Response.json(snapshotResponse(2, [entry(7)]));
+			if (polls === 1) {
+				latestSnapshot = snapshotResponse(2, [entry(7)]);
+				return Response.json(latestSnapshot);
+			}
 			if (polls === 2) return new Response(null, { status: 304 });
 			return holdUntilAborted(init);
 		});
-		const store = openStore(broker, { streamSnapshots: true });
+		const store = openStore(broker, { streamSnapshots: true, snapshotStreamVerifyIntervalMs: 25 });
 		await broker.arrival(LONG_POLL, 3);
 		expect(store.snapshot.generation).toBe(2);
 		expect(store.snapshot.credentials.map(credential => credential.id)).toEqual([7]);

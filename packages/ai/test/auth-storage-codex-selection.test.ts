@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { parseCodexRateLimitHeaders } from "@veyyon/ai";
 import { AuthBrokerClient, RemoteAuthCredentialStore, startAuthBroker } from "@veyyon/ai/auth-broker";
 import { type AuthCredentialStore, AuthStorage } from "@veyyon/ai/auth-storage";
@@ -1642,6 +1643,12 @@ describe("AuthStorage codex oauth ranking", () => {
 				store.cleanExpiredCredentialBlocks?.(Date.now() + STALE_BLOCK_GUARD_MS);
 
 				await clientStorage.fetchUsageReports();
+				const deadline = Date.now() + 2_000;
+				while (store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared") !== undefined) {
+					if (Date.now() >= deadline) break;
+					await scheduler.wait(10);
+				}
+				await remoteStore.refreshSnapshot();
 
 				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
 				expect(store.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeUndefined();
