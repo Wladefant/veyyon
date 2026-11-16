@@ -1533,6 +1533,7 @@ describe("history exact record lookup", () => {
 				'[["type":"message","id":"earlier","parentId":"root"}',
 				'}}{"type":"session","id":"earlier"}',
 				'"metadata":"safe",{"type":"session","id":"earlier"}',
+				'"metadata":"safe",{"meta":1,{"type":"session","id":"shadow"}}',
 				'"id":"earlier"}',
 			]) {
 				await fs.writeFile(file, Buffer.concat([Buffer.from(`${damagedFirst}\n\n`), header, root]));
@@ -1560,6 +1561,7 @@ describe("history exact record lookup", () => {
 				'"Quoted title" [Q4] release',
 				"Release {Q4 {draft}} [archive] — retained title",
 				"Release {{draft}} [archive] — retained title",
+				"{Q4} planning",
 			]) {
 				await fs.writeFile(file, Buffer.concat([Buffer.from(legacyTitle + "\n\n"), header, root]));
 				const titledExact = await readStoredHistoryEntry(file, {
@@ -1895,5 +1897,54 @@ describe("history exact record lookup", () => {
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=one&entry=two"))).toThrow();
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=a"))).toThrow();
 		expect(() => parseHistorySearchRequest(new URL("history://Scout?q=thing&limit=999"))).toThrow();
+	});
+
+	it("rejects impossible nested identity openers after an earlier member while preserving valid nested metadata", async () => {
+		const dir = TempDir.createSync("@veyyon-history-nested-opener-");
+		try {
+			const file = path.join(dir.path(), "session.jsonl");
+			const header = JSON.stringify({ type: "session", id: "s-valid" });
+			const root = JSON.stringify({ type: "message", id: "root", parentId: null, message: "needle trusted" });
+
+			for (const malformed of [
+				'{"meta":1,{"type":"session","id":"shadow"}}',
+				'{"meta":1,{"type":"message","id":"root"}}',
+			]) {
+				await fs.writeFile(file, `${[header, root, malformed].join("\n")}\n`);
+				const exact = await readStoredHistoryEntry(file, {
+					entryId: "root", leafId: "root", offset: 0, limit: 256,
+				});
+				expect(exact.status).toBe("unavailable");
+				expect(exact.fragment).toBeUndefined();
+				expect(exact.sessionId).toBeUndefined();
+				const search = await searchStoredHistoryEntries(file, {
+					query: "needle", leafId: "root", limit: 3,
+				});
+				expect(search.status).toBe("unavailable");
+				expect(search.matches).toEqual([]);
+				expect(search.sessionId).toBeUndefined();
+			}
+
+			const validNested = JSON.stringify({
+				type: "message",
+				id: "m2",
+				parentId: "root",
+				meta: { items: [{ type: "session", id: "shadow" }] },
+				message: "needle nested",
+			});
+			await fs.writeFile(file, `${[header, root, validNested].join("\n")}\n`);
+			const validRead = await readStoredHistoryEntry(file, {
+				entryId: "m2", leafId: "m2", offset: 0, limit: 256,
+			});
+			expect(validRead.status).toBe("ok");
+			expect(validRead.fragment).toContain("needle nested");
+			const validSearch = await searchStoredHistoryEntries(file, {
+				query: "needle", leafId: "m2", limit: 5,
+			});
+			expect(validSearch.status).toBe("ok");
+			expect(validSearch.matches.map(match => match.entryId)).toEqual(["m2", "root"]);
+		} finally {
+			await dir.remove();
+		}
 	});
 });

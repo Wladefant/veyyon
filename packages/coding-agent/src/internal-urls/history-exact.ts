@@ -176,6 +176,7 @@ function scanTopLevelMembers(raw: string): TopLevelMemberScan {
 	let depth = 0;
 	// JSON array string elements are never root-level object member names.
 	let arrayDepth = 0;
+	const containers: ("{" | "[")[] = [];
 	for (let i = 0; i < raw.length; ) {
 		const char = raw[i]!;
 		if (char === '"') {
@@ -300,10 +301,22 @@ function scanTopLevelMembers(raw: string): TopLevelMemberScan {
 			char.trim().length > 0 && char !== "}") {
 			identityAmbiguous = true;
 		}
-		if (char === "{") depth++;
-		else if (char === "}") depth--;
-		else if (char === "[") arrayDepth++;
-		else if (char === "]") arrayDepth = Math.max(0, arrayDepth - 1);
+		if (char === "{" || char === "[") {
+			if (containers[containers.length - 1] === "{") {
+				let previous = i - 1;
+				while (previous >= 0 && /\s/.test(raw[previous]!)) previous--;
+				if (raw[previous] !== ":") identityAmbiguous = true;
+			}
+			containers.push(char);
+			if (char === "{") depth++;
+			else arrayDepth++;
+		} else if (char === "}") {
+			if (containers[containers.length - 1] === "{") containers.pop();
+			depth--;
+		} else if (char === "]") {
+			if (containers[containers.length - 1] === "[") containers.pop();
+			arrayDepth = Math.max(0, arrayDepth - 1);
+		}
 		i++;
 	}
 	// A malformed JSON object can still claim an entry ID even when full parsing fails.
@@ -359,6 +372,21 @@ function resemblesBrokenHeader(line: string): boolean {
 	// scanner's depth/root-member state past the later identity-bearing object.
 	const objectStart = trimmed.indexOf("{");
 	return objectStart >= 0 && hasBrokenIdentity(scanTopLevelMembers(trimmed.slice(objectStart)));
+}
+
+function isBraceLeadingLegacyTitle(
+	line: string,
+	admission: StoredAdmissionState,
+	initialPlainTitle: boolean,
+): boolean {
+	if (admission.headerSeen || admission.entrySeen || admission.titleSeen || initialPlainTitle) return false;
+	if (!line.trimStart().startsWith("{")) return false;
+	try {
+		JSON.parse(line);
+		return false;
+	} catch {
+		return !resemblesBrokenHeader(line);
+	}
 }
 function decodeStoredRecord(raw: string, state: StoredAdmissionState): StoredRecordResult {
 	let sessionTypeMember = false;
@@ -690,6 +718,10 @@ export async function readStoredHistoryEntry(
 					admission.invalidIdentity = true;
 					admission.sessionId = undefined;
 				}
+				continue;
+			}
+			if (isBraceLeadingLegacyTitle(line, admission, initialPlainTitle)) {
+				initialPlainTitle = true;
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
@@ -1145,6 +1177,10 @@ export async function searchStoredHistoryEntries(
 					admission.invalidIdentity = true;
 					admission.sessionId = undefined;
 				}
+				continue;
+			}
+			if (isBraceLeadingLegacyTitle(line, admission, initialPlainTitle)) {
+				initialPlainTitle = true;
 				continue;
 			}
 			if (!line.trimStart().startsWith("{")) {
