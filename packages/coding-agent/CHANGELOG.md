@@ -2,11 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Python eval shutdown waits now have a JavaScript-side deadline, and reset, acquire, and replacement transitions honor caller cancellation without dropping transition ownership ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
+## [1.10.6] - 2026-11-16
+
+### Fixed
+
+- Ci(ovh): pin PR cleanup WORKFLOW_SHA and keep verified-only OVH_CI_PR_ADMISSION gate ([PR #1150](https://github.com/Wladefant/veyyon/pull/1150)).
+
 ## [1.10.5] - 2026-11-16
 
 ### Fixed
 
 - Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
 - Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
 
 ## [1.10.4] - 2026-11-16
