@@ -651,10 +651,15 @@ async function runPreparedSpawn(
 		const registry = AgentRegistry.global();
 		const predecessor = registry.get(params.successorOf);
 		const parentRef = options.parentAgentId ? registry.get(options.parentAgentId) : undefined;
+		const artifactMatched =
+			predecessor?.sessionFile !== null &&
+			predecessor?.sessionFile !== undefined &&
+			path.dirname(path.resolve(predecessor.sessionFile)) === path.resolve(spawn.artifacts.dir);
 		const wrongScope = predecessor?.scope !== undefined && predecessor.scope !== parentRef?.scope;
 		const wrongParent =
 			predecessor?.parentId !== undefined &&
 			(!options.parentAgentId ||
+				(!parentRef && !artifactMatched) ||
 				(predecessor.parentId !== options.parentAgentId &&
 					!registry.descendantsOf(options.parentAgentId).includes(params.successorOf)));
 		if (predecessor && (wrongScope || wrongParent)) {

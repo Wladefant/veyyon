@@ -384,6 +384,33 @@ describe("explicit bounded lane successors", () => {
 			"successor-wrong-owner",
 		);
 		expect(disposed).toBe(false);
+
+		// Missing scope + coincident fallback parentId "Main" with no registered Main must still fail closed.
+		registry.unregister("other-main");
+		registry.register({
+			id: predecessor,
+			displayName: predecessor,
+			kind: "sub",
+			parentId: "Main",
+			status: "idle",
+			session: {
+				dispose: async () => {
+					disposed = true;
+				},
+			} as unknown as AgentSession,
+			sessionFile: dir.join("other-conv", `${predecessor}.jsonl`),
+		});
+		registry.recordTerminalOutcome(predecessor, "failed", "402");
+		const refusedCoincidentMain = await dispatch("CoincidentMain", predecessor);
+		expect(refusedCoincidentMain.isError).toBe(true);
+		expect(refusedCoincidentMain.content.map(c => (c.type === "text" ? c.text : "")).join("\n")).toContain(
+			"successor-wrong-owner",
+		);
+		expect(disposed).toBe(false);
+		expect(registry.get(predecessor)).toBeDefined();
+		expect(executed).toHaveLength(1);
+		const claimFiles = (await fs.readdir(dir.join("parent"))).filter(name => name.endsWith(".claim.json"));
+		expect(claimFiles).toHaveLength(0);
 	});
 	it("refuses successor when predecessor runs and settles again (ABA) during checkpoint claim", async () => {
 		await dispatch("Original");
