@@ -37,7 +37,7 @@ import {
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
-type Mode =
+export type Mode =
 	| "all"
 	| "local"
 	| "local-ts"
@@ -258,14 +258,33 @@ interface CodingAgentBucketPlan {
 	parallel: number;
 	// Required, with no unchunked spelling: see the comment above.
 	chunkSize: number;
+	ciChunksAtOnce: number;
 }
 
 export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
-	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10 },
-	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
-	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
-	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
+	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 2 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
 };
+
+const BUCKET_OF_MODE: Partial<Record<Mode, CodingAgentBucket>> = {
+	"coding-agent-singleton": "singleton",
+	"coding-agent-ui": "ui",
+	"coding-agent-runtime": "runtime",
+	"coding-agent-native": "native",
+};
+
+/**
+ * How many of `total` chunk processes run at once. In CI it is the bucket plan's
+ * `ciChunksAtOnce` for a single coding-agent bucket and 1 for every other mode;
+ * outside CI it is {@link testConcurrency}.
+ */
+export function chunksAtOnce(mode: Mode, ci: boolean, total: number): number {
+	if (!ci) return testConcurrency(total);
+	const bucket = BUCKET_OF_MODE[mode];
+	return Math.max(1, Math.min(bucket ? codingAgentBucketPlans[bucket].ciChunksAtOnce : 1, total));
+}
 
 // Smaller workspace packages stay separate from native/TUI/integration suites so
 // their short TS suites can run together. CI still downloads the Linux x64 native
@@ -2304,7 +2323,7 @@ if (import.meta.main) {
 			testCommands.length > 0 &&
 			(junitReportDir !== null || (!isCI() && testCommands.length > 1))
 		) {
-			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
+			await runTestCommandsInParallel(testCommands, chunksAtOnce(requestedMode as Mode, isCI(), testCommands.length));
 		} else {
 			await runTestCommandsInSequence(testCommands);
 		}

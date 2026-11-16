@@ -73,6 +73,7 @@ describe("OVH shard planner writes the selected plan", () => {
 		await writeFile(input, "b.test.ts\na.test.ts\n");
 		await writeFile(githubOutput, "previous=value\n");
 		const plan = await runCli(["--input", input, "--output", output], { GITHUB_OUTPUT: githubOutput });
+		if (typeof plan === "number") throw new Error(`expected shard plan, got number ${plan}`);
 		expect(plan.shards.flatMap(shard => shard.files)).toEqual(["a.test.ts", "b.test.ts"]);
 		expect(JSON.parse(await readFile(path.join(output, "plan.json"), "utf8"))).toEqual(plan);
 		for (const shard of plan.shards) {

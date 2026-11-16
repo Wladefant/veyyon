@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).
+
 ## [1.10.3] - 2026-11-16
 
 ### Fixed
