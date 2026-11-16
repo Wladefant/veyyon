@@ -10,6 +10,7 @@ import { Agent, type AgentTool } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { withJournalLock } from "@veyyon/kernel/session/session-storage";
 import { TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
@@ -79,6 +80,42 @@ async function session(id: string, responses: MockResponse[], existing?: Session
 }
 
 describe("native retained child resume", () => {
+	it("claims a parent phase in memory while the real journal lock is held, then persists it once", async () => {
+		const child = await session("worker", []);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const sessionFile = child.store.getSessionFile()!;
+		let release!: () => void;
+		let entered!: () => void;
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		const held = new Promise<void>(resolve => { entered = resolve; });
+		const lock = withJournalLock(sessionFile, async () => {
+			entered();
+			await gate;
+		});
+		await held;
+		const pendingRewrite = child.store.rewriteEntries();
+		await setImmediate();
+		try {
+			const outbox = new IrcContinuationOutbox(child.store);
+			expect(outbox.begin("locked-parent-message")).toBe(true);
+			expect(outbox.begin("locked-parent-message")).toBe(false);
+		} finally {
+			release();
+			await lock;
+		}
+		await pendingRewrite;
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		await child.instance.dispose();
+		const reopened = await SessionManager.open(sessionFile);
+		const phaseCount = reopened.getEntries().filter(entry =>
+			entry.type === "custom" && entry.customType === "irc:continuation-phase" &&
+			Reflect.get(entry.data ?? {}, "phaseId") === "locked-parent-message",
+		).length;
+		expect(phaseCount).toBe(1);
+		await reopened.close();
+	});
 	it("delivers B once through the parent inbox, keeps A, and coalesces duplicate resume IDs", async () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();

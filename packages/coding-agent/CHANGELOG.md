@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.10.10] - 2026-11-16
 
 ### Fixed
