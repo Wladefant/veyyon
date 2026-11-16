@@ -482,7 +482,13 @@ export class StartupModelSelection {
 		matchPreferences: ModelMatchPreferences,
 	): void {
 		if (this.#inputs.options.modelPatternFallbackChain) {
-			installPatternFallbackChain(this.#inputs.settings, match, laterPatterns, availableModels, matchPreferences);
+			this.modelPatternFallbackKey = installPatternFallbackChain(
+				this.#inputs.settings,
+				match,
+				laterPatterns,
+				availableModels,
+				matchPreferences,
+			);
 		}
 		if (match.explicitThinkingLevel) this.#restoredThinkingLevel = match.thinkingLevel;
 		this.#adopt(match.model);

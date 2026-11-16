@@ -5,6 +5,7 @@ import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { drainMicrotasks } from "../../../utils/test/helpers/drain-microtasks";
+
 const deferred = <T = void>() => Promise.withResolvers<T>();
 interface SessionStub {
 	session: AgentSession;
@@ -82,12 +83,6 @@ describe("AgentLifecycleManager", () => {
 			parentId,
 			status: "idle",
 		});
-	}
-
-	function registerReportingParent(): string {
-		const id = "PruneParent";
-		registry.register({ id, displayName: "parent", kind: "main", session: makeSessionStub().session });
-		return id;
 	}
 
 	/**
@@ -600,4 +595,36 @@ describe("AgentLifecycleManager", () => {
 		expect(ref.terminalOutcomeReason).toBeUndefined();
 	});
 
+	it("fallAsleep does not detach or sleep a replacement ref registered while dispose is in flight", async () => {
+		const gate = deferred();
+		const oldStub = makeSessionStub(() => gate.promise);
+		registry.register({
+			id: "Race",
+			displayName: "task",
+			kind: "sub",
+			session: oldStub.session,
+			status: "idle",
+		});
+
+		const sleeping = lifecycle.fallAsleep("Race", oldStub.session);
+		await flushAsync();
+		expect(oldStub.disposeCalls()).toBe(1);
+
+		registry.unregister("Race");
+		const newStub = makeSessionStub();
+		const replacement = registry.register({
+			id: "Race",
+			displayName: "task",
+			kind: "sub",
+			session: newStub.session,
+			status: "running",
+		});
+
+		gate.resolve();
+		await sleeping;
+
+		expect(registry.get("Race")).toBe(replacement);
+		expect(replacement.status).toBe("running");
+		expect(replacement.session).toBe(newStub.session);
+	});
 });

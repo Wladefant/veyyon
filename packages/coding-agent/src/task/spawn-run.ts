@@ -704,7 +704,6 @@ async function runPreparedSpawn(
 			);
 		}
 		if (current) {
-			registry.setStatus(params.successorOf, "aborted");
 			await AgentLifecycleManager.global().release(params.successorOf);
 		}
 		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint, ownershipLease);

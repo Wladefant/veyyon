@@ -201,7 +201,7 @@ function archivedTargetForCaller(caller: ResolvedHistoryCaller, agentId: string)
 		!target ||
 		target.kind === "advisor" ||
 		target.scope !== caller.scope ||
-		(target.status !== "parked" && target.status !== "aborted") ||
+		target.status !== "asleep" ||
 		target.session !== null ||
 		typeof target.sessionFile !== "string" ||
 		target.sessionFile.trim().length === 0
@@ -219,7 +219,7 @@ function renderArchivedIndex(refs: Iterable<AgentRef>, scope: string, request: A
 		if (
 			ref.kind === "advisor" ||
 			ref.scope !== scope ||
-			ref.status !== "parked" ||
+			ref.status !== "asleep" ||
 			ref.session !== null ||
 			typeof ref.sessionFile !== "string" ||
 			ref.sessionFile.trim().length === 0
@@ -402,7 +402,7 @@ async function resolveArchivedHistory(
 			archivedTargetForCaller(currentCaller, agentId) !== target ||
 			target.kind === "advisor" ||
 			target.scope !== caller.scope ||
-			(target.status !== "parked" && target.status !== "aborted") ||
+			target.status !== "asleep" ||
 			target.session !== null ||
 			target.sessionFile !== rawSessionFile
 		) {

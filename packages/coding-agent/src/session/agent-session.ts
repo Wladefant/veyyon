@@ -6041,14 +6041,14 @@ await this.#events.send(intent === event.intent ? event : { ...event, intent });
 			if (!parentId) {
 				parentId = context.ancestorIds.find(id => {
 					const parent = registry.get(id);
-					return parent && parent.status !== "aborted" && (parent.session || parent.sessionFile);
+					return parent && (parent.session || parent.sessionFile);
 				});
 				if (!parentId) return false;
 				parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			}
 			if (!context.ancestorIds.includes(parentId)) return false;
 			const parent = registry.get(parentId);
-			if (!parent || parent.status === "aborted") return false;
+			if (!parent) return false;
 			const receipt = await IrcBus.global().send(
 				{ from: completion.agentId, to: parentId, body: completion.output },
 				{

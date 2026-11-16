@@ -280,6 +280,7 @@ export class AgentLifecycleManager {
 		// unregisters the agent instead of letting it sleep.
 		const { promise, resolve } = Promise.withResolvers<void>();
 		this.#sleeping.set(id, promise);
+		const expectedRef = this.#registry.get(id);
 		void (async () => {
 			try {
 				await dispose();
@@ -288,8 +289,10 @@ export class AgentLifecycleManager {
 			}
 			try {
 				const ref = this.#registry.get(id);
-				if (ref?.session === session) this.#registry.detachSession(id);
-				if (ref) this.#registry.setStatus(id, "asleep");
+				if (ref && ref === expectedRef && ref.session === session) {
+					this.#registry.detachSession(id);
+					this.#registry.setStatus(id, "asleep");
+				}
 			} finally {
 				this.#sleeping.delete(id);
 				resolve();
@@ -377,8 +380,6 @@ export class AgentLifecycleManager {
 				logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: errorMessage(error) });
 			}
 		}
-		const adopted = this.#adopted.get(id);
-		if (adopted) disarm(adopted);
 		this.#adopted.delete(id);
 		this.#scheduleNext();
 		this.#registry.unregister(id);
