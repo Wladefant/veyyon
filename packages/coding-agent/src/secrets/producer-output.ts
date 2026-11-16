@@ -10,7 +10,6 @@ const MAX_RECORD_CHARS = 64 * 1024;
 const MAX_SCALAR_CHARS = 16 * 1024 * 1024;
 const MAX_PENDING_LOOKBEHIND_CHARS = 1024 * 1024;
 const MAX_DIRECT_SANITIZE_CHARS = 4 * 1024 * 1024;
-const MAX_DROPPING_PREFIX_CHARS = 256;
 export const BLOCKED_OUTPUT_RECORD = "[credential output withheld]";
 export const OVERSIZED_OUTPUT_RECORD = "[line over 65,536 chars, not scanned]";
 const CREDENTIAL_RECORD =
@@ -430,12 +429,10 @@ function regexLiteralLength(line: string, start: number, depth: number): number 
 }
 
 function classifyJsonStringScalar(text: string, first: number): "scalar" | "oversized" | "not-scalar" {
-	const limit = Math.min(text.length, first + MAX_SCALAR_CHARS);
 	let inString = true;
 	let escaped = false;
 	let trailingWhitespace = 0;
-	let index = first + 1;
-	for (; index < limit; index++) {
+	for (let index = first + 1; index < text.length; index++) {
 		const code = text.charCodeAt(index);
 		if (inString) {
 			if (escaped) {
@@ -455,15 +452,6 @@ function classifyJsonStringScalar(text: string, first: number): "scalar" | "over
 		}
 	}
 	if (inString) return text.length > MAX_SCALAR_CHARS ? "oversized" : "not-scalar";
-	for (; index < text.length; index++) {
-		const code = text.charCodeAt(index);
-		if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
-			trailingWhitespace++;
-			if (trailingWhitespace > MAX_RECORD_CHARS) return "not-scalar";
-		} else {
-			return "not-scalar";
-		}
-	}
 	return text.length > MAX_SCALAR_CHARS ? "oversized" : "scalar";
 }
 
@@ -479,12 +467,116 @@ function hasOversizedLine(text: string): boolean {
 	return false;
 }
 
-function appendLinePrefix(prefix: string, segment: string): string {
-	if (prefix.length >= MAX_DROPPING_PREFIX_CHARS) return prefix;
+type EnvAssignmentState =
+	| "ws0"
+	| "e"
+	| "ex"
+	| "exp"
+	| "expo"
+	| "expor"
+	| "export"
+	| "export_ws"
+	| "ident"
+	| "matched"
+	| "rejected";
+
+function isWhitespaceCode(code: number): boolean {
+	if (code === 0x20 || code === 0x09 || code === 0x0d || code === 0x0a || code === 0x0b || code === 0x0c || code === 0xa0) {
+		return true;
+	}
+	return code >= 0x1680 && /\s/.test(String.fromCharCode(code));
+}
+
+function isIdentStartCode(code: number): boolean {
+	return (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || code === 0x5f;
+}
+
+function isIdentContinueCode(code: number): boolean {
+	return isIdentStartCode(code) || (code >= 0x30 && code <= 0x39);
+}
+
+function advanceEnvAssignmentState(state: EnvAssignmentState, segment: string): EnvAssignmentState {
+	if (state === "matched" || state === "rejected") return state;
 	const sanitized = sanitizeText(segment);
-	const body = prefix.length === 0 ? sanitized.trimStart() : sanitized;
-	if (!body) return prefix;
-	return prefix + body.slice(0, MAX_DROPPING_PREFIX_CHARS - prefix.length);
+	let current = state;
+	for (let index = 0; index < sanitized.length; index++) {
+		const code = sanitized.charCodeAt(index);
+		switch (current) {
+			case "ws0":
+				if (isWhitespaceCode(code)) break;
+				if (code === 0x65) current = "e";
+				else if (isIdentStartCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "e":
+				if (code === 0x78) current = "ex";
+				else if (code === 0x3d) return "matched";
+				else if (isIdentContinueCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "ex":
+				if (code === 0x70) current = "exp";
+				else if (code === 0x3d) return "matched";
+				else if (isIdentContinueCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "exp":
+				if (code === 0x6f) current = "expo";
+				else if (code === 0x3d) return "matched";
+				else if (isIdentContinueCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "expo":
+				if (code === 0x72) current = "expor";
+				else if (code === 0x3d) return "matched";
+				else if (isIdentContinueCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "expor":
+				if (code === 0x74) current = "export";
+				else if (code === 0x3d) return "matched";
+				else if (isIdentContinueCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "export":
+				if (isWhitespaceCode(code)) current = "export_ws";
+				else if (code === 0x3d) return "matched";
+				else if (isIdentContinueCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "export_ws":
+				if (isWhitespaceCode(code)) break;
+				if (isIdentStartCode(code)) current = "ident";
+				else return "rejected";
+				break;
+			case "ident":
+				if (code === 0x3d) return "matched";
+				if (!isIdentContinueCode(code)) return "rejected";
+				break;
+		}
+	}
+	return current;
+}
+
+function boundedScalarTail(parts: string[], tailSegment: string, maxChars: number): string {
+	let remaining = maxChars;
+	const chunks: string[] = [];
+	if (tailSegment.length >= remaining) return tailSegment.slice(-remaining);
+	if (tailSegment) {
+		chunks.push(tailSegment);
+		remaining -= tailSegment.length;
+	}
+	for (let index = parts.length - 1; index >= 0 && remaining > 0; index--) {
+		const part = parts[index];
+		if (part.length >= remaining) {
+			chunks.push(part.slice(-remaining));
+			remaining = 0;
+		} else if (part) {
+			chunks.push(part);
+			remaining -= part.length;
+		}
+	}
+	return chunks.reverse().join("");
 }
 /** Keep JSON structure and primitive metadata out of the text-record grammar. */
 export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
@@ -519,10 +611,10 @@ export class ProducerOutputGuard {
 	#recordLength = 0;
 	#droppingLabel = OVERSIZED_OUTPUT_RECORD;
 	#dropping = false;
-	#droppingPrefix = "";
+	#droppingAssignmentState: EnvAssignmentState = "ws0";
 	#droppingPartOfCandidate = false;
 	#oversizedPending = false;
-	#oversizedPendingPrefix = "";
+	#oversizedPendingAssignmentState: EnvAssignmentState = "ws0";
 	#withholding = false;
 	#candidate = "";
 	#assignments = 0;
@@ -539,6 +631,7 @@ export class ProducerOutputGuard {
 	#scalarState: "undecided" | "in_string" | "after_string" | "records" = "undecided";
 	#scalarEscaped = false;
 	#scalarTrailingWhitespace = 0;
+	#scalarHasNewline = false;
 	readonly #redact: ((text: string) => string) | undefined;
 	readonly #pendingPrefixLength: ((text: string) => number) | undefined;
 
@@ -632,14 +725,15 @@ export class ProducerOutputGuard {
 		this.#scalarState = "records";
 		this.#scalarEscaped = false;
 		this.#scalarTrailingWhitespace = 0;
+		this.#scalarHasNewline = false;
 		this.#candidate = "";
 		this.#candidateOversized = false;
 		this.#candidateEndsWithNewline = false;
 		this.#dropping = false;
 		this.#oversizedPending = false;
 		this.#droppingPartOfCandidate = false;
-		this.#droppingPrefix = "";
-		this.#oversizedPendingPrefix = "";
+		this.#droppingAssignmentState = "ws0";
+		this.#oversizedPendingAssignmentState = "ws0";
 		return label;
 	}
 
@@ -653,12 +747,12 @@ export class ProducerOutputGuard {
 		this.#candidateEndsWithNewline = newline.length > 0;
 	}
 
-	#consumeCompletedOversizedLine(line: string, newline: string, output: string[]): boolean {
-		if (!line.trim()) {
+	#consumeCompletedOversizedLine(state: EnvAssignmentState, newline: string, output: string[]): boolean {
+		if (state === "ws0") {
 			if (this.#assignments > 0 && !this.#structured) this.#holdOversizedCandidateLine(newline);
 			return false;
 		}
-		if (ENV_ASSIGNMENT.test(line)) {
+		if (state === "matched") {
 			this.#assignments++;
 			if (this.#assignments >= 3) {
 				output.push(this.#block(BLOCKED_OUTPUT_RECORD) + newline);
@@ -675,16 +769,22 @@ export class ProducerOutputGuard {
 		return false;
 	}
 
-	#consumeBufferedOversizedPrefix(buffered: string, output: string[]): { blocked: boolean; currentLine: string } {
+	#consumeBufferedOversizedPrefix(
+		buffered: string,
+		output: string[],
+	): { blocked: boolean; currentLineState: EnvAssignmentState } {
 		const sanitized = sanitizeText(buffered);
 		const lastBreak = sanitized.lastIndexOf("\n");
-		if (lastBreak < 0) return { blocked: false, currentLine: sanitized };
+		if (lastBreak < 0) return { blocked: false, currentLineState: advanceEnvAssignmentState("ws0", sanitized) };
 		for (const line of sanitized.slice(0, lastBreak).split("\n")) {
-			if (this.#consumeCompletedOversizedLine(line, "\n", output)) {
-				return { blocked: true, currentLine: "" };
+			if (this.#consumeCompletedOversizedLine(advanceEnvAssignmentState("ws0", line), "\n", output)) {
+				return { blocked: true, currentLineState: "ws0" };
 			}
 		}
-		return { blocked: false, currentLine: sanitized.slice(lastBreak + 1) };
+		return {
+			blocked: false,
+			currentLineState: advanceEnvAssignmentState("ws0", sanitized.slice(lastBreak + 1)),
+		};
 	}
 	#flushCandidate(): string {
 		const candidate = this.#candidate;
@@ -825,6 +925,7 @@ export class ProducerOutputGuard {
 		this.#scalarTrailingWhitespace = 0;
 		this.#scalarParts = [];
 		this.#scalarLength = 0;
+		this.#scalarHasNewline = false;
 		return this.#advanceScalarProbe(probe, first + 1);
 	}
 
@@ -842,6 +943,7 @@ export class ProducerOutputGuard {
 					return this.#abandonScalarToRecords(segment);
 				}
 			} else if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+				if (code === 0x0a) this.#scalarHasNewline = true;
 				this.#scalarTrailingWhitespace++;
 				if (this.#scalarTrailingWhitespace > MAX_RECORD_CHARS) {
 					return this.#abandonScalarToRecords(segment);
@@ -850,15 +952,50 @@ export class ProducerOutputGuard {
 				return this.#abandonScalarToRecords(segment);
 			}
 			if (this.#scalarLength + index + 1 > MAX_SCALAR_CHARS) {
-				return this.#block(OVERSIZED_OUTPUT_RECORD);
+				return this.#overflowScalarToDropping(segment, index);
 			}
 		}
 		if (segment.length > MAX_SCALAR_CHARS - this.#scalarLength) {
-			return this.#block(OVERSIZED_OUTPUT_RECORD);
+			return this.#overflowScalarToDropping(segment, segment.length);
 		}
 		this.#scalarLength += segment.length;
 		if (segment) this.#scalarParts!.push(segment);
 		return "";
+	}
+
+	#overflowScalarToDropping(segment: string, overflowIndex: number): string {
+		const parts = this.#scalarParts ?? [];
+		const prefixSegment = segment.slice(0, overflowIndex);
+		let pendingPrefix = 0;
+		try {
+			const tail = boundedScalarTail(parts, prefixSegment, MAX_PENDING_LOOKBEHIND_CHARS);
+			pendingPrefix = this.#pendingPrefixLength?.(sanitizeText(tail)) ?? 0;
+		} catch {
+			return this.#block(OVERSIZED_OUTPUT_RECORD);
+		}
+		if (pendingPrefix > 0) {
+			return this.#block(OVERSIZED_OUTPUT_RECORD);
+		}
+		const hasNewline = this.#scalarHasNewline;
+		const afterTail = hasNewline ? boundedScalarTail(parts, prefixSegment, MAX_RECORD_CHARS + 1) : "";
+		this.#scalarParts = null;
+		this.#scalarLength = 0;
+		this.#scalarTrailingWhitespace = 0;
+		this.#scalarEscaped = false;
+		this.#scalarHasNewline = false;
+		this.#scalarState = "records";
+		if (hasNewline) {
+			const firstNewline = afterTail.indexOf("\n");
+			if (firstNewline >= 0) {
+				const remainder = afterTail.slice(firstNewline + 1) + segment.slice(overflowIndex);
+				return `${OVERSIZED_OUTPUT_RECORD}\n${this.#pushRecords(remainder)}`;
+			}
+		}
+		this.#dropping = true;
+		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
+		this.#droppingAssignmentState = "rejected";
+		this.#droppingPartOfCandidate = false;
+		return this.#pushRecords(segment.slice(overflowIndex));
 	}
 
 	#abandonScalarToRecords(segment: string): string {
@@ -867,6 +1004,7 @@ export class ProducerOutputGuard {
 		this.#scalarLength = 0;
 		this.#scalarTrailingWhitespace = 0;
 		this.#scalarEscaped = false;
+		this.#scalarHasNewline = false;
 		this.#scalarState = "records";
 		const output: string[] = [];
 		for (const part of parts) {
@@ -890,12 +1028,14 @@ export class ProducerOutputGuard {
 			const segment = chunk.slice(offset, end);
 			let scannedDroppedSegment = false;
 			if (this.#dropping) {
-				this.#droppingPrefix = appendLinePrefix(this.#droppingPrefix, segment);
+				this.#droppingAssignmentState = advanceEnvAssignmentState(this.#droppingAssignmentState, segment);
 			} else {
 				const segmentLength = end - offset;
 				if (this.#oversizedPending) {
-					this.#oversizedPendingPrefix = appendLinePrefix(this.#oversizedPendingPrefix, segment);
-					if (this.#pending.length + segmentLength + separator.length > MAX_PENDING_LOOKBEHIND_CHARS) {
+					this.#oversizedPendingAssignmentState = advanceEnvAssignmentState(
+						this.#oversizedPendingAssignmentState,
+						segment,
+					);
 						const room = Math.max(0, MAX_PENDING_LOOKBEHIND_CHARS - this.#pending.length);
 						const bounded = sanitizeText(this.#pending + segment.slice(0, room));
 						let pendingPrefix = 0;
@@ -920,8 +1060,8 @@ export class ProducerOutputGuard {
 						this.#oversizedPending = false;
 						this.#dropping = true;
 						this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-						this.#droppingPrefix = this.#oversizedPendingPrefix;
-						this.#oversizedPendingPrefix = "";
+						this.#droppingAssignmentState = this.#oversizedPendingAssignmentState;
+						this.#oversizedPendingAssignmentState = "ws0";
 						scannedDroppedSegment = true;
 					} else {
 						this.#pending += segment + separator;
@@ -948,13 +1088,13 @@ export class ProducerOutputGuard {
 						this.#pending = prospective;
 						this.#recordLength += segmentLength;
 						this.#oversizedPending = true;
-						this.#oversizedPendingPrefix = appendLinePrefix(consumed.currentLine, segment);
+						this.#oversizedPendingAssignmentState = advanceEnvAssignmentState(consumed.currentLineState, segment);
 					} else {
 						this.#droppingPartOfCandidate = this.#structured;
 						this.#pending = "";
 						this.#dropping = true;
 						this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-						this.#droppingPrefix = appendLinePrefix(consumed.currentLine, segment);
+						this.#droppingAssignmentState = advanceEnvAssignmentState(consumed.currentLineState, segment);
 						if (this.#structured) {
 							this.#candidate = "";
 							this.#candidateOversized = true;
@@ -985,34 +1125,33 @@ export class ProducerOutputGuard {
 						output.push(this.#block(OVERSIZED_OUTPUT_RECORD));
 						break;
 					}
-					if (this.#consumeCompletedOversizedLine(this.#oversizedPendingPrefix, "\n", output)) break;
-					this.#oversizedPendingPrefix = "";
+					if (this.#consumeCompletedOversizedLine(this.#oversizedPendingAssignmentState, "\n", output)) break;
+					this.#oversizedPendingAssignmentState = "ws0";
 					this.#pending = sanitized.slice(-pendingPrefix);
 					offset = newline + 1;
 					continue;
 				}
-				const prefixLine = this.#oversizedPendingPrefix;
-				const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
+				const lineState = this.#oversizedPendingAssignmentState;
+				const wasAssignment = lineState === "matched";
 				this.#pending = "";
 				this.#oversizedPending = false;
-				this.#oversizedPendingPrefix = "";
-				if (this.#consumeCompletedOversizedLine(prefixLine, "\n", output)) break;
+				this.#oversizedPendingAssignmentState = "ws0";
+				if (this.#consumeCompletedOversizedLine(lineState, "\n", output)) break;
 				if (!wasAssignment) output.push(`${OVERSIZED_OUTPUT_RECORD}\n`);
 				offset = newline + 1;
 				continue;
 			}
 			if (this.#dropping) {
-				const prefixLine = this.#droppingPrefix;
-				const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
+				const lineState = this.#droppingAssignmentState;
+				const wasAssignment = lineState === "matched";
 				const partOfCandidate = this.#droppingPartOfCandidate;
 				this.#pending = "";
 				this.#dropping = false;
 				this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-				this.#droppingPrefix = "";
+				this.#droppingAssignmentState = "ws0";
 				this.#droppingPartOfCandidate = false;
 				if (partOfCandidate && !this.#structured) this.#candidateEndsWithNewline = true;
-				if (this.#consumeCompletedOversizedLine(prefixLine, "\n", output)) break;
-				if (this.#structured) {
+				if (this.#consumeCompletedOversizedLine(lineState, "\n", output)) break;
 					this.#candidate = "";
 					this.#candidateOversized = true;
 					this.#candidateEndsWithNewline = true;
@@ -1051,6 +1190,7 @@ export class ProducerOutputGuard {
 			this.#scalarTrailingWhitespace = 0;
 			this.#scalarEscaped = false;
 			this.#scalarState = "records";
+			this.#scalarHasNewline = false;
 			return this.sanitize(serialized);
 		}
 		if (this.#scalarState === "undecided") {
@@ -1065,14 +1205,14 @@ export class ProducerOutputGuard {
 	#finishRecords(): string {
 		if (this.#withholding) return "";
 		if (this.#oversizedPending) {
-			const prefixLine = this.#oversizedPendingPrefix;
-			const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
+			const lineState = this.#oversizedPendingAssignmentState;
+			const wasAssignment = lineState === "matched";
 			this.#pending = "";
 			this.#recordLength = 0;
 			this.#oversizedPending = false;
-			this.#oversizedPendingPrefix = "";
+			this.#oversizedPendingAssignmentState = "ws0";
 			const output: string[] = [];
-			if (this.#consumeCompletedOversizedLine(prefixLine, "", output)) return output.join("");
+			if (this.#consumeCompletedOversizedLine(lineState, "", output)) return output.join("");
 			if (!this.#structured && (this.#candidate || this.#candidateOversized)) {
 				const flushed = this.#flushCandidate();
 				if (flushed) output.push(flushed);
@@ -1093,15 +1233,15 @@ export class ProducerOutputGuard {
 			}
 		}
 		if (this.#dropping) {
-			const prefixLine = this.#droppingPrefix;
+			const lineState = this.#droppingAssignmentState;
 			const label = this.#droppingLabel;
-			const wasAssignment = ENV_ASSIGNMENT.test(prefixLine);
+			const wasAssignment = lineState === "matched";
 			const partOfCandidate = this.#droppingPartOfCandidate;
 			this.#pending = "";
 			this.#recordLength = 0;
 			this.#dropping = false;
 			this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-			this.#droppingPrefix = "";
+			this.#droppingAssignmentState = "ws0";
 			this.#droppingPartOfCandidate = false;
 			if (partOfCandidate) {
 				this.#candidate = "";
@@ -1109,7 +1249,7 @@ export class ProducerOutputGuard {
 				this.#candidateEndsWithNewline = false;
 			}
 			const output: string[] = [];
-			if (this.#consumeCompletedOversizedLine(prefixLine, "", output)) return output.join("");
+			if (this.#consumeCompletedOversizedLine(lineState, "", output)) return output.join("");
 			if (this.#structured && this.#depth > 0) return output.join("") + this.#block(label);
 			if (!this.#structured && (this.#candidate || this.#candidateOversized)) {
 				const flushed = this.#flushCandidate();
@@ -1124,7 +1264,7 @@ export class ProducerOutputGuard {
 		this.#recordLength = 0;
 		this.#dropping = false;
 		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-		this.#droppingPrefix = "";
+		this.#droppingAssignmentState = "ws0";
 		if (!this.#withholding && this.#structured && this.#depth > 0) return text + this.#block();
 		const output = text + (this.#withholding ? "" : this.#flushCandidate());
 		if (pendingPrefix > 0) this.#withholding = true;
@@ -1136,10 +1276,10 @@ export class ProducerOutputGuard {
 		this.#recordLength = 0;
 		this.#dropping = false;
 		this.#droppingLabel = OVERSIZED_OUTPUT_RECORD;
-		this.#droppingPrefix = "";
+		this.#droppingAssignmentState = "ws0";
 		this.#droppingPartOfCandidate = false;
 		this.#oversizedPending = false;
-		this.#oversizedPendingPrefix = "";
+		this.#oversizedPendingAssignmentState = "ws0";
 		this.#withholding = false;
 		this.#candidate = "";
 		this.#candidateOversized = false;
@@ -1156,5 +1296,6 @@ export class ProducerOutputGuard {
 		this.#scalarState = "undecided";
 		this.#scalarEscaped = false;
 		this.#scalarTrailingWhitespace = 0;
+		this.#scalarHasNewline = false;
 	}
 }

@@ -374,6 +374,35 @@ describe("producer output withholds multiline registered literals", () => {
 			chunked += chunkGuard.finish();
 			expect(chunked).toBe(direct);
 		}
+		const longOversizedCases = [
+			`export ${" ".repeat(300)}FIRST=${oversized}\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+			`FIRST=opaque-first\nexport ${" ".repeat(300)}SECOND=${oversized}\nTHIRD=opaque-third\nend\n`,
+			`FIRST=opaque-first\nSECOND=opaque-second\nexport ${" ".repeat(300)}THIRD=${oversized}\nend\n`,
+			...[255, 256, 257, 320].flatMap(keyLength => {
+				const key = "K".repeat(keyLength);
+				return [
+					`${key}=${oversized}\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+					`FIRST=opaque-first\n${key}=${oversized}\nTHIRD=opaque-third\nend\n`,
+					`FIRST=opaque-first\nSECOND=opaque-second\n${key}=${oversized}\nend\n`,
+				];
+			}),
+		];
+		for (const input of longOversizedCases) {
+			expect(new ProducerOutputGuard().sanitize(input)).toBe(BLOCKED_OUTPUT_RECORD);
+			const wholeGuard = new ProducerOutputGuard();
+			const whole = wholeGuard.push(input) + wholeGuard.finish();
+			expect(whole).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+			expect(whole).not.toContain("opaque-second");
+			expect(whole).not.toContain("opaque-third");
+
+			const chunkGuard = new ProducerOutputGuard();
+			let chunked = "";
+			for (let offset = 0; offset < input.length; offset += 128) {
+				chunked += chunkGuard.push(input.slice(offset, offset + 128));
+			}
+			chunked += chunkGuard.finish();
+			expect(chunked).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+		}
 	});
 
 	it("bounds retained pending bytes across repeating prefixes past 16 Mi chars and resumes safely", () => {
@@ -408,4 +437,28 @@ describe("producer output withholds multiline registered literals", () => {
 		pathologicalOutput += pathological.finish();
 		expect(pathologicalOutput).toBe(OVERSIZED_OUTPUT_RECORD);
 	}, 15_000);
+	it("preserves registered-literal protection across a 16 Mi quoted first record", () => {
+		const tail = "Error: final diagnostic\n";
+		const input = `"${"x".repeat(16 * 1024 * 1024 + 1)}"\n${SECRET}\n${tail}`;
+		const direct = runWithProducerSecretOwner(
+			{
+				redact: text => new SecretObfuscator([{ type: "plain", origin: "config", content: SECRET, name: "MULTILINE_CANARY" }]).obfuscate(text),
+				pendingPrefixLength: text => new SecretObfuscator([{ type: "plain", origin: "config", content: SECRET, name: "MULTILINE_CANARY" }]).pendingRedactionPrefixLength(text),
+			},
+			() => new ProducerOutputGuard().sanitize(input),
+		);
+		expect(direct).toContain("#MULTILINE_CANARY#");
+		expect(direct).not.toContain(SECRET);
+		expect(direct.endsWith(tail)).toBe(true);
+
+		const streamGuard = guardFor();
+		const streamed = streamGuard.push(input) + streamGuard.finish();
+		expect(streamed).toBe(direct);
+
+		const boundaryGuard = guardFor(`${"x".repeat(64)}\n${SECRET}`);
+		const boundaryInput = `"${"x".repeat(16 * 1024 * 1024 + 64)}\n${SECRET}\n${tail}`;
+		const boundaryStreamed = boundaryGuard.push(boundaryInput) + boundaryGuard.finish();
+		expect(boundaryStreamed).toBe(OVERSIZED_OUTPUT_RECORD);
+		expect(boundaryStreamed).not.toContain(SECRET);
+	}, 25_000);
 });

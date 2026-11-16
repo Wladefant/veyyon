@@ -272,4 +272,36 @@ describe("producer output treats persist-credentials booleans as metadata", () =
 		const realOversizedGuard = new ProducerOutputGuard();
 		expect(realOversizedGuard.push(realOversizedScalar) + realOversizedGuard.finish()).toBe(OVERSIZED_OUTPUT_RECORD);
 	}, 25_000);
+	it("recovers after a >16 Mi quoted or unterminated first log record", () => {
+		const tail = "Error: final diagnostic\n";
+		const sixteenMi = 16 * 1024 * 1024;
+		const cases = [
+			`"${"x".repeat(sixteenMi + 1)}"\n${tail}`,
+			`"${"x".repeat(sixteenMi + 1)}\n${tail}`,
+			`"${"x".repeat(sixteenMi - 10)}"\n${" ".repeat(20)}${tail}`,
+			`"${"x".repeat(sixteenMi - 2)}"\n${tail}`,
+			`"${"x".repeat(sixteenMi - 1)}"\n${tail}`,
+			`"${"x".repeat(sixteenMi)}"\n${tail}`,
+		];
+		for (const input of cases) {
+			const direct = new ProducerOutputGuard().sanitize(input);
+			expect(direct.endsWith(tail)).toBe(true);
+			expect(direct.startsWith(`${OVERSIZED_OUTPUT_RECORD}\n`)).toBe(true);
+
+			const wholeGuard = new ProducerOutputGuard();
+			const streamed = wholeGuard.push(input) + wholeGuard.finish();
+			expect(streamed.endsWith(tail)).toBe(true);
+			expect(streamed.startsWith(`${OVERSIZED_OUTPUT_RECORD}\n`)).toBe(true);
+
+			const split = sixteenMi - 10;
+			const splitGuard = new ProducerOutputGuard();
+			const chunked =
+				splitGuard.push(input.slice(0, split)) +
+				splitGuard.push(input.slice(split, sixteenMi + 20)) +
+				splitGuard.push(input.slice(sixteenMi + 20)) +
+				splitGuard.finish();
+			expect(chunked.endsWith(tail)).toBe(true);
+			expect(chunked.startsWith(`${OVERSIZED_OUTPUT_RECORD}\n`)).toBe(true);
+		}
+	}, 25_000);
 });
