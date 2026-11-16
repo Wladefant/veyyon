@@ -240,12 +240,7 @@ export interface RunMonitorArgs {
  * processing, abort/budget machinery, usage accumulation, and output capture
  * for one assignment run.
  */
-export type WatchdogPhase =
-	| "startup"
-	| "session-initializing"
-	| "streaming"
-	| "tool-running"
-	| "waiting-child";
+export type WatchdogPhase = "startup" | "session-initializing" | "streaming" | "tool-running" | "waiting-child";
 
 export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> = {
 	startup: 120_000,
