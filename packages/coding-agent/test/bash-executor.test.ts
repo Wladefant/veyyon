@@ -106,6 +106,7 @@ describe("executeBash", () => {
 					cancelled: status === "cancel",
 					timedOut: status === "timeout",
 					outputIncomplete: true,
+					captureIsDrainPrefix: false,
 					capturedOutput: "prefix",
 				};
 			});
@@ -1271,8 +1272,129 @@ describe("executeBash :async: background retention", () => {
 		},
 	);
 });
+describe("executeBash drain reconciliation regressions", () => {
+	beforeEach(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, cwd: os.tmpdir() });
+	});
+
+	afterEach(() => {
+		resetSettingsForTest();
+		vi.restoreAllMocks();
+	});
+
+	it("keeps minimized output and saves the raw artifact when capture is incomplete", async () => {
+		const saved: string[] = [];
+		vi.spyOn(piNatives.Shell.prototype, "run").mockResolvedValue({
+			exitCode: 0,
+			cancelled: false,
+			timedOut: false,
+			outputIncomplete: true,
+			captureIsDrainPrefix: false,
+			capturedOutput: "raw captured output",
+			minimized: {
+				text: "minimized summary",
+				originalText: "raw native output",
+				filter: "test",
+				inputBytes: 17,
+				outputBytes: 17,
+			},
+		} as ShellRunResult);
+		const result = await executeBash("printf output", {
+			cwd: os.tmpdir(),
+			onMinimizedSave: async raw => {
+				saved.push(raw);
+				return "minimized-raw";
+			},
+		});
+		expect(saved).toEqual(["raw native output"]);
+		expect(result.output).toContain("minimized summary");
+		expect(result.output).toContain("artifact://minimized-raw");
+		expect(result.output).toContain("Shell output capture is incomplete");
+	});
+
+	it("does not replace synchronously accepted chunks with an incomplete drain prefix", async () => {
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(async (_options, onChunk) => {
+			onChunk?.(null, "accepted stream\n");
+			return {
+				exitCode: 0,
+				cancelled: false,
+				timedOut: false,
+				outputIncomplete: true,
+				capturedOutput: "replacement prefix",
+				captureIsDrainPrefix: true,
+			} as ShellRunResult;
+		});
+		const result = await executeBash("printf accepted", { cwd: os.tmpdir() });
+		expect(result.output).toContain("accepted stream");
+		expect(result.output).not.toContain("replacement prefix");
+	});
+
+	it("reconciles a completed native result after abort within the backstop grace", async () => {
+		const nativeResult = Promise.withResolvers<ShellRunResult>();
+		const dispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+			onChunk?.(null, "finished despite abort");
+			dispatched.resolve();
+			return nativeResult.promise;
+		});
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+		const controller = new AbortController();
+		const pending = executeBash("sleep 10", {
+			cwd: os.tmpdir(),
+			timeout: 5000,
+			signal: controller.signal,
+		});
+		await dispatched.promise;
+		controller.abort();
+		await sleep(25);
+		nativeResult.resolve({
+			exitCode: 23,
+			cancelled: false,
+			timedOut: false,
+			outputIncomplete: false,
+			captureIsDrainPrefix: false,
+			capturedOutput: "finished despite abort",
+		});
+		const result = await pending;
+		expect(result.cancelled).toBe(false);
+		expect(result.exitCode).toBe(23);
+		expect(result.output).toContain("finished despite abort");
+	});
+
+	it("marks unresolved abort outcome as uncertain and warns against retrying a write", async () => {
+		const dispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(() => {
+			dispatched.resolve();
+			return Promise.withResolvers<ShellRunResult>().promise;
+		});
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+		const controller = new AbortController();
+		const pending = executeBash("sleep 10", {
+			cwd: os.tmpdir(),
+			timeout: 5000,
+			signal: controller.signal,
+		});
+		await dispatched.promise;
+		controller.abort();
+		const result = await pending;
+		expect(result.cancelled).toBe(true);
+		expect(result.output).toContain("outcome uncertain");
+		expect(result.output).toContain("Do not retry this write before reconciliation");
+	});
+});
 
 describe("executeBash outputIncomplete and callback lifecycle", () => {
+	beforeEach(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, cwd: os.tmpdir() });
+	});
+
+	afterEach(() => {
+		resetSettingsForTest();
+		vi.restoreAllMocks();
+	});
+
 	it("preserves native outputIncomplete when native settles within the backstop grace after explicit timeout", async () => {
 		const nativeResult = Promise.withResolvers<ShellRunResult>();
 		const dispatched = Promise.withResolvers<void>();
@@ -1293,6 +1415,7 @@ describe("executeBash outputIncomplete and callback lifecycle", () => {
 			timedOut: true,
 			outputIncomplete: true,
 			capturedOutput: "partial line\n",
+			captureIsDrainPrefix: false,
 		});
 		const result = await pending;
 
@@ -1335,6 +1458,7 @@ describe("executeBash outputIncomplete and callback lifecycle", () => {
 				cancelled: false,
 				timedOut: false,
 				outputIncomplete: false,
+				captureIsDrainPrefix: false,
 			};
 		});
 

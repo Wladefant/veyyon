@@ -12,6 +12,7 @@ import {
 	type ShellOptions,
 	type ShellRunResult,
 } from "@veyyon/natives";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { ProducerOutputGuard } from "../secrets/producer-output";
@@ -508,8 +509,13 @@ function interruptedRunAnnotation(result: ShellRunResult, timeoutMs: number | un
 
 const INCOMPLETE_CAPTURE_NOTICE = "Shell output capture is incomplete";
 
-function replaceIncompleteCapture(sink: OutputSink, capturedOutput: string | undefined): void {
-	if (capturedOutput !== undefined) sink.replace(capturedOutput);
+function replaceIncompleteCapture(
+	sink: OutputSink,
+	capturedOutput: string | undefined,
+	captureIsDrainPrefix: boolean,
+	acceptedOutput: boolean,
+): void {
+	if (capturedOutput !== undefined && !(captureIsDrainPrefix && acceptedOutput)) sink.replace(capturedOutput);
 }
 
 /**
@@ -642,6 +648,7 @@ async function runBash(
 	const setupElapsedMs = performance.now() - gate.startedAt;
 	const stop = new RunStop(lease.shell, options?.timeout, options?.signal, setupElapsedMs);
 	let acceptingChunks = true;
+	let acceptedOutput = false;
 
 	let resetSession = false;
 	try {
@@ -657,26 +664,50 @@ async function runBash(
 				...(cpuBudgetId ? { cpuBudgetId } : {}),
 			},
 			(err, chunk) => {
-				if (!err && acceptingChunks) sink.push(chunk);
+				if (!err && acceptingChunks) {
+					acceptedOutput = true;
+					sink.push(chunk);
+				}
 			},
 		);
-		const outcome = await new ExponentialYield().race<RunOutcome>([
+		let outcome = await new ExponentialYield().race<RunOutcome>([
 			runPromise.then(result => ({ result })),
 			stop.stopped.then(stopped => ({ stopped })),
 		]);
 		acceptingChunks = false;
 		if ("stopped" in outcome) {
-			resetSession = lease.persistent !== undefined;
-			abandonStoppedRun(sessionKey, lease, runPromise, stop);
-			const timedOut = outcome.stopped.startsWith("Command timed out");
-			return await cancelledResult(sink, `${outcome.stopped}\n${INCOMPLETE_CAPTURE_NOTICE}`, timedOut, true);
+			const reconciled = await settleWithin(
+				runPromise.then(result => ({ result })),
+				NATIVE_TIMEOUT_BACKSTOP_GRACE_MS,
+				undefined,
+			);
+			if (!reconciled) {
+				resetSession = lease.persistent !== undefined;
+				abandonStoppedRun(sessionKey, lease, runPromise, stop);
+				const timedOut = outcome.stopped.startsWith("Command timed out");
+				return await cancelledResult(
+					sink,
+					`${outcome.stopped}\n${INCOMPLETE_CAPTURE_NOTICE}\nCommand outcome uncertain. Do not retry this write before reconciliation.`,
+					timedOut,
+					true,
+				);
+			}
+			outcome = reconciled;
 		}
 		stop.disarmDeadline();
 		const { result } = outcome;
 		if (result.timedOut || result.cancelled) {
 			resetSession = true;
 			if (lease.persistent) quarantineShellSession(sessionKey, runPromise, stop.shellAbort);
-			if (result.outputIncomplete) replaceIncompleteCapture(sink, result.capturedOutput);
+			if (result.outputIncomplete) {
+				replaceIncompleteCapture(
+					sink,
+					result.capturedOutput,
+					result.captureIsDrainPrefix,
+					acceptedOutput,
+				);
+			}
+			await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave, options?.redactOutput);
 			return await cancelledResult(
 				sink,
 				`${interruptedRunAnnotation(result, options?.timeout)}${result.outputIncomplete ? `\n${INCOMPLETE_CAPTURE_NOTICE}` : ""}`,
@@ -685,7 +716,13 @@ async function runBash(
 			);
 		}
 		if (result.outputIncomplete) {
-			replaceIncompleteCapture(sink, result.capturedOutput);
+			replaceIncompleteCapture(
+				sink,
+				result.capturedOutput,
+				result.captureIsDrainPrefix,
+				acceptedOutput,
+			);
+			await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave, options?.redactOutput);
 			return {
 				exitCode: result.exitCode,
 				signal: result.signal,

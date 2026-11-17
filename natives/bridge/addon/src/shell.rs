@@ -192,7 +192,9 @@ pub struct ShellRunResult {
 	pub timed_out:         bool,
 	/// Whether output capture stopped before EOF.
 	pub output_incomplete: bool,
-	/// Retained raw output prefix, present only for incomplete buffered capture.
+	/// Whether captured_output is only a callback-drain fallback, not a core capture.
+	pub capture_is_drain_prefix: bool,
+	/// Retained raw output prefix, present only for incomplete capture.
 	pub captured_output:   Option<String>,
 	/// When the minimizer rewrote the captured output, this carries the
 	/// original buffer + telemetry so the session layer can persist it as
@@ -210,6 +212,7 @@ impl From<CoreShellRunResult> for ShellRunResult {
 			cancelled:         value.cancelled,
 			timed_out:         value.timed_out,
 			output_incomplete: value.output_incomplete,
+			capture_is_drain_prefix: false,
 			captured_output:   value.captured_output,
 			minimized:         value.minimized.map(Into::into),
 			working_dir:       value.working_dir,
@@ -443,6 +446,7 @@ fn retain_incomplete_drain(
 			let captured = std::mem::take(&mut *prefix.lock());
 			if !captured.is_empty() {
 				res.captured_output = Some(captured);
+				res.capture_is_drain_prefix = true;
 			}
 		}
 	}
@@ -637,6 +641,7 @@ mod tests {
 			cancelled,
 			timed_out,
 			output_incomplete: false,
+			capture_is_drain_prefix: false,
 			captured_output: None,
 			minimized: None,
 			working_dir: None,
@@ -681,6 +686,7 @@ mod tests {
 		assert_eq!(result.exit_code, Some(5));
 		assert!(result.output_incomplete, "callback delivery did not finish");
 		assert_eq!(result.captured_output.as_deref(), Some("DRAIN_DIAGNOSTIC\n"));
+		assert!(result.capture_is_drain_prefix);
 		assert!(!result.cancelled);
 		assert!(!result.timed_out);
 	}
@@ -1058,6 +1064,7 @@ mod tests {
 			cancelled:         false,
 			timed_out:         false,
 			output_incomplete: false,
+			capture_is_drain_prefix: false,
 			captured_output:   None,
 			minimized:         None,
 			working_dir:       None,
@@ -1104,6 +1111,7 @@ mod tests {
 			cancelled:         false,
 			timed_out:         false,
 			output_incomplete: false,
+			capture_is_drain_prefix: false,
 			captured_output:   None,
 			minimized:         None,
 			working_dir:       None,
@@ -1317,6 +1325,7 @@ mod tests {
 			cancelled:         false,
 			timed_out:         false,
 			output_incomplete: false,
+			capture_is_drain_prefix: false,
 			captured_output:   None,
 			minimized:         None,
 			working_dir:       None,
