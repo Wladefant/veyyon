@@ -53,6 +53,7 @@ import { bashApprovalPattern } from "./bash-approval-pattern";
 import { registerForegroundBashWait } from "./bash-foreground-registry";
 import {
 	bashCredentialTargets,
+	findBroadProcessStopDenial,
 	findCriticalBashRisk,
 	findFlaggedBashPattern,
 	hostReachableCommand,
@@ -116,8 +117,7 @@ export { FLAGGED_BASH_PATTERNS } from "./bash-guard";
  * with the call's own `env` argument spread over it, which is exactly what
  * `buildNonInteractiveEnv` hands the child.
  *
- * Both judgements that read variables (`findCriticalBashRisk` and
- * `bashCredentialTargets`) go through this. Judging against `process.env`
+ * Guard checks that read variables use this environment. Judging against `process.env`
  * alone let a caller hand the guard one value and the shell another, so
  * `bash({command:"rm -rf $LANG", env:{LANG:"/"}})` was approved and deleted the
  * root. Only string values are taken; anything else is not something the child
@@ -203,6 +203,8 @@ export function bashApprovalDecision(
 	if (polysimDenial) {
 		return { tier: "exec", deny: true, reason: polysimDenial.reason };
 	}
+	const processStopDenial = findBroadProcessStopDenial(command, judgementEnv);
+	if (processStopDenial) return { tier: "exec", deny: true, reason: processStopDenial };
 	const risk =
 		command === "" ? undefined : findCriticalBashRisk(command, undefined, extraProtectedPaths, judgementEnv, cwd);
 	// Same split as the flagged patterns below: `critical` is the floor yolo
@@ -1098,6 +1100,8 @@ export class BashTool
 			});
 		}
 		const expanded = await this.#expandInternalUrls(extracted.command, env, extracted.cwd);
+		const processStopDenial = findBroadProcessStopDenial(expanded.command, bashJudgementEnv(input));
+		if (processStopDenial) throw new ToolError(processStopDenial);
 
 		// Best-effort cache invalidation: drop github-cache rows for any issue/PR
 		// number touched by a mutating `gh` subcommand inside this bash call so
