@@ -976,8 +976,80 @@ describe("IRC", () => {
 				selfId: "Root",
 				parentId: undefined,
 				senderParent: "Root",
-				actor: { sender: { selfId: "Child", parentId: "Root" } },
+				actor: { triggeringIncomingActor: { selfId: "Child", parentId: "Root" } },
 			});
+		});
+		it("marks a parentless sub sender unverified while preserving a valid main root", async () => {
+			const { session } = createRealSession();
+			sessions.push(session);
+			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			registry.register({ id: "Main", displayName: "main", kind: "main", session });
+			registry.register({ id: "OrphanSender", displayName: "task", kind: "sub", session: null });
+			registry.register({ id: "OrphanRecipient", displayName: "task", kind: "sub", session });
+
+			await session.deliverIrcMessage({
+				id: "orphan-sub-sender",
+				from: "OrphanSender",
+				to: "Main",
+				body: "unverified sender",
+				ts: Date.now(),
+			});
+
+			const prompted = promptSpy.mock.calls.map(call => (call[0] as unknown as CustomMessage[])[0]!);
+			expect(prompted[0]?.content).toContain("Sender lineage: parent unverified;");
+			expect(prompted[0]?.details).toMatchObject({ senderParent: "unverified" });
+		});
+
+		it("marks a parentless sub recipient unverified", async () => {
+			const { session } = createRealSession();
+			sessions.push(session);
+			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			registry.register({ id: "Main", displayName: "main", kind: "main", session: null });
+			registry.register({ id: "OrphanRecipient", displayName: "task", kind: "sub", session });
+
+			await session.deliverIrcMessage({
+				id: "orphan-sub-recipient",
+				from: "Main",
+				to: "OrphanRecipient",
+				body: "unverified recipient",
+				ts: Date.now(),
+			});
+
+			const prompted = (promptSpy.mock.calls[0]![0] as unknown as CustomMessage[])[0]!;
+			expect(prompted.content).toContain("Recipient direct parent: unverified.");
+		});
+
+		it("does not label a main agent with a dangling raw parent as root", async () => {
+			const { session } = createRealSession();
+			sessions.push(session);
+			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			registry.register({
+				id: "MissingParentSender",
+				displayName: "main",
+				kind: "main",
+				parentId: "Missing",
+				session: null,
+			});
+			registry.register({
+				id: "MissingParentRecipient",
+				displayName: "main",
+				kind: "main",
+				parentId: "Missing",
+				session,
+			});
+
+			await session.deliverIrcMessage({
+				id: "dangling-main-sender",
+				from: "MissingParentSender",
+				to: "MissingParentRecipient",
+				body: "dangling lineage",
+				ts: Date.now(),
+			});
+
+			const prompted = (promptSpy.mock.calls[0]![0] as unknown as CustomMessage[])[0]!;
+			expect(prompted.content).toContain("Recipient direct parent: unverified.");
+			expect(prompted.content).toContain("Sender lineage: parent unverified;");
+			expect(prompted.details).toMatchObject({ senderParent: "unverified" });
 		});
 
 		it("queues peer IRC as an interrupt while a turn is streaming", async () => {
@@ -1098,7 +1170,14 @@ describe("IRC", () => {
 
 			// The recipient records what was said on its behalf.
 			const record = await autoReplyEvent;
-			expect(record.details).toMatchObject({ to: "0-Sub", body: "auto answer" });
+			expect(record.details).toMatchObject({
+				to: "0-Sub",
+				body: "auto answer",
+				triggeringIncomingActor: { sender: { selfId: "0-Sub" } },
+				triggeringSenderParent: "unverified",
+			});
+			expect(record.details).not.toHaveProperty("actor");
+			expect(reply).toMatchObject({ from: "Main", to: "0-Sub", body: "auto answer" });
 		});
 
 		it("does not auto-reply when async execution is enabled or the sender does not await", async () => {

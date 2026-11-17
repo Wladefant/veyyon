@@ -5289,11 +5289,11 @@ export class AgentSession {
 		const senderRef = registry.get(msg.from);
 		const senderParent = !senderRef
 			? "unverified"
-			: (senderIdentity.parentId ?? (senderRef.kind === "main" ? "root" : "unverified"));
+			: (senderIdentity.parentId ?? (senderRef.kind === "main" && !senderRef.parentId ? "root" : "unverified"));
 		const recipientRef = registry.get(msg.to);
 		const recipientParent = !recipientRef
 			? "unverified"
-			: (identity.parentId ?? (recipientRef.kind === "main" ? "root" : "unverified"));
+			: (identity.parentId ?? (recipientRef.kind === "main" && !recipientRef.parentId ? "root" : "unverified"));
 		const relation = registry.relationTo(msg.to, msg.from);
 		if (
 			!msg.completion &&
@@ -5572,10 +5572,11 @@ export class AgentSession {
 			const senderRef = registry.get(msg.from);
 			const senderParent = !senderRef
 				? "unverified"
-				: (senderIdentity.parentId ?? (senderRef.kind === "main" ? "root" : "unverified"));
-			const recipientParent = !registry.get(msg.to)
+				: (senderIdentity.parentId ?? (senderRef.kind === "main" && !senderRef.parentId ? "root" : "unverified"));
+			const recipientRef = registry.get(msg.to);
+			const recipientParent = !recipientRef
 				? "unverified"
-				: (identity.parentId ?? (registry.get(msg.to)?.kind === "main" ? "root" : "unverified"));
+				: (identity.parentId ?? (recipientRef.kind === "main" && !recipientRef.parentId ? "root" : "unverified"));
 			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
@@ -5603,14 +5604,14 @@ export class AgentSession {
 					to: msg.from,
 					body,
 					replyTo: msg.id,
-					actor: {
+					triggeringIncomingActor: {
 						source: "agent",
 						relation,
 						...identity,
-						triggeringIncomingActor: senderIdentity,
-						senderRegistered: registry.get(msg.from) !== undefined,
+						sender: senderIdentity,
+						senderRegistered: senderRef !== undefined,
 					},
-					senderParent,
+					triggeringSenderParent: senderParent,
 				},
 				attribution: "agent",
 				timestamp: Date.now(),
