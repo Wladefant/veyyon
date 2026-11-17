@@ -1164,6 +1164,10 @@ export function buildRequest(
 	isAntigravity = false,
 ): CloudCodeAssistRequest {
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	const wireModelId = options.requestModelId ?? model.requestModelId ?? model.id;
+	// Extra High is encoded in this fixed SKU. A second thinking control conflicts
+	// with it: the endpoint rejects explicit XHIGH and legacy budget overrides.
+	const variantSelectsThinking = isAntigravity && wireModelId === "gemini-4-hydrogen-xhigh";
 	const contents = convertMessages(
 		model,
 		// Claude on Antigravity runs in VALIDATED mode whatever the request asks (below), so a
@@ -1184,7 +1188,7 @@ export function buildRequest(
 		buildGoogleBaseGenerationConfig(options);
 
 	// Thinking config
-	if (options.thinking?.enabled && model.reasoning) {
+	if (options.thinking?.enabled && model.reasoning && !variantSelectsThinking) {
 		generationConfig.thinkingConfig = {
 			includeThoughts: !options.hideThinkingSummary,
 		};
@@ -1254,7 +1258,6 @@ export function buildRequest(
 		};
 	}
 
-	const wireModelId = options.requestModelId ?? model.requestModelId ?? model.id;
 
 	if (isAntigravity) {
 		// The real client sends a fixed per-model output cap independent of the

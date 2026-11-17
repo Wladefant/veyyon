@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.10.11] - 2026-11-17
+
 ### Fixed
 
 - Restore session deletion methods to the storage type contract and clear completed rewrite fences with the declared empty state ([#774](https://github.com/Wladefant/veyyon/issues/774)).

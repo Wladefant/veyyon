@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-11-17
+
+### Fixed
+
+- Finish working-directory changes even when background agent results continue to arrive. Append new session entries without republishing the transcript for each one.
+
+## [1.11.0] - 2026-11-17
+
+### Added
+
+- Native `BashTool` commands attest the live main or subagent caller through `VEYYON_CALLER_URL` and `VEYYON_CALLER_TOKEN` over a lazy loopback HTTP endpoint, rejecting user `env` overrides and clearing inherited receipt variables when no live actor owns the session.
+
+### Fixed
+
+- Python eval cancellation targets the request without killing the shared kernel, and only its live primary owner can reset it.
+- Shared eval kernels retain implicit owners when explicit co-owners join or leave during startup and active use.
+- Python eval cancellation releases queued worker custody and completed cancellation records while suppressing output from workers still running.
+
+## [1.10.12] - 2026-11-17
+
+### Fixed
+
+- Classify registered child and descendant IRC senders from registry ancestry, and render sender lineage separately from recipient identity while keeping external-session notices non-lineage.
+
+## [1.10.11] - 2026-11-17
+
+### Fixed
+
+- Restore session deletion methods to the storage type contract and clear completed rewrite fences with the declared empty state ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Keep Antigravity's fixed Hydrogen Extra High wire variant free of conflicting thinking overrides, without changing the selected model or medium/default routing.
+
 ## [1.10.10] - 2026-11-16
 
 ### Fixed
