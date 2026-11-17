@@ -21,11 +21,7 @@ import { IrcInbox } from "./irc-inbox";
 export type IrcDeliveryAgent = Pick<
 	Agent,
 	| "steer"
-	| "prompt"
 	| "hasQueuedMessages"
-	| "peekSteeringQueue"
-	| "peekFollowUpQueue"
-	| "replaceQueues"
 	| "emitExternalEvent"
 >;
 
@@ -43,10 +39,8 @@ export interface IrcDeliveryHost {
 	appendToContext(record: CustomMessage): void;
 	/** Whether a queued steer or follow-up will resume the session on its own. */
 	canAutoContinueForFollowUp(): boolean;
-	/** Start tracking a wake turn: reset the per-prompt state and count the turn in flight. */
-	beginWakeTurn(): void;
-	/** Stop tracking a wake turn; the session drains what stranded once none is left in flight. */
-	endWakeTurn(): void;
+	/** Route every wake through the session's native phase and settlement owner. */
+	wake(records: CustomMessage[]): Promise<void>;
 	runEphemeralTurn(args: EphemeralTurnArgs): Promise<EphemeralTurnResult>;
 }
 
@@ -165,42 +159,11 @@ export class IrcDelivery {
 		}
 	}
 
-	/**
-	 * Fire-and-forget wake turn, shared by idle delivery and the stranded-record resume, tracked in
-	 * flight so its settle re-drains anything that stranded during it. A user interrupt may have left
-	 * a follow-up queued behind an invalid tail on purpose; the wake turn's loop would otherwise drain
-	 * it, so a blocked follow-up queue is parked across the wake and restored after. It stays queued
-	 * after the wake because the session suppresses follow-up auto-resume while a user interrupt is in
-	 * effect, even though the wake left a provider-valid tail.
-	 */
+	/** Idle and stranded inputs share the session's phase claim, persistence and queue ownership. */
 	#wake(records: CustomMessage[]): void {
-		const host = this.#host;
-		const agent = host.agent;
-		// Park only a blocked follow-up; one that may resume rides the wake turn without reordering.
-		const parkedFollowUps =
-			agent.peekSteeringQueue().length === 0 &&
-			agent.peekFollowUpQueue().length > 0 &&
-			!host.canAutoContinueForFollowUp()
-				? agent.peekFollowUpQueue().slice()
-				: [];
-		if (parkedFollowUps.length > 0) {
-			agent.replaceQueues(agent.peekSteeringQueue().slice(), []);
-		}
-		host.beginWakeTurn();
-		void agent
-			.prompt(records)
-			.catch(error => {
-				logger.warn("IRC wake turn failed", { error: errorMessage(error) });
-			})
-			.finally(() => {
-				if (parkedFollowUps.length > 0) {
-					agent.replaceQueues(
-						agent.peekSteeringQueue().slice(),
-						parkedFollowUps.concat(agent.peekFollowUpQueue()),
-					);
-				}
-				host.endWakeTurn();
-			});
+		void this.#host.wake(records).catch(error => {
+			logger.warn("IRC wake turn failed", { error: errorMessage(error) });
+		});
 	}
 
 	/**

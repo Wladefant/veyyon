@@ -234,9 +234,9 @@ describe("native retained child resume", () => {
 	});
 
 	it.each([
-		{ name: "an earlier terminal yield", response: yielded("OLD-A") },
-		{ name: "an earlier assistant tail", response: { content: ["OLD-A"], stopReason: "stop" } as MockResponse },
-	])("runs a fresh completion phase instead of reusing $name", async ({ response }) => {
+		{ name: "an earlier terminal yield", response: yielded("OLD-A"), legacyReceipt: false },
+		{ name: "an earlier assistant tail", response: { content: ["OLD-A"], stopReason: "stop" } as MockResponse, legacyReceipt: true },
+	])("runs a fresh completion phase instead of reusing $name", async ({ response, legacyReceipt }) => {
 		const root = await session("root", [{ content: ["Received fresh aggregate"], stopReason: "stop" }]);
 		const aggregator = await session("aggregator", [response, yielded("NEW-B")]);
 		const worker = await session("worker", [yielded("worker-B")]);
@@ -269,10 +269,22 @@ describe("native retained child resume", () => {
 		const unrelatedTurn = aggregator.instance.prompt("Finish the unrelated initial phase A.");
 		try {
 			await started.promise;
-			await worker.instance.deliverIrcMessage({
-				id: "worker-phase-B", from: "aggregator", to: "worker", body: "Return worker-B.", ts: Date.now(),
-			});
-			await worker.instance.waitForIdle();
+			if (legacyReceipt) {
+				const record = {
+					role: "custom" as const, customType: "task:continuation", content: "Persisted worker-B",
+					display: true, timestamp: Date.now(), attribution: "agent" as const,
+					details: { id: "legacy-receipt-B", from: "worker", completionId: "legacy-completion-B", source: "agent" },
+				};
+				// Preserve the old receipt-before-assistant order to verify recovery of an existing journal.
+				aggregator.instance.agent.appendMessage(record);
+				aggregator.store.appendCustomMessageEntry(record.customType, record.content, record.display, record.details, "agent");
+				await aggregator.store.sync();
+			} else {
+				await worker.instance.deliverIrcMessage({
+					id: "worker-phase-B", from: "aggregator", to: "worker", body: "Return worker-B.", ts: Date.now(),
+				});
+				await worker.instance.waitForIdle();
+			}
 		} finally {
 			release.resolve();
 		}
@@ -281,6 +293,25 @@ describe("native retained child resume", () => {
 		await aggregator.instance.replayIrcContinuations();
 		await aggregator.instance.waitForIdle();
 		await root.instance.waitForIdle();
+		console.log("PHASE_BOUNDARY_DIAGNOSTIC", JSON.stringify({
+			calls: aggregator.mock.calls.map(call => call.context.messages.map(message => ({
+				role: message.role,
+				tool: message.role === "toolResult" ? message.toolName : undefined,
+				sawWorkerResult: JSON.stringify(message.content).includes("worker-B"),
+			}))),
+			entries: aggregator.store.getEntries().flatMap(entry => {
+				if (entry.type === "message") return [{
+					kind: entry.message.role,
+					stop: entry.message.role === "assistant" ? entry.message.stopReason : undefined,
+					tool: entry.message.role === "toolResult" ? entry.message.toolName : undefined,
+				}];
+				if (entry.type === "custom_message") return [{
+					kind: entry.customType, streamed: Reflect.get(entry.details ?? {}, "streamingCompletion") === true,
+				}];
+				if (entry.type === "custom" && entry.customType.startsWith("irc:")) return [{ kind: entry.customType }];
+				return [];
+			}),
+		}));
 		const completions = root.store.getEntries().filter(
 			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
 		);
@@ -357,11 +388,11 @@ describe("native retained child resume", () => {
 		expect(tailWhileToolWasPending).toBe("assistant");
 		expect(aggregator.mock.calls).toHaveLength(2);
 		const nextStep = aggregator.mock.calls[1]!.context.messages;
-		const toolResult = nextStep.findIndex(message => message.role === "toolResult" && message.toolCallId === "hold-call");
-		const notice = nextStep.findIndex(message => message.role === "user" && JSON.stringify(message.content).includes("worker-B"));
+		const toolResult = nextStep.findIndex(message => message.role === "toolResult" && message.toolName === "hold");
+		const notice = nextStep.findIndex(message => message.role === "developer" && JSON.stringify(message.content).includes("worker-B"));
 		expect(toolResult).toBeGreaterThanOrEqual(0);
 		expect(notice).toBeGreaterThan(toolResult);
-		expect(nextStep[notice]).toMatchObject({ role: "user", attribution: "agent" });
+		expect(nextStep[notice]).toMatchObject({ role: "developer", attribution: "agent" });
 		expect(aggregator.store.getEntries().filter(
 			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
 		)).toHaveLength(1);

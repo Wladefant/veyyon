@@ -1265,11 +1265,7 @@ export class AgentSession {
 			emitIrcMessage: record => void this.#events.send({ type: "irc_message", message: record }),
 			appendToContext: record => this.#custom.append(record),
 			canAutoContinueForFollowUp: () => this.#queue.canAutoContinueForFollowUp(),
-			beginWakeTurn: () => {
-				this.#resetPromptMaintenanceState();
-				this.#inFlight.begin();
-			},
-			endWakeTurn: () => this.#endInFlight(),
+			wake: records => this.#wakeForIrc(records),
 			runEphemeralTurn: args => this.runEphemeralTurn(args),
 		});
 		this.#stopHook = new SessionStopHook({

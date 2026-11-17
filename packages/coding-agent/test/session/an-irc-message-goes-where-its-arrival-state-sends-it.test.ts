@@ -158,8 +158,9 @@ class ArrivalHost implements IrcDeliveryHost {
 	canAutoContinueForFollowUp(): boolean {
 		return true;
 	}
-	beginWakeTurn(): void {}
-	endWakeTurn(): void {}
+	async wake(records: CustomMessage[]): Promise<void> {
+		await this.agent.prompt(records);
+	}
 	async runEphemeralTurn(_args: EphemeralTurnArgs): Promise<EphemeralTurnResult> {
 		return {
 			replyText: AUTO_REPLY,
