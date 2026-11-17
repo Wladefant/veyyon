@@ -26,7 +26,9 @@ describe("host process stop guard", () => {
 	];
 	for (const command of denied) {
 		it(`denies ${command}`, () => {
-			expect(findBroadProcessStopDenial(command, { SELECTOR: "/IM" }, "/home/agent")).toContain("verified process ID");
+			expect(
+				findBroadProcessStopDenial(command, { SELECTOR: "/IM" }, "/home/agent"),
+			).toContain("verified process ID");
 		});
 	}
 
@@ -60,7 +62,9 @@ describe("process stop approval", () => {
 		it(`denies image-wide commands in ${mode}, even with an explicit allow`, () => {
 			for (const image of ["bun.exe", "python.exe"]) {
 				const args = { command: `taskkill /F /IM ${image} /T` };
-				expect(resolveApproval(bash, args, mode, { bash: "allow" }, { bypassAllApprovals: true })).toMatchObject({
+				expect(
+					resolveApproval(bash, args, mode, { bash: "allow" }, { bypassAllApprovals: true }),
+				).toMatchObject({
 					policy: "deny",
 					reason: expect.stringContaining("verified process ID"),
 				});

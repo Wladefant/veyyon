@@ -1463,19 +1463,7 @@ export function hostReachableCommand(
 	return result;
 }
 
-const PROCESS_STOP_PREFIXES: Record<string, true> = {
-	command: true,
-	exec: true,
-	then: true,
-	do: true,
-	else: true,
-	if: true,
-	elif: true,
-	while: true,
-	until: true,
-	"!": true,
-	"{": true,
-};
+const PROCESS_STOP_PREFIX = /^(?:command|exec|then|do|else|if|elif|while|until|!|\{)$/;
 const CMD_SCRIPT_FLAG = /^\/{1,2}[ck]$/i;
 const POWERSHELL_SCRIPT_FLAG = /^-(?:c|command)$/i;
 const PROCESS_STOP_DENIAL = "Stopping processes by name or pattern is blocked. Use a verified process ID (PID).";
@@ -1496,7 +1484,7 @@ export function findBroadProcessStopDenial(
 		for (; index < words.length; index += 1) {
 			const word = words[index]!.text;
 			if (word === "command" && /^-[vV]$/.test(words[index + 1]?.text ?? "")) break;
-			if (!Object.hasOwn(PROCESS_STOP_PREFIXES, word) && !isPrefixCommand(word) && !(index > 0 && word.startsWith("-"))) {
+			if (!PROCESS_STOP_PREFIX.test(word) && !isPrefixCommand(word) && !(index > 0 && word.startsWith("-"))) {
 				break;
 			}
 		}
@@ -1505,7 +1493,11 @@ export function findBroadProcessStopDenial(
 
 		const shape = INTERPRETED_SCRIPT_COMMANDS.get(name);
 		const scriptFlag =
-			name === "cmd" ? CMD_SCRIPT_FLAG : name === "powershell" || name === "pwsh" ? POWERSHELL_SCRIPT_FLAG : SCRIPT_FLAG;
+			name === "cmd"
+				? CMD_SCRIPT_FLAG
+				: name === "powershell" || name === "pwsh"
+					? POWERSHELL_SCRIPT_FLAG
+					: SCRIPT_FLAG;
 		if (!shape && scriptFlag === SCRIPT_FLAG) continue;
 		const flag = words.findIndex((word, position) => position > index && scriptFlag.test(word.text));
 		const scriptIndex = shape === "nextWord" ? index + 1 : flag === -1 ? words.length : flag + 1;
@@ -1525,7 +1517,10 @@ export function findBroadProcessStopDenial(
 
 function processCommandName(word: string): string {
 	const start = Math.max(word.lastIndexOf("/"), word.lastIndexOf("\\")) + 1;
-	return word.slice(start).toLowerCase().replace(/\.exe$/, "");
+	return word
+		.slice(start)
+		.toLowerCase()
+		.replace(/\.exe$/, "");
 }
 
 function isBroadProcessStop(name: string, words: readonly ExpandedWord[], start: number): boolean {
