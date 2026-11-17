@@ -275,7 +275,7 @@ function timeoutSecondsToMs(value: number | undefined): number | undefined {
 
 function modelCompatStreamIdleTimeoutMs(model: Model<Api> | undefined): number | undefined {
 	if (!model || !("compat" in model) || !isRecord(model.compat)) return undefined;
-	const value = model.compat.streamIdleTimeoutMs;
+	const value = "streamIdleTimeoutMs" in model.compat ? model.compat.streamIdleTimeoutMs : undefined;
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined;
 }
 
