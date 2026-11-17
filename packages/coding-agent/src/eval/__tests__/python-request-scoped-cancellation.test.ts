@@ -98,7 +98,7 @@ test("a timed-out Python request cancels only its ID and leaves the runner alive
 		expect(kernel.isAlive()).toBe(true);
 		expect(signals).toEqual([]);
 
-		stdout.enqueue(new TextEncoder().encode(JSON.stringify({ type: "done", id: "request-b" }) + "\n"));
+		stdout.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "done", id: "request-b" })}\n`));
 		let secondTimer: NodeJS.Timeout | undefined;
 		const secondTimeout = new Promise<never>((_, reject) => {
 			secondTimer = setTimeout(() => reject(new Error("timed out waiting for second request to settle")), 300);

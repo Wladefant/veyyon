@@ -849,7 +849,6 @@ export class KernelSessionPool<
 				cwd,
 				kernel,
 				ownerIds: startingSession.ownerIds,
-				hasFallbackOwner: startingSession.hasFallbackOwner,
 				primaryOwnerId: startingSession.primaryOwnerId,
 			};
 			if (startingSession.ownerIds.size === 0) {
@@ -869,7 +868,6 @@ export class KernelSessionPool<
 
 		startingSession = {
 			ownerIds: new Set(),
-			hasFallbackOwner: false,
 			primaryOwnerId: undefined,
 			promise: startPromise,
 			startupAbort,
@@ -989,7 +987,6 @@ export class KernelSessionPool<
 			cwd,
 			kernel: error.kernel,
 			ownerIds: new Set(owners.ownerIds),
-			hasFallbackOwner: owners.hasFallbackOwner,
 			primaryOwnerId: owners.primaryOwnerId,
 		});
 		return error.cause;
