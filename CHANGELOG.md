@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [1.10.12] - 2026-11-17
+
+### Fixed
+
+- Classify registered child and descendant IRC senders from registry ancestry, and render sender lineage separately from recipient identity while keeping external-session notices non-lineage.
+
+## [1.10.11] - 2026-11-17
+
+### Fixed
+
+- Restore session deletion methods to the storage type contract and clear completed rewrite fences with the declared empty state ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Keep Antigravity's fixed Hydrogen Extra High wire variant free of conflicting thinking overrides, without changing the selected model or medium/default routing.
+
 ## [1.10.10] - 2026-11-16
 
 ### Fixed

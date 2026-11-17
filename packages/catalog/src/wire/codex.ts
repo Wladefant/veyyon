@@ -16,7 +16,7 @@ export const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
  * at `0.159.0`; `gpt-6-sol` and `gpt-6-luna` are listed from `0.155.1`, `gpt-6-astra` from `0.153.0`. An older
  * pin silently hides newer SKUs from discovery, so track the latest stable `@openai/codex` release.
  */
-export const CODEX_CLIENT_VERSION = "0.159.2";
+export const CODEX_CLIENT_VERSION = "0.169.0";
 
 export const OPENAI_HEADERS = {
 	BETA: "OpenAI-Beta",
