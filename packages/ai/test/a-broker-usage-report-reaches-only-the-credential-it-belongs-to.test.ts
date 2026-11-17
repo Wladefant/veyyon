@@ -109,7 +109,11 @@ const stores: RemoteAuthCredentialStore[] = [];
 
 function openStore(
 	broker: FakeBroker,
-	opts: { initialSnapshot?: SnapshotResponse; streamSnapshots?: boolean; snapshotStreamVerifyIntervalMs?: number } = {},
+	opts: {
+		initialSnapshot?: SnapshotResponse;
+		streamSnapshots?: boolean;
+		snapshotStreamVerifyIntervalMs?: number;
+	} = {},
 ): RemoteAuthCredentialStore {
 	const client = new AuthBrokerClient({ url: "http://broker.test", token: "bearer", fetchImpl: broker.fetchImpl });
 	const store = new RemoteAuthCredentialStore({

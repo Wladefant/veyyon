@@ -29,9 +29,7 @@ const STALE_BLOCK_GUARD_MS = 5 * 60_000 + 1;
 function ageCredentialBlockRows(dbPath: string, ageMs = STALE_BLOCK_GUARD_MS + 60_000): void {
 	const db = new Database(dbPath);
 	try {
-		db.prepare("UPDATE auth_credential_blocks SET updated_at = ?").run(
-			Math.floor((Date.now() - ageMs) / 1000),
-		);
+		db.prepare("UPDATE auth_credential_blocks SET updated_at = ?").run(Math.floor((Date.now() - ageMs) / 1000));
 	} finally {
 		db.close();
 	}
