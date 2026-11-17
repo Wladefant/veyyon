@@ -4708,7 +4708,10 @@ export class AgentSession {
 					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
 					await this.sessionManager.flush();
 				} catch (restoreError) {
-					throw new AggregateError([error, restoreError], "Fork failed and could not durably restore its original session");
+					throw new AggregateError(
+						[error, restoreError],
+						"Fork failed and could not durably restore its original session",
+					);
 				}
 			}
 			throw error;
@@ -5456,8 +5459,8 @@ export class AgentSession {
 					return parent && parent.status !== "aborted" && (parent.session || parent.sessionFile);
 				});
 				if (!parentId) return false;
-				parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			}
+			parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			if (!context.ancestorIds.includes(parentId)) return false;
 			const parent = registry.get(parentId);
 			if (!parent || parent.status === "aborted") return false;
