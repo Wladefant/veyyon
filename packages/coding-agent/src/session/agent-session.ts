@@ -5286,12 +5286,14 @@ export class AgentSession {
 		const registry = AgentRegistry.global();
 		const identity = registry.actorContext(msg.to);
 		const senderIdentity = registry.actorContext(msg.from);
-		const senderParent = !registry.get(msg.from)
+		const senderRef = registry.get(msg.from);
+		const senderParent = !senderRef
 			? "unverified"
-			: (senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root"));
-		const recipientParent = !registry.get(msg.to)
+			: (senderIdentity.parentId ?? (senderRef.kind === "main" ? "root" : "unverified"));
+		const recipientRef = registry.get(msg.to);
+		const recipientParent = !recipientRef
 			? "unverified"
-			: (identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root"));
+			: (identity.parentId ?? (recipientRef.kind === "main" ? "root" : "unverified"));
 		const relation = registry.relationTo(msg.to, msg.from);
 		if (
 			!msg.completion &&
@@ -5348,7 +5350,7 @@ export class AgentSession {
 					source: "agent",
 					relation,
 					...identity,
-					sender: senderIdentity,
+					triggeringIncomingActor: senderIdentity,
 					senderRegistered: registry.get(msg.from) !== undefined,
 				},
 				senderParent,
@@ -5567,12 +5569,13 @@ export class AgentSession {
 			const registry = AgentRegistry.global();
 			const identity = registry.actorContext(msg.to);
 			const senderIdentity = registry.actorContext(msg.from);
-			const senderParent = !registry.get(msg.from)
+			const senderRef = registry.get(msg.from);
+			const senderParent = !senderRef
 				? "unverified"
-				: (senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root"));
+				: (senderIdentity.parentId ?? (senderRef.kind === "main" ? "root" : "unverified"));
 			const recipientParent = !registry.get(msg.to)
 				? "unverified"
-				: (identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root"));
+				: (identity.parentId ?? (registry.get(msg.to)?.kind === "main" ? "root" : "unverified"));
 			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
@@ -5604,7 +5607,7 @@ export class AgentSession {
 						source: "agent",
 						relation,
 						...identity,
-						sender: senderIdentity,
+						triggeringIncomingActor: senderIdentity,
 						senderRegistered: registry.get(msg.from) !== undefined,
 					},
 					senderParent,
