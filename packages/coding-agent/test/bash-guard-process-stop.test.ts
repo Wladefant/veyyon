@@ -26,9 +26,8 @@ describe("host process stop guard", () => {
 	];
 	for (const command of denied) {
 		it(`denies ${command}`, () => {
-			expect(
-				findBroadProcessStopDenial(command, { SELECTOR: "/IM" }, "/home/agent"),
-			).toContain("verified process ID");
+			const denial = findBroadProcessStopDenial(command, { SELECTOR: "/IM" }, "/home/agent");
+			expect(denial).toContain("verified process ID");
 		});
 	}
 
