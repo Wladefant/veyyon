@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
+import { z } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -43,13 +44,13 @@ function yielded(value: string): MockResponse {
 		stopReason: "toolUse",
 	};
 }
-async function session(id: string, responses: MockResponse[], existing?: SessionManager) {
+async function session(id: string, responses: MockResponse[], existing?: SessionManager, extraTools: AgentTool[] = []) {
 	const temp = TempDir.createSync("native-handoff-");
 	const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
 	auth.setRuntimeApiKey("mock", "test-key");
 	const mock = createMockModel({ responses });
 	const registry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
-	const tools: AgentTool[] = [new YieldTool({ outputSchema: undefined } as ToolSession)];
+	const tools: AgentTool[] = [new YieldTool({ outputSchema: undefined } as ToolSession), ...extraTools];
 	const store = existing ?? SessionManager.create(temp.path(), temp.path());
 	const agent = new Agent({
 		getApiKey: () => "fake-test-key",
@@ -80,6 +81,60 @@ async function session(id: string, responses: MockResponse[], existing?: Session
 }
 
 describe("native retained child resume", () => {
+	it("recovers an acknowledged receipt before provider input and consumes its root phase once", async () => {
+		const root = await session("root", []);
+		const worker = await session("worker", []);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "worker", displayName: "Worker", kind: "sub", parentId: "root", scope: "tree", session: worker.instance,
+		});
+		const record = {
+			role: "custom" as const, customType: "task:continuation", content: "Persisted child completion B",
+			display: true, timestamp: Date.now(), attribution: "agent" as const,
+			details: { id: "receipt-before-input", from: "worker", completionId: "durable-receipt-B", source: "agent" },
+		};
+		const outbox = new IrcContinuationOutbox(root.store);
+		outbox.receiveCompletion(record);
+		outbox.receiveCompletion(record);
+		await root.store.ensureOnDisk();
+		await root.store.sync();
+		expect(root.store.getEntries().filter(
+			entry => entry.type === "custom" && entry.customType === "irc:completion-received",
+		)).toHaveLength(1);
+		expect(root.store.getEntries().filter(
+			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
+		)).toHaveLength(0);
+		await root.instance.dispose();
+		const reopened = await SessionManager.open(root.store.getSessionFile()!);
+		const recovered = await session("root", [{ content: ["Processed B"], stopReason: "stop" }], reopened);
+		registry.attachSession("root", recovered.instance, reopened.getSessionFile()!);
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await recovered.instance.replayIrcContinuations();
+		expect(recovered.mock.calls).toHaveLength(1);
+		expect(reopened.getEntries().filter(
+			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
+		)).toHaveLength(1);
+		expect(new IrcContinuationOutbox(reopened).pendingReceivedCompletions(new Set())).toEqual([]);
+		expect(new IrcContinuationOutbox(reopened).unfinishedPhases()).toEqual([]);
+	});
+
+	it("keeps arrival ordering when a newer native result is still only a durable receipt", async () => {
+		const root = await session("root", []);
+		const outbox = new IrcContinuationOutbox(root.store);
+		outbox.receiveCompletion({
+			role: "custom", customType: "task:continuation", content: "Newer result", display: true, timestamp: 2000,
+			details: { id: "newer-receipt", from: "worker", completionId: "newer-completion" },
+		});
+		const late = outbox.withOrdering({
+			role: "custom", customType: "task:continuation", content: "Older result", display: true, timestamp: 1000,
+			details: { id: "older-receipt", from: "worker", completionId: "older-completion" },
+		});
+		expect(late.details).toMatchObject({ arrivedAfter: "newer-receipt", phaseId: "older-receipt" });
+		expect(late.content).toContain("does not establish supersession");
+	});
+
 	it("claims a parent phase in memory while the real journal lock is held, then persists it once", async () => {
 		const child = await session("worker", []);
 		await child.store.ensureOnDisk();
@@ -232,7 +287,12 @@ describe("native retained child resume", () => {
 		expect(completions).toHaveLength(1);
 		const completion = completions[0];
 		if (completion?.type !== "custom_message") throw new Error("Expected fresh aggregate completion");
-		expect(completion.content).toContain('"value":"NEW-B"');
+		const result = aggregator.store.getEntries().find(
+			entry => entry.type === "custom" && entry.customType === "irc:continuation-result",
+		);
+		const output = result?.type === "custom" ? Reflect.get(result.data ?? {}, "output") : undefined;
+		expect(typeof output).toBe("string");
+		expect(JSON.parse(output as string)).toEqual({ value: "NEW-B" });
 		expect(completion.details).toMatchObject({ resultSource: "agent" });
 		expect(aggregator.mock.calls).toHaveLength(2);
 		expect(await fs.readFile(immutable, "utf8")).toBe('{"value":"immutable-A"}');
@@ -247,6 +307,68 @@ describe("native retained child resume", () => {
 		expect(root.store.getEntries().filter(
 			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
 		)).toHaveLength(1);
+	});
+
+	it("injects a live native completion after tool results without replaying a second phase", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const hold: AgentTool = {
+			name: "hold", label: "Hold", description: "Keep a tool in flight across native completion delivery.",
+			parameters: z.object({}),
+			async execute() {
+				started.resolve();
+				await release.promise;
+				return { content: [{ type: "text", text: "Original tool finished" }], details: {} };
+			},
+		};
+		const root = await session("root", []);
+		const aggregator = await session("aggregator", [
+			{ content: [{ type: "toolCall", id: "hold-call", name: "hold", arguments: {} }], stopReason: "toolUse" },
+			{ content: ["Handled worker-B at the next valid step"], stopReason: "stop" },
+		], undefined, [hold]);
+		const worker = await session("worker", [yielded("worker-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "aggregator", displayName: "Aggregator", kind: "sub", parentId: "root", scope: "tree",
+			session: aggregator.instance,
+		});
+		registry.register({
+			id: "worker", displayName: "Worker", kind: "sub", parentId: "aggregator", scope: "tree",
+			session: worker.instance,
+		});
+		let tailWhileToolWasPending: string | undefined;
+		const running = aggregator.instance.prompt("Run the original tool, then inspect pending results.");
+		try {
+			await started.promise;
+			await worker.instance.deliverIrcMessage({
+				id: "live-worker-B", from: "aggregator", to: "worker", body: "Return worker-B.", ts: Date.now(),
+			});
+			await worker.instance.waitForIdle();
+			tailWhileToolWasPending = aggregator.instance.agent.state.messages.at(-1)?.role;
+		} finally {
+			release.resolve();
+		}
+		await running;
+		await aggregator.instance.waitForIdle();
+		await aggregator.instance.replayIrcContinuations();
+		await aggregator.instance.waitForIdle();
+		await root.instance.waitForIdle();
+		expect(tailWhileToolWasPending).toBe("assistant");
+		expect(aggregator.mock.calls).toHaveLength(2);
+		const nextStep = aggregator.mock.calls[1]!.context.messages;
+		const toolResult = nextStep.findIndex(message => message.role === "toolResult" && message.toolCallId === "hold-call");
+		const notice = nextStep.findIndex(message => message.role === "user" && JSON.stringify(message.content).includes("worker-B"));
+		expect(toolResult).toBeGreaterThanOrEqual(0);
+		expect(notice).toBeGreaterThan(toolResult);
+		expect(nextStep[notice]).toMatchObject({ role: "user", attribution: "agent" });
+		expect(aggregator.store.getEntries().filter(
+			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
+		)).toHaveLength(1);
+		expect(root.store.getEntries().filter(
+			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
+		)).toHaveLength(0);
+		expect(root.mock.calls).toHaveLength(0);
 	});
 
 	it("aggregates a nested child's B to the root as a separate native result", async () => {
