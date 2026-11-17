@@ -250,21 +250,19 @@ describe("FileSessionStorage synchronous staged short-write preservation", () =>
 			.mockImplementation(
 				(
 					fd: number,
-					...args:
-						| [
-								buffer: NodeJS.ArrayBufferView,
-								offset?: number | null,
-								length?: number | null,
-								position?: number | null,
-						  ]
-						| [text: string, position?: number | null, encoding?: BufferEncoding | null]
+					buffer: NodeJS.ArrayBufferView | string,
+					offset?: number | null,
+					lengthOrEncoding?: number | BufferEncoding | null,
+					position?: number | null,
 				) => {
-					if (typeof args[0] === "string") return originalWrite(fd, args[0], args[1], args[2]);
-					const [buffer, offset, length, position] = args;
+					if (typeof buffer === "string") {
+						const encoding = typeof lengthOrEncoding === "number" ? undefined : lengthOrEncoding;
+						return originalWrite(fd, buffer, offset, encoding);
+					}
+					const length = typeof lengthOrEncoding === "string" ? undefined : lengthOrEncoding;
 					if (Buffer.isBuffer(buffer) && shortWrites === 0 && typeof length === "number" && length > 1) {
 						shortWrites++;
-						const bytesToWrite = Math.max(1, Math.floor(length / 2));
-						return originalWrite(fd, buffer, offset, bytesToWrite, position);
+						return originalWrite(fd, buffer, offset, Math.floor(length / 2), position);
 					}
 					return originalWrite(fd, buffer, offset, length, position);
 				},
