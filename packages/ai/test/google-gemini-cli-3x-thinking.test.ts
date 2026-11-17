@@ -54,6 +54,47 @@ function createModel(id: string): Model<"google-gemini-cli"> {
 	});
 }
 
+function createHydrogenModel(
+	id: string,
+	thinking: ThinkingConfig,
+	provider = "google-antigravity",
+): Model<"google-gemini-cli"> {
+	return buildModel({
+		id,
+		name: id,
+		api: "google-gemini-cli",
+		provider,
+		baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+		reasoning: true,
+		thinking,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_048_576,
+		maxTokens: 65_536,
+	});
+}
+
+const HYDROGEN_XHIGH = "gemini-4-hydrogen-xhigh";
+const hydrogenXHighLegacy = createHydrogenModel(HYDROGEN_XHIGH, {
+	mode: "budget",
+	efforts: [Effort.XHigh],
+	requiresEffort: true,
+});
+const hydrogenLogicalRouted = createHydrogenModel("gemini-4-hydrogen", {
+	mode: "google-level",
+	efforts: [Effort.Medium, Effort.XHigh],
+	requiresEffort: true,
+	effortRouting: {
+		[Effort.Medium]: "gemini-4-hydrogen",
+		[Effort.XHigh]: HYDROGEN_XHIGH,
+	},
+});
+const hydrogenMedium = createHydrogenModel("gemini-4-hydrogen-medium", {
+	mode: "google-level",
+	efforts: [Effort.Medium],
+	requiresEffort: true,
+});
+
 const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
 };
@@ -71,6 +112,100 @@ describe("google-gemini-cli Gemini 3.x thinking mapping", () => {
 			capture(typeof init?.body === "string" ? init.body : undefined);
 			return Promise.resolve(new Response('{"error":{"message":"bad request"}}', { status: 400 }));
 		};
+	it("routes the raw Antigravity xhigh SKU without adding thinkingConfig", async () => {
+		let requestBody: string | undefined;
+		const stream = streamSimple(hydrogenXHighLegacy, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			reasoning: Effort.XHigh,
+			fetch: createFetchMock(body => {
+				requestBody = body;
+			}),
+		});
+		await stream.result();
+
+		const parsed = JSON.parse(requestBody ?? "{}") as CapturedRequestBody;
+		expect(parsed.model).toBe("gemini-4-hydrogen-xhigh");
+		expect(parsed.request?.generationConfig?.thinkingConfig).toBeUndefined();
+	});
+
+	it("omits thinkingConfig when logical Hydrogen routing resolves to the fixed xhigh SKU", async () => {
+		let requestBody: string | undefined;
+		const stream = streamSimple(hydrogenLogicalRouted, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			reasoning: Effort.XHigh,
+			fetch: createFetchMock(body => {
+				requestBody = body;
+			}),
+		});
+		await stream.result();
+
+		const parsed = JSON.parse(requestBody ?? "{}") as CapturedRequestBody;
+		expect(parsed.model).toBe("gemini-4-hydrogen-xhigh");
+		expect(parsed.request?.generationConfig?.thinkingConfig).toBeUndefined();
+	});
+
+	it("keeps explicit Hydrogen medium on its routed model with a medium level", async () => {
+		let requestBody: string | undefined;
+		const model = createHydrogenModel("gemini-4-hydrogen", {
+			mode: "google-level",
+			efforts: [Effort.Medium],
+			requiresEffort: true,
+			effortRouting: { [Effort.Medium]: "gemini-4-hydrogen-medium" },
+		});
+		const stream = streamSimple(model, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			reasoning: Effort.Medium,
+			fetch: createFetchMock(body => {
+				requestBody = body;
+			}),
+		});
+		await stream.result();
+
+		const parsed = JSON.parse(requestBody ?? "{}") as CapturedRequestBody;
+		expect(parsed.model).toBe("gemini-4-hydrogen-medium");
+		expect(parsed.request?.generationConfig?.thinkingConfig?.thinkingLevel).toBe("MEDIUM");
+		expect(parsed.request?.generationConfig?.thinkingConfig?.thinkingBudget).toBeUndefined();
+	});
+
+	it("keeps Hydrogen medium default behavior on the base model", async () => {
+		let requestBody: string | undefined;
+		const stream = streamSimple(hydrogenMedium, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: createFetchMock(body => {
+				requestBody = body;
+			}),
+		});
+		await stream.result();
+
+		const parsed = JSON.parse(requestBody ?? "{}") as CapturedRequestBody;
+		expect(parsed.model).toBe("gemini-4-hydrogen-medium");
+		expect(parsed.request?.generationConfig?.thinkingConfig?.thinkingLevel).toBe("MEDIUM");
+		expect(parsed.request?.generationConfig?.thinkingConfig?.thinkingBudget).toBeUndefined();
+	});
+	it("preserves explicit thinking-off suppression on a Hydrogen model", async () => {
+		let requestBody: string | undefined;
+		const model = createHydrogenModel("gemini-4-hydrogen", {
+			mode: "google-level",
+			efforts: [Effort.Low, Effort.Medium],
+			requiresEffort: true,
+			suppressWhenOff: true,
+		});
+		const stream = streamSimple(model, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			forceReasoningOff: true,
+			fetch: createFetchMock(body => {
+				requestBody = body;
+			}),
+		});
+		await stream.result();
+
+		const parsed = JSON.parse(requestBody ?? "{}") as CapturedRequestBody;
+		expect(parsed.model).toBe("gemini-4-hydrogen");
+		expect(parsed.request?.generationConfig?.thinkingConfig).toEqual({
+			includeThoughts: false,
+			thinkingLevel: "LOW",
+		});
+	});
 	it("uses thinkingLevel for gemini-3.1-pro-preview when the effort is supported", async () => {
 		let requestBody: string | undefined;
 		const fetchMock = createFetchMock(body => {
