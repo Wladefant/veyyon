@@ -723,7 +723,7 @@ mod platform {
 			let (_, dacl) = security_parts(descriptor.pointer()).unwrap();
 			let name = wide(&fixture.stage.directory).unwrap();
 			// SAFETY: this fixture owns the directory; remove only SYSTEM's ACE while retaining the test user's full access.
-			let security = unsafe { CreateFileW(name.as_ptr(), WRITE_DAC,
+			let security = unsafe { CreateFileW(name.as_ptr(), GENERIC_READ | WRITE_DAC,
 				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, null(), OPEN_EXISTING,
 				FILE_FLAG_BACKUP_SEMANTICS, null_mut()) };
 			assert_ne!(security, INVALID_HANDLE_VALUE);
