@@ -1373,9 +1373,7 @@ export class SessionManager {
 				if (await this.#runFencedAtomicRewrite(startEpoch)) {
 					// Same as the synchronous publish: the episode ends when the file is whole.
 					this.#clearDiskError();
-					this.#fileIsCurrent = true;
 					this.#materializeBreadcrumb();
-					this.#rewriteRequired = false;
 					this.#hasTitleSlot = true;
 					this.#coolUnreachablePayloads();
 				}
@@ -1405,12 +1403,11 @@ export class SessionManager {
 
 	/**
 	 * Shared fenced atomic-rewrite loop used by `#rewriteAtomically` and the
-	 * `#persistTitleChangeEntry` fallback. Holds `#atomicRewriteActive` across
-	 * the writer close and the full-file replace, and loops on
-	 * `#atomicRewriteDirty` so any fenced append that lands during the rewrite
-	 * is captured before the task resolves. Returns `false` when the disk epoch
-	 * moved (a superseding synchronous rewrite has taken over) so callers skip
-	 * their post-publish state updates.
+	 * `#persistTitleChangeEntry` fallback. Holds the append fence across
+	 * the writer close and the full-file replace. Drain ordinary late appends onto that
+	 * replacement under the same lock; only changes to published bytes need another pass.
+	 * Returns `false` when a superseding synchronous rewrite took over the disk epoch.
+	 * Callers then skip their post-publish state updates.
 	 */
 	async #runFencedAtomicRewrite(epoch: number): Promise<boolean> {
 		this.#atomicRewriteFenceEpoch = epoch;
@@ -1459,6 +1456,7 @@ export class SessionManager {
 				let published = false;
 				let foreignChangeRejected = false;
 				try {
+					const titleSlot = this.#titleSlotLine();
 					const coldIdentity = this.#publishedFileState?.identity;
 					const shift = await this.#publishAtomically(
 						sessionFile,
@@ -1479,11 +1477,21 @@ export class SessionManager {
 					this.#notePublishedFile();
 					this.#rebaseColdPayloads(coldIdentity, shift);
 					published = true;
+					if (
+						this.#atomicRewriteDirty &&
+						!repairingFailedFork &&
+						this.#storage.withJournalLock &&
+						!(await this.#appendAfterAtomicRewrite(sessionFile, epoch, titleSlot))
+					) {
+						return false;
+					}
 				} finally {
 					// Not written, so the next rewrite still owes these entries.
 					if (!published) this.#firstUpdatedEntry = Math.min(this.#firstUpdatedEntry, updatedFrom);
 				}
 			} while (this.#atomicRewriteDirty);
+			this.#fileIsCurrent = true;
+			this.#rewriteRequired = false;
 			return true;
 			} finally {
 				// Only relinquish the fence if we still own it. A superseding
@@ -1499,6 +1507,34 @@ export class SessionManager {
 			return await this.#storage.withJournalLock(sessionFile, runRewrite);
 		}
 		return await runRewrite();
+	}
+
+	/**
+	 * The staged body may already include appends that landed during the copy.
+	 * Write only the entries it missed; copying the journal again on each append
+	 * can keep a cwd change pending for as long as background agents report results.
+	 */
+	async #appendAfterAtomicRewrite(sessionFile: string, epoch: number, titleSlot: string): Promise<boolean> {
+		const state = this.#publishedFileState;
+		const from = state?.lines?.entryOffsets.length ?? state?.ownedIds?.size;
+		if (from === undefined || from > this.#entries.length || !this.#fileIsExactlyAsPublished()) return true;
+		for (let next = from; ; ) {
+			// A concurrent title update changes the header slot. An in-place entry
+			// update requires the ordinary rewrite, not just a suffix append.
+			if (titleSlot !== this.#titleSlotLine() || this.#firstUpdatedEntry !== Number.POSITIVE_INFINITY) return true;
+			const end = this.#entries.length;
+			if (next === end) {
+				this.#atomicRewriteDirty = false;
+				return true;
+			}
+			for (; next < end; next++) {
+				const entry = this.#entries[next]!;
+				const line = this.#lineFor(entry);
+				await this.#appendWriter().append(line);
+				if (this.#diskEpoch !== epoch || this.#sessionFile !== sessionFile) return false;
+				this.#notePublishedAppend(entry, line);
+			}
+		}
 	}
 
 	#appendToSessionFile(entry: SessionEntry): void {
@@ -1859,8 +1895,6 @@ export class SessionManager {
 					this.#firstUpdatedEntry = 0;
 					if (!(await this.#runFencedAtomicRewrite(epoch))) return;
 					this.#clearDiskError();
-					this.#fileIsCurrent = true;
-					this.#rewriteRequired = false;
 					this.#hasTitleSlot = true;
 				}
 			},
