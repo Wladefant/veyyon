@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
@@ -809,6 +810,47 @@ describe("AgentLifecycleManager", () => {
 						content: 'Agent "Orphan" stalled: Parent session no longer exists.',
 					}),
 				);
+			} finally {
+				await reopened.close();
+			}
+		} finally {
+			await transcript.close();
+			temp.removeSync();
+		}
+	});
+	it("prunes cold-restored scoped history without a stalled notice", async () => {
+		const temp = TempDir.createSync("cold-restored-history-");
+		registry.register({ id: "Parent", displayName: "parent", kind: "main", session: null });
+		const transcript = SessionManager.create(temp.path(), temp.path());
+		try {
+			transcript.appendMessage({ role: "user", content: "cold history", timestamp: 1 });
+			await transcript.flush();
+			await transcript.ensureOnDisk();
+			const sessionFile = transcript.getSessionFile();
+			if (!sessionFile) throw new Error("Missing cold history transcript");
+			await transcript.close();
+			const originalTranscript = await readFile(sessionFile);
+			const ref = registry.register({
+				id: "ColdHistory",
+				displayName: "child",
+				kind: "sub",
+				parentId: "Parent",
+				session: null,
+				sessionFile,
+				status: "parked",
+				coldRestoredFromDisk: true,
+				scope: "session-a",
+			});
+			await lifecycle.prune(ref.id);
+
+			expect(ref.terminalOutcome).toBeUndefined();
+			expect(registry.get(ref.id)).toBeUndefined();
+			const reopened = await SessionManager.open(sessionFile);
+			try {
+				expect(reopened.getEntries()).not.toContainEqual(
+					expect.objectContaining({ customType: "agent-terminal-outcome" }),
+				);
+				expect(await readFile(sessionFile)).toEqual(originalTranscript);
 			} finally {
 				await reopened.close();
 			}

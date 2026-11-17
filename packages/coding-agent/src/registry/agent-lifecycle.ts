@@ -540,7 +540,7 @@ export class AgentLifecycleManager {
 				continue;
 			}
 			const reason = "Parent session no longer exists.";
-			if (!ref.terminalOutcome) {
+			if (!ref.terminalOutcome && !ref.coldRestoredFromDisk && ref.kind === "sub") {
 				this.#stalling.add(ref.id);
 				let reported = false;
 				try {
@@ -561,7 +561,9 @@ export class AgentLifecycleManager {
 			) {
 				continue;
 			}
-			if (!ref.terminalOutcome) this.#registry.recordTerminalOutcome(ref.id, "stalled", reason);
+			if (!ref.terminalOutcome && !ref.coldRestoredFromDisk) {
+				this.#registry.recordTerminalOutcome(ref.id, "stalled", reason);
+			}
 			await this.release(ref.id);
 		}
 	}
@@ -715,8 +717,8 @@ export class AgentLifecycleManager {
 			waitingOnPeer: ref.waitingOnPeer === true,
 			parkedForMs: Date.now() - ref.lastActivity,
 		});
-		if (!ref.terminalOutcome) {
-			const reason = "Assignment was pruned before reporting a terminal outcome.";
+		const reason = "Assignment was pruned before reporting a terminal outcome.";
+		if (!ref.terminalOutcome && !ref.coldRestoredFromDisk && ref.kind === "sub") {
 			this.#stalling.add(id);
 			let reported = false;
 			try {

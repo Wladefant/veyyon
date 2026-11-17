@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Prune cold-restored agent history without reporting a false stalled assignment.
+
 ## [1.10.12] - 2026-11-17
 
 ### Fixed
