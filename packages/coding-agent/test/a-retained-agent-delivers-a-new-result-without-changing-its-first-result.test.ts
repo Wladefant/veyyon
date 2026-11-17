@@ -8,7 +8,9 @@ import { TempDir } from "@veyyon/utils";
 import { IrcContinuationOutbox } from "../src/session/runtime/irc-inbox";
 
 const resources: TempDir[] = [];
-afterEach(() => { for (const resource of resources.splice(0)) resource.removeSync(); });
+afterEach(() => {
+	for (const resource of resources.splice(0)) resource.removeSync();
+});
 function store(): SessionManager {
 	const temp = TempDir.createSync("native-continuation-");
 	resources.push(temp);
@@ -29,7 +31,11 @@ describe("retained agent result delivery", () => {
 			outbox.complete("worker", "owner", "resume-1", "B"),
 		]);
 		expect(raced).toEqual(result);
-		expect(session.getEntries().filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-result")).toHaveLength(1);
+		expect(
+			session
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-result"),
+		).toHaveLength(1);
 		expect(result.handle).not.toBe("agent://worker");
 		expect(await fs.readFile(path.join(dir, "worker.md"), "utf8")).toBe("A");
 		expect(await fs.readFile(path.join(dir, `${result.handle.slice("agent://".length)}.md`), "utf8")).toBe("B");
@@ -39,7 +45,11 @@ describe("retained agent result delivery", () => {
 		expect(await replay.complete("worker", "owner", "resume-1", "B")).toEqual(result);
 		await replay.flush(async () => true);
 		expect(await replay.complete("worker", "owner", "resume-1", "ignored duplicate output")).toEqual(result);
-		expect(reopened.getEntries().filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-result")).toHaveLength(1);
+		expect(
+			reopened
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-result"),
+		).toHaveLength(1);
 	});
 	it("confines unsafe task names to portable continuation artifacts without changing replay identity", async () => {
 		const session = store();
@@ -68,7 +78,9 @@ describe("retained agent result delivery", () => {
 		const replay = new IrcContinuationOutbox(reopened);
 		const original = outbox.pending()[0]!;
 		expect(await replay.complete("../outside", "owner", "unsafe-phase-0", "changed retry text")).toEqual(original);
-		expect(await fs.readFile(path.join(dir, `${original.handle.slice("agent://".length)}.md`), "utf8")).toBe("result-0");
+		expect(await fs.readFile(path.join(dir, `${original.handle.slice("agent://".length)}.md`), "utf8")).toBe(
+			"result-0",
+		);
 	});
 
 	it("serializes concurrent delivery and attempts each failed result once per flush", async () => {
@@ -86,10 +98,16 @@ describe("retained agent result delivery", () => {
 		const reopened = await SessionManager.open(session.getSessionFile()!);
 		const replay = new IrcContinuationOutbox(reopened);
 		const gate = Promise.withResolvers<boolean>();
+		const entered = Promise.withResolvers<void>();
 		let calls = 0;
-		const deliver = async () => { calls++; return await gate.promise; };
+		const deliver = async () => {
+			calls++;
+			entered.resolve();
+			return await gate.promise;
+		};
 		const one = replay.flush(deliver);
 		const two = replay.flush(deliver);
+		await entered.promise;
 		expect(calls).toBe(1);
 		gate.resolve(true);
 		await Promise.all([one, two]);
@@ -111,7 +129,9 @@ describe("retained agent result delivery", () => {
 			return true;
 		});
 		const second = await outbox.complete("worker", "owner", "resume-2", "C");
-		const raced = outbox.flush(async () => { throw new Error("Concurrent flush must join the active delivery"); });
+		const raced = outbox.flush(async () => {
+			throw new Error("Concurrent flush must join the active delivery");
+		});
 		gate.resolve();
 		await Promise.all([active, raced]);
 		expect(delivered).toEqual([first.id, second.id]);
@@ -120,16 +140,25 @@ describe("retained agent result delivery", () => {
 	it("recovers only versioned native phase input after reopening the actual journal", async () => {
 		const session = store();
 		const record = {
-			role: "custom" as const, customType: "irc:incoming", content: "Resume phase B",
-			display: true, timestamp: 1, attribution: "agent" as const,
+			role: "custom" as const,
+			customType: "irc:incoming",
+			content: "Resume phase B",
+			display: true,
+			timestamp: 1,
+			attribution: "agent" as const,
 			details: { id: "resume-1", from: "owner", source: "agent", relation: "parent" },
 		};
 		const outbox = new IrcContinuationOutbox(session);
 		outbox.begin("resume-1", record);
 		session.appendCustomEntry("irc:continuation-phase", { version: 0, phaseId: "legacy", record });
 		session.appendCustomEntry("irc:continuation-result", {
-			version: 0, id: "legacy", agentId: "worker", parentId: "owner", phaseId: "legacy",
-			handle: "agent://legacy", output: "must not be served",
+			version: 0,
+			id: "legacy",
+			agentId: "worker",
+			parentId: "owner",
+			phaseId: "legacy",
+			handle: "agent://legacy",
+			output: "must not be served",
 		});
 		session.flushSync();
 		await session.ensureOnDisk();
