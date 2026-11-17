@@ -20,6 +20,7 @@ import { AgentSession } from "../src/session/agent-session";
 import { convertToLlm } from "../src/session/messages";
 import { IrcContinuationOutbox } from "../src/session/runtime/irc-inbox";
 import { IrcBus } from "../src/task/irc-bus";
+import * as laneAdmission from "../src/task/lane-admission";
 import { renderAgentUserPrompt } from "../src/task/spawn-run";
 import type { ToolSession } from "../src/tools";
 import { YieldTool } from "../src/tools/agent/yield";
@@ -42,7 +43,12 @@ function yielded(value: string): MockResponse {
 		stopReason: "toolUse",
 	};
 }
-async function session(id: string, responses: MockResponse[], existing?: SessionManager) {
+async function session(
+	id: string,
+	responses: MockResponse[],
+	existing?: SessionManager,
+	agentKind: "main" | "sub" = "main",
+) {
 	const temp = TempDir.createSync("native-handoff-");
 	const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
 	auth.setRuntimeApiKey("mock", "test-key");
@@ -64,6 +70,7 @@ async function session(id: string, responses: MockResponse[], existing?: Session
 	const instance = new AgentSession({
 		agent,
 		agentId: id,
+		agentKind,
 		sessionManager: store,
 		settings: Settings.isolated({
 			"compaction.enabled": false,
@@ -79,6 +86,50 @@ async function session(id: string, responses: MockResponse[], existing?: Session
 }
 
 describe("native retained child resume", () => {
+	it("publishes a release reconciliation error as the single native phase completion", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Release failure received"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("B")], undefined, "sub");
+		const releaseFailure = new Error("lane release reconciliation required");
+		const release = vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockResolvedValue({
+			release: async () => Promise.reject(releaseFailure),
+		} as never);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+
+		await child.instance.deliverIrcMessage({
+			id: "release-reconciliation",
+			from: "owner",
+			to: "worker",
+			body: "Return a result.",
+			ts: Date.now(),
+		});
+		await child.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		const completions = parent.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		expect(completions).toHaveLength(1);
+		expect(completions[0]?.content).toContain("lane release reconciliation required");
+		expect(completions[0]?.content).toContain('"source":"harness"');
+		expect(release).toHaveBeenCalledTimes(1);
+		await child.instance.replayIrcContinuations();
+		expect(
+			parent.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+	});
 	it("delivers B once through the parent inbox, keeps A, and coalesces duplicate resume IDs", async () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();

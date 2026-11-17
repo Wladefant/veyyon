@@ -191,31 +191,50 @@ export class IrcDelivery {
 			agent.replaceQueues(agent.peekSteeringQueue().slice(), []);
 		}
 		host.beginWakeTurn();
-		void (async () => {
+		const run = async (): Promise<void> => {
 			let lease: { release(): Promise<void> } | null = null;
+			let failure: unknown;
 			try {
 				if (host.acquireWakeLease) {
 					lease = await host.acquireWakeLease(host.wakeSignal?.());
-					if (!lease || host.isDisposed()) return;
+					if (lease && !host.isDisposed()) await agent.prompt(records);
+				} else {
+					await agent.prompt(records);
 				}
-				await agent.prompt(records);
 			} catch (error) {
-				logger.warn("IRC wake turn failed", { error: errorMessage(error) });
+				failure = error;
 			} finally {
 				if (parkedFollowUps.length > 0) {
-					agent.replaceQueues(
-						agent.peekSteeringQueue().slice(),
-						parkedFollowUps.concat(agent.peekFollowUpQueue()),
-					);
+					try {
+						agent.replaceQueues(
+							agent.peekSteeringQueue().slice(),
+							parkedFollowUps.concat(agent.peekFollowUpQueue()),
+						);
+					} catch (error) {
+						failure ??= error;
+					}
 				}
 				if (lease) {
-					await lease.release().catch(error => {
-						logger.warn("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
-					});
+					try {
+						await lease.release();
+					} catch (error) {
+						if (failure !== undefined) {
+							logger.error("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
+						}
+						failure ??= error;
+					}
 				}
-				host.endWakeTurn();
+				try {
+					host.endWakeTurn();
+				} catch (error) {
+					failure ??= error;
+				}
 			}
-		})();
+			if (failure !== undefined) logger.error("IRC wake turn or host lane release failed", { error: errorMessage(failure) });
+		};
+		void run().catch(error => {
+			logger.error("IRC wake cleanup failed", { error: errorMessage(error) });
+		});
 	}
 
 	/**

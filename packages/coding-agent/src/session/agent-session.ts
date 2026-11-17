@@ -1093,6 +1093,7 @@ export class AgentSession {
 			!this.#queue.canAutoContinueForFollowUp()
 				? this.agent.peekFollowUpQueue().slice()
 				: [];
+		let parkedFollowUpsRestored = false;
 		if (parkedFollowUps.length > 0) {
 			this.agent.replaceQueues(this.agent.peekSteeringQueue().slice(), []);
 		}
@@ -1138,36 +1139,63 @@ export class AgentSession {
 		let wakeLease: NativeHostLaneLease | null = null;
 		let wakeAdmitted = false;
 		const wakeSignal = this.#wakeAbortController.signal;
+		let failure: unknown;
 		const settled = ready
+			.catch(error => {
+				failure = error;
+			})
 			.then(async () => {
-				if (terminal) {
+				if (failure === undefined && terminal) {
 					wakeAdmitted = true;
-					return;
+				} else if (failure === undefined && this.#config.agentKind === "sub") {
+					try {
+						const agentId = this.#config.agentId ?? this.sessionId;
+						wakeLease = await acquireSubagentHostLane({
+							agentId,
+							owner: path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
+							signal: wakeSignal,
+						});
+					} catch (error) {
+						failure = error;
+					}
 				}
-				if (this.#config.agentKind === "sub") {
-					const agentId = this.#config.agentId ?? this.sessionId;
-					wakeLease = await acquireSubagentHostLane({
-						agentId,
-						owner: path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
-						signal: wakeSignal,
-					});
+				if (!terminal && failure === undefined && this.#config.agentKind === "sub") {
 					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
 				}
-				wakeAdmitted = true;
-				await (records.length > 0 && retainedIndex < 0 ? this.agent.prompt(records) : this.agent.continue());
-			})
-			.then(
-				() => (wakeAdmitted ? publish() : undefined),
-				error => publish(error),
-			)
-			.then(async () => {
-				if (!wakeAdmitted) return;
-				if (typeof completionId === "string") {
+				if (!terminal && failure === undefined) {
+					wakeAdmitted = true;
+					try {
+						await (records.length > 0 && retainedIndex < 0 ? this.agent.prompt(records) : this.agent.continue());
+					} catch (error) {
+						failure = error;
+					}
+				}
+				if (parkedFollowUps.length > 0) {
+					try {
+						this.agent.replaceQueues(
+							this.agent.peekSteeringQueue().slice(),
+							parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
+						);
+						parkedFollowUpsRestored = true;
+					} catch (error) {
+						failure ??= error;
+					}
+				}
+				if (wakeLease) {
+					try {
+						await wakeLease.release();
+					} catch (error) {
+						logger.error("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
+						failure ??= error;
+					}
+				}
+				await publish(failure);
+				if (wakeAdmitted && typeof completionId === "string") {
 					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
 					this.sessionManager.flushSync();
 					await this.sessionManager.sync();
 				}
-				published = true;
+				published = wakeAdmitted;
 			})
 			.catch(error => {
 				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", {
@@ -1177,15 +1205,18 @@ export class AgentSession {
 			.finally(async () => {
 				unsubscribe();
 				if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
-				if (parkedFollowUps.length > 0) {
+				if (parkedFollowUps.length > 0 && !parkedFollowUpsRestored) {
 					this.agent.replaceQueues(
 						this.agent.peekSteeringQueue().slice(),
 						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
 					);
+					parkedFollowUpsRestored = true;
 				}
-				if (wakeLease) {
+				if (wakeLease && !wakeAdmitted) {
 					await wakeLease.release().catch(error => {
-						logger.warn("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
+						logger.error("Releasing cancelled IRC wake host lane lease failed", {
+							error: errorMessage(error),
+						});
 					});
 				}
 				// Claim the next retained phase before dropping this turn's idle accounting.
@@ -1197,9 +1228,15 @@ export class AgentSession {
 				this.#endInFlight();
 			});
 		this.#ircWakeSettled = settled;
-		void settled.finally(() => {
-			if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
-		});
+		void settled
+			.finally(() => {
+				if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
+			})
+			.catch(error =>
+				logger.error("Settling a detached IRC wake failed", {
+					error: errorMessage(error),
+				}),
+			);
 		return ready;
 	}
 
