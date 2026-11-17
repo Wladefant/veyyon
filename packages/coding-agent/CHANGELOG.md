@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Block common Bash tool commands that stop host processes by name or pattern while preserving verified PID cleanup ([#751](https://github.com/Wladefant/veyyon/issues/751)).
 ## [1.11.1] - 2026-11-17
 
 ### Fixed
