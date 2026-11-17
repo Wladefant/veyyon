@@ -4,7 +4,8 @@
 
 ### Fixed
 
-- Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Wait for result and parent-target journal writes before retained IRC delivery. Queue parent sends while asynchronous rewrites hold the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Persistence for journal-lock result targets and busyparent queueing ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 
 ## [1.10.10] - 2026-11-16
 
