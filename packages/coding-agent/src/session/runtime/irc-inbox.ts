@@ -215,11 +215,10 @@ export class IrcContinuationOutbox {
 		return [...results.values()];
 	}
 
-	/** Claim a native message ID before starting its turn. A replay cannot start it twice. */
+	/** Claim synchronously in memory; the caller persists before executing the claimed phase. */
 	begin(phaseId: string, record?: CustomMessage): boolean {
 		if (this.hasPhase(phaseId)) return false;
 		this.#store.appendCustomEntry("irc:continuation-phase", { version: 1, phaseId, record });
-		this.#store.flushSync();
 		return true;
 	}
 
@@ -265,7 +264,6 @@ export class IrcContinuationOutbox {
 		const raced = this.#results().find(item => item.id === id);
 		if (raced) return raced;
 		this.#store.appendCustomEntry("irc:continuation-result", completion);
-		this.#store.flushSync();
 		await this.#store.sync();
 		return completion;
 	}
@@ -300,7 +298,6 @@ export class IrcContinuationOutbox {
 			return existing;
 		}
 		this.#store.appendCustomEntry("irc:continuation-target", { version: 1, completionId, parentId });
-		this.#store.flushSync();
 		await this.#store.ensureOnDisk();
 		await this.#store.sync();
 		return parentId;
@@ -323,7 +320,6 @@ export class IrcContinuationOutbox {
 				attempted.add(completion.id);
 				if (!await deliver(completion)) continue;
 				this.#store.appendCustomEntry("irc:continuation-delivered", completion.id);
-				this.#store.flushSync();
 				await this.#store.sync();
 			}
 		})().then(() => {

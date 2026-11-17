@@ -1148,7 +1148,6 @@ export class AgentSession {
 			.then(async () => {
 				if (typeof completionId === "string") {
 					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
-					this.sessionManager.flushSync();
 					await this.sessionManager.sync();
 				}
 				published = true;
@@ -5348,7 +5347,6 @@ export class AgentSession {
 			record = this.#ircContinuations.withOrdering(record);
 			// Persist before acknowledging delivery. A sender crash may replay the same result.
 			this.#appendCustomMessageToContext(record);
-			this.sessionManager.flushSync();
 			await this.sessionManager.ensureOnDisk();
 			await this.sessionManager.sync();
 			void this.#events.send({ type: "irc_message", message: record });
