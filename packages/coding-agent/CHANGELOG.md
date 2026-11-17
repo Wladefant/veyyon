@@ -14,6 +14,10 @@
 
 - Classify registered child and descendant IRC senders from registry ancestry, and render sender lineage separately from recipient identity while keeping external-session notices non-lineage.
 
+### Fixed
+
+- Keep ignored artifact allocation reservations out of the history directory cache budget, and avoid indexing unrelated tool results for a user-only bounded transcript prefix ([Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
+
 ## [1.10.11] - 2026-11-17
 
 ### Fixed

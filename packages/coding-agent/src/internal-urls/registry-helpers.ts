@@ -9,7 +9,7 @@ import * as path from "node:path";
 import { isMissingPath } from "@veyyon/utils/fs-error";
 import { isSessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { AgentRegistry } from "../registry/agent-registry";
-import { HistoryDirectoryIndex } from "./history-directory-index";
+import { HistoryDirectoryIndex, isHistoryTraversalEntry } from "./history-directory-index";
 
 const extraArtifactsDirs = new Set<string>();
 
@@ -146,9 +146,6 @@ export async function ambiguousSessionFileIds(signal?: AbortSignal): Promise<Set
 	return ambiguous;
 }
 
-const ARTIFACT_RESERVATION_DIR_PATTERN = /^\.artifact-id-\d+$/;
-const ARTIFACT_ID_DATABASE_PATTERN = /^\.artifact-ids\.sqlite.*$/;
-
 export interface SessionFileScan {
 	files: Map<string, string>;
 	ambiguous: Set<string>;
@@ -189,8 +186,7 @@ export async function scanSessionFilesFromDisk(signal?: AbortSignal): Promise<Se
 		for (const { dir, depth, entries } of listings) {
 			for (const entry of entries) {
 				if (signal?.aborted) signal.throwIfAborted();
-				if (ARTIFACT_RESERVATION_DIR_PATTERN.test(entry.name) || ARTIFACT_ID_DATABASE_PATTERN.test(entry.name))
-					continue;
+				if (!isHistoryTraversalEntry(entry.name)) continue;
 				if (entry.kind === "d") {
 					pending.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
 					continue;

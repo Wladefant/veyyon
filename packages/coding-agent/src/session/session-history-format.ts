@@ -488,13 +488,18 @@ function* historyMarkdownSteps(
 		yield "";
 	}
 
-	// Index tool results by call id so each toolCall collapses to one line.
-	const resultsByCallId = new Map<string, ToolResultMessage>();
-	for (const msg of typed) {
-		yield undefined;
-		if (msg.role === "toolResult") {
-			resultsByCallId.set(msg.toolCallId, msg);
+	// A user-only prefix needs no lookahead. Build the result index only when
+	// a rendered tool call needs it, preserving last-result-wins semantics.
+	let resultsByCallId: Map<string, ToolResultMessage> | undefined;
+	function* resultForCall(id: string): Generator<undefined, ToolResultMessage | undefined> {
+		if (!resultsByCallId) {
+			resultsByCallId = new Map<string, ToolResultMessage>();
+			for (const msg of typed) {
+				yield undefined;
+				if (msg.role === "toolResult") resultsByCallId.set(msg.toolCallId, msg);
+			}
 		}
+		return resultsByCallId.get(id);
 	}
 	const consumed = new Set<string>();
 	let lastWatchedLabel: string | undefined;
@@ -534,7 +539,7 @@ function* historyMarkdownSteps(
 					if (block.type === "text") {
 						if (block.text.trim()) line = block.text;
 					} else if (block.type === "toolCall") {
-						const result = resultsByCallId.get(block.id);
+						const result = yield* resultForCall(block.id);
 						if (result) {
 							consumed.add(block.id);
 							yield result;
