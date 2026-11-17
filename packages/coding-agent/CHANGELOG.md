@@ -2,9 +2,111 @@
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-11-17
+
 ### Fixed
 
+- Finish working-directory changes even when background agent results continue to arrive. Append new session entries without republishing the transcript for each one.
+
+## [1.11.0] - 2026-11-17
+
+### Added
+
+- Native `BashTool` commands attest the live main or subagent caller through `VEYYON_CALLER_URL` and `VEYYON_CALLER_TOKEN` over a lazy loopback HTTP endpoint, rejecting user `env` overrides and clearing inherited receipt variables when no live actor owns the session.
+
+### Fixed
+
+- Python eval cancellation targets the request without killing the shared kernel, and only its live primary owner can reset it.
+- Shared eval kernels retain implicit owners when explicit co-owners join or leave during startup and active use.
+- Python eval cancellation releases queued worker custody and completed cancellation records while suppressing output from workers still running.
+
+## [1.10.12] - 2026-11-17
+
+### Fixed
+
+- Classify registered child and descendant IRC senders from registry ancestry, and render sender lineage separately from recipient identity while keeping external-session notices non-lineage.
+
+## [1.10.11] - 2026-11-17
+
+### Fixed
+
+- Restore session deletion methods to the storage type contract and clear completed rewrite fences with the declared empty state ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+- Keep Antigravity's fixed Hydrogen Extra High wire variant free of conflicting thinking overrides, without changing the selected model or medium/default routing.
+
+## [1.10.10] - 2026-11-16
+
+### Fixed
+
+- Keep CI logs complete during credential redaction ([PR #1096](https://github.com/Wladefant/veyyon/pull/1096)).
+- Keep serialized CI logs and later diagnostic records complete while redacting credentials, including printed ANSI codes and inline code suggestions.
+- Bound producer-output scalar serialization and diagnose oversized records without exposing credential-bearing lines.
+- Preserve environment-inventory taint across oversized assignment records, bound repeating-prefix lookbehind, and keep quoted multi-record logs out of scalar mode.
+- Keep caret-escaped ANSI CSI sequences out of producer output container and inventory detection while preserving credential redaction ([PR #1087](https://github.com/Wladefant/veyyon/pull/1087)).
+- Fall back from single-file `local://` promotion in `ReadTool` so semicolon-delimited lists containing `local://` URIs split into per-entry reads while preserving individual selectors.
+
+## [1.10.9] - 2026-11-16
+
+### Changed
+
+- No user-facing behavior changes; ACP model-order regression coverage now verifies 257 session models survive provider sorting without local truncation.
+
+### Fixed
+
+- Give child startup and streaming the provider's default five-minute response window, count reasoning and retry progress, and refuse stall recovery while the session remains busy.
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
+## [1.10.8] - 2026-11-16
+
+### Fixed
+
+- Reject duplicate JSON member names in opt-in task records before schema validation, preserving pending-work ownership and constraints ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Exact stored-history reads and searches reject ambiguous or duplicate session/entry identity claims, including impossible nested openers, object suffixes, and array/scalar prefixes, while preserving identity-free legacy title lines (including brace-leading titles) and valid nested metadata ([Refs #984](https://github.com/Wladefant/veyyon/issues/984), [Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Redacted home directory paths and identity-form login names from auto-QA grievances at both local storage and outbound flush boundaries ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 841cfcf79650204c646f73bf306a64ca480e407b, 99680efef69f846a8a52c8c4726403ab61781a24, d765811a8d6dafe718da2361a7e47c8c4ecb3f43).
+- Redacted URL userinfo and query credentials from both `url` and `error` fields in `ModelRegistry` provider discovery failure logs ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 79a2e395726eef756402f71ec1d1ef78c6a943fe).
+
+## [1.10.7] - 2026-11-16
+
+### Fixed
+
+- Deliver parent IRC steering at the next model step during active child turns, including retained continuation phases ([Refs #1126](https://github.com/Wladefant/veyyon/issues/1126)).
+- Preserve discovery mandatory-reasoning floor and compatible default effort level when applying explicit thinking overrides while clearing stale effort-control metadata, validating inherited and authored defaults against the final normalized ladder ([PR #1131](https://github.com/Wladefant/veyyon/pull/1131)).
+- `AgentLifecycleManager` coalesces concurrent parked-orphan sweeps and deduplicates in-flight stalled reporting per agent so registry removal cascades cannot fan out overlapping `SessionManager.open` storms.
+- Typed cached provider model snapshots as mutable arrays in `ModelRegistry.#refreshForSpawnNow` so `tsconfig.tools.json` typechecking passes (`Refs #1098`).
+- Task-run watchdogs allow bounded session initialization before restoring the normal startup deadline on attachment, without extending later running phases.
+- Python eval shutdown waits now have a JavaScript-side deadline, and reset, acquire, and replacement transitions honor caller cancellation without dropping transition ownership ([PR #1115](https://github.com/Wladefant/veyyon/pull/1115)).
+- Enabled `retryRename` on daemon `meta.json` writes so transient Windows rename denials do not drop terminal daemon states ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 16bf61a089e7cc2d134af2975077ffbe1f1adadd, ec199411a3a23fe321e6f903aa08effa19aec2e9).
+
+## [1.10.6] - 2026-11-16
+
+### Fixed
+
+- Ci(ovh): pin PR cleanup WORKFLOW_SHA and keep verified-only OVH_CI_PR_ADMISSION gate ([PR #1150](https://github.com/Wladefant/veyyon/pull/1150)).
+
+## [1.10.5] - 2026-11-16
+
+### Fixed
+
+- Bounded post-completion shell output callback draining with a 3s absolute deadline alongside the 1s idle grace, aborting surviving child output streams and returning an explicit transport error when exceeded.
+
+## [1.10.4] - 2026-11-16
+
+### Fixed
+
+- Escaped `<` as `\u003c` and used a replacer function in `renderOAuthResultHtml` so `</script>` markup and `$` replacement patterns in OAuth callback values stay inert JSON data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c767616cfc3ba221fa6695bcccf96aa2c3e4dbd4).
+- Steer live streaming retained children immediately on parent IRC during an active wake phase while deferring post-loop messages to the continuation outbox ([PR #1146](https://github.com/Wladefant/veyyon/pull/1146)).
+
+## [1.10.3] - 2026-11-16
+
+### Fixed
+
+- `history://` reads stream stored session prefixes lazily and reuse a validated directory index so post-restart reads stay within the 5-second timeout ([PR #1125](https://github.com/Wladefant/veyyon/pull/1125), [Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
+- Scoped one-off `gc` SQLite statements with `using` so `db.close()` releases database and WAL handles immediately on Windows ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c8c67af69cf9fe31223fb97db0da3f9c7674880c).
+- Preserved an existing text file's CRLF line endings and UTF-8 BOM across `WriteTool` overwrites and verified persisted conventions on ACP editor-bridge writes ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi 0ffd42c7146ac69cf18c8561ccf4febea32403ac, f77456fe1d75fdcf38b893081a6a7d12cedd89d2).
+- The shared Windows daemon broker survives the client process that started it.
 - Keep eval variables and resets private to the requesting agent, even when agents share a parent session ([PR #1119](https://github.com/Wladefant/veyyon/pull/1119)).
+- Release settled idle failed predecessors on `successorOf` (with conversation ownership and turn-sequence ABA guards) and on settled `job cancel`, propagating disposal failures ([PR #1144](https://github.com/Wladefant/veyyon/pull/1144)).
+- Scope non-UsageLimit retry fallback cooldowns to the active session instead of globally suppressing selectors in `ModelRegistry` ([PR #1143](https://github.com/Wladefant/veyyon/pull/1143)).
+
 ## [1.10.2] - 2026-11-15
 
 ### Fixed
@@ -28,6 +130,7 @@
 ### Fixed
 
 - Child model spawns refresh stale model catalogs while preserving active cooldowns ([Refs #1100](https://github.com/Wladefant/veyyon/issues/1100)).
+- Bounded `history://` reads stop markdown rendering after the requested prefix and keep later messages untouched. History discovery reads child directories in bounded concurrent batches and deduplicates registry roots without quadratic scans ([Refs #978](https://github.com/Wladefant/veyyon/issues/978)).
 
 ## [1.9.3] - 2026-11-13
 

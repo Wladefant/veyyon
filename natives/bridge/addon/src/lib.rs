@@ -27,6 +27,7 @@ pub mod ast;
 pub mod block;
 pub mod clipboard;
 pub mod commit_memory;
+pub mod console_ctrl;
 mod cores;
 pub mod cpu_budget;
 pub mod crash_handler;
@@ -270,7 +271,7 @@ fn create_napi_tokio_runtime() -> Option<tokio::runtime::Runtime> {
 /// MUST stay in sync with `VERSION_SENTINEL_EXPORT` in
 /// `natives/bridge/bindings/native/index.js` (which derives the name from
 /// `package.json#version`).
-#[napi(js_name = "__veyyonNativesV1_10_2")]
+#[napi(js_name = "__veyyonNativesV1_11_1")]
 pub const fn veyyon_natives_version_sentinel() {}
 
 /// Native module entry point: install crash diagnostics before any tool can

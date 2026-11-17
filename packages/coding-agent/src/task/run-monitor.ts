@@ -8,7 +8,13 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { AgentEvent } from "@veyyon/agent-core";
 import { AGENT_EVENT_TYPES } from "@veyyon/agent-core/types";
-import type { Usage } from "@veyyon/ai";
+import type { Api, Model, Usage } from "@veyyon/ai";
+import {
+	getOpenAIStreamFirstEventTimeoutMs,
+	getOpenAIStreamIdleTimeoutMs,
+	getStreamFirstEventTimeoutMs,
+	getStreamIdleTimeoutMs,
+} from "@veyyon/ai/utils/idle-iterator";
 import { emptyUsage } from "@veyyon/catalog/models";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import { detachedString, errorMessage, isRecord, logger, popLoopPhase, pushLoopPhase, truncate } from "@veyyon/utils";
@@ -240,14 +246,61 @@ export interface RunMonitorArgs {
  * processing, abort/budget machinery, usage accumulation, and output capture
  * for one assignment run.
  */
-export type WatchdogPhase = "startup" | "streaming" | "tool-running" | "waiting-child";
+export type WatchdogPhase = "startup" | "session-initializing" | "streaming" | "tool-running" | "waiting-child";
+
+const DEFAULT_TRANSPORT_WAIT_MS = 300_000;
+
+/**
+ * Extra slack above the provider's first-event/idle budget so pre-dispatch
+ * preparation (context transforms, auth lookup, timer skew) after `agent_start`
+ * never causes the outer monitor to pre-empt a healthy provider stream.
+ */
+export const WATCHDOG_TRANSPORT_SLACK_MS = 30_000;
 
 export const PHASE_WATCHDOG_LIMITS_MS: Readonly<Record<WatchdogPhase, number>> = {
-	startup: 120_000,
-	streaming: 180_000,
+	// Strictly later than the transport's five-minute default first-event/idle budget
+	// plus pre-dispatch latency and scheduling slack.
+	startup: DEFAULT_TRANSPORT_WAIT_MS + WATCHDOG_TRANSPORT_SLACK_MS,
+	"session-initializing": 900_000,
+	streaming: DEFAULT_TRANSPORT_WAIT_MS + WATCHDOG_TRANSPORT_SLACK_MS,
 	"tool-running": 900_000,
 	"waiting-child": 1_800_000,
 };
+
+function timeoutSecondsToMs(value: number | undefined): number | undefined {
+	if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
+	if (value === 0) return 0;
+	return Math.max(1, Math.trunc(value * 1000));
+}
+
+function modelCompatStreamIdleTimeoutMs(model: Model<Api> | undefined): number | undefined {
+	if (!model || !("compat" in model) || !isRecord(model.compat)) return undefined;
+	const value = model.compat.streamIdleTimeoutMs;
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : undefined;
+}
+
+function resolveWatchdogPhaseLimitMs(
+	phase: WatchdogPhase,
+	options?: { model?: Model<Api>; settings?: Settings },
+): number {
+	const baseLimit = PHASE_WATCHDOG_LIMITS_MS[phase];
+	if (phase !== "startup" && phase !== "streaming") return baseLimit;
+	const settingsIdleMs = timeoutSecondsToMs(options?.settings?.get("providers.streamIdleTimeoutSeconds"));
+	const settingsFirstEventMs = timeoutSecondsToMs(options?.settings?.get("providers.streamFirstEventTimeoutSeconds"));
+	const compatIdleMs = modelCompatStreamIdleTimeoutMs(options?.model);
+	const genericIdleMs = settingsIdleMs ?? getStreamIdleTimeoutMs();
+	const genericFirstEventMs = settingsFirstEventMs ?? getStreamFirstEventTimeoutMs(genericIdleMs);
+	const openAIIdleMs = settingsIdleMs ?? getOpenAIStreamIdleTimeoutMs(compatIdleMs);
+	const openAIFirstEventMs = settingsFirstEventMs ?? getOpenAIStreamFirstEventTimeoutMs(openAIIdleMs);
+	const effectiveTransportBudget = Math.max(
+		DEFAULT_TRANSPORT_WAIT_MS,
+		genericIdleMs ?? 0,
+		genericFirstEventMs ?? 0,
+		openAIIdleMs ?? 0,
+		openAIFirstEventMs ?? 0,
+	);
+	return Math.max(baseLimit, effectiveTransportBudget + WATCHDOG_TRANSPORT_SLACK_MS);
+}
 
 export interface AgentRunMonitor {
 	readonly progress: AgentProgress;
@@ -262,6 +315,7 @@ export interface AgentRunMonitor {
 	hasExplicitAbortReason(): boolean;
 	isAbortedRun(): boolean;
 	requestAbort(reason: AbortReason): void;
+	beginSessionInitialization(): void;
 	abortActiveSession(): Promise<void>;
 	waitForActiveSessionAbort(): Promise<void>;
 	resolveSignalAbortReason(): string;
@@ -429,13 +483,21 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		clearTimeout(watchdogTimer);
 		watchdogTimer = undefined;
 		if (resolved || abortSignal.aborted) return;
-		const limit = PHASE_WATCHDOG_LIMITS_MS[watchdogPhase];
+		const limit = resolveWatchdogPhaseLimitMs(watchdogPhase, {
+			model: activeSession?.model,
+			settings: args.settings,
+		});
 		watchdogTimer = setTimeout(() => {
 			if (resolved || abortSignal.aborted || Date.now() - lastProgressEventAt < limit) return;
 			requestAbort("stalled");
 		}, limit);
 	};
 	armPhaseWatchdog();
+	const beginSessionInitialization = (): void => {
+		watchdogPhase = "session-initializing";
+		lastProgressEventAt = Date.now();
+		armPhaseWatchdog();
+	};
 
 	// Soft-budget stop: cancel the free-running turn WITHOUT aborting the
 	// monitor, so driveSessionToYield can still drive one forced final yield.
@@ -1050,7 +1112,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			event.type === "tool_execution_end" ||
 			event.type === "agent_end" ||
 			(event.type === "message_update" &&
-				((assistantEvent?.type === "text_delta" &&
+				(((assistantEvent?.type === "text_delta" || assistantEvent?.type === "thinking_delta") &&
 					typeof assistantEvent.delta === "string" &&
 					assistantEvent.delta.length > 0) ||
 					recentOutputTail !== previousOutput)) ||
@@ -1068,7 +1130,8 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			abortReason !== "stalled" ||
 			stallRecoveries >= 1 ||
 			!abortSignal.aborted ||
-			!abortCleanupSettled
+			!abortCleanupSettled ||
+			activeSession?.isStreaming
 		)
 			return false;
 		activeWatchdogTools.clear();
@@ -1086,9 +1149,16 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 	};
 
 	const attach = (session: AgentSession): (() => void) => {
+		if (watchdogPhase === "session-initializing") {
+			watchdogPhase = "startup";
+			lastProgressEventAt = Date.now();
+			armPhaseWatchdog();
+		}
 		const unsubscribe = session.subscribe(event => {
 			emitAgentEvent(event);
 			if (applyRetryEvent(event)) {
+				lastProgressEventAt = Date.now();
+				armPhaseWatchdog();
 				scheduleProgress(true);
 				return;
 			}
@@ -1170,6 +1240,9 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		setActiveSession: session => {
 			if (session !== activeSession) clearWaitHints();
 			activeSession = session;
+			if (session && !resolved && !abortSignal.aborted) {
+				armPhaseWatchdog();
+			}
 		},
 		takeActiveSession: () => {
 			clearWaitHints();
@@ -1179,6 +1252,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 		},
 		attach,
 		captureSalvage,
+		beginSessionInitialization,
 		lastAssistantSalvageText: () => lastAssistantSalvageText,
 		rawOutput: () => (finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("")),
 		scheduleProgress,

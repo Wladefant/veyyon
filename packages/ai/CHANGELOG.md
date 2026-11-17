@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.10.11] - 2026-11-17
+
+### Fixed
+
+- Keep Antigravity's fixed Hydrogen Extra High wire variant free of conflicting thinking overrides, without changing the selected model or medium/default routing.
+
+## [1.10.4] - 2026-11-16
+
+### Fixed
+
+- Escaped `<` as `\u003c` and used a replacer function in `renderOAuthResultHtml` so `</script>` markup and `$` replacement patterns in OAuth callback values stay inert JSON data ([Refs #107](https://github.com/Wladefant/veyyon/issues/107), oh-my-pi c767616cfc3ba221fa6695bcccf96aa2c3e4dbd4).
+
 ## [1.8.3] - 2026-11-05
 
 ### Fixed

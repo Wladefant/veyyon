@@ -4,6 +4,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
+import { PHASE_WATCHDOG_LIMITS_MS } from "@veyyon/coding-agent/task/run-monitor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import {
 	createAssistantStopMessage,
@@ -91,6 +92,33 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		expect(result.terminalOutcome).toBe("completed");
 	});
 
+	it("keeps a child alive when SDK session creation exceeds the startup watchdog", async () => {
+		vi.useFakeTimers();
+		let markCreationStarted!: () => void;
+		const creationStarted = new Promise<void>(resolve => {
+			markCreationStarted = resolve;
+		});
+		const session = createMockSession(({ emit }) => {
+			emit(yieldSuccessEvent({ ok: true }, "slow-session-create"));
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			markCreationStarted();
+			await new Promise<void>(resolve => setTimeout(resolve, 120_001));
+			return createSessionResult(session);
+		});
+
+		const run = runSubprocess({
+			...baseOptions,
+			id: "agent-slow-session-create",
+			settings: Settings.isolated({ "agent.maxRuntimeMs": 0 }),
+		});
+		await creationStarted;
+		await advanceTimersAndFlush(120_001);
+		const result = await run;
+
+		expect(result.exitCode).toBe(0);
+	});
+
 	it("records a failed terminal outcome", async () => {
 		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
 		const session = createMockSession(() => {
@@ -165,13 +193,13 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		try {
 			await firstPrompt;
-			await advanceTimersAndFlush(120_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			expect(handle.abortCalls()).toBe(1);
 			await secondPrompt;
 			await flushAsync();
 			expect(handle.prompts).toHaveLength(2);
 			expect(handle.prompts[1]?.text).toContain("Continue the same assignment from your existing session state.");
-			await advanceTimersAndFlush(120_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			expect(handle.abortCalls()).toBe(2);
 			const result = await resultPromise;
 			expect(result.abortReason).toContain("stalled");
@@ -180,6 +208,95 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 			controller.abort();
 			releaseSecondPrompt?.();
 			await resultPromise;
+		}
+	});
+	it("does not pre-empt a provider response delayed after agent_start within the five-minute provider budget", async () => {
+		vi.useFakeTimers();
+		const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+		let promptStarted: (() => void) | undefined;
+		let releaseProvider: (() => void) | undefined;
+		const promptReady = new Promise<void>(resolve => {
+			promptStarted = resolve;
+		});
+		const providerGate = new Promise<void>(resolve => {
+			releaseProvider = resolve;
+		});
+		const handle = createMockSessionHandle(async ({ emit }) => {
+			emit({ type: "agent_start" });
+			emit({ type: "turn_start" });
+			promptStarted?.();
+			await providerGate;
+			emit(yieldSuccessEvent({ ok: true }, "tool-delayed-provider"));
+		});
+		mockCreateAgentSession(handle.session);
+
+		const resultPromise = runSubprocess({
+			...baseOptions,
+			id: "agent-pre-dispatch-slack",
+			settings,
+		});
+		await promptReady;
+		// Simulate 5s pre-dispatch latency + 299.999s provider wait (304.999s total after agent_start).
+		await advanceTimersAndFlush(304_999);
+		expect(handle.abortCalls()).toBe(0);
+		releaseProvider?.();
+		const result = await resultPromise;
+		expect(result.aborted).toBe(false);
+		expect(result.abortReason).toBeUndefined();
+		expect(result.terminalOutcome).toBe("completed");
+	});
+	it("inherits OpenAI-specific stream idle timeout precedence over generic stream idle timeout", async () => {
+		vi.useFakeTimers();
+		const prevGenericIdle = process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS;
+		const prevOpenAIIdle = process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+		const prevGenericFirst = process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		const prevOpenAIFirst = process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS = "300000";
+		process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS = "420000";
+		delete process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		delete process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		try {
+			const settings = Settings.isolated({ "agent.maxRuntimeMs": 0 });
+			let promptStarted: (() => void) | undefined;
+			let releaseProvider: (() => void) | undefined;
+			const promptReady = new Promise<void>(resolve => {
+				promptStarted = resolve;
+			});
+			const providerGate = new Promise<void>(resolve => {
+				releaseProvider = resolve;
+			});
+			const handle = createMockSessionHandle(async ({ emit }) => {
+				emit({ type: "agent_start" });
+				emit({ type: "turn_start" });
+				promptStarted?.();
+				await providerGate;
+				emit(yieldSuccessEvent({ ok: true }, "tool-openai-idle-override"));
+			});
+			mockCreateAgentSession(handle.session);
+
+			const resultPromise = runSubprocess({
+				...baseOptions,
+				id: "agent-openai-idle-precedence",
+				settings,
+			});
+			await promptReady;
+			// Provider responds at 340s (past the 330s generic ceiling, within the 420s OpenAI idle budget).
+			await advanceTimersAndFlush(340_000);
+			expect(handle.abortCalls()).toBe(0);
+			releaseProvider?.();
+			const result = await resultPromise;
+			expect(result.aborted).toBe(false);
+			expect(result.abortReason).toBeUndefined();
+			expect(result.terminalOutcome).toBe("completed");
+		} finally {
+			if (prevGenericIdle === undefined) delete process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS;
+			else process.env.VEYYON_STREAM_IDLE_TIMEOUT_MS = prevGenericIdle;
+			if (prevOpenAIIdle === undefined) delete process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+			else process.env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS = prevOpenAIIdle;
+			if (prevGenericFirst === undefined) delete process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			else process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS = prevGenericFirst;
+			if (prevOpenAIFirst === undefined) delete process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			else process.env.VEYYON_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = prevOpenAIFirst;
 		}
 	});
 
@@ -245,7 +362,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		});
 		try {
 			await firstPrompt;
-			await advanceTimersAndFlush(120_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			await abortHasStarted;
 			await flushAsync();
 			await advanceTimersAndFlush(5_001);
@@ -296,7 +413,7 @@ describe("runSubprocess wall clock (task.maxRuntimeMs)", () => {
 		try {
 			await started;
 			await flushAsync();
-			await advanceTimersAndFlush(180_001);
+			await advanceTimersAndFlush(PHASE_WATCHDOG_LIMITS_MS.startup + 1);
 			await flushAsync();
 			expect(handle.abortCalls()).toBe(1);
 			const result = await resultPromise;

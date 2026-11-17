@@ -200,6 +200,8 @@ export interface AgentRef {
 	/** Final result of this assignment, retained on the ref for roster/history consumers. */
 	terminalOutcome?: AgentTerminalOutcome;
 	terminalOutcomeReason?: string;
+	/** Monotonic counter incremented each time the agent enters `running`. */
+	turnSeq?: number;
 }
 
 /** Host-resolved lineage. Names and message bodies never establish a relationship. */
@@ -377,12 +379,20 @@ export class AgentRegistry {
 		return { selfId: id, parentId: ancestorIds[0], ancestorIds, scope: self?.scope };
 	}
 
-	relationTo(recipientId: string, senderId: string): "self" | "parent" | "ancestor" | "peer" | "unknown" {
-		if (!this.#refs.has(senderId) || !this.#refs.has(recipientId)) return "unknown";
+	relationTo(
+		recipientId: string,
+		senderId: string,
+	): "self" | "parent" | "ancestor" | "child" | "descendant" | "peer" | "unknown" {
+		const sender = this.#refs.get(senderId);
+		const recipient = this.#refs.get(recipientId);
+		if (!sender || !recipient || !AgentRegistry.sameScope(sender.scope, recipient.scope)) return "unknown";
 		if (recipientId === senderId) return "self";
-		const context = this.actorContext(recipientId);
-		if (context.parentId === senderId) return "parent";
-		if (context.ancestorIds.includes(senderId)) return "ancestor";
+		const recipientContext = this.actorContext(recipientId);
+		if (recipientContext.parentId === senderId) return "parent";
+		if (recipientContext.ancestorIds.includes(senderId)) return "ancestor";
+		const senderContext = this.actorContext(senderId);
+		if (senderContext.parentId === recipientId) return "child";
+		if (senderContext.ancestorIds.includes(recipientId)) return "descendant";
 		return "peer";
 	}
 
@@ -427,6 +437,7 @@ export class AgentRegistry {
 	#applyStatus(ref: AgentRef, status: AgentStatus): void {
 		ref.status = status;
 		if (status === "running") {
+			ref.turnSeq = (ref.turnSeq ?? 0) + 1;
 			// A new turn is a new assignment; retain the prior outcome only until
 			// activity resumes, then accept the new run's terminal report.
 			ref.terminalOutcome = undefined;
