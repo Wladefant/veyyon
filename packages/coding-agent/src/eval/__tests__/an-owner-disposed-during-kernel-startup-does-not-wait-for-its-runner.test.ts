@@ -67,7 +67,10 @@ class FailedStartupKernel extends TestKernel {
 	exitConfirmed = false;
 	shutdownCalls = 0;
 
-	constructor(readonly failAt: string, readonly shutdownThrows: boolean) {
+	constructor(
+		readonly failAt: string,
+		readonly shutdownThrows: boolean,
+	) {
 		super("failed-startup", {
 			languageName: "Test",
 			traceIpc: false,
@@ -293,7 +296,7 @@ describe("an owner disposed during kernel startup", () => {
 		const old = createRunner({ exitOnPayload: false, exitOnSignals: [] });
 		const next = createRunner({ exitOnPayload: true, exitOnSignals: [] });
 		let starts = 0;
-		const pool = createPool(async () => ++starts === 1 ? old.kernel : next.kernel);
+		const pool = createPool(async () => (++starts === 1 ? old.kernel : next.kernel));
 		const original = await acquire(pool, "old-owner");
 		const disposing = pool.disposeByOwner("old-owner");
 		const acquiring = acquire(pool, "next-owner");
@@ -314,7 +317,7 @@ describe("an owner disposed during kernel startup", () => {
 		const old = createRunner({ exitOnPayload: false, exitOnSignals: [] });
 		const next = createRunner({ exitOnPayload: true, exitOnSignals: [] });
 		let starts = 0;
-		const pool = createPool(async () => ++starts === 1 ? old.kernel : next.kernel);
+		const pool = createPool(async () => (++starts === 1 ? old.kernel : next.kernel));
 		const session = await acquire(pool, "lane");
 		const first = pool.replaceSessionKernel(session, process.cwd(), { kernelOwnerId: "lane" });
 		const second = pool.replaceSessionKernel(session, process.cwd(), { kernelOwnerId: "lane" });
@@ -394,10 +397,7 @@ describe("an owner disposed during kernel startup", () => {
 				logLabel: "shared-startup-deadline",
 				startKernel: async (_cwd, options) => {
 					if (options.deadlineMs !== undefined) {
-						setTimeout(
-							() => runner.finish(null),
-							Math.max(0, options.deadlineMs - Date.now()),
-						);
+						setTimeout(() => runner.finish(null), Math.max(0, options.deadlineMs - Date.now()));
 					}
 					options.signal?.addEventListener("abort", () => runner.finish(null), { once: true });
 					return await ready.promise;

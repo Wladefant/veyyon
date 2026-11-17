@@ -17,7 +17,10 @@ test("a timed-out Python request cancels only its ID and leaves the runner alive
 	const lines: string[] = [];
 	const signals: string[] = [];
 	const { promise: exited, resolve: exitedResolve } = Promise.withResolvers<number | null>();
-	const { promise: cancelWritten, resolve: cancelWrittenResolve } = Promise.withResolvers<{ type: string; id: string }>();
+	const { promise: cancelWritten, resolve: cancelWrittenResolve } = Promise.withResolvers<{
+		type: string;
+		id: string;
+	}>();
 	const { promise: signalFired, resolve: signalFiredResolve } = Promise.withResolvers<string>();
 	let stdout!: ReadableStreamDefaultController<Uint8Array>;
 	const proc = {
@@ -115,7 +118,10 @@ test("a timed-out Python request cancels only its ID and leaves the runner alive
 
 test("a done frame clears Python cancellation pending state", async () => {
 	const { promise: exited, resolve: exitedResolve } = Promise.withResolvers<number | null>();
-	const { promise: cancelWritten, resolve: cancelWrittenResolve } = Promise.withResolvers<{ type: string; id: string }>();
+	const { promise: cancelWritten, resolve: cancelWrittenResolve } = Promise.withResolvers<{
+		type: string;
+		id: string;
+	}>();
 	const { promise: signalFired, resolve: signalFiredResolve } = Promise.withResolvers<string>();
 	const signals: string[] = [];
 	let stdout!: ReadableStreamDefaultController<Uint8Array>;
@@ -170,7 +176,7 @@ test("a done frame clears Python cancellation pending state", async () => {
 		});
 		expect(signals).toEqual([]);
 
-		stdout.enqueue(new TextEncoder().encode(JSON.stringify({ type: "done", id: "ack", cancelled: true }) + "\n"));
+		stdout.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "done", id: "ack", cancelled: true })}\n`));
 		let executionTimer: NodeJS.Timeout | undefined;
 		const executionTimeout = new Promise<never>((_, reject) => {
 			executionTimer = setTimeout(() => reject(new Error("timed out waiting for execution to settle")), 300);
@@ -227,7 +233,7 @@ test("a done frame with cancellationPending true preserves pending cancellation 
 		await cancelWritten;
 		stdout.enqueue(
 			new TextEncoder().encode(
-				JSON.stringify({ type: "done", id: "pending-worker", status: "error", cancelled: true, cancellationPending: true }) + "\n",
+				`${JSON.stringify({ type: "done", id: "pending-worker", status: "error", cancelled: true, cancellationPending: true })}\n`,
 			),
 		);
 		const result = await execution;

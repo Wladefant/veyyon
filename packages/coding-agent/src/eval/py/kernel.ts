@@ -86,7 +86,7 @@ export class PythonKernel extends BaseKernel {
 			traceIpc: TRACE_IPC,
 			interruptEscalationMs: KERNEL_INTERRUPT_ESCALATION_MS,
 			shutdownGraceMs: KERNEL_SHUTDOWN_GRACE_MS,
-		buildCancelPayload: msgId => JSON.stringify({ type: "cancel", id: msgId }),
+			buildCancelPayload: msgId => JSON.stringify({ type: "cancel", id: msgId }),
 		});
 	}
 

@@ -86,11 +86,17 @@ function spawnRunner(): RunnerClient {
 				await proc.stdin.write(encoder.encode(`${JSON.stringify({ type: "exit" })}\n`));
 				await proc.stdin.flush();
 				proc.stdin.end();
-			} catch { /* process already ended */ }
+			} catch {
+				/* process already ended */
+			}
 			if (proc.exitCode === null) proc.kill("SIGKILL");
 			await proc.exited;
 			await pump;
-			try { reader.releaseLock(); } catch { /* stream already closed */ }
+			try {
+				reader.releaseLock();
+			} catch {
+				/* stream already closed */
+			}
 			await stderr;
 		},
 	};
@@ -108,7 +114,11 @@ async function submit(runner: RunnerClient, id: string, code: string): Promise<v
 	await runner.send({ id, code });
 }
 
-async function submitAndDone(runner: RunnerClient, id: string, code: string): Promise<RunnerFrame & { result: unknown }> {
+async function submitAndDone(
+	runner: RunnerClient,
+	id: string,
+	code: string,
+): Promise<RunnerFrame & { result: unknown }> {
 	await submit(runner, id, code);
 	const frames: RunnerFrame[] = [];
 	while (true) {
@@ -124,12 +134,25 @@ describe("Python runner request-specific cancellation protocol", () => {
 	it("cancels async request A without interrupting B or losing the shared namespace", async () => {
 		const runner = spawnRunner();
 		try {
-			await submit(runner, "seed", lines("import asyncio", "release_b = asyncio.Event()", "shared_sentinel = 'retained'"));
+			await submit(
+				runner,
+				"seed",
+				lines("import asyncio", "release_b = asyncio.Event()", "shared_sentinel = 'retained'"),
+			);
 			expect((await doneFor(runner, "seed")).status).toBe("ok");
 			await submit(runner, "async-a", lines("print('A_STARTED', flush=True)", "await release_b.wait()"));
 			expect((await frameFor(runner, "async-a", ["started"])).type).toBe("started");
 			await frameFor(runner, "async-a", ["stdout"]);
-			await submit(runner, "async-b", lines("print('B_STARTED', flush=True)", "await release_b.wait()", "print('B_FINISHED', flush=True)", "shared_sentinel"));
+			await submit(
+				runner,
+				"async-b",
+				lines(
+					"print('B_STARTED', flush=True)",
+					"await release_b.wait()",
+					"print('B_FINISHED', flush=True)",
+					"shared_sentinel",
+				),
+			);
 			expect((await frameFor(runner, "async-b", ["started"])).type).toBe("started");
 			await frameFor(runner, "async-b", ["stdout"]);
 			await runner.send({ type: "cancel", id: "async-a" });
@@ -151,10 +174,22 @@ describe("Python runner request-specific cancellation protocol", () => {
 		try {
 			await submit(runner, "seed", lines("import asyncio", "bridge_done = asyncio.Event()"));
 			expect((await doneFor(runner, "seed")).status).toBe("ok");
-			await submit(runner, "parent", lines("print('PARENT_STARTED', flush=True)", "await bridge_done.wait()", "print('PARENT_FINISHED', flush=True)"));
+			await submit(
+				runner,
+				"parent",
+				lines(
+					"print('PARENT_STARTED', flush=True)",
+					"await bridge_done.wait()",
+					"print('PARENT_FINISHED', flush=True)",
+				),
+			);
 			expect((await frameFor(runner, "parent", ["started"])).type).toBe("started");
 			await frameFor(runner, "parent", ["stdout"]);
-			await submit(runner, "child", lines("print('CHILD_STARTED', flush=True)", "bridge_done.set()", "print('CHILD_FINISHED', flush=True)"));
+			await submit(
+				runner,
+				"child",
+				lines("print('CHILD_STARTED', flush=True)", "bridge_done.set()", "print('CHILD_FINISHED', flush=True)"),
+			);
 			expect((await frameFor(runner, "child", ["started"])).type).toBe("started");
 			expect((await doneFor(runner, "parent")).status).toBe("ok");
 			expect((await doneFor(runner, "child")).status).toBe("ok");
@@ -166,7 +201,15 @@ describe("Python runner request-specific cancellation protocol", () => {
 	it("cancels a queued request before it starts without affecting the active sync request", async () => {
 		const runner = spawnRunner();
 		try {
-			await submit(runner, "sync-active", lines("print('SYNC_ACTIVE_STARTED', flush=True)", "for _ in range(5_000_000): pass", "print('SYNC_ACTIVE_FINISHED', flush=True)"));
+			await submit(
+				runner,
+				"sync-active",
+				lines(
+					"print('SYNC_ACTIVE_STARTED', flush=True)",
+					"for _ in range(5_000_000): pass",
+					"print('SYNC_ACTIVE_FINISHED', flush=True)",
+				),
+			);
 			expect((await frameFor(runner, "sync-active", ["started"])).type).toBe("started");
 			await frameFor(runner, "sync-active", ["stdout"]);
 			await submit(runner, "queued-cancel", "raise RuntimeError('CANCELLED_SOURCE_RAN')");
@@ -180,7 +223,9 @@ describe("Python runner request-specific cancellation protocol", () => {
 			}
 			expect(queuedFrames.some(frame => frame.type === "started")).toBe(true);
 			expect(queuedFrames.find(frame => frame.type === "done")?.status).toBe("error");
-			expect(queuedFrames.some(frame => frame.type === "error" && frame.evalue?.includes("CANCELLED_SOURCE_RAN"))).toBe(false);
+			expect(
+				queuedFrames.some(frame => frame.type === "error" && frame.evalue?.includes("CANCELLED_SOURCE_RAN")),
+			).toBe(false);
 		} finally {
 			await runner.close();
 		}
@@ -245,12 +290,23 @@ describe("Python runner request-specific cancellation protocol", () => {
 			const releaseRes = await submitAndDone(
 				runner,
 				"release-worker",
-				lines("gate.set()", "assert worker_done.wait(timeout=2.0)", "for _ in range(200):", "    if not sys.modules['__main__']._STATE.active_thread_workers: break", "    await asyncio.sleep(0.005)", "'released'"),
+				lines(
+					"gate.set()",
+					"assert worker_done.wait(timeout=2.0)",
+					"for _ in range(200):",
+					"    if not sys.modules['__main__']._STATE.active_thread_workers: break",
+					"    await asyncio.sleep(0.005)",
+					"'released'",
+				),
 			);
 			expect(releaseRes.status).toBe("ok");
 			expect(releaseRes.result).toBe("'released'");
 
-			expect(runner.bufferedFrames(frame => frame.id === "thread-a" && ["stdout", "stderr", "display", "result"].includes(frame.type ?? ""))).toEqual([]);
+			expect(
+				runner.bufferedFrames(
+					frame => frame.id === "thread-a" && ["stdout", "stderr", "display", "result"].includes(frame.type ?? ""),
+				),
+			).toEqual([]);
 
 			const cleanupState = await submitAndDone(
 				runner,
@@ -326,11 +382,7 @@ describe("Python runner request-specific cancellation protocol", () => {
 				expect(cancelledDone.cancellationPending).toBe(false);
 			}
 
-			const release = await submitAndDone(
-				runner,
-				"release-occupier",
-				lines("gate.set()", "'released'"),
-			);
+			const release = await submitAndDone(runner, "release-occupier", lines("gate.set()", "'released'"));
 			expect(release.status).toBe("ok");
 			expect((await doneFor(runner, "occupier")).status).toBe("ok");
 
@@ -344,7 +396,13 @@ describe("Python runner request-specific cancellation protocol", () => {
 			);
 			expect(stateCheck.status).toBe("ok");
 			expect(stateCheck.result).toBe("([], {}, [])");
-			expect(runner.bufferedFrames(frame => (frame.id?.startsWith("queued-") ?? false) && ["stdout", "stderr", "display", "result"].includes(frame.type ?? ""))).toEqual([]);
+			expect(
+				runner.bufferedFrames(
+					frame =>
+						(frame.id?.startsWith("queued-") ?? false) &&
+						["stdout", "stderr", "display", "result"].includes(frame.type ?? ""),
+				),
+			).toEqual([]);
 		} finally {
 			await runner.close();
 		}

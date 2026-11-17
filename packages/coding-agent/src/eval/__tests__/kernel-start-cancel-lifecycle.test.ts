@@ -106,7 +106,6 @@ test("a caller arriving while an abandoned startup is being released gets a fres
 	expect(pool.sessions.get("key")).toBe(next);
 });
 
-
 // Bounded race to observe whether unauthenticated reset attempts synchronously reject before baseline hangs on fake shutdown gate.
 async function observeOutcome<T>(
 	promise: Promise<T>,
@@ -206,7 +205,9 @@ test("disposing primary owner transfers custody to surviving co-owner and refuse
 		const departedOutcome = await observeOutcome(departedReset);
 		expect(departedOutcome.status).toBe("rejected");
 		if (departedOutcome.status === "rejected") {
-			expect(String((departedOutcome.error as Error)?.message ?? departedOutcome.error)).toMatch(/primary kernel owner/);
+			expect(String((departedOutcome.error as Error)?.message ?? departedOutcome.error)).toMatch(
+				/primary kernel owner/,
+			);
 		}
 		expect(counter.shutdowns).toBe(0);
 		expect(pool.sessions.get("shared")).toBe(session);
@@ -337,7 +338,8 @@ for (const phase of ["active", "starting"] as const) {
 					},
 				});
 				const acquireImplicit = () => pool.acquireSession("shared", "implicit", process.cwd(), {});
-				const acquireExplicit = () => pool.acquireSession("shared", "implicit", process.cwd(), { kernelOwnerId: "explicit" });
+				const acquireExplicit = () =>
+					pool.acquireSession("shared", "implicit", process.cwd(), { kernelOwnerId: "explicit" });
 				const first = implicitFirst ? acquireImplicit() : acquireExplicit();
 				if (phase === "active") {
 					ready.resolve(kernel);
@@ -348,7 +350,9 @@ for (const phase of ["active", "starting"] as const) {
 				const initialPrimary = implicitFirst ? "implicit" : "explicit";
 				const survivor = departed === "implicit" ? "explicit" : "implicit";
 				expect(() => pool.assertResetOwner("shared", initialPrimary)).not.toThrow();
-				expect(() => pool.assertResetOwner("shared", initialPrimary === "implicit" ? "explicit" : "implicit")).toThrow(/primary kernel owner/);
+				expect(() =>
+					pool.assertResetOwner("shared", initialPrimary === "implicit" ? "explicit" : "implicit"),
+				).toThrow(/primary kernel owner/);
 				await pool.disposeByOwner(departed);
 				expect(counter.shutdowns).toBe(0);
 				expect(startupSignal?.aborted).toBe(false);

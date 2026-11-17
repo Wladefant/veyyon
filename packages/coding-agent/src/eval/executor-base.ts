@@ -475,10 +475,7 @@ export function attachSessionOwner(
 	if (session.primaryOwnerId === undefined) session.primaryOwnerId = ownerKey;
 }
 
-export function detachSessionOwner(
-	session: { ownerIds: Set<string>; primaryOwnerId?: string },
-	ownerId: string,
-): void {
+export function detachSessionOwner(session: { ownerIds: Set<string>; primaryOwnerId?: string }, ownerId: string): void {
 	session.ownerIds.delete(ownerId);
 	if (session.primaryOwnerId === ownerId) {
 		const next = session.ownerIds.values().next().value;
@@ -508,7 +505,11 @@ export interface ExecuteWithKernelBaseParams<
 	isJulia?: boolean;
 	cancelledErrorClass: CancelledErrorClass;
 	buildKernelEnvPatch: (options: TOptions) => TEnv;
-	formatKernelTimeoutAnnotation: (executionTimeoutMs: number | undefined, kernelKilled: boolean, cancellationPending?: boolean) => string;
+	formatKernelTimeoutAnnotation: (
+		executionTimeoutMs: number | undefined,
+		kernelKilled: boolean,
+		cancellationPending?: boolean,
+	) => string;
 	formatTimeoutAnnotation: (executionTimeoutMs: number | undefined) => string | undefined;
 	/**
 	 * Override how the wall-clock deadline is derived from options. Defaults to
@@ -626,13 +627,14 @@ export async function executeWithKernelBase<
 
 		if (result.cancelled || abortShield.abortRequested) {
 			const timedOut = result.timedOut || abortShield.timedOut;
-			const annotation = timedOut || result.cancellationPending
-				? formatKernelTimeoutAnnotation(
-					timedOut ? executionTimeoutMs ?? options?.idleTimeoutMs : undefined,
-					result.kernelKilled ?? false,
-					result.cancellationPending ?? false,
-				)
-				: undefined;
+			const annotation =
+				timedOut || result.cancellationPending
+					? formatKernelTimeoutAnnotation(
+							timedOut ? (executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
+							result.kernelKilled ?? false,
+							result.cancellationPending ?? false,
+						)
+					: undefined;
 			const dumped = await sink.dumpWithArtifactStatus(annotation);
 			return {
 				exitCode: undefined,
@@ -1056,7 +1058,9 @@ export class KernelSessionPool<
 
 	assertResetOwner(sessionKey: string, ownerId: string): void {
 		const owner =
-			this.#sessions.get(sessionKey) ?? this.#startingSessions.get(sessionKey) ?? this.#failedStartups.get(sessionKey);
+			this.#sessions.get(sessionKey) ??
+			this.#startingSessions.get(sessionKey) ??
+			this.#failedStartups.get(sessionKey);
 		const resettingOwner = this.#resettingOwners.get(sessionKey);
 		if (owner && owner.primaryOwnerId !== ownerId) {
 			throw new Error("Only the primary kernel owner may reset this session");
@@ -1124,7 +1128,8 @@ export class KernelSessionPool<
 			this.#logOwnership(session, "owned");
 		}
 		for (const [sessionKey, starting] of [...this.#startingSessions.entries()]) {
-			if (this.#sessions.has(sessionKey) || (!starting.ownerIds.has(ownerId) && starting.primaryOwnerId !== ownerId)) continue;
+			if (this.#sessions.has(sessionKey) || (!starting.ownerIds.has(ownerId) && starting.primaryOwnerId !== ownerId))
+				continue;
 			detachSessionOwner(starting, ownerId);
 			starting.disposedOwnerIds.add(ownerId);
 			if (starting.ownerIds.size === 0) starting.startupAbort.abort(new this.#cancelledErrorClass(false));
@@ -1167,7 +1172,11 @@ export interface KernelExecutionDriverOptions<
 	/** See `buildEvalSessionKey`: what in a cwd selects the default runtime, when anything does. */
 	resolveDefaultRuntimeScope?: (cwd: string) => string;
 	buildKernelEnvPatch?: (options: TOptions) => Record<string, string | null | undefined>;
-	formatKernelTimeoutAnnotation?: (executionTimeoutMs: number | undefined, kernelKilled: boolean, cancellationPending?: boolean) => string;
+	formatKernelTimeoutAnnotation?: (
+		executionTimeoutMs: number | undefined,
+		kernelKilled: boolean,
+		cancellationPending?: boolean,
+	) => string;
 	formatTimeoutAnnotation?: (executionTimeoutMs: number | undefined) => string | undefined;
 	createCancelledResult?: (timedOut: boolean, timeoutMs?: number) => KernelExecutionResult;
 	resolveDeadlineMs?: (options?: TOptions) => number | undefined;

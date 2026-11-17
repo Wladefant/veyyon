@@ -857,7 +857,11 @@ describe("agent() through eval runtimes", () => {
 		});
 
 		const result = await executePython(
-			["import asyncio", "await asyncio.to_thread(agent, 'invoke child')", "print('PARENT_RESUMED', flush=True)"].join("\n"),
+			[
+				"import asyncio",
+				"await asyncio.to_thread(agent, 'invoke child')",
+				"print('PARENT_RESUMED', flush=True)",
+			].join("\n"),
 			{ cwd: tempDir.path(), sessionId, sessionFile, kernelMode: "session", toolSession: session },
 		);
 		if (result.exitCode === undefined && result.cancelled) {

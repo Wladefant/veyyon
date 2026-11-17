@@ -760,7 +760,9 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			if (this.#buildCancelPayload) {
 				pending.cancellationPending = true;
 				void this.#writeLine(this.#buildCancelPayload(msgId)).catch(error => {
-					logger.debug(`${this.#options.languageName} cancellation frame write failed`, { error: errorMessage(error) });
+					logger.debug(`${this.#options.languageName} cancellation frame write failed`, {
+						error: errorMessage(error),
+					});
 				});
 				const grace = setTimeout(() => {
 					if (!pending.settled) finalize();
