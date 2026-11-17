@@ -314,6 +314,9 @@ try {
         }
     }
 
+    # Do not copy local environment or package-manager config from nested trees.
+    $excludeLocalConfig = @("/XF", ".env", ".env.*", ".npmrc")
+
     # Robocopy workspace trees (rejecting any source reparse points and passing /XJ)
     $workspaceDirs = @("packages", "plugins", "contracts", "kernel", "hosts", "clients", "tests", "apps", "scripts", "natives", "types")
     foreach ($d in $workspaceDirs) {
@@ -321,7 +324,7 @@ try {
         if (Test-Path -LiteralPath $srcDir) {
             Assert-NoSourceReparsePoints $srcDir
             $dstDir = Join-Path $stageRepo $d
-            & robocopy $srcDir $dstDir /E /XJ /MT:32 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+            & robocopy $srcDir $dstDir /E /XJ /MT:32 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP @excludeLocalConfig | Out-Null
             if ($LASTEXITCODE -ge 8) {
                 Die "robocopy failed for $d with exit code $LASTEXITCODE"
             }
@@ -331,11 +334,15 @@ try {
     # Stage root node_modules (excluding workspace links in @veyyon and .cache)
     $srcNm = Join-Path $RepoRoot "node_modules"
     $dstNm = Join-Path $stageRepo "node_modules"
-    if (Test-Path $srcNm) {
+    if (Test-Path -LiteralPath $srcNm) {
+        $dependencyRoot = Get-Item -LiteralPath $srcNm -Force
+        if (-not $dependencyRoot.PSIsContainer -or ($dependencyRoot.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            Die "Dependency source is not an ordinary directory: $srcNm"
+        }
         if (-not (Test-Path $dstNm)) {
             New-Item -ItemType Directory -Path $dstNm -Force | Out-Null
         }
-        & robocopy $srcNm $dstNm /E /XJ /MT:32 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP /XD "@veyyon" ".cache" | Out-Null
+        & robocopy $srcNm $dstNm /E /XJ /MT:32 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP /XD "@veyyon" ".cache" @excludeLocalConfig | Out-Null
         if ($LASTEXITCODE -ge 8) {
             Die "robocopy failed for node_modules with exit code $LASTEXITCODE"
         }
