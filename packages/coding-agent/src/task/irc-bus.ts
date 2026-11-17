@@ -646,7 +646,8 @@ export class IrcBus {
 
 		try {
 			const delivery = await session.deliverIrcMessage(message, opts);
-			if (message.completion) this.#takeMatchingWaiter(message.to, message.from, message.completion.id)?.resolve(message);
+			if (message.completion)
+				this.#takeMatchingWaiter(message.to, message.from, message.completion.id)?.resolve(message);
 			// A native result must reach durable context before a blocked caller consumes it.
 			if (!opts?.suppressRelay) this.#relayToMainUi(message, this.#scopeOf(message));
 			return {
@@ -733,7 +734,8 @@ export class IrcBus {
 
 		const visibleCompletionIds = new Set(
 			(this.#registry.get(agentId)?.session?.sessionManager?.getEntries() ?? []).flatMap(entry =>
-				entry.type === "custom_message" && entry.customType === "task:continuation" &&
+				entry.type === "custom_message" &&
+				entry.customType === "task:continuation" &&
 				typeof Reflect.get(entry.details ?? {}, "completionId") === "string"
 					? [Reflect.get(entry.details ?? {}, "completionId") as string]
 					: [],

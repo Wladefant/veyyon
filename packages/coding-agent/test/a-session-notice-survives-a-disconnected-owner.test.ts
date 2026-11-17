@@ -254,7 +254,14 @@ describe("the notice queue", () => {
 		fs.mkdirSync(directory, { recursive: true });
 		fs.writeFileSync(
 			path.join(directory, "x.json"),
-			JSON.stringify({ version: SESSION_NOTICE_VERSION, id: "x", from: "s", to: "other", body: "misfiled", ts: Date.now() }),
+			JSON.stringify({
+				version: SESSION_NOTICE_VERSION,
+				id: "x",
+				from: "s",
+				to: "other",
+				body: "misfiled",
+				ts: Date.now(),
+			}),
 		);
 		expect(claimSessionNotices("target", root)).toEqual([]);
 	});

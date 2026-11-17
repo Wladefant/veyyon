@@ -232,6 +232,4 @@ describe("Bus traffic is attributed to the conversation that produced it", () =>
 
 		expect(bus.log().map(entry => entry.message.actor?.relation)).toEqual(["peer", "unknown", "unknown"]);
 	});
-
-
 });

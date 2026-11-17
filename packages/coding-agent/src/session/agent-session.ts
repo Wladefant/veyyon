@@ -4709,7 +4709,10 @@ export class AgentSession {
 					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
 					await this.sessionManager.flush();
 				} catch (restoreError) {
-					throw new AggregateError([error, restoreError], "Fork failed and could not durably restore its original session");
+					throw new AggregateError(
+						[error, restoreError],
+						"Fork failed and could not durably restore its original session",
+					);
 				}
 			}
 			throw error;
@@ -5283,10 +5286,12 @@ export class AgentSession {
 		const registry = AgentRegistry.global();
 		const identity = registry.actorContext(msg.to);
 		const senderIdentity = registry.actorContext(msg.from);
-		const senderParent =
-			!registry.get(msg.from) ? "unverified" : senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root");
-		const recipientParent =
-			!registry.get(msg.to) ? "unverified" : identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root");
+		const senderParent = !registry.get(msg.from)
+			? "unverified"
+			: (senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root"));
+		const recipientParent = !registry.get(msg.to)
+			? "unverified"
+			: (identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root"));
 		const relation = registry.relationTo(msg.to, msg.from);
 		if (
 			!msg.completion &&
@@ -5562,10 +5567,12 @@ export class AgentSession {
 			const registry = AgentRegistry.global();
 			const identity = registry.actorContext(msg.to);
 			const senderIdentity = registry.actorContext(msg.from);
-			const senderParent =
-				!registry.get(msg.from) ? "unverified" : senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root");
-			const recipientParent =
-				!registry.get(msg.to) ? "unverified" : identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root");
+			const senderParent = !registry.get(msg.from)
+				? "unverified"
+				: (senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root"));
+			const recipientParent = !registry.get(msg.to)
+				? "unverified"
+				: (identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root"));
 			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
