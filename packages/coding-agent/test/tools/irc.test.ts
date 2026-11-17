@@ -941,6 +941,35 @@ describe("IRC", () => {
 			expect(event.type).toBe("irc_message");
 		});
 
+		it("describes child sender lineage separately from its registered root recipient", async () => {
+			const { session } = createRealSession();
+			sessions.push(session);
+			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+			registry.register({ id: "Root", displayName: "main", kind: "main", scope: "conversation-a", session });
+			registry.register({ id: "Child", displayName: "task", kind: "sub", parentId: "Root", session: null });
+
+			await session.deliverIrcMessage({
+				id: "child-to-root",
+				from: "Child",
+				to: "Root",
+				body: "child report",
+				ts: Date.now(),
+			});
+
+			const prompted = (promptSpy.mock.calls[0]![0] as unknown as CustomMessage[])[0]!;
+			expect(prompted.content).toContain("Relationship to recipient: child.");
+			expect(prompted.content).toContain("Recipient direct parent: root.");
+			expect(prompted.content).toContain("Sender: `Child`. Sender lineage: parent Root;");
+			expect(prompted.content).not.toContain("Sender lineage: parent unknown");
+			expect(prompted.details).toMatchObject({
+				relation: "child",
+				selfId: "Root",
+				parentId: undefined,
+				senderParent: "Root",
+				actor: { sender: { selfId: "Child", parentId: "Root" } },
+			});
+		});
+
 		it("queues peer IRC as an interrupt while a turn is streaming", async () => {
 			const { session } = createRealSession();
 			sessions.push(session);

@@ -421,6 +421,7 @@ describe("a session reading its notices", () => {
 		expect(JSON.stringify(records[0])).toContain("other-session");
 		expect(JSON.stringify(records[0])).toContain("Sent: ");
 		expect(JSON.stringify(records[0])).toContain("Delivered: ");
+		expect(JSON.stringify(records[0])).toContain("Sender lineage: not agent lineage.");
 		expect(messages.indexOf(records[0]!)).toBeLessThan(messages.findIndex(message => message.role === "user"));
 		expect(created.calls()).toBe(1);
 		expect(noticeState(created.sessionId, receipt!.id, root)).toBe("delivered");

@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Classify registered child and descendant IRC senders from registry ancestry, and render sender lineage separately from recipient identity while keeping external-session notices non-lineage.
 
 ## [1.10.10] - 2026-11-16
 

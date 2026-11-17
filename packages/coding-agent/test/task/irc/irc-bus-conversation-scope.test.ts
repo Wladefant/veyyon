@@ -213,5 +213,25 @@ describe("Bus traffic is attributed to the conversation that produced it", () =>
 			sender: { selfId: "Grandchild-A", parentId: "Reviewer-A", ancestorIds: ["Reviewer-A", "acp:a"] },
 		});
 	});
+	test("keeps unrelated peers and cross-scope senders out of verified ancestry", async () => {
+		const relays: string[] = [];
+		conversation("session-a", "acp:a", "Reviewer-A", relays);
+		registry.register({
+			id: "Peer-A",
+			displayName: "peer",
+			kind: "main",
+			session: deliveringSession(relays),
+			status: "running",
+			scope: "session-a",
+		});
+		conversation("session-b", "acp:b", "Reviewer-B", []);
+
+		await bus.send({ from: "Peer-A", to: "acp:a", body: "peer message" });
+		await bus.send({ from: "Reviewer-B", to: "acp:a", body: "foreign message" });
+		await bus.send({ from: "unregistered", to: "acp:a", body: "unverified message" });
+
+		expect(bus.log().map(entry => entry.message.actor?.relation)).toEqual(["peer", "unknown", "unknown"]);
+	});
+
 
 });
