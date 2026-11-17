@@ -61,6 +61,7 @@ pub(crate) mod testing;
 pub mod text;
 pub mod tokens;
 pub(crate) mod utils;
+pub mod windows_atomic_file;
 pub mod workspace;
 
 #[cfg(target_os = "windows")]

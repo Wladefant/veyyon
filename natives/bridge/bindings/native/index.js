@@ -30,6 +30,7 @@ export const MacOSPowerAssertion = lazyNativeClass("MacOSPowerAssertion");
 export const Process = lazyNativeClass("Process");
 export const PtySession = lazyNativeClass("PtySession");
 export const Shell = lazyNativeClass("Shell");
+export const WindowsAtomicStage = lazyNativeClass("WindowsAtomicStage");
 
 // functions
 export const __veyyonInstallTokioRuntime = lazyNativeFn("__veyyonInstallTokioRuntime");

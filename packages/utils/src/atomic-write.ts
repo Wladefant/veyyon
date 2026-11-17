@@ -27,8 +27,9 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import type { WindowsAtomicOutcome } from "@veyyon/natives";
 import { isEnoent, isFsError, nonRegularKind } from "./fs-error";
-import { publishWindowsFile } from "./windows-file-replace";
+import { createWindowsStage, type WindowsStage } from "./windows-file-replace";
 
 export interface AtomicWriteOptions {
 	/**
@@ -78,6 +79,7 @@ function removeTempSync(tmpPath: string): void {
 // file already exists; a name with this pid in it is this process's or a dead one's. Keep a
 // temp tracked until its rename (including the Windows backup-and-restore replace) finishes.
 const pendingTemps = new Set<string>();
+const pendingWindowsStages = new Set<WindowsStage>();
 let exitListenerInstalled = false;
 
 function trackPendingTemp(tmpPath: string): void {
@@ -95,6 +97,12 @@ function removePendingTemps(): void {
 		} catch {}
 	}
 	pendingTemps.clear();
+	for (const stage of pendingWindowsStages) {
+		try {
+			stage.native.cleanupSync();
+		} catch {}
+	}
+	pendingWindowsStages.clear();
 }
 
 async function reserveTempFile(
@@ -102,7 +110,22 @@ async function reserveTempFile(
 	targetBasename: string,
 	mode: number,
 	target: string,
-): Promise<{ handle: fsp.FileHandle; tmpPath: string }> {
+): Promise<{ handle: fsp.FileHandle; tmpPath: string; stage?: WindowsStage }> {
+	if (process.platform === "win32") {
+		for (;;) {
+			const stageDir = nextTempPath(dir, targetBasename);
+			try {
+				const stage = createWindowsStage(stageDir);
+				trackPendingWindowsStage(stage);
+				const handle = await fsp.open(stage.path, "r+");
+				await handle.chmod(mode);
+				return { handle, tmpPath: stage.path, stage };
+			} catch (error) {
+				if (isFsError(error) && ["EEXIST", "WIN32_183", "WIN32_80"].includes(error.code ?? "")) continue;
+				throw withTargetInMessage(error, target, stageDir);
+			}
+		}
+	}
 	for (;;) {
 		const tmpPath = nextTempPath(dir, targetBasename);
 		trackPendingTemp(tmpPath);
@@ -121,7 +144,22 @@ function reserveTempFileSync(
 	targetBasename: string,
 	mode: number,
 	target: string,
-): { fd: number; tmpPath: string } {
+): { fd: number; tmpPath: string; stage?: WindowsStage } {
+	if (process.platform === "win32") {
+		for (;;) {
+			const stageDir = nextTempPath(dir, targetBasename);
+			try {
+				const stage = createWindowsStage(stageDir);
+				trackPendingWindowsStage(stage);
+				const fd = fs.openSync(stage.path, "r+");
+				fs.fchmodSync(fd, mode);
+				return { fd, tmpPath: stage.path, stage };
+			} catch (error) {
+				if (isFsError(error) && ["EEXIST", "WIN32_183", "WIN32_80"].includes(error.code ?? "")) continue;
+				throw withTargetInMessage(error, target, stageDir);
+			}
+		}
+	}
 	for (;;) {
 		const tmpPath = nextTempPath(dir, targetBasename);
 		try {
@@ -133,9 +171,21 @@ function reserveTempFileSync(
 	}
 }
 
+function trackPendingWindowsStage(stage: WindowsStage): void {
+	if (!exitListenerInstalled) {
+		exitListenerInstalled = true;
+		process.on("exit", removePendingTemps);
+	}
+	pendingWindowsStages.add(stage);
+}
+
+
 function isRetryableWindowsRenameError(error: unknown): boolean {
-	return process.platform === "win32" && isFsError(error) &&
-		(error.code === "EACCES" || error.code === "EBUSY");
+	if (process.platform !== "win32" || !isFsError(error)) return false;
+	const outcome = error as WindowsOutcomeError;
+	return outcome.publicationState === "unpublished" &&
+		(error.code === "EACCES" || error.code === "EBUSY" ||
+			outcome.rawErrorCode === 5 || outcome.rawErrorCode === 32 || outcome.rawErrorCode === 33);
 }
 
 // Follow every basename symlink ourselves instead of using realpath. realpath
@@ -318,23 +368,52 @@ async function renameTempOverTarget(
 	tmpPath: string,
 	target: string,
 	retryRename = false,
+	stage?: WindowsStage,
 ): Promise<void> {
 	if (process.platform !== "win32") {
 		await fsp.rename(tmpPath, target);
 		return;
 	}
+	if (!stage) throw new Error("Windows publication requires its owned native stage");
 	const deadline = retryRename ? Date.now() + RENAME_RETRY_BUDGET_MS : 0;
+	const nativeTarget = path.toNamespacedPath(path.resolve(target));
 	for (let failures = 0; ; failures++) {
 		try {
-			publishWindowsFile(tmpPath, target, nextTempPath(path.dirname(target), `${path.basename(target)}.previous`));
+			stage.publicationState = "recovery-required";
+			const outcome = await stage.native.publish(nativeTarget);
+			stage.publicationState = outcome.state;
+			if (outcome.errorCode !== 0) throw windowsOutcomeError(outcome, target, stage);
 			return;
 		} catch (error) {
-			if (!retryRename || !isRetryableWindowsRenameError(error)) throw error;
+			if (!retryRename || !isRetryableWindowsRenameError(error) ||
+				!(error instanceof Error) || (error as WindowsOutcomeError).publicationState !== "unpublished") throw error;
 			const remaining = deadline - Date.now();
 			if (remaining <= 0) throw error;
 			await Bun.sleep(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
 		}
 	}
+}
+
+type WindowsOutcomeError = Error & { code?: string; publicationState?: string; recoveryDirectory?: string; rawErrorCode?: number };
+
+function windowsOutcomeError(outcome: WindowsAtomicOutcome, target: string, stage: WindowsStage): WindowsOutcomeError {
+	const retained = outcome.state === "recovery-required" || outcome.state === "published";
+	const error = new Error(`${outcome.operation} failed for ${target} (Win32 error ${outcome.errorCode}; publication: ${outcome.state}).${retained ? ` Recovery files remain at ${stage.directory}.` : ""}`) as WindowsOutcomeError;
+	error.rawErrorCode = outcome.errorCode;
+	error.code = `WIN32_${outcome.errorCode}`;
+	error.publicationState = outcome.state;
+	if (retained) error.recoveryDirectory = stage.directory;
+	return error;
+}
+
+function withWindowsPublicationState(error: unknown, stage: WindowsStage, target: string): unknown {
+	if (stage.publicationState === "unpublished" || (error instanceof Error && "publicationState" in error)) return error;
+	const state = stage.publicationState;
+	const message = state === "published" ? "The replacement was published" : "The publication outcome is unknown";
+	const failure = new Error(`${message} for ${target}; recovery files remain at ${stage.directory}.`, { cause: error }) as WindowsOutcomeError;
+	failure.publicationState = state;
+	failure.recoveryDirectory = stage.directory;
+	return failure;
 }
 
 const DIRECTORY_FSYNC_UNSUPPORTED: Readonly<Record<string, true>> = {
@@ -374,8 +453,8 @@ function rethrowUnlessDirectoryFsyncUnsupported(error: unknown): void {
 
 /**
  * Write `data` to `filePath` atomically. Creates parent directories as needed.
- * Either fully succeeds (the target now holds `data`) or throws with the target
- * left untouched.
+ * Throws on failure; publication may already have committed if a later durability
+ * or native cleanup operation fails.
  */
 export async function atomicWriteFile(
 	filePath: string,
@@ -459,9 +538,8 @@ export async function atomicWriteJson(
 /**
  * The producer form of {@link atomicWriteFile}: instead of handing over bytes,
  * you get the temp path and write to it however you like (a streaming writer, a
- * third-party encoder that only takes a path). The same crash-safety holds — the
- * temp is renamed over the target only after `write` resolves, so a failure
- * leaves the target untouched — and the same symlink handling applies.
+ * Native Windows staging protects the payload before this callback runs. A
+ * later durability or cleanup error can still occur after publication.
  *
  * Use this only when the payload is produced by something that writes to a path
  * rather than returning bytes. When you already have the bytes, call
@@ -511,31 +589,50 @@ async function atomicWriteFileWithImpl(
 	const dir = path.dirname(target);
 	if (!viaSymlink) await fsp.mkdir(dir, { recursive: true });
 
-	const { handle, tmpPath } = await reserveTempFile(dir, path.basename(target), mode, target);
+	const { handle, tmpPath, stage } = await reserveTempFile(dir, path.basename(target), mode, target);
 	try {
 		if (writer.kind === "handle") {
-			await closingAfter(
-				() => writer.write(handle),
-				() => handle.close(),
-			);
+			await closingAfter(() => writer.write(handle), () => handle.close());
 		} else {
 			await handle.close();
 			await fillTempFromPath(writer.write, tmpPath, mode, fsync && fsyncTempFile);
 		}
-
-		// Recheck both names after user-controlled work and immediately before
-		// rename. This preserves a raced-in special destination and catches a
-		// swapped staging entry.
 		assertRegularFileTarget(await fsp.lstat(tmpPath), tmpPath);
 		await assertReplaceableTarget(target);
-		await renameTempOverTarget(tmpPath, target, retryRename);
-		pendingTemps.delete(tmpPath);
+		if (stage) pendingWindowsStages.delete(stage);
+		await renameTempOverTarget(tmpPath, target, retryRename, stage);
+		if (stage) {
+			const cleanup = await stage.native.cleanup();
+			if (cleanup.errorCode !== 0) throw windowsOutcomeError({ ...cleanup, state: "published" }, target, stage);
+		} else pendingTemps.delete(tmpPath);
 	} catch (error) {
-		pendingTemps.delete(tmpPath);
-		await fsp.rm(tmpPath, { force: true, recursive: true }).catch(() => {});
+		if (stage) {
+			error = withWindowsPublicationState(error, stage, target);
+			if (stage.publicationState === "unpublished") {
+				try {
+					const cleanup = await stage.native.cleanup();
+					if (cleanup.errorCode !== 0) throw windowsOutcomeError(cleanup, target, stage);
+				} catch (cleanupError) {
+					pendingWindowsStages.delete(stage);
+					throw new AggregateError([error, cleanupError], `Write failed for ${target}; native stage remains at ${stage.directory}`);
+				}
+			}
+			pendingWindowsStages.delete(stage);
+		} else {
+			pendingTemps.delete(tmpPath);
+			await fsp.rm(tmpPath, { force: true, recursive: true }).catch(() => {});
+		}
 		throw withTargetInMessage(error, target, tmpPath);
 	}
-	if (fsync) await fsyncDirEntry(dir);
+	if (fsync) {
+		try {
+			await fsyncDirEntry(dir);
+		} catch (error) {
+			const committed = new Error(`Write to ${target} was published, but directory durability failed.`, { cause: error }) as WindowsOutcomeError;
+			committed.publicationState = "published";
+			throw committed;
+		}
+	}
 }
 
 /**
@@ -577,7 +674,7 @@ export function atomicWriteFileSync(
 	const dir = path.dirname(target);
 	if (!viaSymlink) fs.mkdirSync(dir, { recursive: true });
 
-	const { fd, tmpPath } = reserveTempFileSync(dir, path.basename(target), mode, target);
+	const { fd, tmpPath, stage } = reserveTempFileSync(dir, path.basename(target), mode, target);
 	try {
 		closingAfterSync(
 			() => {
@@ -588,20 +685,49 @@ export function atomicWriteFileSync(
 		);
 		assertRegularFileTarget(fs.lstatSync(tmpPath), tmpPath);
 		assertReplaceableTargetSync(target);
-		renameTempOverTargetSync(tmpPath, target);
+		if (stage) pendingWindowsStages.delete(stage);
+		renameTempOverTargetSync(tmpPath, target, stage);
+		if (stage) {
+			const cleanup = stage.native.cleanupSync();
+			if (cleanup.errorCode !== 0) throw windowsOutcomeError({ ...cleanup, state: "published" }, target, stage);
+		} else pendingTemps.delete(tmpPath);
 	} catch (error) {
-		try {
-			removeTempSync(tmpPath);
-		} catch {}
+		if (stage) {
+			error = withWindowsPublicationState(error, stage, target);
+			if (stage.publicationState === "unpublished") {
+				try {
+					const cleanup = stage.native.cleanupSync();
+					if (cleanup.errorCode !== 0) throw windowsOutcomeError(cleanup, target, stage);
+				} catch (cleanupError) {
+					pendingWindowsStages.delete(stage);
+					throw new AggregateError([error, cleanupError], `Write failed for ${target}; native stage remains at ${stage.directory}`);
+				}
+			}
+			pendingWindowsStages.delete(stage);
+		} else {
+			try { removeTempSync(tmpPath); } catch {}
+		}
 		throw withTargetInMessage(error, target, tmpPath);
 	}
-	if (fsync) fsyncDirEntrySync(dir);
+	if (fsync) {
+		try {
+			fsyncDirEntrySync(dir);
+		} catch (error) {
+			const committed = new Error(`Write to ${target} was published, but directory durability failed.`, { cause: error }) as WindowsOutcomeError;
+			committed.publicationState = "published";
+			throw committed;
+		}
+	}
 }
 
 /** Blocking twin of {@link renameTempOverTarget}; see that function for the reasoning. */
-function renameTempOverTargetSync(tmpPath: string, target: string): void {
+function renameTempOverTargetSync(tmpPath: string, target: string, stage?: WindowsStage): void {
 	if (process.platform === "win32") {
-		publishWindowsFile(tmpPath, target, nextTempPath(path.dirname(target), `${path.basename(target)}.previous`));
+		if (!stage) throw new Error("Windows publication requires its owned native stage");
+		stage.publicationState = "recovery-required";
+		const outcome = stage.native.publishSync(path.toNamespacedPath(path.resolve(target)));
+		stage.publicationState = outcome.state;
+		if (outcome.errorCode !== 0) throw windowsOutcomeError(outcome, target, stage);
 	} else {
 		fs.renameSync(tmpPath, target);
 	}

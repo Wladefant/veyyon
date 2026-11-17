@@ -190,6 +190,17 @@ export declare class Shell {
   liveBackgroundJobCount(): Promise<number>
 }
 
+/** The directory handle prevents its replacement while a producer owns the path. */
+export declare class WindowsAtomicStage {
+  readonly directory: string
+  readonly path: string
+  constructor(directory: string)
+  publishSync(target: string): WindowsAtomicOutcome
+  publish(target: string): Promise<unknown>
+  cleanupSync(): WindowsAtomicOutcome
+  cleanup(): Promise<unknown>
+}
+
 /**
  * Install the bounded Tokio runtime napi-rs adopts for async exports and, on
  * Windows, the bounded Rayon global pool used by native parallel iterators.
@@ -1067,7 +1078,6 @@ export interface HtmlToMarkdownOptions {
  */
 export declare function installConsoleCtrlHandler(path: string): ConsoleCtrlInstallResult
 
-
 /**
  * Invalidate the walker scan cache.
  *
@@ -1744,7 +1754,6 @@ export interface ShellRunResult {
   workingDir?: string
 }
 
-
 /**
  * Skim the session file open at descriptor `fd` from byte `start`, reading it
  * on the thread pool through a duplicate of `fd`, so the caller may close its
@@ -1850,6 +1859,14 @@ export declare function truncateToWidth(text: string, maxWidth: number, ellipsis
  * Tabs count as a fixed-width cell.
  */
 export declare function visibleWidth(text: string, tabWidth: number): number
+
+/** A publication result is distinct from a later cleanup failure. */
+export interface WindowsAtomicOutcome {
+  state: string
+  errorCode: number
+  operation: string
+  recoveryErrorCode?: number
+}
 
 /** Profiling results returned to JavaScript. */
 export interface WorkProfile {
