@@ -134,16 +134,21 @@ function hasDuplicateJsonMemberNames(raw: string): boolean {
 			const start = index++;
 			while (index < raw.length) {
 				if (raw[index] === "\\") index += 2;
-				else if (raw[index] === '"') { index++; break; }
-				else index++;
+				else if (raw[index] === '"') {
+					index++;
+					break;
+				} else index++;
 			}
 			const names = containers[containers.length - 1];
 			if (names) {
 				let following = index;
 				while (
-					raw[following] === " " || raw[following] === "\t" ||
-					raw[following] === "\r" || raw[following] === "\n"
-				) following++;
+					raw[following] === " " ||
+					raw[following] === "\t" ||
+					raw[following] === "\r" ||
+					raw[following] === "\n"
+				)
+					following++;
 				if (raw[following] === ":") {
 					const name = JSON.parse(raw.slice(start, index)) as string;
 					if (names.has(name)) return true;
@@ -159,7 +164,6 @@ function hasDuplicateJsonMemberNames(raw: string): boolean {
 	}
 	return false;
 }
-
 
 /**
  * Where this manager's entry lines sit in the file it last published. Valid while that file is
@@ -516,7 +520,8 @@ export class SessionManager {
 	 * without reading the file: a different inode means someone republished the
 	 * path, whether or not the body they wrote is the same length as ours.
 	 */
-	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null = null;
+	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines; ownedIds?: Set<string> } | null =
+		null;
 	/**
 	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
 	 * installed with {@link #lastBodyBytes} once that body is published.
@@ -1154,9 +1159,9 @@ export class SessionManager {
 				continue;
 			}
 			if (requireCompleteHistory && hasDuplicateJsonMemberNames(raw)) {
-			throw new Error("Cannot preserve ambiguous session journal during failed-fork repair");
-		}
-		if (requireCompleteHistory && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
+				throw new Error("Cannot preserve ambiguous session journal during failed-fork repair");
+			}
+			if (requireCompleteHistory && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
 				throw new Error("Cannot preserve unrecognized session journal entry during failed-fork repair");
 			}
 			// The title slot is a fixed-width line this manager rewrites every time,
@@ -1183,7 +1188,9 @@ export class SessionManager {
 					// The title slot is mutable in place. A peer can change its
 					// fixed-width bytes while inode and length still look unchanged.
 					if (`${raw}\n` !== this.#titleSlotLine()) {
-						throw new Error("Cannot preserve independently modified session title slot during failed-fork repair");
+						throw new Error(
+							"Cannot preserve independently modified session title slot during failed-fork repair",
+						);
 					}
 					seenTitleSlot = true;
 				}
@@ -1212,14 +1219,18 @@ export class SessionManager {
 			if (id && seenStrictEntryIds && this.#isOwnId(id)) {
 				const owned = this.#index.get(id);
 				if (!owned || `${raw}\n` !== this.#lineFor(owned)) {
-					throw new Error("Cannot preserve independently modified session journal entry during failed-fork repair");
+					throw new Error(
+						"Cannot preserve independently modified session journal entry during failed-fork repair",
+					);
 				}
 				missingPublishedIds?.delete(id);
 			}
 			const abortedLine = id ? abortedForkLines?.get(id) : undefined;
 			// replace its bytes while retaining the ID, so ID-only matching loses history.
 			if (requireCompleteHistory && abortedLine !== undefined && `${raw}\n` !== abortedLine) {
-				throw new Error("Cannot preserve independently modified aborted fork lifecycle marker during failed-fork repair");
+				throw new Error(
+					"Cannot preserve independently modified aborted fork lifecycle marker during failed-fork repair",
+				);
 			}
 			// A strict repair republishes retained owned entries before its
 			// foreign tail. A peer row between owned messages would move.
@@ -1290,66 +1301,74 @@ export class SessionManager {
 	 * yielding carries only the foreign lines the last atomic publish learned
 	 * about, which is all a synchronous path can do there.
 	 */
-#rewriteSynchronously(): void {
-	if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
-	const sessionFile = this.#sessionFile;
-	const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
-	const runRewrite = (): void => {
-		try {
-			// Strict failed-fork repair must recheck the original object at publication,
-			// including its EPERM backup. This is not cross-process append-at-rename CAS.
-			let originalState: SessionStorageStat | undefined;
-			if (repairingFailedFork) {
-				try {
-					originalState = this.#storage.statSync(sessionFile);
-				} catch {
-					throw new Error("Cannot verify original journal before synchronous failed-fork repair");
+	#rewriteSynchronously(): void {
+		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
+		const sessionFile = this.#sessionFile;
+		const repairingFailedFork = this.#abortedForkLifecycleLinesByFile.has(sessionFile);
+		const runRewrite = (): void => {
+			try {
+				// Strict failed-fork repair must recheck the original object at publication,
+				// including its EPERM backup. This is not cross-process append-at-rename CAS.
+				let originalState: SessionStorageStat | undefined;
+				if (repairingFailedFork) {
+					try {
+						originalState = this.#storage.statSync(sessionFile);
+					} catch {
+						throw new Error("Cannot verify original journal before synchronous failed-fork repair");
+					}
 				}
+				this.#refreshForeignLinesSync();
+				const sourceUnchanged = (sourcePath = sessionFile): boolean => {
+					if (!originalState) return true;
+					try {
+						const current = this.#storage.statSync(sourcePath);
+						return (
+							current.identity === originalState.identity &&
+							current.size === originalState.size &&
+							current.mtimeMs === originalState.mtimeMs &&
+							// A strict reread alone cannot detect a peer restoring mtime after
+							// a same-size edit. A Windows EPERM move-aside can legitimately
+							// change ctime, so only compare it at the original path.
+							(sourcePath !== sessionFile ||
+								originalState.ctimeMs === undefined ||
+								current.ctimeMs === originalState.ctimeMs)
+						);
+					} catch {
+						return false;
+					}
+				};
+				const body = this.#fileBody();
+				this.#diskEpoch++;
+				this.#diskTail = Promise.resolve();
+				this.#closeWriterEventually();
+				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
+				this.#storage.writeTextSync(
+					sessionFile,
+					body,
+					repairingFailedFork ? { commitGuard: sourceUnchanged } : undefined,
+				);
+				this.#notePublishedFile();
+				// The file matches memory again, so the fault episode is over and a later one
+				// is a new thing to report.
+				this.#clearDiskError();
+				this.#fileIsCurrent = true;
+				this.#materializeBreadcrumb();
+				this.#rewriteRequired = false;
+				this.#coolUnreachablePayloads();
+			} catch (err) {
+				this.#noteDiskFailure(err);
 			}
-			this.#refreshForeignLinesSync();
-			const sourceUnchanged = (sourcePath = sessionFile): boolean => {
-				if (!originalState) return true;
-				try {
-					const current = this.#storage.statSync(sourcePath);
-					return current.identity === originalState.identity && current.size === originalState.size &&
-						current.mtimeMs === originalState.mtimeMs &&
-						// A strict reread alone cannot detect a peer restoring mtime after
-						// a same-size edit. A Windows EPERM move-aside can legitimately
-						// change ctime, so only compare it at the original path.
-						(sourcePath !== sessionFile || originalState.ctimeMs === undefined ||
-							current.ctimeMs === originalState.ctimeMs);
-				} catch {
-					return false;
-				}
-			};
-			const body = this.#fileBody();
-			this.#diskEpoch++;
-			this.#diskTail = Promise.resolve();
-			this.#closeWriterEventually();
-			this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
-			this.#storage.writeTextSync(sessionFile, body, repairingFailedFork ? { commitGuard: sourceUnchanged } : undefined);
-			this.#notePublishedFile();
-			// The file matches memory again, so the fault episode is over and a later one
-			// is a new thing to report.
-			this.#clearDiskError();
-			this.#fileIsCurrent = true;
-			this.#materializeBreadcrumb();
-			this.#rewriteRequired = false;
-			this.#coolUnreachablePayloads();
-		} catch (err) {
-			this.#noteDiskFailure(err);
+		};
+		if (this.#storage.withJournalLockSync) {
+			try {
+				this.#storage.withJournalLockSync(sessionFile, runRewrite);
+			} catch (err) {
+				this.#noteDiskFailure(err);
+			}
+		} else {
+			runRewrite();
 		}
-	};
-	if (this.#storage.withJournalLockSync) {
-		try {
-			this.#storage.withJournalLockSync(sessionFile, runRewrite);
-		} catch (err) {
-			this.#noteDiskFailure(err);
-		}
-	} else {
-		runRewrite();
 	}
-}
 
 	/**
 	 * Republish the file atomically (temp-write + rename, EPERM-safe) on the
@@ -1429,70 +1448,72 @@ export class SessionManager {
 							throw new Error("Cannot verify original journal before failed-fork repair");
 						}
 					}
-				const sourceUnchanged = (sourcePath = sessionFile): boolean => {
-					if (!originalState) return true;
-					try {
-						const current = this.#storage.statSync(sourcePath);
-						return (
-							current.identity === originalState.identity &&
-							current.size === originalState.size &&
-							current.mtimeMs === originalState.mtimeMs &&
-							// The optional POSIX change stamp also catches equal-length
-							// peer rewrites that restore their previous mtime.
-							(sourcePath !== sessionFile || originalState.ctimeMs === undefined ||
-								current.ctimeMs === originalState.ctimeMs)
-						);
-					} catch {
-						return false;
+					const sourceUnchanged = (sourcePath = sessionFile): boolean => {
+						if (!originalState) return true;
+						try {
+							const current = this.#storage.statSync(sourcePath);
+							return (
+								current.identity === originalState.identity &&
+								current.size === originalState.size &&
+								current.mtimeMs === originalState.mtimeMs &&
+								// The optional POSIX change stamp also catches equal-length
+								// peer rewrites that restore their previous mtime.
+								(sourcePath !== sessionFile ||
+									originalState.ctimeMs === undefined ||
+									current.ctimeMs === originalState.ctimeMs)
+							);
+						} catch {
+							return false;
+						}
+					};
+					await this.#refreshForeignLines(repairingFailedFork);
+					if (repairingFailedFork && !sourceUnchanged()) {
+						throw new Error("Original journal changed during failed-fork repair");
 					}
-				};
-				await this.#refreshForeignLines(repairingFailedFork);
-				if (repairingFailedFork && !sourceUnchanged()) {
-					throw new Error("Original journal changed during failed-fork repair");
-				}
-				if (this.#diskEpoch !== epoch) return false;
-				const updatedFrom = this.#firstUpdatedEntry;
-				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
-				let published = false;
-				let foreignChangeRejected = false;
-				try {
-					const titleSlot = this.#titleSlotLine();
-					const coldIdentity = this.#publishedFileState?.identity;
-					const shift = await this.#publishAtomically(
-						sessionFile,
-						epoch,
-						updatedFrom,
-						repairingFailedFork
-							? (sourcePath?: string) => {
-									const unchanged = sourceUnchanged(sourcePath);
-									if (!unchanged) foreignChangeRejected = true;
-									return unchanged;
-								}
-							: undefined,
-					);
-					// writeTextAtomic discards a rejected staged write without
-					// throwing. Do not mistake its successful return for a repair.
-					if (foreignChangeRejected) throw new Error("Original journal changed before failed-fork repair publication");
 					if (this.#diskEpoch !== epoch) return false;
-					this.#notePublishedFile();
-					this.#rebaseColdPayloads(coldIdentity, shift);
-					published = true;
-					if (
-						this.#atomicRewriteDirty &&
-						!repairingFailedFork &&
-						this.#storage.withJournalLock &&
-						!(await this.#appendAfterAtomicRewrite(sessionFile, epoch, titleSlot))
-					) {
-						return false;
+					const updatedFrom = this.#firstUpdatedEntry;
+					this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
+					let published = false;
+					let foreignChangeRejected = false;
+					try {
+						const titleSlot = this.#titleSlotLine();
+						const coldIdentity = this.#publishedFileState?.identity;
+						const shift = await this.#publishAtomically(
+							sessionFile,
+							epoch,
+							updatedFrom,
+							repairingFailedFork
+								? (sourcePath?: string) => {
+										const unchanged = sourceUnchanged(sourcePath);
+										if (!unchanged) foreignChangeRejected = true;
+										return unchanged;
+									}
+								: undefined,
+						);
+						// writeTextAtomic discards a rejected staged write without
+						// throwing. Do not mistake its successful return for a repair.
+						if (foreignChangeRejected)
+							throw new Error("Original journal changed before failed-fork repair publication");
+						if (this.#diskEpoch !== epoch) return false;
+						this.#notePublishedFile();
+						this.#rebaseColdPayloads(coldIdentity, shift);
+						published = true;
+						if (
+							this.#atomicRewriteDirty &&
+							!repairingFailedFork &&
+							this.#storage.withJournalLock &&
+							!(await this.#appendAfterAtomicRewrite(sessionFile, epoch, titleSlot))
+						) {
+							return false;
+						}
+					} finally {
+						// Not written, so the next rewrite still owes these entries.
+						if (!published) this.#firstUpdatedEntry = Math.min(this.#firstUpdatedEntry, updatedFrom);
 					}
-				} finally {
-					// Not written, so the next rewrite still owes these entries.
-					if (!published) this.#firstUpdatedEntry = Math.min(this.#firstUpdatedEntry, updatedFrom);
-				}
-			} while (this.#atomicRewriteDirty);
-			this.#fileIsCurrent = true;
-			this.#rewriteRequired = false;
-			return true;
+				} while (this.#atomicRewriteDirty);
+				this.#fileIsCurrent = true;
+				this.#rewriteRequired = false;
+				return true;
 			} finally {
 				// Only relinquish the fence if we still own it. A superseding
 				// synchronous rewrite (`flushSync` → `#rewriteSynchronously`) may
@@ -2184,7 +2205,7 @@ export class SessionManager {
 							}
 							return undefined;
 						})(),
-				  }
+					}
 				: null,
 		};
 	}
@@ -2212,7 +2233,7 @@ export class SessionManager {
 						ownedIds: snapshot.publishedFileState.ownedIds
 							? new Set(snapshot.publishedFileState.ownedIds)
 							: undefined,
-				  }
+					}
 				: null;
 		}
 		this.#nextSequence = snapshot.nextSequence;
@@ -2360,12 +2381,17 @@ export class SessionManager {
 	}
 
 	/** Shared local-vs-explicit-foreign artifact URL scanner for forks and synchronous branches. */
-	static #localArtifactReferences(retainedEntries: readonly FileEntry[], parentSessionId: string | undefined): Set<string> {
+	static #localArtifactReferences(
+		retainedEntries: readonly FileEntry[],
+		parentSessionId: string | undefined,
+	): Set<string> {
 		const referencedIds = new Set<string>();
 		for (const entry of retainedEntries) {
 			// Artifact IDs are per session. An explicit foreign-session reference
 			// must not be checked or copied from this session's artifact store.
-			for (const match of JSON.stringify(entry).matchAll(/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi)) {
+			for (const match of JSON.stringify(entry).matchAll(
+				/\bartifact:\/\/([^/?#\s"'\\<>)\]]+)(?:\?([^#\s"'\\<>)\],;]+))?/gi,
+			)) {
 				let id = match[1];
 				if (!id) continue;
 				// The internal URL parser percent-decodes rawHost before checking
@@ -2384,7 +2410,8 @@ export class SessionManager {
 						sessions.length === 1 &&
 						/^[A-Za-z0-9_.:-]{1,128}$/.test(sessions[0]!) &&
 						sessions[0] !== parentSessionId
-					) continue;
+					)
+						continue;
 				}
 				referencedIds.add(id);
 			}
@@ -2581,7 +2608,9 @@ export class SessionManager {
 			await verifyDestinationParent();
 			for (const name of sourceNames) {
 				await fs.promises.cp(path.join(oldArtifactDir, name), path.join(nextArtifactDir, name), {
-					recursive: true, force: false, errorOnExist: true,
+					recursive: true,
+					force: false,
+					errorOnExist: true,
 					filter: async source => {
 						await assertSafeEntry(source);
 						return true;
@@ -2602,7 +2631,10 @@ export class SessionManager {
 			// opens it. Hash through one pinned descriptor, refusing a symlink,
 			// special file, hard link or substituted inode before reading bytes.
 			const sha256File = async (
-				filename: string, expected: fs.Stats, root: string, directories: Map<string, fs.Stats>,
+				filename: string,
+				expected: fs.Stats,
+				root: string,
+				directories: Map<string, fs.Stats>,
 			): Promise<string> => {
 				const changed = () => new Error("Cannot fork session: artifact changed during digest read");
 				const verifyAncestors = async () => {
@@ -2624,7 +2656,8 @@ export class SessionManager {
 							!actualDirectory.isDirectory() ||
 							actualDirectory.dev !== expectedDirectory.dev ||
 							actualDirectory.ino !== expectedDirectory.ino
-						) throw changed();
+						)
+							throw changed();
 					}
 				};
 				const matches = (actual: fs.Stats): boolean =>
@@ -2643,9 +2676,7 @@ export class SessionManager {
 				// This does not prove safety against all Windows reparse races.
 				const flags =
 					fs.constants.O_RDONLY |
-					(process.platform === "win32"
-						? 0
-						: (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+					(process.platform === "win32" ? 0 : (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
 				const file = await fs.promises.open(filename, flags);
 				try {
 					// O_NOFOLLOW covers only the leaf; refuse a changed parent
@@ -2678,7 +2709,8 @@ export class SessionManager {
 						afterRead.ctimeMs !== opened.ctimeMs ||
 						pathAfterRead.mtimeMs !== before.mtimeMs ||
 						pathAfterRead.ctimeMs !== before.ctimeMs
-					) throw changed();
+					)
+						throw changed();
 					await verifyAncestors();
 					return digest.digest("hex");
 				} finally {
@@ -2694,9 +2726,12 @@ export class SessionManager {
 				const original = sourceTree.files.get(filename);
 				const copied = copiedTree.files.get(filename);
 				if (
-					!original || !copied ||
-					!original.isFile() || !copied.isFile() ||
-					original.nlink > 1 || copied.nlink > 1 ||
+					!original ||
+					!copied ||
+					!original.isFile() ||
+					!copied.isFile() ||
+					original.nlink > 1 ||
+					copied.nlink > 1 ||
 					original.size !== copied.size
 				) {
 					throw new Error(
@@ -2725,16 +2760,31 @@ export class SessionManager {
 				sourceTree.entries.some((entry, index) => entry !== finalSourceTree.entries[index]) ||
 				[...sourceTree.directories].some(([relative, expected]) => {
 					const actual = finalSourceTree.directories.get(relative);
-					return !actual || actual.dev !== expected.dev || actual.ino !== expected.ino ||
-						actual.mode !== expected.mode || actual.uid !== expected.uid || actual.gid !== expected.gid ||
-						actual.mtimeMs !== expected.mtimeMs || actual.ctimeMs !== expected.ctimeMs;
+					return (
+						!actual ||
+						actual.dev !== expected.dev ||
+						actual.ino !== expected.ino ||
+						actual.mode !== expected.mode ||
+						actual.uid !== expected.uid ||
+						actual.gid !== expected.gid ||
+						actual.mtimeMs !== expected.mtimeMs ||
+						actual.ctimeMs !== expected.ctimeMs
+					);
 				}) ||
 				[...sourceTree.files].some(([relative, expected]) => {
 					const actual = finalSourceTree.files.get(relative);
-					return !actual || actual.dev !== expected.dev || actual.ino !== expected.ino ||
-						actual.nlink !== expected.nlink || actual.size !== expected.size ||
-						actual.mode !== expected.mode || actual.uid !== expected.uid || actual.gid !== expected.gid ||
-						actual.mtimeMs !== expected.mtimeMs || actual.ctimeMs !== expected.ctimeMs;
+					return (
+						!actual ||
+						actual.dev !== expected.dev ||
+						actual.ino !== expected.ino ||
+						actual.nlink !== expected.nlink ||
+						actual.size !== expected.size ||
+						actual.mode !== expected.mode ||
+						actual.uid !== expected.uid ||
+						actual.gid !== expected.gid ||
+						actual.mtimeMs !== expected.mtimeMs ||
+						actual.ctimeMs !== expected.ctimeMs
+					);
 				});
 			if (sourceTreeChanged) throw new Error("Cannot fork session: artifact source changed during copy");
 			// This narrows the copy window; it is not an interprocess lock. A peer
@@ -2742,10 +2792,8 @@ export class SessionManager {
 			// Recheck empty destination directories too: they have no file hash operation.
 			for (const [relative, expected] of copiedTree.directories) {
 				const actual = await fs.promises.lstat(path.join(nextArtifactDir, relative));
-				if (
-					!actual.isDirectory() || actual.dev !== expected.dev ||
-					actual.ino !== expected.ino
-				) throw new Error("Cannot fork session: artifact directory changed during verification");
+				if (!actual.isDirectory() || actual.dev !== expected.dev || actual.ino !== expected.ino)
+					throw new Error("Cannot fork session: artifact directory changed during verification");
 			}
 			await verifyDestinationParent();
 
@@ -2786,15 +2834,15 @@ export class SessionManager {
 			const flushCopiedFile = async (relative: string, expected: fs.Stats): Promise<void> => {
 				const filename = path.join(nextArtifactDir, relative);
 				const parentRelative = path.dirname(relative) === "." ? "" : path.dirname(relative);
-				const changed = () =>
-					new Error("Cannot fork session: copied artifact changed before durability flush");
+				const changed = () => new Error("Cannot fork session: copied artifact changed before durability flush");
 				await verifyCopiedDirectoryPath(parentRelative);
 				const before = await fs.promises.lstat(filename);
 				if (
 					!copiedFileMatches(before, expected) ||
 					before.mtimeMs !== expected.mtimeMs ||
 					before.ctimeMs !== expected.ctimeMs
-				) throw changed();
+				)
+					throw changed();
 				// Windows FlushFileBuffers requires GENERIC_WRITE. Use a write-only
 				// handle there; POSIX fsync permits the read-only handle used below.
 				// A read-only copied artifact therefore fails closed on Windows.
@@ -2814,7 +2862,8 @@ export class SessionManager {
 						opened.ctimeMs !== expected.ctimeMs ||
 						pathAfterOpen.mtimeMs !== expected.mtimeMs ||
 						pathAfterOpen.ctimeMs !== expected.ctimeMs
-					) throw changed();
+					)
+						throw changed();
 					await file.sync();
 					await verifyCopiedDirectoryPath(parentRelative);
 					const afterSync = await file.stat();
@@ -2826,12 +2875,15 @@ export class SessionManager {
 						afterSync.ctimeMs !== expected.ctimeMs ||
 						pathAfterSync.mtimeMs !== expected.mtimeMs ||
 						pathAfterSync.ctimeMs !== expected.ctimeMs
-					) throw changed();
+					)
+						throw changed();
 				} finally {
 					await file.close();
 				}
 			};
-			for (const [relative, expected] of [...copiedTree.files.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+			for (const [relative, expected] of [...copiedTree.files.entries()].sort(([left], [right]) =>
+				left.localeCompare(right),
+			)) {
 				await flushCopiedFile(relative, expected);
 			}
 
@@ -2846,13 +2898,12 @@ export class SessionManager {
 						actual.isDirectory() &&
 						actual.dev === expected.dev &&
 						actual.ino === expected.ino &&
-						(!compareMetadata || (
-							actual.mode === expected.mode &&
-							actual.uid === expected.uid &&
-							actual.gid === expected.gid &&
-							actual.mtimeMs === expected.mtimeMs &&
-							actual.ctimeMs === expected.ctimeMs
-						));
+						(!compareMetadata ||
+							(actual.mode === expected.mode &&
+								actual.uid === expected.uid &&
+								actual.gid === expected.gid &&
+								actual.mtimeMs === expected.mtimeMs &&
+								actual.ctimeMs === expected.ctimeMs));
 					const changed = () =>
 						new Error("Cannot fork session: artifact directory changed before durability flush");
 					const before = await fs.promises.lstat(filename);
@@ -2878,7 +2929,7 @@ export class SessionManager {
 					}
 				};
 				const directories = [...copiedTree.directories.entries()].sort(([left], [right]) => {
-					const depth = (relative: string): number => relative ? relative.split(path.sep).length : 0;
+					const depth = (relative: string): number => (relative ? relative.split(path.sep).length : 0);
 					return depth(right) - depth(left) || left.localeCompare(right);
 				});
 				for (const [relative, expected] of directories) {
@@ -2886,12 +2937,7 @@ export class SessionManager {
 					await flushDirectory(filename, expected, () => verifyCopiedDirectoryPath(relative), true);
 				}
 				await verifyDestinationParent();
-				await flushDirectory(
-					destinationParentRealPath,
-					destinationParentStat,
-					verifyDestinationParent,
-					false,
-				);
+				await flushDirectory(destinationParentRealPath, destinationParentStat, verifyDestinationParent, false);
 				await verifyDestinationParent();
 			}
 			// Windows file contents are flushed above, but this portable Node path
@@ -2917,7 +2963,8 @@ export class SessionManager {
 		const sessionArtifactDir = artifactsDirectoryFor(oldSessionFile);
 		const effectiveArtifactDir = this.getArtifactsDir();
 		if (
-			!sessionArtifactDir || !effectiveArtifactDir ||
+			!sessionArtifactDir ||
+			!effectiveArtifactDir ||
 			path.resolve(effectiveArtifactDir) !== path.resolve(sessionArtifactDir)
 		) {
 			throw new Error("Cannot fork session: adopted artifact scope differs from session sidecar");
@@ -2933,12 +2980,7 @@ export class SessionManager {
 			sessionFileName(`${fileSafeTimestamp(timestamp)}_${nextSessionId}`),
 		);
 		const retainedEntries = this.#entries.filter(entry => !isSessionIncarnationTelemetry(entry));
-		await SessionManager.#copyForkArtifactEvidence(
-			oldSessionFile,
-			nextSessionFile,
-			retainedEntries,
-			parentSessionId,
-		);
+		await SessionManager.#copyForkArtifactEvidence(oldSessionFile, nextSessionFile, retainedEntries, parentSessionId);
 
 		const beforeSwitch = this.captureState();
 		try {
@@ -2966,7 +3008,10 @@ export class SessionManager {
 				// a process restart without a later caller flush must not see a
 				await this.flush();
 			} catch (restoreError) {
-				throw new AggregateError([error, restoreError], "Fork failed and could not durably restore the active source");
+				throw new AggregateError(
+					[error, restoreError],
+					"Fork failed and could not durably restore the active source",
+				);
 			}
 			throw error;
 		}
@@ -4465,12 +4510,7 @@ export class SessionManager {
 		if (path.resolve(nextSessionFile) === path.resolve(sourcePath)) {
 			throw new Error("Cannot fork session: destination must differ from source");
 		}
-		await SessionManager.#copyForkArtifactEvidence(
-			sourcePath,
-			nextSessionFile,
-			history,
-			sourceHeader?.id,
-		);
+		await SessionManager.#copyForkArtifactEvidence(sourcePath, nextSessionFile, history, sourceHeader?.id);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;
