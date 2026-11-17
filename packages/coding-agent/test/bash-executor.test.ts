@@ -1330,14 +1330,17 @@ describe("executeBash drain reconciliation regressions", () => {
 		expect(result.output).not.toContain("replacement prefix");
 	});
 
-	it("reconciles a completed native result after abort within the backstop grace", async () => {
+	it("reconciles a completed native result and late callback after abort", async () => {
 		const nativeResult = Promise.withResolvers<ShellRunResult>();
 		const dispatched = Promise.withResolvers<void>();
 		const abortCleanup = Promise.withResolvers<void>();
 		const shells: Shell[] = [];
+		const forwarded: string[] = [];
+		let emitLateChunk: ((error: Error | null, chunk: string) => void) | null | undefined;
 		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(function (this: Shell, _options, onChunk) {
 			shells.push(this);
-			onChunk?.(null, "finished despite abort");
+			emitLateChunk = onChunk;
+			onChunk?.(null, "finished despite abort\n");
 			dispatched.resolve();
 			return nativeResult.promise;
 		});
@@ -1348,29 +1351,133 @@ describe("executeBash drain reconciliation regressions", () => {
 			timeout: 5000,
 			signal: controller.signal,
 			sessionKey: "reconciled-abort-cleanup",
+			onChunk: chunk => {
+				forwarded.push(chunk);
+			},
+			chunkThrottleMs: 0,
 		});
-		await dispatched.promise;
-		controller.abort();
-		await sleep(25);
-		nativeResult.resolve({
-			exitCode: 23,
-			cancelled: false,
-			timedOut: false,
-			outputIncomplete: false,
-			captureIsDrainPrefix: false,
-			capturedOutput: "finished despite abort",
+		try {
+			await dispatched.promise;
+			controller.abort();
+			await sleep(25);
+			// This arrives after abort's stop branch has run, but before native settles.
+			emitLateChunk?.(null, "late drain callback");
+			nativeResult.resolve({
+				exitCode: 23,
+				cancelled: false,
+				timedOut: false,
+				outputIncomplete: false,
+				captureIsDrainPrefix: false,
+				capturedOutput: "finished despite abort\nlate drain callback",
+			});
+			const result = await pending;
+			expect(result.cancelled).toBe(false);
+			expect(result.exitCode).toBe(23);
+			expect(result.output).toContain("late drain callback");
+			expect(forwarded.join("")).toContain("late drain callback");
+			await executeBash("printf next", { cwd: os.tmpdir(), sessionKey: "reconciled-abort-cleanup" });
+			await executeBash("printf next again", { cwd: os.tmpdir(), sessionKey: "reconciled-abort-cleanup" });
+			expect(shells).toHaveLength(3);
+			expect(new Set(shells).size).toBe(3);
+		} finally {
+			nativeResult.resolve({
+				exitCode: 23,
+				cancelled: false,
+				timedOut: false,
+				outputIncomplete: false,
+				captureIsDrainPrefix: false,
+				capturedOutput: "finished despite abort",
+			});
+			abortCleanup.resolve();
+		}
+	});
+
+	it("retains a completed native status after the explicit timeout backstop elapses", async () => {
+		const nativeResult = Promise.withResolvers<ShellRunResult>();
+		const dispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(() => {
+			dispatched.resolve();
+			return nativeResult.promise;
 		});
-		const result = await pending;
-		expect(result.cancelled).toBe(false);
-		expect(result.exitCode).toBe(23);
-		expect(result.output).toContain("finished despite abort");
-		await executeBash("printf next", {
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+		const pending = executeBash("sleep 10", {
 			cwd: os.tmpdir(),
-			sessionKey: "reconciled-abort-cleanup",
+			timeout: 1000,
+			sessionKey: "timeout-native-status-retained",
 		});
-		expect(shells).toHaveLength(2);
-		expect(shells[1]).not.toBe(shells[0]);
-		abortCleanup.resolve();
+		try {
+			await dispatched.promise;
+			await sleep(1650);
+			nativeResult.resolve({
+				exitCode: 29,
+				cancelled: false,
+				timedOut: false,
+				outputIncomplete: false,
+				captureIsDrainPrefix: false,
+				capturedOutput: "native completed",
+			});
+			const result = await pending;
+			expect(result.exitCode).toBe(29);
+			expect(result.cancelled).toBe(false);
+		} finally {
+			nativeResult.resolve({
+				exitCode: 29,
+				cancelled: false,
+				timedOut: false,
+				outputIncomplete: false,
+				captureIsDrainPrefix: false,
+				capturedOutput: "native completed",
+			});
+		}
+	});
+
+	it("does not abort a settled native shell while its artifact save awaits", async () => {
+		const saveStarted = Promise.withResolvers<void>();
+		const save = Promise.withResolvers<string>();
+		const shells: Shell[] = [];
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(function (this: Shell) {
+			shells.push(this);
+			return Promise.resolve({
+				exitCode: 31,
+				cancelled: false,
+				timedOut: false,
+				outputIncomplete: true,
+				captureIsDrainPrefix: false,
+				capturedOutput: "captured",
+				minimized: {
+					text: "summary",
+					originalText: "raw artifact",
+					filter: "test",
+					inputBytes: 12,
+					outputBytes: 7,
+				},
+			});
+		});
+		const abort = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+		const controller = new AbortController();
+		const pending = executeBash("printf artifact", {
+			cwd: os.tmpdir(),
+			signal: controller.signal,
+			sessionKey: "settled-save-no-abort",
+			onMinimizedSave: async () => {
+				saveStarted.resolve();
+				return save.promise;
+			},
+		});
+		try {
+			await saveStarted.promise;
+			controller.abort();
+			save.resolve("saved-raw");
+			const result = await pending;
+			expect(abort).not.toHaveBeenCalled();
+			expect(result.cancelled).toBe(false);
+			expect(result.exitCode).toBe(31);
+			await executeBash("printf reuse", { cwd: os.tmpdir(), sessionKey: "settled-save-no-abort" });
+			expect(shells).toHaveLength(2);
+			expect(shells[1]).toBe(shells[0]);
+		} finally {
+			save.resolve("saved-raw");
+		}
 	});
 
 	it("marks unresolved abort outcome as uncertain and warns against retrying a write", async () => {
