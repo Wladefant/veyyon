@@ -8,6 +8,13 @@ type ListedEntry = { name: string; kind: "d" | "f" | "o" };
 type DirectoryRow = { stamp: string; entries: ListedEntry[] };
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_ENTRIES = 100_000;
+const ARTIFACT_RESERVATION_DIR_PATTERN = /^\.artifact-id-\d+$/;
+const ARTIFACT_ID_DATABASE_PATTERN = /^\.artifact-ids\.sqlite.*$/;
+
+/** Allocation reservations contain no transcripts and must not consume the index budget. */
+export function isHistoryTraversalEntry(name: string): boolean {
+	return !ARTIFACT_RESERVATION_DIR_PATTERN.test(name) && !ARTIFACT_ID_DATABASE_PATTERN.test(name);
+}
 
 /** Cache directory names, never transcript contents or authority to read another root. */
 export class HistoryDirectoryIndex {
@@ -72,7 +79,7 @@ export class HistoryDirectoryIndex {
 					)
 						throw new Error("Invalid history directory entry");
 				}
-				this.#rows.set(dir, row);
+				this.#rows.set(dir, { ...row, entries: row.entries.filter((entry: ListedEntry) => isHistoryTraversalEntry(entry.name)) });
 			}
 		} catch {
 			this.#signal?.throwIfAborted();
@@ -92,10 +99,12 @@ export class HistoryDirectoryIndex {
 				this.#visited.set(dir, cached);
 				return cached.entries;
 			}
-			const entries = (await fs.readdir(dir, { withFileTypes: true })).map(entry => ({
-				name: entry.name,
-				kind: entry.isDirectory() ? ("d" as const) : entry.isFile() ? ("f" as const) : ("o" as const),
-			}));
+			const entries = (await fs.readdir(dir, { withFileTypes: true }))
+				.filter(entry => isHistoryTraversalEntry(entry.name))
+				.map(entry => ({
+					name: entry.name,
+					kind: entry.isDirectory() ? ("d" as const) : entry.isFile() ? ("f" as const) : ("o" as const),
+				}));
 			this.#signal?.throwIfAborted();
 			const after = isRoot ? await fs.stat(dir) : await fs.lstat(dir);
 			if (stamp === `${after.dev}:${after.ino}:${after.mtimeMs}:${after.ctimeMs}`)

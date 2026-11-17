@@ -1,4 +1,5 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import { BlobStore, blobsDirForSessionDir } from "@veyyon/kernel/session/blob-store";
 import { TempDir } from "@veyyon/utils";
@@ -90,6 +91,49 @@ it("reuses a disk index after registry reset and invalidates a newly ambiguous i
 	const collided = await scanSessionFilesFromDisk();
 	expect([...collided.files.keys()]).not.toContain("OldAgent");
 	expect([...collided.ambiguous].map(id => id.toLowerCase())).toContain("oldagent");
+});
+
+it("persists the disk index when ignored artifact reservations exceed its entry cap", async () => {
+	using dir = TempDir.createSync("history-restart-reservations-");
+	const sessionFile = dir.join("OldAgent.jsonl");
+	await fs.writeFile(sessionFile, "not needed for lookup");
+	const readdir = fs.readdir;
+	const rootEntries = [
+		{
+			name: "OldAgent.jsonl",
+			isDirectory: () => false,
+			isFile: () => true,
+			isSymbolicLink: () => false,
+		},
+		...Array.from({ length: 100_001 }, (_, index) => ({
+			name: `.artifact-id-${index + 1}`,
+			isDirectory: () => true,
+			isFile: () => false,
+		})),
+	] as unknown as Dirent[];
+	const initialListing = spyOn(fs, "readdir").mockImplementation(((...args: Parameters<typeof fs.readdir>) => {
+		if (String(args[0]) === dir.path()) return Promise.resolve(rootEntries);
+		return readdir(...args);
+	}) as typeof fs.readdir);
+	try {
+		registerArtifactsDir(dir.path());
+		expect((await scanSessionFilesFromDisk()).files.get("OldAgent")).toBe(sessionFile);
+	} finally {
+		initialListing.mockRestore();
+	}
+
+	AgentRegistry.resetGlobalForTests();
+	resetRegisteredArtifactDirsForTests();
+	registerArtifactsDir(dir.path());
+	const cachedListing = spyOn(fs, "readdir").mockImplementation(((...args: Parameters<typeof fs.readdir>) => {
+		if (String(args[0]) === dir.path()) throw new Error("indexed root enumerated again");
+		return readdir(...args);
+	}) as typeof fs.readdir);
+	try {
+		expect((await scanSessionFilesFromDisk()).files.get("OldAgent")).toBe(sessionFile);
+	} finally {
+		cachedListing.mockRestore();
+	}
 });
 
 it("keeps branch selection and restored tool-result lookahead in stored prefixes", async () => {

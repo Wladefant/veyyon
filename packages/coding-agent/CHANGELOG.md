@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep ignored artifact allocation reservations out of the history directory cache budget, and avoid indexing unrelated tool results for a user-only bounded transcript prefix ([Refs #1121](https://github.com/Wladefant/veyyon/issues/1121)).
+
 ## [1.10.11] - 2026-11-17
 
 ### Fixed

@@ -40,6 +40,19 @@ it("returns the same markdown prefix without rendering later message content", a
 	expect(result.contentIncomplete).toBe(true);
 });
 
+it("does not inspect unrelated messages before returning a user-only prefix", async () => {
+	const tail = {
+		get role(): never {
+			throw new Error("irrelevant tail inspected");
+		},
+	};
+	const prefix = await formatSessionHistoryMarkdownAsync(
+		[{ role: "user", content: "first\nsecond\nthird\nfourth\nfifth" }, tail],
+		{ title: "Scout (running)", maxLines: 7 },
+	);
+	expect(prefix).toBe("# Scout (running)\n\n## user\n\nfirst\nsecond\nthird\n");
+});
+
 it("keeps tool-result lookahead summaries identical in a bounded prefix", async () => {
 	const messages = [
 		{
