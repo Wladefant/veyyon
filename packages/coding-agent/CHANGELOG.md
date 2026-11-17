@@ -8,6 +8,9 @@
 - Python eval cancellation releases queued worker custody and completed cancellation records while suppressing output from workers still running.
 
 
+### Added
+
+- Native `BashTool` commands attest the live main or subagent caller through `VEYYON_CALLER_URL` and `VEYYON_CALLER_TOKEN` over a lazy loopback HTTP endpoint, rejecting user `env` overrides and clearing inherited receipt variables when no live actor owns the session.
 ## [1.10.12] - 2026-11-17
 
 ### Fixed
