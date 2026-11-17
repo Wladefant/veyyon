@@ -19,7 +19,7 @@ import { type InstrumentationLevel, sessionTelemetryDetail } from "@veyyon/ai/in
 import { errorMessage, logger, Snowflake } from "@veyyon/utils";
 import { settingsOrNull } from "../config/settings-instance";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { type AgentKind, AgentRegistry } from "../registry/agent-registry";
+import { type AgentActorContext, type AgentKind, AgentRegistry } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
 
 export interface IrcMessage {
@@ -37,11 +37,13 @@ export interface IrcMessage {
 	/** Runtime-stamped identity; absent on legacy records, never inferred from body text. */
 	actor?: {
 		source: "agent";
-		relation: "self" | "parent" | "ancestor" | "peer" | "unknown";
+		relation: "self" | "parent" | "ancestor" | "child" | "descendant" | "peer" | "unknown";
 		selfId: string;
 		parentId?: string;
 		ancestorIds: string[];
 		scope?: string;
+		sender: AgentActorContext;
+		senderRegistered: boolean;
 	};
 }
 
@@ -308,6 +310,8 @@ export class IrcBus {
 				source: "agent",
 				relation: this.#registry.relationTo(msg.to, msg.from),
 				...this.#registry.actorContext(msg.to),
+				sender: this.#registry.actorContext(msg.from),
+				senderRegistered: this.#registry.get(msg.from) !== undefined,
 			},
 			...(opts?.completion ? { completion: opts.completion } : {}),
 		};

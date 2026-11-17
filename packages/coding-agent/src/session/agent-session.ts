@@ -5282,6 +5282,11 @@ export class AgentSession {
 			(opts?.expectsReply ?? false) && ((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
 		const registry = AgentRegistry.global();
 		const identity = registry.actorContext(msg.to);
+		const senderIdentity = registry.actorContext(msg.from);
+		const senderParent =
+			!registry.get(msg.from) ? "unverified" : senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root");
+		const recipientParent =
+			!registry.get(msg.to) ? "unverified" : identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root");
 		const relation = registry.relationTo(msg.to, msg.from);
 		if (
 			!msg.completion &&
@@ -5312,7 +5317,10 @@ export class AgentSession {
 				autoReplied: autoReply,
 				interrupting: this.isStreaming,
 				...identity,
-				parentId: identity.parentId ?? "unknown",
+				parentId: recipientParent,
+				senderId: senderIdentity.selfId,
+				senderParent,
+				senderAncestorIds: senderIdentity.ancestorIds.join(", ") || "none verified",
 				ancestorIds: identity.ancestorIds.join(", ") || "none verified",
 				relation,
 				parentUpdate: relation === "parent",
@@ -5330,7 +5338,14 @@ export class AgentSession {
 				source: "agent",
 				relation,
 				...identity,
-				actor: { source: "agent", relation, ...identity },
+				actor: {
+					source: "agent",
+					relation,
+					...identity,
+					sender: senderIdentity,
+					senderRegistered: registry.get(msg.from) !== undefined,
+				},
+				senderParent,
 				...(msg.completion
 					? {
 							completionId: msg.completion.id,
@@ -5545,14 +5560,22 @@ export class AgentSession {
 		try {
 			const registry = AgentRegistry.global();
 			const identity = registry.actorContext(msg.to);
+			const senderIdentity = registry.actorContext(msg.from);
+			const senderParent =
+				!registry.get(msg.from) ? "unverified" : senderIdentity.parentId ?? (registry.get(msg.from)?.parentId ? "unverified" : "root");
+			const recipientParent =
+				!registry.get(msg.to) ? "unverified" : identity.parentId ?? (registry.get(msg.to)?.parentId ? "unverified" : "root");
 			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
 					from: msg.from,
 					...identity,
-					parentId: identity.parentId ?? "unknown",
+					parentId: recipientParent,
 					ancestorIds: identity.ancestorIds.join(", ") || "none verified",
 					relation,
+					senderId: senderIdentity.selfId,
+					senderParent,
+					senderAncestorIds: senderIdentity.ancestorIds.join(", ") || "none verified",
 					parentUpdate: relation === "parent",
 					message: msg.body,
 					replyTo: msg.replyTo ?? "",
@@ -5565,7 +5588,19 @@ export class AgentSession {
 				customType: "irc:autoreply",
 				content: `[IRC you → \`${msg.from}\` (auto)]\n\n${body}`,
 				display: true,
-				details: { to: msg.from, body, replyTo: msg.id },
+				details: {
+					to: msg.from,
+					body,
+					replyTo: msg.id,
+					actor: {
+						source: "agent",
+						relation,
+						...identity,
+						sender: senderIdentity,
+						senderRegistered: registry.get(msg.from) !== undefined,
+					},
+					senderParent,
+				},
 				attribution: "agent",
 				timestamp: Date.now(),
 			};

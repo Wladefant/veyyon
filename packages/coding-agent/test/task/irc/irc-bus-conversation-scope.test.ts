@@ -186,4 +186,32 @@ describe("Bus traffic is attributed to the conversation that produced it", () =>
 		expect(relaysA.join("\n")).toContain("A's private exchange");
 		expect(relaysB).toEqual([]);
 	});
+	test("stamps child lineage separately from the root recipient", async () => {
+		const relays: string[] = [];
+		conversation("session-a", "acp:a", "Reviewer-A", relays);
+		registry.register({
+			id: "Grandchild-A",
+			displayName: "grandchild",
+			kind: "sub",
+			parentId: "Reviewer-A",
+			session: deliveringSession(relays),
+			status: "running",
+		});
+
+		await bus.send({ from: "Reviewer-A", to: "acp:a", body: "child message" });
+		await bus.send({ from: "Grandchild-A", to: "acp:a", body: "descendant message" });
+
+		const messages = bus.log().map(entry => entry.message);
+		expect(messages[0]?.actor).toMatchObject({
+			relation: "child",
+			selfId: "acp:a",
+			sender: { selfId: "Reviewer-A", parentId: "acp:a", ancestorIds: ["acp:a"] },
+			senderRegistered: true,
+		});
+		expect(messages[1]?.actor).toMatchObject({
+			relation: "descendant",
+			sender: { selfId: "Grandchild-A", parentId: "Reviewer-A", ancestorIds: ["Reviewer-A", "acp:a"] },
+		});
+	});
+
 });
