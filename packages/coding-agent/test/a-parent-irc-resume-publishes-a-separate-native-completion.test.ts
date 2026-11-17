@@ -141,6 +141,77 @@ describe("native retained child resume", () => {
 		).toBe(true);
 	});
 
+	it.each([
+		{ name: "an earlier terminal yield", response: yielded("OLD-A") },
+		{ name: "an earlier assistant tail", response: { content: ["OLD-A"], stopReason: "stop" } as MockResponse },
+	])("runs a fresh completion phase instead of reusing $name", async ({ response }) => {
+		const root = await session("root", [{ content: ["Received fresh aggregate"], stopReason: "stop" }]);
+		const aggregator = await session("aggregator", [response, yielded("NEW-B")]);
+		const worker = await session("worker", [yielded("worker-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "aggregator", displayName: "Aggregator", kind: "sub", parentId: "root", scope: "tree",
+			session: aggregator.instance,
+		});
+		registry.register({
+			id: "worker", displayName: "Worker", kind: "sub", parentId: "aggregator", scope: "tree",
+			session: worker.instance,
+		});
+		await aggregator.store.ensureOnDisk();
+		const immutable = path.join(aggregator.store.getArtifactsDir()!, "aggregator.md");
+		await fs.mkdir(path.dirname(immutable), { recursive: true });
+		await fs.writeFile(immutable, '{"value":"immutable-A"}');
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const stream = aggregator.instance.agent.streamFn;
+		let first = true;
+		aggregator.instance.agent.streamFn = async (model, context, options) => {
+			if (first) {
+				first = false;
+				started.resolve();
+				await release.promise;
+			}
+			return stream(model, context, options);
+		};
+		const unrelatedTurn = aggregator.instance.prompt("Finish the unrelated initial phase A.");
+		try {
+			await started.promise;
+			await worker.instance.deliverIrcMessage({
+				id: "worker-phase-B", from: "aggregator", to: "worker", body: "Return worker-B.", ts: Date.now(),
+			});
+			await worker.instance.waitForIdle();
+		} finally {
+			release.resolve();
+		}
+		await unrelatedTurn;
+		await aggregator.instance.waitForIdle();
+		await aggregator.instance.replayIrcContinuations();
+		await aggregator.instance.waitForIdle();
+		await root.instance.waitForIdle();
+		const completions = root.store.getEntries().filter(
+			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
+		);
+		expect(completions).toHaveLength(1);
+		const completion = completions[0];
+		if (completion?.type !== "custom_message") throw new Error("Expected fresh aggregate completion");
+		expect(completion.content).toContain('"value":"NEW-B"');
+		expect(completion.details).toMatchObject({ resultSource: "agent" });
+		expect(aggregator.mock.calls).toHaveLength(2);
+		expect(await fs.readFile(immutable, "utf8")).toBe('{"value":"immutable-A"}');
+		expect(aggregator.store.getEntries().filter(
+			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
+		)).toHaveLength(1);
+		await Promise.all([
+			aggregator.instance.replayIrcContinuations(), aggregator.instance.replayIrcContinuations(),
+		]);
+		await aggregator.instance.waitForIdle();
+		expect(aggregator.mock.calls).toHaveLength(2);
+		expect(root.store.getEntries().filter(
+			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
+		)).toHaveLength(1);
+	});
+
 	it("aggregates a nested child's B to the root as a separate native result", async () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
