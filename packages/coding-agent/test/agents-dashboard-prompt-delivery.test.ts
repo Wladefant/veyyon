@@ -54,7 +54,7 @@ it("delivers queued prompts across /agents and restores composer input on Escape
 	const term = new VirtualTerminal(120, 40);
 	mode.ui = new TUI(term);
 	const watchGit = vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
-	let firstTurn: Promise<void> | undefined;
+	let firstTurn: Promise<boolean> | undefined;
 	try {
 		await mode.init();
 		await term.waitForRender(mode.ui);

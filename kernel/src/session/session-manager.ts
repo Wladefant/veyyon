@@ -3231,7 +3231,10 @@ export class SessionManager {
 		}
 		const retry = this.#retryPersistenceAfterFailure();
 		const dirty = this.#rewriteRequired && (!this.#deferredLegacyRewrite || !this.#fileIsCurrent);
-		if (retry || pendingMigration || dirty) {
+		// The active publish already owns entries that arrived under its append fence.
+		// Queue the flush behind it instead of asking for another full publish per child report.
+		const appendFence = this.#atomicRewriteFenceEpoch === this.#diskEpoch && this.#atomicRewriteDirty;
+		if (retry || pendingMigration || (dirty && !appendFence)) {
 			await this.#rewriteAtomically();
 			this.#deferredLegacyRewrite = false;
 		}
