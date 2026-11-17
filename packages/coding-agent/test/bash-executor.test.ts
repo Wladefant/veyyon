@@ -1333,17 +1333,21 @@ describe("executeBash drain reconciliation regressions", () => {
 	it("reconciles a completed native result after abort within the backstop grace", async () => {
 		const nativeResult = Promise.withResolvers<ShellRunResult>();
 		const dispatched = Promise.withResolvers<void>();
-		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
+		const abortCleanup = Promise.withResolvers<void>();
+		const shells: Shell[] = [];
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(function (this: Shell, _options, onChunk) {
+			shells.push(this);
 			onChunk?.(null, "finished despite abort");
 			dispatched.resolve();
 			return nativeResult.promise;
 		});
-		vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+		vi.spyOn(piNatives.Shell.prototype, "abort").mockReturnValue(abortCleanup.promise);
 		const controller = new AbortController();
 		const pending = executeBash("sleep 10", {
 			cwd: os.tmpdir(),
 			timeout: 5000,
 			signal: controller.signal,
+			sessionKey: "reconciled-abort-cleanup",
 		});
 		await dispatched.promise;
 		controller.abort();
@@ -1360,6 +1364,13 @@ describe("executeBash drain reconciliation regressions", () => {
 		expect(result.cancelled).toBe(false);
 		expect(result.exitCode).toBe(23);
 		expect(result.output).toContain("finished despite abort");
+		await executeBash("printf next", {
+			cwd: os.tmpdir(),
+			sessionKey: "reconciled-abort-cleanup",
+		});
+		expect(shells).toHaveLength(2);
+		expect(shells[1]).not.toBe(shells[0]);
+		abortCleanup.resolve();
 	});
 
 	it("marks unresolved abort outcome as uncertain and warns against retrying a write", async () => {

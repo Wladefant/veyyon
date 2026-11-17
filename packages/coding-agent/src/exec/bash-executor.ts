@@ -696,9 +696,11 @@ async function runBash(
 		}
 		stop.disarmDeadline();
 		const { result } = outcome;
-		if (result.timedOut || result.cancelled) {
+		if (stop.shellAbort || result.timedOut || result.cancelled) {
 			resetSession = true;
 			if (lease.persistent) quarantineShellSession(sessionKey, runPromise, stop.shellAbort);
+		}
+		if (result.timedOut || result.cancelled) {
 			if (result.outputIncomplete) {
 				replaceIncompleteCapture(
 					sink,
