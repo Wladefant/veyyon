@@ -169,8 +169,7 @@ export async function serveTerminalControl(
 	};
 	const capabilities = (): readonly string[] => {
 		const available = TERMINAL_CAPABILITIES.filter(
-			capability =>
-				capability !== "idle-exit" || Boolean(target.isIdle && target.reserveExit && target.shutdown),
+			capability => capability !== "idle-exit" || Boolean(target.isIdle && target.reserveExit && target.shutdown),
 		);
 		return secretIntakeContext() ? [...available, "secret-intake"] : available;
 	};

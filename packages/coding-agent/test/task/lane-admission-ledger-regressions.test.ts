@@ -741,7 +741,9 @@ process.stdout.write(JSON.stringify({
 
 		// Wait until all 10 processes have started and reached the barrier
 		await waitForDirectoryCondition(barrierDir, () =>
-			Array.from({ length: workerCount }, (_, i) => fs.existsSync(path.join(barrierDir, `ready-${i}`))).every(Boolean),
+			Array.from({ length: workerCount }, (_, i) => fs.existsSync(path.join(barrierDir, `ready-${i}`))).every(
+				Boolean,
+			),
 		);
 
 		// Release all 10 simultaneously through the stdin barrier
@@ -752,7 +754,9 @@ process.stdout.write(JSON.stringify({
 
 		// WHY: wait until all contenders attempt admission before releasing winners so late arrivals cannot fill freed slots.
 		await waitForDirectoryCondition(barrierDir, () =>
-			Array.from({ length: workerCount }, (_, i) => fs.existsSync(path.join(barrierDir, `attempted-${i}`))).every(Boolean),
+			Array.from({ length: workerCount }, (_, i) => fs.existsSync(path.join(barrierDir, `attempted-${i}`))).every(
+				Boolean,
+			),
 		);
 
 		const liveStatus = await getLaneAdmissionStatus();

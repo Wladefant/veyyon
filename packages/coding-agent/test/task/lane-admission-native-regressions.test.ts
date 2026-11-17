@@ -26,8 +26,8 @@ import {
 	acquireLaneAdmission,
 	acquireNativeHostLaneWait,
 	acquireSubagentHostLane,
-	getLaneAdmissionStatus,
 	getLaneAdmissionLedgerPath,
+	getLaneAdmissionStatus,
 	LaneAdmissionError,
 	releaseLaneAdmission,
 } from "@veyyon/coding-agent/task/lane-admission";
@@ -305,25 +305,41 @@ describe("native host-lane admission regressions", () => {
 		for (const followUp of [false, true]) {
 			const ledgerPath = getLaneAdmissionLedgerPath();
 			let original = "";
-			const session = createMockSession(async ({ emit }) => {
-				original = fs.readFileSync(ledgerPath, "utf8");
-				fs.writeFileSync(ledgerPath, "{");
-				emit(yieldSuccessEvent({ ok: true }));
-			}, { activeToolNames: ["yield"] });
+			const session = createMockSession(
+				async ({ emit }) => {
+					original = fs.readFileSync(ledgerPath, "utf8");
+					fs.writeFileSync(ledgerPath, "{");
+					emit(yieldSuccessEvent({ ok: true }));
+				},
+				{ activeToolNames: ["yield"] },
+			);
 			vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 			vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockResolvedValue(session);
 			try {
 				const result = followUp
 					? runSubagentFollowUpTurn({
-						id: "PersistentFollowUp", agent: testAgent, message: "continue",
-						eventBus: new EventBus(), artifactsDir: makeArtifactsDir(),
-					})
+							id: "PersistentFollowUp",
+							agent: testAgent,
+							message: "continue",
+							eventBus: new EventBus(),
+							artifactsDir: makeArtifactsDir(),
+						})
 					: runSubprocess({
-						cwd: "/repo", agent: testAgent, task: "finish", index: 0, id: "PersistentInitial",
-						settings: Settings.isolated(),
-						modelRegistry: { refresh: async () => {}, getAvailable: () => [], getApiKey: async () => "k" } as never,
-						enableLsp: false, eventBus: new EventBus(), artifactsDir: makeArtifactsDir(),
-					});
+							cwd: "/repo",
+							agent: testAgent,
+							task: "finish",
+							index: 0,
+							id: "PersistentInitial",
+							settings: Settings.isolated(),
+							modelRegistry: {
+								refresh: async () => {},
+								getAvailable: () => [],
+								getApiKey: async () => "k",
+							} as never,
+							enableLsp: false,
+							eventBus: new EventBus(),
+							artifactsDir: makeArtifactsDir(),
+						});
 				await expect(result).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
 			} finally {
 				if (original) fs.writeFileSync(ledgerPath, original);
@@ -377,7 +393,14 @@ describe("native host-lane admission regressions", () => {
 			cap: 1,
 			signal: nestedController.signal,
 			waitIfFull: false,
-		}).then(value => { outcome = value; }, error => { outcome = error; });
+		}).then(
+			value => {
+				outcome = value;
+			},
+			error => {
+				outcome = error;
+			},
+		);
 		try {
 			// Pending-flight rejection must not wait for ledger IO or the parent's lease.
 			await Promise.resolve();

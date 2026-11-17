@@ -1154,9 +1154,7 @@ export class AgentSession {
 					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
 				}
 				wakeAdmitted = true;
-				await (records.length > 0 && retainedIndex < 0
-					? this.agent.prompt(records)
-					: this.agent.continue());
+				await (records.length > 0 && retainedIndex < 0 ? this.agent.prompt(records) : this.agent.continue());
 			})
 			.then(
 				() => (wakeAdmitted ? publish() : undefined),

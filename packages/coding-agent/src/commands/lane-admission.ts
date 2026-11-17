@@ -102,12 +102,7 @@ export default class LaneAdmissionCommand extends Command {
 				}
 				case "adopt": {
 					if (!flags["slot-id"] || !flags["lease-token"] || flags.pid === undefined) {
-						this.fail(
-							action,
-							"missing_arguments",
-							"adopt requires --slot-id, --lease-token, and --pid",
-							asJson,
-						);
+						this.fail(action, "missing_arguments", "adopt requires --slot-id, --lease-token, and --pid", asJson);
 						return;
 					}
 					const result = await adoptLaneAdmission({
@@ -121,12 +116,7 @@ export default class LaneAdmissionCommand extends Command {
 				}
 				case "heartbeat": {
 					if (!flags["slot-id"] || !flags["lease-token"]) {
-						this.fail(
-							action,
-							"missing_arguments",
-							"heartbeat requires --slot-id and --lease-token",
-							asJson,
-						);
+						this.fail(action, "missing_arguments", "heartbeat requires --slot-id and --lease-token", asJson);
 						return;
 					}
 					const result = await heartbeatLaneAdmission({
@@ -139,12 +129,7 @@ export default class LaneAdmissionCommand extends Command {
 				}
 				case "release": {
 					if (!flags["slot-id"] || !flags["lease-token"]) {
-						this.fail(
-							action,
-							"missing_arguments",
-							"release requires --slot-id and --lease-token",
-							asJson,
-						);
+						this.fail(action, "missing_arguments", "release requires --slot-id and --lease-token", asJson);
 						return;
 					}
 					const result = await releaseLaneAdmission({

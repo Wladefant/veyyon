@@ -194,10 +194,7 @@ export class LaneAdmissionError extends Error {
 		this.name = "LaneAdmissionError";
 	}
 }
-export async function setLaneAdmissionCap(options: {
-	cap: number;
-	globalConfigRoot?: string;
-}): Promise<void> {
+export async function setLaneAdmissionCap(options: { cap: number; globalConfigRoot?: string }): Promise<void> {
 	const requestedCap = resolveCap(options.cap);
 	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
@@ -1086,7 +1083,6 @@ function createBorrowedLeaseHandle(key: string, entry: ActiveNativeLeaseEntry): 
 }
 
 function joinPendingAcquire(
-	key: string,
 	entry: PendingNativeAcquireEntry,
 	signal: AbortSignal | undefined,
 	waitIfFull: boolean,
@@ -1132,8 +1128,6 @@ function joinPendingAcquire(
 
 	return promise;
 }
-
-
 /**
  * Acquire a native host-wide lane slot, waiting while the host cap is full until
  * admitted or `signal` aborts. When `waitIfFull` is false, rejects full capacity
@@ -1295,7 +1289,7 @@ export async function acquireSubagentHostLane(options: {
 				if (options.signal?.aborted) return null;
 				continue;
 			}
-			const outcome = await joinPendingAcquire(key, pending, options.signal, callerWaitIfFull);
+			const outcome = await joinPendingAcquire(pending, options.signal, callerWaitIfFull);
 			if (outcome.kind === "retry") continue;
 			return outcome.lease;
 		}
@@ -1313,7 +1307,7 @@ export async function acquireSubagentHostLane(options: {
 			promise: Promise.resolve(),
 		};
 		pendingNativeAgentAcquires.set(key, entry);
-		const callerPromise = joinPendingAcquire(key, entry, options.signal, callerWaitIfFull);
+		const callerPromise = joinPendingAcquire(entry, options.signal, callerWaitIfFull);
 
 		entry.promise = acquireNativeHostLaneWait({
 			owner: options.owner,

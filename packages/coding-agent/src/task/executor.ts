@@ -83,8 +83,8 @@ import {
 	resolveAgentPruneBudget,
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
-import { reportProviderError } from "./provider-error-reporter";
 import { acquireSubagentHostLane, type NativeHostLaneLease } from "./lane-admission";
+import { reportProviderError } from "./provider-error-reporter";
 import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
 import { YIELD_TOOL_NAME } from "./subprocess-tool-registry";
@@ -1651,7 +1651,9 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	try {
 		hostLaneLease = await acquireSubagentHostLane({
 			agentId: id,
-			owner: path.resolve(AgentRegistry.global().get(id)?.sessionFile ?? path.join(getSessionsDir(), sessionFileName(id))),
+			owner: path.resolve(
+				AgentRegistry.global().get(id)?.sessionFile ?? path.join(getSessionsDir(), sessionFileName(id)),
+			),
 			signal,
 		});
 	} catch (error) {

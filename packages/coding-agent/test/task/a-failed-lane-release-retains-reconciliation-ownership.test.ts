@@ -28,7 +28,11 @@ describe("persistent lane release recovery", () => {
 	});
 
 	it("escalates persistent corrupt-ledger release without borrowing an ended worker's fence", async () => {
-		const lease = await acquireSubagentHostLane({ agentId: "persistent-release", owner: "persistent-release", cap: 1 });
+		const lease = await acquireSubagentHostLane({
+			agentId: "persistent-release",
+			owner: "persistent-release",
+			cap: 1,
+		});
 		const ledgerPath = getLaneAdmissionLedgerPath();
 		const original = fs.readFileSync(ledgerPath, "utf8");
 		const log = vi.spyOn(logger, "error");
@@ -39,7 +43,10 @@ describe("persistent lane release recovery", () => {
 		let outcome: unknown;
 		try {
 			outcome = await Promise.race([
-				release.then(() => "released", error => error),
+				release.then(
+					() => "released",
+					error => error,
+				),
 				delay(1_000, "unbounded", { signal: deadline.signal }),
 			]);
 		} finally {
@@ -48,14 +55,23 @@ describe("persistent lane release recovery", () => {
 			await release.catch(() => {});
 		}
 		expect(outcome).toMatchObject({ code: "lane_release_reconciliation_required" });
-		expect(log.mock.calls).toEqual([["Host lane release requires reconciliation", {
-			operation: "lane-release",
-			stage: "durable-release",
-			errorCode: "lane_release_reconciliation_required",
-		}]]);
+		expect(log.mock.calls).toEqual([
+			[
+				"Host lane release requires reconciliation",
+				{
+					operation: "lane-release",
+					stage: "durable-release",
+					errorCode: "lane_release_reconciliation_required",
+				},
+			],
+		]);
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
 		expect((await acquireLaneAdmission({ owner: "must-stay-full", kind: "native" })).admitted).toBe(false);
-		const recovered = await acquireSubagentHostLane({ agentId: "persistent-release", owner: "persistent-release", cap: 1 });
+		const recovered = await acquireSubagentHostLane({
+			agentId: "persistent-release",
+			owner: "persistent-release",
+			cap: 1,
+		});
 		expect(recovered!.slotId).not.toBe(lease!.slotId);
 		await lease!.release();
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
@@ -76,12 +92,19 @@ describe("persistent lane release recovery", () => {
 			controller.abort();
 			return admitted;
 		});
-		const acquire = acquireNativeHostLaneWait({ owner: "persistent-compensation", cap: 1, signal: controller.signal });
+		const acquire = acquireNativeHostLaneWait({
+			owner: "persistent-compensation",
+			cap: 1,
+			signal: controller.signal,
+		});
 		const deadline = new AbortController();
 		let outcome: unknown;
 		try {
 			outcome = await Promise.race([
-				acquire.then(() => "cancelled", error => error),
+				acquire.then(
+					() => "cancelled",
+					error => error,
+				),
 				delay(1_000, "unbounded", { signal: deadline.signal }),
 			]);
 		} finally {
@@ -91,7 +114,11 @@ describe("persistent lane release recovery", () => {
 		}
 		expect(outcome).toMatchObject({ code: "lane_release_reconciliation_required" });
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
-		const recovered = await acquireNativeHostLaneWait({ owner: "persistent-compensation", cap: 1, waitIfFull: false });
+		const recovered = await acquireNativeHostLaneWait({
+			owner: "persistent-compensation",
+			cap: 1,
+			waitIfFull: false,
+		});
 		expect(recovered).not.toBeNull();
 		await recovered!.release();
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
