@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.10.11] - 2026-11-17
+
 ### Fixed
 
 - Keep Antigravity's fixed Hydrogen Extra High wire variant free of conflicting thinking overrides, without changing the selected model or medium/default routing.
