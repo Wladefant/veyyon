@@ -61,9 +61,8 @@ describe("process stop approval", () => {
 		it(`denies image-wide commands in ${mode}, even with an explicit allow`, () => {
 			for (const image of ["bun.exe", "python.exe"]) {
 				const args = { command: `taskkill /F /IM ${image} /T` };
-				expect(
-					resolveApproval(bash, args, mode, { bash: "allow" }, { bypassAllApprovals: true }),
-				).toMatchObject({
+				const result = resolveApproval(bash, args, mode, { bash: "allow" }, { bypassAllApprovals: true });
+				expect(result).toMatchObject({
 					policy: "deny",
 					reason: expect.stringContaining("verified process ID"),
 				});
