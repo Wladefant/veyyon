@@ -5,6 +5,17 @@
 ### Fixed
 
 - Block common Bash tool commands that stop host processes by name or pattern while preserving verified PID cleanup ([#751](https://github.com/Wladefant/veyyon/issues/751)).
+## [1.11.0] - 2026-11-17
+
+### Added
+
+- Native `BashTool` commands attest the live main or subagent caller through `VEYYON_CALLER_URL` and `VEYYON_CALLER_TOKEN` over a lazy loopback HTTP endpoint, rejecting user `env` overrides and clearing inherited receipt variables when no live actor owns the session.
+
+### Fixed
+
+- Python eval cancellation targets the request without killing the shared kernel, and only its live primary owner can reset it.
+- Shared eval kernels retain implicit owners when explicit co-owners join or leave during startup and active use.
+- Python eval cancellation releases queued worker custody and completed cancellation records while suppressing output from workers still running.
 
 ## [1.10.12] - 2026-11-17
 

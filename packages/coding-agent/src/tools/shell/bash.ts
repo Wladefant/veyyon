@@ -50,6 +50,7 @@ import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
 import { bashApprovalPattern } from "./bash-approval-pattern";
+import { RESERVED_CALLER_ENV_KEYS, resolveBashCallerEnv } from "./bash-caller-attestation";
 import { registerForegroundBashWait } from "./bash-foreground-registry";
 import {
 	bashCredentialTargets,
@@ -439,6 +440,9 @@ function normalizeBashEnv(env: Record<string, string> | undefined): Record<strin
 		if (!BASH_ENV_NAME_PATTERN.test(key)) {
 			throw new ToolError(`Invalid bash env name: ${key}`);
 		}
+		if (Object.hasOwn(RESERVED_CALLER_ENV_KEYS, key.toUpperCase())) {
+			throw new ToolError(`Bash env override refused: ${key} is reserved for host caller attestation.`);
+		}
 		normalized[key] = value;
 	}
 	return normalized;
@@ -743,7 +747,9 @@ export class BashTool
 		// minimizer miss) may emit more than the inline budget, scaled by how long
 		// this result will sit in context. The body is capped before the notices and
 		// the exit code are appended, so they are never elided, and a body the sink
-		// already held to the budget is not cut again for the bytes a notice adds.
+		// already held to the budget is not cut again for the bytes a notice adds. A
+		// sink that spilled saved the full stream already, so a cut here points at that
+		// artifact rather than saving the sink's window as a second one.
 		const cappedBody = await enforceInlineByteCap(body, {
 			...inlineOutputPricing(this.session),
 			saveArtifact:
@@ -1133,10 +1139,14 @@ export class BashTool
 			if (timeoutClampNotice) notices.push(timeoutClampNotice);
 		}
 		if (skillScopeUnresolved) notices.push(SKILL_SCOPE_UNRESOLVED_NOTICE);
+		const resolvedEnv = {
+			...expanded.env,
+			...resolveBashCallerEnv(this.session),
+		};
 		return {
 			command: expanded.command,
 			commandCwd,
-			resolvedEnv: expanded.env,
+			resolvedEnv,
 			requestedTimeoutSec,
 			timeoutSec,
 			timeoutMs: timeoutSec === undefined ? undefined : timeoutSec * 1000,
