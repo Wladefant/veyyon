@@ -566,7 +566,7 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 
 	try {
 		return await withLedgerLock(ledgerPath, async () => {
-			const ledger = await readLedgerUnderLock(ledgerPath, requestedCap ?? DEFAULT_HOST_LANE_CAP);
+			const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
 			const effectiveCap = resolveDurableCap(ledger.cap, requestedCap);
 			observedCap = effectiveCap;
 			const { retained, reclaimedCount } = reclaimProvenDeadReservations(ledger.reservations, liveness);

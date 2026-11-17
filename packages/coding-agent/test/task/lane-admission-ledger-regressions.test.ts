@@ -345,17 +345,17 @@ describe("lane-admission ledger safety regressions", () => {
 		expect(goodAdopt.adopted).toBe(true);
 	});
 
-	it("keeps admission ceilings separate from explicit persisted policy updates", async () => {
-		const first = await acquireLaneAdmission({ owner: "policy-first", kind: "native", cap: 100 });
+	it("keeps first-acquisition ceilings separate from the default and explicit persisted policy", async () => {
+		const first = await acquireLaneAdmission({ owner: "policy-first", kind: "native", cap: 1 });
 		expect(first.admitted).toBe(true);
-		for (const owner of ["policy-other", "policy-first"]) {
-			const refused = await acquireLaneAdmission({ owner, kind: "native", cap: 1 });
-			expect(refused.admitted).toBe(false);
-			expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(100);
-		}
-		const second = await acquireLaneAdmission({ owner: "policy-second", kind: "native", cap: 2 });
-		expect(second.admitted).toBe(true);
+		expect(first.cap).toBe(1);
 		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(100);
+
+		const second = await acquireLaneAdmission({ owner: "policy-second", kind: "native", cap: 100 });
+		expect(second.admitted).toBe(true);
+		expect(second.cap).toBe(100);
+		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(100);
+
 		await setLaneAdmissionCap({ cap: 40 });
 		const before = readLedgerSnapshot(getLaneAdmissionLedgerPath());
 		await setLaneAdmissionCap({ cap: 100 });
@@ -392,6 +392,7 @@ describe("lane-admission ledger safety regressions", () => {
 			liveness,
 		});
 		expect(acquired.admitted).toBe(true);
+		await setLaneAdmissionCap({ cap: 4 });
 
 		await releaseLaneAdmission({ slotId: "missing", leaseToken: "invalid", cap: 1 });
 		expect(readLedgerSnapshot(getLaneAdmissionLedgerPath()).cap).toBe(4);
@@ -416,7 +417,7 @@ describe("lane-admission ledger safety regressions", () => {
 				expectedIdentity === null ? true : fakeLive.get(`${pid}:${expectedIdentity}`) === true,
 		};
 
-		// First acquire sets durable cap=1
+		// An explicit policy update, not the per-acquisition ceiling, persists cap=1.
 		const first = await acquireLaneAdmission({
 			owner: "cap-one-first",
 			kind: "native",
@@ -426,6 +427,7 @@ describe("lane-admission ledger safety regressions", () => {
 		});
 		expect(first.admitted).toBe(true);
 		expect(first.cap).toBe(1);
+		await setLaneAdmissionCap({ cap: 1 });
 
 		// Later acquire omitting cap MUST respect persisted cap=1 (never silently reset to 100)
 		const omittedCap = await acquireLaneAdmission({
@@ -493,6 +495,7 @@ describe("lane-admission ledger safety regressions", () => {
 		});
 		expect(start5.admitted).toBe(true);
 		expect(start5.cap).toBe(5);
+		await setLaneAdmissionCap({ cap: 5, globalConfigRoot: freshRoot });
 
 		const reduceTo2 = await acquireLaneAdmission({
 			owner: "cap-reduce-2",
@@ -650,6 +653,7 @@ describe("lane-admission ledger safety regressions", () => {
 		const barrierDir = makeTempDir("@veyyon-lane-race-barrier-");
 		const workerCount = 10;
 		const cap = 3;
+		await setLaneAdmissionCap({ cap });
 
 		const raceWorkerScript = `
 // Exception to the static-import rule: spawned child script loads target module from env URL.
