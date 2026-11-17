@@ -293,25 +293,6 @@ describe("native retained child resume", () => {
 		await aggregator.instance.replayIrcContinuations();
 		await aggregator.instance.waitForIdle();
 		await root.instance.waitForIdle();
-		console.log("PHASE_BOUNDARY_DIAGNOSTIC", JSON.stringify({
-			calls: aggregator.mock.calls.map(call => call.context.messages.map(message => ({
-				role: message.role,
-				tool: message.role === "toolResult" ? message.toolName : undefined,
-				sawWorkerResult: JSON.stringify(message.content).includes("worker-B"),
-			}))),
-			entries: aggregator.store.getEntries().flatMap(entry => {
-				if (entry.type === "message") return [{
-					kind: entry.message.role,
-					stop: entry.message.role === "assistant" ? entry.message.stopReason : undefined,
-					tool: entry.message.role === "toolResult" ? entry.message.toolName : undefined,
-				}];
-				if (entry.type === "custom_message") return [{
-					kind: entry.customType, streamed: Reflect.get(entry.details ?? {}, "streamingCompletion") === true,
-				}];
-				if (entry.type === "custom" && entry.customType.startsWith("irc:")) return [{ kind: entry.customType }];
-				return [];
-			}),
-		}));
 		const completions = root.store.getEntries().filter(
 			entry => entry.type === "custom_message" && entry.customType === "task:continuation",
 		);

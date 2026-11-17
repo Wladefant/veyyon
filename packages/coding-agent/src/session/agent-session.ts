@@ -1261,12 +1261,9 @@ export class AgentSession {
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
 			planModeEnabled: () => this.#planMode.enabled,
-			asyncEnabled: () => this.settings.get("async.enabled"),
-			emitIrcMessage: record => void this.#events.send({ type: "irc_message", message: record }),
 			appendToContext: record => this.#custom.append(record),
 			canAutoContinueForFollowUp: () => this.#queue.canAutoContinueForFollowUp(),
 			wake: records => this.#wakeForIrc(records),
-			runEphemeralTurn: args => this.runEphemeralTurn(args),
 		});
 		this.#stopHook = new SessionStopHook({
 			isHalted: () =>
@@ -5243,8 +5240,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Deliver an IRC message into this session (recipient side; called by the IrcBus); see
-	 * {@link IrcDelivery.deliver}.
+	 * Deliver an IRC message through the session's verified frame, durable inbox, and phase owner.
 	 */
 	async deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
 		if (this.#isDisposed) {
