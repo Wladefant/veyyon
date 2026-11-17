@@ -71,7 +71,6 @@ interface JsSession {
 	 */
 	ownerIds: Set<string>;
 	/** True while the only owner is the fallback `sessionKey` (no real owner attached yet). */
-	hasFallbackOwner: boolean;
 }
 
 const sessions = new Map<string, JsSession>();
@@ -320,7 +319,6 @@ export async function smokeTestJsEvalWorker(): Promise<void> {
 		state: "alive",
 		pending: new Map(),
 		ownerIds: new Set(),
-		hasFallbackOwner: false,
 	};
 	try {
 		await initWorker(session, { cwd: process.cwd(), sessionId: "smoke" }, WORKER_INIT_TIMEOUT_MS);
@@ -434,7 +432,6 @@ async function acquireSession(sessionKey: string, snapshot: SessionSnapshot, tim
 			state: "alive",
 			pending: new Map(),
 			ownerIds: new Set(),
-			hasFallbackOwner: false,
 		};
 		// Init headroom is the fixed infrastructure floor; the caller's per-cell timeout
 		// dominates when larger so users can grant more by raising `timeout` on a cell.
