@@ -775,17 +775,18 @@ exit 64
 			return;
 		}
 		let sawChunk = false;
-		const result = await executeBash("awk 'BEGIN { for (i = 0; i < 100000; i++) printf \"a\" }'", {
+		const result = await executeBash("printf '%0100000d' 7", {
 			cwd: tempDir,
 			timeout: 5000,
 			onChunk: () => {
 				sawChunk = true;
 			},
 		});
+		expect(result.exitCode).toBe(0);
 		expect(sawChunk).toBe(true);
 		expect(result.totalBytes).toBe(100000);
 		expect(result.outputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-		expect(result.output).toContain("a");
+		expect(result.output).toContain("7");
 	});
 
 	it("handles large output without freeze or OOM", async () => {
@@ -950,7 +951,9 @@ exit 64
 			const started = Date.now();
 			const result = await executeBash("sleep 60", { cwd: tempDir, timeout: 1_000, sessionKey: "stall-absolute" });
 			expect(result.timedOut).toBe(true);
-			expect(Date.now() - started).toBeLessThan(1_500);
+			// The native timeout still includes setup. The JS fallback allows the
+			// native post-exit drain to finish before giving up on the result.
+			expect(Date.now() - started).toBeLessThan(5_000);
 			expect(nativeTimeoutMs).toBeDefined();
 			expect(nativeTimeoutMs!).toBeLessThan(600);
 		}, 10_000);

@@ -391,6 +391,8 @@ async function releaseShell(sessionKey: string, lease: ShellLease, reset: boolea
 }
 
 const NATIVE_TIMEOUT_BACKSTOP_GRACE_MS = 200;
+// Cover the addon's 3 s absolute post-exit drain plus time to deliver its result to JS.
+const NATIVE_DRAIN_RECONCILE_MS = 3_250;
 
 /**
  * The two ways a run ends before its result: the caller's signal and the executor deadline. Either aborts
@@ -442,13 +444,9 @@ class RunStop {
 		return this.#shellAbort;
 	}
 
-	disarmDeadline(): void {
-		clearTimeout(this.#timer);
-		this.#timer = undefined;
-	}
-
 	dispose(): void {
 		clearTimeout(this.#timer);
+		this.#timer = undefined;
 		this.#userSignal?.removeEventListener("abort", this.#onUserAbort);
 	}
 
@@ -512,7 +510,7 @@ const INCOMPLETE_CAPTURE_NOTICE = "Shell output capture is incomplete";
 function replaceIncompleteCapture(
 	sink: OutputSink,
 	capturedOutput: string | undefined,
-	captureIsDrainPrefix: boolean,
+	captureIsDrainPrefix: boolean | undefined,
 	acceptedOutput: boolean,
 ): void {
 	if (capturedOutput !== undefined && !(captureIsDrainPrefix && acceptedOutput)) sink.replace(capturedOutput);
@@ -674,14 +672,17 @@ async function runBash(
 			runPromise.then(result => ({ result })),
 			stop.stopped.then(stopped => ({ stopped })),
 		]);
-		acceptingChunks = false;
 		if ("stopped" in outcome) {
 			const reconciled = await settleWithin(
 				runPromise.then(result => ({ result })),
-				NATIVE_TIMEOUT_BACKSTOP_GRACE_MS,
+				stop.nativeTimeoutMs !== undefined && stop.shellAbort === undefined
+					? NATIVE_DRAIN_RECONCILE_MS
+					: NATIVE_TIMEOUT_BACKSTOP_GRACE_MS,
 				undefined,
 			);
 			if (!reconciled) {
+				acceptingChunks = false;
+				stop.dispose();
 				resetSession = lease.persistent !== undefined;
 				abandonStoppedRun(sessionKey, lease, runPromise, stop);
 				const timedOut = outcome.stopped.startsWith("Command timed out");
@@ -694,7 +695,9 @@ async function runBash(
 			}
 			outcome = reconciled;
 		}
-		stop.disarmDeadline();
+		// Native delivery has settled. Do not abort this shell during artifact writes.
+		acceptingChunks = false;
+		stop.dispose();
 		const { result } = outcome;
 		if (stop.shellAbort || result.timedOut || result.cancelled) {
 			resetSession = true;
@@ -702,12 +705,7 @@ async function runBash(
 		}
 		if (result.timedOut || result.cancelled) {
 			if (result.outputIncomplete) {
-				replaceIncompleteCapture(
-					sink,
-					result.capturedOutput,
-					result.captureIsDrainPrefix,
-					acceptedOutput,
-				);
+				replaceIncompleteCapture(sink, result.capturedOutput, result.captureIsDrainPrefix, acceptedOutput);
 			}
 			await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave, options?.redactOutput);
 			return await cancelledResult(
@@ -718,12 +716,7 @@ async function runBash(
 			);
 		}
 		if (result.outputIncomplete) {
-			replaceIncompleteCapture(
-				sink,
-				result.capturedOutput,
-				result.captureIsDrainPrefix,
-				acceptedOutput,
-			);
+			replaceIncompleteCapture(sink, result.capturedOutput, result.captureIsDrainPrefix, acceptedOutput);
 			await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave, options?.redactOutput);
 			return {
 				exitCode: result.exitCode,
