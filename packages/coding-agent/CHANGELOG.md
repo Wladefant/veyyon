@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Finish working-directory changes even when background agent results continue to arrive. Append new session entries without republishing the transcript for each one.
 ## [1.11.0] - 2026-11-17
 
 ### Added
