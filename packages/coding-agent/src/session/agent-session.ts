@@ -976,9 +976,11 @@ export class AgentSession {
 				record.customType === "task:continuation" ||
 				(record.customType === "irc:incoming" && Reflect.get(record.details ?? {}, "relation") === "parent"),
 		);
-		records = records.map(record => record.customType === "task:continuation" && record !== parentRecord
-			? { ...record, details: { ...(record.details ?? {}), streamingCompletion: true } }
-			: record);
+		records = records.map(record =>
+			record.customType === "task:continuation" && record !== parentRecord
+				? { ...record, details: { ...(record.details ?? {}), streamingCompletion: true } }
+				: record,
+		);
 		const completionId =
 			parentRecord?.customType === "task:continuation"
 				? Reflect.get(parentRecord.details ?? {}, "completionId")
@@ -1018,11 +1020,7 @@ export class AgentSession {
 			if (!selfId || typeof parentId !== "string" || typeof phaseId !== "string") return;
 			const last = yields.at(-1);
 			let lastAssistantText = recoveredAssistantText;
-			for (
-				let index = this.agent.state.messages.length - 1;
-				index >= phaseStart;
-				index--
-			) {
+			for (let index = this.agent.state.messages.length - 1; index >= phaseStart; index--) {
 				const message = this.agent.state.messages[index];
 				if (message?.role !== "assistant") continue;
 				const text = contentText(message.content, { separator: "" });
@@ -1102,17 +1100,27 @@ export class AgentSession {
 		this.#resetPromptMaintenanceState();
 		this.#inFlight.begin();
 		const retainedIndex = parentRecord
-			? this.agent.state.messages.findIndex(message => message.role === "custom" && sameIrcRecord(message, parentRecord))
+			? this.agent.state.messages.findIndex(
+					message => message.role === "custom" && sameIrcRecord(message, parentRecord),
+				)
 			: -1;
 		const phaseStart = this.agent.state.messages.length;
-		const recovered = retainedIndex >= 0 && parentRecord && typeof phaseId === "string"
-			? outbox.recoveryMessages(phaseId, parentRecord) ?? []
-			: [];
+		const recovered =
+			retainedIndex >= 0 && parentRecord && typeof phaseId === "string"
+				? (outbox.recoveryMessages(phaseId, parentRecord) ?? [])
+				: [];
 		for (const message of recovered) {
-			if (message.role === "custom" && parentRecord && !sameIrcRecord(message, parentRecord) &&
-				((message.customType === "task:continuation" && Reflect.get(message.details ?? {}, "streamingCompletion") !== true) ||
-					(message.customType === "irc:incoming" && Reflect.get(message.details ?? {}, "relation") === "parent" &&
-						Reflect.get(message.details ?? {}, "streamingSteer") !== true))) break;
+			if (
+				message.role === "custom" &&
+				parentRecord &&
+				!sameIrcRecord(message, parentRecord) &&
+				((message.customType === "task:continuation" &&
+					Reflect.get(message.details ?? {}, "streamingCompletion") !== true) ||
+					(message.customType === "irc:incoming" &&
+						Reflect.get(message.details ?? {}, "relation") === "parent" &&
+						Reflect.get(message.details ?? {}, "streamingSteer") !== true))
+			)
+				break;
 			if (message.role === "assistant") {
 				const text = contentText(message.content, { separator: "" });
 				if (text.trim()) recoveredAssistantText = text;
@@ -1125,8 +1133,13 @@ export class AgentSession {
 			terminal ||= isTerminalYieldToolResult({ toolName: "yield", result: { details } });
 			if (terminal) break;
 		}
-		if (!terminal && !recoveredTurnEnded && retainedIndex >= 0 && recovered.length === 0 &&
-			retainedIndex !== this.agent.state.messages.length - 1) {
+		if (
+			!terminal &&
+			!recoveredTurnEnded &&
+			retainedIndex >= 0 &&
+			recovered.length === 0 &&
+			retainedIndex !== this.agent.state.messages.length - 1
+		) {
 			// Older journals stored delivery receipts during another turn. Re-present the same identity
 			// at a valid user boundary without writing a second receipt or borrowing that turn's result.
 			const messages = this.agent.state.messages.slice();
@@ -1134,8 +1147,10 @@ export class AgentSession {
 			messages.push(record!);
 			this.agent.replaceMessages(messages);
 		}
-		const inputs = records.filter(record =>
-			!this.agent.state.messages.some(message => message.role === "custom" && sameIrcRecord(message, record)));
+		const inputs = records.filter(
+			record =>
+				!this.agent.state.messages.some(message => message.role === "custom" && sameIrcRecord(message, record)),
+		);
 		const ready =
 			this.#ircActivePhase === phaseId && typeof phaseId === "string"
 				? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
@@ -4708,7 +4723,10 @@ export class AgentSession {
 					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
 					await this.sessionManager.flush();
 				} catch (restoreError) {
-					throw new AggregateError([error, restoreError], "Fork failed and could not durably restore its original session");
+					throw new AggregateError(
+						[error, restoreError],
+						"Fork failed and could not durably restore its original session",
+					);
 				}
 			}
 			throw error;
@@ -5441,8 +5459,8 @@ export class AgentSession {
 					return parent && parent.status !== "aborted" && (parent.session || parent.sessionFile);
 				});
 				if (!parentId) return false;
-				parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			}
+			parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			if (!context.ancestorIds.includes(parentId)) return false;
 			const parent = registry.get(parentId);
 			if (!parent || parent.status === "aborted") return false;
@@ -5469,8 +5487,12 @@ export class AgentSession {
 			return false;
 		const consumedInContext = new Set<string>();
 		for (const message of this.agent.state.messages) {
-			if (message.role !== "custom" || message.customType !== "task:continuation" ||
-				Reflect.get(message.details ?? {}, "streamingCompletion") !== true) continue;
+			if (
+				message.role !== "custom" ||
+				message.customType !== "task:continuation" ||
+				Reflect.get(message.details ?? {}, "streamingCompletion") !== true
+			)
+				continue;
 			const id = Reflect.get(message.details ?? {}, "completionId");
 			if (typeof id === "string") consumedInContext.add(id);
 		}
@@ -5641,9 +5663,13 @@ export class AgentSession {
 	 * the turn. A crash before this point leaves the claim in `claimed/`, and it is offered again.
 	 */
 	#takeIrcRecords(): CustomMessage[] {
-		const records = this.#irc.inbox.takeAll().map(record => record.customType === "task:continuation"
-			? { ...record, details: { ...(record.details ?? {}), streamingCompletion: true } }
-			: record);
+		const records = this.#irc.inbox
+			.takeAll()
+			.map(record =>
+				record.customType === "task:continuation"
+					? { ...record, details: { ...(record.details ?? {}), streamingCompletion: true } }
+					: record,
+			);
 		const noticeIds: string[] = [];
 		for (const record of records) {
 			const id = record.customType === "session:notice" ? Reflect.get(record.details ?? {}, "id") : undefined;
