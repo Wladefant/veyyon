@@ -15,6 +15,7 @@ import { mapWithConcurrencyLimit, Semaphore, type SpawnPriority } from "./parall
 import { appendAdvisory } from "./spawn-advisory";
 import { agentOutputManagerFor, allocateAgentId, pendingSpawnProgress, runSpawn, type SpawnRequest } from "./spawn-run";
 import { treeSpawnSemaphore } from "./spawn-semaphore";
+import { recordNativeDispatch } from "./topic-replenishment";
 import type { AgentDefinition, AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
 
 /** One `task` call as the scheduler runs it. */
@@ -103,6 +104,10 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if (item.successorOf !== undefined) spawn.successorOf = item.successorOf;
 	if (item.priority !== undefined) spawn.priority = item.priority;
 	if (item.ownershipLease !== undefined) spawn.ownershipLease = item.ownershipLease;
+	if (params.ticketId !== undefined) spawn.ticketId = params.ticketId;
+	if (params.runId !== undefined) spawn.runId = params.runId;
+	if (params.ledgerPath !== undefined) spawn.ledgerPath = params.ledgerPath;
+	if (params.nativeDispatchBound !== undefined) spawn.nativeDispatchBound = params.nativeDispatchBound;
 	if (params.context !== undefined) spawn.context = params.context;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
@@ -258,7 +263,10 @@ function settleInlineProgress(
 }
 
 /** What the parent reads once a background agent stops: how to reach it and where its transcript is. */
-function followUpHint(agentId: string, aborted: boolean, ircEnabled: boolean): string {
+function followUpHint(agentId: string, aborted: boolean, ircEnabled: boolean, isolated = false): string {
+	if (isolated) {
+		return `\n\n${agentId} ran isolated and cannot be resumed or messaged — transcript at history://${agentId}`;
+	}
 	if (aborted) {
 		const status = AgentRegistry.global().get(agentId)?.status;
 		if (status === "idle" || status === "parked") {
@@ -475,7 +483,7 @@ export class SpawnScheduler {
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const callStartedAt = Date.now();
 		const batch = new BackgroundBatch(await this.#claimIds(spawns), callStartedAt);
-		const start = this.#startJobs(call, batch, options);
+		const start = await this.#startJobs(call, batch, options);
 		const inline = batch.spawns.filter(spawn => spawn.blocking);
 		if (start.started.length === 0 && inline.length === 0) return nothingStarted(start.failures);
 		const result =
@@ -569,11 +577,23 @@ export class SpawnScheduler {
 		return scheduled;
 	}
 
-	#startJobs(call: SpawnCall, batch: BackgroundBatch, options: BackgroundOptions): JobStart {
+	async #startJobs(call: SpawnCall, batch: BackgroundBatch, options: BackgroundOptions): Promise<JobStart> {
 		const started: StartedJob[] = [];
 		const failures: string[] = [];
 		for (const spawn of batch.jobs) {
 			try {
+				if (call.params.ticketId && !call.params.nativeDispatchBound) {
+					if (!call.params.runId?.trim() || !call.params.ledgerPath?.trim()) {
+						throw new Error("Native dispatch requires a run ID and ledger path");
+					}
+					await recordNativeDispatch(
+						call.params.runId,
+						`agent://${spawn.agentId}`,
+						call.params.ledgerPath,
+						call.params.ticketId,
+					);
+					call.params.nativeDispatchBound = true;
+				}
 				const jobId = this.#registerJob(call, spawn, batch, options);
 				if (started.length === 0) batch.primaryJobId = jobId;
 				started.push({ agentId: spawn.agentId, jobId });
@@ -646,7 +666,7 @@ export class SpawnScheduler {
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 					delivery = {
-						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled)}`,
+						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled, params.isolated)}`,
 						failed,
 					};
 				} catch (error) {

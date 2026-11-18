@@ -494,6 +494,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError("Agents are disabled in settings.");
 		}
 		const spawnItems = resolveSpawnItems(params);
+		if (params.ticketId && spawnItems.length !== 1) {
+			return createTaskModeError("A native ledger claim must dispatch exactly one worker.");
+		}
 		const spawns = resolveCallSpawns(this.session, spawnItems, discoveredAgents, catalog);
 		if (typeof spawns === "string") {
 			return createTaskModeError(spawns);

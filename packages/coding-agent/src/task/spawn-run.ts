@@ -20,6 +20,7 @@ import { planModePrompts } from "../prompts/plan-mode/rows";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { AgentSpawnRecord } from "../tools";
 import { TOOL } from "../tools/core/builtin-names";
 import {
 	agentModelSourceLabel,
@@ -52,6 +53,7 @@ import {
 	successorWorkflow,
 	writeSuccessorCheckpoint,
 } from "./successor-checkpoint";
+import { recordNativeDispatch } from "./topic-replenishment";
 import type { AgentDefinition, AgentProgress, AgentSource, SingleResult, TaskParams, TaskToolDetails } from "./types";
 import { parseIsolationMode, type TaskIsolationMode } from "./worktree";
 
@@ -515,9 +517,10 @@ function recordSpawn(
 	result: SingleResult,
 	artifactsDir: string,
 	isolation: SpawnIsolation | null,
-): void {
+	params: TaskParams,
+): AgentSpawnRecord {
 	const outcome = classifyAgentOutcome(result);
-	session.recordAgentSpawn?.({
+	const record: AgentSpawnRecord = {
 		agentId: result.id,
 		agentName: result.agent,
 		task: result.task,
@@ -528,7 +531,11 @@ function recordSpawn(
 		durationMs: result.durationMs,
 		usage: result.usage,
 		error: result.error,
-	});
+		ticketId: params.ticketId,
+		runId: params.runId,
+	};
+	session.recordAgentSpawn?.(record);
+	return record;
 }
 
 /** The manager that hands out agent ids unique across the session, so no two agents' artifacts collide. */
@@ -716,37 +723,59 @@ async function runPreparedSpawn(
 			Date.now() - startTime,
 		);
 	}
-	let result: SingleResult;
-	let mergeSummary = "";
-	if (isolation) {
-		const taskStart = Date.now();
-		const run = await runIsolatedSubprocess({
-			baseOptions: options,
-			context: isolation.context,
-			preferredBackend: parseIsolationMode(isolation.mode),
-			agentId,
-			mergeMode: isolation.mergeMode,
-			artifactsDir: spawn.artifacts.dir,
-			buildCommitMessage,
-			buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
-		});
-		({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
-	} else {
-		result = await runSubprocess(options);
-	}
-
-	recordSpawn(session, result, spawn.artifacts.dir, isolation);
-	if (!isolation) {
-		try {
-			await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
-		} catch (error) {
-			result = {
-				...result,
-				error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
-			};
+	// Bind before execution. Detached workers bind before their job is accepted.
+	if (params.ticketId && !params.nativeDispatchBound) {
+		if (!params.runId?.trim() || !params.ledgerPath?.trim()) {
+			throw new Error("Native dispatch requires a run ID and ledger path");
 		}
+		await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
 	}
-	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
+	const lifecycle = {
+		agentId,
+		agentName: spawn.agentName,
+		ticketId: params.ticketId,
+		runId: params.runId,
+	};
+	let completionStarted = false;
+	try {
+		session.onSubagentStart?.(lifecycle);
+		let result: SingleResult;
+		let mergeSummary = "";
+		if (isolation) {
+			const taskStart = Date.now();
+			const run = await runIsolatedSubprocess({
+				baseOptions: options,
+				context: isolation.context,
+				preferredBackend: parseIsolationMode(isolation.mode),
+				agentId,
+				mergeMode: isolation.mergeMode,
+				artifactsDir: spawn.artifacts.dir,
+				buildCommitMessage,
+				buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
+			});
+			({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
+		} else {
+			result = await runSubprocess(options);
+		}
+
+		const record = recordSpawn(session, result, spawn.artifacts.dir, isolation, params);
+		completionStarted = true;
+		await session.onSubagentComplete?.(record);
+		if (!isolation) {
+			try {
+				await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
+			} catch (error) {
+				result = {
+					...result,
+					error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
+				};
+			}
+		}
+		return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
+	} catch (error) {
+		if (!completionStarted) session.onSubagentStartFailed?.(lifecycle);
+		throw error;
+	}
 }
 
 /**

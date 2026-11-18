@@ -343,8 +343,8 @@ describe("task spawn routing", () => {
 		} as TaskParams);
 
 		expect(runSpy.mock.calls[0]?.[0]?.modelOverride).toEqual([
-			"openai-codex/gpt-6-luna",
 			"google/gemini-3.8-flash",
+			"openai-codex/gpt-6-luna",
 			"anthropic/claude-sonnet-4",
 		]);
 	});
