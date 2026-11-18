@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Give every native result wake one durable continuation phase. Keep pending tool results ahead of completion notices and prevent reuse of an earlier phase's terminal result ([Refs #1159](https://github.com/Wladefant/veyyon/issues/1159)).
 - Wait for result and parent-target journal writes before retained IRC delivery. Queue parent sends while asynchronous rewrites hold the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Persistence for journal-lock result targets and busyparent queueing ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Block common Bash tool commands that stop host processes by name or pattern while preserving verified PID cleanup ([#751](https://github.com/Wladefant/veyyon/issues/751)).
