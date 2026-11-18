@@ -666,7 +666,7 @@ export class SpawnScheduler {
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 					delivery = {
-						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled, params.isolated)}`,
+						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled, params.isolated === true && single !== undefined)}`,
 						failed,
 					};
 				} catch (error) {
