@@ -231,7 +231,7 @@ describe("task spawn routing", () => {
 		const completions: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
 		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			events.push("execute");
-			return makeResult(options.id, { agent: "reviewer" });
+			return makeResult(options.id, { agent: "reviewer", output: JSON.stringify({ verdict: "pass", stage: "review" }) });
 		});
 		const tool = await TaskTool.create(
 			makeToolSession({
@@ -273,6 +273,7 @@ describe("task spawn routing", () => {
 		]);
 		expect(completions).toHaveLength(1);
 		expect(completions[0]).toMatchObject(starts[0]!);
+		expect(completions[0]).toMatchObject({ structuredResult: { verdict: "pass", stage: "review" } });
 	});
 
 	/**
