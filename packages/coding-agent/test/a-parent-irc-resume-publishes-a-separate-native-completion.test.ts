@@ -135,9 +135,11 @@ describe("native retained child resume", () => {
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 			expect(completions).toHaveLength(1);
-			expect(completions[0]?.content).toContain("lane release reconciliation required");
-			expect(completions[0]?.content).toContain('"source":"harness"');
-			if (turnFails) expect(completions[0]?.content).toContain("worker prompt also failed");
+			const [completion] = completions;
+			const content = completion?.type === "custom_message" ? completion.content : undefined;
+			expect(content).toContain("lane release reconciliation required");
+			expect(content).toContain('"source":"harness"');
+			if (turnFails) expect(content).toContain("worker prompt also failed");
 			expect(release).toHaveBeenCalledTimes(1);
 		});
 	}

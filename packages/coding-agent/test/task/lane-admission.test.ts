@@ -40,6 +40,7 @@ import {
 	LANE_ADMISSION_VERSION,
 	type LaneLivenessProbe,
 	releaseLaneAdmission,
+	setLaneAdmissionCap,
 } from "@veyyon/coding-agent/task/lane-admission";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
@@ -128,6 +129,7 @@ describe("host-wide shared lane admission", () => {
 	});
 
 	it("enforces atomic acquire, adopt, heartbeat, fenced release, and idempotent double release", async () => {
+		await setLaneAdmissionCap({ cap: 2 });
 		const a1 = await acquireLaneAdmission({ owner: "disp-1", kind: "external", callerPid: process.pid, cap: 2 });
 		expect(a1.admitted).toBe(true);
 		expect(a1.state).toBe("launching");
@@ -765,6 +767,7 @@ describe("host-wide shared lane admission", () => {
 	});
 
 	it("preserves persisted ledger cap in getLaneAdmissionStatus when cap is omitted", async () => {
+		await setLaneAdmissionCap({ cap: 3 });
 		const fakeLive = new Map<string, boolean>([
 			["707", true],
 			["707:test:707:1", true],
