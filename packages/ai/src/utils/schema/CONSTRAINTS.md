@@ -66,10 +66,10 @@ Schemas sent on the Google JSON Schema path MUST follow:
      - `$schema`, `$ref`, `$defs`, `$dynamicRef`, `$dynamicAnchor`
      - `examples`, `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`
      - `patternProperties`, `additionalProperties`
-     - `minItems`, `maxItems`, `uniqueItems`, `contains`, `minContains`, `maxContains`
-     - `minLength`, `maxLength`
+     - `minItems`, `maxItems`, `minLength`, `maxLength`
      - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
      - `pattern`, `format`
+   - `GEMINI_UNSUPPORTED_ARRAY_FIELDS` also strips `uniqueItems`, `contains`, `minContains`, and `maxContains` from `parametersJsonSchema`. The Claude path retains these keywords in `parameters`.
    - Keys of a schema map (`SCHEMA_MAP_KEYWORDS`: `properties`, `patternProperties`, `dependencies`, `dependentSchemas`, `$defs`, `definitions`) are property, pattern or definition names and MUST NOT be stripped or rewritten by keyword match. Every walker, including the CCA nullable pass, the residual check and the compatibility audit, descends into the map's values and leaves its keys alone.
    - Human-meaningful stripped keys (`pattern`, `format`, min/max constraints, `default`, `examples`, etc.) are appended to the sibling `description` as an Anthropic-style spill block: `{pattern: "^foo$", minimum: 0}`. Structural/meta keys such as `$ref`, `$defs`, and `additionalProperties` are not spilled.
    - This rule applies only to the provider's tool declaration. Local argument validation still enforces the original array constraints.
@@ -96,7 +96,7 @@ For Cloud Code Assist Claude tool declarations, schema MUST satisfy stricter con
 
 ### 3.2 Sanitization contract
 
-1. Start with Google unsupported-key stripping behavior.
+1. Strip the shared unsupported keys. Do not apply the Gemini-only array keyword filter.
 2. **`nullable` keyword MUST be stripped** in CCA Claude path.
 3. `type: ["T", "null"]` becomes `type: "T"` with no `nullable` marker.
 4. Human-meaningful stripped keys are appended to `description` with the same spill format used by the Google dispatcher.

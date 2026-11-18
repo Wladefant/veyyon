@@ -459,6 +459,24 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		);
 	});
 
+	it("retains structured array constraints in Claude's separate Code Assist declaration", () => {
+		const array = {
+			type: "array",
+			items: { type: "integer" },
+			uniqueItems: true,
+			contains: { type: "integer" },
+			minContains: 1,
+			maxContains: 2,
+		};
+		const tool: Tool = {
+			name: "inspect_tabs",
+			description: "",
+			parameters: { type: "object", properties: { tabIds: array } },
+		};
+		const declaration = convertTools([tool], createModel("claude-sonnet-4-5"))?.[0]?.functionDeclarations[0];
+		expect(declaration?.parameters).toEqual({ type: "object", properties: { tabIds: array } });
+	});
+
 	it("infers type:string for a bare string-literal enum under properties (Vertex rejects type-less enums)", () => {
 		// Regression: ArkType emits string-literal unions (e.g. the lsp tool's
 		// `action`) as a bare `{ enum: [...] }` with no `type`. Vertex / Cloud
