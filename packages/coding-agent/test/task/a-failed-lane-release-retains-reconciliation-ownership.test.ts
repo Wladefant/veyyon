@@ -13,6 +13,7 @@ import {
 	acquireSubagentHostLane,
 	getLaneAdmissionLedgerPath,
 	getLaneAdmissionStatus,
+	setLaneAdmissionCap,
 } from "@veyyon/coding-agent/task/lane-admission";
 import { logger } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
@@ -28,6 +29,7 @@ describe("persistent lane release recovery", () => {
 	});
 
 	it("escalates persistent corrupt-ledger release without borrowing an ended worker's fence", async () => {
+		await setLaneAdmissionCap({ cap: 1 });
 		const lease = await acquireSubagentHostLane({
 			agentId: "persistent-release",
 			owner: "persistent-release",

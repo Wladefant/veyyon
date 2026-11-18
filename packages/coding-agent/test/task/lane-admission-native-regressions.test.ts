@@ -30,6 +30,7 @@ import {
 	getLaneAdmissionStatus,
 	LaneAdmissionError,
 	releaseLaneAdmission,
+	setLaneAdmissionCap,
 } from "@veyyon/coding-agent/task/lane-admission";
 import type { AgentDefinition, SingleResult } from "@veyyon/coding-agent/task/types";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
@@ -160,7 +161,7 @@ describe("native host-lane admission regressions", () => {
 	});
 
 	it("rejects saturated nested runSubprocess (taskDepth > 0) as startup-failed while top-level waits and cancellation works", async () => {
-		// Persist cap=2 via one held filler slot so 1 slot remains for the parent run
+		await setLaneAdmissionCap({ cap: 2 });
 		const filler = await acquireLaneAdmission({
 			owner: "nested-sat-filler",
 			kind: "native",
