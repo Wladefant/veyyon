@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { convertTools } from "@veyyon/ai/providers/google-shared";
 import type { Model, TJsonSchema, Tool } from "@veyyon/ai/types";
 import { normalizeSchemaForCCA, normalizeSchemaForGoogle } from "@veyyon/ai/utils/schema";
+import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { buildModel } from "@veyyon/catalog/build";
 
 function createModel(id: string): Model<"google-gemini-cli"> {
@@ -407,6 +408,55 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 				},
 			},
 		});
+	});
+
+	it("omits array validation keywords from Gemini declarations without changing tool inputs", () => {
+		// Code Assist rejected the declaration before the model could start the turn.
+		const tool: Tool = {
+			name: "inspect_tabs",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					uniqueItems: { type: "boolean" },
+					tabIds: { type: "array", items: { type: "integer" }, uniqueItems: true },
+					groups: {
+						type: "array",
+						items: {
+							type: "array",
+							items: { type: "integer" },
+							uniqueItems: true,
+							contains: { type: "integer" },
+							minContains: 1,
+							maxContains: 2,
+						},
+					},
+				},
+				required: ["uniqueItems", "tabIds"],
+			},
+		};
+		const declaration = convertTools([tool], createModel("gemini-4-hydrogen"))?.[0]?.functionDeclarations[0];
+		const schema = declaration?.parametersJsonSchema as {
+			properties: { tabIds: Record<string, unknown>; groups: { items: Record<string, unknown> } };
+		};
+		expect(schema).toMatchObject({
+			properties: {
+				uniqueItems: { type: "boolean" },
+				tabIds: { type: "array", items: { type: "integer" } },
+				groups: { items: { type: "array", items: { type: "integer" } } },
+			},
+			required: ["uniqueItems", "tabIds"],
+		});
+		const unsupported = ["uniqueItems", "contains", "minContains", "maxContains"];
+		expect(unsupported.filter(key => Object.hasOwn(schema.properties.tabIds, key))).toEqual([]);
+		expect(unsupported.filter(key => Object.hasOwn(schema.properties.groups.items, key))).toEqual([]);
+
+		const call = { type: "toolCall" as const, id: "tabs", name: tool.name };
+		const args = { uniqueItems: false, tabIds: [1, 2] };
+		expect(validateToolArguments(tool, { ...call, arguments: args })).toEqual(args);
+		expect(() => validateToolArguments(tool, { ...call, arguments: { ...args, tabIds: [1, 1] } })).toThrow(
+			"must be unique",
+		);
 	});
 
 	it("infers type:string for a bare string-literal enum under properties (Vertex rejects type-less enums)", () => {

@@ -66,11 +66,13 @@ Schemas sent on the Google JSON Schema path MUST follow:
      - `$schema`, `$ref`, `$defs`, `$dynamicRef`, `$dynamicAnchor`
      - `examples`, `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`
      - `patternProperties`, `additionalProperties`
-     - `minItems`, `maxItems`, `minLength`, `maxLength`
+     - `minItems`, `maxItems`, `uniqueItems`, `contains`, `minContains`, `maxContains`
+     - `minLength`, `maxLength`
      - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
      - `pattern`, `format`
    - Keys of a schema map (`SCHEMA_MAP_KEYWORDS`: `properties`, `patternProperties`, `dependencies`, `dependentSchemas`, `$defs`, `definitions`) are property, pattern or definition names and MUST NOT be stripped or rewritten by keyword match. Every walker, including the CCA nullable pass, the residual check and the compatibility audit, descends into the map's values and leaves its keys alone.
    - Human-meaningful stripped keys (`pattern`, `format`, min/max constraints, `default`, `examples`, etc.) are appended to the sibling `description` as an Anthropic-style spill block: `{pattern: "^foo$", minimum: 0}`. Structural/meta keys such as `$ref`, `$defs`, and `additionalProperties` are not spilled.
+   - This rule applies only to the provider's tool declaration. Local argument validation still enforces the original array constraints.
 
 2. **`type` arrays are normalized to scalar type + nullable marker**
    - `type: ["T", "null"]` becomes `type: "T"` and `nullable: true`.
