@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Resume retained IRC input after an unrelated assistant turn. Report final text with a no-yield status when a phase stops without a terminal yield ([Refs #1159](https://github.com/Wladefant/veyyon/issues/1159)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

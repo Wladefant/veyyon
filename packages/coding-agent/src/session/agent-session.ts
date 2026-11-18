@@ -1018,7 +1018,7 @@ export class AgentSession {
 		let terminal = false;
 		let published = false;
 		let recoveredAssistantText: string | undefined;
-		let recoveredTurnEnded = false;
+		let phaseTail: AgentMessage | undefined;
 		const unsubscribe = this.subscribe(event => {
 			if (event.type !== "tool_execution_end" || event.toolName !== "yield" || event.isError) return;
 			const details = event.result?.details as YieldDetails | undefined;
@@ -1052,12 +1052,20 @@ export class AgentSession {
 				failure !== undefined || !terminal || (!assembled && last?.status !== "aborted") || assembled?.missingData
 					? "harness"
 					: "agent";
+			const finalText =
+				failure === undefined && !terminal && phaseTail?.role === "assistant" && phaseTail.stopReason === "stop"
+					? contentText(phaseTail.content, { separator: "" })
+					: "";
 			let output =
 				failure !== undefined || !terminal
-					? JSON.stringify({
-							error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure),
-							source: "harness",
-						})
+					? JSON.stringify(
+							finalText.trim()
+								? { status: "no_yield", output: finalText, source: "harness" }
+								: {
+										error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure),
+										source: "harness",
+									},
+						)
 					: last?.status === "aborted"
 						? JSON.stringify({ error: last.error ?? "Agent ended the phase without success", source: "agent" })
 						: !assembled || assembled.missingData
@@ -1120,6 +1128,7 @@ export class AgentSession {
 			retainedIndex >= 0 && parentRecord && typeof phaseId === "string"
 				? (outbox.recoveryMessages(phaseId, parentRecord) ?? [])
 				: [];
+		let crossedPhaseBoundary = false;
 		for (const message of recovered) {
 			if (
 				message.role === "custom" &&
@@ -1130,13 +1139,15 @@ export class AgentSession {
 					(message.customType === "irc:incoming" &&
 						Reflect.get(message.details ?? {}, "relation") === "parent" &&
 						Reflect.get(message.details ?? {}, "streamingSteer") !== true))
-			)
+			) {
+				crossedPhaseBoundary = true;
 				break;
+			}
+			phaseTail = message;
 			if (message.role === "assistant") {
 				const text = contentText(message.content, { separator: "" });
 				if (text.trim()) recoveredAssistantText = text;
-				recoveredTurnEnded = message.stopReason !== "toolUse";
-			} else recoveredTurnEnded = false;
+			}
 			if (message.role !== "toolResult" || message.toolName !== "yield" || message.isError) continue;
 			const details = message.details as YieldDetails | undefined;
 			if (!details || (details.status !== "success" && details.status !== "aborted")) continue;
@@ -1144,14 +1155,15 @@ export class AgentSession {
 			terminal ||= isTerminalYieldToolResult({ toolName: "yield", result: { details } });
 			if (terminal) break;
 		}
+		const recoveredTurnEnded = phaseTail?.role === "assistant" && phaseTail.stopReason !== "toolUse";
 		if (
 			!terminal &&
 			!recoveredTurnEnded &&
 			retainedIndex >= 0 &&
-			recovered.length === 0 &&
+			(recovered.length === 0 || crossedPhaseBoundary || this.agent.state.messages.at(-1)?.role === "assistant") &&
 			retainedIndex !== this.agent.state.messages.length - 1
 		) {
-			// Older journals stored delivery receipts during another turn. Re-present the same identity
+			// The phase has no usable continuation tail. Re-present its retained input
 			// at a valid user boundary without writing a second receipt or borrowing that turn's result.
 			const messages = this.agent.state.messages.slice();
 			const [record] = messages.splice(retainedIndex, 1);
@@ -1199,6 +1211,7 @@ export class AgentSession {
 					wakeAdmitted = true;
 					try {
 						await (inputs.length > 0 ? this.agent.prompt(inputs) : this.agent.continue());
+						phaseTail = this.agent.state.messages.length > phaseStart ? this.agent.state.messages.at(-1) : undefined;
 					} catch (error) {
 						failure = error;
 					}

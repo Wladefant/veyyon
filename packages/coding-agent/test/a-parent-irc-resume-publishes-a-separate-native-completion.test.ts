@@ -959,6 +959,13 @@ describe("native retained child resume", () => {
 			name: "a phase without a native yield",
 			response: { content: ["Stopped without yielding"], stopReason: "stop" } as MockResponse,
 			source: "harness",
+			expected: { status: "no_yield", output: "Stopped without yielding", source: "harness" },
+		},
+		{
+			name: "an interrupted phase with partial text",
+			response: { content: ["Partial work"], stopReason: "aborted" } as MockResponse,
+			source: "harness",
+			expected: { error: "Phase ended without a terminal yield", source: "harness" },
 		},
 		{
 			name: "an agent's explicit refusal",
@@ -974,8 +981,9 @@ describe("native retained child resume", () => {
 				stopReason: "toolUse",
 			} as MockResponse,
 			source: "agent",
+			expected: { error: "Declined within the safety boundary", source: "agent" },
 		},
-	])("keeps the real source for $name, without inventing a human stop", async ({ response, source }) => {
+	])("keeps the real source for $name, without inventing a human stop", async ({ response, source, expected }) => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Result received"], stopReason: "stop" }]);
@@ -1005,8 +1013,85 @@ describe("native retained child resume", () => {
 			.find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		if (completion?.type !== "custom_message") throw new Error("Expected native phase completion");
 		expect(completion.details).toMatchObject({ resultSource: source });
-		expect(completion.content).toContain(`"source":"${source}"`);
+		expect(completion.content).toContain(JSON.stringify(expected));
 		expect(child.instance.agent.state.systemPrompt).toEqual(["Operator: production writes are forbidden."]);
+	});
+
+	it("re-presents a retained input before prompting from an unrelated assistant tail", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Fresh result"], stopReason: "stop" }]);
+		const worker = await session("worker", [{ content: ["Unrelated final text"], stopReason: "stop" }]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: worker.instance,
+		});
+
+		const oldPhase = {
+			role: "custom" as const,
+			customType: "irc:incoming",
+			content: "Older phase A",
+			display: true,
+			timestamp: 1000,
+			attribution: "agent" as const,
+			details: { id: "resume-A", from: "owner", source: "agent", relation: "parent" },
+		};
+		new IrcContinuationOutbox(worker.store).begin("resume-A", oldPhase);
+		worker.store.appendCustomMessageEntry(
+			oldPhase.customType,
+			oldPhase.content,
+			oldPhase.display,
+			oldPhase.details,
+			oldPhase.attribution,
+		);
+		await worker.store.ensureOnDisk();
+		await worker.store.sync();
+
+		await worker.instance.sendCustomMessage(
+			{
+				...oldPhase,
+				content: "Unrelated phase",
+				timestamp: 2000,
+				details: { ...oldPhase.details, id: "unrelated" },
+			},
+			{ triggerTurn: true },
+		);
+		await worker.instance.waitForIdle();
+
+		await worker.instance.dispose();
+		const reopened = await SessionManager.open(worker.store.getSessionFile()!);
+		const recovered = await session("worker", [yielded("B")], reopened);
+		registry.attachSession("worker", recovered.instance, reopened.getSessionFile()!);
+
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
+
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry => entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		expect(completions).toHaveLength(1);
+		expect(completions[0]?.content).toContain('"value":"B"');
+		expect(recovered.mock.calls).toHaveLength(1);
+		expect(recovered.mock.calls[0]?.context.messages.at(-1)).toMatchObject({
+			role: "developer",
+			attribution: "agent",
+			content: [{ type: "text", text: oldPhase.content }],
+		});
+		expect(
+			reopened.getEntries().filter(
+				entry =>
+					entry.type === "custom_message" &&
+					entry.customType === "irc:incoming" &&
+					Reflect.get(entry.details ?? {}, "id") === oldPhase.details.id,
+			),
+		).toHaveLength(1);
 	});
 
 	it("does not create a turn or completion when replaying an already delivered parent message missing a continuation phase", async () => {

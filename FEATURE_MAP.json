@@ -18,7 +18,10 @@
       ],
       "owning_issue": "2397",
       "risk": "high",
-      "components": ["coding-agent", "SageOx"]
+      "components": [
+        "coding-agent",
+        "SageOx"
+      ]
     },
     "launch-incarnation-guard": {
       "name": "Launch incarnation guard",
@@ -35,10 +38,25 @@
       ],
       "owning_issue": "1071",
       "risk": "medium",
-      "components": ["coding-agent", "launch"],
+      "components": [
+        "coding-agent",
+        "launch"
+      ],
       "docs": [
         "docs/tools/launch.md"
       ]
+    },
+    "agent-continuation": {
+      "name": "Agent Continuation",
+      "description": "Support for agent session continuation via irc-inbox",
+      "entry_files": [
+        "packages/coding-agent/src/session/agent-session.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/test/a-parent-irc-resume-publishes-a-separate-native-completion.test.ts"
+      ],
+      "owning_issue": "1159",
+      "risk": "medium"
     }
   }
 }
