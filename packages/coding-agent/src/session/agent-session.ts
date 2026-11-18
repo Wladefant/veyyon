@@ -1128,14 +1128,15 @@ export class AgentSession {
 		let crossedPhaseBoundary = false;
 		for (const message of recovered) {
 			if (
-				message.role === "custom" &&
-				parentRecord &&
-				!sameIrcRecord(message, parentRecord) &&
-				((message.customType === "task:continuation" &&
-					Reflect.get(message.details ?? {}, "streamingCompletion") !== true) ||
-					(message.customType === "irc:incoming" &&
-						Reflect.get(message.details ?? {}, "relation") === "parent" &&
-						Reflect.get(message.details ?? {}, "streamingSteer") !== true))
+				message.role === "user" ||
+				(message.role === "custom" &&
+					parentRecord &&
+					!sameIrcRecord(message, parentRecord) &&
+					((message.customType === "task:continuation" &&
+						Reflect.get(message.details ?? {}, "streamingCompletion") !== true) ||
+						(message.customType === "irc:incoming" &&
+							Reflect.get(message.details ?? {}, "relation") === "parent" &&
+							Reflect.get(message.details ?? {}, "streamingSteer") !== true)))
 			) {
 				crossedPhaseBoundary = true;
 				break;
