@@ -15,9 +15,11 @@ import {
 } from "@veyyon/ai/utils/schema";
 import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createTools, HIDDEN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools";
+import { createTools, HIDDEN_TOOLS, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
 import { createVibeTools } from "@veyyon/coding-agent/tools/agent/vibe";
 import { isRecord } from "@veyyon/utils";
+import { SecretRequestTool } from "../../src/tools/agent/secret-request";
+import { GithubTool } from "../../src/tools/web/gh";
 import { visitEveryFirstPartyTool } from "../helpers/every-first-party-tool";
 
 interface ToolSchemaEntry {
@@ -146,15 +148,22 @@ describe("builtin tool schemas provider compatibility", () => {
 		const failures: string[] = [];
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gemini-tool-schema-"));
 		try {
-			const unbuilt = await visitEveryFirstPartyTool(dir, tool => {
+			const check = (tool: Tool) => {
 				const declaration = convertTools([tool], model)?.[0]?.functionDeclarations[0];
 				if (!isRecord(declaration?.parametersJsonSchema)) {
 					failures.push(`${tool.name}: missing parametersJsonSchema`);
 					return;
 				}
 				findUnsupportedGeminiArrayKeywords(declaration.parametersJsonSchema, tool.name, failures);
-			});
-			expect(unbuilt).toEqual([]);
+			};
+			const unbuilt = await visitEveryFirstPartyTool(dir, check);
+			// These factories require local capabilities the test runner may not have.
+			// Their real constructors provide the same schemas without invoking the tools.
+			for (const name of unbuilt) {
+				if (name === "github") check(new GithubTool(createTestSession()));
+				else if (name === "secret_request") check(new SecretRequestTool(createTestSession()));
+				else failures.push(`${name}: factory returned no tool`);
+			}
 			expect(failures).toEqual([]);
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
