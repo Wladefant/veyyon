@@ -5,11 +5,22 @@
 ### Fixed
 
 - Show the selected repository and its GitHub App and worktree commands in task prompts. Keep delegation ancestors out of the IRC peer roster ([Refs #738](https://github.com/Wladefant/veyyon/issues/738), [Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
+
+## [1.12.0] - 2026-11-18
+
+### Added
+
+- Enforce host-wide shared lane admission ledger (cap 100) and `veyyon lane-admission` CLI ([Refs #1113](https://github.com/Wladefant/veyyon/issues/1113)).
+
+### Fixed
+
+- Keep admission limits read-only during ordinary calls, add explicit host-cap updates, and bound failed release attempts with fenced reconciliation.
 - Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Give every native result wake one durable continuation phase. Keep pending tool results ahead of completion notices and prevent reuse of an earlier phase's terminal result ([Refs #1159](https://github.com/Wladefant/veyyon/issues/1159)).
 - Wait for result and parent-target journal writes before retained IRC delivery. Queue parent sends while asynchronous rewrites hold the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Persistence for journal-lock result targets and busyparent queueing ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Block common Bash tool commands that stop host processes by name or pattern while preserving verified PID cleanup ([#751](https://github.com/Wladefant/veyyon/issues/751)).
+
 ## [1.11.1] - 2026-11-17
 
 ### Fixed

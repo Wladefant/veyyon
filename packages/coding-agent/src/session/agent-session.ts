@@ -155,6 +155,7 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
+import { acquireSubagentHostLane, type NativeHostLaneLease } from "../task/lane-admission";
 import type { YieldItem } from "../task/types";
 import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -532,6 +533,14 @@ async function sendModeContext(
 	);
 }
 
+function withIrcWakeReleaseFailure(wakeError: unknown, releaseError: unknown): unknown {
+	if (wakeError === undefined) return releaseError;
+	return new AggregateError(
+		[wakeError, releaseError],
+		`${errorMessage(releaseError)}\nIRC wake also failed: ${errorMessage(wakeError)}`,
+	);
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -738,6 +747,7 @@ export class AgentSession {
 	/** The per-family service tiers `/fast` and `tier.*` set, and the tier each request resolves to. */
 	readonly #tiers: ServiceTiers;
 	#isDisposed = false;
+	#wakeAbortController = new AbortController();
 	/** Subscribers, the extension forwarding every session event passes through, and the held `agent_end`. */
 	readonly #events: SessionEvents;
 	readonly #persistence: MessagePersistence;
@@ -895,7 +905,7 @@ export class AgentSession {
 	 *  Runs whenever the session settles; the guard makes it a no-op when the
 	 *  queue was consumed normally or a new turn already started. */
 	#drainStrandedQueuedMessages(): void {
-		if (this.#abortInProgress) return;
+		if (this.#abortInProgress || this.#isDisposed) return;
 		// A concern steered into a resumed streaming run after a user interrupt can
 		// strand at the turn tail (steered past the loop's final boundary poll). While
 		// that interrupt's suppression is still in effect, reclaim such advisor steers
@@ -1094,6 +1104,7 @@ export class AgentSession {
 			!this.#queue.canAutoContinueForFollowUp()
 				? this.agent.peekFollowUpQueue().slice()
 				: [];
+		let parkedFollowUpsRestored = false;
 		if (parkedFollowUps.length > 0) {
 			this.agent.replaceQueues(this.agent.peekSteeringQueue().slice(), []);
 		}
@@ -1155,51 +1166,108 @@ export class AgentSession {
 			this.#ircActivePhase === phaseId && typeof phaseId === "string"
 				? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
 				: Promise.resolve();
+		const needsPrompt = !terminal && !recoveredTurnEnded;
+		const canPublishFailure = Boolean(selfId && typeof parentId === "string" && typeof phaseId === "string");
+		let wakeLease: NativeHostLaneLease | null = null;
+		let wakeAdmitted = false;
+		const wakeSignal = this.#wakeAbortController.signal;
+		let failure: unknown;
+		let releaseFailed = false;
 		const settled = ready
-			.then(() =>
-				terminal || recoveredTurnEnded
-					? undefined
-					: inputs.length > 0
-						? this.agent.prompt(inputs)
-						: this.agent.continue(),
-			)
-			.then(
-				() => publish(),
-				error => publish(error),
-			)
+			.catch(error => {
+				failure = error;
+			})
 			.then(async () => {
-				if (typeof completionId === "string") {
+				if (failure === undefined && !needsPrompt) {
+					wakeAdmitted = true;
+				} else if (failure === undefined && this.#config.agentKind === "sub") {
+					try {
+						const agentId = this.#config.agentId ?? this.sessionId;
+						wakeLease = await acquireSubagentHostLane({
+							agentId,
+							owner: path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
+							signal: wakeSignal,
+						});
+					} catch (error) {
+						failure = error;
+					}
+				}
+				if (needsPrompt && failure === undefined && this.#config.agentKind === "sub") {
+					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
+				}
+				if (needsPrompt && failure === undefined) {
+					wakeAdmitted = true;
+					try {
+						await (inputs.length > 0 ? this.agent.prompt(inputs) : this.agent.continue());
+					} catch (error) {
+						failure = error;
+					}
+				}
+				if (parkedFollowUps.length > 0) {
+					try {
+						this.agent.replaceQueues(
+							this.agent.peekSteeringQueue().slice(),
+							parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
+						);
+						parkedFollowUpsRestored = true;
+					} catch (error) {
+						failure ??= error;
+					}
+				}
+				if (wakeLease) {
+					try {
+						await wakeLease.release();
+					} catch (error) {
+						releaseFailed = true;
+						failure = withIrcWakeReleaseFailure(failure, error);
+					}
+				}
+				if (releaseFailed && !canPublishFailure) throw failure;
+				await publish(failure);
+				if (wakeAdmitted && typeof completionId === "string") {
 					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
 					await this.sessionManager.sync();
 				}
-				published = true;
+				published = wakeAdmitted;
 			})
 			.catch(error => {
+				if (releaseFailed) throw error === failure ? error : withIrcWakeReleaseFailure(error, failure);
 				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", {
 					error: errorMessage(error),
 				});
 			})
 			.finally(async () => {
-				unsubscribe();
-				if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
-				if (parkedFollowUps.length > 0) {
-					this.agent.replaceQueues(
-						this.agent.peekSteeringQueue().slice(),
-						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
-					);
+				try {
+					unsubscribe();
+					if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
+					if (parkedFollowUps.length > 0 && !parkedFollowUpsRestored) {
+						this.agent.replaceQueues(
+							this.agent.peekSteeringQueue().slice(),
+							parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
+						);
+						parkedFollowUpsRestored = true;
+					}
+					if (wakeLease && !wakeAdmitted) await wakeLease.release();
+					// Claim the next retained phase before dropping this turn's idle accounting.
+					if (published) {
+						await this.replayIrcContinuations(true).catch(error =>
+							logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
+						);
+					}
+				} finally {
+					this.#endInFlight();
 				}
-				// Claim the next retained phase before dropping this turn's idle accounting.
-				if (published) {
-					await this.replayIrcContinuations(true).catch(error =>
-						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
-					);
-				}
-				this.#endInFlight();
 			});
 		this.#ircWakeSettled = settled;
-		void settled.finally(() => {
-			if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
-		});
+		void settled
+			.finally(() => {
+				if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
+			})
+			.catch(error =>
+				logger.error("Settling a detached IRC wake failed", {
+					error: errorMessage(error),
+				}),
+			);
 		return ready;
 	}
 
@@ -3039,6 +3107,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#wakeAbortController.abort();
 		this.#irc.flushPending();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -4608,6 +4677,7 @@ export class AgentSession {
 		this.#abortInProgress = true;
 		try {
 			this.abortRetry();
+			this.#wakeAbortController.abort();
 			this.#promptGeneration++;
 			this.#nextTurn.forgetRequestedTurn();
 			if (options?.preserveCompaction) {
@@ -4657,6 +4727,7 @@ export class AgentSession {
 				this.#advisorRoster.preserveCard(card);
 			}
 		} finally {
+			if (!this.#isDisposed) this.#wakeAbortController = new AbortController();
 			this.#abortInProgress = false;
 			this.#drainStrandedQueuedMessages();
 		}

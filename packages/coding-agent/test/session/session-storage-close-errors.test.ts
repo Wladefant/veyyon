@@ -185,7 +185,6 @@ function failNextClose(): void {
 	});
 }
 
-
 describe("FileSessionStorage asynchronous staged short-write preservation", () => {
 	it("retries a short multibyte write and refuses zero progress without overwriting history", async () => {
 		for (const outcome of ["short", "zero"] as const) {
@@ -218,7 +217,8 @@ describe("FileSessionStorage asynchronous staged short-write preservation", () =
 			});
 			try {
 				const publish = new FileSessionStorage().writeTextAtomic(journal, () => [
-					"é\n", "COMPLETE SYNTHETIC TAIL\n",
+					"é\n",
+					"COMPLETE SYNTHETIC TAIL\n",
 				]);
 				if (outcome === "zero") {
 					await expect(publish).rejects.toThrow(/Short async session journal write/);
@@ -245,18 +245,31 @@ describe("FileSessionStorage synchronous staged short-write preservation", () =>
 		fs.writeFileSync(journal, "ORIGINAL SYNTHETIC JOURNAL\n");
 		const originalWrite = fs.writeSync;
 		let shortWrites = 0;
-		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation((fd, buffer, offset, length, position) => {
-			if (Buffer.isBuffer(buffer) && shortWrites === 0 && length > 1) {
-				shortWrites++;
-				return originalWrite(fd, buffer, offset, Math.max(1, Math.floor(length / 2)), position);
-			}
-			return originalWrite(fd, buffer, offset, length, position);
-		});
+		const writeSpy = vi
+			.spyOn(fs, "writeSync")
+			.mockImplementation(
+				(
+					fd: number,
+					buffer: NodeJS.ArrayBufferView | string,
+					offset?: number | null,
+					lengthOrEncoding?: number | BufferEncoding | null,
+					position?: number | null,
+				) => {
+					if (typeof buffer === "string") {
+						const encoding = typeof lengthOrEncoding === "number" ? undefined : lengthOrEncoding;
+						return originalWrite(fd, buffer, offset, encoding);
+					}
+					const length = typeof lengthOrEncoding === "string" ? undefined : lengthOrEncoding;
+					if (Buffer.isBuffer(buffer) && shortWrites === 0 && typeof length === "number" && length > 1) {
+						shortWrites++;
+						return originalWrite(fd, buffer, offset, Math.floor(length / 2), position);
+					}
+					return originalWrite(fd, buffer, offset, length, position);
+				},
+			);
 		try {
 			const expected = "é\nCOMPLETE UTF-8 TAIL\n";
-			new FileSessionStorage().writeTextSync(journal, () => [
-				"é\n", "COMPLETE UTF-8 TAIL\n",
-			]);
+			new FileSessionStorage().writeTextSync(journal, () => ["é\n", "COMPLETE UTF-8 TAIL\n"]);
 			expect(shortWrites).toBe(1);
 			expect(fs.readFileSync(journal, "utf8")).toBe(expected);
 			expect(fs.readdirSync(dir)).toEqual(["synthetic.jsonl"]);
@@ -276,9 +289,9 @@ describe("FileSessionStorage synchronous staged short-write preservation", () =>
 		fs.writeFileSync(artifact, evidence);
 		const writeSpy = vi.spyOn(fs, "writeSync").mockImplementation(() => 0);
 		try {
-			expect(() => new FileSessionStorage().writeTextSync(journal, () => [
-				"REPLACEMENT JOURNAL\n", "TAIL\n",
-			])).toThrow(/Short sync session journal write/);
+			expect(() =>
+				new FileSessionStorage().writeTextSync(journal, () => ["REPLACEMENT JOURNAL\n", "TAIL\n"]),
+			).toThrow(/Short sync session journal write/);
 			expect(fs.readFileSync(journal, "utf8")).toBe(original);
 			expect(fs.readFileSync(artifact, "utf8")).toBe(evidence);
 			expect(fs.readdirSync(dir).sort()).toEqual(["synthetic-artifact.log", "synthetic.jsonl"]);
@@ -301,8 +314,10 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		const rename = fs.renameSync;
 		let stagedPublications = 0;
 		const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-			const staged = path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
-				String(source).endsWith(".tmp") && String(destination) === journal;
+			const staged =
+				path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
+				String(source).endsWith(".tmp") &&
+				String(destination) === journal;
 			if (staged) {
 				stagedPublications += 1;
 				if (stagedPublications === 1) {
@@ -316,9 +331,9 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		});
 		try {
 			const storage = new FileSessionStorage();
-			expect(() => storage.writeTextSync(journal, () => [
-				"REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n",
-			])).toThrow(/synthetic staged replacement EIO/);
+			expect(() =>
+				storage.writeTextSync(journal, () => ["REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n"]),
+			).toThrow(/synthetic staged replacement EIO/);
 			expect(stagedPublications).toBe(2);
 			// The old EPERM fallback wrote directly to journal with "w" and
 			// would report success (or leave a truncated source on later EIO).
@@ -338,8 +353,10 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		const rename = fs.renameSync;
 		let stagedPublications = 0;
 		const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-			const staged = path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
-				String(source).endsWith(".tmp") && String(destination) === journal;
+			const staged =
+				path.basename(String(source)).startsWith(".synthetic.jsonl.") &&
+				String(source).endsWith(".tmp") &&
+				String(destination) === journal;
 			if (staged) {
 				stagedPublications += 1;
 				if (stagedPublications === 1) {
@@ -350,13 +367,11 @@ describe("FileSessionStorage synchronous EPERM publication integrity", () => {
 		});
 		try {
 			const storage = new FileSessionStorage();
-			expect(() => storage.writeTextSync(journal, () => [
-				"REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n",
-			])).not.toThrow();
+			expect(() =>
+				storage.writeTextSync(journal, () => ["REPLACEMENT SYNTHETIC JOURNAL\n", "COMPLETE TAIL\n"]),
+			).not.toThrow();
 			expect(stagedPublications).toBe(2);
-			expect(fs.readFileSync(journal, "utf8")).toBe(
-				"REPLACEMENT SYNTHETIC JOURNAL\nCOMPLETE TAIL\n",
-			);
+			expect(fs.readFileSync(journal, "utf8")).toBe("REPLACEMENT SYNTHETIC JOURNAL\nCOMPLETE TAIL\n");
 			expect(fs.readdirSync(dir)).toEqual(["synthetic.jsonl"]);
 		} finally {
 			renameSpy.mockRestore();
