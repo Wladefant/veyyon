@@ -4,12 +4,13 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Message } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { withJournalLock } from "@veyyon/kernel/session/session-storage";
 import { isRecord, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { ModelRegistry } from "../src/config/model-registry";
@@ -144,7 +145,7 @@ describe("parent IRC delivery to an active child", () => {
 		}
 	});
 
-	it("steers two distinct parent messages into the next model request in order while a tool is blocked", async () => {
+	it("queues parent steering behind the busy child's journal rewrite and delivers each message once", async () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
 		const blocker = createBlockingTool();
@@ -176,7 +177,27 @@ describe("parent IRC delivery to an active child", () => {
 			await blocker.started;
 			const firstBody = "First parent steer: pause edits.";
 			const secondBody = "Second parent steer: report status.";
-			const firstReceipt = await IrcBus.global().send({ from: "parent", to: "child", body: firstBody });
+			const entered = Promise.withResolvers<void>();
+			const releaseJournal = Promise.withResolvers<void>();
+			const lock = withJournalLock(child.sessionManager.getSessionFile()!, async () => {
+				entered.resolve();
+				await releaseJournal.promise;
+			});
+			await entered.promise;
+			const rewrite = child.sessionManager.rewriteEntries();
+			let delivered = false;
+			const pending = IrcBus.global().send({ from: "parent", to: "child", body: firstBody }).finally(() => {
+				delivered = true;
+			});
+			try {
+				await setImmediate();
+				expect(delivered).toBe(false);
+			} finally {
+				releaseJournal.resolve();
+				await lock;
+			}
+			const firstReceipt = await pending;
+			await rewrite;
 			const secondReceipt = await IrcBus.global().send({ from: "parent", to: "child", body: secondBody });
 			expect(firstReceipt).toMatchObject({ to: "child", outcome: "injected" });
 			expect(secondReceipt).toMatchObject({ to: "child", outcome: "injected" });
