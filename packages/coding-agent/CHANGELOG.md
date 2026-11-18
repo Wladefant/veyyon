@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Enforce host-wide shared lane admission ledger (cap 100) and `veyyon lane-admission` CLI ([Refs #1113](https://github.com/Wladefant/veyyon/issues/1113)).
+
+### Fixed
+
+- Keep admission limits read-only during ordinary calls, add explicit host-cap updates, and bound failed release attempts with fenced reconciliation.
 ### Fixed
 
 - Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).

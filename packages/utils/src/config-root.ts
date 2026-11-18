@@ -39,6 +39,9 @@ export const PROFILES_DIR_NAME = "profiles";
  */
 export const SUBAGENTS_DIR_NAME = "subagents";
 
+/** Basename of the cross-profile host runtime directory (`<configRoot>/run`). */
+export const RUN_DIR_NAME = "run";
+
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 /**
@@ -258,4 +261,12 @@ export function getSharedAuthDir(): string {
  */
 export function getGlobalSubagentsDir(): string {
 	return path.join(getGlobalConfigRootDir(), SUBAGENTS_DIR_NAME);
+}
+
+/**
+ * Cross-profile runtime directory at the base config root (`<configRoot>/run`),
+ * holding host-wide coordination state such as `lane-admission.json`.
+ */
+export function getGlobalRunDir(): string {
+	return path.join(getGlobalConfigRootDir(), RUN_DIR_NAME);
 }

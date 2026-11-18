@@ -1123,7 +1123,7 @@ describe("process supervisor", () => {
 			expect(result.exitCode).toBe(42);
 			expect(result.report?.stderrStatus).toBe("captured");
 			expect(result.report?.stderrBytes).toBeGreaterThanOrEqual(2500);
-			expect(fs.readFileSync(result.report!.stderrLogPath, "utf8").length).toBe(result.report?.stderrBytes);
+			expect(fs.readFileSync(result.report!.stderrLogPath, "utf8").length).toBe(result.report!.stderrBytes);
 			expect(sinkEmitter.listenerCount("drain")).toBe(0);
 
 			sinkEmitter.emit("drain");
