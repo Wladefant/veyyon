@@ -1731,7 +1731,9 @@ export interface ShellRunResult {
   timedOut: boolean
   /** Whether output capture stopped before EOF. */
   outputIncomplete: boolean
-  /** Retained raw output prefix, present only for incomplete buffered capture. */
+  /** Set when captured_output is a callback-drain fallback, not a core capture. */
+  captureIsDrainPrefix?: boolean
+  /** Retained raw output prefix, present only for incomplete capture. */
   capturedOutput?: string
   /**
    * When the minimizer rewrote the captured output, this carries the
