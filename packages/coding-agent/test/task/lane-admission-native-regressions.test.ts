@@ -37,7 +37,12 @@ import type { AgentDefinition, SingleResult } from "@veyyon/coding-agent/task/ty
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { TempDir } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
-import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
+import {
+	createAssistantStopMessage,
+	createMockSession,
+	createSessionResult,
+	yieldSuccessEvent,
+} from "../helpers/agent-session";
 
 const testAgent: AgentDefinition = {
 	name: "task",
@@ -78,7 +83,9 @@ describe("native host-lane admission regressions", () => {
 		const entered = Promise.withResolvers<void>();
 		const resume = Promise.withResolvers<void>();
 		const readFile = fsp.readFile;
-		const delayedRead = vi.spyOn(fsp, "readFile").mockImplementation((async (...args: Parameters<typeof readFile>) => {
+		const delayedRead = vi.spyOn(fsp, "readFile").mockImplementation((async (
+			...args: Parameters<typeof readFile>
+		) => {
 			if (args[0] === ledgerPath) {
 				delayedRead.mockRestore();
 				entered.resolve();
@@ -103,9 +110,9 @@ describe("native host-lane admission regressions", () => {
 			queued.resolve();
 			return handle;
 		};
-		const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation(
-			Object.assign(scheduleAndSignal, { __promisify__: schedule.__promisify__ }),
-		);
+		const timer = vi
+			.spyOn(globalThis, "setTimeout")
+			.mockImplementation(Object.assign(scheduleAndSignal, { __promisify__: schedule.__promisify__ }));
 		const successor = acquireSubagentHostLane({ agentId: "Successor", owner: "Successor" });
 		void successor.catch(() => {});
 		try {
@@ -352,6 +359,30 @@ describe("native host-lane admission regressions", () => {
 
 		await releaseLaneAdmission({ slotId: filler.slot_id!, leaseToken: filler.lease_token! });
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
+	it("frees the reservation when the provider ends the lane with an error", async () => {
+		const providerError = "Provider stopped with PROHIBITED_CONTENT";
+		const session = createMockSession(async ({ pushTurn }) => {
+			expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+			pushTurn({ ...createAssistantStopMessage("", "error"), errorMessage: providerError });
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+		const result = await runSubprocess({
+			cwd: "/repo",
+			agent: testAgent,
+			task: "handle a provider error",
+			index: 0,
+			id: "ProviderStoppedLane",
+			settings: Settings.isolated(),
+			modelRegistry: { refresh: async () => {}, getAvailable: () => [], getApiKey: async () => "k" } as never,
+			enableLsp: false,
+			eventBus: new EventBus(),
+			artifactsDir: makeArtifactsDir(),
+		});
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe(providerError);
+		expect((await getLaneAdmissionStatus()).reservations).toEqual([]);
 	});
 
 	for (const followUp of [false, true]) {
