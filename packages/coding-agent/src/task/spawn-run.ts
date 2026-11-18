@@ -7,7 +7,7 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
-import { directoryExists, errorMessage, getSessionsDir, prompt, Snowflake } from "@veyyon/utils";
+import { directoryExists, errorMessage, getSessionsDir, isRecord, prompt, Snowflake } from "@veyyon/utils";
 import { formatBytes, formatDuration } from "@veyyon/utils/format";
 import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ToolSession } from "..";
@@ -20,6 +20,7 @@ import { planModePrompts } from "../prompts/plan-mode/rows";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { AgentSpawnRecord } from "../tools";
 import { TOOL } from "../tools/core/builtin-names";
 import {
 	agentModelSourceLabel,
@@ -52,6 +53,7 @@ import {
 	successorWorkflow,
 	writeSuccessorCheckpoint,
 } from "./successor-checkpoint";
+import { recordNativeDispatch } from "./topic-replenishment";
 import type { AgentDefinition, AgentProgress, AgentSource, SingleResult, TaskParams, TaskToolDetails } from "./types";
 import { parseIsolationMode, type TaskIsolationMode } from "./worktree";
 
@@ -505,6 +507,18 @@ async function landIsolatedChanges(
 	return { result: landed, summary: merged.summary + nestedSummary };
 }
 
+function parseStructuredResult(result: SingleResult): Record<string, unknown> | undefined {
+	const items = result.extractedToolData?.yield;
+	const last = items?.[items.length - 1];
+	if (isRecord(last) && isRecord(last.data)) return last.data;
+	try {
+		const value: unknown = JSON.parse(result.output);
+		return isRecord(value) ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Record the parent's index row for a settled spawn, pointing at the child's durable transcript, so a
  * study or backtest tool can enumerate a session's agents without scraping tool-result prose (GRAN-2).
@@ -515,9 +529,10 @@ function recordSpawn(
 	result: SingleResult,
 	artifactsDir: string,
 	isolation: SpawnIsolation | null,
-): void {
+	params: TaskParams,
+): AgentSpawnRecord {
 	const outcome = classifyAgentOutcome(result);
-	session.recordAgentSpawn?.({
+	const record: AgentSpawnRecord = {
 		agentId: result.id,
 		agentName: result.agent,
 		task: result.task,
@@ -528,7 +543,12 @@ function recordSpawn(
 		durationMs: result.durationMs,
 		usage: result.usage,
 		error: result.error,
-	});
+		ticketId: params.ticketId,
+		runId: params.runId,
+		structuredResult: parseStructuredResult(result),
+	};
+	session.recordAgentSpawn?.(record);
+	return record;
 }
 
 /** The manager that hands out agent ids unique across the session, so no two agents' artifacts collide. */
@@ -716,37 +736,59 @@ async function runPreparedSpawn(
 			Date.now() - startTime,
 		);
 	}
-	let result: SingleResult;
-	let mergeSummary = "";
-	if (isolation) {
-		const taskStart = Date.now();
-		const run = await runIsolatedSubprocess({
-			baseOptions: options,
-			context: isolation.context,
-			preferredBackend: parseIsolationMode(isolation.mode),
-			agentId,
-			mergeMode: isolation.mergeMode,
-			artifactsDir: spawn.artifacts.dir,
-			buildCommitMessage,
-			buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
-		});
-		({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
-	} else {
-		result = await runSubprocess(options);
-	}
-
-	recordSpawn(session, result, spawn.artifacts.dir, isolation);
-	if (!isolation) {
-		try {
-			await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
-		} catch (error) {
-			result = {
-				...result,
-				error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
-			};
+	// Bind before execution. Detached workers bind before their job is accepted.
+	if (params.ticketId && !params.nativeDispatchBound) {
+		if (!params.runId?.trim() || !params.ledgerPath?.trim()) {
+			throw new Error("Native dispatch requires a run ID and ledger path");
 		}
+		await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath, params.ticketId);
 	}
-	return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
+	const lifecycle = {
+		agentId,
+		agentName: spawn.agentName,
+		ticketId: params.ticketId,
+		runId: params.runId,
+	};
+	let completionStarted = false;
+	try {
+		session.onSubagentStart?.(lifecycle);
+		let result: SingleResult;
+		let mergeSummary = "";
+		if (isolation) {
+			const taskStart = Date.now();
+			const run = await runIsolatedSubprocess({
+				baseOptions: options,
+				context: isolation.context,
+				preferredBackend: parseIsolationMode(isolation.mode),
+				agentId,
+				mergeMode: isolation.mergeMode,
+				artifactsDir: spawn.artifacts.dir,
+				buildCommitMessage,
+				buildFailureResult: err => isolationSetupFailure(options, taskStart, err),
+			});
+			({ result, summary: mergeSummary } = await landIsolatedChanges(run, isolation, buildCommitMessage));
+		} else {
+			result = await runSubprocess(options);
+		}
+
+		const record = recordSpawn(session, result, spawn.artifacts.dir, isolation, params);
+		completionStarted = true;
+		await session.onSubagentComplete?.(record);
+		if (!isolation) {
+			try {
+				await writeSuccessorCheckpoint(spawn.artifacts.dir, result, workflow, checkpoint);
+			} catch (error) {
+				result = {
+					...result,
+					error: `successor-checkpoint-write-failed: ${errorMessage(error)}; lane already ran, do not repeat its work`,
+				};
+			}
+		}
+		return buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
+	} catch (error) {
+		if (!completionStarted) session.onSubagentStartFailed?.(lifecycle);
+		throw error;
+	}
 }
 
 /**
