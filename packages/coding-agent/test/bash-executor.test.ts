@@ -775,7 +775,8 @@ exit 64
 			return;
 		}
 		let sawChunk = false;
-		const result = await executeBash("printf '%0100000d' 7", {
+		const block = "a".repeat(1_000);
+		const result = await executeBash(`for _ in {1..100}; do printf %s '${block}'; done`, {
 			cwd: tempDir,
 			timeout: 5000,
 			onChunk: () => {
@@ -786,7 +787,7 @@ exit 64
 		expect(sawChunk).toBe(true);
 		expect(result.totalBytes).toBe(100000);
 		expect(result.outputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-		expect(result.output).toContain("7");
+		expect(result.output).toContain("a");
 	});
 
 	it("handles large output without freeze or OOM", async () => {
