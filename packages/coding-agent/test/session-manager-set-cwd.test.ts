@@ -63,7 +63,10 @@ describe("SessionManager.setCwd", () => {
 			expect(manager.getSessionFile()).toBe(sessionFile);
 			const persisted = fs.readFileSync(sessionFile, "utf8");
 			expect(persisted).toContain("Retain this journal entry.");
-			const header = persisted.split("\n").map(line => (line ? JSON.parse(line) : null)).find(row => row?.type === "session");
+			const header = persisted
+				.split("\n")
+				.map(line => (line ? JSON.parse(line) : null))
+				.find(row => row?.type === "session");
 			expect(header?.cwd).toBe(path.resolve(next));
 		} finally {
 			renameSpy.mockRestore();

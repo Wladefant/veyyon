@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { setImmediate, setTimeout as delay } from "node:timers/promises";
+import { setTimeout as delay, setImmediate } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Message } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
@@ -186,9 +186,11 @@ describe("parent IRC delivery to an active child", () => {
 			await entered.promise;
 			const rewrite = child.sessionManager.rewriteEntries();
 			let delivered = false;
-			const pending = IrcBus.global().send({ from: "parent", to: "child", body: firstBody }).finally(() => {
-				delivered = true;
-			});
+			const pending = IrcBus.global()
+				.send({ from: "parent", to: "child", body: firstBody })
+				.finally(() => {
+					delivered = true;
+				});
 			try {
 				await setImmediate();
 				expect(delivered).toBe(false);
