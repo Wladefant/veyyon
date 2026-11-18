@@ -585,12 +585,12 @@ describe("IRC", () => {
 				parentId: "owner",
 				ancestorIds: ["owner", "root"],
 			});
-			expect(result.details?.peers?.find(peer => peer.id === "owner")).toMatchObject({
-				ancestor: true,
+			const ancestors = Reflect.get(result.details ?? {}, "ancestors") as Array<{ id: string }> | undefined;
+			expect(ancestors?.find(lane => lane.id === "owner")).toMatchObject({
+				relation: "parent",
 				activity: "Delegated src/shared.ts",
 			});
 			expect(result.details?.peers?.find(peer => peer.id === "worker.NotAnAncestor")).toMatchObject({
-				ancestor: false,
 				activity: "Writing src/shared.ts",
 			});
 			expect(result.content[0]?.type === "text" && result.content[0].text).toContain(
