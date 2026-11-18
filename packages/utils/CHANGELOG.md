@@ -7,6 +7,7 @@
 ### Fixed
 
 - Fixed file locks that stayed held for the rest of a session after a burst of same-process callers on Windows, which made subagent spawns fail with "Failed to acquire lock for lane-admission.json": same-process contenders now queue, a Windows sharing violation during release is retried, and a lock whose release failed is reaped by its own process.
+- Fixed lock waits that exceeded their retry budget when other waiters timed out while the holder still held the lock.
 
 ## [1.10.7] - 2026-11-16
 

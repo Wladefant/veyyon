@@ -79,6 +79,34 @@ describe("contenders in one process", () => {
 		const next = await acquireFileLock(file, { retries: 1, retryDelayMs: 0 });
 		await next.release();
 	});
+
+	test("short waiters timing out do not renew another waiter's budget", async () => {
+		const file = await target("hung-holder-with-churn");
+		const held = await acquireFileLock(file);
+		const started = performance.now();
+		const longWait = acquireFileLock(file, { retries: 50, retryDelayMs: 10 }).then(
+			async handle => {
+				await handle.release();
+				throw new Error("Waiter acquired the lock while the holder still had it");
+			},
+			(error: unknown) => ({ error, elapsed: performance.now() - started }),
+		);
+		try {
+			for (let attempt = 0; attempt < 10; attempt++) {
+				await expect(acquireFileLock(file, { retries: 1, retryDelayMs: 100 })).rejects.toThrow(
+					"an earlier holder in this process did not release it",
+				);
+			}
+			const { error, elapsed } = await longWait;
+			expect(error).toBeInstanceOf(Error);
+			expect(String(error)).toContain("an earlier holder in this process did not release it");
+			expect(elapsed).toBeLessThan(900);
+		} finally {
+			await held.release();
+		}
+		const next = await acquireFileLock(file, { retries: 10, retryDelayMs: 10 });
+		await next.release();
+	});
 });
 
 describe("a lock whose release failed", () => {

@@ -972,7 +972,7 @@ function reapStaleAndAcquireSync(lockPath: string, opts: Required<FileLockOption
  */
 interface TurnQueue {
 	tail: Promise<void>;
-	/** Resolves, and is replaced, each time a queued turn ends anywhere on this path. */
+	/** Resolves, and is replaced, each time a holder releases this path. */
 	progress: PromiseWithResolvers<void>;
 }
 
@@ -1010,15 +1010,6 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 	const { promise: turnDone, resolve: finishTurn } = Promise.withResolvers<void>();
 	const tail = previous.then(() => turnDone);
 	turnQueue.tail = tail;
-	let ended = false;
-	const endTurn = (): void => {
-		if (ended) return;
-		ended = true;
-		finishTurn();
-		const progressed = turnQueue.progress;
-		turnQueue.progress = Promise.withResolvers<void>();
-		progressed.resolve();
-	};
 	void tail.then(() => {
 		if (turnQueue.tail === tail && inProcessTurns.get(lockPath) === turnQueue) inProcessTurns.delete(lockPath);
 	});
@@ -1036,7 +1027,10 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 					try {
 						await releaseLock(lockPath, lease);
 					} finally {
-						endTurn();
+						finishTurn();
+						const progressed = turnQueue.progress;
+						turnQueue.progress = Promise.withResolvers<void>();
+						progressed.resolve();
 					}
 				};
 			}
@@ -1044,7 +1038,7 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 		}
 		throw new Error(`Failed to acquire lock for ${escapeTerminalText(filePath)} after ${opts.retries} attempts`);
 	} catch (error) {
-		endTurn();
+		finishTurn();
 		throw error;
 	}
 }
