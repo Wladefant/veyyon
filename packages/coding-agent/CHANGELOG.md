@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Show the selected repository and its GitHub App and worktree commands in task prompts. Keep delegation ancestors out of the IRC peer roster ([Refs #738](https://github.com/Wladefant/veyyon/issues/738), [Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
 - Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
 - Give every native result wake one durable continuation phase. Keep pending tool results ahead of completion notices and prevent reuse of an earlier phase's terminal result ([Refs #1159](https://github.com/Wladefant/veyyon/issues/1159)).
 - Wait for result and parent-target journal writes before retained IRC delivery. Queue parent sends while asynchronous rewrites hold the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).

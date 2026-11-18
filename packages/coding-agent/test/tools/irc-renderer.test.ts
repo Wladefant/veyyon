@@ -241,6 +241,17 @@ describe("the irc card for a peer list", () => {
 				details: {
 					op: "list",
 					from: "Main",
+					ancestors: [
+						{
+							id: "Owner",
+							displayName: "owner",
+							kind: "main",
+							status: "running",
+							relation: "parent",
+							unread: 3,
+							lastActivity: Date.now() - 1000,
+						},
+					],
 					peers: [
 						{
 							id: "RateLimiter",
@@ -268,6 +279,7 @@ describe("the irc card for a peer list", () => {
 		expect(rendered[0]).toContain("1 running");
 		expect(rendered[0]).toContain("1 parked");
 		expect(rendered[0]).toContain("2 unread");
+		expect(rendered.some(line => line.includes("Owner") && line.includes("direct parent"))).toBe(true);
 		// Running peers sort above parked ones regardless of input order.
 		const authIndex = rendered.findIndex(line => line.includes("AuthLoader"));
 		const rateIndex = rendered.findIndex(line => line.includes("RateLimiter"));
