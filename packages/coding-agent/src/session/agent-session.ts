@@ -1153,20 +1153,6 @@ export class AgentSession {
 			if (terminal) break;
 		}
 		const recoveredTurnEnded = phaseTail?.role === "assistant" && phaseTail.stopReason !== "toolUse";
-		if (
-			!terminal &&
-			!recoveredTurnEnded &&
-			retainedIndex >= 0 &&
-			(recovered.length === 0 || crossedPhaseBoundary || this.agent.state.messages.at(-1)?.role === "assistant") &&
-			retainedIndex !== this.agent.state.messages.length - 1
-		) {
-			// The phase has no usable continuation tail. Re-present its retained input
-			// at a valid user boundary without writing a second receipt or borrowing that turn's result.
-			const messages = this.agent.state.messages.slice();
-			const [record] = messages.splice(retainedIndex, 1);
-			messages.push(record!);
-			this.agent.replaceMessages(messages);
-		}
 		const inputs = records.filter(
 			record =>
 				!this.agent.state.messages.some(message => message.role === "custom" && sameIrcRecord(message, record)),
@@ -1201,13 +1187,36 @@ export class AgentSession {
 						failure = error;
 					}
 				}
-				if (needsPrompt && failure === undefined && this.#config.agentKind === "sub") {
-					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
-				}
+				if (
+					needsPrompt &&
+					failure === undefined &&
+					(this.#isDisposed || wakeSignal.aborted || (this.#config.agentKind === "sub" && !wakeLease))
+				)
+					return;
 				if (needsPrompt && failure === undefined) {
 					wakeAdmitted = true;
 					try {
-						await (inputs.length > 0 ? this.agent.prompt(inputs) : this.agent.continue());
+						if (inputs.length > 0) {
+							await this.agent.prompt(inputs);
+						} else {
+							const messages = this.agent.state.messages;
+							if (
+								parentRecord &&
+								(recovered.length === 0 || crossedPhaseBoundary || messages.at(-1)?.role === "assistant")
+							) {
+								const index = messages.findIndex(
+									message => message.role === "custom" && sameIrcRecord(message, parentRecord),
+								);
+								if (index >= 0 && index !== messages.length - 1) {
+									// Re-present the retained input at a valid boundary without writing another receipt.
+									const reordered = messages.slice();
+									const [record] = reordered.splice(index, 1);
+									reordered.push(record!);
+									this.agent.replaceMessages(reordered);
+								}
+							}
+							await this.agent.continue();
+						}
 						phaseTail = this.agent.state.messages.length > phaseStart ? this.agent.state.messages.at(-1) : undefined;
 					} catch (error) {
 						failure = error;

@@ -1027,7 +1027,7 @@ describe("native retained child resume", () => {
 		expect(child.instance.agent.state.systemPrompt).toEqual(["Operator: production writes are forbidden."]);
 	});
 
-	it("re-presents a retained input before prompting from an unrelated assistant tail", async () => {
+	it.each(["admitted", "refused", "aborted"] as const)("retained input waits for admission: %s", async admission => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Fresh result"], stopReason: "stop" }]);
@@ -1075,7 +1075,35 @@ describe("native retained child resume", () => {
 		await worker.instance.waitForIdle();
 
 		await worker.instance.dispose();
-		const reopened = await SessionManager.open(worker.store.getSessionFile()!);
+		const journal = worker.store.getSessionFile()!;
+		if (admission !== "admitted") {
+			const abandonedStore = await SessionManager.open(journal);
+			const abandoned = await session("worker", [], abandonedStore, [], "sub");
+			registry.attachSession("worker", abandoned.instance, journal);
+			const messages = abandoned.instance.agent.state.messages.slice();
+			const journalBefore = await fs.readFile(journal, "utf8");
+			const entered = Promise.withResolvers<AbortSignal>();
+			const lease = Promise.withResolvers<laneAdmission.NativeHostLaneLease | null>();
+			const acquire = spyOn(laneAdmission, "acquireSubagentHostLane").mockImplementation(({ signal }) => {
+				entered.resolve(signal!);
+				return lease.promise;
+			});
+			const release = vi.fn(async () => {});
+			await abandoned.instance.replayIrcContinuations();
+			const signal = await entered.promise;
+			if (admission === "aborted") abandoned.instance.beginDispose();
+			lease.resolve(admission === "refused" ? null : { slotId: "worker-slot", leaseToken: "lease", release });
+			await abandoned.instance.waitForIdle();
+			acquire.mockRestore();
+
+			expect(signal.aborted).toBe(admission === "aborted");
+			expect(abandoned.mock.calls).toHaveLength(0);
+			expect(await fs.readFile(journal, "utf8")).toBe(journalBefore);
+			expect(abandoned.instance.agent.state.messages).toEqual(messages);
+			await abandoned.instance.dispose();
+		}
+
+		const reopened = await SessionManager.open(journal);
 		const recovered = await session("worker", [yielded("B")], reopened);
 		registry.attachSession("worker", recovered.instance, reopened.getSessionFile()!);
 
