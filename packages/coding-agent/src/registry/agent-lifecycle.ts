@@ -111,7 +111,10 @@ export class AgentLifecycleManager {
 	 * close it raced with, so it never receives a session that is being disposed and
 	 * the session it attaches is never detached by the close finishing after it.
 	 */
-	readonly #sleeping = new Map<string, Promise<void>>();
+	readonly #sleeping = new Map<
+		string,
+		{ promise: Promise<void>; ref: AgentRef | undefined; session: AgentSession }
+	>();
 	/** In-flight wakes, so concurrent {@link ensureLive} calls coalesce. */
 	readonly #revivals = new Map<string, Promise<AgentSession>>();
 	/**
@@ -266,23 +269,24 @@ export class AgentLifecycleManager {
 	 * the agent from it.
 	 *
 	 * `dispose` closes the session; the default is `session.dispose()`, and the
-	 * executor passes a bounded one. Concurrent calls for one id share the close.
+	 * executor passes a bounded one. Concurrent calls for one registration and session share the close.
 	 */
 	fallAsleep(
 		id: string,
 		session: AgentSession,
 		dispose: () => Promise<void> = () => session.dispose(),
 	): Promise<void> {
+		const expectedRef = this.#registry.get(id);
 		const inflight = this.#sleeping.get(id);
-		if (inflight) return inflight;
+		if (inflight && inflight.ref === expectedRef && inflight.session === session) return inflight.promise;
 		// Registered BEFORE `dispose` runs: the sdk's dispose hook asks
 		// {@link isFallingAsleep} synchronously, and a hook that misses the close
 		// unregisters the agent instead of letting it sleep.
 		const { promise, resolve } = Promise.withResolvers<void>();
-		this.#sleeping.set(id, promise);
-		const expectedRef = this.#registry.get(id);
+		this.#sleeping.set(id, { promise, ref: expectedRef, session });
 		void (async () => {
 			try {
+				if (inflight) await inflight.promise;
 				await dispose();
 			} catch (error) {
 				logger.warn("AgentLifecycleManager.fallAsleep: session dispose failed", { id, error: errorMessage(error) });
@@ -294,7 +298,7 @@ export class AgentLifecycleManager {
 					this.#registry.setStatus(id, "asleep");
 				}
 			} finally {
-				this.#sleeping.delete(id);
+				if (this.#sleeping.get(id)?.promise === promise) this.#sleeping.delete(id);
 				resolve();
 				this.#scheduleNext();
 			}
@@ -310,7 +314,7 @@ export class AgentLifecycleManager {
 	async ensureLive(id: string): Promise<AgentSession> {
 		// A wake that arrives while the agent is falling asleep waits for the close to
 		// finish, then wakes it from the transcript the close just flushed.
-		await this.#sleeping.get(id);
+		await this.#sleeping.get(id)?.promise;
 		const ref = this.#registry.get(id);
 		if (!ref) {
 			throw new Error(
