@@ -431,7 +431,8 @@ async fn await_chunk_drain(
 	let Some(ChunkDrain { mut handle, mut progress_rx }) = drain else {
 		return result;
 	};
-	let allow_cancel_abort = !matches!(&result, Ok(res) if res.cancelled || res.timed_out);
+	// The command result is already known. Expired output budgets only make
+	// capture incomplete; an explicit abort still interrupts an active drain.
 	let idle_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_IDLE_GRACE);
 	napi::tokio::pin!(idle_sleep);
 	let deadline_sleep = napi::tokio::time::sleep(POST_COMPLETION_DRAIN_DEADLINE);
@@ -448,34 +449,17 @@ async fn await_chunk_drain(
 				}
 				return result;
 			}
-			reason = cancel_token.wait(), if allow_cancel_abort => {
-				handle.abort();
-				let _ = handle.await;
-				return match result {
-					Ok(mut res) if res.cancelled || res.timed_out => {
-						res.output_incomplete = true;
-						Ok(res)
-					}
-					Ok(_) => Err(Error::from_reason(format!(
+			reason = cancel_token.wait() => {
+				if !matches!(reason, CoreAbortReason::Timeout)
+					&& matches!(&result, Ok(res) if !res.cancelled && !res.timed_out)
+				{
+					result = Err(Error::from_reason(format!(
 						"Shell output callback drain aborted ({reason:?})"
-					))),
-					Err(err) => Err(err),
-				};
+					)));
+				}
+				break;
 			}
-			() = &mut deadline_sleep => {
-				handle.abort();
-				let _ = handle.await;
-				return match result {
-					Ok(mut res) if res.cancelled || res.timed_out => {
-						res.output_incomplete = true;
-						Ok(res)
-					}
-					Ok(_) => Err(Error::from_reason(
-						"Shell output callback drain exceeded deadline after command completion"
-					)),
-					Err(err) => Err(err),
-				};
-			}
+			() = &mut deadline_sleep => break,
 			changed = progress_rx.changed(), if progress_open => {
 				if changed.is_ok() {
 					idle_sleep.as_mut().reset(
@@ -485,22 +469,15 @@ async fn await_chunk_drain(
 					progress_open = false;
 				}
 			}
-			() = &mut idle_sleep => {
-				handle.abort();
-				let _ = handle.await;
-				return match result {
-					Ok(mut res) if res.cancelled || res.timed_out => {
-						res.output_incomplete = true;
-						Ok(res)
-					}
-					Ok(_) => Err(Error::from_reason(
-						"Shell output callback drain stalled after command completion"
-					)),
-					Err(err) => Err(err),
-				};
-			}
+			() = &mut idle_sleep => break,
 		}
 	}
+	handle.abort();
+	let _ = handle.await;
+	if let Ok(res) = &mut result {
+		res.output_incomplete = true;
+	}
+	result
 }
 
 /// Drain `rx`, greedily coalescing queued chunks into ≤64 KiB batches, and
@@ -955,7 +932,7 @@ mod tests {
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
-	async fn drain_stalled_forward_after_success_returns_transport_error_on_deadline() {
+	async fn completed_shell_preserves_exit_status_at_command_deadline() {
 		let (tx, rx) = flume::bounded::<String>(4);
 		let callback_resource = std::sync::Arc::new(());
 		let callback_weak = std::sync::Arc::downgrade(&callback_resource);
@@ -982,11 +959,11 @@ mod tests {
 			await_chunk_drain(Some(drain), &cancel, ok_result),
 		)
 		.await
-		.expect("deadline must bound stalled drain after core completes");
-		assert!(
-			settled.is_err(),
-			"stalled drain after normal core completion must surface an explicit error, not truncate silently",
-		);
+		.expect("deadline must bound stalled drain after core completes")
+		.expect("completed shell should return ShellRunResult");
+		assert_eq!(settled.exit_code, Some(0));
+		assert!(!settled.timed_out && !settled.cancelled);
+		assert!(settled.output_incomplete);
 		assert!(
 			callback_weak.upgrade().is_none(),
 			"stalled pump task and callback resources must be released",
@@ -1157,7 +1134,7 @@ mod tests {
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
-	async fn drain_stalled_forward_after_success_with_default_none_options_returns_error() {
+	async fn shell_exit_status_survives_stalled_drain() {
 		let shell = Shell::new(None);
 		let mut core_cancel = CancelToken::default();
 		let run_guard = shell.active_runs.register(&mut core_cancel);
@@ -1188,12 +1165,12 @@ mod tests {
 		let settled = time::timeout(Duration::from_secs(15), run_task)
 			.await
 			.expect("default None options must bound stalled drain after core completion")
-			.expect("run task should not panic");
-		assert!(
-			settled.is_err(),
-			"stalled drain after normal core completion with default options must surface an explicit error",
-		);
-		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run on error");
+			.expect("run task should not panic")
+			.expect("completed shell should return ShellRunResult");
+		assert_eq!(settled.exit_code, Some(0));
+		assert!(!settled.timed_out && !settled.cancelled);
+		assert!(settled.output_incomplete);
+		assert_eq!(shell.active_runs.active_count(), 0, "RAII guard must unregister run");
 		assert!(
 			callback_weak.upgrade().is_none(),
 			"stalled pump task and callback resources must be released",
@@ -1347,16 +1324,11 @@ mod tests {
 		drop(retained_tx);
 
 		let settled = settled_result
-			.expect("continuous post-completion child output must hit absolute drain deadline within 4s");
-		let Err(err) = settled else {
-			panic!(
-				"continuous post-completion output exceeding absolute deadline must surface an explicit transport error"
-			);
-		};
-		assert_eq!(
-			err.reason,
-			"Shell output callback drain exceeded deadline after command completion",
-		);
+			.expect("continuous post-completion child output must hit absolute drain deadline within 4s")
+			.expect("completed shell should return ShellRunResult");
+		assert_eq!(settled.exit_code, Some(0));
+		assert!(!settled.timed_out && !settled.cancelled);
+		assert!(settled.output_incomplete);
 		assert!(
 			delivered.load(Ordering::SeqCst) >= 3,
 			"expected several chunks to be delivered before hitting absolute deadline",
