@@ -585,8 +585,7 @@ describe("IRC", () => {
 				parentId: "owner",
 				ancestorIds: ["owner", "root"],
 			});
-			const ancestors = Reflect.get(result.details ?? {}, "ancestors") as Array<{ id: string }> | undefined;
-			expect(ancestors?.find(lane => lane.id === "owner")).toMatchObject({
+			expect(result.details?.ancestors?.find(lane => lane.id === "owner")).toMatchObject({
 				relation: "parent",
 				activity: "Delegated src/shared.ts",
 			});

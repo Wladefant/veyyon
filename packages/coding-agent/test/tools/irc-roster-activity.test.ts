@@ -87,7 +87,7 @@ describe("IRC roster activity", () => {
 			registry.register({ id, parentId, displayName: "task", kind: "sub", session: null, status: "running" });
 		}
 		const result = await new IrcTool(sessionForAgent(registry, "A.B.C")).execute("call", { op: "list" });
-		expect(Reflect.get(result.details ?? {}, "ancestors")).toMatchObject([
+		expect(result.details?.ancestors).toMatchObject([
 			{ id: "A", relation: "ancestor" },
 			{ id: "A.B", relation: "parent" },
 		]);

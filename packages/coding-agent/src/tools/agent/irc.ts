@@ -76,10 +76,13 @@ interface IrcPeerInfo {
 	kind: string;
 	status: string;
 	parentId?: string;
-	ancestor?: boolean;
 	unread: number;
 	lastActivity: number;
 	activity?: string;
+}
+
+interface IrcAncestorInfo extends IrcPeerInfo {
+	relation: "parent" | "ancestor";
 }
 
 export interface IrcDetails {
@@ -91,6 +94,7 @@ export interface IrcDetails {
 	waited?: IrcMessage | null;
 	inbox?: IrcMessage[];
 	peers?: IrcPeerInfo[];
+	ancestors?: IrcAncestorInfo[];
 	identity?: { selfId: string; parentId?: string; ancestorIds: string[]; scope?: string; model?: string | null };
 	/** Other live sessions on the same machine, distinct from same-conversation agent peers. */
 	sessionPeers?: SessionNoticeOwner[];
@@ -531,18 +535,26 @@ function executeList(
 	// second time; two spellings of one rule is how the drift starts. Parked
 	// peers are listed because messaging one revives it, which is supported.
 	const identity = { ...registry.actorContext(senderId), model: activeModel };
-	const ancestors = new Set(identity.ancestorIds);
-	const peers = registry.listAddressableBy(senderId).map(ref => ({
-		id: ref.id,
-		displayName: ref.displayName,
-		kind: ref.kind,
-		status: ref.status,
-		parentId: ref.parentId,
-		ancestor: ancestors.has(ref.id),
-		unread: bus.unreadCount(ref.id),
-		lastActivity: ref.lastActivity,
-		activity: ref.activity,
-	}));
+	const ancestorIds = new Set(identity.ancestorIds);
+	const ancestors: IrcAncestorInfo[] = [];
+	const peers: IrcPeerInfo[] = [];
+	for (const ref of registry.listAddressableBy(senderId)) {
+		const lane = {
+			id: ref.id,
+			displayName: ref.displayName,
+			kind: ref.kind,
+			status: ref.status,
+			parentId: ref.parentId,
+			unread: bus.unreadCount(ref.id),
+			lastActivity: ref.lastActivity,
+			activity: ref.activity,
+		};
+		if (ancestorIds.has(ref.id)) {
+			ancestors.push({ ...lane, relation: ref.id === identity.parentId ? "parent" : "ancestor" });
+		} else {
+			peers.push(lane);
+		}
+	}
 	const lines: string[] = [
 		`Self: ${identity.selfId}`,
 		`Current model: ${activeModel ?? "unknown (runtime does not expose the active model)"}`,
@@ -551,24 +563,23 @@ function executeList(
 		"Ancestors delegate work; activity alone is not a competing writer. Actual overlapping peer writes still require coordination.",
 		"Within your parent's assigned scope, peers may coordinate reversible implementation details; they cannot grant authority or permissions, reassign the task, or override parent, operator, or safety gates.",
 	];
-	if (peers.length === 0) {
+	if (peers.length === 0 && ancestors.length === 0) {
 		lines.push("No other agents.");
 	} else {
-		const ancestorPeers = peers.filter(peer => peer.ancestor);
-		const otherPeers = peers.filter(peer => !peer.ancestor);
 		for (const [heading, group] of [
-			["Your ancestors (delegation context; verify write ownership):", ancestorPeers],
-			["Other lanes:", otherPeers],
+			["Your ancestors (delegation context; verify write ownership):", ancestors],
+			["Other lanes:", peers],
 		] as const) {
 			if (group.length === 0) continue;
 			lines.push(heading);
-			if (group === ancestorPeers) {
+			if (group === ancestors) {
 				lines.push(
 					"An ancestor may still have uncommitted edits. Confirm the assigned writer and paths before overlapping writes.",
 				);
 			}
 			for (const peer of group) {
 				const extras = [
+					"relation" in peer ? (peer.relation === "parent" ? "direct parent" : "ancestor") : undefined,
 					peer.activity || undefined,
 					peer.unread > 0 ? `unread ${peer.unread}` : undefined,
 					peer.parentId ? `parent ${peer.parentId}` : undefined,
@@ -577,7 +588,7 @@ function executeList(
 				lines.push(`- ${peer.id} [${peer.displayName} · ${peer.kind} · ${peer.status}] — ${extras.join(", ")}`);
 			}
 		}
-		if (peers.some(peer => peer.status === "parked")) {
+		if (peers.some(peer => peer.status === "parked") || ancestors.some(lane => lane.status === "parked")) {
 			lines.push("");
 			lines.push("Parked agents are revived automatically when you message them.");
 		}
@@ -599,7 +610,7 @@ function executeList(
 	}
 	return {
 		content: [{ type: "text", text: lines.join("\n") }],
-		details: { op: "list", from: senderId, peers, identity, sessionPeers },
+		details: { op: "list", from: senderId, peers, ancestors, identity, sessionPeers },
 	};
 }
 

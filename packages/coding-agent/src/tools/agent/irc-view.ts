@@ -51,6 +51,7 @@ const BODY_LINE_WIDTH = 100;
 const RECIPIENT_NOUN = { one: "recipient", many: "recipients" } as const;
 const MESSAGE_NOUN = { one: "message", many: "messages" } as const;
 const PEER_NOUN = { one: "peer", many: "peers" } as const;
+const ANCESTOR_NOUN = { one: "ancestor", many: "ancestors" } as const;
 const SESSION_NOUN = { one: "session", many: "sessions" } as const;
 
 /** The order a roster reads in: who is working, then who is waiting, then who is parked. */
@@ -321,6 +322,7 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 		(a, b) =>
 			(PEER_STATUS_ORDER[a.status] ?? 9) - (PEER_STATUS_ORDER[b.status] ?? 9) || b.lastActivity - a.lastActivity,
 	);
+	const ancestors = details.ancestors ?? [];
 	const lines: ViewLine[] = details.identity
 		? [
 				[{ text: replaceTabs(`Self: ${details.identity.selfId}`) }],
@@ -329,7 +331,7 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 			]
 		: [];
 	const sessionPeers = [...(details.sessionPeers ?? [])].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-	if (peers.length === 0 && sessionPeers.length === 0) {
+	if (peers.length === 0 && ancestors.length === 0 && sessionPeers.length === 0) {
 		return messageCard(
 			{ kind: "statusRow", status: "info", title: "IRC peers", meta: [[{ text: "no other agents" }]] },
 			"success",
@@ -344,12 +346,13 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 	if (sessionPeers.length > 0) meta.push([{ text: `${sessionPeers.length} live ${sessionPeers.length === 1 ? "session" : "sessions"}` }]);
 
 	const sections: ViewSection[] = lines.length > 0 ? [{ lines }] : [];
-	if (peers.length > 0) {
-		const shown = shownItems(peers.length, expanded);
+	for (const [group, noun] of [[ancestors, ANCESTOR_NOUN], [peers, PEER_NOUN]] as const) {
+		if (group.length === 0) continue;
+		const shown = shownItems(group.length, expanded);
 		const lines: ViewLine[] = [];
 		for (let i = 0; i < shown; i++) {
-			const peer = peers[i]!;
-			const relation = peer.id === details.identity?.parentId ? "direct parent" : peer.ancestor ? "ancestor" : "peer";
+			const peer = group[i]!;
+			const relation = "relation" in peer ? (peer.relation === "parent" ? "direct parent" : "ancestor") : "peer";
 			const kindText = `${relation} · ${peer.parentId ? `${peer.kind} of ${peer.parentId}` : peer.kind}`;
 			const line: ViewSpan[] = [
 				...peerStatusSpans(peer.status),
@@ -366,7 +369,7 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 			if (age) line.push({ text: " " }, { text: age, tone: "dim" });
 			lines.push(line);
 		}
-		sections.push({ lines, hidden: heldBack(peers.length - shown, PEER_NOUN) });
+		sections.push({ lines, hidden: heldBack(group.length - shown, noun) });
 	}
 
 	if (sessionPeers.length > 0) {
