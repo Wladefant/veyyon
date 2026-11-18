@@ -595,6 +595,33 @@ describe("AgentLifecycleManager", () => {
 		expect(ref.terminalOutcomeReason).toBeUndefined();
 	});
 
+	it("a replacement closes its own session after the previous registration finishes closing", async () => {
+		const oldGate = deferred();
+		const newGate = deferred();
+		const oldStub = makeSessionStub(() => oldGate.promise);
+		registry.register({ id: "Race", displayName: "task", kind: "sub", session: oldStub.session, status: "idle" });
+		const oldClose = lifecycle.fallAsleep("Race", oldStub.session);
+		await flushAsync();
+		registry.unregister("Race");
+		const newStub = makeSessionStub(() => newGate.promise);
+		const replacement = registry.register({
+			id: "Race", displayName: "task", kind: "sub", session: newStub.session, status: "running",
+		});
+		const newClose = lifecycle.fallAsleep("Race", newStub.session);
+		oldGate.resolve();
+		expect(newClose).not.toBe(oldClose);
+		await oldClose;
+		await flushAsync();
+		expect(newStub.disposeCalls()).toBe(1);
+		expect(lifecycle.isFallingAsleep("Race")).toBe(true);
+		expect(replacement.session).toBe(newStub.session);
+		expect(lifecycle.fallAsleep("Race", newStub.session)).toBe(newClose);
+		newGate.resolve();
+		await newClose;
+		expect(replacement.session).toBeNull();
+		expect(replacement.status).toBe("asleep");
+	});
+
 	it("fallAsleep does not detach or sleep a replacement ref registered while dispose is in flight", async () => {
 		const gate = deferred();
 		const oldStub = makeSessionStub(() => gate.promise);
