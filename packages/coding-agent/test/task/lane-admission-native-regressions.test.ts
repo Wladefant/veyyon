@@ -301,55 +301,59 @@ describe("native host-lane admission regressions", () => {
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 	});
 
-	it("surfaces persistent ledger faults from initial and follow-up executor finalization", async () => {
-		for (const followUp of [false, true]) {
-			const ledgerPath = getLaneAdmissionLedgerPath();
-			let original = "";
-			const session = createMockSession(
-				async ({ emit }) => {
-					original = fs.readFileSync(ledgerPath, "utf8");
-					fs.writeFileSync(ledgerPath, "{");
-					emit(yieldSuccessEvent({ ok: true }));
-				},
-				{ activeToolNames: ["yield"] },
-			);
-			vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
-			vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockResolvedValue(session);
-			try {
-				const result = followUp
-					? runSubagentFollowUpTurn({
-							id: "PersistentFollowUp",
-							agent: testAgent,
-							message: "continue",
-							eventBus: new EventBus(),
-							artifactsDir: makeArtifactsDir(),
-						})
-					: runSubprocess({
-							cwd: "/repo",
-							agent: testAgent,
-							task: "finish",
-							index: 0,
-							id: "PersistentInitial",
-							settings: Settings.isolated(),
-							modelRegistry: {
-								refresh: async () => {},
-								getAvailable: () => [],
-								getApiKey: async () => "k",
-							} as never,
-							enableLsp: false,
-							eventBus: new EventBus(),
-							artifactsDir: makeArtifactsDir(),
-						});
-				await expect(result).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
-			} finally {
-				if (original) fs.writeFileSync(ledgerPath, original);
-			}
-			const held = (await getLaneAdmissionStatus()).reservations;
-			expect(held).toHaveLength(1);
-			const release = await releaseLaneAdmission({ slotId: held[0]!.slotId, leaseToken: held[0]!.leaseToken });
-			expect(release.released).toBe(true);
+	for (const followUp of [false, true]) {
+		for (const turnFails of [false, true]) {
+			it(`surfaces ${turnFails ? "dual turn and release failures" : "a release failure"} from the ${followUp ? "follow-up" : "initial"} executor`, async () => {
+				const ledgerPath = getLaneAdmissionLedgerPath();
+				let original = "";
+				const session = createMockSession(
+					async ({ emit }) => {
+						original = fs.readFileSync(ledgerPath, "utf8");
+						fs.writeFileSync(ledgerPath, "{");
+						if (turnFails) throw new Error("worker prompt failed before yield");
+						emit(yieldSuccessEvent({ ok: true }));
+					},
+					{ activeToolNames: ["yield"] },
+				);
+				vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+				vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockResolvedValue(session);
+				try {
+					const result = followUp
+						? runSubagentFollowUpTurn({
+								id: "PersistentFollowUp",
+								agent: testAgent,
+								message: "continue",
+								eventBus: new EventBus(),
+								artifactsDir: makeArtifactsDir(),
+							})
+						: runSubprocess({
+								cwd: "/repo",
+								agent: testAgent,
+								task: "finish",
+								index: 0,
+								id: "PersistentInitial",
+								settings: Settings.isolated(),
+								modelRegistry: {
+									refresh: async () => {},
+									getAvailable: () => [],
+									getApiKey: async () => "k",
+								} as never,
+								enableLsp: false,
+								eventBus: new EventBus(),
+								artifactsDir: makeArtifactsDir(),
+							});
+					await expect(result).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
+					if (turnFails) await expect(result).rejects.toThrow("worker prompt failed before yield");
+				} finally {
+					if (original) fs.writeFileSync(ledgerPath, original);
+				}
+				const held = (await getLaneAdmissionStatus()).reservations;
+				expect(held).toHaveLength(1);
+				const release = await releaseLaneAdmission({ slotId: held[0]!.slotId, leaseToken: held[0]!.leaseToken });
+				expect(release.released).toBe(true);
+			});
 		}
-	});
+	}
 
 	it("settles transient release failure without handing retry ownership to the caller", async () => {
 		const lease = await acquireSubagentHostLane({

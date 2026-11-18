@@ -83,7 +83,7 @@ import {
 	resolveAgentPruneBudget,
 } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
-import { acquireSubagentHostLane, type NativeHostLaneLease } from "./lane-admission";
+import { acquireSubagentHostLane, LaneAdmissionError, type NativeHostLaneLease } from "./lane-admission";
 import { reportProviderError } from "./provider-error-reporter";
 import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
@@ -1609,6 +1609,34 @@ export interface FollowUpTurnOptions {
 	maxRuntimeMs?: number;
 }
 
+async function runWithHostLaneRelease(
+	lease: NativeHostLaneLease,
+	run: () => Promise<SingleResult>,
+): Promise<SingleResult> {
+	let result: SingleResult | undefined;
+	let runError: unknown;
+	try {
+		result = await run();
+	} catch (error) {
+		runError = error;
+	}
+	try {
+		await lease.release();
+	} catch (releaseError) {
+		if (result?.exitCode === 0) throw releaseError;
+		const runFailure = result
+			? result.error || result.abortReason || result.stderr || `Agent exited with code ${result.exitCode}`
+			: runError;
+		const failure = new AggregateError(
+			[runFailure, releaseError],
+			`${errorMessage(releaseError)}\nAgent run also failed: ${errorMessage(runFailure)}`,
+		);
+		throw releaseError instanceof LaneAdmissionError ? Object.assign(failure, { code: releaseError.code }) : failure;
+	}
+	if (!result) throw runError;
+	return result;
+}
+
 /**
  * Continue a previously spawned (keep-alive) agent with one more monitored
  * turn: revive it if parked, send `message` as a real prompt, drive it to
@@ -1699,7 +1727,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		};
 	}
 
-	try {
+	return runWithHostLaneRelease(hostLaneLease, async () => {
 		const session = await AgentLifecycleManager.global().ensureLive(id);
 		const ref = AgentRegistry.global().get(id);
 		const sessionFile = ref?.sessionFile ?? undefined;
@@ -1783,9 +1811,7 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 			sessionFile,
 			startTime,
 		});
-	} finally {
-		await hostLaneLease.release();
-	}
+	});
 }
 
 /**
@@ -2690,7 +2716,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 	}
 	if (!hostLaneLease) return cancelledBeforeStart(options);
 
-	try {
+	return runWithHostLaneRelease(hostLaneLease, async () => {
 		const monitor = createAgentRunMonitor({
 			index: options.index,
 			id,
@@ -2758,7 +2784,5 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 			sessionFile,
 			startTime,
 		});
-	} finally {
-		await hostLaneLease.release();
-	}
+	});
 }
