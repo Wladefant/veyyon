@@ -352,7 +352,12 @@ describe("native retained child resume", () => {
 		const completion = completions[0]!;
 		if (completion.type !== "custom_message") throw new Error("Expected native completion");
 		expect(completion.attribution).toBe("agent");
-		expect(completion.details).toMatchObject({ from: "worker", source: "agent", phaseId: "resume-phase-two" });
+		expect(completion.details).toMatchObject({
+			from: "worker",
+			source: "agent",
+			phaseId: "resume-phase-two",
+			resultSource: "agent",
+		});
 		expect(completion.content).toContain('"value":"B"');
 		const handle = Reflect.get(completion.details!, "handle") as string;
 		expect(handle).toStartWith("agent://worker.phase-");
@@ -959,7 +964,12 @@ describe("native retained child resume", () => {
 			name: "a phase without a native yield",
 			response: { content: ["Stopped without yielding"], stopReason: "stop" } as MockResponse,
 			source: "harness",
-			expected: { status: "no_yield", output: "Stopped without yielding", source: "harness" },
+			expected: {
+				error: "Phase ended without a terminal yield",
+				status: "no_yield",
+				output: "Stopped without yielding",
+				source: "harness",
+			},
 		},
 		{
 			name: "an interrupted phase with partial text",

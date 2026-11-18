@@ -1058,14 +1058,11 @@ export class AgentSession {
 					: "";
 			let output =
 				failure !== undefined || !terminal
-					? JSON.stringify(
-							finalText.trim()
-								? { status: "no_yield", output: finalText, source: "harness" }
-								: {
-										error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure),
-										source: "harness",
-									},
-						)
+					? JSON.stringify({
+							error: failure === undefined ? "Phase ended without a terminal yield" : errorMessage(failure),
+							...(finalText.trim() ? { status: "no_yield", output: finalText } : undefined),
+							source: "harness",
+						})
 					: last?.status === "aborted"
 						? JSON.stringify({ error: last.error ?? "Agent ended the phase without success", source: "agent" })
 						: !assembled || assembled.missingData
