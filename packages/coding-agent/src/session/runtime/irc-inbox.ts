@@ -15,9 +15,30 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { AgentMessage } from "@veyyon/agent-core";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { IrcMessage } from "../../task/irc-bus";
 import type { CustomMessage } from "../messages";
+
+export function sameIrcRecord(
+	left: Pick<CustomMessage, "customType" | "details">,
+	right: Pick<CustomMessage, "customType" | "details">,
+): boolean {
+	if (left.customType !== right.customType) return false;
+	const field = left.customType === "task:continuation" ? "completionId" : "id";
+	const id = Reflect.get(left.details ?? {}, field);
+	return typeof id === "string" && Reflect.get(right.details ?? {}, field) === id;
+}
+
+function receivedCompletion(data: unknown): CustomMessage | undefined {
+	if (!data || typeof data !== "object" || Reflect.get(data, "version") !== 1) return undefined;
+	const record = Reflect.get(data, "record") as CustomMessage | undefined;
+	return record?.role === "custom" &&
+		record.customType === "task:continuation" &&
+		typeof Reflect.get(record.details ?? {}, "completionId") === "string"
+		? record
+		: undefined;
+}
 
 /** Which `irc:incoming` records {@link IrcInbox.takeIncoming} returns. */
 export interface IrcIncomingFilter {
@@ -30,28 +51,24 @@ export interface IrcIncomingFilter {
 export class IrcInbox {
 	#interrupts: CustomMessage[] = [];
 	#asides: CustomMessage[] = [];
-	#completionWake: CustomMessage | undefined;
-
-	queueCompletionWake(record: CustomMessage): void {
-		this.#completionWake ??= record;
-	}
-
-	get completionWake(): CustomMessage | undefined {
-		return this.#completionWake;
-	}
 
 	/** Whether a peer message is waiting for the next step boundary. */
 	get hasInterrupts(): boolean {
-		return this.#interrupts.length > 0 || this.#completionWake !== undefined;
+		return this.#interrupts.length > 0;
 	}
 
 	/** Whether any record is waiting. */
 	get isEmpty(): boolean {
-		return this.#interrupts.length === 0 && this.#asides.length === 0 && this.#completionWake === undefined;
+		return this.#interrupts.length === 0 && this.#asides.length === 0;
 	}
 
 	queueInterrupt(record: CustomMessage): void {
 		this.#interrupts.push(record);
+	}
+
+	takeCompletion(record: CustomMessage): void {
+		const index = this.#interrupts.findIndex(candidate => sameIrcRecord(candidate, record));
+		if (index >= 0) this.#interrupts.splice(index, 1);
 	}
 
 	queueAside(record: CustomMessage): void {
@@ -60,7 +77,6 @@ export class IrcInbox {
 
 	/** Every waiting record, interrupts first, leaving both queues empty. */
 	takeAll(): CustomMessage[] {
-		this.#completionWake = undefined;
 		const records = this.#interrupts.concat(this.#asides);
 		this.#interrupts = [];
 		this.#asides = [];
@@ -146,6 +162,67 @@ export class IrcContinuationOutbox {
 		this.#store = store;
 	}
 
+	hasReceivedCompletion(completionId: string): boolean {
+		return this.#store.getEntries().some(entry => {
+			if (entry.type === "custom_message" && entry.customType === "task:continuation") {
+				return Reflect.get(entry.details ?? {}, "completionId") === completionId;
+			}
+			if (entry.type !== "custom" || entry.customType !== "irc:completion-received") return false;
+			const record = receivedCompletion(entry.data);
+			return record !== undefined && Reflect.get(record.details ?? {}, "completionId") === completionId;
+		});
+	}
+
+	/** A durable delivery receipt is not a provider input and cannot split an in-flight tool exchange. */
+	receiveCompletion(record: CustomMessage): void {
+		const id = Reflect.get(record.details ?? {}, "completionId");
+		if (record.customType !== "task:continuation" || typeof id !== "string") {
+			throw new Error("Native completion receipt requires a completion ID");
+		}
+		if (!this.hasReceivedCompletion(id)) {
+			this.#store.appendCustomEntry("irc:completion-received", { version: 1, record });
+		}
+	}
+
+	pendingReceivedCompletions(consumedInContext: ReadonlySet<string>): CustomMessage[] {
+		const consumed = new Set(consumedInContext);
+		const records = new Map<string, CustomMessage>();
+		for (const entry of this.#store.getEntries()) {
+			let record: CustomMessage | undefined;
+			if (entry.type === "custom") {
+				if (entry.customType === "irc:completion-consumed" && typeof entry.data === "string")
+					consumed.add(entry.data);
+				else if (entry.customType === "irc:completion-received") record = receivedCompletion(entry.data);
+			} else if (entry.type === "custom_message" && entry.customType === "task:continuation") {
+				const message = this.#store.buildEntryContext(entry).messages[0];
+				if (message?.role === "custom") record = message;
+			}
+			if (!record) continue;
+			const id = Reflect.get(record.details ?? {}, "completionId");
+			if (typeof id !== "string") continue;
+			if (Reflect.get(record.details ?? {}, "streamingCompletion") === true) consumed.add(id);
+			if (!records.has(id)) records.set(id, record);
+		}
+		return [...records.values()].filter(record => !consumed.has(Reflect.get(record.details ?? {}, "completionId")));
+	}
+
+	/** Only messages after both the durable phase claim and its actual input can belong to its result. */
+	recoveryMessages(phaseId: string, record: CustomMessage): AgentMessage[] | undefined {
+		const entries = this.#store.getBranch();
+		const claim = entries.findIndex(
+			entry =>
+				entry.type === "custom" &&
+				entry.customType === "irc:continuation-phase" &&
+				typeof entry.data === "object" &&
+				entry.data !== null &&
+				Reflect.get(entry.data, "version") === 1 &&
+				Reflect.get(entry.data, "phaseId") === phaseId,
+		);
+		const input = entries.findIndex(entry => entry.type === "custom_message" && sameIrcRecord(entry, record));
+		if (claim < 0 || input < 0) return undefined;
+		return entries.slice(Math.max(claim, input) + 1).flatMap(entry => this.#store.buildEntryContext(entry).messages);
+	}
+
 	hasPhase(phaseId: string): boolean {
 		return this.#store
 			.getEntries()
@@ -162,19 +239,34 @@ export class IrcContinuationOutbox {
 
 	/** Retained native input with its durable phase ID lets activation recover a phase interrupted before its result was saved. */
 	unfinishedPhases(): Array<{ phaseId: string; record: CustomMessage }> {
+		const entries = this.#store.getEntries();
 		const completed = new Set(this.#results().map(result => result.phaseId));
+		for (const entry of entries) {
+			if (
+				entry.type === "custom" &&
+				entry.customType === "irc:completion-consumed" &&
+				typeof entry.data === "string"
+			) {
+				completed.add(`completion:${entry.data}`);
+			} else if (
+				entry.type === "custom_message" &&
+				entry.customType === "task:continuation" &&
+				Reflect.get(entry.details ?? {}, "streamingCompletion") === true
+			) {
+				const id = Reflect.get(entry.details ?? {}, "completionId");
+				if (typeof id === "string") completed.add(`completion:${id}`);
+			}
+		}
 		const consumedSteers = new Set(
-			this.#store
-				.getEntries()
-				.flatMap(entry =>
-					entry.type === "custom_message" &&
-					entry.customType === "irc:incoming" &&
-					Reflect.get(entry.details ?? {}, "streamingSteer") === true
-						? [Reflect.get(entry.details ?? {}, "id")]
-						: [],
-				),
+			entries.flatMap(entry =>
+				entry.type === "custom_message" &&
+				entry.customType === "irc:incoming" &&
+				Reflect.get(entry.details ?? {}, "streamingSteer") === true
+					? [Reflect.get(entry.details ?? {}, "id")]
+					: [],
+			),
 		);
-		return this.#store.getEntries().flatMap(entry => {
+		return entries.flatMap(entry => {
 			if (
 				entry.type !== "custom" ||
 				entry.customType !== "irc:continuation-phase" ||
@@ -208,14 +300,22 @@ export class IrcContinuationOutbox {
 		let newerId: string | undefined;
 		let newerTimestamp = record.timestamp;
 		for (const entry of this.#store.getEntries()) {
+			const candidate =
+				entry.type === "custom_message"
+					? entry
+					: entry.type === "custom" && entry.customType === "irc:completion-received"
+						? receivedCompletion(entry.data)
+						: undefined;
 			if (
-				entry.type !== "custom_message" ||
-				(entry.customType !== "irc:incoming" && entry.customType !== "task:continuation") ||
-				Reflect.get(entry.details ?? {}, "from") !== from
+				!candidate ||
+				(candidate.customType !== "irc:incoming" && candidate.customType !== "task:continuation") ||
+				Reflect.get(candidate.details ?? {}, "from") !== from
 			)
 				continue;
-			const candidateId = Reflect.get(entry.details ?? {}, "id");
-			const timestamp = Reflect.get(entry.details ?? {}, "sentAt") ?? new Date(entry.timestamp).getTime();
+			const candidateId = Reflect.get(candidate.details ?? {}, "id");
+			const timestamp =
+				Reflect.get(candidate.details ?? {}, "sentAt") ??
+				(typeof candidate.timestamp === "number" ? candidate.timestamp : new Date(candidate.timestamp).getTime());
 			if (
 				typeof candidateId === "string" &&
 				candidateId !== id &&
