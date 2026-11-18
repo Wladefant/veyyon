@@ -1027,11 +1027,20 @@ describe("native retained child resume", () => {
 		expect(child.instance.agent.state.systemPrompt).toEqual(["Operator: production writes are forbidden."]);
 	});
 
-	it.each(["admitted", "refused", "aborted"] as const)("retained input waits for admission: %s", async admission => {
+	it.each([
+		["admitted", "parent"],
+		["refused", "parent"],
+		["aborted", "parent"],
+		["admitted", "user-text"],
+		["admitted", "user-yield"],
+	] as const)("retained input waits for admission: %s after %s", async (admission, interruption) => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Fresh result"], stopReason: "stop" }]);
-		const worker = await session("worker", [{ content: ["Unrelated final text"], stopReason: "stop" }]);
+		const worker = await session(
+			"worker",
+			[interruption === "user-yield" ? yielded("Unrelated private result") : { content: ["Unrelated final text"], stopReason: "stop" }],
+		);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
 		registry.register({
@@ -1063,6 +1072,9 @@ describe("native retained child resume", () => {
 		await worker.store.ensureOnDisk();
 		await worker.store.sync();
 
+		if (interruption !== "parent") {
+			await worker.instance.prompt("Independent user request");
+		} else {
 		await worker.instance.sendCustomMessage(
 			{
 				...oldPhase,
@@ -1072,6 +1084,7 @@ describe("native retained child resume", () => {
 			},
 			{ triggerTurn: true },
 		);
+		}
 		await worker.instance.waitForIdle();
 
 		await worker.instance.dispose();
