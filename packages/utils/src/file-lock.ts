@@ -354,6 +354,15 @@ function closeObservedInfoSync(fd: number | undefined): void {
 	}
 }
 
+/**
+ * Tokens of locks this process acquired and then failed to remove. The owner record still names
+ * this live process, so liveness alone can never prove them abandoned: before this set existed one
+ * failed release (a Windows sharing violation while another participant read the owner record)
+ * blocked every later acquire in the same process until it exited. The owner gave the lock up, so
+ * its own process may reap it; no other process can observe or forge membership.
+ */
+const abandonedOwnTokens = new Set<string>();
+
 function observationIsStale(
 	observation: LockObservation,
 	_staleMs: number,
@@ -361,6 +370,7 @@ function observationIsStale(
 	isOwnerAlive: ProcessInstanceVerifier = isProcessInstanceAlive,
 ): boolean {
 	if (observation.kind === "valid" && observation.info) {
+		if (observation.info.pid === process.pid && abandonedOwnTokens.has(observation.info.token)) return true;
 		// Wall age never proves abandonment. A long-running live critical
 		// section remains exclusive until its exact process incarnation is
 		// proven dead or reused.
@@ -540,6 +550,7 @@ async function retireObservedLock(
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "ENOENT") return "changed";
 		if (code === "EEXIST" || code === "ENOTEMPTY") return "busy";
+		if (isWindowsSharingViolation(error)) return "busy";
 		throw error;
 	}
 	await assertParentIdentity(lockPath, parentIdentity);
@@ -570,6 +581,7 @@ function retireObservedLockSync(
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "ENOENT") return "changed";
 		if (code === "EEXIST" || code === "ENOTEMPTY") return "busy";
+		if (isWindowsSharingViolation(error)) return "busy";
 		throw error;
 	}
 	assertParentIdentitySync(lockPath, parentIdentity);
@@ -757,6 +769,15 @@ function isPublicationAccessConflict(error: unknown): boolean {
 	return code === "EPERM" || code === "EACCES" || code === "EBUSY";
 }
 
+/**
+ * Windows refuses to rename a directory while any process holds a handle inside it, and every
+ * contender briefly opens the owner record to inspect it. The refusal is transient contention,
+ * not a verdict, so retiring a lock retries it as busy.
+ */
+function isWindowsSharingViolation(error: unknown): boolean {
+	return process.platform === "win32" && isPublicationAccessConflict(error);
+}
+
 async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 	const candidate = await prepareCandidate(lockPath);
 	let published = false;
@@ -838,25 +859,31 @@ function reportLostLockOwnership(lockPath: string, expectedToken: string, actual
 	);
 }
 
-function reportFailedRelease(lockPath: string, error: unknown): void {
+function reportFailedRelease(lockPath: string, token: string | undefined, error: unknown): void {
 	if (isEnoent(error)) return;
-	logger.warn("file-lock: could not remove the lock, so other processes will wait for it to go stale", {
+	if (token !== undefined) abandonedOwnTokens.add(token);
+	logger.warn("file-lock: could not remove the lock; this process will reap it on its next acquire", {
 		lockPath: escapeTerminalText(lockPath),
 		error: escapeTerminalText(String(error)),
 	});
 }
 
+/** How long a release keeps retrying a lock whose retirement stays busy. */
+const RELEASE_BUSY_BUDGET_MS = 2_000;
+const RELEASE_BUSY_DELAY_MS = 5;
+
 async function releaseLock(lockPath: string, expected: LockLease | string): Promise<void> {
+	const expectedToken = typeof expected === "string" ? expected : expected.token;
 	try {
 		const observation = await inspectLockDirectory(lockPath);
-		const expectedToken = typeof expected === "string" ? expected : expected.token;
 		const observed = leaseFor(observation, expectedToken);
 		if (observation === null || observed === undefined) {
 			reportLostLockOwnership(lockPath, expectedToken, observation?.info?.token);
 			return;
 		}
 		const lease = typeof expected === "string" ? observed : expected;
-		for (let attempt = 0; attempt < 3; attempt++) {
+		const deadline = Date.now() + RELEASE_BUSY_BUDGET_MS;
+		do {
 			const result = await retireObservedLock(lockPath, observation, { kind: "owner", lease });
 			if (result === "removed") return;
 			if (result === "changed" || result === "not-authorized") {
@@ -865,24 +892,26 @@ async function releaseLock(lockPath: string, expected: LockLease | string): Prom
 				return;
 			}
 			await settleTransition(lockPath, Number.POSITIVE_INFINITY);
-		}
+			await Bun.sleep(RELEASE_BUSY_DELAY_MS);
+		} while (Date.now() < deadline);
 		throw new Error("file-lock lifecycle remained busy during release");
 	} catch (error) {
-		reportFailedRelease(lockPath, error);
+		reportFailedRelease(lockPath, expectedToken, error);
 	}
 }
 
 function releaseLockSync(lockPath: string, expected: LockLease | string): void {
+	const expectedToken = typeof expected === "string" ? expected : expected.token;
 	try {
 		const observation = inspectLockDirectorySync(lockPath);
-		const expectedToken = typeof expected === "string" ? expected : expected.token;
 		const observed = leaseFor(observation, expectedToken);
 		if (observation === null || observed === undefined) {
 			reportLostLockOwnership(lockPath, expectedToken, observation?.info?.token);
 			return;
 		}
 		const lease = typeof expected === "string" ? observed : expected;
-		for (let attempt = 0; attempt < 3; attempt++) {
+		const deadline = Date.now() + RELEASE_BUSY_BUDGET_MS;
+		do {
 			const result = retireObservedLockSync(lockPath, observation, { kind: "owner", lease });
 			if (result === "removed") return;
 			if (result === "changed" || result === "not-authorized") {
@@ -891,10 +920,11 @@ function releaseLockSync(lockPath: string, expected: LockLease | string): void {
 				return;
 			}
 			settleTransitionSync(lockPath, Number.POSITIVE_INFINITY);
-		}
+			sleepSync(RELEASE_BUSY_DELAY_MS);
+		} while (Date.now() < deadline);
 		throw new Error("file-lock lifecycle remained busy during release");
 	} catch (error) {
-		reportFailedRelease(lockPath, error);
+		reportFailedRelease(lockPath, expectedToken, error);
 	}
 }
 
@@ -934,16 +964,89 @@ function reapStaleAndAcquireSync(lockPath: string, opts: Required<FileLockOption
 	return tryAcquireLockSync(lockPath);
 }
 
+/**
+ * The in-process queue on each lock path. Contenders in one process take turns before they touch
+ * the filesystem. Without it, a burst of same-process callers (twenty subagent spawns reserving host
+ * lanes at once) spent every retry renaming candidates against each other, and on Windows their
+ * constant reads of the owner record kept the holder's release rename failing.
+ */
+interface TurnQueue {
+	tail: Promise<void>;
+	/** Resolves, and is replaced, each time a queued turn ends anywhere on this path. */
+	progress: PromiseWithResolvers<void>;
+}
+
+const inProcessTurns = new Map<string, TurnQueue>();
+
+/**
+ * Wait for `previous` to finish. Fails only when the queue makes no progress for `budgetMs`, so a
+ * long burst still drains while a holder that never releases cannot stall its successors forever.
+ */
+async function waitForTurn(queue: TurnQueue, previous: Promise<void>, budgetMs: number): Promise<boolean> {
+	const ready = previous.then(() => "ready" as const);
+	for (;;) {
+		const { promise: expired, resolve: expire } = Promise.withResolvers<"expired">();
+		const timer = setTimeout(() => expire("expired"), budgetMs);
+		try {
+			const outcome = await Promise.race([ready, queue.progress.promise.then(() => "progress" as const), expired]);
+			if (outcome === "ready") return true;
+			if (outcome === "expired") return false;
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+}
+
 async function acquireLock(filePath: string, options: FileLockOptions = {}): Promise<() => Promise<void>> {
 	const opts = validateOptions(options);
 	const lockPath = getLockPath(filePath);
-	for (let attempt = 0; attempt < opts.retries; attempt++) {
-		await settleTransition(lockPath, opts.staleMs);
-		const lease = (await tryAcquireLock(lockPath)) ?? (await reapStaleAndAcquire(lockPath, opts));
-		if (lease !== null) return () => releaseLock(lockPath, lease);
-		if (attempt + 1 < opts.retries) await Bun.sleep(opts.retryDelayMs);
+	let queue = inProcessTurns.get(lockPath);
+	if (queue === undefined) {
+		queue = { tail: Promise.resolve(), progress: Promise.withResolvers<void>() };
+		inProcessTurns.set(lockPath, queue);
 	}
-	throw new Error(`Failed to acquire lock for ${escapeTerminalText(filePath)} after ${opts.retries} attempts`);
+	const turnQueue = queue;
+	const previous = turnQueue.tail;
+	const { promise: turnDone, resolve: finishTurn } = Promise.withResolvers<void>();
+	const tail = previous.then(() => turnDone);
+	turnQueue.tail = tail;
+	let ended = false;
+	const endTurn = (): void => {
+		if (ended) return;
+		ended = true;
+		finishTurn();
+		const progressed = turnQueue.progress;
+		turnQueue.progress = Promise.withResolvers<void>();
+		progressed.resolve();
+	};
+	void tail.then(() => {
+		if (turnQueue.tail === tail && inProcessTurns.get(lockPath) === turnQueue) inProcessTurns.delete(lockPath);
+	});
+	try {
+		if (!(await waitForTurn(turnQueue, previous, opts.retries * Math.max(opts.retryDelayMs, 1)))) {
+			throw new Error(
+				`Failed to acquire lock for ${escapeTerminalText(filePath)}: an earlier holder in this process did not release it`,
+			);
+		}
+		for (let attempt = 0; attempt < opts.retries; attempt++) {
+			await settleTransition(lockPath, opts.staleMs);
+			const lease = (await tryAcquireLock(lockPath)) ?? (await reapStaleAndAcquire(lockPath, opts));
+			if (lease !== null) {
+				return async () => {
+					try {
+						await releaseLock(lockPath, lease);
+					} finally {
+						endTurn();
+					}
+				};
+			}
+			if (attempt + 1 < opts.retries) await Bun.sleep(opts.retryDelayMs);
+		}
+		throw new Error(`Failed to acquire lock for ${escapeTerminalText(filePath)} after ${opts.retries} attempts`);
+	} catch (error) {
+		endTurn();
+		throw error;
+	}
 }
 
 function acquireLockSync(filePath: string, options: FileLockOptions = {}): () => void {
