@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Retry transient Windows sharing denials before moving a session journal aside during an asynchronous rewrite ([#774](https://github.com/Wladefant/veyyon/issues/774)).
+
 ## [1.10.11] - 2026-11-17
 
 ### Fixed

@@ -1,11 +1,12 @@
-import * as fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { retryWindowsRename } from "@veyyon/utils/atomic-write";
 import { reportFault } from "@veyyon/utils/fault-sink";
+import { withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 import { hasFsCode, isEnoent } from "@veyyon/utils/fs-error";
 import { type PathState, pathStateSync } from "@veyyon/utils/fs-optional";
-import { withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { peekFileEnds } from "@veyyon/utils/peek-file";
@@ -661,7 +662,12 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			// would mix our new session with the peer's on the same inode.
 			// Prior appends (including an owned title-slot prefix) are allowed
 			// to complete our own session header on a subsequent call.
-			if (this.#emptyAtOpen && !this.#sessionIdAtOpen && !this.#hasAppendedToPinnedJournal && fs.fstatSync(this.#fd).size > 0) {
+			if (
+				this.#emptyAtOpen &&
+				!this.#sessionIdAtOpen &&
+				!this.#hasAppendedToPinnedJournal &&
+				fs.fstatSync(this.#fd).size > 0
+			) {
 				throw new Error("Session writer journal gained content before first append");
 			}
 			// A peer can truncate and overwrite an existing regular journal in place.
@@ -704,8 +710,11 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		);
 		try {
 			const next = fs.lstatSync(this.#path);
-			if (!next.isFile() || next.isSymbolicLink() ||
-				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))) {
+			if (
+				!next.isFile() ||
+				next.isSymbolicLink() ||
+				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))
+			) {
 				throw new Error("Session writer target changed during reopen");
 			}
 			// A different regular session file is not an authorized continuation.
@@ -752,11 +761,20 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			}
 		};
 		const canonical = path.resolve(this.#path);
-		if ((inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) || this.#pendingAppendCount > 0) {
+		if (
+			(inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) ||
+			this.#pendingAppendCount > 0
+		) {
 			this.#pendingAppendCount++;
 			const next = this.#pendingAppends.then(
-				() => withJournalLock(this.#path, async () => { writeLocked(); }),
-				() => withJournalLock(this.#path, async () => { writeLocked(); }),
+				() =>
+					withJournalLock(this.#path, async () => {
+						writeLocked();
+					}),
+				() =>
+					withJournalLock(this.#path, async () => {
+						writeLocked();
+					}),
 			);
 			this.#pendingAppends = next.catch(() => {});
 			try {
@@ -783,8 +801,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
 			const assertCurrentTarget = (): void => {
 				const entry = fs.lstatSync(this.#path);
-				if (!entry.isFile() || entry.isSymbolicLink() ||
-					fileObjectIdentity(entry) !== pinnedIdentity) {
+				if (!entry.isFile() || entry.isSymbolicLink() || fileObjectIdentity(entry) !== pinnedIdentity) {
 					throw new Error("Session writer target changed before durable sync");
 				}
 			};
@@ -910,8 +927,12 @@ export class FileSessionStorage implements SessionStorage {
 					if (!hasFsCode(renameError, "EPERM")) throw renameError;
 					// Never truncate the previous journal when replacement is refused.
 					// The existing staged-file fallback preserves or restores its backup.
-					this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError,
-						options?.commitGuard ? commitGuard : undefined);
+					this.#replaceSessionFileAfterEpermSync(
+						tempPath,
+						fpath,
+						renameError,
+						options?.commitGuard ? commitGuard : undefined,
+					);
 					if (guardRejected) throw new Error("Original journal changed before synchronous publication");
 				}
 			} catch (err) {
@@ -1077,7 +1098,7 @@ export class FileSessionStorage implements SessionStorage {
 				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
-			this.#publishStaged(tempPath, fpath, options);
+			await this.#publishStaged(tempPath, fpath, options);
 		});
 	}
 	/**
@@ -1125,34 +1146,28 @@ export class FileSessionStorage implements SessionStorage {
 				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
-			this.#publishStaged(tempPath, fpath, options);
+			await this.#publishStaged(tempPath, fpath, options);
 		});
 	}
 
 	/** Make a fully written temp file the file at `fpath`, or discard it. */
-	#publishStaged(tempPath: string, fpath: string, options?: WriteTextAtomicOptions): void {
-		// Guard-check + rename MUST NOT be separated by an await. A concurrent
-		// synchronous rewrite (flushSync -> #rewriteSynchronously) can otherwise
-		// publish a fresh body between the check and the rename, and this stale
-		// staged body would overwrite it. Sync rename closes that window.
-		if (options?.commitGuard && !options.commitGuard()) {
-			discardTemp(tempPath, fpath);
-			return;
-		}
+	async #publishStaged(tempPath: string, fpath: string, options?: WriteTextAtomicOptions): Promise<void> {
+		const guard = options?.commitGuard;
 		try {
-			this.renameSync(tempPath, fpath);
-			return;
-		} catch (err) {
-			if (!hasFsCode(err, "EPERM")) {
-				discardTemp(tempPath, fpath);
-				throw toError(err);
-			}
 			try {
-				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard);
-			} catch (fallbackErr) {
-				discardTemp(tempPath, fpath);
-				throw fallbackErr;
+				await retryWindowsRename(() => {
+					// A delay belongs between attempts, never between the guard and rename.
+					if (guard && !guard()) discardTemp(tempPath, fpath);
+					else this.renameSync(tempPath, fpath);
+				});
+			} catch (err) {
+				if (!hasFsCode(err, "EPERM")) throw toError(err);
+				if (guard && !guard()) discardTemp(tempPath, fpath);
+				else this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, guard);
 			}
+		} catch (error) {
+			discardTemp(tempPath, fpath);
+			throw error;
 		}
 	}
 

@@ -1,7 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
+import { restorePlatform, setPlatform } from "../../utils/test/helpers/platform-override";
 import { useTempDirs } from "./helpers/temp-dirs";
 
 const makeTempDir = useTempDirs();
@@ -24,6 +26,53 @@ describe("SessionManager.setCwd", () => {
 		expect(events).toEqual([{ previous: path.resolve(start), next: path.resolve(next) }]);
 
 		unsubscribe();
+	});
+
+	it("keeps the journal readable while a Windows sharing denial delays a cwd change", async () => {
+		const start = makeTempDir("@pi-setcwd-shared-start-");
+		const next = makeTempDir("@pi-setcwd-shared-next-");
+		const storage = new FileSessionStorage();
+		const manager = SessionManager.create(start, start, storage);
+		manager.appendCustomEntry("test-content", "Retain this journal entry.");
+		await manager.ensureOnDisk();
+		const sessionFile = manager.getSessionFile()!;
+		const original = fs.readFileSync(sessionFile, "utf8");
+		const rename = storage.renameSync.bind(storage);
+		let blocked = true;
+		let readWhileBlocked: string | undefined;
+		const sharingDenial = Object.assign(new Error("EPERM: operation not permitted, rename journal.jsonl.tmp"), {
+			code: "EPERM",
+		});
+		const renameSpy = spyOn(storage, "renameSync").mockImplementation((source, target) => {
+			if (blocked && (source === sessionFile || target === sessionFile)) {
+				if (readWhileBlocked === undefined) {
+					readWhileBlocked = fs.readFileSync(sessionFile, "utf8");
+					setPlatform("win32");
+					setImmediate(() => {
+						blocked = false;
+						restorePlatform();
+					});
+				}
+				throw sharingDenial;
+			}
+			rename(source, target);
+		});
+		try {
+			expect(await manager.setCwd(next)).toBe(path.resolve(next));
+			expect(readWhileBlocked).toBe(original);
+			expect(manager.getSessionFile()).toBe(sessionFile);
+			const persisted = fs.readFileSync(sessionFile, "utf8");
+			expect(persisted).toContain("Retain this journal entry.");
+			const header = persisted
+				.split("\n")
+				.map(line => (line ? JSON.parse(line) : null))
+				.find(row => row?.type === "session");
+			expect(header?.cwd).toBe(path.resolve(next));
+		} finally {
+			renameSpy.mockRestore();
+			restorePlatform();
+			await manager.close();
+		}
 	});
 
 	it("rejects a path that is a file", async () => {
