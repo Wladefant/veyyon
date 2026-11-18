@@ -78,14 +78,14 @@ describe("native host-lane admission regressions", () => {
 		const entered = Promise.withResolvers<void>();
 		const resume = Promise.withResolvers<void>();
 		const readFile = fsp.readFile;
-		const delayedRead = vi.spyOn(fsp, "readFile").mockImplementation(async (file, options) => {
-			if (file === ledgerPath) {
+		const delayedRead = vi.spyOn(fsp, "readFile").mockImplementation((async (...args: Parameters<typeof readFile>) => {
+			if (args[0] === ledgerPath) {
 				delayedRead.mockRestore();
 				entered.resolve();
 				await resume.promise;
 			}
-			return readFile(file, options);
-		});
+			return readFile(...args);
+		}) as typeof readFile);
 		const controller = new AbortController();
 		const cancelled = acquireSubagentHostLane({
 			agentId: "Cancelled",
@@ -98,11 +98,14 @@ describe("native host-lane admission regressions", () => {
 		const queued = Promise.withResolvers<void>();
 		vi.useFakeTimers();
 		const schedule = globalThis.setTimeout;
-		const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-			const handle = schedule(callback, delay, ...args);
+		const scheduleAndSignal = (...args: Parameters<typeof schedule>) => {
+			const handle = schedule(...args);
 			queued.resolve();
 			return handle;
-		});
+		};
+		const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation(
+			Object.assign(scheduleAndSignal, { __promisify__: schedule.__promisify__ }),
+		);
 		const successor = acquireSubagentHostLane({ agentId: "Successor", owner: "Successor" });
 		void successor.catch(() => {});
 		try {
