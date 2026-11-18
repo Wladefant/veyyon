@@ -25,6 +25,7 @@ import { Snowflake } from "@veyyon/utils/snowflake";
 import { getGlobalAgentsPath } from "../../src/discovery/agents-guidance";
 import { resolveVaultLocations, vaultPathFor } from "../../src/secrets/vault";
 import { vaultKeyPath } from "../../src/secrets/vault-crypto";
+import { getLaneAdmissionLedgerPath } from "../../src/task/lane-admission";
 
 let tempRoot = "";
 let originalConfigDir: string | undefined;
@@ -103,5 +104,22 @@ describe("the legacy migration never moves cross-profile state", () => {
 		// The exemptions are not a blanket stand-down: legacy state still moves.
 		expect(result.movedEntries).toEqual(["agent", "stats.db"]);
 		expect(fs.readFileSync(path.join(result.targetDir, "agent", "agent.db"), "utf8")).toBe("db");
+	});
+
+	it("leaves the host-wide run/lane-admission.json directory at the global root", () => {
+		const root = getGlobalConfigRootDir();
+		const ledgerPath = getLaneAdmissionLedgerPath(root);
+		expect(path.dirname(path.dirname(ledgerPath))).toBe(root);
+		fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+		fs.writeFileSync(ledgerPath, '{"version":1,"cap":40,"reservations":[]}');
+		fs.mkdirSync(path.join(root, "agent"), { recursive: true });
+		fs.writeFileSync(path.join(root, "agent", "agent.db"), "db");
+
+		const result = migrateLegacyDefaultProfileLayout();
+
+		expect(result.migrated).toBe(true);
+		expect(fs.existsSync(ledgerPath)).toBe(true);
+		expect(result.movedEntries).not.toContain("run");
+		expect(fs.existsSync(path.join(result.targetDir, "run"))).toBe(false);
 	});
 });

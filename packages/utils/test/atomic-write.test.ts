@@ -616,9 +616,9 @@ describe("atomicWriteFile", () => {
 			await realRename(oldPath, newPath);
 		});
 		try {
-			await expect(
-				atomicWriteFile(target, "NEW", { mode: 0o600, requireAtomicReplace: true }),
-			).rejects.toThrow("operation not permitted");
+			await expect(atomicWriteFile(target, "NEW", { mode: 0o600, requireAtomicReplace: true })).rejects.toThrow(
+				"operation not permitted",
+			);
 		} finally {
 			renameSpy.mockRestore();
 			Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
@@ -878,9 +878,9 @@ describe("atomicWriteFile", () => {
 				realRename(oldPath, newPath);
 			});
 			try {
-				expect(() =>
-					atomicWriteFileSync(target, "NEW", { mode: 0o600, requireAtomicReplace: true }),
-				).toThrow("operation not permitted");
+				expect(() => atomicWriteFileSync(target, "NEW", { mode: 0o600, requireAtomicReplace: true })).toThrow(
+					"operation not permitted",
+				);
 			} finally {
 				renameSpy.mockRestore();
 				Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
@@ -1228,5 +1228,141 @@ describe("atomicWriteFilePreservingMode", () => {
 		await fsp.writeFile(target, "before\n");
 		await atomicWriteFilePreservingMode(target, "after\n", { requireAtomicReplace: true });
 		expect(fs.readFileSync(target, "utf8")).toBe("after\n");
+	});
+});
+
+describe("atomicWriteFile retryRename", () => {
+	let dir: TempDir;
+
+	beforeEach(async () => {
+		dir = await TempDir.create("@pi-atomic-retry-");
+	});
+
+	afterEach(async () => {
+		await dir.remove();
+	});
+
+	it("retries transient Windows EBUSY/EACCES/EPERM/EEXIST rename denials without displacing target", async () => {
+		const target = path.join(dir.path(), "retry-success.txt");
+		await fsp.writeFile(target, "before\n");
+
+		const realRename = fsp.rename.bind(fsp);
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		const codes = ["EBUSY", "EACCES", "EPERM", "EEXIST"];
+		let attempts = 0;
+		let movedTarget = false;
+		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (source, dest) => {
+			if (String(source) === target) movedTarget = true;
+			if (String(dest) === target && attempts < codes.length) {
+				Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+				const code = codes[attempts++];
+				throw Object.assign(new Error(`transient ${code}`), { code });
+			}
+			return realRename(source, dest);
+		});
+
+		try {
+			await atomicWriteFile(target, "after\n", { requireAtomicReplace: true, retryRename: true });
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+			renameSpy.mockRestore();
+		}
+
+		expect(attempts).toBe(codes.length);
+		expect(movedTarget).toBe(false);
+		expect(fs.readFileSync(target, "utf8")).toBe("after\n");
+	});
+
+	it("preserves target and cleans temp on exhausted strict retryRename", async () => {
+		const target = path.join(dir.path(), "retry-strict-exhaust.txt");
+		await fsp.writeFile(target, "before\n");
+
+		const realRename = fsp.rename.bind(fsp);
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		let movedTarget = false;
+		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (source, dest) => {
+			if (String(source) === target) movedTarget = true;
+			if (String(dest) === target) {
+				Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+				throw Object.assign(new Error("persistent EPERM"), { code: "EPERM" });
+			}
+			return realRename(source, dest);
+		});
+
+		try {
+			await expect(
+				atomicWriteFile(target, "after\n", { requireAtomicReplace: true, retryRename: true }),
+			).rejects.toThrow("persistent EPERM");
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+			renameSpy.mockRestore();
+		}
+
+		expect(movedTarget).toBe(false);
+		expect(fs.readFileSync(target, "utf8")).toBe("before\n");
+		expect(fs.readdirSync(dir.path()).filter(f => f.includes(".tmp"))).toEqual([]);
+	}, 10_000);
+
+	it("falls back to displacing backup after retryRename exhaustion when requireAtomicReplace is false", async () => {
+		const target = path.join(dir.path(), "retry-fallback-exhaust.txt");
+		await fsp.writeFile(target, "before\n");
+
+		const realRename = fsp.rename.bind(fsp);
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		let movedTarget = false;
+		let blockDirect = true;
+		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (source, dest) => {
+			if (String(source) === target) {
+				movedTarget = true;
+				blockDirect = false;
+			}
+			if (blockDirect && String(dest) === target) {
+				Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+				throw Object.assign(new Error("persistent EACCES"), { code: "EACCES" });
+			}
+			return realRename(source, dest);
+		});
+
+		try {
+			await atomicWriteFile(target, "after\n", { retryRename: true });
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+			renameSpy.mockRestore();
+		}
+
+		expect(movedTarget).toBe(true);
+		expect(fs.readFileSync(target, "utf8")).toBe("after\n");
+	}, 10_000);
+
+	it("fails POSIX EACCES immediately without retries or displacement", async () => {
+		const target = path.join(dir.path(), "posix-eacces.txt");
+		await fsp.writeFile(target, "before\n");
+
+		const realRename = fsp.rename.bind(fsp);
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		let attempts = 0;
+		let movedTarget = false;
+		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (source, dest) => {
+			if (String(source) === target) movedTarget = true;
+			if (String(dest) === target) {
+				attempts++;
+				Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+				throw Object.assign(new Error("posix EACCES"), { code: "EACCES" });
+			}
+			return realRename(source, dest);
+		});
+
+		try {
+			await expect(
+				atomicWriteFile(target, "after\n", { requireAtomicReplace: true, retryRename: true }),
+			).rejects.toThrow("posix EACCES");
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+			renameSpy.mockRestore();
+		}
+
+		expect(attempts).toBe(1);
+		expect(movedTarget).toBe(false);
+		expect(fs.readFileSync(target, "utf8")).toBe("before\n");
 	});
 });

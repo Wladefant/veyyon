@@ -69,7 +69,7 @@ libmimalloc-sys.workspace = true
 tree-sitter.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Wdk_Storage_FileSystem", "Win32_Security", "Win32_System_ProcessStatus"] }
+windows-sys = { workspace = true, features = ["Wdk_Storage_FileSystem", "Win32_Security", "Win32_System_Console", "Win32_System_ProcessStatus"] }
 clipboard-win.workspace = true
 winreg.workspace = true
 

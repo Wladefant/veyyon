@@ -1,7 +1,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Process } from "@veyyon/natives";
-import { $flag, atomicWriteFile, errorMessage, getKernelRunnerDir, isBunTestRuntime, isTimeoutError, logger, readLines, Snowflake } from "@veyyon/utils";
+import {
+	$flag,
+	atomicWriteFile,
+	errorMessage,
+	getKernelRunnerDir,
+	isBunTestRuntime,
+	isTimeoutError,
+	logger,
+	readLines,
+	Snowflake,
+} from "@veyyon/utils";
 import { processHandle } from "@veyyon/utils/native-process";
 import type { Subprocess } from "bun";
 import { Settings } from "../config/settings";
@@ -58,6 +68,8 @@ export interface KernelExecuteResult {
 	 * kernel died unexpectedly). When false, the kernel remains reusable.
 	 */
 	kernelKilled?: boolean;
+	/** Cancellation was sent, but this request has not acknowledged it yet. */
+	cancellationPending?: boolean;
 }
 
 export interface KernelShutdownResult {
@@ -124,6 +136,8 @@ export interface BaseKernelOptions<TExecuteOptions extends KernelExecuteOptions 
 	shutdownGraceMs?: number;
 	/** Serializes an execution request into the runner's wire protocol. */
 	buildPayload?: (code: string, msgId: string, options?: TExecuteOptions) => string;
+	/** Serializes request-scoped cancellation into the runner wire protocol. */
+	buildCancelPayload?: (msgId: string) => string;
 }
 export type FrameType = "started" | "stdout" | "stderr" | "display" | "result" | "error" | "done";
 
@@ -138,6 +152,7 @@ export interface Frame {
 	status?: "ok" | "error";
 	executionCount?: number;
 	cancelled?: boolean;
+	cancellationPending?: boolean;
 }
 
 interface PendingExecution {
@@ -149,6 +164,7 @@ interface PendingExecution {
 	cancelled: boolean;
 	timedOut: boolean;
 	stdinRequested: boolean;
+	cancellationPending: boolean;
 	kernelKilled: boolean;
 	settled: boolean;
 	escalationTimer?: NodeJS.Timeout;
@@ -406,7 +422,10 @@ export function spawnKernelProcess(
 
 /** A failed initializer still owns this runner until shutdown confirms its exit. */
 export class UnconfirmedKernelStartupError extends Error {
-	constructor(readonly kernel: SessionKernel, cause: unknown) {
+	constructor(
+		readonly kernel: SessionKernel,
+		cause: unknown,
+	) {
 		super(errorMessage(cause), { cause });
 		this.name = cause instanceof Error ? cause.name : "Error";
 	}
@@ -650,13 +669,16 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#stopReason: string | undefined;
 	#exitedPromise: Promise<number> | null = null;
 	#shutdownPromise: Promise<KernelShutdownResult> | null = null;
+	readonly #pendingTreeExitWaits = new Map<number, Promise<boolean>>();
 	#ownedProcess: Process | null | undefined;
 	readonly #ownedTree = new Map<number, Process>();
 	#pending = new Map<string, PendingExecution>();
-	readonly #options: Required<BaseKernelOptions<TExecuteOptions>>;
+	readonly #options: Omit<Required<BaseKernelOptions<TExecuteOptions>>, "buildCancelPayload">;
+	readonly #buildCancelPayload: ((msgId: string) => string) | undefined;
 
 	constructor(id: string, options: BaseKernelOptions<TExecuteOptions>) {
 		this.id = id;
+		this.#buildCancelPayload = options.buildCancelPayload;
 		this.#options = {
 			languageName: options.languageName,
 			traceIpc: options.traceIpc ?? false,
@@ -705,6 +727,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			cancelled: false,
 			timedOut: false,
 			stdinRequested: false,
+			cancellationPending: false,
 			settled: false,
 			kernelKilled: false,
 		};
@@ -723,6 +746,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				timedOut: pending.timedOut,
 				stdinRequested: pending.stdinRequested,
 				kernelKilled: pending.kernelKilled,
+				cancellationPending: pending.cancellationPending,
 			});
 		};
 
@@ -731,6 +755,20 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 			if (pending.settled || pending.escalationTimer) return;
 			if (!requestWritten) {
 				finalize();
+				return;
+			}
+			if (this.#buildCancelPayload) {
+				pending.cancellationPending = true;
+				void this.#writeLine(this.#buildCancelPayload(msgId)).catch(error => {
+					logger.debug(`${this.#options.languageName} cancellation frame write failed`, {
+						error: errorMessage(error),
+					});
+				});
+				const grace = setTimeout(() => {
+					if (!pending.settled) finalize();
+				}, this.#options.interruptEscalationMs);
+				grace.unref?.();
+				pending.escalationTimer = grace;
 				return;
 			}
 			void this.interrupt();
@@ -823,9 +861,11 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		if (this.#shutdownPromise) return this.#shutdownPromise;
 		const shuttingDown = this.#shutdown(options);
 		this.#shutdownPromise = shuttingDown;
-		void shuttingDown.finally(() => {
-			if (!this.#shutdownConfirmed) this.#shutdownPromise = null;
-		}).catch(() => {});
+		void shuttingDown
+			.finally(() => {
+				if (!this.#shutdownConfirmed) this.#shutdownPromise = null;
+			})
+			.catch(() => {});
 		return shuttingDown;
 	}
 
@@ -905,13 +945,33 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		// The runner's Windows job remains the creation-time ownership guard.
 		let treeExited = false;
 		if (treeObserved) {
+			let treeTimeout: NodeJS.Timeout | undefined;
 			try {
-				const exits = await Promise.all(
-					[...this.#ownedTree.values()].map(owned => owned.waitForExit({ timeoutMs })),
-				);
-				treeExited = exits.every(Boolean);
+				const exits = await Promise.race([
+					Promise.all(
+						[...this.#ownedTree.values()].map(owned => {
+							let wait = this.#pendingTreeExitWaits.get(owned.pid);
+							if (!wait) {
+								wait = Promise.resolve(owned.waitForExit({ timeoutMs })).finally(() => {
+									if (this.#pendingTreeExitWaits.get(owned.pid) === wait) {
+										this.#pendingTreeExitWaits.delete(owned.pid);
+									}
+								});
+								this.#pendingTreeExitWaits.set(owned.pid, wait);
+							}
+							return wait;
+						}),
+					),
+					new Promise<null>(resolve => {
+						treeTimeout = setTimeout(() => resolve(null), Math.max(0, timeoutMs));
+						treeTimeout.unref();
+					}),
+				]);
+				treeExited = exits?.every(Boolean) ?? false;
 			} catch (error) {
 				logger.warn("eval kernel tree exit was not confirmed", { pid: proc.pid, error: errorMessage(error) });
+			} finally {
+				clearTimeout(treeTimeout);
 			}
 		}
 		const confirmed = !!result && treeExited;
@@ -1074,6 +1134,7 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				if (frame.cancelled) {
 					pending.cancelled = true;
 				}
+				pending.cancellationPending = Boolean(frame.cancellationPending);
 				pending.finalize?.();
 				return;
 			}

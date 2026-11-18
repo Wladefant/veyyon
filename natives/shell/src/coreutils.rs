@@ -32,15 +32,94 @@ use tokio_util::sync::CancellationToken;
 /// command name at index 0) and returns a process-style exit code.
 type UutilRun = fn(Vec<OsString>) -> i32;
 
-/// Await a blocking builtin and report cancellation only after its thread
-/// finishes.
+/// Await a blocking builtin on an independent thread (avoiding Tokio's capped
+/// blocking pool and nested `spawn_blocking` deadlocks) and report
+/// cancellation once its thread finishes.
 pub async fn run_cancellable_blocking(
 	cancel: Option<CancellationToken>,
 	task: impl FnOnce(Arc<AtomicBool>) -> i32 + Send + 'static,
 ) -> i32 {
 	let cancel_flag = Arc::new(AtomicBool::new(false));
 	let thread_flag = Arc::clone(&cancel_flag);
-	let mut handle = tokio::task::spawn_blocking(move || task(thread_flag));
+	#[cfg(not(windows))]
+	let mut rx = {
+		let handle = tokio::task::spawn_blocking(move || task(thread_flag));
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		tokio::spawn(async move {
+			let _ = tx.send(handle.await.unwrap_or(1));
+		});
+		rx
+	};
+	#[cfg(windows)]
+	let rx = {
+		static COREUTIL_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+			std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(32)));
+		let permit = match cancel.as_ref() {
+			Some(token) => tokio::select! {
+				biased;
+				() = token.cancelled() => return 130,
+				res = Arc::clone(&COREUTIL_SEMAPHORE).acquire_owned() => {
+					let Ok(permit) = res else { return 1; };
+					permit
+				},
+			},
+			None => {
+				let Ok(permit) = Arc::clone(&COREUTIL_SEMAPHORE).acquire_owned().await else {
+					return 1;
+				};
+				permit
+			},
+		};
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		let Ok(join_handle) = std::thread::Builder::new()
+			.name("veyyon-coreutil".into())
+			.spawn(move || {
+				let _permit = permit;
+				let code = task(thread_flag);
+				let _ = tx.send(code);
+			})
+		else {
+			return 1;
+		};
+		(rx, join_handle)
+	};
+
+	#[cfg(windows)]
+	struct CancelCoreutilOnDrop {
+		handle: Option<std::thread::JoinHandle<()>>,
+		cancel: Arc<AtomicBool>,
+	}
+	#[cfg(windows)]
+	impl CancelCoreutilOnDrop {
+		fn cancel_now(&mut self) {
+			self.cancel.store(true, Ordering::Release);
+			if let Some(handle) = self.handle.take() {
+				use std::os::windows::io::AsRawHandle;
+				unsafe extern "system" {
+					fn CancelSynchronousIo(h_thread: *mut std::ffi::c_void) -> i32;
+				}
+				// SAFETY: `handle` is a live thread handle until dropped.
+				unsafe {
+					CancelSynchronousIo(handle.as_raw_handle());
+				}
+			}
+		}
+	}
+	#[cfg(windows)]
+	impl Drop for CancelCoreutilOnDrop {
+		fn drop(&mut self) {
+			self.cancel_now();
+		}
+	}
+	#[cfg(windows)]
+	let (mut rx, mut cancel_guard) = {
+		let (rx, join_handle) = rx;
+		let guard = CancelCoreutilOnDrop {
+			handle: Some(join_handle),
+			cancel: Arc::clone(&cancel_flag),
+		};
+		(rx, guard)
+	};
 
 	match cancel {
 		Some(token) => {
@@ -49,17 +128,105 @@ pub async fn run_cancellable_blocking(
 				biased;
 				() = token.cancelled() => {
 					cancel_flag.store(true, Ordering::Relaxed);
-					let _ = (&mut handle).await;
+					#[cfg(windows)]
+					cancel_guard.cancel_now();
+					let _ = (&mut rx).await;
 					130
 				},
-				result = &mut handle => {
+				result = &mut rx => {
+					#[cfg(windows)]
+					{
+						cancel_guard.handle = None;
+					}
 					// If the token already fired, the task only finished because
 					// our cancel flag unblocked it — report interrupted.
 					if token_check.is_cancelled() { 130 } else { result.unwrap_or(1) }
 				},
 			}
 		},
-		None => handle.await.unwrap_or(1),
+		None => {
+			let code = rx.await.unwrap_or(1);
+			#[cfg(windows)]
+			{
+				cancel_guard.handle = None;
+			}
+			code
+		},
+	}
+}
+
+#[cfg(windows)]
+struct CancellableWindowsStdin {
+	inner:  OpenFile,
+	cancel: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+impl Read for CancellableWindowsStdin {
+	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+		use std::{os::windows::io::AsRawHandle, time::Duration};
+
+		const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+		if buf.is_empty() {
+			return Ok(0);
+		}
+		if self.cancel.load(Ordering::Relaxed) {
+			return Ok(0);
+		}
+		let raw_handle = match &self.inner {
+			OpenFile::PipeReader(pipe) => Some(pipe.as_raw_handle()),
+			OpenFile::File(file) => Some(file.as_raw_handle()),
+			_ => None,
+		};
+		if let Some(handle) = raw_handle {
+			loop {
+				if self.cancel.load(Ordering::Relaxed) {
+					return Ok(0);
+				}
+				match crate::shell::check_pipe_readiness(handle) {
+					crate::shell::PipeReadiness::Ready(avail) => {
+						let to_read = avail.min(buf.len()).max(1);
+						return self.inner.read(&mut buf[..to_read]);
+					},
+					crate::shell::PipeReadiness::Empty => {
+						std::thread::sleep(POLL_INTERVAL);
+					},
+					crate::shell::PipeReadiness::Eof => return Ok(0),
+					crate::shell::PipeReadiness::NotAPipe => break,
+				}
+			}
+		}
+		self.inner.read(buf)
+	}
+}
+
+#[cfg(windows)]
+struct CancellableWindowsWriter {
+	inner:  OpenFile,
+	cancel: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+impl Write for CancellableWindowsWriter {
+	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+		if self.cancel.load(Ordering::Relaxed) {
+			return Err(io::Error::new(io::ErrorKind::BrokenPipe, "cancelled"));
+		}
+		match self.inner.write(buf) {
+			Err(e) if self.cancel.load(Ordering::Relaxed) => {
+				let _ = e;
+				Err(io::Error::new(io::ErrorKind::BrokenPipe, "cancelled"))
+			},
+			other => other,
+		}
+	}
+
+	fn flush(&mut self) -> io::Result<()> {
+		if self.cancel.load(Ordering::Relaxed) {
+			return Err(io::Error::new(io::ErrorKind::BrokenPipe, "cancelled"));
+		}
+		self.inner.flush()
 	}
 }
 
@@ -156,15 +323,51 @@ async fn run_uutil<SE: ShellExtensions>(
 		// Keeps every descriptor in `fds` open for the utility's lifetime.
 		let _held = open_fds;
 		let stdin: Box<dyn Read + Send> = match stdin {
-			Some(file) => Box::new(file),
+			Some(file) => {
+				#[cfg(windows)]
+				{
+					Box::new(CancellableWindowsStdin {
+						inner:  file,
+						cancel: Arc::clone(&scope_flag),
+					})
+				}
+				#[cfg(not(windows))]
+				{
+					Box::new(file)
+				}
+			},
 			None => Box::new(io::empty()),
 		};
 		let stdout: Box<dyn Write + Send> = match stdout {
-			Some(file) => Box::new(file),
+			Some(file) => {
+				#[cfg(windows)]
+				{
+					Box::new(CancellableWindowsWriter {
+						inner:  file,
+						cancel: Arc::clone(&scope_flag),
+					})
+				}
+				#[cfg(not(windows))]
+				{
+					Box::new(file)
+				}
+			},
 			None => Box::new(io::sink()),
 		};
 		let stderr: Box<dyn Write + Send> = match stderr {
-			Some(file) => Box::new(file),
+			Some(file) => {
+				#[cfg(windows)]
+				{
+					Box::new(CancellableWindowsWriter {
+						inner:  file,
+						cancel: Arc::clone(&scope_flag),
+					})
+				}
+				#[cfg(not(windows))]
+				{
+					Box::new(file)
+				}
+			},
 			None => Box::new(io::sink()),
 		};
 		veyyon_uutils_ctx::scope(
@@ -298,7 +501,7 @@ mod tests {
 	use std::{
 		collections::HashMap,
 		ffi::OsString,
-		io::{self, Write},
+		io::{self, Read, Write},
 		path::PathBuf,
 		sync::{Arc, atomic::AtomicBool},
 	};
@@ -306,6 +509,8 @@ mod tests {
 	use flume::Sender;
 
 	use super::{UutilRun, run_caught};
+	#[cfg(windows)]
+	use super::{CancellableWindowsStdin, OpenFile};
 
 	/// `Send` writer that forwards every write onto a channel so a test can
 	/// inspect what the utility wrote to the scope's stderr.
@@ -364,5 +569,65 @@ mod tests {
 		let (code, err) = run_in_scope(boom, vec![OsString::from("tail")]);
 		assert_eq!(code, 1, "a panic in the utility becomes a failed command");
 		assert_eq!(err, "tail: internal error\n", "diagnostic names the command");
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn cancellable_windows_stdin_empty_buffer_returns_zero_without_panic() {
+		let (reader, mut writer) = std::io::pipe().expect("create pipe");
+		writer.write_all(b"hello").expect("write pipe");
+		let mut stdin = CancellableWindowsStdin {
+			inner:  OpenFile::PipeReader(reader),
+			cancel: Arc::new(AtomicBool::new(false)),
+		};
+		let n = stdin.read(&mut []).expect("empty read must return Ok(0)");
+		assert_eq!(n, 0);
+		let mut buf = [0u8; 5];
+		let n2 = stdin.read(&mut buf).expect("subsequent read must succeed");
+		assert_eq!(&buf[..n2], b"hello");
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn run_cancellable_blocking_unblocks_when_writer_pipe_is_full() {
+		use std::io::Write;
+		use tokio_util::sync::CancellationToken;
+
+		let rt = tokio::runtime::Builder::new_current_thread()
+			.enable_all()
+			.build()
+			.expect("runtime");
+		let (reader, writer) = std::io::pipe().expect("pipe");
+		let token = CancellationToken::new();
+		let cancel_child = token.clone();
+		let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+
+		let exit_code = rt.block_on(async move {
+			let handle = tokio::spawn(super::run_cancellable_blocking(
+				Some(cancel_child),
+				move |scope_flag| {
+					let mut cancellable = super::CancellableWindowsWriter {
+						inner:  super::OpenFile::PipeWriter(writer),
+						cancel: scope_flag,
+					};
+					let _ = started_tx.send(());
+					let chunk = [b'x'; 4096];
+					loop {
+						if cancellable.write_all(&chunk).is_err() {
+							return 130;
+						}
+					}
+				},
+			));
+			let _ = started_rx.await;
+			tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+			token.cancel();
+			tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+				.await
+				.expect("cancelled blocked writer must return promptly")
+				.expect("task must not panic")
+		});
+		drop(reader);
+		assert_eq!(exit_code, 130);
 	}
 }

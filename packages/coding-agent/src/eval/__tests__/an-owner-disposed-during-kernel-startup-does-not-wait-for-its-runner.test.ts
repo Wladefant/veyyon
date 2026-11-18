@@ -67,7 +67,10 @@ class FailedStartupKernel extends TestKernel {
 	exitConfirmed = false;
 	shutdownCalls = 0;
 
-	constructor(readonly failAt: string, readonly shutdownThrows: boolean) {
+	constructor(
+		readonly failAt: string,
+		readonly shutdownThrows: boolean,
+	) {
 		super("failed-startup", {
 			languageName: "Test",
 			traceIpc: false,
@@ -268,7 +271,7 @@ describe("an owner disposed during kernel startup", () => {
 		expect(starts).toBe(2);
 	});
 
-	it("a fallback-owner startup that a real owner joins completes for both, and the real owner's disposal closes the runner", async () => {
+	it("an implicit owner keeps its runner after an explicit startup co-owner departs", async () => {
 		const ready = Promise.withResolvers<BaseKernel>();
 		const runner = createRunner({ exitOnPayload: true, exitOnSignals: [] });
 		const pool = createPool(() => ready.promise);
@@ -278,10 +281,12 @@ describe("an owner disposed during kernel startup", () => {
 		ready.resolve(runner.kernel);
 		const [fallbackSession, realSession] = await Promise.all([fallback, real]);
 		expect(realSession).toBe(fallbackSession);
-		expect([...realSession.ownerIds]).toEqual(["lane"]);
-		expect(realSession.hasFallbackOwner).toBe(false);
+		expect([...realSession.ownerIds]).toEqual(["session", "lane"]);
 
 		await pool.disposeByOwner("lane");
+		expect(exitRequested(runner.writes)).toBe(false);
+		expect(runner.kernel.isAlive()).toBe(true);
+		await pool.disposeByOwner("session");
 		expect(exitRequested(runner.writes)).toBe(true);
 		expect(runner.kernel.isAlive()).toBe(false);
 		expect(pool.sessions.size).toBe(0);
@@ -291,7 +296,7 @@ describe("an owner disposed during kernel startup", () => {
 		const old = createRunner({ exitOnPayload: false, exitOnSignals: [] });
 		const next = createRunner({ exitOnPayload: true, exitOnSignals: [] });
 		let starts = 0;
-		const pool = createPool(async () => ++starts === 1 ? old.kernel : next.kernel);
+		const pool = createPool(async () => (++starts === 1 ? old.kernel : next.kernel));
 		const original = await acquire(pool, "old-owner");
 		const disposing = pool.disposeByOwner("old-owner");
 		const acquiring = acquire(pool, "next-owner");
@@ -312,7 +317,7 @@ describe("an owner disposed during kernel startup", () => {
 		const old = createRunner({ exitOnPayload: false, exitOnSignals: [] });
 		const next = createRunner({ exitOnPayload: true, exitOnSignals: [] });
 		let starts = 0;
-		const pool = createPool(async () => ++starts === 1 ? old.kernel : next.kernel);
+		const pool = createPool(async () => (++starts === 1 ? old.kernel : next.kernel));
 		const session = await acquire(pool, "lane");
 		const first = pool.replaceSessionKernel(session, process.cwd(), { kernelOwnerId: "lane" });
 		const second = pool.replaceSessionKernel(session, process.cwd(), { kernelOwnerId: "lane" });
@@ -392,10 +397,7 @@ describe("an owner disposed during kernel startup", () => {
 				logLabel: "shared-startup-deadline",
 				startKernel: async (_cwd, options) => {
 					if (options.deadlineMs !== undefined) {
-						setTimeout(
-							() => runner.finish(null),
-							Math.max(0, options.deadlineMs - Date.now()),
-						);
+						setTimeout(() => runner.finish(null), Math.max(0, options.deadlineMs - Date.now()));
 					}
 					options.signal?.addEventListener("abort", () => runner.finish(null), { once: true });
 					return await ready.promise;
@@ -448,7 +450,7 @@ describe("an owner disposed during kernel startup", () => {
 				expect(failed.shutdownCalls).toBe(3);
 				await pool.disposeAll();
 				expect(failed.shutdownCalls).toBe(4);
-				await expect(pool.resetSession(KEY)).rejects.toThrow(/shutdown/);
+				await expect(pool.resetSession(KEY, "owner")).rejects.toThrow(/shutdown/);
 				expect(failed.shutdownCalls).toBe(5);
 				expect(starts).toBe(1);
 				failed.exitConfirmed = true;

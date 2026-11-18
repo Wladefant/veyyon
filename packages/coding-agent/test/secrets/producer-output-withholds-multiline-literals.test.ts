@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
-import { ProducerOutputGuard } from "../../src/secrets/producer-output";
+import { BLOCKED_OUTPUT_RECORD, OVERSIZED_OUTPUT_RECORD, ProducerOutputGuard } from "../../src/secrets/producer-output";
 import { runWithProducerSecretOwner } from "../../src/secrets/producer-owner";
 
 const SECRET = "synthetic-first-line\nsynthetic-second-line";
@@ -198,6 +198,33 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(cancelled.push("synthetic-second-line\n")).toBe("");
 	});
 
+	it("segments a long structured-looking stream without splitting registered multiline secrets", () => {
+		const lines = ["prefix {"];
+		let length = lines[0]!.length + 1;
+		for (let index = 0; length < 65_500; index++) {
+			const line = `row-${index.toString().padStart(4, "0")}: ${"x".repeat(80)}`;
+			lines.push(line);
+			length += line.length + 1;
+		}
+		const prefix = `${lines.join("\n")}\n`;
+		expect(prefix.length).toBeGreaterThan(65_400);
+		expect(prefix.length).toBeLessThan(65_600);
+		const input = `${prefix}${SECRET}\n}\nError: long checkout failed\n`;
+		const start = input.indexOf(SECRET);
+		for (let split = start; split <= start + SECRET.length; split++) {
+			const guard = guardFor();
+			const streamed = guard.push(input.slice(0, split)) + guard.push(input.slice(split)) + guard.finish();
+			const leaked = streamed.includes(SECRET);
+			expect(leaked, `split=${split} leaked a registered literal`).toBe(false);
+			expect(
+				streamed.includes("[line over 65,536 chars, not scanned]"),
+				`split=${split} did not mask the oversized candidate`,
+			).toBe(true);
+			expect(streamed.includes("Error: long checkout failed\n"), `split=${split} lost the final diagnostic`).toBe(
+				true,
+			);
+		}
+	});
 	it("labels oversized GitHub JSON lines without releasing planted credentials", () => {
 		const longLine = `{"payload":"${"x".repeat(65_537)}","token":"ghs_planted_fake_value"}`;
 		const direct = new ProducerOutputGuard().sanitize(longLine);
@@ -205,10 +232,27 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(direct).not.toContain("ghs_");
 
 		const guard = new ProducerOutputGuard();
-		const streamed = guard.push(`${longLine}\n`) + guard.finish();
-		expect(streamed).toBe("[line over 65,536 chars, not scanned]\n");
+		const later = "Error: later safe diagnostic\n";
+		const streamed = guard.push(`${longLine}\n${later}`) + guard.finish();
+		expect(streamed).toBe(`[line over 65,536 chars, not scanned]\n${later}`);
 		expect(streamed).not.toContain("ghs_");
-		expect(guard.push('{"later":"safe"}\n')).toBe("");
+		expect(guard.push('{"later":"safe"}\n')).toBe('{"later":"safe"}\n');
+	});
+	it("emits a single oversized placeholder for balanced or multiline structured oversized records", () => {
+		const longLine = `{"payload":"${"x".repeat(65_537)}","token":"ghs_planted_fake_value"}`;
+		const streamedNoNewline = new ProducerOutputGuard();
+		expect(streamedNoNewline.push(longLine) + streamedNoNewline.finish()).toBe(OVERSIZED_OUTPUT_RECORD);
+
+		const multilineGuard = new ProducerOutputGuard();
+		const multiline = `foo: {\n  payload: "${"x".repeat(65_537)}"\n}\nError: after structured\n`;
+		expect(multilineGuard.push(multiline) + multilineGuard.finish()).toBe(
+			`${OVERSIZED_OUTPUT_RECORD}\nError: after structured\n`,
+		);
+
+		const assignmentGuard = new ProducerOutputGuard();
+		expect(assignmentGuard.push(`A=1\n${longLine}\n`) + assignmentGuard.finish()).toBe(
+			`A=1\n${OVERSIZED_OUTPUT_RECORD}\n`,
+		);
 	});
 	it("withholds a known multiline literal that exceeds the bounded pending record", () => {
 		const longSecret = `${"a".repeat(32 * 1024)}\n${"b".repeat(32 * 1024)}`;
@@ -220,7 +264,24 @@ describe("producer output withholds multiline registered literals", () => {
 		const blocked = guard.push(secondRecord);
 		expect(blocked).toBe("[line over 65,536 chars, not scanned]\n");
 		expect(blocked).not.toContain(longSecret);
-		expect(guard.push("after\n")).toBe("");
+		expect(guard.push("after\n")).toBe("after\n");
+	});
+	it("carries a registered literal through the record cap before resuming", () => {
+		const partLength = 25 * 1024;
+		const longSecret = `${"a".repeat(partLength)}\n${"b".repeat(partLength)}\n${"c".repeat(partLength)}\n${"d".repeat(partLength)}`;
+		const guard = guardFor(longSecret);
+		const first = `${"a".repeat(partLength)}\n`;
+		const second = `${"b".repeat(partLength)}\n`;
+		const third = `${"c".repeat(partLength)}\n`;
+		const fourth = `${"d".repeat(partLength)}\n`;
+
+		expect(guard.push(first)).toBe("");
+		expect(guard.push(second)).toBe("");
+		expect(guard.push(third.slice(0, 16 * 1024))).toBe("");
+		expect(guard.push(third.slice(16 * 1024))).toBe("");
+		expect(guard.push(fourth)).toBe("[line over 65,536 chars, not scanned]\n");
+		expect(guard.push("after\n")).toBe("after\n");
+		expect(guard.finish()).toBe("");
 	});
 	it("matches multiline literals after supported ANSI normalization", () => {
 		const guard = guardFor();
@@ -249,4 +310,229 @@ describe("producer output withholds multiline registered literals", () => {
 		expect(guard.push(secret)).toBe("#MULTILINE_CANARY#");
 		expect(guard.finish()).toBe("");
 	});
+
+	it("carries environment-inventory taint across oversized assignment records at every split", () => {
+		const oversized = "x".repeat(65_537);
+		const blockedCases = [
+			`FIRST=${oversized}\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+			`FIRST=opaque-first\nSECOND=${oversized}\nTHIRD=opaque-third\nend\n`,
+			`FIRST=opaque-first\nSECOND=opaque-second\nTHIRD=${oversized}\nend\n`,
+			`FIRST=${oversized}\n\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+			`export FIRST=${oversized}\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+		];
+		for (const input of blockedCases) {
+			expect(new ProducerOutputGuard().sanitize(input)).toBe(BLOCKED_OUTPUT_RECORD);
+			const wholeGuard = new ProducerOutputGuard();
+			const whole = wholeGuard.push(input) + wholeGuard.finish();
+			expect(whole).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+			expect(whole).not.toContain("opaque-second");
+			expect(whole).not.toContain("opaque-third");
+			const splits = new Set([
+				0,
+				5,
+				6,
+				7,
+				65_535,
+				65_536,
+				65_537,
+				input.indexOf("\n"),
+				input.indexOf("\n") + 1,
+				input.indexOf("THIRD") + 6,
+			]);
+			for (const split of splits) {
+				if (split < 0 || split > input.length) continue;
+				const splitGuard = new ProducerOutputGuard();
+				const streamed =
+					splitGuard.push(input.slice(0, split)) + splitGuard.push(input.slice(split)) + splitGuard.finish();
+				expect(streamed).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+				expect(streamed).not.toContain("opaque-second");
+				expect(streamed).not.toContain("opaque-third");
+			}
+			const chunkGuard = new ProducerOutputGuard();
+			let chunked = "";
+			for (let offset = 0; offset < input.length; offset += 8192) {
+				chunked += chunkGuard.push(input.slice(offset, offset + 8192));
+			}
+			chunked += chunkGuard.finish();
+			expect(chunked).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+		}
+
+		const twoAssignmentCases = [
+			`FIRST=${oversized}\nSECOND=opaque-second\nend\n`,
+			`FIRST=opaque-first\nSECOND=${oversized}\nend\n`,
+			`FIRST=opaque-first\n${oversized}\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+		];
+		for (const input of twoAssignmentCases) {
+			const direct = new ProducerOutputGuard().sanitize(input);
+			const wholeGuard = new ProducerOutputGuard();
+			expect(wholeGuard.push(input) + wholeGuard.finish()).toBe(direct);
+			const chunkGuard = new ProducerOutputGuard();
+			let chunked = "";
+			for (let offset = 0; offset < input.length; offset += 8192) {
+				chunked += chunkGuard.push(input.slice(offset, offset + 8192));
+			}
+			chunked += chunkGuard.finish();
+			expect(chunked).toBe(direct);
+		}
+		const longOversizedCases = [
+			`export ${" ".repeat(300)}FIRST=${oversized}\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+			`FIRST=opaque-first\nexport ${" ".repeat(300)}SECOND=${oversized}\nTHIRD=opaque-third\nend\n`,
+			`FIRST=opaque-first\nSECOND=opaque-second\nexport ${" ".repeat(300)}THIRD=${oversized}\nend\n`,
+			...[255, 256, 257, 320].flatMap(keyLength => {
+				const key = "K".repeat(keyLength);
+				return [
+					`${key}=${oversized}\nSECOND=opaque-second\nTHIRD=opaque-third\nend\n`,
+					`FIRST=opaque-first\n${key}=${oversized}\nTHIRD=opaque-third\nend\n`,
+					`FIRST=opaque-first\nSECOND=opaque-second\n${key}=${oversized}\nend\n`,
+				];
+			}),
+		];
+		for (const input of longOversizedCases) {
+			expect(new ProducerOutputGuard().sanitize(input)).toBe(BLOCKED_OUTPUT_RECORD);
+			const wholeGuard = new ProducerOutputGuard();
+			const whole = wholeGuard.push(input) + wholeGuard.finish();
+			expect(whole).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+			expect(whole).not.toContain("opaque-second");
+			expect(whole).not.toContain("opaque-third");
+
+			const chunkGuard = new ProducerOutputGuard();
+			let chunked = "";
+			for (let offset = 0; offset < input.length; offset += 128) {
+				chunked += chunkGuard.push(input.slice(offset, offset + 128));
+			}
+			chunked += chunkGuard.finish();
+			expect(chunked).toBe(`${BLOCKED_OUTPUT_RECORD}\n`);
+		}
+	});
+
+	it("bounds retained pending bytes across repeating prefixes past 16 Mi chars and resumes safely", () => {
+		const guard = guardFor();
+		const repeatChunk = PREFIX.repeat(10_000);
+		let output = "";
+		for (let batch = 0; batch < 100; batch++) {
+			output += guard.push(repeatChunk);
+		}
+		output += guard.push("break\nError: after repeating prefix\n") + guard.finish();
+		expect(output).toBe(`${OVERSIZED_OUTPUT_RECORD}\nError: after repeating prefix\n`);
+
+		const completedSecretGuard = guardFor();
+		let secretOutput = completedSecretGuard.push(PREFIX.repeat(4000));
+		secretOutput += completedSecretGuard.push("synthetic-second-line\nError: secret stayed masked\n");
+		secretOutput += completedSecretGuard.finish();
+		expect(secretOutput).toBe(`${OVERSIZED_OUTPUT_RECORD}\nError: secret stayed masked\n`);
+		expect(secretOutput).not.toContain("synthetic-second-line");
+
+		const unnewlinedGuard = guardFor();
+		let unnewlinedOutput = unnewlinedGuard.push(PREFIX.repeat(4000));
+		unnewlinedOutput += unnewlinedGuard.push("x".repeat(2_000_000));
+		unnewlinedOutput += unnewlinedGuard.push("\nError: after unnewlined overflow\n") + unnewlinedGuard.finish();
+		expect(unnewlinedOutput).toBe(`${OVERSIZED_OUTPUT_RECORD}\nError: after unnewlined overflow\n`);
+
+		const pathological = new ProducerOutputGuard(undefined, text => text.length);
+		let pathologicalOutput = "";
+		const line = `${"a".repeat(25_000)}\n`;
+		for (let count = 0; count < 60; count++) {
+			pathologicalOutput += pathological.push(line);
+		}
+		pathologicalOutput += pathological.finish();
+		expect(pathologicalOutput).toBe(OVERSIZED_OUTPUT_RECORD);
+	}, 15_000);
+	it("preserves registered-literal protection across a 16 Mi quoted first record", () => {
+		const tail = "Error: final diagnostic\n";
+		const input = `"${"x".repeat(16 * 1024 * 1024 + 1)}"\n${SECRET}\n${tail}`;
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", origin: "config", content: SECRET, name: "MULTILINE_CANARY" },
+		]);
+		const direct = runWithProducerSecretOwner(
+			{
+				redact: text => obfuscator.obfuscate(text),
+				pendingPrefixLength: text => obfuscator.pendingRedactionPrefixLength(text),
+			},
+			() => new ProducerOutputGuard().sanitize(input),
+		);
+		expect(direct).toContain("#MULTILINE_CANARY#");
+		expect(direct).not.toContain(SECRET);
+		expect(direct.endsWith(tail)).toBe(true);
+
+		const streamGuard = guardFor();
+		const streamed = streamGuard.push(input) + streamGuard.finish();
+		expect(streamed).toBe(direct);
+
+		const boundaryGuard = guardFor(`${"x".repeat(64)}\n${SECRET}`);
+		const boundaryInput = `"${"x".repeat(16 * 1024 * 1024 + 64)}\n${SECRET}\n${tail}`;
+		const boundaryStreamed = boundaryGuard.push(boundaryInput) + boundaryGuard.finish();
+		expect(boundaryStreamed).toBe(OVERSIZED_OUTPUT_RECORD);
+		expect(boundaryStreamed).not.toContain(SECRET);
+	}, 25_000);
+	it("withholds multiline registered literals starting after 16 Mi scalar overflow or ordinary oversize while preserving later diagnostics", () => {
+		const tail = "Error: final diagnostic\n";
+		const scalarOverflowInput = `"${"x".repeat(16 * 1024 * 1024 + 8)}${SECRET}\n${tail}`;
+
+		const directScalar = guardFor().sanitize(scalarOverflowInput);
+		expect(directScalar).not.toContain(SECRET);
+		expect(directScalar).not.toContain("synthetic-second-line");
+		expect(directScalar).toContain(tail);
+
+		const wholeScalarGuard = guardFor();
+		const wholeScalar = wholeScalarGuard.push(scalarOverflowInput) + wholeScalarGuard.finish();
+		expect(wholeScalar).not.toContain(SECRET);
+		expect(wholeScalar).not.toContain("synthetic-second-line");
+		expect(wholeScalar).toContain(tail);
+
+		const splitPoints = [
+			16 * 1024 * 1024 + 8,
+			16 * 1024 * 1024 + 8 + "synthetic-first-line".length,
+			16 * 1024 * 1024 + 8 + PREFIX.length,
+		];
+		for (const split of splitPoints) {
+			const splitGuard = guardFor();
+			const splitOut =
+				splitGuard.push(scalarOverflowInput.slice(0, split)) +
+				splitGuard.push(scalarOverflowInput.slice(split)) +
+				splitGuard.finish();
+			expect(splitOut).not.toContain(SECRET);
+			expect(splitOut).not.toContain("synthetic-second-line");
+			expect(splitOut).toContain(tail);
+		}
+
+		const eofScalarGuard = guardFor();
+		const eofScalar =
+			eofScalarGuard.push(`"${"x".repeat(16 * 1024 * 1024 + 8)}`) +
+			eofScalarGuard.push(SECRET) +
+			eofScalarGuard.finish();
+		expect(eofScalar).not.toContain("synthetic-first-line");
+		expect(eofScalar).not.toContain("synthetic-second-line");
+
+		const ordinaryOversizeInput = `${"x".repeat(70_000)}${SECRET}\n${tail}`;
+		const directOrdinary = guardFor().sanitize(ordinaryOversizeInput);
+		expect(directOrdinary).not.toContain(SECRET);
+		expect(directOrdinary).not.toContain("synthetic-second-line");
+		expect(directOrdinary).toContain(tail);
+
+		const wholeOrdinaryGuard = guardFor();
+		const wholeOrdinary = wholeOrdinaryGuard.push(ordinaryOversizeInput) + wholeOrdinaryGuard.finish();
+		expect(wholeOrdinary).not.toContain(SECRET);
+		expect(wholeOrdinary).not.toContain("synthetic-second-line");
+		expect(wholeOrdinary).toContain(tail);
+
+		const splitOrdinaryGuard = guardFor();
+		const ordinaryBreak = 70_000 + PREFIX.length;
+		const splitOrdinary =
+			splitOrdinaryGuard.push(ordinaryOversizeInput.slice(0, ordinaryBreak)) +
+			splitOrdinaryGuard.push(ordinaryOversizeInput.slice(ordinaryBreak)) +
+			splitOrdinaryGuard.finish();
+		expect(splitOrdinary).not.toContain(SECRET);
+		expect(splitOrdinary).not.toContain("synthetic-second-line");
+		expect(splitOrdinary).toContain(tail);
+
+		const pendingToDropGuard = guardFor();
+		let pendingToDrop = pendingToDropGuard.push(PREFIX.repeat(4000));
+		pendingToDrop += pendingToDropGuard.push("x".repeat(2_000_000));
+		pendingToDrop += pendingToDropGuard.push(PREFIX);
+		pendingToDrop += pendingToDropGuard.push(`synthetic-second-line\n${tail}`);
+		pendingToDrop += pendingToDropGuard.finish();
+		expect(pendingToDrop).not.toContain(SECRET);
+		expect(pendingToDrop).not.toContain("synthetic-second-line");
+		expect(pendingToDrop).toContain(tail);
+	}, 25_000);
 });

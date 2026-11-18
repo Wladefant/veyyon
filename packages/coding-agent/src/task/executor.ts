@@ -42,10 +42,9 @@ import { type SettingPath, Settings } from "../config/settings";
 import type { Rule } from "../discovery/capability/rule";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
-import { sessionExtensionActions } from "../extensibility/extensions/session-actions";
-import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
+import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { LocalProtocolOptions } from "../internal-urls";
 import type { MCPManager } from "../mcp/manager";
@@ -59,9 +58,8 @@ import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { discoverAuthStorage } from "../session/auth-broker-config";
 import { rootBudgetGroupOwnerId, withInheritedBudgetGroup } from "../session/cpu-limit";
-import { USER_INTERRUPT_LABEL } from "../session/messages";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
-import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
+import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { truncateTail } from "../session/streaming-output";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, resolveThinkingLevelForModel } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
@@ -80,6 +78,7 @@ import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { WorkspaceTree } from "../workspace-tree";
 import { agentSettingsFor, resolveAgentIdleTtlMs, resolveAgentMaxNestedSpawnDepth } from "./agent-settings";
 import { type AutoloadSkillPlan, settleAutoloadSkills } from "./inherited-collections";
+import { acquireSubagentHostLane, LaneAdmissionError, type NativeHostLaneLease } from "./lane-admission";
 import { reportProviderError } from "./provider-error-reporter";
 import { selectRoleContext } from "./role-context";
 import { type AbortReason, type AgentRunMonitor, createAgentRunMonitor } from "./run-monitor";
@@ -1557,6 +1556,34 @@ export interface FollowUpTurnOptions {
 	maxRuntimeMs?: number;
 }
 
+async function runWithHostLaneRelease(
+	lease: NativeHostLaneLease,
+	run: () => Promise<SingleResult>,
+): Promise<SingleResult> {
+	let result: SingleResult | undefined;
+	let runError: unknown;
+	try {
+		result = await run();
+	} catch (error) {
+		runError = error;
+	}
+	try {
+		await lease.release();
+	} catch (releaseError) {
+		if (result?.exitCode === 0) throw releaseError;
+		const runFailure = result
+			? result.error || result.abortReason || result.stderr || `Agent exited with code ${result.exitCode}`
+			: runError;
+		const failure = new AggregateError(
+			[runFailure, releaseError],
+			`${errorMessage(releaseError)}\nAgent run also failed: ${errorMessage(runFailure)}`,
+		);
+		throw releaseError instanceof LaneAdmissionError ? Object.assign(failure, { code: releaseError.code }) : failure;
+	}
+	if (!result) throw runError;
+	return result;
+}
+
 /**
  * Continue a previously spawned (keep-alive) agent with one more monitored
  * turn: wake it if asleep, send `message` as a real prompt, drive it to
@@ -1572,47 +1599,110 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	const { id, agent, message, signal } = options;
 	const index = options.index ?? 0;
 	const startTime = Date.now();
-	const session = await AgentLifecycleManager.global().ensureLive(id);
-	const ref = AgentRegistry.global().get(id);
-	const sessionFile = ref?.sessionFile ?? undefined;
-
-	const monitor = createAgentRunMonitor({
-		index,
-		id,
-		agent,
-		task: message,
-		description: options.description,
-		signal,
-		onProgress: options.onProgress,
-		eventBus: options.eventBus,
-		parentToolCallId: options.parentToolCallId,
-		detached: true,
-		sessionFile,
-		softRequestBudget: 0,
-		softRequestBudgetNotice: false,
-		maxRuntimeMs: options.maxRuntimeMs ?? 0,
-	});
-	// A follow-up turn's progress snapshot replaces the spawn's in every observer,
-	// so it carries the same badge or the row loses it the moment the agent is
-	// woken. The live session is the one authority on what it runs.
-	if (session.model) {
-		monitor.progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);
-	}
-
-	if (options.eventBus) {
-		options.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+	if (signal?.aborted) {
+		return {
+			index,
 			id,
 			agent: agent.name,
-			parentToolCallId: options.parentToolCallId,
-			detached: true,
 			agentSource: agent.source,
+			task: message,
 			description: options.description,
-			status: "started",
-			sessionFile,
-			index,
-		});
+			exitCode: 1,
+			output: "",
+			stderr: CANCELLED_BEFORE_START,
+			truncated: false,
+			durationMs: 0,
+			tokens: 0,
+			requests: 0,
+			terminalOutcome: "cancelled",
+			error: CANCELLED_BEFORE_START,
+			aborted: true,
+			abortReason: CANCELLED_BEFORE_START,
+			cancellationAcknowledged: false,
+		};
 	}
 
+	let hostLaneLease: NativeHostLaneLease | null = null;
+	try {
+		hostLaneLease = await acquireSubagentHostLane({
+			agentId: id,
+			owner: path.resolve(
+				AgentRegistry.global().get(id)?.sessionFile ?? path.join(getSessionsDir(), sessionFileName(id)),
+			),
+			signal,
+		});
+	} catch (error) {
+		const reason = errorMessage(error);
+		return {
+			index,
+			id,
+			agent: agent.name,
+			agentSource: agent.source,
+			task: message,
+			description: options.description,
+			exitCode: 1,
+			output: "",
+			stderr: reason,
+			truncated: false,
+			durationMs: Date.now() - startTime,
+			tokens: 0,
+			requests: 0,
+			terminalOutcome: "startup-failed",
+			error: reason,
+		};
+	}
+	if (!hostLaneLease) {
+		return {
+			index,
+			id,
+			agent: agent.name,
+			agentSource: agent.source,
+			task: message,
+			description: options.description,
+			exitCode: 1,
+			output: "",
+			stderr: CANCELLED_BEFORE_START,
+			truncated: false,
+			durationMs: Date.now() - startTime,
+			tokens: 0,
+			requests: 0,
+			terminalOutcome: "cancelled",
+			error: CANCELLED_BEFORE_START,
+			aborted: true,
+			abortReason: CANCELLED_BEFORE_START,
+			cancellationAcknowledged: false,
+		};
+	}
+
+	return runWithHostLaneRelease(hostLaneLease, async () => {
+		const session = await AgentLifecycleManager.global().ensureLive(id);
+		const ref = AgentRegistry.global().get(id);
+		const sessionFile = ref?.sessionFile ?? undefined;
+
+		const monitor = createAgentRunMonitor({
+			index,
+			id,
+			agent,
+			task: message,
+			description: options.description,
+			signal,
+			onProgress: options.onProgress,
+			eventBus: options.eventBus,
+			parentToolCallId: options.parentToolCallId,
+			detached: true,
+			sessionFile,
+			softRequestBudget: 0,
+			softRequestBudgetNotice: false,
+			maxRuntimeMs: options.maxRuntimeMs ?? 0,
+		});
+		// A follow-up turn's progress snapshot replaces the spawn's in every observer,
+		// so it carries the same badge or the row loses it the moment the agent is
+		// woken. The live session is the one authority on what it runs.
+		if (session.model) {
+			monitor.progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);
+		}
+
+<<<<<<< HEAD
 	monitor.setActiveSession(session);
 	const unsubscribe = monitor.attach(session);
 	let outcome: DriveOutcome;
@@ -1632,21 +1722,64 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		// `driveSessionToYield` ever throws.
 		AgentRegistry.global().setWaitingOnPeer(id, saysItIsWaitingOnAPeer(agentSignOffText(monitor)));
 	}
+=======
+		if (options.eventBus) {
+			options.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+				id,
+				agent: agent.name,
+				parentToolCallId: options.parentToolCallId,
+				detached: true,
+				agentSource: agent.source,
+				description: options.description,
+				status: "started",
+				sessionFile,
+				index,
+			});
+		}
+>>>>>>> origin/main
 
-	return finalizeRunResult({
-		monitor,
-		done: { ...outcome, durationMs: Date.now() - startTime },
-		index,
-		id,
-		agent,
-		task: message,
-		signal,
-		artifactsDir: options.artifactsDir,
-		eventBus: options.eventBus,
-		parentToolCallId: options.parentToolCallId,
-		detached: true,
-		sessionFile,
-		startTime,
+		monitor.setActiveSession(session);
+		const unsubscribe = monitor.attach(session);
+		let outcome: DriveOutcome;
+		try {
+			outcome = await driveSessionToYield(session, monitor, message, agent.output);
+		} finally {
+			await settleActiveSessionAbort(monitor);
+			unsubscribe();
+			const active = monitor.takeActiveSession();
+			if (active) monitor.captureSalvage(active);
+			monitor.finish();
+			// The waiting flag describes the agent's LATEST word, not its first. A follow-up
+			// turn does not go through `finalizeSubagentLifecycle`, so without this an agent
+			// that once signed off "waiting on X" and has since reported done keeps the
+			// longer close grace for the rest of the session, and the operator's ordinary
+			// budget is never applied to it again.
+			//
+			// Inside the `finally`, and after `captureSalvage`, on purpose. It used to sit
+			// after the whole try/finally, which relied on `driveSessionToYield` never
+			// throwing. That happens to hold today (it catches every path into a
+			// `DriveOutcome`), so this placement fixes no reachable bug, and that is exactly
+			// why it belongs here: "the flag always tracks the latest word" was true only
+			// because of an invariant of a different 160-line function, stated nowhere, and
+			// one added `throw` there would have made it quietly false.
+			AgentRegistry.global().setWaitingOnPeer(id, saysItIsWaitingOnAPeer(agentSignOffText(monitor)));
+		}
+
+		return finalizeRunResult({
+			monitor,
+			done: { ...outcome, durationMs: Date.now() - startTime },
+			index,
+			id,
+			agent,
+			task: message,
+			signal,
+			artifactsDir: options.artifactsDir,
+			eventBus: options.eventBus,
+			parentToolCallId: options.parentToolCallId,
+			detached: true,
+			sessionFile,
+			startTime,
+		});
 	});
 }
 
@@ -2537,6 +2670,7 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 	const childDepth = (options.taskDepth ?? 0) + 1;
 	const atMaxDepth = !canSpawnAtDepth(maxNestedSpawnDepth, childDepth);
 
+<<<<<<< HEAD
 	const monitor = createAgentRunMonitor({
 		index: options.index,
 		id,
@@ -2561,13 +2695,42 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 		softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice") ?? false,
 		maxRuntimeMs: nonNegativeInt(options.maxRuntimeMs ?? settings.get("agent.maxRuntimeMs")),
 	});
+=======
+	let hostLaneLease: NativeHostLaneLease | null = null;
+	try {
+		hostLaneLease = await acquireSubagentHostLane({
+			agentId: id,
+			owner: path.resolve(sessionFile),
+			signal,
+			waitIfFull: (options.taskDepth ?? 0) === 0,
+		});
+	} catch (error) {
+		return startupFailedBeforeMonitor(options, error, startTime);
+	}
+	if (!hostLaneLease) return cancelledBeforeStart(options);
+>>>>>>> origin/main
 
-	const done = await driveChildRun(
-		{
-			options,
-			monitor,
+	return runWithHostLaneRelease(hostLaneLease, async () => {
+		const monitor = createAgentRunMonitor({
+			index: options.index,
+			id,
+			agent,
+			task: options.task,
+			assignment: options.assignment,
+			description: options.description,
+			modelRegistry: options.modelRegistry,
 			settings,
+			parentActiveModelPattern: options.parentActiveModelPattern,
+			obfuscateProviderText: options.obfuscateProviderText,
+			completeImpl: options.completeImpl,
+			modelOverride,
+			signal,
+			onProgress: options.onProgress,
+			eventBus: options.eventBus,
+			parentToolCallId: options.parentToolCallId,
+			detached: options.detached,
 			sessionFile,
+<<<<<<< HEAD
 			effectiveCwd,
 			// The caller resolved this through `resolveAgentModel`, the one owner of "what model does
 			// this agent run", and handed the patterns down. Falling back to `agent.model` here would let
@@ -2585,23 +2748,55 @@ export async function runSubprocess(spawnOptions: ExecutorOptions): Promise<Sing
 		{ agentIdleTtlMs: resolveAgentIdleTtlMs(settings) },
 	);
 	monitor.finish();
+=======
+			softRequestBudget: resolveSoftRequestBudget(settings, agent.name),
+			softRequestBudgetNotice: settings.get("agent.softRequestBudgetNotice") ?? false,
+			maxRuntimeMs: nonNegativeInt(options.maxRuntimeMs ?? settings.get("agent.maxRuntimeMs")),
+		});
+		monitor.beginSessionInitialization();
+>>>>>>> origin/main
 
-	return finalizeRunResult({
-		monitor,
-		done,
-		index: options.index,
-		id,
-		agent,
-		task: options.task,
-		assignment: options.assignment,
-		modelOverride,
-		outputSchema: options.outputSchema,
-		signal,
-		artifactsDir: options.artifactsDir,
-		eventBus: options.eventBus,
-		parentToolCallId: options.parentToolCallId,
-		detached: options.detached,
-		sessionFile,
-		startTime,
+		const done = await driveChildRun(
+			{
+				options,
+				monitor,
+				settings,
+				sessionFile,
+				effectiveCwd,
+				// The caller resolved this through `resolveAgentModel`, the one owner of "what model does
+				// this agent run", and handed the patterns down. Falling back to `agent.model` here would let
+				// the definition's frontmatter decide on any path that forgot to resolve.
+				modelPatterns: normalizeModelPatterns(modelOverride),
+				toolNames: resolveChildToolNames(agent, atMaxDepth, settings),
+				spawnsEnv: childSpawnsEnv(agent, atMaxDepth),
+				childDepth,
+				maxNestedSpawnDepth,
+				ircEnabled: isIrcEnabled(settings, childDepth, maxNestedSpawnDepth),
+				awaitAbortable: createAbortableAwaiter(monitor.abortSignal),
+				marks: { perfStart: performance.now() },
+			},
+			startTime,
+			{ agentIdleTtlMs: resolveAgentIdleTtlMs(settings), prune: resolveAgentPruneBudget(settings) },
+		);
+		monitor.finish();
+
+		return finalizeRunResult({
+			monitor,
+			done,
+			index: options.index,
+			id,
+			agent,
+			task: options.task,
+			assignment: options.assignment,
+			modelOverride,
+			outputSchema: options.outputSchema,
+			signal,
+			artifactsDir: options.artifactsDir,
+			eventBus: options.eventBus,
+			parentToolCallId: options.parentToolCallId,
+			detached: options.detached,
+			sessionFile,
+			startTime,
+		});
 	});
 }

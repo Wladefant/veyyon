@@ -121,8 +121,8 @@ Unknown magic names raise `NameError: UsageError: ...` inside the cell.
 
 - `session` (default)
   - Reuses kernel sessions keyed by namespaced eval session id and interpreter. The eval session id of a saved session is its session file, so a directory change keeps the kernel and its names; each cell runs in the session's current cwd, which is also the first `sys.path` entry. A directory with its own `.venv` or `venv` gets its own kernel, because that venv selects the interpreter.
-  - Multiple owners can share the same retained kernel for that key.
-  - `/new`, `/resume` of another session and a handoff shut down the kernels the session's cells started; the next cell starts a new kernel. A kernel a spawned agent still shares stays running for that agent. A reload of the same session keeps its kernel.
+  - Multiple owners, including task agents, can share the same retained kernel for that key. Python state is shared across those calls and agents.
+  - `/new`, `/resume` of another session and a handoff shut down only kernels started by the original primary owner; a kernel still shared by a spawned agent stays running. A reload of the same session keeps its kernel.
   - Calls through the tool are exclusive, so tool invocations do not overlap.
   - A dead retained subprocess is replaced before execution.
   - If the subprocess dies during execution, it is replaced and the cell is retried once.
@@ -198,12 +198,10 @@ The pause/resume events are the **sole** mechanism that suspends the budget. Eve
 
 On abort/timeout:
 
-- The host sends `kill("SIGINT")` to the runner subprocess.
-- The runner's exec-time signal handler raises `KeyboardInterrupt` inside the running cell.
-- Result includes `cancelled=true`; a kernel timeout is annotated as `eval cell timed out after <n>s; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`
-- Between requests the runner installs `SIG_IGN` for SIGINT so a stray cancel does not tear down the kernel.
-
-If the runner does not emit `done` within 5s of the interrupt (`INTERRUPT_ESCALATION_MS`, e.g. stuck in C code holding the GIL), the host shuts the subprocess down (escalating `exit` → `SIGTERM` → `SIGKILL`), the cell is annotated as kernel-killed, and the kernel is recreated on the next call.
+- Cancellation and timeout target the current request ID; they do not terminate the shared Python kernel.
+- The runner asks the active cell to stop. If Python can acknowledge, the request completes as cancelled and the kernel remains available.
+- If code cannot acknowledge (for example, blocking native code), cancellation remains pending. The cell may still mutate shared state before it acknowledges; the shared kernel remains alive.
+- Resetting the Python kernel is allowed only for the original primary owner. A non-owner's reset request is refused and shared state survives.
 
 ### stdin behavior
 

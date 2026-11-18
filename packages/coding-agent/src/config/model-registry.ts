@@ -16,8 +16,8 @@ import { bundledCatalogDigest, getBundledModels, getBundledProviders } from "@ve
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
-	openAICodexModelCacheProviderId,
 	type OpenAICodexAccount,
+	openAICodexModelCacheProviderId,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 } from "@veyyon/catalog/provider-models";
@@ -33,6 +33,7 @@ import {
 	logger,
 	wrapFetchForExtraCa,
 } from "@veyyon/utils";
+import { redactUrlForLog } from "../mcp/json-rpc";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import { isAuthenticated, kNoAuth } from "./auth-state";
 import type { ConfigError, ConfigFile } from "./config-file";
@@ -648,10 +649,7 @@ export class ModelRegistry {
 	 * Refresh discovery state for long-lived child resolution without clearing
 	 * active cooldowns. A short interval also bounds repeated absent-model probes.
 	 */
-	async refreshForSpawn(
-		selectors: readonly string[],
-		options?: { force?: boolean },
-	): Promise<string | undefined> {
+	async refreshForSpawn(selectors: readonly string[], options?: { force?: boolean }): Promise<string | undefined> {
 		const now = Date.now();
 		for (const [selector, until] of this.#suppressedSelectors) {
 			if (until <= now) this.#suppressedSelectors.delete(selector);
@@ -679,22 +677,24 @@ export class ModelRegistry {
 			return this.#lastSpawnPreflightFailure;
 		}
 		const mode = forced ? "forced" : "preflight";
-		const refreshPromise = this.#refreshForSpawnNow(forced).then(failure => {
-			if (forced) {
-				this.#forcedSpawnRefreshes.set(key, {
-					refreshedAt: Date.now(),
-					failure,
-					catalogStamp: modelCacheStamp(this.#cacheDbPath ?? getModelDbPath(), { ttlMs: DAY_MS }),
-				});
-				if (failure === undefined) this.#lastSpawnPreflightFailure = undefined;
-			} else {
-				this.#lastSpawnPreflightAt = Date.now();
-				this.#lastSpawnPreflightFailure = failure;
-			}
-			return failure;
-		}).finally(() => {
-			if (this.#spawnRefreshFlight?.promise === refreshPromise) this.#spawnRefreshFlight = undefined;
-		});
+		const refreshPromise = this.#refreshForSpawnNow(forced)
+			.then(failure => {
+				if (forced) {
+					this.#forcedSpawnRefreshes.set(key, {
+						refreshedAt: Date.now(),
+						failure,
+						catalogStamp: modelCacheStamp(this.#cacheDbPath ?? getModelDbPath(), { ttlMs: DAY_MS }),
+					});
+					if (failure === undefined) this.#lastSpawnPreflightFailure = undefined;
+				} else {
+					this.#lastSpawnPreflightAt = Date.now();
+					this.#lastSpawnPreflightFailure = failure;
+				}
+				return failure;
+			})
+			.finally(() => {
+				if (this.#spawnRefreshFlight?.promise === refreshPromise) this.#spawnRefreshFlight = undefined;
+			});
 		this.#spawnRefreshFlight = { mode, key, promise: refreshPromise };
 		return refreshPromise;
 	}
@@ -735,7 +735,6 @@ export class ModelRegistry {
 			return undefined;
 		});
 	}
-
 
 	/**
 	 * Refresh dynamic metadata that can appear only after a local model loads.
@@ -1087,7 +1086,6 @@ export class ModelRegistry {
 			},
 		});
 	}
-
 
 	#loadCachedStandardProviderModels(): {
 		models: Model<Api>[];
@@ -1551,22 +1549,24 @@ export class ModelRegistry {
 	}
 
 	#warnProviderDiscoveryFailure(provider: string, url: string | undefined, error: string): void {
+		const safeUrl = url ? redactUrlForLog(url) : undefined;
+		const safeError = error.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, match => redactUrlForLog(match));
 		const previous = this.#lastDiscoveryWarnings.get(provider);
-		if (previous === error) {
+		if (previous === safeError) {
 			return;
 		}
-		this.#lastDiscoveryWarnings.set(provider, error);
-		if (this.#shouldWarnOnDiscoveryFailure(provider, url, error)) {
+		this.#lastDiscoveryWarnings.set(provider, safeError);
+		if (this.#shouldWarnOnDiscoveryFailure(provider, safeUrl, safeError)) {
 			logger.warn("model discovery failed for provider", {
 				provider,
-				url,
-				error,
+				url: safeUrl,
+				error: safeError,
 			});
 		} else {
 			logger.debug("model discovery failed for provider", {
 				provider,
-				url,
-				error,
+				url: safeUrl,
+				error: safeError,
 			});
 		}
 	}

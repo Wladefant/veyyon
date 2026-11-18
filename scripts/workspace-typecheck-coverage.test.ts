@@ -91,8 +91,10 @@ describe("the workspace typecheck covers every package", () => {
 	it("keeps check:ts fanning out across the workspaces", () => {
 		const root = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
 		const checkTs: string = root.scripts["check:ts"];
-		expect(checkTs).toContain("--workspaces");
-		expect(checkTs).toContain("check:types");
+		const target =
+			checkTs === "bun scripts/check-ts.ts" ? readFileSync(join(REPO_ROOT, "scripts/check-ts.ts"), "utf8") : checkTs;
+		expect(target).toContain("--workspaces");
+		expect(target).toContain("check:types");
 	});
 });
 

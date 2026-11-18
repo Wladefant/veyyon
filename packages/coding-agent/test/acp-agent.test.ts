@@ -853,6 +853,53 @@ describe("ACP agent", () => {
 		}
 	});
 
+	it("keeps a 257th current ACP model available after provider sorting", async () => {
+		// T3 currently caps provider discovery at 256. This isolates Veyyon's
+		// post-discovery ordering layer: it must not add a second cap or lose
+		// the session's current model when that model is the 257th input.
+		const codexTemplate = getBundledModel("openai-codex", "gpt-5.4");
+		const currentModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!codexTemplate || !currentModel) throw new Error("Expected bundled ACP model fixtures");
+
+		const codexModels: Model[] = Array.from({ length: 256 }, (_, index) => ({
+			...codexTemplate,
+			id: `acp-model-order-${index}`,
+			name: `ACP model order ${index}`,
+		}));
+		const models: Model[] = [...codexModels, currentModel];
+		const harness = await createHarness({ models });
+		try {
+			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+			const session = harness.findSession(created.sessionId);
+			if (!session) throw new Error("Expected the created ACP session to be registered");
+
+			// The current model is deliberately the 257th input; refresh options
+			// through the real ACP config-option response after selecting it.
+			session.model = currentModel;
+			const refreshed = await harness.agent.setSessionConfigOption({
+				sessionId: created.sessionId,
+				configId: "mode",
+				value: "default",
+			});
+			const modelOption = refreshed.configOptions?.find(option => option.id === "model");
+			if (!modelOption || !("options" in modelOption)) throw new Error("Expected a model selection option");
+			const advertised = modelOption.options.map(option => {
+				if (!("value" in option)) throw new Error("Expected an ungrouped model selection");
+				return option.value;
+			});
+
+			expect(advertised).toEqual([
+				...codexModels.map(model => `${model.provider}/${model.id}`),
+				`${currentModel.provider}/${currentModel.id}`,
+			]);
+			expect(advertised).toHaveLength(257);
+			expect(new Set(advertised).size).toBe(257);
+			expect(modelOption.currentValue).toBe(`${currentModel.provider}/${currentModel.id}`);
+		} finally {
+			harness.abortController.abort();
+		}
+	});
+
 	it("supports multiple live ACP sessions with model and lifecycle handlers", async () => {
 		const harness = await createHarness();
 		const first = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

@@ -7,22 +7,25 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
+import { z } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { withJournalLock } from "@veyyon/kernel/session/session-storage";
+import { TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { AgentProtocolHandler } from "../src/internal-urls/agent-protocol";
 import { parseInternalUrl } from "../src/internal-urls/parse";
 import { AgentRegistry } from "../src/registry/agent-registry";
-import { IrcBus } from "../src/task/irc-bus";
-import { renderAgentUserPrompt } from "../src/task/spawn-run";
 import { AgentSession } from "../src/session/agent-session";
 import { convertToLlm } from "../src/session/messages";
 import { IrcContinuationOutbox } from "../src/session/runtime/irc-inbox";
+import { IrcBus } from "../src/task/irc-bus";
+import * as laneAdmission from "../src/task/lane-admission";
+import { renderAgentUserPrompt } from "../src/task/spawn-run";
 import type { ToolSession } from "../src/tools";
 import { YieldTool } from "../src/tools/agent/yield";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
 
 const resources: { session?: AgentSession; auth?: AuthStorage; temp: TempDir }[] = [];
 afterEach(async () => {
@@ -37,45 +40,313 @@ afterEach(async () => {
 	IrcBus.resetGlobalForTests();
 });
 function yielded(value: string): MockResponse {
-	return { content: [{ type: "toolCall", id: `yield-${value}`, name: "yield", arguments: { result: { data: { value } } } }], stopReason: "toolUse" };
+	return {
+		content: [{ type: "toolCall", id: `yield-${value}`, name: "yield", arguments: { result: { data: { value } } } }],
+		stopReason: "toolUse",
+	};
 }
-async function session(id: string, responses: MockResponse[], existing?: SessionManager) {
+async function session(
+	id: string,
+	responses: MockResponse[],
+	existing?: SessionManager,
+	extraTools: AgentTool[] = [],
+	agentKind: "main" | "sub" = "main",
+) {
 	const temp = TempDir.createSync("native-handoff-");
 	const auth = await AuthStorage.create(path.join(temp.path(), "auth.db"));
 	auth.setRuntimeApiKey("mock", "test-key");
 	const mock = createMockModel({ responses });
 	const registry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
-	const tools: AgentTool[] = [new YieldTool({ outputSchema: undefined } as ToolSession)];
+	const tools: AgentTool[] = [new YieldTool({ outputSchema: undefined } as ToolSession), ...extraTools];
 	const store = existing ?? SessionManager.create(temp.path(), temp.path());
-	const agent = new Agent({ getApiKey: () => "fake-test-key", initialState: { model: mock, systemPrompt: ["Operator: production writes are forbidden."], tools, messages: store.buildSessionContext().messages }, convertToLlm, streamFn: mock.stream });
-	const instance = new AgentSession({ agent, agentId: id, sessionManager: store, settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "todo.enabled": false, "todo.reminders": false }), modelRegistry: registry, toolRegistry: new Map(tools.map(tool => [tool.name, tool])) });
+	const agent = new Agent({
+		getApiKey: () => "fake-test-key",
+		initialState: {
+			model: mock,
+			systemPrompt: ["Operator: production writes are forbidden."],
+			tools,
+			messages: store.buildSessionContext().messages,
+		},
+		convertToLlm,
+		streamFn: mock.stream,
+	});
+	const instance = new AgentSession({
+		agent,
+		agentId: id,
+		agentKind,
+		sessionManager: store,
+		settings: Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"todo.enabled": false,
+			"todo.reminders": false,
+		}),
+		modelRegistry: registry,
+		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
+	});
 	resources.push({ session: instance, auth, temp });
 	return { instance, mock, store };
 }
 
 describe("native retained child resume", () => {
+	for (const turnFails of [false, true]) {
+		it(`publishes a release reconciliation error once ${turnFails ? "after a failed prompt" : "after terminal yield"}`, async () => {
+			const parent = await session("owner", [{ content: ["Release failure received"], stopReason: "stop" }]);
+			const child = await session("worker", [yielded("B")], undefined, [], "sub");
+			if (turnFails) {
+				vi.spyOn(child.instance.agent, "prompt").mockRejectedValue(new Error("worker prompt also failed"));
+			}
+			const release = vi.fn(async () => {
+				throw new Error("lane release reconciliation required");
+			});
+			vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockResolvedValue({
+				slotId: "worker-slot",
+				leaseToken: "worker-lease",
+				release,
+			});
+			const registry = AgentRegistry.global();
+			registry.register({
+				id: "owner",
+				displayName: "Owner",
+				kind: "main",
+				scope: "test",
+				session: parent.instance,
+			});
+			registry.register({
+				id: "worker",
+				displayName: "Worker",
+				kind: "sub",
+				parentId: "owner",
+				scope: "test",
+				session: child.instance,
+			});
+			await child.instance.deliverIrcMessage({
+				id: "release-reconciliation",
+				from: "owner",
+				to: "worker",
+				body: "Return a result.",
+				ts: Date.now(),
+			});
+			await child.instance.waitForIdle();
+			await parent.instance.waitForIdle();
+			await child.instance.replayIrcContinuations();
+
+			const completions = parent.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+			expect(completions).toHaveLength(1);
+			const [completion] = completions;
+			const content = completion?.type === "custom_message" ? completion.content : undefined;
+			expect(content).toContain("lane release reconciliation required");
+			expect(content).toContain('"source":"harness"');
+			if (turnFails) expect(content).toContain("worker prompt also failed");
+			expect(release).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it("surfaces release reconciliation failure when a native wake is cancelled during admission", async () => {
+		const child = await session("worker", [], undefined, [], "sub");
+		const parent = await session("owner", []);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
+		const entered = Promise.withResolvers<AbortSignal>();
+		const admitted = Promise.withResolvers<laneAdmission.NativeHostLaneLease>();
+		vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockImplementation(({ signal }) => {
+			entered.resolve(signal!);
+			return admitted.promise;
+		});
+		const releaseFailure = new Error("lane release reconciliation required after cancellation");
+		const release = vi.fn(async () => {
+			throw releaseFailure;
+		});
+		await child.instance.deliverIrcMessage({
+			id: "cancelled-wake",
+			from: "owner",
+			to: "worker",
+			body: "Wake before cancellation.",
+			ts: Date.now(),
+		});
+		const signal = await entered.promise;
+		const idle = child.instance.waitForIdle();
+		void idle.catch(() => {});
+		await setImmediate();
+		child.instance.beginDispose();
+		admitted.resolve({ slotId: "worker-slot", leaseToken: "worker-lease", release });
+		expect(signal.aborted).toBe(true);
+		await expect(idle).rejects.toBe(releaseFailure);
+		expect(child.mock.calls).toHaveLength(0);
+		expect(release).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers an acknowledged receipt before provider input and consumes its root phase once", async () => {
+		const root = await session("root", []);
+		const worker = await session("worker", []);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: worker.instance,
+		});
+		const record = {
+			role: "custom" as const,
+			customType: "task:continuation",
+			content: "Persisted child completion B",
+			display: true,
+			timestamp: Date.now(),
+			attribution: "agent" as const,
+			details: { id: "receipt-before-input", from: "worker", completionId: "durable-receipt-B", source: "agent" },
+		};
+		const outbox = new IrcContinuationOutbox(root.store);
+		outbox.receiveCompletion(record);
+		outbox.receiveCompletion(record);
+		await root.store.ensureOnDisk();
+		await root.store.sync();
+		expect(
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === "irc:completion-received"),
+		).toHaveLength(1);
+		expect(
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(0);
+		await root.instance.dispose();
+		const reopened = await SessionManager.open(root.store.getSessionFile()!);
+		const recovered = await session("root", [{ content: ["Processed B"], stopReason: "stop" }], reopened);
+		registry.attachSession("root", recovered.instance, reopened.getSessionFile()!);
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await recovered.instance.replayIrcContinuations();
+		expect(recovered.mock.calls).toHaveLength(1);
+		expect(
+			reopened
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+		expect(new IrcContinuationOutbox(reopened).pendingReceivedCompletions(new Set())).toEqual([]);
+		expect(new IrcContinuationOutbox(reopened).unfinishedPhases()).toEqual([]);
+	});
+
+	it("keeps arrival ordering when a newer native result is still only a durable receipt", async () => {
+		const root = await session("root", []);
+		const outbox = new IrcContinuationOutbox(root.store);
+		outbox.receiveCompletion({
+			role: "custom",
+			customType: "task:continuation",
+			content: "Newer result",
+			display: true,
+			timestamp: 2000,
+			details: { id: "newer-receipt", from: "worker", completionId: "newer-completion" },
+		});
+		const late = outbox.withOrdering({
+			role: "custom",
+			customType: "task:continuation",
+			content: "Older result",
+			display: true,
+			timestamp: 1000,
+			details: { id: "older-receipt", from: "worker", completionId: "older-completion" },
+		});
+		expect(late.details).toMatchObject({ arrivedAfter: "newer-receipt", phaseId: "older-receipt" });
+		expect(late.content).toContain("does not establish supersession");
+	});
+
+	it("claims a parent phase in memory while the real journal lock is held, then persists it once", async () => {
+		const child = await session("worker", []);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const sessionFile = child.store.getSessionFile()!;
+		let release!: () => void;
+		let entered!: () => void;
+		const gate = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		const held = new Promise<void>(resolve => {
+			entered = resolve;
+		});
+		const lock = withJournalLock(sessionFile, async () => {
+			entered();
+			await gate;
+		});
+		await held;
+		const pendingRewrite = child.store.rewriteEntries();
+		await setImmediate();
+		try {
+			const outbox = new IrcContinuationOutbox(child.store);
+			expect(outbox.begin("locked-parent-message")).toBe(true);
+			expect(outbox.begin("locked-parent-message")).toBe(false);
+		} finally {
+			release();
+			await lock;
+		}
+		await pendingRewrite;
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		await child.instance.dispose();
+		const reopened = await SessionManager.open(sessionFile);
+		const phaseCount = reopened
+			.getEntries()
+			.filter(
+				entry =>
+					entry.type === "custom" &&
+					entry.customType === "irc:continuation-phase" &&
+					Reflect.get(entry.data ?? {}, "phaseId") === "locked-parent-message",
+			).length;
+		expect(phaseCount).toBe(1);
+		await reopened.close();
+	});
 	it("delivers B once through the parent inbox, keeps A, and coalesces duplicate resume IDs", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Continuation received"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("A"), yielded("B")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "NotMain", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Unrelated.Name", kind: "sub", parentId: "owner", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Unrelated.Name",
+			kind: "sub",
+			parentId: "owner",
+			session: child.instance,
+		});
 		let completionEvents = 0;
 		parent.instance.subscribe(event => {
 			if (event.type === "irc_message" && event.message.customType === "task:continuation") completionEvents++;
 		});
-		await child.instance.prompt(renderAgentUserPrompt("Phase A: no new worktree and read-only until my next phase update.", "owner"), { attribution: "agent" });
+		await child.instance.prompt(
+			renderAgentUserPrompt("Phase A: no new worktree and read-only until my next phase update.", "owner"),
+			{ attribution: "agent" },
+		);
 		await child.instance.waitForIdle();
 		const dir = child.store.getArtifactsDir()!;
 		await fs.mkdir(dir, { recursive: true });
 		await fs.writeFile(path.join(dir, "worker.md"), JSON.stringify({ value: "A" }));
-		const resume = { id: "resume-phase-two", from: "owner", to: "worker", body: "Phase two replaces my temporary read-only plan. Stay in the same tree. Production writes remain forbidden.", ts: Date.now() };
+		const resume = {
+			id: "resume-phase-two",
+			from: "owner",
+			to: "worker",
+			body: "Phase two replaces my temporary read-only plan. Stay in the same tree. Production writes remain forbidden.",
+			ts: Date.now(),
+		};
 		await Promise.all([child.instance.deliverIrcMessage(resume), child.instance.deliverIrcMessage(resume)]);
 		await child.instance.waitForIdle();
 		await parent.instance.waitForIdle();
 		await Promise.all([child.instance.replayIrcContinuations(), child.instance.replayIrcContinuations()]);
-		const completions = parent.store.getEntries().filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		const completions = parent.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(completions).toHaveLength(1);
 		expect(completionEvents).toBe(1);
 		const completion = completions[0]!;
@@ -91,31 +362,267 @@ describe("native retained child resume", () => {
 		expect(await fs.readFile(path.join(dir, "worker.md"), "utf8")).toBe('{"value":"A"}');
 		expect(child.mock.calls).toHaveLength(2);
 		expect(child.instance.agent.state.systemPrompt).toEqual(["Operator: production writes are forbidden."]);
-		expect(child.mock.calls[0]?.context.messages.some(message => message.role === "user" && message.attribution === "agent")).toBe(true);
+		expect(
+			child.mock.calls[0]?.context.messages.some(
+				message => message.role === "user" && message.attribution === "agent",
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		{ name: "an earlier terminal yield", response: yielded("OLD-A"), legacyReceipt: false },
+		{
+			name: "an earlier assistant tail",
+			response: { content: ["OLD-A"], stopReason: "stop" } as MockResponse,
+			legacyReceipt: true,
+		},
+	])("runs a fresh completion phase instead of reusing $name", async ({ response, legacyReceipt }) => {
+		const root = await session("root", [{ content: ["Received fresh aggregate"], stopReason: "stop" }]);
+		const aggregator = await session("aggregator", [response, yielded("NEW-B")]);
+		const worker = await session("worker", [yielded("worker-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "aggregator",
+			displayName: "Aggregator",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: aggregator.instance,
+		});
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "aggregator",
+			scope: "tree",
+			session: worker.instance,
+		});
+		await aggregator.store.ensureOnDisk();
+		const immutable = path.join(aggregator.store.getArtifactsDir()!, "aggregator.md");
+		await fs.mkdir(path.dirname(immutable), { recursive: true });
+		await fs.writeFile(immutable, '{"value":"immutable-A"}');
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const stream = aggregator.instance.agent.streamFn;
+		let first = true;
+		aggregator.instance.agent.streamFn = async (model, context, options) => {
+			if (first) {
+				first = false;
+				started.resolve();
+				await release.promise;
+			}
+			return stream(model, context, options);
+		};
+		const unrelatedTurn = aggregator.instance.prompt("Finish the unrelated initial phase A.");
+		try {
+			await started.promise;
+			if (legacyReceipt) {
+				const record = {
+					role: "custom" as const,
+					customType: "task:continuation",
+					content: "Persisted worker-B",
+					display: true,
+					timestamp: Date.now(),
+					attribution: "agent" as const,
+					details: {
+						id: "legacy-receipt-B",
+						from: "worker",
+						completionId: "legacy-completion-B",
+						source: "agent",
+					},
+				};
+				// Preserve the old receipt-before-assistant order to verify recovery of an existing journal.
+				aggregator.instance.agent.appendMessage(record);
+				aggregator.store.appendCustomMessageEntry(
+					record.customType,
+					record.content,
+					record.display,
+					record.details,
+					"agent",
+				);
+				await aggregator.store.sync();
+			} else {
+				await worker.instance.deliverIrcMessage({
+					id: "worker-phase-B",
+					from: "aggregator",
+					to: "worker",
+					body: "Return worker-B.",
+					ts: Date.now(),
+				});
+				await worker.instance.waitForIdle();
+			}
+		} finally {
+			release.resolve();
+		}
+		await unrelatedTurn;
+		await aggregator.instance.waitForIdle();
+		await aggregator.instance.replayIrcContinuations();
+		await aggregator.instance.waitForIdle();
+		await root.instance.waitForIdle();
+		const completions = root.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		expect(completions).toHaveLength(1);
+		const completion = completions[0];
+		if (completion?.type !== "custom_message") throw new Error("Expected fresh aggregate completion");
+		const result = aggregator.store
+			.getEntries()
+			.find(entry => entry.type === "custom" && entry.customType === "irc:continuation-result");
+		const output = result?.type === "custom" ? Reflect.get(result.data ?? {}, "output") : undefined;
+		expect(typeof output).toBe("string");
+		expect(JSON.parse(output as string)).toEqual({ value: "NEW-B" });
+		expect(completion.details).toMatchObject({ resultSource: "agent" });
+		expect(aggregator.mock.calls).toHaveLength(2);
+		expect(await fs.readFile(immutable, "utf8")).toBe('{"value":"immutable-A"}');
+		expect(
+			aggregator.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+		await Promise.all([aggregator.instance.replayIrcContinuations(), aggregator.instance.replayIrcContinuations()]);
+		await aggregator.instance.waitForIdle();
+		expect(aggregator.mock.calls).toHaveLength(2);
+		expect(
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+	});
+
+	it("injects a live native completion after tool results without replaying a second phase", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const hold: AgentTool = {
+			name: "hold",
+			label: "Hold",
+			description: "Keep a tool in flight across native completion delivery.",
+			parameters: z.object({}),
+			async execute() {
+				started.resolve();
+				await release.promise;
+				return { content: [{ type: "text", text: "Original tool finished" }], details: {} };
+			},
+		};
+		const root = await session("root", []);
+		const aggregator = await session(
+			"aggregator",
+			[
+				{ content: [{ type: "toolCall", id: "hold-call", name: "hold", arguments: {} }], stopReason: "toolUse" },
+				{ content: ["Handled worker-B at the next valid step"], stopReason: "stop" },
+			],
+			undefined,
+			[hold],
+		);
+		const worker = await session("worker", [yielded("worker-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "aggregator",
+			displayName: "Aggregator",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: aggregator.instance,
+		});
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "aggregator",
+			scope: "tree",
+			session: worker.instance,
+		});
+		let tailWhileToolWasPending: string | undefined;
+		const running = aggregator.instance.prompt("Run the original tool, then inspect pending results.");
+		try {
+			await started.promise;
+			await worker.instance.deliverIrcMessage({
+				id: "live-worker-B",
+				from: "aggregator",
+				to: "worker",
+				body: "Return worker-B.",
+				ts: Date.now(),
+			});
+			await worker.instance.waitForIdle();
+			tailWhileToolWasPending = aggregator.instance.agent.state.messages.at(-1)?.role;
+		} finally {
+			release.resolve();
+		}
+		await running;
+		await aggregator.instance.waitForIdle();
+		await aggregator.instance.replayIrcContinuations();
+		await aggregator.instance.waitForIdle();
+		await root.instance.waitForIdle();
+		expect(tailWhileToolWasPending).toBe("assistant");
+		expect(aggregator.mock.calls).toHaveLength(2);
+		const nextStep = aggregator.mock.calls[1]!.context.messages;
+		const toolResult = nextStep.findIndex(message => message.role === "toolResult" && message.toolName === "hold");
+		const notice = nextStep.findIndex(
+			message => message.role === "developer" && JSON.stringify(message.content).includes("worker-B"),
+		);
+		expect(toolResult).toBeGreaterThanOrEqual(0);
+		expect(notice).toBeGreaterThan(toolResult);
+		expect(nextStep[notice]).toMatchObject({ role: "developer", attribution: "agent" });
+		expect(
+			aggregator.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+		expect(
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(0);
+		expect(root.mock.calls).toHaveLength(0);
 	});
 
 	it("aggregates a nested child's B to the root as a separate native result", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const root = await session("root", [{ content: ["Root received B"], stopReason: "stop" }]);
 		const parent = await session("parent", [yielded("aggregate-B")]);
 		const child = await session("child", [yielded("B")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
-		registry.register({ id: "parent", displayName: "Parent", kind: "sub", parentId: "root", scope: "tree", session: parent.instance });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "tree", session: child.instance });
+		registry.register({
+			id: "parent",
+			displayName: "Parent",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: parent.instance,
+		});
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "tree",
+			session: child.instance,
+		});
 		await fs.mkdir(child.store.getArtifactsDir()!, { recursive: true });
 		await fs.writeFile(path.join(child.store.getArtifactsDir()!, "child.md"), JSON.stringify({ value: "A" }));
 		await child.instance.deliverIrcMessage({
-			id: "resume-nested-child", from: "parent", to: "child", body: "Return B.", ts: Date.now(),
+			id: "resume-nested-child",
+			from: "parent",
+			to: "child",
+			body: "Return B.",
+			ts: Date.now(),
 		});
 		await child.instance.waitForIdle();
 		await parent.instance.waitForIdle();
 		await root.instance.waitForIdle();
-		const parentResult = parent.store.getEntries().find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
-		const rootResult = root.store.getEntries().find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		const parentResult = parent.store
+			.getEntries()
+			.find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		const rootResult = root.store
+			.getEntries()
+			.find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(parentResult?.type).toBe("custom_message");
 		expect(rootResult?.type).toBe("custom_message");
-		if (parentResult?.type !== "custom_message" || rootResult?.type !== "custom_message") throw new Error("Expected nested native completions");
+		if (parentResult?.type !== "custom_message" || rootResult?.type !== "custom_message")
+			throw new Error("Expected nested native completions");
 		expect(parentResult.content).toContain('"value":"B"');
 		expect(rootResult.content).toContain('"value":"aggregate-B"');
 		expect(Reflect.get(parentResult.details!, "handle")).not.toBe(Reflect.get(rootResult.details!, "handle"));
@@ -124,50 +631,92 @@ describe("native retained child resume", () => {
 	});
 
 	it("keeps a parent message received during native B as a separate C completion", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Handled B and C"], stopReason: "stop" }]);
 		const child = await session("worker", [{ ...yielded("B"), delayMs: 30 }, yielded("C")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 		await child.store.ensureOnDisk();
 		await fs.mkdir(child.store.getArtifactsDir()!, { recursive: true });
 		await fs.writeFile(path.join(child.store.getArtifactsDir()!, "worker.md"), JSON.stringify({ value: "A" }));
 		const bDelivery = child.instance.deliverIrcMessage({
-			id: "resume-B", from: "owner", to: "worker", body: "Return B.", ts: Date.now(),
+			id: "resume-B",
+			from: "owner",
+			to: "worker",
+			body: "Return B.",
+			ts: Date.now(),
 		});
 		const cDelivery = child.instance.deliverIrcMessage({
-			id: "resume-C", from: "owner", to: "worker", body: "Return C.", ts: Date.now(),
+			id: "resume-C",
+			from: "owner",
+			to: "worker",
+			body: "Return C.",
+			ts: Date.now(),
 		});
 		await Promise.all([bDelivery, cDelivery]);
 		await child.instance.waitForIdle();
 		await parent.instance.waitForIdle();
-		const completions = parent.store.getEntries().flatMap(entry =>
-			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
 		expect(completions).toHaveLength(2);
 		expect(completions.map(entry => entry.content)).toEqual([
-			expect.stringContaining('"value":"B"'), expect.stringContaining('"value":"C"'),
+			expect.stringContaining('"value":"B"'),
+			expect.stringContaining('"value":"C"'),
 		]);
-		expect(Reflect.get(completions[0]!.details ?? {}, "handle"))
-			.not.toBe(Reflect.get(completions[1]!.details ?? {}, "handle"));
+		expect(Reflect.get(completions[0]!.details ?? {}, "handle")).not.toBe(
+			Reflect.get(completions[1]!.details ?? {}, "handle"),
+		);
 		expect(await fs.readFile(path.join(child.store.getArtifactsDir()!, "worker.md"), "utf8")).toBe('{"value":"A"}');
 		expect(child.mock.calls).toHaveLength(2);
 	});
 
 	it("routes to the verified root ancestor when the direct parent is unavailable", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const root = await session("root", [{ content: ["Received B"], stopReason: "stop" }]);
 		const child = await session("child", [yielded("B")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
-		registry.register({ id: "missing-parent", displayName: "Missing Parent", kind: "sub", parentId: "root", scope: "tree", session: null });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "missing-parent", scope: "tree", session: child.instance });
+		registry.register({
+			id: "missing-parent",
+			displayName: "Missing Parent",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: null,
+		});
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "missing-parent",
+			scope: "tree",
+			session: child.instance,
+		});
 		await child.instance.deliverIrcMessage({
-			id: "resume-orphaned-child", from: "missing-parent", to: "child", body: "Return B.", ts: Date.now(),
+			id: "resume-orphaned-child",
+			from: "missing-parent",
+			to: "child",
+			body: "Return B.",
+			ts: Date.now(),
 		});
 		await child.instance.waitForIdle();
 		await root.instance.waitForIdle();
-		const completion = root.store.getEntries().find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		const completion = root.store
+			.getEntries()
+			.find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(completion?.type).toBe("custom_message");
 		if (completion?.type !== "custom_message") throw new Error("Expected verified ancestor completion");
 		expect(completion.content).toContain('"value":"B"');
@@ -175,41 +724,79 @@ describe("native retained child resume", () => {
 	});
 
 	it("does not route a completion to an unrelated root when verified lineage ends", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const foreignRoot = await session("foreign-root", [{ content: ["Must not receive B"], stopReason: "stop" }]);
 		const child = await session("child", [yielded("B")]);
 		const registry = AgentRegistry.global();
-		registry.register({ id: "foreign-root", displayName: "Foreign Root", kind: "main", scope: "foreign", session: foreignRoot.instance });
-		registry.register({ id: "missing-parent", displayName: "Missing Parent", kind: "sub", scope: "isolated", session: null });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "missing-parent", scope: "isolated", session: child.instance });
+		registry.register({
+			id: "foreign-root",
+			displayName: "Foreign Root",
+			kind: "main",
+			scope: "foreign",
+			session: foreignRoot.instance,
+		});
+		registry.register({
+			id: "missing-parent",
+			displayName: "Missing Parent",
+			kind: "sub",
+			scope: "isolated",
+			session: null,
+		});
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "missing-parent",
+			scope: "isolated",
+			session: child.instance,
+		});
 		await child.instance.deliverIrcMessage({
-			id: "resume-unverified-lineage", from: "missing-parent", to: "child", body: "Return B.", ts: Date.now(),
+			id: "resume-unverified-lineage",
+			from: "missing-parent",
+			to: "child",
+			body: "Return B.",
+			ts: Date.now(),
 		});
 		await child.instance.waitForIdle();
-		const completions = foreignRoot.store.getEntries().filter(entry =>
-			entry.type === "custom_message" && entry.customType === "task:continuation");
+		const completions = foreignRoot.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(completions).toHaveLength(0);
 		const outbox = new IrcContinuationOutbox(child.store);
 		expect(outbox.pending()).toHaveLength(1);
 		const pending = outbox.pending()[0]!;
 		expect(pending.output).toContain('"value":"B"');
 		expect(pending.handle).toStartWith("agent://child.phase-");
-		expect(await fs.readFile(path.join(child.store.getArtifactsDir()!, `${pending.handle.slice(8)}.md`), "utf8"))
-			.toBe(pending.output);
+		expect(
+			await fs.readFile(path.join(child.store.getArtifactsDir()!, `${pending.handle.slice(8)}.md`), "utf8"),
+		).toBe(pending.output);
 		expect(child.mock.calls).toHaveLength(1);
 	});
 
 	it("replays an older unfinished parent phase before a newly arrived parent message", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Received B then C"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("B"), yielded("C")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 		const originalTs = 1700000000000;
 		const oldPhase = {
-			role: "custom" as const, customType: "irc:incoming", content: "Resume older phase B",
-			display: true, timestamp: originalTs, attribution: "agent" as const,
+			role: "custom" as const,
+			customType: "irc:incoming",
+			content: "Resume older phase B",
+			display: true,
+			timestamp: originalTs,
+			attribution: "agent" as const,
 			details: { id: "resume-B", from: "owner", source: "agent", relation: "parent", sentAt: originalTs },
 		};
 		new IrcContinuationOutbox(child.store).begin("resume-B", oldPhase);
@@ -220,19 +807,27 @@ describe("native retained child resume", () => {
 		const recovered = await session("worker", [yielded("B"), yielded("C")], reopened);
 		registry.attachSession("worker", recovered.instance, reopened.getSessionFile()!);
 		await recovered.instance.deliverIrcMessage({
-			id: "resume-C", from: "owner", to: "worker", body: "Resume newer phase C", ts: Date.now(),
+			id: "resume-C",
+			from: "owner",
+			to: "worker",
+			body: "Resume newer phase C",
+			ts: Date.now(),
 		});
 		await recovered.instance.waitForIdle();
 		await parent.instance.waitForIdle();
-		const completions = parent.store.getEntries().flatMap(entry =>
-			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
 		expect(completions.map(entry => Reflect.get(entry.details ?? {}, "phaseId"))).toEqual(["resume-B", "resume-C"]);
 		expect(completions.map(entry => entry.content)).toEqual([
-			expect.stringContaining('"value":"B"'), expect.stringContaining('"value":"C"'),
+			expect.stringContaining('"value":"B"'),
+			expect.stringContaining('"value":"C"'),
 		]);
 		expect(recovered.mock.calls).toHaveLength(2);
-		const resumed = recovered.instance.agent.state.messages.find(m =>
-			m.role === "custom" && Reflect.get(m.details ?? {}, "id") === "resume-B",
+		const resumed = recovered.instance.agent.state.messages.find(
+			m => m.role === "custom" && Reflect.get(m.details ?? {}, "id") === "resume-B",
 		);
 		if (resumed?.role !== "custom") throw new Error("Expected recovered input");
 		expect(resumed?.timestamp).toBe(originalTs);
@@ -240,15 +835,28 @@ describe("native retained child resume", () => {
 	});
 
 	it("replays a durable root continuation after reopen without duplicating its receipt", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const root = await session("root", [{ content: ["Received B"], stopReason: "stop" }]);
 		const child = await session("child", [yielded("B")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "root", scope: "tree", session: child.instance });
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: child.instance,
+		});
 		const completionId = "durable-completion-before-wake";
-		root.store.appendCustomMessageEntry("task:continuation", "B", true,
-			{ id: "incoming-B", from: "child", completionId, source: "agent" }, "agent");
+		root.store.appendCustomMessageEntry(
+			"task:continuation",
+			"B",
+			true,
+			{ id: "incoming-B", from: "child", completionId, source: "agent" },
+			"agent",
+		);
 		await root.store.ensureOnDisk();
 		await root.store.sync();
 		await root.instance.dispose();
@@ -257,28 +865,52 @@ describe("native retained child resume", () => {
 		registry.attachSession("root", recovered.instance, reopened.getSessionFile()!);
 		await recovered.instance.replayIrcContinuations();
 		await recovered.instance.waitForIdle();
-		const consumed = reopened.getEntries().filter(entry => entry.type === "custom" &&
-			entry.customType === "irc:completion-consumed" && entry.data === completionId);
+		const consumed = reopened
+			.getEntries()
+			.filter(
+				entry =>
+					entry.type === "custom" && entry.customType === "irc:completion-consumed" && entry.data === completionId,
+			);
 		expect(consumed).toHaveLength(1);
 		expect(recovered.mock.calls).toHaveLength(1);
 		await recovered.instance.replayIrcContinuations();
-		expect(reopened.getEntries().filter(entry => entry.type === "custom" &&
-			entry.customType === "irc:completion-consumed" && entry.data === completionId)).toHaveLength(1);
+		expect(
+			reopened
+				.getEntries()
+				.filter(
+					entry =>
+						entry.type === "custom" &&
+						entry.customType === "irc:completion-consumed" &&
+						entry.data === completionId,
+				),
+		).toHaveLength(1);
 		expect(recovered.mock.calls).toHaveLength(1);
 	});
 
 	it("recovers persisted native yields after restart without executing either phase again", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Results received"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("B"), yielded("C")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 		const outbox = new IrcContinuationOutbox(child.store);
 		for (const phase of ["B", "C"]) {
 			const record = {
-				role: "custom" as const, customType: "irc:incoming", content: `Resume phase ${phase}`,
-				display: true, timestamp: Date.now(), attribution: "agent" as const,
+				role: "custom" as const,
+				customType: "irc:incoming",
+				content: `Resume phase ${phase}`,
+				display: true,
+				timestamp: Date.now(),
+				attribution: "agent" as const,
 				details: { id: `resume-${phase}`, from: "owner", source: "agent", relation: "parent" },
 			};
 			outbox.begin(`resume-${phase}`, record);
@@ -296,36 +928,81 @@ describe("native retained child resume", () => {
 		await parent.instance.waitForIdle();
 		const receipt = await waiting;
 		const duplicateWait = IrcBus.global().wait("owner", { from: "worker" }, 50);
-		await IrcBus.global().send({ from: "worker", to: "owner", body: receipt!.body }, { completion: receipt!.completion });
+		await IrcBus.global().send(
+			{ from: "worker", to: "owner", body: receipt!.body },
+			{ completion: receipt!.completion },
+		);
 		expect(await duplicateWait).toBeNull();
 		expect(receipt?.completion?.phaseId).toBe("resume-B");
-		const completions = parent.store.getEntries().flatMap(entry =>
-			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
 		expect(completions.map(entry => Reflect.get(entry.details ?? {}, "phaseId"))).toEqual(["resume-B", "resume-C"]);
 		expect(completions.map(entry => entry.content)).toEqual([
-			expect.stringContaining('"value":"B"'), expect.stringContaining('"value":"C"'),
+			expect.stringContaining('"value":"B"'),
+			expect.stringContaining('"value":"C"'),
 		]);
 		expect(recovered.mock.calls).toHaveLength(0);
 		expect(new IrcContinuationOutbox(reopened).unfinished()).toEqual([]);
 		await recovered.instance.replayIrcContinuations();
-		expect(parent.store.getEntries().filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation")).toHaveLength(2);
+		expect(
+			parent.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(2);
 	});
 
 	it.each([
-		{ name: "a phase without a native yield", response: { content: ["Stopped without yielding"], stopReason: "stop" } as MockResponse, source: "harness" },
-		{ name: "an agent's explicit refusal", response: { content: [{ type: "toolCall", id: "declined", name: "yield", arguments: { result: { error: "Declined within the safety boundary" } } }], stopReason: "toolUse" } as MockResponse, source: "agent" },
+		{
+			name: "a phase without a native yield",
+			response: { content: ["Stopped without yielding"], stopReason: "stop" } as MockResponse,
+			source: "harness",
+		},
+		{
+			name: "an agent's explicit refusal",
+			response: {
+				content: [
+					{
+						type: "toolCall",
+						id: "declined",
+						name: "yield",
+						arguments: { result: { error: "Declined within the safety boundary" } },
+					},
+				],
+				stopReason: "toolUse",
+			} as MockResponse,
+			source: "agent",
+		},
 	])("keeps the real source for $name, without inventing a human stop", async ({ response, source }) => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Result received"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("A"), response]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 		await child.instance.prompt("Phase A", { attribution: "agent" });
-		await child.instance.deliverIrcMessage({ id: "bounded-resume", from: "owner", to: "worker", body: "Complete the safe phase only.", ts: Date.now() });
+		await child.instance.deliverIrcMessage({
+			id: "bounded-resume",
+			from: "owner",
+			to: "worker",
+			body: "Complete the safe phase only.",
+			ts: Date.now(),
+		});
 		await child.instance.waitForIdle();
 		await parent.instance.waitForIdle();
-		const completion = parent.store.getEntries().find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		const completion = parent.store
+			.getEntries()
+			.find(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		if (completion?.type !== "custom_message") throw new Error("Expected native phase completion");
 		expect(completion.details).toMatchObject({ resultSource: source });
 		expect(completion.content).toContain(`"source":"${source}"`);
@@ -333,12 +1010,20 @@ describe("native retained child resume", () => {
 	});
 
 	it("does not create a turn or completion when replaying an already delivered parent message missing a continuation phase", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Received newer"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("newer-result")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 
 		const oldRecord = {
 			role: "custom" as const,
@@ -392,20 +1077,31 @@ describe("native retained child resume", () => {
 
 		expect(child.mock.calls).toHaveLength(1);
 		expect(recovered.mock.calls).toHaveLength(0);
-		const completions = parent.store.getEntries().flatMap(entry =>
-			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
 		expect(completions).toHaveLength(1);
 		expect(Reflect.get(completions[0]!.details ?? {}, "phaseId")).toBe("newer");
 		expect(completions[0]!.content).toContain('"value":"newer-result"');
 	});
 
 	it("executes out-of-order parent messages and marks late record with arrived-after metadata", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Handled both"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("newer-result"), yielded("late-result")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 
 		await child.instance.deliverIrcMessage({
 			id: "newer-message",
@@ -428,18 +1124,22 @@ describe("native retained child resume", () => {
 		await parent.instance.waitForIdle();
 
 		expect(child.mock.calls).toHaveLength(2);
-		const completions = parent.store.getEntries().flatMap(entry =>
-			entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
 		expect(completions).toHaveLength(2);
 		expect(completions.map(entry => Reflect.get(entry.details ?? {}, "phaseId"))).toEqual([
 			"newer-message",
 			"late-message",
 		]);
 
-		const lateRecord = child.instance.agent.state.messages.find(m =>
-			m.role === "custom" &&
-			(Reflect.get(m.details ?? {}, "phaseId") === "late-message" ||
-				Reflect.get(m.details ?? {}, "id") === "late-message"),
+		const lateRecord = child.instance.agent.state.messages.find(
+			m =>
+				m.role === "custom" &&
+				(Reflect.get(m.details ?? {}, "phaseId") === "late-message" ||
+					Reflect.get(m.details ?? {}, "id") === "late-message"),
 		);
 		expect(lateRecord).toBeDefined();
 		if (lateRecord?.role !== "custom") throw new Error("Expected late input");
@@ -452,13 +1152,28 @@ describe("native retained child resume", () => {
 	});
 
 	it("does not apply late marker when out-of-order timestamps come from different senders", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Result received"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("owner-result"), yielded("peer-result")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "peer", displayName: "Peer", kind: "sub", parentId: "owner", scope: "test", session: null });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "peer",
+			displayName: "Peer",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: null,
+		});
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 
 		await child.instance.deliverIrcMessage({
 			id: "owner-msg-1",
@@ -479,10 +1194,11 @@ describe("native retained child resume", () => {
 		});
 		await child.instance.waitForIdle();
 
-		const peerRecord = child.instance.agent.state.messages.find(m =>
-			m.role === "custom" &&
-			(Reflect.get(m.details ?? {}, "id") === "peer-msg-2" ||
-				Reflect.get(m.details ?? {}, "phaseId") === "peer-msg-2"),
+		const peerRecord = child.instance.agent.state.messages.find(
+			m =>
+				m.role === "custom" &&
+				(Reflect.get(m.details ?? {}, "id") === "peer-msg-2" ||
+					Reflect.get(m.details ?? {}, "phaseId") === "peer-msg-2"),
 		);
 		expect(peerRecord).toBeDefined();
 		if (peerRecord?.role !== "custom") throw new Error("Expected peer input");
@@ -490,12 +1206,20 @@ describe("native retained child resume", () => {
 		expect(Reflect.get(peerRecord!.details ?? {}, "arrivedAfter")).toBeUndefined();
 	});
 	it("claims a durable phase before streaming steer and recovers unconsumed steer without duplicate execution", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Handled B"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("B")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 
 		child.instance.agent.state.isStreaming = true;
 		const heldSteers: unknown[] = [];
@@ -511,22 +1235,22 @@ describe("native retained child resume", () => {
 			ts: 1700000001000,
 		};
 
-		await Promise.all([
-			child.instance.deliverIrcMessage(resume),
-			child.instance.deliverIrcMessage(resume),
-		]);
+		await Promise.all([child.instance.deliverIrcMessage(resume), child.instance.deliverIrcMessage(resume)]);
 
 		expect(heldSteers).toHaveLength(1);
 		const outbox = new IrcContinuationOutbox(child.store);
 		expect(outbox.hasPhase("streaming-resume-1")).toBe(true);
 
-		const phaseEntry = child.store.getEntries().find(entry =>
-			entry.type === "custom" &&
-			entry.customType === "irc:continuation-phase" &&
-			Reflect.get(entry.data ?? {}, "phaseId") === "streaming-resume-1",
-		);
+		const phaseEntry = child.store
+			.getEntries()
+			.find(
+				entry =>
+					entry.type === "custom" &&
+					entry.customType === "irc:continuation-phase" &&
+					Reflect.get(entry.data ?? {}, "phaseId") === "streaming-resume-1",
+			);
 		expect(phaseEntry).toBeDefined();
-		if (!phaseEntry || phaseEntry.type !== "custom") throw new Error("Expected custom phase entry");
+		if (phaseEntry?.type !== "custom") throw new Error("Expected custom phase entry");
 		const phaseData = phaseEntry.data;
 		const record = phaseData ? Reflect.get(phaseData, "record") : undefined;
 		expect(record).toBeDefined();
@@ -547,22 +1271,30 @@ describe("native retained child resume", () => {
 		await recovered.instance.waitForIdle();
 		expect(recovered.mock.calls).toHaveLength(1);
 
-		const completions = parent.store.getEntries().filter(entry =>
-			entry.type === "custom_message" && entry.customType === "task:continuation",
-		);
+		const completions = parent.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(completions).toHaveLength(1);
 		const firstCompletion = completions[0];
-		if (!firstCompletion || firstCompletion.type !== "custom_message") throw new Error("Expected completion entry");
+		if (firstCompletion?.type !== "custom_message") throw new Error("Expected completion entry");
 		expect(Reflect.get(firstCompletion.details ?? {}, "phaseId")).toBe("streaming-resume-1");
 	});
 
 	it("ignores streamingSteer phase claim during replay when matching custom_message receipt exists", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Parent ack"], stopReason: "stop" }]);
 		const child = await session("worker", [yielded("B")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
-		registry.register({ id: "worker", displayName: "Worker", kind: "sub", parentId: "owner", scope: "test", session: child.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 
 		const outbox = new IrcContinuationOutbox(child.store);
 		const phaseId = "stream-consumed-phase";
@@ -596,17 +1328,37 @@ describe("native retained child resume", () => {
 	});
 
 	it("pins continuation delivery target to initial parent and avoids reassigning to root after crash", async () => {
-		AgentRegistry.resetGlobalForTests(); IrcBus.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
 		const root = await session("root", [{ content: ["Root response"], stopReason: "stop" }]);
 		const parent = await session("parent", [{ content: ["Parent received"], stopReason: "stop" }]);
 		const child = await session("child", [yielded("child-completion")]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
-		registry.register({ id: "parent", displayName: "Parent", kind: "sub", parentId: "root", scope: "tree", session: parent.instance });
-		registry.register({ id: "child", displayName: "Child", kind: "sub", parentId: "parent", scope: "tree", session: child.instance });
+		registry.register({
+			id: "parent",
+			displayName: "Parent",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: parent.instance,
+		});
+		registry.register({
+			id: "child",
+			displayName: "Child",
+			kind: "sub",
+			parentId: "parent",
+			scope: "tree",
+			session: child.instance,
+		});
 
 		const outbox = new IrcContinuationOutbox(child.store);
-		const completion = await outbox.complete("child", "parent", "p2-phase-1", JSON.stringify({ value: "child-completion" }));
+		const completion = await outbox.complete(
+			"child",
+			"parent",
+			"p2-phase-1",
+			JSON.stringify({ value: "child-completion" }),
+		);
 
 		const originalAppend = child.store.appendCustomEntry.bind(child.store);
 		const appendSpy = spyOn(child.store, "appendCustomEntry").mockImplementation((type: string, data: unknown) => {
@@ -619,9 +1371,9 @@ describe("native retained child resume", () => {
 		await expect(child.instance.replayIrcContinuations()).rejects.toThrow("Simulated disk error");
 
 		const reopenedParent = await SessionManager.open(parent.store.getSessionFile()!);
-		const parentCompletions = reopenedParent.getEntries().filter(e =>
-			e.type === "custom_message" && e.customType === "task:continuation",
-		);
+		const parentCompletions = reopenedParent
+			.getEntries()
+			.filter(e => e.type === "custom_message" && e.customType === "task:continuation");
 		expect(parentCompletions).toHaveLength(1);
 
 		appendSpy.mockRestore();
@@ -640,16 +1392,279 @@ describe("native retained child resume", () => {
 		await recoveredChild.instance.replayIrcContinuations();
 		await root.instance.waitForIdle();
 
-		const rootCompletionsFromChild = root.store.getEntries().filter(e =>
-			e.type === "custom_message" && e.customType === "task:continuation" &&
-			(Reflect.get(e.details ?? {}, "from") === "child" ||
-				Reflect.get(e.details ?? {}, "completionId") === completion.id),
-		);
+		const rootCompletionsFromChild = root.store
+			.getEntries()
+			.filter(
+				e =>
+					e.type === "custom_message" &&
+					e.customType === "task:continuation" &&
+					(Reflect.get(e.details ?? {}, "from") === "child" ||
+						Reflect.get(e.details ?? {}, "completionId") === completion.id),
+			);
 		expect(rootCompletionsFromChild).toHaveLength(0);
 
 		const reopenedOutbox = new IrcContinuationOutbox(recoveredChild.store);
 		expect(reopenedOutbox.deliveryTarget(completion.id)).toBe("parent");
 		expect(reopenedOutbox.pending().some(item => item.id === completion.id)).toBe(true);
+	});
+	it("does not let a concurrent outbox deliver or resolve an in-memory completion before sync", async () => {
+		const child = await session("worker", []);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const first = new IrcContinuationOutbox(child.store);
+		const second = new IrcContinuationOutbox(child.store);
+		const syncStarted = Promise.withResolvers<void>();
+		const syncGate = Promise.withResolvers<void>();
+		const originalSync = child.store.sync.bind(child.store);
+		let gated = false;
+		spyOn(child.store, "sync").mockImplementation(async () => {
+			if (gated) {
+				syncStarted.resolve();
+				await syncGate.promise;
+			}
+			return originalSync();
+		});
+
+		let delivered = false;
+		let firstSettled = false;
+		let secondSettled = false;
+		gated = true;
+		try {
+			const firstComplete = first.complete("worker", "owner", "shared-phase", '{"value":"done"}').then(result => {
+				firstSettled = true;
+				return result;
+			});
+			await syncStarted.promise;
+			expect(first.pending()).toHaveLength(1);
+			expect(second.pending()).toHaveLength(1);
+			expect(second.pending()[0]?.output).toBe('{"value":"done"}');
+			const secondComplete = second.complete("worker", "owner", "shared-phase", '{"value":"done"}').then(result => {
+				secondSettled = true;
+				return result;
+			});
+			const flush = second.flush(async () => {
+				delivered = true;
+				return true;
+			});
+			await setImmediate();
+			const deliveredBeforeSync = delivered;
+			const firstSettledBeforeSync = firstSettled;
+			const secondSettledBeforeSync = secondSettled;
+			syncGate.resolve();
+			const [firstResult, secondResult] = await Promise.all([firstComplete, secondComplete]);
+			await flush;
+			expect(deliveredBeforeSync).toBe(false);
+			expect(firstSettledBeforeSync).toBe(false);
+			expect(secondSettledBeforeSync).toBe(false);
+			expect(firstResult.id).toBe(secondResult.id);
+			expect(delivered).toBe(true);
+		} finally {
+			syncGate.resolve();
+		}
+		await child.instance.dispose();
+	});
+
+	it("does not deliver or acknowledge an in-memory completion when every concurrent sync fails", async () => {
+		const child = await session("worker", []);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const outbox = new IrcContinuationOutbox(child.store);
+		const syncStarted = Promise.withResolvers<void>();
+		const syncGate = Promise.withResolvers<void>();
+		const originalSync = child.store.sync.bind(child.store);
+		let failSyncs = true;
+		spyOn(child.store, "sync").mockImplementation(async () => {
+			if (failSyncs) {
+				syncStarted.resolve();
+				await syncGate.promise;
+				throw new Error("simulated completion sync failure");
+			}
+			await originalSync();
+		});
+		let delivered = false;
+		let settled: Promise<PromiseSettledResult<unknown>[]> | undefined;
+		try {
+			const completing = outbox.complete("worker", "owner", "failed-sync-phase", '{"value":"done"}');
+			await syncStarted.promise;
+			expect(outbox.pending()).toHaveLength(1);
+			const flushing = outbox.flush(async () => {
+				delivered = true;
+				return true;
+			});
+			settled = Promise.allSettled([completing, flushing]);
+			await setImmediate();
+			const deliveredBeforeFailure = delivered;
+			syncGate.resolve();
+			const outcomes = await settled;
+			expect(outcomes.map(outcome => outcome.status)).toEqual(["rejected", "rejected"]);
+			expect(deliveredBeforeFailure).toBe(false);
+			expect(delivered).toBe(false);
+			expect(
+				child.store
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-delivered"),
+			).toHaveLength(0);
+			expect(outbox.pending()).toHaveLength(1);
+		} finally {
+			failSyncs = false;
+			syncGate.resolve();
+			await settled;
+		}
+		await originalSync();
+	});
+
+	for (const timing of ["before replay", "after result barrier"] as const) {
+		it(`replay waits for an uncommitted sticky target ${timing}`, async () => {
+			const parent = await session("owner", [{ content: ["Parent received"], stopReason: "stop" }]);
+			const child = await session("worker", []);
+			const registry = AgentRegistry.global();
+			registry.register({
+				id: "owner",
+				displayName: "Owner",
+				kind: "main",
+				scope: "tree",
+				session: parent.instance,
+			});
+			registry.register({
+				id: "worker",
+				displayName: "Worker",
+				kind: "sub",
+				parentId: "owner",
+				scope: "tree",
+				session: child.instance,
+			});
+			const outbox = new IrcContinuationOutbox(child.store);
+			const phaseId = `sticky-target-${timing}`;
+			outbox.begin(phaseId);
+			const completion = await outbox.complete("worker", "owner", phaseId, '{"value":"result"}');
+			const pinStarted = Promise.withResolvers<void>();
+			const pinGate = Promise.withResolvers<void>();
+			const originalSync = child.store.sync.bind(child.store);
+			let injectAfterBarrier = timing === "after result barrier";
+			let claim: Promise<string> | undefined;
+			let replay: Promise<void> | undefined;
+			let released = false;
+			let sentBeforePinCommit = false;
+			spyOn(child.store, "sync").mockImplementation(async () => {
+				if (injectAfterBarrier) {
+					injectAfterBarrier = false;
+					expect(outbox.deliveryTarget(completion.id)).toBeUndefined();
+					await originalSync();
+					claim = outbox.claimDeliveryTarget(completion.id, "owner");
+					return;
+				}
+				if (outbox.deliveryTarget(completion.id)) {
+					pinStarted.resolve();
+					await pinGate.promise;
+				}
+				await originalSync();
+			});
+			const bus = IrcBus.global();
+			const originalSend = bus.send.bind(bus);
+			spyOn(bus, "send").mockImplementation(async (input, options) => {
+				if (input.from === "worker" && options?.completion?.id === completion.id) {
+					sentBeforePinCommit ||= !released;
+				}
+				return originalSend(input, options);
+			});
+			try {
+				if (timing === "before replay") {
+					claim = outbox.claimDeliveryTarget(completion.id, "owner");
+					await pinStarted.promise;
+				}
+				replay = child.instance.replayIrcContinuations();
+				await pinStarted.promise;
+				await setImmediate();
+				const prematureSend = sentBeforePinCommit;
+				released = true;
+				pinGate.resolve();
+				await replay;
+				await claim;
+				await parent.instance.waitForIdle();
+				expect(prematureSend).toBe(false);
+				expect(
+					parent.store
+						.getEntries()
+						.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+				).toHaveLength(1);
+				const file = child.store.getSessionFile()!;
+				await child.instance.dispose();
+				const reopened = await SessionManager.open(file);
+				const recovered = await session("worker", [], reopened);
+				expect(new IrcContinuationOutbox(reopened).deliveryTarget(completion.id)).toBe("owner");
+				await recovered.instance.replayIrcContinuations();
+				await parent.instance.waitForIdle();
+				expect(
+					parent.store
+						.getEntries()
+						.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+				).toHaveLength(1);
+			} finally {
+				released = true;
+				pinGate.resolve();
+				await Promise.allSettled(
+					[claim, replay].filter((pending): pending is Promise<string> | Promise<void> => pending !== undefined),
+				);
+			}
+		});
+	}
+
+	it("queues a real parent bus send behind a busy child journal without an early receipt or model turn", async () => {
+		const parent = await session("owner", [{ content: ["Received"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("BUS-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "tree", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "tree",
+			session: child.instance,
+		});
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const lock = withJournalLock(child.store.getSessionFile()!, async () => {
+			entered.resolve();
+			await release.promise;
+		});
+		await entered.promise;
+		const rewrite = child.store.rewriteEntries();
+		await setImmediate();
+		let receiptSettled = false;
+		const sending = IrcBus.global()
+			.send({ from: "owner", to: "worker", body: "Return BUS-B after the journal commits." })
+			.then(receipt => {
+				receiptSettled = true;
+				return receipt;
+			});
+		try {
+			await setImmediate();
+			const earlyReceipt = receiptSettled;
+			const earlyTurns = child.mock.calls.length;
+			release.resolve();
+			await lock;
+			await rewrite;
+			const receipt = await sending;
+			await child.instance.waitForIdle();
+			await parent.instance.waitForIdle();
+			expect(receipt.error).toBeUndefined();
+			expect(earlyReceipt).toBe(false);
+			expect(earlyTurns).toBe(0);
+			expect(receipt.outcome).not.toBe("failed");
+			expect(child.mock.calls).toHaveLength(1);
+			expect(
+				child.store
+					.getEntries()
+					.filter(entry => entry.type === "custom_message" && entry.customType === "irc:incoming"),
+			).toHaveLength(1);
+		} finally {
+			release.resolve();
+			await lock;
+			await Promise.allSettled([rewrite, sending]);
+		}
 	});
 
 	it("does not annotate arrivedAfter in withOrdering when newer entry is from a different sender", async () => {
@@ -739,9 +1754,7 @@ describe("native retained child resume", () => {
 		expect(child.mock.calls).toHaveLength(2);
 		const secondTurnMessages = child.mock.calls[1]?.context.messages ?? [];
 		expect(
-			secondTurnMessages.some(
-				message => JSON.stringify(message.content).includes("2 GiB installer approved"),
-			),
+			secondTurnMessages.some(message => JSON.stringify(message.content).includes("2 GiB installer approved")),
 		).toBe(true);
 
 		const completions = parent.store
@@ -749,7 +1762,7 @@ describe("native retained child resume", () => {
 			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
 		expect(completions).toHaveLength(1);
 		const completion = completions[0];
-		if (!completion || completion.type !== "custom_message") throw new Error("Expected native completion");
+		if (completion?.type !== "custom_message") throw new Error("Expected native completion");
 		expect(completion.content).toContain('"value":"B"');
 	});
 
@@ -1162,9 +2175,9 @@ describe("native retained child resume", () => {
 			await parent.instance.waitForIdle();
 			expect(child.mock.calls).toHaveLength(2);
 			expect(
-				child.store.getEntries().some(
-					entry => entry.type === "custom" && entry.customType === "irc:continuation-result",
-				),
+				child.store
+					.getEntries()
+					.some(entry => entry.type === "custom" && entry.customType === "irc:continuation-result"),
 			).toBe(true);
 		} finally {
 			openSpy.mockRestore();
@@ -1262,9 +2275,7 @@ describe("native retained child resume", () => {
 		await child.instance.waitForIdle();
 		await parent.instance.waitForIdle();
 		const parentDeliveries = child.mock.calls.filter(call =>
-			call.context.messages.some(message =>
-				JSON.stringify(message.content).includes("Parent blocked by plan mode"),
-			),
+			call.context.messages.some(message => JSON.stringify(message.content).includes("Parent blocked by plan mode")),
 		);
 		expect(parentDeliveries).toHaveLength(1);
 		const completions = parent.store
@@ -1491,10 +2502,17 @@ describe("native retained child resume", () => {
 			const completions = parent.store
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+<<<<<<< HEAD
 			expect(completions.some(c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"'))).toBe(true);
 			expect(
 				completions.filter(c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"')),
 			).toHaveLength(1);
+=======
+			const hasP2 = (content: string | readonly unknown[]): boolean =>
+				(typeof content === "string" ? content : JSON.stringify(content)).includes('"value":"P2"');
+			expect(completions.some(c => c.type === "custom_message" && hasP2(c.content))).toBe(true);
+			expect(completions.filter(c => c.type === "custom_message" && hasP2(c.content))).toHaveLength(1);
+>>>>>>> origin/main
 		} finally {
 			openSpy.mockRestore();
 		}

@@ -94,18 +94,26 @@ export class AgentLifecycleManager {
 
 	/** Stop listening to the registry and drop every timer and tracked agent. */
 	#retire(): void {
+		this.#disposed = true;
+		this.#orphanCleanupPending = false;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 		this.#clearTimer();
 		this.#adopted.clear();
 		this.#revivals.clear();
+<<<<<<< HEAD
 		this.#sleeping.clear();
+=======
+		this.#parking.clear();
+		this.#stalling.clear();
+>>>>>>> origin/main
 		this.#pinned.clear();
 		this.#persistedReviverFactory = undefined;
 	}
 
 	readonly #registry: AgentRegistry;
 	readonly #adopted = new Map<string, AdoptedAgent>();
+<<<<<<< HEAD
 	/**
 	 * Sessions being closed by {@link fallAsleep} right now. A wake waits for the
 	 * close it raced with, so it never receives a session that is being disposed and
@@ -116,6 +124,13 @@ export class AgentLifecycleManager {
 		{ promise: Promise<void>; ref: AgentRef | undefined; session: AgentSession }
 	>();
 	/** In-flight wakes, so concurrent {@link ensureLive} calls coalesce. */
+=======
+	/** Ids whose session is being disposed by {@link park} right now. */
+	readonly #parking = new Set<string>();
+	/** Ids whose stalled outcome is currently being persisted by {@link prune} or {@link cleanupParkedOrphans}. */
+	readonly #stalling = new Set<string>();
+	/** In-flight revives, so concurrent {@link ensureLive} calls coalesce. */
+>>>>>>> origin/main
 	readonly #revivals = new Map<string, Promise<AgentSession>>();
 	/**
 	 * Ids a screen is attached to, with the number of holders. A pinned agent never
@@ -129,7 +144,15 @@ export class AgentLifecycleManager {
 	#persistedReviverFactory: PersistedAgentReviverFactory | undefined;
 	/** One process-wide next-deadline timer; never one poller/timer per agent. */
 	#timer: NodeJS.Timeout | undefined;
+<<<<<<< HEAD
 	/** TTL policy applied when a ref restored from disk is woken. */
+=======
+	#orphanSweepDeadline: number | undefined;
+	#orphanCleanupInFlight: Promise<void> | undefined;
+	#orphanCleanupPending = false;
+	#disposed = false;
+	/** TTL policy applied when a cold-revived ref is adopted on demand. */
+>>>>>>> origin/main
 	#persistedReviveTtl: number | PersistedAgentIdleTtlResolver = 0;
 
 	constructor(registry: AgentRegistry = AgentRegistry.global()) {
@@ -393,19 +416,64 @@ export class AgentLifecycleManager {
 	 * and unattributed refs are intentionally outside this cleanup rule.
 	 */
 	async cleanupParkedOrphans(): Promise<void> {
+		if (this.#disposed) return;
+		if (this.#orphanCleanupInFlight) {
+			this.#orphanCleanupPending = true;
+			return this.#orphanCleanupInFlight;
+		}
+		let run!: Promise<void>;
+		run = (async () => {
+			await Promise.resolve();
+			try {
+				while (!this.#disposed) {
+					this.#orphanCleanupPending = false;
+					await this.#runParkedOrphanSweep();
+					if (!this.#orphanCleanupPending) break;
+				}
+			} finally {
+				if (this.#orphanCleanupInFlight === run) {
+					this.#orphanCleanupInFlight = undefined;
+				}
+				if (this.#orphanCleanupPending && !this.#disposed) {
+					void this.cleanupParkedOrphans();
+				}
+			}
+		})();
+		this.#orphanCleanupInFlight = run;
+		await run;
+	}
+
+	async #runParkedOrphanSweep(): Promise<void> {
 		for (const ref of this.#registry.list()) {
+			if (this.#disposed) return;
 			if (
 				ref.kind !== "sub" ||
 				ref.status !== "asleep" ||
 				!ref.parentId ||
 				this.#registry.get(ref.parentId) ||
+<<<<<<< HEAD
 				this.#sleeping.has(ref.id) ||
 				this.#revivals.has(ref.id)
+=======
+				this.#parking.has(ref.id) ||
+				this.#revivals.has(ref.id) ||
+				this.#stalling.has(ref.id)
+>>>>>>> origin/main
 			) {
 				continue;
 			}
 			const reason = "Parent session no longer exists.";
-			if (!ref.terminalOutcome && !(await this.#reportStalled(ref, reason))) continue;
+			if (!ref.terminalOutcome) {
+				this.#stalling.add(ref.id);
+				let reported = false;
+				try {
+					reported = await this.#reportStalled(ref, reason);
+				} finally {
+					this.#stalling.delete(ref.id);
+				}
+				if (this.#disposed) return;
+				if (!reported) continue;
+			}
 			const current = this.#registry.get(ref.id);
 			if (
 				current !== ref ||
@@ -427,10 +495,11 @@ export class AgentLifecycleManager {
 		let ownedManager = false;
 		try {
 			if (!manager) {
-				if (!ref.sessionFile) return false;
+				if (!ref.sessionFile || this.#disposed) return false;
 				manager = await SessionManager.open(ref.sessionFile, undefined, undefined, { suppressBreadcrumb: true });
 				ownedManager = true;
 			}
+			if (this.#disposed) return false;
 			const content = `Agent "${ref.id}" stalled: ${reason}`;
 			manager.appendCustomMessageEntry(
 				"agent-terminal-outcome",
@@ -499,23 +568,77 @@ export class AgentLifecycleManager {
 	 * agent that would not stop reachable through its parent chain so the caller can
 	 * retry.
 	 */
+<<<<<<< HEAD
 	async terminate(id: string, reason: string): Promise<void> {
 		for (const target of [...this.#registry.descendantsOf(id).reverse(), id]) {
 			const ref = this.#registry.get(target);
 			if (ref?.status === "running" && ref.session) await ref.session.abort({ reason });
 			await this.release(target, { throwOnDisposeError: true });
 		}
+=======
+	async prune(id: string): Promise<void> {
+		const ref = this.#registry.get(id);
+		const reviving = this.#revivals.has(id);
+		const stalling = this.#stalling.has(id);
+		if (ref?.status !== "parked" || reviving || stalling || this.#parking.has(id)) {
+			const adopted = this.#adopted.get(id);
+			if (adopted) {
+				if (reviving || stalling) arm(adopted, Date.now() + REVIVE_RECHECK_MS, "prune");
+				else this.#refreshDeadline(id, adopted);
+				this.#scheduleNext();
+			}
+			return;
+		}
+		logger.debug("AgentLifecycleManager.prune: dropping parked agent", {
+			id,
+			waitingOnPeer: ref.waitingOnPeer === true,
+			parkedForMs: Date.now() - ref.lastActivity,
+		});
+		if (!ref.terminalOutcome) {
+			const reason = "Assignment was pruned before reporting a terminal outcome.";
+			this.#stalling.add(id);
+			let reported = false;
+			try {
+				reported = await this.#reportStalled(ref, reason);
+			} finally {
+				this.#stalling.delete(id);
+			}
+			if (!reported) {
+				const adopted = this.#adopted.get(id);
+				if (adopted) arm(adopted, Date.now() + PARKED_ORPHAN_RECHECK_MS, "prune");
+				this.#scheduleNext();
+				return;
+			}
+			const current = this.#registry.get(id);
+			if (current !== ref || current.status !== "parked" || this.#revivals.has(id) || this.#parking.has(id)) return;
+			this.#registry.recordTerminalOutcome(id, "stalled", reason);
+		}
+		const current = this.#registry.get(id);
+		if (current !== ref || current.status !== "parked" || this.#revivals.has(id) || this.#parking.has(id)) return;
+		await this.release(id);
+>>>>>>> origin/main
 	}
 
 	/** Teardown everything (process exit / main session dispose). */
 	async dispose(): Promise<void> {
+		this.#disposed = true;
+		this.#orphanCleanupPending = false;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 		this.#clearTimer();
 		const ids = Array.from(this.#adopted.keys());
 		await Promise.all(ids.map(id => this.release(id)));
+		const inFlight = this.#orphanCleanupInFlight;
+		if (inFlight) {
+			await inFlight.catch(() => {});
+		}
 		this.#revivals.clear();
+<<<<<<< HEAD
 		this.#sleeping.clear();
+=======
+		this.#parking.clear();
+		this.#stalling.clear();
+>>>>>>> origin/main
 		this.#pinned.clear();
 		this.#persistedReviverFactory = undefined;
 	}
@@ -630,6 +753,14 @@ export class AgentLifecycleManager {
 		if (event.type === "removed") {
 			this.#adopted.delete(event.ref.id);
 			this.#scheduleNext();
+<<<<<<< HEAD
+=======
+			if (!this.#disposed) {
+				void this.cleanupParkedOrphans().catch(error =>
+					logger.warn("AgentLifecycleManager.cleanupParkedOrphans failed", { error: errorMessage(error) }),
+				);
+			}
+>>>>>>> origin/main
 			return;
 		}
 		const adopted = this.#adopted.get(event.ref.id);

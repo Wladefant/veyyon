@@ -292,15 +292,20 @@ export class ReadTool implements AgentTool<typeof readSchema.value, ReadToolDeta
 			}),
 		});
 		if (urlMeta.protocol.replace(/:$/, "").toLowerCase() !== "local") return serve();
-		const localFile = await resolveLocalUrlToFile(urlMeta, {
-			cwd: this.session.cwd,
-			settings: this.session.settings,
-			signal,
-			localProtocolOptions: this.session.localProtocolOptions,
-			skills: this.session.skills,
-		});
-		if (!localFile) return serve();
-		return { kind: "promoted", readPath: localFile.path, selector: internalTarget.sel };
+		try {
+			const localFile = await resolveLocalUrlToFile(urlMeta, {
+				cwd: this.session.cwd,
+				settings: this.session.settings,
+				signal,
+				localProtocolOptions: this.session.localProtocolOptions,
+				skills: this.session.skills,
+			});
+			if (!localFile) return serve();
+			return { kind: "promoted", readPath: localFile.path, selector: internalTarget.sel };
+		} catch (error) {
+			if (error instanceof ToolAbortError || signal?.aborted) throw error;
+			return serve();
+		}
 	}
 
 	/**

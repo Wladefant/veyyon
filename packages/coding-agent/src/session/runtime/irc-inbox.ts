@@ -15,9 +15,30 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { AgentMessage } from "@veyyon/agent-core";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { IrcMessage } from "../../task/irc-bus";
 import type { CustomMessage } from "../messages";
+
+export function sameIrcRecord(
+	left: Pick<CustomMessage, "customType" | "details">,
+	right: Pick<CustomMessage, "customType" | "details">,
+): boolean {
+	if (left.customType !== right.customType) return false;
+	const field = left.customType === "task:continuation" ? "completionId" : "id";
+	const id = Reflect.get(left.details ?? {}, field);
+	return typeof id === "string" && Reflect.get(right.details ?? {}, field) === id;
+}
+
+function receivedCompletion(data: unknown): CustomMessage | undefined {
+	if (!data || typeof data !== "object" || Reflect.get(data, "version") !== 1) return undefined;
+	const record = Reflect.get(data, "record") as CustomMessage | undefined;
+	return record?.role === "custom" &&
+		record.customType === "task:continuation" &&
+		typeof Reflect.get(record.details ?? {}, "completionId") === "string"
+		? record
+		: undefined;
+}
 
 /** Which `irc:incoming` records {@link IrcInbox.takeIncoming} returns. */
 export interface IrcIncomingFilter {
@@ -30,28 +51,24 @@ export interface IrcIncomingFilter {
 export class IrcInbox {
 	#interrupts: CustomMessage[] = [];
 	#asides: CustomMessage[] = [];
-	#completionWake: CustomMessage | undefined;
-
-	queueCompletionWake(record: CustomMessage): void {
-		this.#completionWake ??= record;
-	}
-
-	get completionWake(): CustomMessage | undefined {
-		return this.#completionWake;
-	}
 
 	/** Whether a peer message is waiting for the next step boundary. */
 	get hasInterrupts(): boolean {
-		return this.#interrupts.length > 0 || this.#completionWake !== undefined;
+		return this.#interrupts.length > 0;
 	}
 
 	/** Whether any record is waiting. */
 	get isEmpty(): boolean {
-		return this.#interrupts.length === 0 && this.#asides.length === 0 && this.#completionWake === undefined;
+		return this.#interrupts.length === 0 && this.#asides.length === 0;
 	}
 
 	queueInterrupt(record: CustomMessage): void {
 		this.#interrupts.push(record);
+	}
+
+	takeCompletion(record: CustomMessage): void {
+		const index = this.#interrupts.findIndex(candidate => sameIrcRecord(candidate, record));
+		if (index >= 0) this.#interrupts.splice(index, 1);
 	}
 
 	queueAside(record: CustomMessage): void {
@@ -60,7 +77,6 @@ export class IrcInbox {
 
 	/** Every waiting record, interrupts first, leaving both queues empty. */
 	takeAll(): CustomMessage[] {
-		this.#completionWake = undefined;
 		const records = this.#interrupts.concat(this.#asides);
 		this.#interrupts = [];
 		this.#asides = [];
@@ -116,9 +132,13 @@ export interface IrcContinuation {
 
 function isContinuation(value: unknown): value is IrcContinuation {
 	if (!value || typeof value !== "object") return false;
-	return Reflect.get(value, "version") === 1 &&
-		["id", "agentId", "parentId", "phaseId", "handle", "output"].every(key => typeof Reflect.get(value, key) === "string") &&
-		(Reflect.get(value, "resultSource") === "agent" || Reflect.get(value, "resultSource") === "harness");
+	return (
+		Reflect.get(value, "version") === 1 &&
+		["id", "agentId", "parentId", "phaseId", "handle", "output"].every(
+			key => typeof Reflect.get(value, key) === "string",
+		) &&
+		(Reflect.get(value, "resultSource") === "agent" || Reflect.get(value, "resultSource") === "harness")
+	);
 }
 
 /** Keep native continuation artifacts in one portable path component.
@@ -126,7 +146,8 @@ function isContinuation(value: unknown): value is IrcContinuation {
  * digest so traversal, Windows device names and invalid filename characters
  * never become filesystem path syntax. The original agentId stays in the journal. */
 function continuationArtifactAgentComponent(agentId: string): string {
-	const portable = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(agentId) &&
+	const portable =
+		/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(agentId) &&
 		!/[.]$/.test(agentId) &&
 		!/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(agentId);
 	return portable ? agentId : `agent-${createHash("sha256").update(agentId).digest("hex")}`;
@@ -141,25 +162,124 @@ export class IrcContinuationOutbox {
 		this.#store = store;
 	}
 
+	hasReceivedCompletion(completionId: string): boolean {
+		return this.#store.getEntries().some(entry => {
+			if (entry.type === "custom_message" && entry.customType === "task:continuation") {
+				return Reflect.get(entry.details ?? {}, "completionId") === completionId;
+			}
+			if (entry.type !== "custom" || entry.customType !== "irc:completion-received") return false;
+			const record = receivedCompletion(entry.data);
+			return record !== undefined && Reflect.get(record.details ?? {}, "completionId") === completionId;
+		});
+	}
+
+	/** A durable delivery receipt is not a provider input and cannot split an in-flight tool exchange. */
+	receiveCompletion(record: CustomMessage): void {
+		const id = Reflect.get(record.details ?? {}, "completionId");
+		if (record.customType !== "task:continuation" || typeof id !== "string") {
+			throw new Error("Native completion receipt requires a completion ID");
+		}
+		if (!this.hasReceivedCompletion(id)) {
+			this.#store.appendCustomEntry("irc:completion-received", { version: 1, record });
+		}
+	}
+
+	pendingReceivedCompletions(consumedInContext: ReadonlySet<string>): CustomMessage[] {
+		const consumed = new Set(consumedInContext);
+		const records = new Map<string, CustomMessage>();
+		for (const entry of this.#store.getEntries()) {
+			let record: CustomMessage | undefined;
+			if (entry.type === "custom") {
+				if (entry.customType === "irc:completion-consumed" && typeof entry.data === "string")
+					consumed.add(entry.data);
+				else if (entry.customType === "irc:completion-received") record = receivedCompletion(entry.data);
+			} else if (entry.type === "custom_message" && entry.customType === "task:continuation") {
+				const message = this.#store.buildEntryContext(entry).messages[0];
+				if (message?.role === "custom") record = message;
+			}
+			if (!record) continue;
+			const id = Reflect.get(record.details ?? {}, "completionId");
+			if (typeof id !== "string") continue;
+			if (Reflect.get(record.details ?? {}, "streamingCompletion") === true) consumed.add(id);
+			if (!records.has(id)) records.set(id, record);
+		}
+		return [...records.values()].filter(record => !consumed.has(Reflect.get(record.details ?? {}, "completionId")));
+	}
+
+	/** Only messages after both the durable phase claim and its actual input can belong to its result. */
+	recoveryMessages(phaseId: string, record: CustomMessage): AgentMessage[] | undefined {
+		const entries = this.#store.getBranch();
+		const claim = entries.findIndex(
+			entry =>
+				entry.type === "custom" &&
+				entry.customType === "irc:continuation-phase" &&
+				typeof entry.data === "object" &&
+				entry.data !== null &&
+				Reflect.get(entry.data, "version") === 1 &&
+				Reflect.get(entry.data, "phaseId") === phaseId,
+		);
+		const input = entries.findIndex(entry => entry.type === "custom_message" && sameIrcRecord(entry, record));
+		if (claim < 0 || input < 0) return undefined;
+		return entries.slice(Math.max(claim, input) + 1).flatMap(entry => this.#store.buildEntryContext(entry).messages);
+	}
+
 	hasPhase(phaseId: string): boolean {
-		return this.#store.getEntries().some(entry => entry.type === "custom" &&
-			entry.customType === "irc:continuation-phase" && typeof entry.data === "object" && entry.data !== null &&
-			Reflect.get(entry.data, "version") === 1 && Reflect.get(entry.data, "phaseId") === phaseId);
+		return this.#store
+			.getEntries()
+			.some(
+				entry =>
+					entry.type === "custom" &&
+					entry.customType === "irc:continuation-phase" &&
+					typeof entry.data === "object" &&
+					entry.data !== null &&
+					Reflect.get(entry.data, "version") === 1 &&
+					Reflect.get(entry.data, "phaseId") === phaseId,
+			);
 	}
 
 	/** Retained native input with its durable phase ID lets activation recover a phase interrupted before its result was saved. */
 	unfinishedPhases(): Array<{ phaseId: string; record: CustomMessage }> {
+		const entries = this.#store.getEntries();
 		const completed = new Set(this.#results().map(result => result.phaseId));
-		const consumedSteers = new Set(this.#store.getEntries().flatMap(entry =>
-			entry.type === "custom_message" && entry.customType === "irc:incoming" &&
-			Reflect.get(entry.details ?? {}, "streamingSteer") === true
-				? [Reflect.get(entry.details ?? {}, "id")] : []));
-		return this.#store.getEntries().flatMap(entry => {
-			if (entry.type !== "custom" || entry.customType !== "irc:continuation-phase" ||
-				!entry.data || typeof entry.data !== "object" || Reflect.get(entry.data, "version") !== 1) return [];
+		for (const entry of entries) {
+			if (
+				entry.type === "custom" &&
+				entry.customType === "irc:completion-consumed" &&
+				typeof entry.data === "string"
+			) {
+				completed.add(`completion:${entry.data}`);
+			} else if (
+				entry.type === "custom_message" &&
+				entry.customType === "task:continuation" &&
+				Reflect.get(entry.details ?? {}, "streamingCompletion") === true
+			) {
+				const id = Reflect.get(entry.details ?? {}, "completionId");
+				if (typeof id === "string") completed.add(`completion:${id}`);
+			}
+		}
+		const consumedSteers = new Set(
+			entries.flatMap(entry =>
+				entry.type === "custom_message" &&
+				entry.customType === "irc:incoming" &&
+				Reflect.get(entry.details ?? {}, "streamingSteer") === true
+					? [Reflect.get(entry.details ?? {}, "id")]
+					: [],
+			),
+		);
+		return entries.flatMap(entry => {
+			if (
+				entry.type !== "custom" ||
+				entry.customType !== "irc:continuation-phase" ||
+				!entry.data ||
+				typeof entry.data !== "object" ||
+				Reflect.get(entry.data, "version") !== 1
+			)
+				return [];
 			const phaseId = Reflect.get(entry.data, "phaseId");
 			const record = Reflect.get(entry.data, "record") as CustomMessage | undefined;
-			return typeof phaseId === "string" && !completed.has(phaseId) && !consumedSteers.has(phaseId) &&
+			return typeof phaseId === "string" &&
+				!completed.has(phaseId) &&
+				!consumedSteers.has(phaseId) &&
 				record?.role === "custom" &&
 				(record.customType === "irc:incoming" || record.customType === "task:continuation")
 				? [{ phaseId, record }]
@@ -180,13 +300,28 @@ export class IrcContinuationOutbox {
 		let newerId: string | undefined;
 		let newerTimestamp = record.timestamp;
 		for (const entry of this.#store.getEntries()) {
-			if (entry.type !== "custom_message" ||
-				(entry.customType !== "irc:incoming" && entry.customType !== "task:continuation") ||
-				Reflect.get(entry.details ?? {}, "from") !== from) continue;
-			const candidateId = Reflect.get(entry.details ?? {}, "id");
-			const timestamp = Reflect.get(entry.details ?? {}, "sentAt") ?? new Date(entry.timestamp).getTime();
-			if (typeof candidateId === "string" && candidateId !== id &&
-				typeof timestamp === "number" && timestamp > newerTimestamp) {
+			const candidate =
+				entry.type === "custom_message"
+					? entry
+					: entry.type === "custom" && entry.customType === "irc:completion-received"
+						? receivedCompletion(entry.data)
+						: undefined;
+			if (
+				!candidate ||
+				(candidate.customType !== "irc:incoming" && candidate.customType !== "task:continuation") ||
+				Reflect.get(candidate.details ?? {}, "from") !== from
+			)
+				continue;
+			const candidateId = Reflect.get(candidate.details ?? {}, "id");
+			const timestamp =
+				Reflect.get(candidate.details ?? {}, "sentAt") ??
+				(typeof candidate.timestamp === "number" ? candidate.timestamp : new Date(candidate.timestamp).getTime());
+			if (
+				typeof candidateId === "string" &&
+				candidateId !== id &&
+				typeof timestamp === "number" &&
+				timestamp > newerTimestamp
+			) {
 				newerId = candidateId;
 				newerTimestamp = timestamp;
 			}
@@ -215,30 +350,54 @@ export class IrcContinuationOutbox {
 		return [...results.values()];
 	}
 
-	/** Claim a native message ID before starting its turn. A replay cannot start it twice. */
+	/** Claim synchronously in memory; the caller persists before executing the claimed phase. */
 	begin(phaseId: string, record?: CustomMessage): boolean {
 		if (this.hasPhase(phaseId)) return false;
 		this.#store.appendCustomEntry("irc:continuation-phase", { version: 1, phaseId, record });
-		this.#store.flushSync();
 		return true;
 	}
 
-	complete(agentId: string, parentId: string, phaseId: string, output: string, resultSource: IrcContinuation["resultSource"] = "agent"): Promise<IrcContinuation> {
+	complete(
+		agentId: string,
+		parentId: string,
+		phaseId: string,
+		output: string,
+		resultSource: IrcContinuation["resultSource"] = "agent",
+	): Promise<IrcContinuation> {
 		const pending = this.#completing.get(phaseId);
 		if (pending) return pending;
-		const completion = this.#complete(agentId, parentId, phaseId, output, resultSource)
-			.finally(() => { this.#completing.delete(phaseId); });
+		const completion = this.#complete(agentId, parentId, phaseId, output, resultSource).finally(() => {
+			this.#completing.delete(phaseId);
+		});
 		this.#completing.set(phaseId, completion);
 		return completion;
 	}
 
-	async #complete(agentId: string, parentId: string, phaseId: string, output: string, resultSource: IrcContinuation["resultSource"]): Promise<IrcContinuation> {
+	async #complete(
+		agentId: string,
+		parentId: string,
+		phaseId: string,
+		output: string,
+		resultSource: IrcContinuation["resultSource"],
+	): Promise<IrcContinuation> {
 		await this.#store.ensureOnDisk();
 		const id = createHash("sha256").update(this.#store.getSessionId()).update("\0").update(phaseId).digest("hex");
 		const existing = this.#results().find(item => item.id === id);
-		if (existing) return existing;
+		if (existing) {
+			await this.#store.sync();
+			return existing;
+		}
 		const stem = `${continuationArtifactAgentComponent(agentId)}.phase-${id}`;
-		const completion: IrcContinuation = { version: 1, id, agentId, parentId, phaseId, handle: `agent://${stem}`, output, resultSource };
+		const completion: IrcContinuation = {
+			version: 1,
+			id,
+			agentId,
+			parentId,
+			phaseId,
+			handle: `agent://${stem}`,
+			output,
+			resultSource,
+		};
 		const dir = this.#store.getArtifactsDir();
 		if (!dir) throw new Error("Cannot publish a continuation without an artifact directory");
 		await fs.mkdir(dir, { recursive: true });
@@ -257,24 +416,33 @@ export class IrcContinuationOutbox {
 				await fs.link(temporary, artifact);
 			} catch (error) {
 				if (!(error && typeof error === "object" && Reflect.get(error, "code") === "EEXIST")) throw error;
-				if (await fs.readFile(artifact, "utf8") !== output) throw new Error("Continuation output changed during replay");
+				if ((await fs.readFile(artifact, "utf8")) !== output)
+					throw new Error("Continuation output changed during replay");
 			}
 		} finally {
 			await fs.rm(temporary, { force: true });
 		}
 		const raced = this.#results().find(item => item.id === id);
-		if (raced) return raced;
+		if (raced) {
+			await this.#store.sync();
+			return raced;
+		}
 		this.#store.appendCustomEntry("irc:continuation-result", completion);
-		this.#store.flushSync();
 		await this.#store.sync();
 		return completion;
 	}
 
 	pending(): IrcContinuation[] {
 		const entries = this.#store.getEntries();
-		const acknowledged = new Set(entries.flatMap(entry =>
-			entry.type === "custom" && entry.customType === "irc:continuation-delivered" &&
-			typeof entry.data === "string" ? [entry.data] : []));
+		const acknowledged = new Set(
+			entries.flatMap(entry =>
+				entry.type === "custom" &&
+				entry.customType === "irc:continuation-delivered" &&
+				typeof entry.data === "string"
+					? [entry.data]
+					: [],
+			),
+		);
 		return this.#results().filter(result => !acknowledged.has(result.id));
 	}
 
@@ -282,10 +450,15 @@ export class IrcContinuationOutbox {
 	 * Failover is safe only before sending; an unavailable owner leaves the result pending. */
 	deliveryTarget(completionId: string): string | undefined {
 		for (const entry of this.#store.getEntries()) {
-			if (entry.type !== "custom" || entry.customType !== "irc:continuation-target" ||
-				!entry.data || typeof entry.data !== "object" ||
+			if (
+				entry.type !== "custom" ||
+				entry.customType !== "irc:continuation-target" ||
+				!entry.data ||
+				typeof entry.data !== "object" ||
 				Reflect.get(entry.data, "version") !== 1 ||
-				Reflect.get(entry.data, "completionId") !== completionId) continue;
+				Reflect.get(entry.data, "completionId") !== completionId
+			)
+				continue;
 			const target = Reflect.get(entry.data, "parentId");
 			if (typeof target === "string") return target;
 		}
@@ -300,7 +473,6 @@ export class IrcContinuationOutbox {
 			return existing;
 		}
 		this.#store.appendCustomEntry("irc:continuation-target", { version: 1, completionId, parentId });
-		this.#store.flushSync();
 		await this.#store.ensureOnDisk();
 		await this.#store.sync();
 		return parentId;
@@ -321,18 +493,24 @@ export class IrcContinuationOutbox {
 					return;
 				}
 				attempted.add(completion.id);
-				if (!await deliver(completion)) continue;
+				// Another publisher's entry can be visible while its sync is pending.
+				// Commit this observed result before allowing external delivery.
+				await this.#store.ensureOnDisk();
+				await this.#store.sync();
+				if (!(await deliver(completion))) continue;
 				this.#store.appendCustomEntry("irc:continuation-delivered", completion.id);
-				this.#store.flushSync();
 				await this.#store.sync();
 			}
-		})().then(() => {
-			if (this.#flushing === flushing) this.#flushing = undefined;
-			drain.resolve();
-		}, (error: unknown) => {
-			if (this.#flushing === flushing) this.#flushing = undefined;
-			drain.reject(error);
-		});
+		})().then(
+			() => {
+				if (this.#flushing === flushing) this.#flushing = undefined;
+				drain.resolve();
+			},
+			(error: unknown) => {
+				if (this.#flushing === flushing) this.#flushing = undefined;
+				drain.reject(error);
+			},
+		);
 		return flushing;
 	}
 }

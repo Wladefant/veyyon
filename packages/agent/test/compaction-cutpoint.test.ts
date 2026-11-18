@@ -153,20 +153,24 @@ describe("estimateTokens — role branches", () => {
 		};
 		const payload = remoteCompactionProviderPayload(preserveData);
 		expect(payload).toBeDefined();
-		const summaryMsg = createCompactionSummaryMessage("", 200_000, 1, undefined, payload);
+		const summaryMsg = createCompactionSummaryMessage("", 200_000, "1970-01-01T00:00:00.001Z", undefined, payload);
 		const withReasoning = estimateTokens(summaryMsg);
 		const withoutReasoning = estimateTokens(summaryMsg, { excludeEncryptedReasoning: true });
 		expect(withReasoning).toBeGreaterThan(2_000);
 		expect(withoutReasoning).toBeGreaterThan(1_500);
 		expect(withReasoning).toBeGreaterThan(withoutReasoning);
 
-		const withInputImage = createCompactionSummaryMessage("", 200_000, 1, undefined, {
+		const withInputImage = createCompactionSummaryMessage("", 200_000, "1970-01-01T00:00:00.001Z", undefined, {
 			type: "openaiResponsesHistory",
 			provider: "openai-codex",
 			dt: true,
 			items: [
 				...payload!.items,
-				{ type: "message", role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AA" }] },
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_image", image_url: "data:image/png;base64,AA" }],
+				},
 			],
 		});
 		expect(estimateTokens(withInputImage) - withReasoning).toBe(IMAGE_TOKEN_ESTIMATE);
@@ -418,7 +422,7 @@ describe("prepareCompaction — scaleKeepRecentTokens with active compaction", (
 		const activeWindowMsg = createCompactionSummaryMessage(
 			"",
 			180_000,
-			1,
+			"1970-01-01T00:00:00.001Z",
 			undefined,
 			remoteCompactionProviderPayload(preserveData),
 		);

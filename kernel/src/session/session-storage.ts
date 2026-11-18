@@ -1,28 +1,113 @@
 import * as fs from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { reportFault } from "@veyyon/utils/fault-sink";
 import { hasFsCode, isEnoent } from "@veyyon/utils/fs-error";
 import { type PathState, pathStateSync } from "@veyyon/utils/fs-optional";
+import { withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
-import { clampLow } from "@veyyon/utils/math";
 import { peekFileEnds } from "@veyyon/utils/peek-file";
 import { sessionBackupName, sessionFileStem } from "@veyyon/utils/session-file";
 import { Snowflake } from "@veyyon/utils/snowflake";
-import { isRecord, toError } from "@veyyon/utils/type-guards";
+import { toError } from "@veyyon/utils/type-guards";
+import { SESSION_TITLE_SLOT_ENTRY_TYPE } from "./session-entries";
 import { overlayTitleSlotContent, type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 
 const utf8Decoder = new TextDecoder("utf-8");
+
+const journalLockStorage = new AsyncLocalStorage<Set<string>>();
+const inProcessJournalQueues = new Map<string, Promise<void>>();
+const syncJournalLockDepths = new Map<string, number>();
+
+/** @internal Test-only handle for verifying async journal queue cleanup. */
+export const __journalLockInternalsForTesting = {
+	queueSize: (): number => inProcessJournalQueues.size,
+};
+
+export async function withJournalLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+	const canonical = path.resolve(filePath);
+	const held = journalLockStorage.getStore();
+	if (held?.has(canonical)) {
+		return await fn();
+	}
+	let releaseQueue: () => void;
+	const gate = new Promise<void>(resolve => {
+		releaseQueue = resolve;
+	});
+	const priorQueue = inProcessJournalQueues.get(canonical) ?? Promise.resolve();
+	const queued = priorQueue.then(() => gate);
+	inProcessJournalQueues.set(canonical, queued);
+	await priorQueue;
+	const nextHeld = new Set(held);
+	nextHeld.add(canonical);
+	try {
+		await fsp.mkdir(path.dirname(canonical), { recursive: true });
+		return await withFileLock(canonical, async () => {
+			return await journalLockStorage.run(nextHeld, fn);
+		});
+	} finally {
+		releaseQueue!();
+		if (inProcessJournalQueues.get(canonical) === queued) {
+			inProcessJournalQueues.delete(canonical);
+		}
+	}
+}
+
+async function withJournalLocks<T>(filePaths: readonly string[], fn: () => Promise<T>): Promise<T> {
+	const canonicalPaths = [...new Set(filePaths.map(filePath => path.resolve(filePath)))].sort();
+	const acquireNext = async (index: number): Promise<T> => {
+		if (index >= canonicalPaths.length) {
+			return await fn();
+		}
+		return await withJournalLock(canonicalPaths[index]!, () => acquireNext(index + 1));
+	};
+	return await acquireNext(0);
+}
+
+export function withJournalLockSync<T>(filePath: string, fn: () => T): T {
+	const canonical = path.resolve(filePath);
+	const held = journalLockStorage.getStore();
+	if (held?.has(canonical)) {
+		return fn();
+	}
+	if (inProcessJournalQueues.has(canonical)) {
+		throw new Error(`Journal lock for ${canonical} is held asynchronously in this process`);
+	}
+	const currentDepth = syncJournalLockDepths.get(canonical) ?? 0;
+	if (currentDepth > 0) {
+		syncJournalLockDepths.set(canonical, currentDepth + 1);
+		try {
+			return fn();
+		} finally {
+			if (currentDepth === 0) {
+				syncJournalLockDepths.delete(canonical);
+			} else {
+				syncJournalLockDepths.set(canonical, currentDepth);
+			}
+		}
+	}
+	syncJournalLockDepths.set(canonical, 1);
+	try {
+		fs.mkdirSync(path.dirname(canonical), { recursive: true });
+		return withFileLockSync(canonical, fn);
+	} finally {
+		syncJournalLockDepths.delete(canonical);
+	}
+}
 
 export interface SessionStorageStat {
 	size: number;
 	mtimeMs: number;
 	mtime: Date;
+	/** The filesystem's metadata-change time, when available. Unlike mtime this
+	 * advances for timestamp-preserving in-place rewrites on POSIX filesystems. */
+	ctimeMs?: number;
 	/**
 	 * What the path names RIGHT NOW, for a backend where a path can start naming
-	 * a different object: `dev:ino` on a real filesystem, where a whole rewrite is
-	 * a temp write plus a rename and every open handle on the old inode keeps
+	 * a different object: `dev:ino` on a real filesystem, where a rewrite is a
+	 * temp write plus a rename and every open handle on the old inode keeps
 	 * writing into a file nothing can reach. Left undefined by backends that
 	 * address by path (memory, sql, redis), which cannot have that problem.
 	 */
@@ -50,9 +135,7 @@ export interface SessionStorageWriter {
 /**
  * A read handle on the object a session path named when it was opened. Reads keep answering from
  * that object after the path is republished over, renamed or unlinked, so byte offsets recorded
- * against it stay valid for as long as the handle is open. A tail rewrite in place
- * ({@link SessionStorage.rewriteTailAtomic}) changes the object's bytes after the lines it keeps;
- * a line that was among them has to be found again by its id.
+ * against it stay valid for as long as the handle is open.
  */
 export interface PinnedSessionReader {
 	/** {@link SessionStorageStat.identity} of the object the handle reads. */
@@ -85,7 +168,8 @@ export function fileObjectIdentity(stats: { readonly dev: number; readonly ino: 
  * synchronous rewrite that took over cannot be overwritten by a stale body.
  */
 export interface WriteTextAtomicOptions {
-	commitGuard?: () => boolean;
+	/** The EPERM move-aside path, when a backend has renamed the original there. */
+	commitGuard?: (sourcePath?: string) => boolean;
 }
 
 /**
@@ -127,7 +211,18 @@ function writeChunksSync(fpath: string, body: SessionFileBody): void {
 	const fd = fs.openSync(fpath, "w");
 	try {
 		for (const chunk of sessionBodyChunks(body)) {
-			if (chunk.length > 0) fs.writeSync(fd, chunk);
+			if (chunk.length === 0) continue;
+			// A successful writeSync can still write fewer bytes than requested.
+			// Keep a single encoded chunk so retries cannot split or duplicate UTF-8.
+			const bytes = Buffer.from(chunk, "utf8");
+			let offset = 0;
+			while (offset < bytes.length) {
+				const written = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+				if (written === 0) {
+					throw new Error(`Short sync session journal write: ${offset} of ${bytes.length} bytes`);
+				}
+				offset += written;
+			}
 		}
 	} finally {
 		fs.closeSync(fd);
@@ -146,7 +241,17 @@ async function writeChunks(fpath: string, body: SessionFileBody): Promise<void> 
 	const handle = await fs.promises.open(fpath, "w");
 	try {
 		for (const chunk of sessionBodyChunks(body)) {
-			if (chunk.length > 0) await handle.write(chunk);
+			if (chunk.length === 0) continue;
+			// Stage all UTF-8 bytes: a fulfilled write can still be short.
+			const bytes = Buffer.from(chunk, "utf8");
+			let offset = 0;
+			while (offset < bytes.length) {
+				const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, null);
+				if (bytesWritten === 0) {
+					throw new Error(`Short async session journal write: ${offset} of ${bytes.length} bytes`);
+				}
+				offset += bytesWritten;
+			}
 		}
 		await flushStaged(handle);
 	} finally {
@@ -214,200 +319,6 @@ async function copyRange(
 	}
 }
 
-/**
- * Read `length` bytes at `position` of `fd` into the start of `buffer`, or throw naming `source`. A
- * read past the end of the file comes back short.
- */
-function readFullySync(fd: number, buffer: Buffer, length: number, position: number, source: string): void {
-	for (let filled = 0; filled < length; ) {
-		const read = fs.readSync(fd, buffer, filled, length - filled, position + filled);
-		if (read === 0) throw new Error(`Short read from ${source}: ${filled} of ${length} bytes at ${position}`);
-		filled += read;
-	}
-}
-
-/** Write the first `length` bytes of `buffer` at `position` of `fd`, or throw. */
-function writeFullySync(fd: number, buffer: Buffer, length: number, position: number): void {
-	for (let written = 0; written < length; ) {
-		const wrote = fs.writeSync(fd, buffer, written, length - written, position + written);
-		if (wrote === 0) throw new Error(`Short write: ${written} of ${length} bytes at ${position}`);
-		written += wrote;
-	}
-}
-
-/** Copy `length` bytes from byte `from` of `source` to byte `to` of `target` through `buffer`. */
-function copyBytesSync(
-	source: number,
-	from: number,
-	target: number,
-	to: number,
-	length: number,
-	buffer: Buffer,
-	sourceName: string,
-): void {
-	for (let done = 0; done < length; ) {
-		const bytes = Math.min(buffer.length, length - done);
-		readFullySync(source, buffer, bytes, from + done, sourceName);
-		writeFullySync(target, buffer, bytes, to + done);
-		done += bytes;
-	}
-}
-
-/** Whether `length` bytes from byte `aFrom` of `a` equal those from byte `bFrom` of `b`. */
-function bytesEqualSync(a: number, aFrom: number, b: number, bFrom: number, length: number, source: string): boolean {
-	const size = Math.min(COPY_CHUNK_BYTES, length);
-	const left = Buffer.allocUnsafe(size);
-	const right = Buffer.allocUnsafe(size);
-	for (let done = 0; done < length; ) {
-		const bytes = Math.min(size, length - done);
-		readFullySync(a, left, bytes, aFrom + done, source);
-		readFullySync(b, right, bytes, bFrom + done, source);
-		if (left.compare(right, 0, bytes, 0, bytes) !== 0) return false;
-		done += bytes;
-	}
-	return true;
-}
-
-/**
- * Longest old tail {@link FileSessionStorage.rewriteTailAtomic} replaces inside the session file
- * itself. The new tail is copied into the file in one synchronous stretch, so that no read in this
- * process meets a file half rewritten: 8 MiB copies in 1.6 ms (median of 9 runs, 2.9 ms the
- * slowest) on ext4 with a warm page cache. A prune, shake or dedupe writes a tail no longer than the
- * one it replaces. A longer old tail goes to a copy of the file that is renamed over it, which
- * writes every kept byte again.
- */
-const IN_PLACE_TAIL_BYTES = 8 << 20;
-
-/** Last bytes of a whole tail journal. A journal that does not end with them was never applied. */
-const TAIL_JOURNAL_MAGIC = Buffer.from("VYTAIL01", "latin1");
-
-/** Bytes after a tail journal's record: the record's length, then {@link TAIL_JOURNAL_MAGIC}. */
-const TAIL_JOURNAL_FOOTER_BYTES = 4 + TAIL_JOURNAL_MAGIC.length;
-
-/** Format of the record a tail journal ends with. */
-const TAIL_JOURNAL_VERSION = 1;
-
-/**
- * A whole tail journal in a format this version does not read. The rewrite it records may have
- * stopped part way through the file, so it is neither applied nor dropped.
- */
-class TailJournalFormatError extends Error {}
-
-/**
- * The record at the end of a tail journal. The journal holds `head` bytes that go over the start of
- * the session file, then `tail` bytes that go after its first `keep` bytes, then this record as
- * JSON. `identity` is the object the journal was written for, and `size` its size then.
- */
-interface TailJournal {
-	identity: string;
-	size: number;
-	keep: number;
-	head: number;
-	tail: number;
-}
-
-function isByteCount(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-/** End the journal with `record` after its first `position` bytes, which makes it whole. */
-async function sealTailJournal(
-	journal: fs.promises.FileHandle,
-	journalPath: string,
-	record: TailJournal,
-	position: number,
-): Promise<void> {
-	const json = Buffer.from(JSON.stringify({ v: TAIL_JOURNAL_VERSION, ...record }), "utf-8");
-	const sealed = Buffer.allocUnsafe(json.length + TAIL_JOURNAL_FOOTER_BYTES);
-	json.copy(sealed);
-	sealed.writeUInt32LE(json.length, json.length);
-	TAIL_JOURNAL_MAGIC.copy(sealed, json.length + 4);
-	const { bytesWritten } = await journal.write(sealed, 0, sealed.length, position);
-	if (bytesWritten !== sealed.length) {
-		throw new Error(`Short write to ${journalPath}: ${bytesWritten} of ${sealed.length} bytes`);
-	}
-}
-
-/**
- * The record ending the journal open at `journal`, or undefined when the journal is not whole.
- * Throws {@link TailJournalFormatError} for a whole journal in another format.
- */
-function readTailJournalSync(journal: number, journalPath: string): TailJournal | undefined {
-	const { size } = fs.fstatSync(journal);
-	if (size < TAIL_JOURNAL_FOOTER_BYTES) return undefined;
-	const footer = Buffer.allocUnsafe(TAIL_JOURNAL_FOOTER_BYTES);
-	readFullySync(journal, footer, footer.length, size - footer.length, journalPath);
-	if (!footer.subarray(4).equals(TAIL_JOURNAL_MAGIC)) return undefined;
-	const recordBytes = footer.readUInt32LE(0);
-	const recordAt = size - footer.length - recordBytes;
-	if (recordAt < 0) return undefined;
-	const json = Buffer.allocUnsafe(recordBytes);
-	readFullySync(journal, json, recordBytes, recordAt, journalPath);
-	let record: unknown;
-	try {
-		record = JSON.parse(json.toString("utf-8"));
-	} catch {
-		return undefined;
-	}
-	if (!isRecord(record)) return undefined;
-	if (record.v !== TAIL_JOURNAL_VERSION) {
-		throw new TailJournalFormatError(
-			`it is in journal format ${JSON.stringify(record.v)}, and this version reads format ${TAIL_JOURNAL_VERSION}`,
-		);
-	}
-	const { identity, size: fileSize, keep, head, tail } = record;
-	if (typeof identity !== "string") return undefined;
-	if (!isByteCount(fileSize) || !isByteCount(keep) || !isByteCount(head) || !isByteCount(tail)) return undefined;
-	if (head > keep || head + tail !== recordAt) return undefined;
-	return { identity, size: fileSize, keep, head, tail };
-}
-
-/**
- * Write the journal's head over the start of `target`, cut `target` to its first `keep` bytes, and
- * write the journal's tail after them. Synchronous, so no read in this process lands between the
- * first write and the last.
- */
-function applyTailJournalSync(target: number, journal: number, record: TailJournal, journalPath: string): void {
-	const buffer = Buffer.allocUnsafe(clampLow(Math.max(record.head, record.tail), 1, COPY_CHUNK_BYTES));
-	copyBytesSync(journal, 0, target, 0, record.head, buffer, journalPath);
-	fs.ftruncateSync(target, record.keep);
-	copyBytesSync(journal, record.head, target, record.keep, record.tail, buffer, journalPath);
-}
-
-/**
- * Bring the file at `fpath` to what the journal describes, when a rewrite from it stopped part way:
- * the file is the object the journal was written for, it does not already hold the journal's head
- * and tail, and nothing grew it after the rewrite began.
- */
-function finishTailJournalSync(fpath: string, journal: number, record: TailJournal, journalPath: string): void {
-	let target: number;
-	try {
-		target = fs.openSync(fpath, "r+");
-	} catch (err) {
-		if (isEnoent(err)) return;
-		throw err;
-	}
-	try {
-		const stats = fs.fstatSync(target);
-		if (fileObjectIdentity(stats) !== record.identity || stats.size < record.keep) return;
-		const end = record.keep + record.tail;
-		if (
-			stats.size >= end &&
-			bytesEqualSync(target, 0, journal, 0, record.head, journalPath) &&
-			bytesEqualSync(target, record.keep, journal, record.head, record.tail, journalPath)
-		) {
-			return;
-		}
-		// Longer than the file the rewrite began on and than the one it writes: lines appended to a
-		// file the rewrite never touched.
-		if (stats.size !== record.size && stats.size > end) return;
-		applyTailJournalSync(target, journal, record, journalPath);
-		fs.fdatasyncSync(target);
-	} finally {
-		fs.closeSync(target);
-	}
-}
-
 export interface SessionStorage {
 	ensureDirSync(dir: string): void;
 	existsSync(path: string): boolean;
@@ -427,7 +338,8 @@ export interface SessionStorage {
 	 * the filesystem about a path those backends never wrote.
 	 */
 	existsStateSync(path: string): PathState;
-	writeTextSync(path: string, body: SessionFileBody): void;
+	/** Optional synchronous publication fence; a rejecting guard throws and preserves the target. */
+	writeTextSync(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void;
 	/**
 	 * Update the current session title through the storage backend.
 	 *
@@ -444,6 +356,15 @@ export interface SessionStorage {
 	exists(path: string): Promise<boolean>;
 	readText(path: string): Promise<string>;
 	/**
+	 * Optional byte-strict UTF-8 read for fail-closed history repair: unlike
+	 * ordinary text reads, malformed source bytes must never be republished as U+FFFD.
+	 */
+	readTextStrict?(path: string): Promise<string>;
+	/**
+	 * Optional synchronous byte-strict twin for failed-fork exit/flush repair.
+	 */
+	readTextSyncStrict?(path: string): string | undefined;
+	/**
 	 * Read a whole file without yielding, for a caller that cannot await.
 	 *
 	 * OPTIONAL, and the reason is the point: a backend that reaches a socket or a
@@ -458,19 +379,17 @@ export interface SessionStorage {
 	/**
 	 * Open a {@link PinnedSessionReader} on what `path` names now.
 	 *
-	 * OPTIONAL: only a backend whose whole rewrites publish a new object by rename can keep an old
-	 * object readable behind a handle. Its tail rewrites may keep the object and change the bytes
-	 * after the lines they keep. Absent, or returning `undefined`, means the caller holds every entry
+	 * OPTIONAL: only a backend whose rewrites publish a new object by rename can keep an old object
+	 * readable behind a handle. Absent, or returning `undefined`, means the caller holds every entry
 	 * in memory. A path that is gone throws.
 	 */
 	openPinnedReaderSync?(path: string): PinnedSessionReader | undefined;
 	writeText(path: string, content: string): Promise<void>;
 	writeTextAtomic(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void>;
 	/**
-	 * Make `path` hold `head`, then the file's bytes from `headBytes` up to `keepBytes`, then `tail`:
-	 * `head` takes the place of the first `headBytes` bytes. `commitGuard` applies as it does to
-	 * {@link writeTextAtomic}. A crash at any point leaves the old file, or a rewrite
-	 * {@link recoverInterruptedRewriteSync} finishes.
+	 * Replace `path` atomically with `head`, then the file's bytes from `headBytes` up to
+	 * `keepBytes`, then `tail`: `head` takes the place of the first `headBytes` bytes. `commitGuard`
+	 * applies as it does to {@link writeTextAtomic}.
 	 *
 	 * OPTIONAL: a session rewrite that changed only its header and its last entries uses this to keep
 	 * the bytes of every entry before them instead of serializing the whole transcript again. A
@@ -486,12 +405,6 @@ export interface SessionStorage {
 		tail: SessionFileBody,
 		options?: WriteTextAtomicOptions,
 	): Promise<void>;
-	/**
-	 * Finish or drop a {@link rewriteTailAtomic} of `path` that a crash stopped part way, so that a
-	 * load reads a whole file. OPTIONAL: only a backend that rewrites a file in place can leave one
-	 * half written.
-	 */
-	recoverInterruptedRewriteSync?(path: string): void;
 	rename(path: string, nextPath: string): Promise<void>;
 	/**
 	 * Relocate a session transcript and every artifact beneath its sibling
@@ -499,9 +412,13 @@ export interface SessionStorage {
 	 * the source if any part of the relocation fails.
 	 */
 	moveSessionWithArtifacts(path: string, nextPath: string): Promise<void>;
+	/** Remove one file in the backend's namespace. */
 	unlink(path: string): Promise<void>;
-	deleteSessionWithArtifacts(sessionPath: string): Promise<void>;
+	/** Remove a session transcript and its sibling artifact directory. */
+	deleteSessionWithArtifacts(path: string): Promise<void>;
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
+	withJournalLock?<T>(filePath: string, fn: () => Promise<T>): Promise<T>;
+	withJournalLockSync?<T>(filePath: string, fn: () => T): T;
 	/**
 	 * Wait for every backing write scheduled by this storage to become durably
 	 * visible. Sync backends (file, memory) return immediately because their
@@ -548,7 +465,16 @@ class FilePinnedSessionReader implements PinnedSessionReader {
 		const fd = this.#fd;
 		if (fd === undefined) throw new Error("Pinned session reader is closed");
 		const buffer = Buffer.allocUnsafe(length);
-		readFullySync(fd, buffer, length, offset, `session object ${this.identity}`);
+		let filled = 0;
+		while (filled < length) {
+			const read = fs.readSync(fd, buffer, filled, length - filled, offset + filled);
+			if (read === 0) {
+				throw new Error(
+					`Short read from session object ${this.identity}: ${filled} of ${length} bytes at ${offset}`,
+				);
+			}
+			filled += read;
+		}
 		return buffer.toString("utf-8");
 	}
 
@@ -643,12 +569,69 @@ export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 	}
 }
 
+/**
+ * Read only the session header from an already-open journal object, with an
+ * independent read descriptor pinned to the SAME inode as the writer. A peer
+ * may replace the pathname with a perfectly ordinary file belonging to another
+ * session; regular-file checks alone do not make that replacement trustworthy.
+ *
+ * A missing/unreadable/oversized header is not proof of ownership. Calling code
+ * treats that result as a refusal to rebind, not permission to append blindly.
+ */
+function openedJournalSessionId(fpath: string, writerFd: number): string | undefined {
+	let readFd: number | undefined;
+	try {
+		readFd = fs.openSync(
+			fpath,
+			fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0),
+		);
+		const readStat = fs.fstatSync(readFd);
+		// O_NOFOLLOW does not reject FIFOs. Nonblocking open plus an opened-object
+		// regular-file check prevents a pathname swap from hanging this sync probe.
+		if (!readStat.isFile() || fileObjectIdentity(readStat) !== fileObjectIdentity(fs.fstatSync(writerFd))) {
+			return undefined;
+		}
+		const buffer = Buffer.alloc(64 * 1024);
+		const length = fs.readSync(readFd, buffer, 0, buffer.length, 0);
+		const firstEnd = buffer.indexOf(10);
+		if (firstEnd < 0 || firstEnd >= length) return undefined;
+		const first = JSON.parse(buffer.toString("utf-8", 0, firstEnd)) as { type?: unknown; id?: unknown };
+		let header = first;
+		if (first?.type === SESSION_TITLE_SLOT_ENTRY_TYPE) {
+			const secondEnd = buffer.indexOf(10, firstEnd + 1);
+			if (secondEnd < 0 || secondEnd >= length) return undefined;
+			header = JSON.parse(buffer.toString("utf-8", firstEnd + 1, secondEnd)) as {
+				type?: unknown;
+				id?: unknown;
+			};
+		}
+		return header?.type === "session" && typeof header.id === "string" && header.id.length > 0
+			? header.id
+			: undefined;
+	} catch {
+		return undefined;
+	} finally {
+		if (readFd !== undefined) fs.closeSync(readFd);
+	}
+}
+
 class FileSessionStorageWriter extends BaseSessionStorageWriter {
 	#fd: number;
+	readonly #path: string;
+	readonly #appendMode: boolean;
+	#sessionIdAtOpen: string | undefined;
+	/** Any prior append could be lost when a replacement lacks this writer\'s history, even after fsync. */
+	#hasAppendedToPinnedJournal = false;
+	readonly #emptyAtOpen: boolean;
+	#pendingAppends: Promise<void> = Promise.resolve();
+	#pendingAppendCount = 0;
+	#closePromise: Promise<void> | undefined;
 
 	constructor(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
 		super(options);
 		const flags = options?.flags ?? "a";
+		this.#path = fpath;
+		this.#appendMode = flags === "a";
 		// Ensure parent directory exists
 		const dir = path.dirname(fpath);
 		if (!fs.existsSync(dir)) {
@@ -656,57 +639,187 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		}
 		// Open file once, keep fd for lifetime
 		this.#fd = fs.openSync(fpath, flags === "w" ? "w" : "a");
+		this.#emptyAtOpen = this.#appendMode && fs.fstatSync(this.#fd).size === 0;
+		this.#sessionIdAtOpen = this.#appendMode ? openedJournalSessionId(fpath, this.#fd) : undefined;
 		// Register for cleanup if abandoned without close()
 		writerRegistry.register(this, this.#fd, this);
 	}
 
+	/** A peer can atomically replace the pathname while this writer keeps the old inode open. */
+	#rebindAfterReplacement(): void {
+		const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
+		// Never follow a substituted symlink, even when it resolves to the
+		// original pinned inode. A stat-based same-inode fast path otherwise
+		// bypasses every later no-follow check before appending.
+		const current = fs.lstatSync(this.#path);
+		if (!current.isFile() || current.isSymbolicLink()) {
+			throw new Error("Session writer target is not a regular file");
+		}
+		if (fileObjectIdentity(current) === pinnedIdentity) {
+			// An empty journal has no session ID to pin at open. If a peer
+			// writes its own header before our first append, adopting that ID
+			// would mix our new session with the peer's on the same inode.
+			// Prior appends (including an owned title-slot prefix) are allowed
+			// to complete our own session header on a subsequent call.
+			if (this.#emptyAtOpen && !this.#sessionIdAtOpen && !this.#hasAppendedToPinnedJournal && fs.fstatSync(this.#fd).size > 0) {
+				throw new Error("Session writer journal gained content before first append");
+			}
+			// A peer can truncate and overwrite an existing regular journal in place.
+			// Matching dev:ino alone does not prove that this is still our session.
+			// A late-created journal acquires its header identity once it exists.
+			const currentSessionId = openedJournalSessionId(this.#path, this.#fd);
+			// The pathname can change after the earlier lstat and during the
+			// independent header open. Revalidate the exact writer inode after
+			// the probe before allowing an append to the pinned descriptor.
+			const afterHeaderProbe = fs.lstatSync(this.#path);
+			if (
+				!afterHeaderProbe.isFile() ||
+				afterHeaderProbe.isSymbolicLink() ||
+				fileObjectIdentity(afterHeaderProbe) !== pinnedIdentity
+			) {
+				throw new Error("Session writer target changed during header probe");
+			}
+			if (this.#sessionIdAtOpen && currentSessionId !== this.#sessionIdAtOpen) {
+				throw new Error("Session writer current journal has an unrelated or unverifiable session header");
+			}
+			if (!this.#sessionIdAtOpen && currentSessionId) this.#sessionIdAtOpen = currentSessionId;
+			return;
+		}
+		if (!this.#appendMode) throw new Error("Session writer target was replaced");
+		// Neither fsync nor matching session IDs proves the new journal retained
+		// this descriptor\'s earlier lines. Without a content proof, preserve the
+		// old descriptor for explicit recovery instead of closing it on rebind.
+		if (this.#hasAppendedToPinnedJournal) {
+			throw new Error("Session writer target changed after earlier appends");
+		}
+		const entry = fs.lstatSync(this.#path);
+		if (!entry.isFile() || entry.isSymbolicLink()) {
+			throw new Error("Session writer target is not a regular file");
+		}
+		// Reopen in append mode WITHOUT O_CREAT or truncation. O_NOFOLLOW, where
+		// available, closes the symlink-swap window around the initial lstat.
+		const nextFd = fs.openSync(
+			this.#path,
+			fs.constants.O_WRONLY | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW ?? 0),
+		);
+		try {
+			const next = fs.lstatSync(this.#path);
+			if (!next.isFile() || next.isSymbolicLink() ||
+				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))) {
+				throw new Error("Session writer target changed during reopen");
+			}
+			// A different regular session file is not an authorized continuation.
+			// Fail closed if either header cannot be proven, including legacy or
+			// inaccessible files; never splice this writer\'s transcript into it.
+			if (!this.#sessionIdAtOpen || openedJournalSessionId(this.#path, nextFd) !== this.#sessionIdAtOpen) {
+				throw new Error("Session writer replacement has an unrelated or unverifiable session header");
+			}
+			fs.closeSync(this.#fd);
+		} catch (error) {
+			fs.closeSync(nextFd);
+			throw error;
+		}
+		writerRegistry.unregister(this);
+		this.#fd = nextFd;
+		writerRegistry.register(this, nextFd, this);
+	}
 	async append(line: string): Promise<void> {
 		this.ensureOpen();
-		try {
-			const buf = Buffer.from(line, "utf-8");
-			let offset = 0;
-			while (offset < buf.length) {
-				const written = fs.writeSync(this.#fd, buf, offset, buf.length - offset);
-				if (written === 0) {
-					throw new Error("Short write");
+		const writeLocked = (): void => {
+			try {
+				// A post-rename append must not silently write to a displaced inode.
+				// This observation cannot serialize arbitrary concurrent OS writers.
+				this.#rebindAfterReplacement();
+				const buf = Buffer.from(line, "utf-8");
+				let offset = 0;
+				while (offset < buf.length) {
+					const written = fs.writeSync(this.#fd, buf, offset, buf.length - offset);
+					if (written === 0) {
+						throw new Error("Short write");
+					}
+					offset += written;
 				}
-				offset += written;
+				this.#hasAppendedToPinnedJournal = true;
+				// New append-mode files have no header at open. Capture the first
+				// complete session header after writing it; otherwise a foreign
+				// in-place rewrite before the next append could become the first ID
+				// we ever pin, silently claiming the unrelated session.
+				if (this.#appendMode && !this.#sessionIdAtOpen) {
+					this.#sessionIdAtOpen = openedJournalSessionId(this.#path, this.#fd);
+				}
+			} catch (err) {
+				throw this.recordError(err);
 			}
-		} catch (err) {
-			throw this.recordError(err);
+		};
+		const canonical = path.resolve(this.#path);
+		if ((inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) || this.#pendingAppendCount > 0) {
+			this.#pendingAppendCount++;
+			const next = this.#pendingAppends.then(
+				() => withJournalLock(this.#path, async () => { writeLocked(); }),
+				() => withJournalLock(this.#path, async () => { writeLocked(); }),
+			);
+			this.#pendingAppends = next.catch(() => {});
+			try {
+				await next;
+			} finally {
+				this.#pendingAppendCount--;
+			}
+			return;
 		}
+		withJournalLockSync(this.#path, writeLocked);
+	}
+
+	override async flush(): Promise<void> {
+		await this.#pendingAppends;
+		this.ensureNoError();
 	}
 	async sync(): Promise<void> {
 		await this.flush();
 		try {
+			// A peer may replace the journal after our last append. fsync of the
+			// displaced inode still succeeds, but cannot acknowledge the journal
+			// currently reachable at this pathname. Unlike append(), do NOT
+			// rebind here: already written lines could remain only on the old inode.
+			const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
+			const assertCurrentTarget = (): void => {
+				const entry = fs.lstatSync(this.#path);
+				if (!entry.isFile() || entry.isSymbolicLink() ||
+					fileObjectIdentity(entry) !== pinnedIdentity) {
+					throw new Error("Session writer target changed before durable sync");
+				}
+			};
+			assertCurrentTarget();
 			fs.fsyncSync(this.#fd);
+			// Detect replacement during fsync too. This remains observational,
+			// not a cross-process lock or guarantee against a subsequent rename.
+			assertCurrentTarget();
 		} catch (error) {
 			throw this.recordError(error);
 		}
 	}
 
 	async close(): Promise<void> {
+		if (this.#closePromise) {
+			await this.#closePromise;
+			return;
+		}
 		if (this.isClosed) return;
 		this.markClosed();
-		// Unregister from finalization - we're closing properly
-		writerRegistry.unregister(this);
-		try {
-			fs.closeSync(this.#fd);
-		} catch (err) {
-			// A failing close is not cosmetic: on a delayed-allocation or network
-			// filesystem it is where a write error surfaces, so the session
-			// transcript can be short by whatever did not land. This used to be
-			// ignored outright, which made a truncated transcript indistinguishable
-			// from a complete one (Law 10). It goes through the same path as a write
-			// error, so `getError()` reports it and the `onError` callback fires.
-			// Still does not throw: close runs on shutdown and teardown paths where
-			// throwing would mask the reason the session is ending.
-			const error = this.recordError(err);
-			logger.warn("Could not close the session file cleanly; the transcript may be missing its last writes", {
-				error: error.message,
-				fix: "Check that the session directory is writable and not out of space. The session's earlier messages are unaffected.",
-			});
-		}
+		this.#closePromise = (async () => {
+			await this.#pendingAppends;
+			// Unregister from finalization - we're closing properly
+			writerRegistry.unregister(this);
+			try {
+				fs.closeSync(this.#fd);
+			} catch (err) {
+				const error = this.recordError(err);
+				logger.warn("Could not close the session file cleanly; the transcript may be missing its last writes", {
+					error: error.message,
+					fix: "Check that the session directory is writable and not out of space. The session's earlier messages are unaffected.",
+				});
+			}
+		})();
+		await this.#closePromise;
 	}
 }
 
@@ -777,51 +890,66 @@ export class FileSessionStorage implements SessionStorage {
 		if (state === "present") this.#reportedUnreachable.delete(path);
 		return state;
 	}
-
-	writeTextSync(fpath: string, body: SessionFileBody): void {
-		const dir = path.dirname(fpath);
-		this.ensureDirSync(dir);
-		const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
-		try {
-			writeChunksSync(tempPath, body);
-			fs.renameSync(tempPath, fpath);
-		} catch (err) {
+	writeTextSync(fpath: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
+		withJournalLockSync(fpath, () => {
+			const dir = path.dirname(fpath);
+			this.ensureDirSync(dir);
+			const tempPath = path.join(dir, `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
+			let guardRejected = false;
+			const commitGuard = (sourcePath?: string): boolean => {
+				const allowed = options?.commitGuard?.(sourcePath) ?? true;
+				if (!allowed) guardRejected = true;
+				return allowed;
+			};
 			try {
-				if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-			} catch (cleanupErr) {
-				if (!isEnoent(cleanupErr)) {
-					logger.warn("Failed to remove session rewrite temp file", {
-						sessionFile: fpath,
-						tempPath,
-						error: toError(cleanupErr).message,
-					});
+				writeChunksSync(tempPath, body);
+				if (!commitGuard()) throw new Error("Original journal changed before synchronous publication");
+				try {
+					this.renameSync(tempPath, fpath);
+				} catch (renameError) {
+					if (!hasFsCode(renameError, "EPERM")) throw renameError;
+					// Never truncate the previous journal when replacement is refused.
+					// The existing staged-file fallback preserves or restores its backup.
+					this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError,
+						options?.commitGuard ? commitGuard : undefined);
+					if (guardRejected) throw new Error("Original journal changed before synchronous publication");
 				}
+			} catch (err) {
+				try {
+					if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+				} catch (cleanupErr) {
+					if (!isEnoent(cleanupErr)) {
+						logger.warn("Failed to remove session rewrite temp file", {
+							sessionFile: fpath,
+							tempPath,
+							error: toError(cleanupErr).message,
+						});
+					}
+				}
+				throw toError(err);
 			}
-			if (hasFsCode(err, "EPERM")) {
-				writeChunksSync(fpath, body);
-				return;
-			}
-			throw toError(err);
-		}
+		});
 	}
 
 	async updateSessionTitle(fpath: string, update: SessionTitleUpdate): Promise<void> {
-		const fd = fs.openSync(fpath, "r+");
-		try {
-			const buf = Buffer.from(serializeTitleSlot(update), "utf-8");
-			let offset = 0;
-			while (offset < buf.length) {
-				const written = fs.writeSync(fd, buf, offset, buf.length - offset, offset);
-				if (written === 0) {
-					throw new Error("Short write");
+		await withJournalLock(fpath, async () => {
+			const fd = fs.openSync(fpath, "r+");
+			try {
+				const buf = Buffer.from(serializeTitleSlot(update), "utf-8");
+				let offset = 0;
+				while (offset < buf.length) {
+					const written = fs.writeSync(fd, buf, offset, buf.length - offset, offset);
+					if (written === 0) {
+						throw new Error("Short write");
+					}
+					offset += written;
 				}
-				offset += written;
+			} catch (err) {
+				throw toError(err);
+			} finally {
+				fs.closeSync(fd);
 			}
-		} catch (err) {
-			throw toError(err);
-		} finally {
-			fs.closeSync(fd);
-		}
+		});
 	}
 
 	statSync(path: string): SessionStorageStat {
@@ -830,6 +958,7 @@ export class FileSessionStorage implements SessionStorage {
 			size: stats.size,
 			mtimeMs: stats.mtimeMs,
 			mtime: stats.mtime,
+			ctimeMs: stats.ctimeMs,
 			identity: fileObjectIdentity(stats),
 		};
 	}
@@ -879,8 +1008,24 @@ export class FileSessionStorage implements SessionStorage {
 		}
 	}
 
-	readText(path: string): Promise<string> {
-		return Bun.file(path).text();
+	async readText(path: string): Promise<string> {
+		const text = await fsp.readFile(path, "utf8");
+		return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+	}
+
+	async readTextStrict(path: string): Promise<string> {
+		// Default UTF-8 text decoding replaces malformed bytes with U+FFFD, which
+		// would silently change an independently written journal during a repair.
+		return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await fs.promises.readFile(path));
+	}
+
+	readTextSyncStrict(path: string): string | undefined {
+		try {
+			return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(fs.readFileSync(path));
+		} catch (err) {
+			if (isEnoent(err)) return undefined;
+			throw toError(err);
+		}
 	}
 
 	readTextSync(path: string): string | undefined {
@@ -922,25 +1067,24 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	async writeTextAtomic(fpath: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void> {
-		const dir = path.resolve(fpath, "..");
-		const tempPath = stagingPath(fpath);
-		await fs.promises.mkdir(dir, { recursive: true });
-		try {
-			await writeChunks(tempPath, body);
-		} catch (err) {
-			discardTemp(tempPath, fpath);
-			throw toError(err);
-		}
-		this.#publishStaged(tempPath, fpath, options);
+		await withJournalLock(fpath, async () => {
+			const dir = path.resolve(fpath, "..");
+			const tempPath = stagingPath(fpath);
+			await fs.promises.mkdir(dir, { recursive: true });
+			try {
+				await writeChunks(tempPath, body);
+			} catch (err) {
+				discardTemp(tempPath, fpath);
+				throw toError(err);
+			}
+			this.#publishStaged(tempPath, fpath, options);
+		});
 	}
-
 	/**
-	 * A head as long as the bytes it replaces leaves every kept byte where it is, so a short enough
-	 * tail is rewritten inside the file itself ({@link #rewriteTailInPlace}) and the kept bytes are
-	 * neither read nor written. Otherwise the head and tail go over a copy of the file that is renamed
-	 * over it: for a head of the same length a reflink where the filesystem supports one (btrfs, XFS,
-	 * APFS) and an in-kernel copy elsewhere, and for a head of another length, which moves every kept
-	 * byte and which no reflink can express, the kept bytes copied through one reused buffer.
+	 * A head as long as the bytes it replaces is written over a copy of the file, which is a reflink
+	 * where the filesystem supports one (btrfs, XFS, APFS) and an in-kernel copy elsewhere, so the kept
+	 * bytes never pass through this process. A head of another length moves every kept byte, which no
+	 * reflink can express, so those bytes are copied through one reused buffer behind the new head.
 	 */
 	async rewriteTailAtomic(
 		fpath: string,
@@ -950,134 +1094,39 @@ export class FileSessionStorage implements SessionStorage {
 		tail: SessionFileBody,
 		options?: WriteTextAtomicOptions,
 	): Promise<void> {
-		if (headBytes > keepBytes) {
-			throw new Error(`A tail rewrite cannot replace ${headBytes} head bytes when it keeps only ${keepBytes}`);
-		}
-		const headLength = Buffer.byteLength(head, "utf-8");
-		const sameLength = headLength === headBytes;
-		if (sameLength && (await this.#rewriteTailInPlace(fpath, keepBytes, head, tail, options))) return;
-		const tempPath = stagingPath(fpath);
-		try {
-			if (sameLength) await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
-			const handle = await fs.promises.open(tempPath, sameLength ? "r+" : "w");
-			try {
-				if (sameLength) {
-					const { size } = await handle.stat();
-					if (size < keepBytes) throw keptBytesMissing(size, keepBytes);
-					await handle.truncate(keepBytes);
-				} else {
-					await copyRange(fpath, handle, headBytes, keepBytes, headLength);
-				}
-				await writeTextAt(handle, tempPath, head, 0);
-				let position = keepBytes - headBytes + headLength;
-				for (const chunk of sessionBodyChunks(tail)) {
-					position += await writeTextAt(handle, tempPath, chunk, position);
-				}
-				await flushStaged(handle);
-			} finally {
-				await handle.close();
+		await withJournalLock(fpath, async () => {
+			if (headBytes > keepBytes) {
+				throw new Error(`A tail rewrite cannot replace ${headBytes} head bytes when it keeps only ${keepBytes}`);
 			}
-		} catch (err) {
-			discardTemp(tempPath, fpath);
-			throw toError(err);
-		}
-		this.#publishStaged(tempPath, fpath, options);
-	}
-
-	/**
-	 * Rewrite the tail of `fpath` inside the file. The head and the tail go to a journal beside the
-	 * file, which is flushed and then sealed with a record of where they go, and only then copied into
-	 * the file and the file flushed. A crash at any point leaves the old file, or a journal that
-	 * {@link recoverInterruptedRewriteSync} finishes the rewrite from.
-	 *
-	 * Returns false, having written nothing, when the old tail is longer than
-	 * {@link IN_PLACE_TAIL_BYTES} or than the kept bytes, or a journal for `fpath` is already there:
-	 * another rewrite of the file is under way, or one stopped and the file has not been loaded since.
-	 */
-	async #rewriteTailInPlace(
-		fpath: string,
-		keepBytes: number,
-		head: string,
-		tail: SessionFileBody,
-		options?: WriteTextAtomicOptions,
-	): Promise<boolean> {
-		const target = await fs.promises.open(fpath, "r+");
-		const journalPath = tailJournalPath(fpath);
-		let journal: fs.promises.FileHandle | undefined;
-		// Set while the file is being written: a rewrite that stops then leaves the journal behind.
-		let keepJournal = false;
-		try {
-			const stats = await target.stat();
-			if (stats.size - keepBytes > Math.min(IN_PLACE_TAIL_BYTES, keepBytes)) return false;
+			const tempPath = stagingPath(fpath);
+			const headLength = Buffer.byteLength(head, "utf-8");
 			try {
-				journal = await fs.promises.open(journalPath, "wx+");
+				const inPlace = headLength === headBytes;
+				if (inPlace) await fs.promises.copyFile(fpath, tempPath, fs.constants.COPYFILE_FICLONE);
+				const handle = await fs.promises.open(tempPath, inPlace ? "r+" : "w");
+				try {
+					if (inPlace) {
+						const { size } = await handle.stat();
+						if (size < keepBytes) throw keptBytesMissing(size, keepBytes);
+						await handle.truncate(keepBytes);
+					} else {
+						await copyRange(fpath, handle, headBytes, keepBytes, headLength);
+					}
+					await writeTextAt(handle, tempPath, head, 0);
+					let position = keepBytes - headBytes + headLength;
+					for (const chunk of sessionBodyChunks(tail)) {
+						position += await writeTextAt(handle, tempPath, chunk, position);
+					}
+					await flushStaged(handle);
+				} finally {
+					await handle.close();
+				}
 			} catch (err) {
-				if (hasFsCode(err, "EEXIST")) return false;
-				throw err;
+				discardTemp(tempPath, fpath);
+				throw toError(err);
 			}
-			const headLength = await writeTextAt(journal, journalPath, head, 0);
-			let position = headLength;
-			for (const chunk of sessionBodyChunks(tail)) {
-				position += await writeTextAt(journal, journalPath, chunk, position);
-			}
-			// Flushed before the record goes on, so a sealed journal never holds bytes a crash lost.
-			await journal.datasync();
-			const record: TailJournal = {
-				identity: fileObjectIdentity(stats),
-				size: stats.size,
-				keep: keepBytes,
-				head: headLength,
-				tail: position - headLength,
-			};
-			await sealTailJournal(journal, journalPath, record, position);
-			await journal.datasync();
-			// Guard-check and the first write MUST NOT be separated by an await, as in #publishStaged.
-			if (options?.commitGuard && !options.commitGuard()) return true;
-			const { size } = fs.fstatSync(target.fd);
-			if (size < keepBytes) throw keptBytesMissing(size, keepBytes);
-			keepJournal = true;
-			applyTailJournalSync(target.fd, journal.fd, record, journalPath);
-			await target.datasync();
-			keepJournal = false;
-			return true;
-		} finally {
-			await Promise.all([target.close(), journal?.close()]);
-			if (journal !== undefined && !keepJournal) discardTemp(journalPath, fpath);
-		}
-	}
-
-	/**
-	 * Finish a {@link rewriteTailAtomic} of `fpath` that stopped part way, from the journal it left
-	 * beside the file, then delete the journal. A journal that is not whole, or that was written for
-	 * an object `fpath` no longer names, is deleted and the file left as it is: that rewrite never
-	 * began writing the file, or a whole rewrite has replaced the file since.
-	 */
-	recoverInterruptedRewriteSync(fpath: string): void {
-		const journalPath = tailJournalPath(fpath);
-		let journal: number;
-		try {
-			journal = fs.openSync(journalPath, "r");
-		} catch (err) {
-			if (isEnoent(err)) return;
-			throw toError(err);
-		}
-		try {
-			const record = readTailJournalSync(journal, journalPath);
-			if (record !== undefined) finishTailJournalSync(fpath, journal, record, journalPath);
-		} catch (err) {
-			const error = toError(err);
-			const action =
-				err instanceof TailJournalFormatError
-					? "Open the session with the version that wrote the journal."
-					: "Make both files readable and writable, then open the session again.";
-			throw new Error(
-				`${fpath} was left part way through a rewrite, and finishing it from ${journalPath} failed: ${error.message}. ${action}`,
-				{ cause: error },
-			);
-		} finally {
-			fs.closeSync(journal);
-		}
-		discardTemp(journalPath, fpath);
+			this.#publishStaged(tempPath, fpath, options);
+		});
 	}
 
 	/** Make a fully written temp file the file at `fpath`, or discard it. */
@@ -1113,14 +1162,85 @@ export class FileSessionStorage implements SessionStorage {
 	 * Windows-style EPERM at the sync layer used by the atomic path.
 	 */
 	renameSync(source: string, target: string): void {
-		fs.renameSync(source, target);
+		withJournalLockSync(target, () => {
+			this.#replayTailAppends(source, target);
+			fs.renameSync(source, target);
+		});
+	}
+
+	#replayTailAppends(source: string, target: string): void {
+		if (
+			source === target ||
+			!target.endsWith(".jsonl") ||
+			!path.basename(source).includes(".tmp") ||
+			!fs.existsSync(source) ||
+			!fs.existsSync(target)
+		) {
+			return;
+		}
+		try {
+			const targetContent = fs.readFileSync(target, "utf-8");
+			const sourceContent = fs.readFileSync(source, "utf-8");
+			if (!targetContent.trim() || !sourceContent.trim()) return;
+
+			const targetLines = targetContent.split("\n").filter(line => line.length > 0);
+			const sourceLines = sourceContent.split("\n").filter(line => line.length > 0);
+			if (targetLines.length === 0 || sourceLines.length === 0) return;
+
+			let lastCommonTargetIndex = -1;
+			for (let i = sourceLines.length - 1; i >= 0; i--) {
+				const targetIndex = targetLines.lastIndexOf(sourceLines[i]!);
+				if (targetIndex >= 0) {
+					lastCommonTargetIndex = targetIndex;
+					break;
+				}
+			}
+
+			if (lastCommonTargetIndex < 0 || lastCommonTargetIndex >= targetLines.length - 1) {
+				return;
+			}
+
+			const sourceLineSet = new Set(sourceLines);
+			const linesToReplay: string[] = [];
+			for (let j = lastCommonTargetIndex + 1; j < targetLines.length; j++) {
+				const line = targetLines[j]!;
+				if (sourceLineSet.has(line)) continue;
+				try {
+					const parsed = JSON.parse(line) as { type?: string; state?: string; reason?: string };
+					if (parsed.type === "session_lifecycle" && parsed.reason === "session_switched") {
+						continue;
+					}
+				} catch {
+					continue;
+				}
+				linesToReplay.push(line);
+			}
+
+			if (linesToReplay.length > 0) {
+				fs.appendFileSync(source, `${linesToReplay.join("\n")}\n`);
+			}
+		} catch (error) {
+			logger.warn("Failed to replay trailing journal appends during rename", {
+				source,
+				target,
+				error: toError(error).message,
+			});
+		}
+	}
+
+	async withJournalLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+		return withJournalLock(filePath, fn);
+	}
+
+	withJournalLockSync<T>(filePath: string, fn: () => T): T {
+		return withJournalLockSync(filePath, fn);
 	}
 
 	#replaceSessionFileAfterEpermSync(
 		tempPath: string,
 		targetPath: string,
 		renameError: unknown,
-		commitGuard?: () => boolean,
+		commitGuard?: (sourcePath?: string) => boolean,
 	): void {
 		const dir = path.resolve(targetPath, "..");
 		const backupPath = path.join(dir, sessionBackupName(path.basename(targetPath), Snowflake.next()));
@@ -1137,11 +1257,26 @@ export class FileSessionStorage implements SessionStorage {
 			}
 			throw toError(renameError);
 		}
-		if (commitGuard && !commitGuard()) {
+		// Another writer may publish a new journal at targetPath after we move
+		// its old inode aside. Even an unchanged backup cannot authorize replacing
+		// that new journal: retain both files and report the conflict for recovery.
+		// This check is not an atomic cross-process CAS with the later rename.
+		if (this.existsStateSync(targetPath) !== "absent") {
+			throw new Error(`Session journal reappeared during EPERM replacement; original retained at ${backupPath}`);
+		}
+		// The original journal now lives at backupPath. Give the guard that
+		// original-object path so version checks remain meaningful on Windows
+		// rather than treating our own EPERM move-aside as a foreign deletion.
+		if (commitGuard && !commitGuard(backupPath)) {
 			// A concurrent synchronous rewrite published a fresh body between the
 			// move-aside and this point. Restore the moved-aside file so we do
 			// not overwrite it with our staged (stale) body, and drop the temp
 			// so `writeTextAtomic`'s "discard on abandon" contract holds.
+			// A foreign writer can reclaim the vacated pathname after the first
+			// existence check. Never restore our backup over its new journal.
+			if (this.existsStateSync(targetPath) !== "absent") {
+				throw new Error(`Session journal reappeared during EPERM rollback; original retained at ${backupPath}`);
+			}
 			try {
 				this.renameSync(backupPath, targetPath);
 			} catch (restoreErr) {
@@ -1157,6 +1292,14 @@ export class FileSessionStorage implements SessionStorage {
 		try {
 			this.renameSync(tempPath, targetPath);
 		} catch (replaceError) {
+			// The failed retry does not authorize discarding a journal another
+			// writer published at the vacated path. This observation is not CAS.
+			if (this.existsStateSync(targetPath) !== "absent") {
+				throw new Error(
+					`Session journal reappeared after failed EPERM replacement; original retained at ${backupPath}`,
+					{ cause: toError(replaceError) },
+				);
+			}
 			try {
 				this.renameSync(backupPath, targetPath);
 			} catch (rollbackErr) {
@@ -1183,9 +1326,11 @@ export class FileSessionStorage implements SessionStorage {
 		}
 	}
 
-	async rename(path: string, nextPath: string): Promise<void> {
+	async rename(sourcePath: string, nextPath: string): Promise<void> {
 		try {
-			await fs.promises.rename(path, nextPath);
+			await withJournalLocks([sourcePath, nextPath], async () => {
+				await fs.promises.rename(sourcePath, nextPath);
+			});
 		} catch (err) {
 			throw toError(err);
 		}
@@ -1198,38 +1343,40 @@ export class FileSessionStorage implements SessionStorage {
 		const artifactPathChanged = path.resolve(sourceArtifacts) !== path.resolve(targetArtifacts);
 		this.ensureDirSync(path.dirname(targetPath));
 
-		let sessionMoved = false;
-		let artifactsMoved = false;
-		try {
-			if (sessionPathChanged && this.existsStateSync(sourcePath) !== "absent") {
-				await this.rename(sourcePath, targetPath);
-				sessionMoved = true;
-			}
-			if (artifactPathChanged && this.existsStateSync(sourceArtifacts) !== "absent") {
-				await this.rename(sourceArtifacts, targetArtifacts);
-				artifactsMoved = true;
-			}
-		} catch (error) {
-			const rollbackErrors: Error[] = [];
-			if (artifactsMoved) {
-				try {
-					await this.rename(targetArtifacts, sourceArtifacts);
-				} catch (rollbackError) {
-					rollbackErrors.push(toError(rollbackError));
+		await withJournalLocks([sourcePath, targetPath], async () => {
+			let sessionMoved = false;
+			let artifactsMoved = false;
+			try {
+				if (sessionPathChanged && this.existsStateSync(sourcePath) !== "absent") {
+					await this.rename(sourcePath, targetPath);
+					sessionMoved = true;
 				}
-			}
-			if (sessionMoved) {
-				try {
-					await this.rename(targetPath, sourcePath);
-				} catch (rollbackError) {
-					rollbackErrors.push(toError(rollbackError));
+				if (artifactPathChanged && this.existsStateSync(sourceArtifacts) !== "absent") {
+					await this.rename(sourceArtifacts, targetArtifacts);
+					artifactsMoved = true;
 				}
+			} catch (error) {
+				const rollbackErrors: Error[] = [];
+				if (artifactsMoved) {
+					try {
+						await this.rename(targetArtifacts, sourceArtifacts);
+					} catch (rollbackError) {
+						rollbackErrors.push(toError(rollbackError));
+					}
+				}
+				if (sessionMoved) {
+					try {
+						await this.rename(targetPath, sourcePath);
+					} catch (rollbackError) {
+						rollbackErrors.push(toError(rollbackError));
+					}
+				}
+				if (rollbackErrors.length > 0) {
+					throw new AggregateError([toError(error), ...rollbackErrors], "Session relocation and rollback failed");
+				}
+				throw error;
 			}
-			if (rollbackErrors.length > 0) {
-				throw new AggregateError([toError(error), ...rollbackErrors], "Session relocation and rollback failed");
-			}
-			throw error;
-		}
+		});
 	}
 
 	unlink(path: string): Promise<void> {
@@ -1276,14 +1423,6 @@ export class FileSessionStorage implements SessionStorage {
 /** A temp path beside `fpath`, so the publish is a rename within one directory. */
 function stagingPath(fpath: string): string {
 	return path.join(path.resolve(fpath, ".."), `.${path.basename(fpath)}.${Snowflake.next()}.tmp`);
-}
-
-/**
- * The journal a tail rewrite of `fpath` writes before it writes the file. One per session file, at a
- * fixed name, so a load finds the journal a crash left and a second rewrite finds one under way.
- */
-function tailJournalPath(fpath: string): string {
-	return path.join(path.dirname(fpath), `.${path.basename(fpath)}.tail`);
 }
 
 function discardTemp(tempPath: string, targetPath: string): void {
@@ -1516,7 +1655,10 @@ export class MemorySessionStorage implements SessionStorage {
 		return this.#files.has(path) ? "present" : "absent";
 	}
 
-	writeTextSync(path: string, body: SessionFileBody): void {
+	writeTextSync(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): void {
+		if (options?.commitGuard && !options.commitGuard()) {
+			throw new Error("Original journal changed before synchronous publication");
+		}
 		this.#files.set(path, createMemoryFileEntry(sessionBodyToString(body), Date.now()));
 	}
 
@@ -1586,6 +1728,17 @@ export class MemorySessionStorage implements SessionStorage {
 	readTextSync(path: string): string | undefined {
 		const entry = this.#files.get(path);
 		return entry ? materializeMemoryEntry(entry) : undefined;
+	}
+
+	// MemorySessionStorage holds already-decoded text chunks, never raw bytes.
+	// Its existing exact-string reads therefore satisfy byte-strict recovery:
+	// there is no external UTF-8 decoder that could replace malformed bytes.
+	readTextStrict(path: string): Promise<string> {
+		return this.readText(path);
+	}
+
+	readTextSyncStrict(path: string): string | undefined {
+		return this.readTextSync(path);
 	}
 
 	readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {

@@ -457,7 +457,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 
 	it("does not borrow the alternate screen for a height-only resize (settings-exit flash, #5854)", async () => {
-		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+		await withEnv(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {
@@ -481,7 +481,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 				expect(drag).not.toContain(ALT_SCREEN_ENTER);
 				expect(drag).not.toContain("\x1b[2J");
 				expect(drag).not.toContain("\x1b[3J");
-				expect(visible(term).at(-1)).toBe("b14-y");
+				expect(viewportRows(term).at(-1)).toBe("b14-y");
 			} finally {
 				tui.stop();
 			}
@@ -603,7 +603,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 		// alt-screen-toggle feedback loop. On a host that owns the grid the
 		// in-place path is the broken one: conhost reprints its own viewport on
 		// every resize, so only the borrow's settled rebuild reaches the reader.
-		await withEnvPatch(WARP_ENV, async () => {
+		await withEnv(WARP_ENV, async () => {
 			const term = new HostOwnedGridTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {
@@ -631,7 +631,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 				expect(settle).toContain(ALT_SCREEN_EXIT);
 				expect(settle.indexOf(ALT_SCREEN_EXIT)).toBeLessThan(settle.indexOf("\x1b[3J"));
 				expect(eraseScrollbackCount(writes)).toBeGreaterThan(0);
-				expect(visible(term).at(-1)).toBe("b14-y");
+				expect(viewportRows(term).at(-1)).toBe("b14-y");
 			} finally {
 				tui.stop();
 			}
@@ -641,7 +641,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 	it("VEYYON_TUI_RESIZE_IN_PLACE=1 still forces in-place resize on a host that owns the grid", async () => {
 		// The exclusion is a default, not a lock: the documented escape hatch
 		// wins, exactly as it does over the Warp marker and over a multiplexer.
-		await withEnvPatch({ ...WARP_ENV, VEYYON_TUI_RESIZE_IN_PLACE: "1" }, async () => {
+		await withEnv({ ...WARP_ENV, VEYYON_TUI_RESIZE_IN_PLACE: "1" }, async () => {
 			const term = new HostOwnedGridTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
 			try {

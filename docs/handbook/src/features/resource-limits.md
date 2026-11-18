@@ -150,6 +150,49 @@ command: the CPU quota, `memory.max` and `pids.max` on an existing group are rew
 write budget lifts its refusal, and setting a limit back to 0 lifts it. A process started after
 the change, such as a new eval kernel or MCP server, joins a group that holds the new value.
 
+## Evidence after a session dies
+
+The launch supervisor records the child's exit code, signal, phase, lane counts,
+parent PID and command line. A parent is not necessarily the process that killed
+the child. The exit notification does not identify that process, so the report
+states that attribution is unavailable rather than guessing.
+
+The heartbeat keeps the last 12 memory and handle samples. Windows samples include
+system commit, private process commit and open handles. The supervisor copies this
+history into its unexpected-death report before removing the heartbeat.
+
+Native stderr reaches rotating files under the profile log directory's
+`session-stderr/` folder, named `<pid>.stderr.log`, with numbered older files.
+Each file holds at most 1 MiB, and each process retains at most three files.
+The report includes capture errors and paths. These logs can contain private data.
+
+On Windows, a native console handler synchronously writes received
+`CTRL_CLOSE_EVENT`, `CTRL_LOGOFF_EVENT` and `CTRL_SHUTDOWN_EVENT` events to
+`heartbeat/<pid>.console.log`. It then lets the existing handlers continue.
+Interactive applications normally do not receive logoff or shutdown events.
+No event record does not prove that no shutdown occurred.
+See Microsoft's [console handler constraints](https://learn.microsoft.com/en-us/windows/console/handlerroutine).
+
+### Windows native minidumps
+
+Windows Error Reporting documents per-image LocalDumps under **HKLM**, not HKCU.
+An administrator must enable this once. Veyyon does not change the registry or
+elevate itself. In an elevated terminal, configure only `veyyon.exe`:
+
+```bat
+reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\veyyon.exe" /v DumpType /t REG_DWORD /d 1 /f
+reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\veyyon.exe" /v DumpCount /t REG_DWORD /d 3 /f
+```
+
+WER writes minidumps to `%LOCALAPPDATA%\CrashDumps` by default. The executable name
+must match the crashing image; source launches under `bun.exe` do not match
+`veyyon.exe`. A normal exit or external termination does not promise a dump.
+Microsoft excludes applications with custom crash reporting and applications with
+automatic crash debugging. Bun's own crash handling can therefore prevent a WER
+dump; do not treat this setup as proof that a dump will exist.
+Keep dumps private because they can contain credentials and session text.
+See Microsoft's [LocalDumps requirements](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps).
+
 ## Example
 
 Cap a session to 2 cores and run a parallel build:

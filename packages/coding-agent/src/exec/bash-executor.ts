@@ -12,11 +12,12 @@ import {
 	type ShellOptions,
 	type ShellRunResult,
 } from "@veyyon/natives";
+import { settleWithin } from "@veyyon/utils/scoped-timeout";
 import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
-import { sessionCpuLimit } from "../session/cpu-limit";
-import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output"
 import { ProducerOutputGuard } from "../secrets/producer-output";
+import { sessionCpuLimit } from "../session/cpu-limit";
+import { DEFAULT_MAX_BYTES, LIVE_OUTPUT_INTERVAL_MS, OutputSink } from "../session/streaming-output";
 import {
 	type OutputArtifactError,
 	resolveOutputMaxColumns,
@@ -389,6 +390,10 @@ async function releaseShell(sessionKey: string, lease: ShellLease, reset: boolea
 	if (!reset) await retainShellWithLiveBackgroundJobs(lease.persistent);
 }
 
+const NATIVE_TIMEOUT_BACKSTOP_GRACE_MS = 200;
+// Cover the addon's 3 s absolute post-exit drain plus time to deliver its result to JS.
+const NATIVE_DRAIN_RECONCILE_MS = 3_250;
+
 /**
  * The two ways a run ends before its result: the caller's signal and the executor deadline. Either aborts
  * the run and settles `stopped` with the annotation of the first that fired.
@@ -402,13 +407,7 @@ class RunStop {
 	readonly #stopped = Promise.withResolvers<string>();
 	#timer: NodeJS.Timeout | undefined;
 	#shellAbort: Promise<void> | undefined;
-
-	constructor(
-		shell: Shell,
-		timeoutMs: number | undefined,
-		userSignal: AbortSignal | undefined,
-		setupElapsedMs = 0,
-	) {
+	constructor(shell: Shell, timeoutMs: number | undefined, userSignal: AbortSignal | undefined, setupElapsedMs = 0) {
 		this.#shell = shell;
 		this.#userSignal = userSignal;
 		const deadlineMs = timeoutMs === 0 ? undefined : Math.max(1_000, timeoutMs ?? DEFAULT_BASH_TIMEOUT_MS);
@@ -417,7 +416,11 @@ class RunStop {
 			timeoutMs !== undefined && timeoutMs > 0 ? Math.max(1, timeoutMs - setupElapsedMs) : undefined;
 		userSignal?.addEventListener("abort", this.#onUserAbort, { once: true });
 		if (remainingDeadlineMs !== undefined) {
-			this.#timer = setTimeout(() => this.#onDeadline(deadlineMs!), remainingDeadlineMs);
+			const backstopMs =
+				this.nativeTimeoutMs !== undefined
+					? remainingDeadlineMs + NATIVE_TIMEOUT_BACKSTOP_GRACE_MS
+					: remainingDeadlineMs;
+			this.#timer = setTimeout(() => this.#onDeadline(deadlineMs!), backstopMs);
 		}
 	}
 
@@ -441,13 +444,9 @@ class RunStop {
 		return this.#shellAbort;
 	}
 
-	disarmDeadline(): void {
-		clearTimeout(this.#timer);
-		this.#timer = undefined;
-	}
-
 	dispose(): void {
 		clearTimeout(this.#timer);
+		this.#timer = undefined;
 		this.#userSignal?.removeEventListener("abort", this.#onUserAbort);
 	}
 
@@ -508,8 +507,13 @@ function interruptedRunAnnotation(result: ShellRunResult, timeoutMs: number | un
 
 const INCOMPLETE_CAPTURE_NOTICE = "Shell output capture is incomplete";
 
-function replaceIncompleteCapture(sink: OutputSink, capturedOutput: string | undefined): void {
-	if (capturedOutput !== undefined) sink.replace(capturedOutput);
+function replaceIncompleteCapture(
+	sink: OutputSink,
+	capturedOutput: string | undefined,
+	captureIsDrainPrefix: boolean | undefined,
+	acceptedOutput: boolean,
+): void {
+	if (capturedOutput !== undefined && !(captureIsDrainPrefix && acceptedOutput)) sink.replace(capturedOutput);
 }
 
 /**
@@ -613,12 +617,16 @@ async function runBash(
 	const plan = await planCommand(settings, command, options);
 	// Output sink for truncation and artifact handling. sink.push() is synchronous: buffer management,
 	// counters and onChunk all run inline, and artifact file writes run asynchronously inside the sink.
-	const sink = new OutputSink({ outputGuard: new ProducerOutputGuard(options?.redactOutput),
+	const sink = new OutputSink({
+		outputGuard: new ProducerOutputGuard(options?.redactOutput),
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactId: options?.artifactId,
-		artifactMaxBytes: options?.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings), ...resolveOutputSinkWindow(settings, options?.spillThreshold ?? DEFAULT_MAX_BYTES), maxColumns: resolveOutputMaxColumns(settings),
-		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0, });
+		artifactMaxBytes: options?.artifactMaxBytes ?? resolveOutputSinkArtifactMaxBytes(settings),
+		...resolveOutputSinkWindow(settings, options?.spillThreshold ?? DEFAULT_MAX_BYTES),
+		maxColumns: resolveOutputMaxColumns(settings),
+		chunkThrottleMs: options?.onChunk ? (options.chunkThrottleMs ?? LIVE_OUTPUT_INTERVAL_MS) : 0,
+	});
 	if (options?.signal?.aborted) return cancelledResult(sink, "Command cancelled");
 
 	const cpuBudgetId = await joinCpuBudget(options);
@@ -638,6 +646,7 @@ async function runBash(
 	const setupElapsedMs = performance.now() - gate.startedAt;
 	const stop = new RunStop(lease.shell, options?.timeout, options?.signal, setupElapsedMs);
 	let acceptingChunks = true;
+	let acceptedOutput = false;
 
 	let resetSession = false;
 	try {
@@ -653,26 +662,52 @@ async function runBash(
 				...(cpuBudgetId ? { cpuBudgetId } : {}),
 			},
 			(err, chunk) => {
-				if (!err && acceptingChunks) sink.push(chunk);
+				if (!err && acceptingChunks) {
+					acceptedOutput = true;
+					sink.push(chunk);
+				}
 			},
 		);
-		const outcome = await new ExponentialYield().race<RunOutcome>([
+		let outcome = await new ExponentialYield().race<RunOutcome>([
 			runPromise.then(result => ({ result })),
 			stop.stopped.then(stopped => ({ stopped })),
 		]);
 		if ("stopped" in outcome) {
-			acceptingChunks = false;
-			resetSession = lease.persistent !== undefined;
-			abandonStoppedRun(sessionKey, lease, runPromise, stop);
-			const timedOut = outcome.stopped.startsWith("Command timed out");
-			return await cancelledResult(sink, outcome.stopped, timedOut);
+			const reconciled = await settleWithin(
+				runPromise.then(result => ({ result })),
+				stop.nativeTimeoutMs !== undefined && stop.shellAbort === undefined
+					? NATIVE_DRAIN_RECONCILE_MS
+					: NATIVE_TIMEOUT_BACKSTOP_GRACE_MS,
+				undefined,
+			);
+			if (!reconciled) {
+				acceptingChunks = false;
+				stop.dispose();
+				resetSession = lease.persistent !== undefined;
+				abandonStoppedRun(sessionKey, lease, runPromise, stop);
+				const timedOut = outcome.stopped.startsWith("Command timed out");
+				return await cancelledResult(
+					sink,
+					`${outcome.stopped}\n${INCOMPLETE_CAPTURE_NOTICE}\nCommand outcome uncertain. Do not retry this write before reconciliation.`,
+					timedOut,
+					true,
+				);
+			}
+			outcome = reconciled;
 		}
-		stop.disarmDeadline();
+		// Native delivery has settled. Do not abort this shell during artifact writes.
+		acceptingChunks = false;
+		stop.dispose();
 		const { result } = outcome;
-		if (result.timedOut || result.cancelled) {
+		if (stop.shellAbort || result.timedOut || result.cancelled) {
 			resetSession = true;
 			if (lease.persistent) quarantineShellSession(sessionKey, runPromise, stop.shellAbort);
-			if (result.outputIncomplete) replaceIncompleteCapture(sink, result.capturedOutput);
+		}
+		if (result.timedOut || result.cancelled) {
+			if (result.outputIncomplete) {
+				replaceIncompleteCapture(sink, result.capturedOutput, result.captureIsDrainPrefix, acceptedOutput);
+			}
+			await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave, options?.redactOutput);
 			return await cancelledResult(
 				sink,
 				`${interruptedRunAnnotation(result, options?.timeout)}${result.outputIncomplete ? `\n${INCOMPLETE_CAPTURE_NOTICE}` : ""}`,
@@ -681,7 +716,8 @@ async function runBash(
 			);
 		}
 		if (result.outputIncomplete) {
-			replaceIncompleteCapture(sink, result.capturedOutput);
+			replaceIncompleteCapture(sink, result.capturedOutput, result.captureIsDrainPrefix, acceptedOutput);
+			await spliceMinimizedOutput(sink, result.minimized, options?.onMinimizedSave, options?.redactOutput);
 			return {
 				exitCode: result.exitCode,
 				signal: result.signal,
@@ -704,6 +740,7 @@ async function runBash(
 		resetSession = true;
 		throw err;
 	} finally {
+		acceptingChunks = false;
 		stop.dispose();
 		await releaseShell(sessionKey, lease, resetSession, options?.sessionKey?.includes(":async:") === true);
 	}

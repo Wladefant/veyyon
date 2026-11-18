@@ -37,7 +37,7 @@ import {
 import { isCI } from "./ci-signal";
 import { ensureToolViewsGenerated } from "./ensure-tool-views";
 
-type Mode =
+export type Mode =
 	| "all"
 	| "local"
 	| "local-ts"
@@ -258,15 +258,87 @@ interface CodingAgentBucketPlan {
 	parallel: number;
 	// Required, with no unchunked spelling: see the comment above.
 	chunkSize: number;
+	ciChunksAtOnce: number;
 }
 
 export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucketPlan> = {
-	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10 },
-	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
-	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
-	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
+	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5, ciChunksAtOnce: 2 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10, ciChunksAtOnce: 3 },
 };
 
+const BUCKET_OF_MODE: Partial<Record<Mode, CodingAgentBucket>> = {
+	"coding-agent-singleton": "singleton",
+	"coding-agent-ui": "ui",
+	"coding-agent-runtime": "runtime",
+	"coding-agent-native": "native",
+};
+
+/**
+ * How many of `total` chunk processes run at once. In CI it is the bucket plan's
+ * `ciChunksAtOnce` for a single coding-agent bucket and 1 for every other mode;
+ * outside CI it is {@link testConcurrency}.
+ */
+export function chunksAtOnce(mode: Mode, ci: boolean, total: number): number {
+	if (!ci) return testConcurrency(total);
+	const bucket = BUCKET_OF_MODE[mode];
+	return Math.max(1, Math.min(bucket ? codingAgentBucketPlans[bucket].ciChunksAtOnce : 1, total));
+}
+
+export interface TestDispatchPlan {
+	runner: "parallel" | "sequence";
+	concurrency: number;
+}
+
+export function selectTestExecution(options: {
+	mode: Mode;
+	ci: boolean;
+	commandCount: number;
+	dryRun: boolean;
+	junitReportDir: string | null;
+}): TestDispatchPlan {
+	const concurrency = chunksAtOnce(options.mode, options.ci, options.commandCount);
+	if (
+		!options.dryRun &&
+		options.commandCount > 0 &&
+		(options.junitReportDir !== null || (concurrency > 1 && options.commandCount > 1))
+	) {
+		return { runner: "parallel", concurrency };
+	}
+	return { runner: "sequence", concurrency };
+}
+
+export async function dispatchTestCommands(
+	options: {
+		mode: Mode;
+		ci: boolean;
+		commands: TestCommand[];
+		dryRun: boolean;
+		junitReportDir: string | null;
+	},
+	runners: {
+		runParallel: (commands: TestCommand[], concurrency: number) => Promise<void>;
+		runSequence: (commands: TestCommand[]) => Promise<void>;
+	} = {
+		runParallel: runTestCommandsInParallel,
+		runSequence: runTestCommandsInSequence,
+	},
+): Promise<TestDispatchPlan> {
+	const plan = selectTestExecution({
+		mode: options.mode,
+		ci: options.ci,
+		commandCount: options.commands.length,
+		dryRun: options.dryRun,
+		junitReportDir: options.junitReportDir,
+	});
+	if (plan.runner === "parallel") {
+		await runners.runParallel(options.commands, plan.concurrency);
+	} else {
+		await runners.runSequence(options.commands);
+	}
+	return plan;
+}
 // Smaller workspace packages stay separate from native/TUI/integration suites so
 // their short TS suites can run together. CI still downloads the Linux x64 native
 // addon before this bucket: shared utility barrels may load native-backed modules.
@@ -599,6 +671,7 @@ export const repoScriptTests = [
 	"cloud/shared-tools/a-tool-budget-survives-restart.test.ts",
 	"cloud/shared-tools/admission-stops-unauthorized-tool-dispatch.test.ts",
 	"cloud/shared-tools/only-admitted-users-can-use-their-own-secrets.test.ts",
+	"scripts/check-ts-runs-workspaces-even-when-tools-fails.test.ts",
 ];
 
 /**
@@ -943,9 +1016,7 @@ export async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 						env: pkg === "plugins/hashline" ? { HASHLINE_SEED_SOAK: "1" } : undefined,
 						extraArgs: [
 							...onlyFailuresArgs,
-							...(pkg === "packages/utils"
-								? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"]
-								: []),
+							...(pkg === "packages/utils" ? ["--path-ignore-patterns", "test/slice-extract-fuzz.test.ts"] : []),
 						],
 					}),
 				];
@@ -1230,9 +1301,7 @@ export function parseCiTestShard(value: string | undefined): CiTestShard | undef
 	return { index, count };
 }
 
-export function resolveCiTestShard(
-	env: Record<string, string | undefined> = Bun.env,
-): CiTestShard | undefined {
+export function resolveCiTestShard(env: Record<string, string | undefined> = Bun.env): CiTestShard | undefined {
 	const testShardVal = env.VEYYON_CI_TEST_SHARD;
 	const vShard = env.VEYYON_CI_SHARD;
 	const vShards = env.VEYYON_CI_SHARDS;
@@ -1284,9 +1353,7 @@ export function resolveCiTestShard(
 			throw new Error(`Invalid CF_SHARD_COUNT ${JSON.stringify(cfCount)}; expected positive integer`);
 		}
 		if (!Number.isSafeInteger(indexNum) || indexNum < 0 || indexNum >= countNum) {
-			throw new Error(
-				`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`,
-			);
+			throw new Error(`Invalid CF_SHARD_INDEX ${JSON.stringify(cfIndex)}; must be between 0 and ${countNum - 1}`);
 		}
 		normB = { index: indexNum + 1, count: countNum };
 	}
@@ -1352,11 +1419,7 @@ function resolveWorkspaceCloudflareOverride(label: string): number | undefined {
 	return undefined;
 }
 
-export function allocateCloudflareTestCommands<T>(
-	mode: string,
-	commands: readonly T[],
-	shard: CiTestShard,
-): T[] {
+export function allocateCloudflareTestCommands<T>(mode: string, commands: readonly T[], shard: CiTestShard): T[] {
 	if (shard.count !== 3) {
 		return partitionTestCommands(commands, shard);
 	}
@@ -1529,7 +1592,6 @@ export function reportNodeTestTotals(totals: NodeTestTotals): void {
 		`CLOUDFLARE_CI_NODE_TEST_COUNTS pass=${totals.pass} fail=${totals.fail} skip=${totals.skip} todo=${totals.todo} tests=${tests} files=${totals.files} runs=${totals.runs}\n`,
 	);
 }
-
 
 // Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
 // above. Used by the progress line and footer so timings read like `bun test`.
@@ -1827,7 +1889,6 @@ export async function runTestCommandsInParallel(commands: TestCommand[], concurr
 		process.stdout.write(
 			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds, testTotals)}\n`,
 		);
-
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
@@ -2285,8 +2346,9 @@ if (import.meta.main) {
 				`available_commands=${availableTestCommands.length}`,
 		);
 	}
-	// Outside CI, fan the independent chunk processes out across cores; CI keeps the
-	// sequential, fail-fast path so each memory-capped runner job stays bounded.
+	// Route both ordinary and JUnit execution through chunksAtOnce(mode, ci, total):
+	// CI uses each coding-agent bucket's ciChunksAtOnce width (1 for singleton, 2 for UI, 3 for
+	// runtime/native, 1 for all other modes); local runs honor testConcurrency(total).
 	// Third protection layer: PROOF. Layers one and two (a sandboxed HOME for every
 	// child, and the tripwire preload) are meant to make real-data writes
 	// impossible, but a safety mechanism believed to work and never checked is how
@@ -2299,15 +2361,13 @@ if (import.meta.main) {
 
 	const bucketStartedAt = performance.now();
 	try {
-		if (
-			!isDryRun &&
-			testCommands.length > 0 &&
-			(junitReportDir !== null || (!isCI() && testCommands.length > 1))
-		) {
-			await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
-		} else {
-			await runTestCommandsInSequence(testCommands);
-		}
+		await dispatchTestCommands({
+			mode: requestedMode as Mode,
+			ci: isCI(),
+			commands: testCommands,
+			dryRun: isDryRun,
+			junitReportDir,
+		});
 	} finally {
 		// In `finally` on purpose: a failing or interrupted run is exactly when a
 		// half-finished suite is most likely to have left damage behind.

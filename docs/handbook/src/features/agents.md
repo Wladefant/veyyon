@@ -86,6 +86,44 @@ because no closer role is available.
 An agent role is routing guidance, not a security boundary. Use the
 [sandbox](./sandbox.md) when you need to restrict filesystem or process access.
 
+## Host-wide admission
+
+Native agents and external workers share a durable host-wide limit, separate from
+the per-session `agent.maxConcurrency` setting. New ledgers default to 100 slots.
+Existing ledgers keep their saved limit until an operator changes it explicitly:
+
+```console
+veyyon lane-admission set-cap --cap 100 --json
+```
+
+This command updates the policy under the ledger lock. It preserves every live
+reservation and fencing token. It also supports lower limits from 1 through 100.
+If the new limit is below the held count, admission stays closed until enough
+reservations end. The version-1 ledger format does not change.
+
+`acquire --cap` and `status --cap` only narrow that call's ceiling.
+Admission, status and release never change an existing saved limit.
+
+### Release reconciliation
+
+Native teardown tries fenced release at most three times, with two 100 ms waits.
+Each attempt retains the existing bounded lock acquisition. Persistent ledger
+errors raise `lane_release_reconciliation_required` and write a privacy-safe
+error event. Cancellation does not skip compensation. The slot remains held;
+the error does not mean capacity was freed.
+
+1. Restore ledger access or repair the corrupt file from a trusted, complete copy.
+   Never delete or reset the ledger to clear an error.
+2. Run `veyyon lane-admission status --json` and identify the ended worker's reservation.
+3. Verify that worker ended. Run `veyyon lane-admission release --slot-id <id> --lease-token <token> --json`
+   with that reservation's fence. Keep the token private.
+4. Check status again. Count capacity as free only after release confirms success.
+
+The process retains failed compensation's fence for a same-owner retry.
+A retained native lease handle can also retry release after repair.
+Reacquiring an agent whose final release failed retries that release before
+starting another worker; it does not borrow the ended worker's lease.
+
 ## Choosing agents
 
 `agent.agents` holds one row per agent name. You choose initial permissions in
