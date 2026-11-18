@@ -24,6 +24,15 @@ This exception covers only the recorded paths in the recorded worktree before ex
 A separate peer with fresh overlapping activity still requires coordination. This lease changes no filesystem permissions and grants no human, production, secret or safety approval.
 
 {{/if}}
+{{#if repositoryContext}}
+# Runtime repository context
+The origin below comes from the selected child working directory.
+
+{{repositoryContext}}
+
+Use the GitHub App commands for this repository where available. If the assignment asks you to create a worktree, run the creation command from `worktree.cwd`, then switch to `worktree.path`. If the assignment names a different path or base, use that path or base. These commands do not grant permission to write or override host and project policy.
+
+{{/if}}
 Complete the assignment below, thoroughly:
 
 {{assignment}}

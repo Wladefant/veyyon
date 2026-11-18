@@ -87,10 +87,11 @@ describe("IRC roster activity", () => {
 			registry.register({ id, parentId, displayName: "task", kind: "sub", session: null, status: "running" });
 		}
 		const result = await new IrcTool(sessionForAgent(registry, "A.B.C")).execute("call", { op: "list" });
-		expect(result.details?.peers?.filter(peer => Reflect.get(peer, "ancestor")).map(peer => peer.id)).toEqual([
-			"A",
-			"A.B",
+		expect(result.details?.ancestors).toMatchObject([
+			{ id: "A", relation: "ancestor" },
+			{ id: "A.B", relation: "parent" },
 		]);
+		expect(result.details?.peers?.map(peer => peer.id)).toEqual(["A.B.Cousin", "A.Peer"]);
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("Your ancestors (delegation context; verify write ownership):");
 		expect(text).toContain("An ancestor may still have uncommitted edits");

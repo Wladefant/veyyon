@@ -21,6 +21,7 @@ import { toolsPrompts } from "../prompts/tools/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { TOOL } from "../tools/core/builtin-names";
+import { githubOriginRepository } from "../utils/git";
 import {
 	agentModelSourceLabel,
 	filterEnabledAgents,
@@ -106,17 +107,53 @@ type SpawnModel = Pick<ExecutorOptions, "modelOverride" | "thinkingLevel">;
 /** Tools an agent declares that plan mode keeps beside its read-only base set. */
 const PLAN_MODE_AGENT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([TOOL.report_finding]);
 
+interface DispatchRepositoryContext {
+	repository: string;
+	githubReadCommand: string;
+	githubWriteCommand: string;
+	worktree: { cwd: string; path: string; createFromOriginDefault: string };
+}
+
+async function dispatchRepositoryContext(
+	cwd: string,
+	agentId: string,
+	signal?: AbortSignal,
+): Promise<DispatchRepositoryContext | undefined> {
+	const origin = await githubOriginRepository(cwd, signal);
+	if (!origin) return undefined;
+	const slug = agentId.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 40);
+	const name = `task-${slug}-${Snowflake.next()}`;
+	const target = path.join(path.dirname(origin.root), `.wt-${name}`).split(path.sep).join("/");
+	const quoted = `'${target.replaceAll("'", "'\\''")}'`;
+	return {
+		repository: origin.repository,
+		githubReadCommand: `python ~/.veyyon/workflows/github_ci_read.py get repos/${origin.repository}/<endpoint>`,
+		githubWriteCommand: `python ~/.veyyon/workflows/gh_app.py --repo ${origin.repository} -- gh <command>`,
+		worktree: {
+			cwd,
+			path: target,
+			// Pin the SHA before fetching. FETCH_HEAD is shared across linked worktrees.
+			createFromOriginDefault:
+				'remote_head=$(git ls-remote --exit-code origin HEAD) && base=${remote_head%%[[:space:]]*} && ' +
+				'git fetch --no-tags --no-write-fetch-head origin "$base" && ' +
+				`git worktree add --no-track -b ${name} ${quoted} "$base"`,
+		},
+	};
+}
+
 export function renderAgentUserPrompt(
 	assignment: string,
 	parentAgentId?: string,
 	checkpoint?: SuccessorCheckpoint,
 	ownershipLease?: OwnershipLease,
+	repositoryContext?: DispatchRepositoryContext,
 ): string {
 	return prompt.render(agentPrompts["agent/user-prompt"].text, {
 		assignment: assignment.trim(),
 		parentAgentId,
 		checkpoint: checkpoint ? JSON.stringify(checkpoint) : undefined,
 		ownershipLease: ownershipLease ? JSON.stringify(ownershipLease) : undefined,
+		repositoryContext: repositoryContext ? JSON.stringify(repositoryContext, null, 2) : undefined,
 	});
 }
 
@@ -597,13 +634,16 @@ async function runPreparedSpawn(
 		}
 	}
 
+	const repositoryContext = await dispatchRepositoryContext(spawnCwd, agentId, request.signal);
+	const parentAgentId = session.getAgentId?.() ?? MAIN_AGENT_ID;
+
 	const options: ExecutorOptions = {
 		...parentRunOptions(session, parentApprovalBypassed),
 		// After `spawnCwd`: whether the child inherits the parent's layers depends on where it runs.
 		...inheritSpawnLayers(session, spawnCwd, spawn.agentName, spawn.agent.autoloadSkills),
 		cwd: spawnCwd,
 		agent: spawn.runAgent,
-		task: renderAgentUserPrompt(assignment, session.getAgentId?.() ?? MAIN_AGENT_ID, undefined, ownershipLease),
+		task: renderAgentUserPrompt(assignment, parentAgentId, undefined, ownershipLease, repositoryContext),
 		assignment,
 		context: session.settings.get("agent.batch") ? params.context?.trim() || undefined : undefined,
 		planReference: spawn.planReference,
@@ -707,7 +747,7 @@ async function runPreparedSpawn(
 			registry.setStatus(params.successorOf, "aborted");
 			await AgentLifecycleManager.global().release(params.successorOf);
 		}
-		options.task = renderAgentUserPrompt(assignment, options.parentAgentId, checkpoint, ownershipLease);
+		options.task = renderAgentUserPrompt(assignment, parentAgentId, checkpoint, ownershipLease, repositoryContext);
 	}
 	if (ownershipLease && Date.parse(ownershipLease.expiresAt) <= Date.now()) {
 		return spawnRefusal(

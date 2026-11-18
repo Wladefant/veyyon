@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Show the selected repository and its GitHub App and worktree commands in task prompts. Keep delegation ancestors out of the IRC peer roster ([Refs #738](https://github.com/Wladefant/veyyon/issues/738), [Refs #883](https://github.com/Wladefant/veyyon/issues/883)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

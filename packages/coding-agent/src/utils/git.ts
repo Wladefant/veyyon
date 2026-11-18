@@ -658,6 +658,22 @@ async function queryGitOrNull(
 	});
 }
 
+/** The opaque remote URL stays local; only a validated GitHub owner/repo reaches the caller. */
+export async function githubOriginRepository(
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<{ repository: string; root: string } | undefined> {
+	const remote = await queryGitOrNull(cwd, ["config", "--local", "--get", "remote.origin.url"], signal);
+	if (remote?.exitCode !== 0) return undefined;
+	const match = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)$/i.exec(
+		remote.stdout.trim().replace(/\.git$/i, ""),
+	);
+	if (!match || match[2] === "." || match[2] === "..") return undefined;
+	const root = await queryGitOrNull(cwd, ["rev-parse", "--show-toplevel"], signal);
+	if (root?.exitCode !== 0 || !root.stdout.trim()) return undefined;
+	return { repository: `${match[1]}/${match[2]}`, root: root.stdout.trim() };
+}
+
 /** The HEAD state of a reftable repository from its symbolic HEAD (null when detached) and the commit HEAD resolves to. */
 function reftableHeadState(repository: GitRepository, symbolicRef: string | null, commit: string | null): GitHeadState {
 	if (symbolicRef === null) {

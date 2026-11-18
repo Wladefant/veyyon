@@ -63,6 +63,7 @@ describe("task spawn executor cwd routing", () => {
 
 	it("creates each spawned session in its routed cwd, including nested relative and inherited paths", async () => {
 		const createdCwds: string[] = [];
+		const childPrompts: string[] = [];
 		const sdkSpy = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
 			if (!options || !options.sessionManager) {
 				throw new Error("expected createAgentSession options and sessionManager to be defined");
@@ -75,17 +76,25 @@ describe("task spawn executor cwd routing", () => {
 				}),
 			);
 		});
-		vi.spyOn(executorModule, "runSubprocess").mockImplementation(options =>
-			realRunSubprocess({
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(options => {
+			childPrompts.push(options.task);
+			return realRunSubprocess({
 				...options,
 				modelRegistry,
 				modelOverride: [`${model.provider}/${model.id}`],
 				enableLsp: false,
-			}),
-		);
+			});
+		});
 
 		const parentCwd = makeTempDir("@pi-task-spawn-parent-");
 		const explicitCwd = makeTempDir("@pi-task-spawn-explicit-");
+		for (const args of [
+			["init", "-q"],
+			["remote", "add", "origin", "git@github.com:Wladefant/heylolo-api.git"],
+		]) {
+			const result = Bun.spawnSync(["git", ...args], { cwd: explicitCwd, windowsHide: true });
+			expect(result.exitCode).toBe(0);
+		}
 		const nestedCwd = path.join(explicitCwd, "nested");
 		fs.mkdirSync(nestedCwd);
 		const first = await TaskTool.create(createParentSession(parentCwd));
@@ -137,6 +146,14 @@ describe("task spawn executor cwd routing", () => {
 
 		expect(sdkSpy).toHaveBeenCalledTimes(3);
 		expect(createdCwds).toEqual([explicitCwd, nestedCwd, explicitCwd]);
+		expect(childPrompts).toHaveLength(3);
+		for (const task of childPrompts) {
+			expect(task).toContain('"repository": "Wladefant/heylolo-api"');
+			expect(task).toContain("github_ci_read.py get repos/Wladefant/heylolo-api/");
+			expect(task).toContain("gh_app.py --repo Wladefant/heylolo-api");
+			expect(task).toContain("git ls-remote --exit-code origin HEAD");
+			expect(task).toContain("worktree add");
+		}
 		expect(
 			sdkSpy.mock.calls.map(([options]) => {
 				if (!options) {
