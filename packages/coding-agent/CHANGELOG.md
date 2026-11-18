@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Report a completed bash command's exit status even if output forwarding stalls ([Refs #1182](https://github.com/Wladefant/veyyon/issues/1182)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

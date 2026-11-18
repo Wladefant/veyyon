@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the shell exit status and mark output incomplete when post-completion output forwarding stalls ([Refs #1182](https://github.com/Wladefant/veyyon/issues/1182)).
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed
