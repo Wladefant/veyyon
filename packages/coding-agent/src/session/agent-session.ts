@@ -5286,6 +5286,15 @@ export class AgentSession {
 			(opts?.expectsReply ?? false) && ((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
 		const registry = AgentRegistry.global();
 		const identity = registry.actorContext(msg.to);
+		const senderIdentity = registry.actorContext(msg.from);
+		const senderRef = registry.get(msg.from);
+		const senderParent = !senderRef
+			? "unverified"
+			: (senderIdentity.parentId ?? (senderRef.kind === "main" && !senderRef.parentId ? "root" : "unverified"));
+		const recipientRef = registry.get(msg.to);
+		const recipientParent = !recipientRef
+			? "unverified"
+			: (identity.parentId ?? (recipientRef.kind === "main" && !recipientRef.parentId ? "root" : "unverified"));
 		const relation = registry.relationTo(msg.to, msg.from);
 		if (
 			!msg.completion &&
@@ -5312,11 +5321,15 @@ export class AgentSession {
 				from: msg.from,
 				message: msg.body,
 				source: "agent",
+				agentSource: true,
 				replyTo: msg.replyTo ?? "",
 				autoReplied: autoReply,
 				interrupting: this.isStreaming,
 				...identity,
-				parentId: identity.parentId ?? "unknown",
+				parentId: recipientParent,
+				senderId: senderIdentity.selfId,
+				senderParent,
+				senderAncestorIds: senderIdentity.ancestorIds.join(", ") || "none verified",
 				ancestorIds: identity.ancestorIds.join(", ") || "none verified",
 				relation,
 				parentUpdate: relation === "parent",
@@ -5334,7 +5347,14 @@ export class AgentSession {
 				source: "agent",
 				relation,
 				...identity,
-				actor: { source: "agent", relation, ...identity },
+				actor: {
+					source: "agent",
+					relation,
+					...identity,
+					triggeringIncomingActor: senderIdentity,
+					senderRegistered: registry.get(msg.from) !== undefined,
+				},
+				senderParent,
 				...(msg.completion
 					? {
 							completionId: msg.completion.id,
@@ -5540,14 +5560,26 @@ export class AgentSession {
 		try {
 			const registry = AgentRegistry.global();
 			const identity = registry.actorContext(msg.to);
+			const senderIdentity = registry.actorContext(msg.from);
+			const senderRef = registry.get(msg.from);
+			const senderParent = !senderRef
+				? "unverified"
+				: (senderIdentity.parentId ?? (senderRef.kind === "main" && !senderRef.parentId ? "root" : "unverified"));
+			const recipientRef = registry.get(msg.to);
+			const recipientParent = !recipientRef
+				? "unverified"
+				: (identity.parentId ?? (recipientRef.kind === "main" && !recipientRef.parentId ? "root" : "unverified"));
 			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
 					from: msg.from,
 					...identity,
-					parentId: identity.parentId ?? "unknown",
+					parentId: recipientParent,
 					ancestorIds: identity.ancestorIds.join(", ") || "none verified",
 					relation,
+					senderId: senderIdentity.selfId,
+					senderParent,
+					senderAncestorIds: senderIdentity.ancestorIds.join(", ") || "none verified",
 					parentUpdate: relation === "parent",
 					message: msg.body,
 					replyTo: msg.replyTo ?? "",
@@ -5560,7 +5592,19 @@ export class AgentSession {
 				customType: "irc:autoreply",
 				content: `[IRC you → \`${msg.from}\` (auto)]\n\n${body}`,
 				display: true,
-				details: { to: msg.from, body, replyTo: msg.id },
+				details: {
+					to: msg.from,
+					body,
+					replyTo: msg.id,
+					triggeringIncomingActor: {
+						source: "agent",
+						relation,
+						...identity,
+						sender: senderIdentity,
+						senderRegistered: senderRef !== undefined,
+					},
+					triggeringSenderParent: senderParent,
+				},
 				attribution: "agent",
 				timestamp: Date.now(),
 			};
@@ -5730,6 +5774,7 @@ export class AgentSession {
 					from: notice.from,
 					message: formatNoticeMessage(notice, Date.now()),
 					source: "external-session notice",
+					agentSource: false,
 					selfId: this.#config.agentId ?? sessionId,
 					relation: "external-session notice",
 					parentId: "not agent lineage",
