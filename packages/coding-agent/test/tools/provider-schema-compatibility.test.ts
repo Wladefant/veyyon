@@ -112,7 +112,9 @@ function formatCompatibilityIssues(
 
 function findUnsupportedGeminiArrayKeywords(value: unknown, at: string, failures: string[]): void {
 	if (Array.isArray(value)) {
-		value.forEach((item, index) => findUnsupportedGeminiArrayKeywords(item, `${at}/${index}`, failures));
+		for (const [index, item] of value.entries()) {
+			findUnsupportedGeminiArrayKeywords(item, `${at}/${index}`, failures);
+		}
 		return;
 	}
 	if (!isRecord(value)) return;
