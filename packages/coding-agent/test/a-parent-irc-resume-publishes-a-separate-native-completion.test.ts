@@ -142,8 +142,19 @@ describe("native retained child resume", () => {
 		});
 	}
 
-	it("surfaces release reconciliation failure when a peer wake is cancelled during admission", async () => {
+	it("surfaces release reconciliation failure when a native wake is cancelled during admission", async () => {
 		const child = await session("worker", [], undefined, [], "sub");
+		const parent = await session("owner", []);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: child.instance,
+		});
 		const entered = Promise.withResolvers<AbortSignal>();
 		const admitted = Promise.withResolvers<laneAdmission.NativeHostLaneLease>();
 		vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockImplementation(({ signal }) => {
@@ -156,19 +167,19 @@ describe("native retained child resume", () => {
 		});
 		await child.instance.deliverIrcMessage({
 			id: "cancelled-wake",
-			from: "peer",
+			from: "owner",
 			to: "worker",
 			body: "Wake before cancellation.",
 			ts: Date.now(),
 		});
 		const signal = await entered.promise;
-		const aborted = Promise.withResolvers<void>();
-		signal.addEventListener("abort", () => aborted.resolve(), { once: true });
-		const idle = expect(child.instance.waitForIdle()).rejects.toBe(releaseFailure);
-		const abort = child.instance.abort();
-		await aborted.promise;
+		const idle = child.instance.waitForIdle();
+		void idle.catch(() => {});
+		await setImmediate();
+		child.instance.beginDispose();
 		admitted.resolve({ slotId: "worker-slot", leaseToken: "worker-lease", release });
-		await Promise.all([abort, idle]);
+		expect(signal.aborted).toBe(true);
+		await expect(idle).rejects.toBe(releaseFailure);
 		expect(child.mock.calls).toHaveLength(0);
 		expect(release).toHaveBeenCalledTimes(1);
 	});
