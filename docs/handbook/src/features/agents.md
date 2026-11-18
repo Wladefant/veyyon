@@ -104,6 +104,11 @@ reservations end. The version-1 ledger format does not change.
 `acquire --cap` and `status --cap` only narrow that call's ceiling.
 Admission, status and release never change an existing saved limit.
 
+Ledger transactions in the same process wait in order. If the queue makes no
+progress for 45 seconds, the waiting transaction reports the active process and
+operation without removing its lock. Contention with another process uses a
+separate filesystem retry budget.
+
 ### Release reconciliation
 
 Native teardown tries fenced release at most three times, with two 100 ms waits.
