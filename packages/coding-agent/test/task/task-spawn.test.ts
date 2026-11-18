@@ -22,6 +22,7 @@ import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
 import * as isolationRunner from "@veyyon/coding-agent/task/isolation-runner";
 import { Semaphore } from "@veyyon/coding-agent/task/parallel";
+import * as ledger from "@veyyon/coding-agent/task/topic-replenishment";
 import type { AgentDefinition, SingleResult, TaskParams } from "@veyyon/coding-agent/task/types";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -105,6 +106,32 @@ describe("task spawn routing", () => {
 		}
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
+	});
+
+	// A detached dispatch that never binds must fail before the parent gets a job ID.
+	it("does not accept a detached native worker whose run binding was rejected", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		vi.spyOn(ledger, "recordNativeDispatch").mockRejectedValue(new Error("native run binding rejected"));
+		const run = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("NativeWorker"));
+		const manager = createManager();
+		const tool = await TaskTool.create(createSession({ manager, settings: { "async.enabled": true } }));
+
+		const result = await tool.execute("tc-native-bind-rejected", {
+			agent: "task",
+			name: "NativeWorker",
+			task: "Claimed work.",
+			ticketId: "ticket-native",
+			runId: "run-native",
+			ledgerPath: "/repo/native-tickets.json",
+		} as TaskParams);
+
+		expect(result.isError).toBe(true);
+		expect(result.details?.async).toBeUndefined();
+		expect(firstToolResultText(result)).toContain("native run binding rejected");
+		expect(run).not.toHaveBeenCalled();
 	});
 
 	/**
