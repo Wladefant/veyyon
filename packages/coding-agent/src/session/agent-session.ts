@@ -238,7 +238,7 @@ import { ExitRecord } from "./runtime/exit-record";
 import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
 import { type ImageAttachment, ImageAttachments } from "./runtime/image-attachments";
-import { IrcDelivery } from "./runtime/irc-delivery";
+import { IrcDelivery, withIrcWakeReleaseFailure } from "./runtime/irc-delivery";
 import { IrcContinuationOutbox } from "./runtime/irc-inbox";
 import { LoopGuards } from "./runtime/loop-guards";
 import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
@@ -1140,6 +1140,7 @@ export class AgentSession {
 		let wakeAdmitted = false;
 		const wakeSignal = this.#wakeAbortController.signal;
 		let failure: unknown;
+		let releaseFailed = false;
 		const settled = ready
 			.catch(error => {
 				failure = error;
@@ -1185,8 +1186,8 @@ export class AgentSession {
 					try {
 						await wakeLease.release();
 					} catch (error) {
-						logger.error("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
-						failure ??= error;
+						releaseFailed = true;
+						failure = withIrcWakeReleaseFailure(failure, error);
 					}
 				}
 				await publish(failure);
@@ -1198,34 +1199,32 @@ export class AgentSession {
 				published = wakeAdmitted;
 			})
 			.catch(error => {
+				if (releaseFailed) throw withIrcWakeReleaseFailure(error, failure);
 				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", {
 					error: errorMessage(error),
 				});
 			})
 			.finally(async () => {
-				unsubscribe();
-				if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
-				if (parkedFollowUps.length > 0 && !parkedFollowUpsRestored) {
-					this.agent.replaceQueues(
-						this.agent.peekSteeringQueue().slice(),
-						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
-					);
-					parkedFollowUpsRestored = true;
+				try {
+					unsubscribe();
+					if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
+					if (parkedFollowUps.length > 0 && !parkedFollowUpsRestored) {
+						this.agent.replaceQueues(
+							this.agent.peekSteeringQueue().slice(),
+							parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
+						);
+						parkedFollowUpsRestored = true;
+					}
+					if (wakeLease && !wakeAdmitted) await wakeLease.release();
+					// Claim the next retained phase before dropping this turn's idle accounting.
+					if (published) {
+						await this.replayIrcContinuations(true).catch(error =>
+							logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
+						);
+					}
+				} finally {
+					this.#endInFlight();
 				}
-				if (wakeLease && !wakeAdmitted) {
-					await wakeLease.release().catch(error => {
-						logger.error("Releasing cancelled IRC wake host lane lease failed", {
-							error: errorMessage(error),
-						});
-					});
-				}
-				// Claim the next retained phase before dropping this turn's idle accounting.
-				if (published) {
-					await this.replayIrcContinuations(true).catch(error =>
-						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
-					);
-				}
-				this.#endInFlight();
 			});
 		this.#ircWakeSettled = settled;
 		void settled
@@ -3292,6 +3291,7 @@ export class AgentSession {
 
 	/** Wait until streaming and deferred recovery work are fully settled. */
 	async waitForIdle(): Promise<void> {
+		await this.#irc.waitForWakes();
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
 		while (this.#ircWakeSettled || this.#ircReplayPending) {
@@ -3300,6 +3300,7 @@ export class AgentSession {
 			await this.agent.waitForIdle();
 			await this.#waitForPostPromptRecovery();
 		}
+		await this.#irc.waitForWakes();
 		await this.#continuations.waitForRecovery();
 	}
 

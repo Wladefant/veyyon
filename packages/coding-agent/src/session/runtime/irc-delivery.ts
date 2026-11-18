@@ -54,6 +54,14 @@ export interface IrcDeliveryHost {
 	acquireWakeLease?(signal?: AbortSignal): Promise<{ release(): Promise<void> } | null>;
 }
 
+export function withIrcWakeReleaseFailure(wakeError: unknown, releaseError: unknown): unknown {
+	if (wakeError === undefined) return releaseError;
+	return new AggregateError(
+		[wakeError, releaseError],
+		`${errorMessage(releaseError)}\nIRC wake also failed: ${errorMessage(wakeError)}`,
+	);
+}
+
 export class IrcDelivery {
 	/**
 	 * Records that arrived while a turn streamed. Parent messages enter the steering queue instead;
@@ -61,9 +69,14 @@ export class IrcDelivery {
 	 */
 	readonly inbox = new IrcInbox();
 	readonly #host: IrcDeliveryHost;
+	#wakeTurns?: Set<Promise<void>>;
 
 	constructor(host: IrcDeliveryHost) {
 		this.#host = host;
+	}
+
+	async waitForWakes(): Promise<void> {
+		while (this.#wakeTurns?.size) await Promise.all(this.#wakeTurns);
 	}
 
 	/**
@@ -194,6 +207,7 @@ export class IrcDelivery {
 		const run = async (): Promise<void> => {
 			let lease: { release(): Promise<void> } | null = null;
 			let failure: unknown;
+			let releaseFailed = false;
 			try {
 				if (host.acquireWakeLease) {
 					lease = await host.acquireWakeLease(host.wakeSignal?.());
@@ -218,10 +232,8 @@ export class IrcDelivery {
 					try {
 						await lease.release();
 					} catch (error) {
-						if (failure !== undefined) {
-							logger.error("Releasing IRC wake host lane lease failed", { error: errorMessage(error) });
-						}
-						failure ??= error;
+						releaseFailed = true;
+						failure = withIrcWakeReleaseFailure(failure, error);
 					}
 				}
 				try {
@@ -230,11 +242,21 @@ export class IrcDelivery {
 					failure ??= error;
 				}
 			}
-			if (failure !== undefined) logger.error("IRC wake turn or host lane release failed", { error: errorMessage(failure) });
+			if (releaseFailed) throw failure;
+			if (failure !== undefined)
+				logger.error("IRC wake turn or host lane release failed", { error: errorMessage(failure) });
 		};
-		void run().catch(error => {
-			logger.error("IRC wake cleanup failed", { error: errorMessage(error) });
-		});
+		const wake = run();
+		this.#wakeTurns ??= new Set();
+		const wakes = this.#wakeTurns;
+		wakes.add(wake);
+		void wake.then(
+			() => wakes.delete(wake),
+			error => {
+				wakes.delete(wake);
+				logger.error("IRC wake cleanup failed", { error: errorMessage(error) });
+			},
+		);
 	}
 
 	/**

@@ -20,8 +20,7 @@
  * `agent-session-advisor-suppression` drive through a real `AgentSession`, and how a wake turn
  * parks and restores a blocked follow-up, which `agent-session-advisor-suppression` covers.
  */
-import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
-import { logger, prompt } from "@veyyon/utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentEvent, AgentMessage, AgentPromptOptions } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
@@ -35,6 +34,7 @@ import {
 	type IrcDeliveryHost,
 } from "@veyyon/coding-agent/session/runtime/irc-delivery";
 import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
+import { logger, prompt } from "@veyyon/utils";
 
 const PARENT = "Lead";
 const PEER = "Sibling";
@@ -277,43 +277,54 @@ describe("an IRC message goes where the recipient's state at arrival sends it", 
 		});
 	}
 	it("reports a release reconciliation failure without masking the prompt error", async () => {
-		const host = new ArrivalHost({ streaming: false, planMode: false, asyncEnabled: true, sender: PARENT, expectsReply: false });
+		const host = new ArrivalHost({
+			streaming: false,
+			planMode: false,
+			asyncEnabled: true,
+			sender: PARENT,
+			expectsReply: false,
+		});
 		const promptFailure = new Error("prompt failed");
 		const releaseFailure = new Error("lane release reconciliation required");
-		const errorLog = vi.spyOn(logger, "error").mockImplementation(() => {});
+		vi.spyOn(logger, "error").mockImplementation(() => {});
 		vi.spyOn(host.agent, "prompt").mockRejectedValue(promptFailure);
 		host.acquireWakeLease = async () => ({ release: async () => Promise.reject(releaseFailure) });
 		vi.spyOn(prompt, "render").mockReturnValue("incoming IRC test record");
 
-		new IrcDelivery(host).deliver({ id: "release-failure", from: PARENT, to: RECIPIENT, body: BODY, ts: 1 });
-		await delay(0);
+		const delivery = new IrcDelivery(host);
+		delivery.deliver({ id: "release-failure", from: PARENT, to: RECIPIENT, body: BODY, ts: 1 });
+		await expect(delivery.waitForWakes()).rejects.toMatchObject({ errors: [promptFailure, releaseFailure] });
 
 		expect(host.ended).toBe(1);
-		expect(errorLog).toHaveBeenCalledWith("IRC wake turn or host lane release failed", {
-			error: "prompt failed",
-		});
-		expect(errorLog).toHaveBeenCalledWith("Releasing IRC wake host lane lease failed", {
-			error: "lane release reconciliation required",
-		});
 	});
 
 	it("reports release reconciliation failure after a cancelled wake and still ends tracking", async () => {
-		const host = new ArrivalHost({ streaming: false, planMode: false, asyncEnabled: true, sender: PARENT, expectsReply: false });
+		const host = new ArrivalHost({
+			streaming: false,
+			planMode: false,
+			asyncEnabled: true,
+			sender: PARENT,
+			expectsReply: false,
+		});
 		const releaseFailure = new Error("lane release reconciliation required");
-		const errorLog = vi.spyOn(logger, "error").mockImplementation(() => {});
+		vi.spyOn(logger, "error").mockImplementation(() => {});
 		host.acquireWakeLease = async () => {
 			host.isDisposed = () => true;
 			return { release: async () => Promise.reject(releaseFailure) };
 		};
 
 		vi.spyOn(prompt, "render").mockReturnValue("incoming IRC test record");
-		new IrcDelivery(host).deliver({ id: "cancelled-release-failure", from: PARENT, to: RECIPIENT, body: BODY, ts: 1 });
-		await delay(0);
+		const delivery = new IrcDelivery(host);
+		delivery.deliver({
+			id: "cancelled-release-failure",
+			from: PARENT,
+			to: RECIPIENT,
+			body: BODY,
+			ts: 1,
+		});
+		await expect(delivery.waitForWakes()).rejects.toBe(releaseFailure);
 
 		expect(host.agent.prompted).toHaveLength(0);
 		expect(host.ended).toBe(1);
-		expect(errorLog).toHaveBeenCalledWith("IRC wake turn or host lane release failed", {
-			error: "lane release reconciliation required",
-		});
 	});
 });
