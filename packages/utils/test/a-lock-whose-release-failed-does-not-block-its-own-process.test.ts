@@ -20,6 +20,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { __internalsForTesting, acquireFileLock, withFileLockSync } from "../src/file-lock";
+import { withLogRedaction } from "../src/logger";
 import { removeWithRetries } from "../src/temp";
 
 const { getLockPath } = __internalsForTesting;
@@ -119,7 +120,18 @@ describe("a lock whose release failed", () => {
 			if (String(source) === lockPath) throw denied();
 			return realRename(source, destination);
 		});
-		await handle.release();
+		restores.push(() => rename.mockRestore());
+		const output: string[] = [];
+		await withLogRedaction(
+			line => {
+				output.push(line);
+				return line;
+			},
+			() => handle.release(),
+		);
+		const failure = output.find(line => line.includes("could not remove the lock"));
+		expect(failure).toContain("EPERM");
+		expect(failure).toContain("can retry cleanup only after the error clears");
 		rename.mockRestore();
 		expect(fsSync.existsSync(lockPath)).toBe(true);
 
@@ -128,7 +140,7 @@ describe("a lock whose release failed", () => {
 		expect(fsSync.existsSync(lockPath)).toBe(false);
 	});
 
-	test("is reaped by the next sync acquire in the process that owned it", async () => {
+	test("a sync reap retires the old owner's token", async () => {
 		const file = await target("sync-leak");
 		const lockPath = getLockPath(file);
 		const realRename = fsSync.renameSync;
@@ -140,6 +152,8 @@ describe("a lock whose release failed", () => {
 		withFileLockSync(file, () => {});
 		rename.mockRestore();
 		expect(fsSync.existsSync(lockPath)).toBe(true);
+		const ownerInfo = await fs.readFile(path.join(lockPath, "info"));
+		expect(__internalsForTesting.isLockStaleSync(lockPath, 0)).toBe(true);
 
 		let ran = false;
 		withFileLockSync(
@@ -151,6 +165,9 @@ describe("a lock whose release failed", () => {
 		);
 		expect(ran).toBe(true);
 		expect(fsSync.existsSync(lockPath)).toBe(false);
+		await fs.mkdir(lockPath);
+		await fs.writeFile(path.join(lockPath, "info"), ownerInfo);
+		expect(__internalsForTesting.isLockStaleSync(lockPath, 0)).toBe(false);
 	});
 
 	test.if(process.platform === "win32")(

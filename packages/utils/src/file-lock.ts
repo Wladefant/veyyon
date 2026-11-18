@@ -72,7 +72,7 @@ type RemovalAuthorization =
 	| { kind: "owner"; lease: LockLease }
 	| { kind: "stale"; staleMs: number; isOwnerAlive?: ProcessInstanceVerifier };
 
-type RetireResult = "removed" | "changed" | "busy" | "not-authorized";
+type RetireResult = "removed" | "changed" | "busy" | "not-authorized" | { accessError: unknown };
 
 function identityOf(stat: fsSync.Stats): FileIdentity {
 	return { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
@@ -445,6 +445,7 @@ async function removeObservedDirectory(directoryPath: string, expected: LockObse
 		}
 		await assertParentIdentity(directoryPath, parentIdentity);
 		await fs.unlink(path.join(directoryPath, "info"));
+		if (expected.info?.pid === process.pid) abandonedOwnTokens.delete(expected.info.token);
 	}
 	await assertParentIdentity(directoryPath, parentIdentity);
 	await fs.rmdir(directoryPath);
@@ -468,6 +469,7 @@ function removeObservedDirectorySync(directoryPath: string, expected: LockObserv
 		}
 		assertParentIdentitySync(directoryPath, parentIdentity);
 		fsSync.unlinkSync(path.join(directoryPath, "info"));
+		if (expected.info?.pid === process.pid) abandonedOwnTokens.delete(expected.info.token);
 	}
 	assertParentIdentitySync(directoryPath, parentIdentity);
 	fsSync.rmdirSync(directoryPath);
@@ -550,7 +552,7 @@ async function retireObservedLock(
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "ENOENT") return "changed";
 		if (code === "EEXIST" || code === "ENOTEMPTY") return "busy";
-		if (isWindowsSharingViolation(error)) return "busy";
+		if (isWindowsRetirementAccessConflict(error)) return { accessError: error };
 		throw error;
 	}
 	await assertParentIdentity(lockPath, parentIdentity);
@@ -581,7 +583,7 @@ function retireObservedLockSync(
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code === "ENOENT") return "changed";
 		if (code === "EEXIST" || code === "ENOTEMPTY") return "busy";
-		if (isWindowsSharingViolation(error)) return "busy";
+		if (isWindowsRetirementAccessConflict(error)) return { accessError: error };
 		throw error;
 	}
 	assertParentIdentitySync(lockPath, parentIdentity);
@@ -770,11 +772,10 @@ function isPublicationAccessConflict(error: unknown): boolean {
 }
 
 /**
- * Windows refuses to rename a directory while any process holds a handle inside it, and every
- * contender briefly opens the owner record to inspect it. The refusal is transient contention,
- * not a verdict, so retiring a lock retries it as busy.
+ * Windows can report an open reader or an actual permission denial with the same errno.
+ * Retry either briefly, but keep the error for the diagnostic if access does not recover.
  */
-function isWindowsSharingViolation(error: unknown): boolean {
+function isWindowsRetirementAccessConflict(error: unknown): boolean {
 	return process.platform === "win32" && isPublicationAccessConflict(error);
 }
 
@@ -862,7 +863,7 @@ function reportLostLockOwnership(lockPath: string, expectedToken: string, actual
 function reportFailedRelease(lockPath: string, token: string | undefined, error: unknown): void {
 	if (isEnoent(error)) return;
 	if (token !== undefined) abandonedOwnTokens.add(token);
-	logger.warn("file-lock: could not remove the lock; this process will reap it on its next acquire", {
+	logger.warn("file-lock: could not remove the lock; this process can retry cleanup only after the error clears", {
 		lockPath: escapeTerminalText(lockPath),
 		error: escapeTerminalText(String(error)),
 	});
@@ -871,6 +872,11 @@ function reportFailedRelease(lockPath: string, token: string | undefined, error:
 /** How long a release keeps retrying a lock whose retirement stays busy. */
 const RELEASE_BUSY_BUDGET_MS = 2_000;
 const RELEASE_BUSY_DELAY_MS = 5;
+
+function releaseBusyError(accessError: unknown): Error {
+	const message = "file-lock lifecycle remained busy during release";
+	return new Error(accessError === undefined ? message : `${message}: ${String(accessError)}`);
+}
 
 async function releaseLock(lockPath: string, expected: LockLease | string): Promise<void> {
 	const expectedToken = typeof expected === "string" ? expected : expected.token;
@@ -883,6 +889,7 @@ async function releaseLock(lockPath: string, expected: LockLease | string): Prom
 		}
 		const lease = typeof expected === "string" ? observed : expected;
 		const deadline = Date.now() + RELEASE_BUSY_BUDGET_MS;
+		let accessError: unknown;
 		do {
 			const result = await retireObservedLock(lockPath, observation, { kind: "owner", lease });
 			if (result === "removed") return;
@@ -891,10 +898,11 @@ async function releaseLock(lockPath: string, expected: LockLease | string): Prom
 				reportLostLockOwnership(lockPath, expectedToken, actual?.token);
 				return;
 			}
+			if (typeof result === "object") accessError = result.accessError;
 			await settleTransition(lockPath, Number.POSITIVE_INFINITY);
 			await Bun.sleep(RELEASE_BUSY_DELAY_MS);
 		} while (Date.now() < deadline);
-		throw new Error("file-lock lifecycle remained busy during release");
+		throw releaseBusyError(accessError);
 	} catch (error) {
 		reportFailedRelease(lockPath, expectedToken, error);
 	}
@@ -911,6 +919,7 @@ function releaseLockSync(lockPath: string, expected: LockLease | string): void {
 		}
 		const lease = typeof expected === "string" ? observed : expected;
 		const deadline = Date.now() + RELEASE_BUSY_BUDGET_MS;
+		let accessError: unknown;
 		do {
 			const result = retireObservedLockSync(lockPath, observation, { kind: "owner", lease });
 			if (result === "removed") return;
@@ -919,10 +928,11 @@ function releaseLockSync(lockPath: string, expected: LockLease | string): void {
 				reportLostLockOwnership(lockPath, expectedToken, actual?.token);
 				return;
 			}
+			if (typeof result === "object") accessError = result.accessError;
 			settleTransitionSync(lockPath, Number.POSITIVE_INFINITY);
 			sleepSync(RELEASE_BUSY_DELAY_MS);
 		} while (Date.now() < deadline);
-		throw new Error("file-lock lifecycle remained busy during release");
+		throw releaseBusyError(accessError);
 	} catch (error) {
 		reportFailedRelease(lockPath, expectedToken, error);
 	}
