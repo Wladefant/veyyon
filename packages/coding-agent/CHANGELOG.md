@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Let native lane admission wait through short host stalls without taking the lock from a live transaction ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

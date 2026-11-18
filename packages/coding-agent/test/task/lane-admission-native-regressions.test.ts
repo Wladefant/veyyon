@@ -15,6 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -71,6 +72,54 @@ describe("native host-lane admission regressions", () => {
 		for (const dir of tempDirs.splice(0)) dir.removeSync();
 		isolated.restore();
 	});
+
+	it("admits another lane after a cancelled lane's stalled ledger transaction finishes", async () => {
+		const ledgerPath = getLaneAdmissionLedgerPath();
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const readFile = fsp.readFile;
+		const delayedRead = vi.spyOn(fsp, "readFile").mockImplementation(async (file, options) => {
+			if (file === ledgerPath) {
+				delayedRead.mockRestore();
+				entered.resolve();
+				await resume.promise;
+			}
+			return readFile(file, options);
+		});
+		const controller = new AbortController();
+		const cancelled = acquireSubagentHostLane({
+			agentId: "Cancelled",
+			owner: "Cancelled",
+			signal: controller.signal,
+		});
+		void cancelled.catch(() => {});
+		await entered.promise;
+		controller.abort();
+		const queued = Promise.withResolvers<void>();
+		vi.useFakeTimers();
+		const schedule = globalThis.setTimeout;
+		const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+			const handle = schedule(callback, delay, ...args);
+			queued.resolve();
+			return handle;
+		});
+		const successor = acquireSubagentHostLane({ agentId: "Successor", owner: "Successor" });
+		void successor.catch(() => {});
+		try {
+			await queued.promise;
+			// Move past the original five-second timeout before the transaction can resume.
+			vi.advanceTimersByTime(5_250);
+		} finally {
+			timer.mockRestore();
+			vi.useRealTimers();
+			resume.resolve();
+		}
+		expect(await cancelled).toBeNull();
+		const lease = await successor;
+		expect(lease).not.toBeNull();
+		await lease?.release();
+		expect((await getLaneAdmissionStatus()).reservations).toEqual([]);
+	}, 15_000);
 
 	it("fails fast on waitIfFull=false while preserving cancellation and top-level polling", async () => {
 		const filler = await acquireLaneAdmission({

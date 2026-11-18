@@ -14,7 +14,7 @@ export const DEFAULT_HOST_LANE_CAP = 100;
 export const LANE_ADMISSION_CAPABILITY = "lane-admission" as const;
 
 const LEDGER_FILENAME = "lane-admission.json";
-const LOCK_OPTIONS = { staleMs: 10_000, retries: 100, retryDelayMs: 50 } as const;
+const LOCK_OPTIONS = { staleMs: 10_000, retries: 100, retryDelayMs: 50, queueWaitMs: 20_000 } as const;
 const VALID_SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const DEFAULT_WAIT_POLL_MS = 100;
 const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -153,6 +153,7 @@ export interface LaneAdmissionHeartbeatOptions {
 	slotId: string;
 	leaseToken: string;
 	globalConfigRoot?: string;
+	owner?: string;
 }
 
 export interface LaneAdmissionHeartbeatResult {
@@ -167,6 +168,7 @@ export interface LaneAdmissionReleaseOptions {
 	leaseToken: string;
 	cap?: number;
 	globalConfigRoot?: string;
+	owner?: string;
 }
 
 export interface LaneAdmissionReleaseResult {
@@ -199,7 +201,7 @@ export async function setLaneAdmissionCap(options: { cap: number; globalConfigRo
 	const globalConfigRoot = options.globalConfigRoot ?? getGlobalConfigRootDir();
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
 
-	await withLedgerLock(ledgerPath, async () => {
+	await withLedgerLock(ledgerPath, "set-cap", undefined, async () => {
 		const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
 		await writeLedgerUnderLock(ledgerPath, { ...ledger, cap: requestedCap });
 	});
@@ -475,9 +477,17 @@ export function listUnregisteredLiveTerminalOwners(
 	return inspectTerminalOwnerEnforcement(globalConfigRoot, liveness).unregistered_live_owners;
 }
 
-async function withLedgerLock<T>(ledgerPath: string, fn: () => Promise<T>): Promise<T> {
+async function withLedgerLock<T>(
+	ledgerPath: string,
+	operation: string,
+	owner: string | undefined,
+	fn: () => Promise<T>,
+): Promise<T> {
 	await fsp.mkdir(path.dirname(ledgerPath), { recursive: true, mode: 0o700 });
-	return withFileLock(ledgerPath, fn, LOCK_OPTIONS);
+	return withFileLock(ledgerPath, fn, {
+		...LOCK_OPTIONS,
+		queueContext: { site: `lane-admission:${operation}`, owner: owner ? path.basename(owner) : undefined },
+	});
 }
 
 export async function getLaneAdmissionStatus(options?: {
@@ -494,7 +504,7 @@ export async function getLaneAdmissionStatus(options?: {
 		retained,
 		reclaimedCount,
 		cap: resolvedCap,
-	} = await withLedgerLock(ledgerPath, async () => {
+	} = await withLedgerLock(ledgerPath, "status", undefined, async () => {
 		const ledger = await readLedgerUnderLock(ledgerPath, requestedCap ?? DEFAULT_HOST_LANE_CAP);
 		const effectiveCap = resolveDurableCap(ledger.cap, requestedCap);
 		const result = reclaimProvenDeadReservations(ledger.reservations, liveness);
@@ -565,7 +575,7 @@ export async function acquireLaneAdmission(options: LaneAdmissionAcquireOptions)
 	}
 
 	try {
-		return await withLedgerLock(ledgerPath, async () => {
+		return await withLedgerLock(ledgerPath, "acquire", owner, async () => {
 			const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
 			const effectiveCap = resolveDurableCap(ledger.cap, requestedCap);
 			observedCap = effectiveCap;
@@ -755,7 +765,7 @@ export async function adoptLaneAdmission(options: LaneAdmissionAdoptOptions): Pr
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
 
 	try {
-		return await withLedgerLock(ledgerPath, async () => {
+		return await withLedgerLock(ledgerPath, "adopt", undefined, async () => {
 			const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
 			const index = ledger.reservations.findIndex(r => r.slotId === options.slotId);
 			if (index === -1) {
@@ -832,7 +842,7 @@ export async function heartbeatLaneAdmission(
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
 
 	try {
-		return await withLedgerLock(ledgerPath, async () => {
+		return await withLedgerLock(ledgerPath, "heartbeat", options.owner, async () => {
 			const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
 			const index = ledger.reservations.findIndex(r => r.slotId === options.slotId);
 			if (index === -1) {
@@ -862,7 +872,7 @@ export async function releaseLaneAdmission(options: LaneAdmissionReleaseOptions)
 	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
 
 	try {
-		return await withLedgerLock(ledgerPath, async () => {
+		return await withLedgerLock(ledgerPath, "release", options.owner, async () => {
 			const ledger = await readLedgerUnderLock(ledgerPath, requestedCap ?? DEFAULT_HOST_LANE_CAP);
 			const responseCap = resolveDurableCap(ledger.cap, requestedCap);
 			const index = ledger.reservations.findIndex(r => r.slotId === options.slotId);
@@ -1179,6 +1189,7 @@ export async function acquireNativeHostLaneWait(options: {
 					.heartbeat({
 						slotId,
 						leaseToken,
+						owner: options.owner,
 						globalConfigRoot: options.globalConfigRoot,
 					})
 					.catch(() => {});
