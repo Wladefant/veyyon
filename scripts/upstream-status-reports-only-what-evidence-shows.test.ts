@@ -11,6 +11,10 @@
  * `bun run upstream:status` itself.
  */
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	type Citations,
 	classify,
@@ -21,6 +25,7 @@ import {
 	normalizeLine,
 	type OmpClass,
 	patchWalker,
+	readCommitSummaries,
 	ShaIndex,
 } from "./upstream-status";
 
@@ -231,5 +236,75 @@ describe("follow-up links", () => {
 			]),
 		);
 		expect(commits.map(c => c.followUpOf)).toEqual([[], [], [], [], [], []]);
+	});
+});
+
+describe("readCommitSummaries", () => {
+	it("reads summaries for an oversized SHA list without hitting argv limits", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "upstream-status-stdin-"));
+		try {
+			execFileSync("git", ["init", "-q"], { cwd: dir });
+			execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
+			execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+			writeFileSync(join(dir, "file.txt"), "hello\n");
+			execFileSync("git", ["add", "file.txt"], { cwd: dir });
+			execFileSync("git", ["commit", "-q", "-m", "initial commit"], { cwd: dir });
+			const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+			// 1,000 40-char SHAs would exceed 41 KB on argv and throw ENAMETOOLONG on Windows.
+			const out = await readCommitSummaries(
+				Array.from({ length: 1000 }, () => sha),
+				dir,
+			);
+			const lines = out.trim().split("\n");
+			expect(lines.length).toBeGreaterThanOrEqual(1);
+			expect(lines[0]).toContain(`${sha}\t`);
+			expect(lines[0]).toContain("\tinitial commit");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves non-chronological SHA order and returns empty string for empty input", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "upstream-status-order-"));
+		try {
+			execFileSync("git", ["init", "-q"], { cwd: dir });
+			execFileSync("git", ["config", "user.name", "Test"], { cwd: dir });
+			execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+			const commit = (content: string, subject: string, isoDate: string): string => {
+				writeFileSync(join(dir, "file.txt"), content);
+				execFileSync("git", ["add", "file.txt"], { cwd: dir });
+				execFileSync("git", ["commit", "-q", "-m", subject], {
+					cwd: dir,
+					env: { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate },
+				});
+				return execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+			};
+			const shaA = commit("one\n", "first commit", "2026-01-01T00:00:00Z");
+			const shaB = commit("two\n", "second commit", "2026-01-02T00:00:00Z");
+			const shaC = commit("three\n", "third commit", "2026-01-03T00:00:00Z");
+
+			expect(await readCommitSummaries([], dir)).toBe("");
+
+			const out = await readCommitSummaries([shaB, shaA, shaC], dir);
+			expect(out.trim().split("\n")).toEqual([
+				`${shaB}\t2026-01-02\tsecond commit`,
+				`${shaA}\t2026-01-01\tfirst commit`,
+				`${shaC}\t2026-01-03\tthird commit`,
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects with Git context rather than crashing on EPIPE when cwd is not a git repo", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "upstream-status-nongit-"));
+		try {
+			const shas = Array.from({ length: 1000 }, () => SHA_A);
+			await expect(readCommitSummaries(shas, dir)).rejects.toThrow(
+				/git log --stdin --no-walk=unsorted .* exited [1-9]\d*: .*not a git repository/i,
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
