@@ -36,7 +36,6 @@ export class IrcDelivery {
 		this.#host = host;
 	}
 
-
 	/**
 	 * Records that arrive after the loop's final aside poll, or while an abort skipped that poll, wait
 	 * in the inbox with no loop left to drain them, and the queued-message drain does not count them.
@@ -79,5 +78,4 @@ export class IrcDelivery {
 			logger.warn("IRC wake turn failed", { error: errorMessage(error) });
 		});
 	}
-
 }
