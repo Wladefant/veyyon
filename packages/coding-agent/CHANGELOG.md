@@ -9,6 +9,31 @@
 ### Fixed
 
 - Keep admission limits read-only during ordinary calls, add explicit host-cap updates, and bound failed release attempts with fenced reconciliation.
+### Fixed
+
+- Keep parent IRC delivery and retained result receipts durable while an asynchronous session rewrite holds the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Give every native result wake one durable continuation phase. Keep pending tool results ahead of completion notices and prevent reuse of an earlier phase's terminal result ([Refs #1159](https://github.com/Wladefant/veyyon/issues/1159)).
+- Wait for result and parent-target journal writes before retained IRC delivery. Queue parent sends while asynchronous rewrites hold the journal lock ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Persistence for journal-lock result targets and busyparent queueing ([Refs #774](https://github.com/Wladefant/veyyon/issues/774)).
+- Block common Bash tool commands that stop host processes by name or pattern while preserving verified PID cleanup ([#751](https://github.com/Wladefant/veyyon/issues/751)).
+## [1.11.1] - 2026-11-17
+
+### Fixed
+
+- Finish working-directory changes even when background agent results continue to arrive. Append new session entries without republishing the transcript for each one.
+
+## [1.11.0] - 2026-11-17
+
+### Added
+
+- Native `BashTool` commands attest the live main or subagent caller through `VEYYON_CALLER_URL` and `VEYYON_CALLER_TOKEN` over a lazy loopback HTTP endpoint, rejecting user `env` overrides and clearing inherited receipt variables when no live actor owns the session.
+
+### Fixed
+
+- Python eval cancellation targets the request without killing the shared kernel, and only its live primary owner can reset it.
+- Shared eval kernels retain implicit owners when explicit co-owners join or leave during startup and active use.
+- Python eval cancellation releases queued worker custody and completed cancellation records while suppressing output from workers still running.
+
 ## [1.10.12] - 2026-11-17
 
 ### Fixed

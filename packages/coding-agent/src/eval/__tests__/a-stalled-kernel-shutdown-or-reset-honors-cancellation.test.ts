@@ -317,7 +317,7 @@ describe("stalled kernel shutdown, reset, and transition cancellation", () => {
 		});
 
 		const session = await pool.acquireSession(KEY, "session", CWD, { kernelOwnerId: "owner-a" });
-		await expect(pool.resetSession(KEY)).rejects.toThrow(/shutdown was not confirmed/);
+		await expect(pool.resetSession(KEY, "owner-a")).rejects.toThrow(/shutdown was not confirmed/);
 		expect(pool.hasSession(KEY, session)).toBe(true);
 
 		deadKernel.shutdownGate = retireGate.promise;

@@ -1,33 +1,14 @@
 /**
- * IRC messages arriving at a session: the `irc:incoming` record each becomes, where that record
- * goes, the auto-reply sent for a session that cannot answer in time, and the records that strand
- * in the inbox after a turn's last step boundary.
- *
- * This is a session collaborator. It holds the {@link IrcInbox} and reaches the session only through
- * {@link IrcDeliveryHost}. A delivery never blocks on the recipient's turn: a wake turn and an
- * auto-reply are both fire-and-forget.
+ * The session's IRC inbox and idle drain. Every wake delegates to AgentSession,
+ * which owns phase claims, durable delivery, and settlement.
  */
 import type { Agent } from "@veyyon/agent-core";
-import { errorMessage, logger, prompt } from "@veyyon/utils";
-import { sideChannelPrompts } from "../../prompts/side-channel/rows";
-import { steeringPrompts } from "../../prompts/steering/rows";
-import { AgentRegistry } from "../../registry/agent-registry";
-import { IrcBus, type IrcMessage } from "../../task/irc-bus";
-import type { EphemeralTurnArgs, EphemeralTurnResult } from "../agent-session-ephemeral-turn";
+import { errorMessage, logger } from "@veyyon/utils";
 import type { CustomMessage } from "../messages";
 import { IrcInbox } from "./irc-inbox";
 
-/** The agent queues and turn entry points a delivery drives. `Agent` satisfies this. */
-export type IrcDeliveryAgent = Pick<
-	Agent,
-	| "steer"
-	| "prompt"
-	| "hasQueuedMessages"
-	| "peekSteeringQueue"
-	| "peekFollowUpQueue"
-	| "replaceQueues"
-	| "emitExternalEvent"
->;
+/** The agent state and event surface the inbox drain needs. */
+export type IrcDeliveryAgent = Pick<Agent, "hasQueuedMessages" | "emitExternalEvent">;
 
 /** What {@link IrcDelivery} needs from the session that holds it. */
 export interface IrcDeliveryHost {
@@ -35,31 +16,12 @@ export interface IrcDeliveryHost {
 	isDisposed(): boolean;
 	isStreaming(): boolean;
 	planModeEnabled(): boolean;
-	/** `async.enabled`, read at each delivery. */
-	asyncEnabled(): boolean;
-	/** Emit the `irc_message` session event the UI draws a card from. */
-	emitIrcMessage(record: CustomMessage): void;
 	/** Append a record to the model's context and the session file without starting a turn. */
 	appendToContext(record: CustomMessage): void;
 	/** Whether a queued steer or follow-up will resume the session on its own. */
 	canAutoContinueForFollowUp(): boolean;
-	/** Start tracking a wake turn: reset the per-prompt state and count the turn in flight. */
-	beginWakeTurn(): void;
-	/** Stop tracking a wake turn; the session drains what stranded once none is left in flight. */
-	endWakeTurn(): void;
-	runEphemeralTurn(args: EphemeralTurnArgs): Promise<EphemeralTurnResult>;
-	/** Optional abort signal cancelled when the owning session aborts or disposes. */
-	wakeSignal?(): AbortSignal | undefined;
-	/** Optional host admission lease acquired before running a background wake turn; null cancels before start. */
-	acquireWakeLease?(signal?: AbortSignal): Promise<{ release(): Promise<void> } | null>;
-}
-
-export function withIrcWakeReleaseFailure(wakeError: unknown, releaseError: unknown): unknown {
-	if (wakeError === undefined) return releaseError;
-	return new AggregateError(
-		[wakeError, releaseError],
-		`${errorMessage(releaseError)}\nIRC wake also failed: ${errorMessage(wakeError)}`,
-	);
+	/** Route every wake through the session's native phase and settlement owner. */
+	wake(records: CustomMessage[]): Promise<void>;
 }
 
 export class IrcDelivery {
@@ -69,81 +31,9 @@ export class IrcDelivery {
 	 */
 	readonly inbox = new IrcInbox();
 	readonly #host: IrcDeliveryHost;
-	#wakeTurns?: Set<Promise<void>>;
 
 	constructor(host: IrcDeliveryHost) {
 		this.#host = host;
-	}
-
-	async waitForWakes(): Promise<void> {
-		while (this.#wakeTurns?.size) await Promise.all(this.#wakeTurns);
-	}
-
-	/**
-	 * Deliver `msg` into the session and emit its `irc_message` event:
-	 *
-	 * - mid-turn → steered when the sender is the recipient's parent, otherwise queued in the inbox
-	 *   and folded in at the next step boundary → "injected";
-	 * - idle in plan mode → appended into context without waking an autonomous turn (convergence
-	 *   stays user-driven) → "injected";
-	 * - idle → starts a real turn with the message so the recipient wakes → "woken".
-	 *
-	 * When the sender expects a reply (`send await:true`) and the session cannot produce a real reply
-	 * turn in time — mid-turn with async execution disabled (the next step boundary may wait on the
-	 * sender's own batch), or idle in plan mode (wake turns are suppressed) — an ephemeral
-	 * side-channel auto-reply is generated from the current context and sent back over the bus on
-	 * this agent's behalf.
-	 */
-	deliver(msg: IrcMessage, opts?: { expectsReply?: boolean }): "injected" | "woken" {
-		const host = this.#host;
-		if (host.isDisposed()) {
-			throw new Error("Recipient session is disposed.");
-		}
-		const streaming = host.isStreaming();
-		const planModeIdle = !streaming && host.planModeEnabled();
-		const autoReply = (opts?.expectsReply ?? false) && ((streaming && !host.asyncEnabled()) || planModeIdle);
-		const record: CustomMessage = {
-			role: "custom",
-			customType: "irc:incoming",
-			content: prompt.render(sideChannelPrompts["side-channel/irc-incoming"].text, {
-				from: msg.from,
-				message: msg.body,
-				replyTo: msg.replyTo ?? "",
-				autoReplied: autoReply,
-				interrupting: streaming,
-			}),
-			display: true,
-			details: { id: msg.id, from: msg.from, message: msg.body, ...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
-			attribution: "agent",
-			timestamp: msg.ts,
-		};
-		host.emitIrcMessage(record);
-		if (host.isStreaming()) {
-			const recipientParentId = AgentRegistry.global().get(msg.to)?.parentId;
-			if (recipientParentId === msg.from) {
-				host.agent.steer({
-					role: "user",
-					content: prompt.render(steeringPrompts["steering/parent-irc"].text, {
-						from: msg.from,
-						message: msg.body,
-					}),
-					attribution: "agent",
-					timestamp: msg.ts,
-					steering: true,
-				});
-			} else {
-				this.inbox.queueInterrupt(record);
-			}
-			if (autoReply) void this.#autoReply(msg);
-			return "injected";
-		}
-		if (host.planModeEnabled()) {
-			host.appendToContext(record);
-			if (autoReply) void this.#autoReply(msg);
-			return "injected";
-		}
-		this.#wake([record]);
-		return "woken";
 	}
 
 	/**
@@ -182,122 +72,10 @@ export class IrcDelivery {
 		}
 	}
 
-	/**
-	 * Fire-and-forget wake turn, shared by idle delivery and the stranded-record resume, tracked in
-	 * flight so its settle re-drains anything that stranded during it. A user interrupt may have left
-	 * a follow-up queued behind an invalid tail on purpose; the wake turn's loop would otherwise drain
-	 * it, so a blocked follow-up queue is parked across the wake and restored after. It stays queued
-	 * after the wake because the session suppresses follow-up auto-resume while a user interrupt is in
-	 * effect, even though the wake left a provider-valid tail.
-	 */
+	/** Idle and stranded inputs share the session's phase claim, persistence and queue ownership. */
 	#wake(records: CustomMessage[]): void {
-		const host = this.#host;
-		const agent = host.agent;
-		// Park only a blocked follow-up; one that may resume rides the wake turn without reordering.
-		const parkedFollowUps =
-			agent.peekSteeringQueue().length === 0 &&
-			agent.peekFollowUpQueue().length > 0 &&
-			!host.canAutoContinueForFollowUp()
-				? agent.peekFollowUpQueue().slice()
-				: [];
-		if (parkedFollowUps.length > 0) {
-			agent.replaceQueues(agent.peekSteeringQueue().slice(), []);
-		}
-		host.beginWakeTurn();
-		const run = async (): Promise<void> => {
-			let lease: { release(): Promise<void> } | null = null;
-			let failure: unknown;
-			let releaseFailed = false;
-			try {
-				if (host.acquireWakeLease) {
-					lease = await host.acquireWakeLease(host.wakeSignal?.());
-					if (lease && !host.isDisposed()) await agent.prompt(records);
-				} else {
-					await agent.prompt(records);
-				}
-			} catch (error) {
-				failure = error;
-			} finally {
-				if (parkedFollowUps.length > 0) {
-					try {
-						agent.replaceQueues(
-							agent.peekSteeringQueue().slice(),
-							parkedFollowUps.concat(agent.peekFollowUpQueue()),
-						);
-					} catch (error) {
-						failure ??= error;
-					}
-				}
-				if (lease) {
-					try {
-						await lease.release();
-					} catch (error) {
-						releaseFailed = true;
-						failure = withIrcWakeReleaseFailure(failure, error);
-					}
-				}
-				try {
-					host.endWakeTurn();
-				} catch (error) {
-					failure ??= error;
-				}
-			}
-			if (releaseFailed) throw failure;
-			if (failure !== undefined)
-				logger.error("IRC wake turn or host lane release failed", { error: errorMessage(failure) });
-		};
-		const wake = run();
-		this.#wakeTurns ??= new Set();
-		const wakes = this.#wakeTurns;
-		wakes.add(wake);
-		void wake.then(
-			() => wakes.delete(wake),
-			error => {
-				wakes.delete(wake);
-				logger.error("IRC wake cleanup failed", { error: errorMessage(error) });
-			},
-		);
-	}
-
-	/**
-	 * Generate and deliver an ephemeral auto-reply to `msg` on this agent's behalf: a no-tools
-	 * side-channel turn over the current history (the `/btw` pipeline), queued in the inbox as an
-	 * `irc:autoreply` aside so the model reads what was said for it, and sent back to the sender as a
-	 * bus message (`replyTo: msg.id`) so their parked `wait` or `await:true` resolves. A failure is
-	 * logged and the sender reaches its wait timeout.
-	 */
-	async #autoReply(msg: IrcMessage): Promise<void> {
-		const host = this.#host;
-		try {
-			const { replyText } = await host.runEphemeralTurn({
-				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
-					from: msg.from,
-					message: msg.body,
-					replyTo: msg.replyTo ?? "",
-				}),
-			});
-			const body = replyText.trim();
-			if (!body || host.isDisposed()) return;
-			const record: CustomMessage = {
-				role: "custom",
-				customType: "irc:autoreply",
-				content: `[IRC you → \`${msg.from}\` (auto)]\n\n${body}`,
-				display: true,
-				details: { to: msg.from, body, replyTo: msg.id },
-				attribution: "agent",
-				timestamp: Date.now(),
-			};
-			host.emitIrcMessage(record);
-			// Asides drain at the next step boundary; one left over is flushed at the start of the
-			// next prompt (flushPending).
-			this.inbox.queueAside(record);
-			// `from` is the id the sender addressed (msg.to), so their from-filtered waiter matches.
-			const receipt = await IrcBus.global().send({ from: msg.to, to: msg.from, body, replyTo: msg.id });
-			if (receipt.outcome === "failed") {
-				logger.warn("IRC auto-reply delivery failed", { to: msg.from, error: receipt.error });
-			}
-		} catch (error) {
-			logger.warn("IRC auto-reply turn failed", { from: msg.from, error: errorMessage(error) });
-		}
+		void this.#host.wake(records).catch(error => {
+			logger.warn("IRC wake turn failed", { error: errorMessage(error) });
+		});
 	}
 }

@@ -7,9 +7,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
+import { z } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { withJournalLock } from "@veyyon/kernel/session/session-storage";
 import { TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
@@ -47,6 +49,7 @@ async function session(
 	id: string,
 	responses: MockResponse[],
 	existing?: SessionManager,
+	extraTools: AgentTool[] = [],
 	agentKind: "main" | "sub" = "main",
 ) {
 	const temp = TempDir.createSync("native-handoff-");
@@ -54,7 +57,7 @@ async function session(
 	auth.setRuntimeApiKey("mock", "test-key");
 	const mock = createMockModel({ responses });
 	const registry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
-	const tools: AgentTool[] = [new YieldTool({ outputSchema: undefined } as ToolSession)];
+	const tools: AgentTool[] = [new YieldTool({ outputSchema: undefined } as ToolSession), ...extraTools];
 	const store = existing ?? SessionManager.create(temp.path(), temp.path());
 	const agent = new Agent({
 		getApiKey: () => "fake-test-key",
@@ -86,49 +89,210 @@ async function session(
 }
 
 describe("native retained child resume", () => {
-	it("publishes a release reconciliation error as the single native phase completion", async () => {
-		AgentRegistry.resetGlobalForTests();
-		IrcBus.resetGlobalForTests();
-		const parent = await session("owner", [{ content: ["Release failure received"], stopReason: "stop" }]);
-		const child = await session("worker", [yielded("B")], undefined, "sub");
-		const releaseFailure = new Error("lane release reconciliation required");
-		const release = vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockResolvedValue({
-			release: async () => Promise.reject(releaseFailure),
-		} as never);
+	for (const turnFails of [false, true]) {
+		it(`publishes a release reconciliation error once ${turnFails ? "after a failed prompt" : "after terminal yield"}`, async () => {
+			const parent = await session("owner", [{ content: ["Release failure received"], stopReason: "stop" }]);
+			const child = await session("worker", [yielded("B")], undefined, [], "sub");
+			if (turnFails) {
+				vi.spyOn(child.instance.agent, "prompt").mockRejectedValue(new Error("worker prompt also failed"));
+			}
+			const release = vi.fn(async () => {
+				throw new Error("lane release reconciliation required");
+			});
+			vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockResolvedValue({
+				slotId: "worker-slot",
+				leaseToken: "worker-lease",
+				release,
+			});
+			const registry = AgentRegistry.global();
+			registry.register({
+				id: "owner",
+				displayName: "Owner",
+				kind: "main",
+				scope: "test",
+				session: parent.instance,
+			});
+			registry.register({
+				id: "worker",
+				displayName: "Worker",
+				kind: "sub",
+				parentId: "owner",
+				scope: "test",
+				session: child.instance,
+			});
+			await child.instance.deliverIrcMessage({
+				id: "release-reconciliation",
+				from: "owner",
+				to: "worker",
+				body: "Return a result.",
+				ts: Date.now(),
+			});
+			await child.instance.waitForIdle();
+			await parent.instance.waitForIdle();
+			await child.instance.replayIrcContinuations();
+
+			const completions = parent.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+			expect(completions).toHaveLength(1);
+			expect(completions[0]?.content).toContain("lane release reconciliation required");
+			expect(completions[0]?.content).toContain('"source":"harness"');
+			if (turnFails) expect(completions[0]?.content).toContain("worker prompt also failed");
+			expect(release).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it("surfaces release reconciliation failure when a peer wake is cancelled during admission", async () => {
+		const child = await session("worker", [], undefined, [], "sub");
+		const entered = Promise.withResolvers<AbortSignal>();
+		const admitted = Promise.withResolvers<laneAdmission.NativeHostLaneLease>();
+		vi.spyOn(laneAdmission, "acquireSubagentHostLane").mockImplementation(({ signal }) => {
+			entered.resolve(signal!);
+			return admitted.promise;
+		});
+		const releaseFailure = new Error("lane release reconciliation required after cancellation");
+		const release = vi.fn(async () => {
+			throw releaseFailure;
+		});
+		await child.instance.deliverIrcMessage({
+			id: "cancelled-wake",
+			from: "peer",
+			to: "worker",
+			body: "Wake before cancellation.",
+			ts: Date.now(),
+		});
+		const signal = await entered.promise;
+		const aborted = Promise.withResolvers<void>();
+		signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+		const idle = expect(child.instance.waitForIdle()).rejects.toBe(releaseFailure);
+		const abort = child.instance.abort();
+		await aborted.promise;
+		admitted.resolve({ slotId: "worker-slot", leaseToken: "worker-lease", release });
+		await Promise.all([abort, idle]);
+		expect(child.mock.calls).toHaveLength(0);
+		expect(release).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers an acknowledged receipt before provider input and consumes its root phase once", async () => {
+		const root = await session("root", []);
+		const worker = await session("worker", []);
 		const registry = AgentRegistry.global();
-		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
 		registry.register({
 			id: "worker",
 			displayName: "Worker",
 			kind: "sub",
-			parentId: "owner",
-			scope: "test",
-			session: child.instance,
+			parentId: "root",
+			scope: "tree",
+			session: worker.instance,
 		});
-
-		await child.instance.deliverIrcMessage({
-			id: "release-reconciliation",
-			from: "owner",
-			to: "worker",
-			body: "Return a result.",
-			ts: Date.now(),
-		});
-		await child.instance.waitForIdle();
-		await parent.instance.waitForIdle();
-
-		const completions = parent.store
-			.getEntries()
-			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
-		expect(completions).toHaveLength(1);
-		expect(completions[0]?.content).toContain("lane release reconciliation required");
-		expect(completions[0]?.content).toContain('"source":"harness"');
-		expect(release).toHaveBeenCalledTimes(1);
-		await child.instance.replayIrcContinuations();
+		const record = {
+			role: "custom" as const,
+			customType: "task:continuation",
+			content: "Persisted child completion B",
+			display: true,
+			timestamp: Date.now(),
+			attribution: "agent" as const,
+			details: { id: "receipt-before-input", from: "worker", completionId: "durable-receipt-B", source: "agent" },
+		};
+		const outbox = new IrcContinuationOutbox(root.store);
+		outbox.receiveCompletion(record);
+		outbox.receiveCompletion(record);
+		await root.store.ensureOnDisk();
+		await root.store.sync();
 		expect(
-			parent.store
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom" && entry.customType === "irc:completion-received"),
+		).toHaveLength(1);
+		expect(
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(0);
+		await root.instance.dispose();
+		const reopened = await SessionManager.open(root.store.getSessionFile()!);
+		const recovered = await session("root", [{ content: ["Processed B"], stopReason: "stop" }], reopened);
+		registry.attachSession("root", recovered.instance, reopened.getSessionFile()!);
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await recovered.instance.replayIrcContinuations();
+		expect(recovered.mock.calls).toHaveLength(1);
+		expect(
+			reopened
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
 		).toHaveLength(1);
+		expect(new IrcContinuationOutbox(reopened).pendingReceivedCompletions(new Set())).toEqual([]);
+		expect(new IrcContinuationOutbox(reopened).unfinishedPhases()).toEqual([]);
+	});
+
+	it("keeps arrival ordering when a newer native result is still only a durable receipt", async () => {
+		const root = await session("root", []);
+		const outbox = new IrcContinuationOutbox(root.store);
+		outbox.receiveCompletion({
+			role: "custom",
+			customType: "task:continuation",
+			content: "Newer result",
+			display: true,
+			timestamp: 2000,
+			details: { id: "newer-receipt", from: "worker", completionId: "newer-completion" },
+		});
+		const late = outbox.withOrdering({
+			role: "custom",
+			customType: "task:continuation",
+			content: "Older result",
+			display: true,
+			timestamp: 1000,
+			details: { id: "older-receipt", from: "worker", completionId: "older-completion" },
+		});
+		expect(late.details).toMatchObject({ arrivedAfter: "newer-receipt", phaseId: "older-receipt" });
+		expect(late.content).toContain("does not establish supersession");
+	});
+
+	it("claims a parent phase in memory while the real journal lock is held, then persists it once", async () => {
+		const child = await session("worker", []);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const sessionFile = child.store.getSessionFile()!;
+		let release!: () => void;
+		let entered!: () => void;
+		const gate = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		const held = new Promise<void>(resolve => {
+			entered = resolve;
+		});
+		const lock = withJournalLock(sessionFile, async () => {
+			entered();
+			await gate;
+		});
+		await held;
+		const pendingRewrite = child.store.rewriteEntries();
+		await setImmediate();
+		try {
+			const outbox = new IrcContinuationOutbox(child.store);
+			expect(outbox.begin("locked-parent-message")).toBe(true);
+			expect(outbox.begin("locked-parent-message")).toBe(false);
+		} finally {
+			release();
+			await lock;
+		}
+		await pendingRewrite;
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		await child.instance.dispose();
+		const reopened = await SessionManager.open(sessionFile);
+		const phaseCount = reopened
+			.getEntries()
+			.filter(
+				entry =>
+					entry.type === "custom" &&
+					entry.customType === "irc:continuation-phase" &&
+					Reflect.get(entry.data ?? {}, "phaseId") === "locked-parent-message",
+			).length;
+		expect(phaseCount).toBe(1);
+		await reopened.close();
 	});
 	it("delivers B once through the parent inbox, keeps A, and coalesces duplicate resume IDs", async () => {
 		AgentRegistry.resetGlobalForTests();
@@ -190,6 +354,214 @@ describe("native retained child resume", () => {
 				message => message.role === "user" && message.attribution === "agent",
 			),
 		).toBe(true);
+	});
+
+	it.each([
+		{ name: "an earlier terminal yield", response: yielded("OLD-A"), legacyReceipt: false },
+		{
+			name: "an earlier assistant tail",
+			response: { content: ["OLD-A"], stopReason: "stop" } as MockResponse,
+			legacyReceipt: true,
+		},
+	])("runs a fresh completion phase instead of reusing $name", async ({ response, legacyReceipt }) => {
+		const root = await session("root", [{ content: ["Received fresh aggregate"], stopReason: "stop" }]);
+		const aggregator = await session("aggregator", [response, yielded("NEW-B")]);
+		const worker = await session("worker", [yielded("worker-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "aggregator",
+			displayName: "Aggregator",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: aggregator.instance,
+		});
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "aggregator",
+			scope: "tree",
+			session: worker.instance,
+		});
+		await aggregator.store.ensureOnDisk();
+		const immutable = path.join(aggregator.store.getArtifactsDir()!, "aggregator.md");
+		await fs.mkdir(path.dirname(immutable), { recursive: true });
+		await fs.writeFile(immutable, '{"value":"immutable-A"}');
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const stream = aggregator.instance.agent.streamFn;
+		let first = true;
+		aggregator.instance.agent.streamFn = async (model, context, options) => {
+			if (first) {
+				first = false;
+				started.resolve();
+				await release.promise;
+			}
+			return stream(model, context, options);
+		};
+		const unrelatedTurn = aggregator.instance.prompt("Finish the unrelated initial phase A.");
+		try {
+			await started.promise;
+			if (legacyReceipt) {
+				const record = {
+					role: "custom" as const,
+					customType: "task:continuation",
+					content: "Persisted worker-B",
+					display: true,
+					timestamp: Date.now(),
+					attribution: "agent" as const,
+					details: {
+						id: "legacy-receipt-B",
+						from: "worker",
+						completionId: "legacy-completion-B",
+						source: "agent",
+					},
+				};
+				// Preserve the old receipt-before-assistant order to verify recovery of an existing journal.
+				aggregator.instance.agent.appendMessage(record);
+				aggregator.store.appendCustomMessageEntry(
+					record.customType,
+					record.content,
+					record.display,
+					record.details,
+					"agent",
+				);
+				await aggregator.store.sync();
+			} else {
+				await worker.instance.deliverIrcMessage({
+					id: "worker-phase-B",
+					from: "aggregator",
+					to: "worker",
+					body: "Return worker-B.",
+					ts: Date.now(),
+				});
+				await worker.instance.waitForIdle();
+			}
+		} finally {
+			release.resolve();
+		}
+		await unrelatedTurn;
+		await aggregator.instance.waitForIdle();
+		await aggregator.instance.replayIrcContinuations();
+		await aggregator.instance.waitForIdle();
+		await root.instance.waitForIdle();
+		const completions = root.store
+			.getEntries()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+		expect(completions).toHaveLength(1);
+		const completion = completions[0];
+		if (completion?.type !== "custom_message") throw new Error("Expected fresh aggregate completion");
+		const result = aggregator.store
+			.getEntries()
+			.find(entry => entry.type === "custom" && entry.customType === "irc:continuation-result");
+		const output = result?.type === "custom" ? Reflect.get(result.data ?? {}, "output") : undefined;
+		expect(typeof output).toBe("string");
+		expect(JSON.parse(output as string)).toEqual({ value: "NEW-B" });
+		expect(completion.details).toMatchObject({ resultSource: "agent" });
+		expect(aggregator.mock.calls).toHaveLength(2);
+		expect(await fs.readFile(immutable, "utf8")).toBe('{"value":"immutable-A"}');
+		expect(
+			aggregator.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+		await Promise.all([aggregator.instance.replayIrcContinuations(), aggregator.instance.replayIrcContinuations()]);
+		await aggregator.instance.waitForIdle();
+		expect(aggregator.mock.calls).toHaveLength(2);
+		expect(
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+	});
+
+	it("injects a live native completion after tool results without replaying a second phase", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const hold: AgentTool = {
+			name: "hold",
+			label: "Hold",
+			description: "Keep a tool in flight across native completion delivery.",
+			parameters: z.object({}),
+			async execute() {
+				started.resolve();
+				await release.promise;
+				return { content: [{ type: "text", text: "Original tool finished" }], details: {} };
+			},
+		};
+		const root = await session("root", []);
+		const aggregator = await session(
+			"aggregator",
+			[
+				{ content: [{ type: "toolCall", id: "hold-call", name: "hold", arguments: {} }], stopReason: "toolUse" },
+				{ content: ["Handled worker-B at the next valid step"], stopReason: "stop" },
+			],
+			undefined,
+			[hold],
+		);
+		const worker = await session("worker", [yielded("worker-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "root", displayName: "Root", kind: "main", scope: "tree", session: root.instance });
+		registry.register({
+			id: "aggregator",
+			displayName: "Aggregator",
+			kind: "sub",
+			parentId: "root",
+			scope: "tree",
+			session: aggregator.instance,
+		});
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "aggregator",
+			scope: "tree",
+			session: worker.instance,
+		});
+		let tailWhileToolWasPending: string | undefined;
+		const running = aggregator.instance.prompt("Run the original tool, then inspect pending results.");
+		try {
+			await started.promise;
+			await worker.instance.deliverIrcMessage({
+				id: "live-worker-B",
+				from: "aggregator",
+				to: "worker",
+				body: "Return worker-B.",
+				ts: Date.now(),
+			});
+			await worker.instance.waitForIdle();
+			tailWhileToolWasPending = aggregator.instance.agent.state.messages.at(-1)?.role;
+		} finally {
+			release.resolve();
+		}
+		await running;
+		await aggregator.instance.waitForIdle();
+		await aggregator.instance.replayIrcContinuations();
+		await aggregator.instance.waitForIdle();
+		await root.instance.waitForIdle();
+		expect(tailWhileToolWasPending).toBe("assistant");
+		expect(aggregator.mock.calls).toHaveLength(2);
+		const nextStep = aggregator.mock.calls[1]!.context.messages;
+		const toolResult = nextStep.findIndex(message => message.role === "toolResult" && message.toolName === "hold");
+		const notice = nextStep.findIndex(
+			message => message.role === "developer" && JSON.stringify(message.content).includes("worker-B"),
+		);
+		expect(toolResult).toBeGreaterThanOrEqual(0);
+		expect(notice).toBeGreaterThan(toolResult);
+		expect(nextStep[notice]).toMatchObject({ role: "developer", attribution: "agent" });
+		expect(
+			aggregator.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(1);
+		expect(
+			root.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(0);
+		expect(root.mock.calls).toHaveLength(0);
 	});
 
 	it("aggregates a nested child's B to the root as a separate native result", async () => {
@@ -1018,6 +1390,265 @@ describe("native retained child resume", () => {
 		const reopenedOutbox = new IrcContinuationOutbox(recoveredChild.store);
 		expect(reopenedOutbox.deliveryTarget(completion.id)).toBe("parent");
 		expect(reopenedOutbox.pending().some(item => item.id === completion.id)).toBe(true);
+	});
+	it("does not let a concurrent outbox deliver or resolve an in-memory completion before sync", async () => {
+		const child = await session("worker", []);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const first = new IrcContinuationOutbox(child.store);
+		const second = new IrcContinuationOutbox(child.store);
+		const syncStarted = Promise.withResolvers<void>();
+		const syncGate = Promise.withResolvers<void>();
+		const originalSync = child.store.sync.bind(child.store);
+		let gated = false;
+		spyOn(child.store, "sync").mockImplementation(async () => {
+			if (gated) {
+				syncStarted.resolve();
+				await syncGate.promise;
+			}
+			return originalSync();
+		});
+
+		let delivered = false;
+		let firstSettled = false;
+		let secondSettled = false;
+		gated = true;
+		try {
+			const firstComplete = first.complete("worker", "owner", "shared-phase", '{"value":"done"}').then(result => {
+				firstSettled = true;
+				return result;
+			});
+			await syncStarted.promise;
+			expect(first.pending()).toHaveLength(1);
+			expect(second.pending()).toHaveLength(1);
+			expect(second.pending()[0]?.output).toBe('{"value":"done"}');
+			const secondComplete = second.complete("worker", "owner", "shared-phase", '{"value":"done"}').then(result => {
+				secondSettled = true;
+				return result;
+			});
+			const flush = second.flush(async () => {
+				delivered = true;
+				return true;
+			});
+			await setImmediate();
+			const deliveredBeforeSync = delivered;
+			const firstSettledBeforeSync = firstSettled;
+			const secondSettledBeforeSync = secondSettled;
+			syncGate.resolve();
+			const [firstResult, secondResult] = await Promise.all([firstComplete, secondComplete]);
+			await flush;
+			expect(deliveredBeforeSync).toBe(false);
+			expect(firstSettledBeforeSync).toBe(false);
+			expect(secondSettledBeforeSync).toBe(false);
+			expect(firstResult.id).toBe(secondResult.id);
+			expect(delivered).toBe(true);
+		} finally {
+			syncGate.resolve();
+		}
+		await child.instance.dispose();
+	});
+
+	it("does not deliver or acknowledge an in-memory completion when every concurrent sync fails", async () => {
+		const child = await session("worker", []);
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const outbox = new IrcContinuationOutbox(child.store);
+		const syncStarted = Promise.withResolvers<void>();
+		const syncGate = Promise.withResolvers<void>();
+		const originalSync = child.store.sync.bind(child.store);
+		let failSyncs = true;
+		spyOn(child.store, "sync").mockImplementation(async () => {
+			if (failSyncs) {
+				syncStarted.resolve();
+				await syncGate.promise;
+				throw new Error("simulated completion sync failure");
+			}
+			await originalSync();
+		});
+		let delivered = false;
+		let settled: Promise<PromiseSettledResult<unknown>[]> | undefined;
+		try {
+			const completing = outbox.complete("worker", "owner", "failed-sync-phase", '{"value":"done"}');
+			await syncStarted.promise;
+			expect(outbox.pending()).toHaveLength(1);
+			const flushing = outbox.flush(async () => {
+				delivered = true;
+				return true;
+			});
+			settled = Promise.allSettled([completing, flushing]);
+			await setImmediate();
+			const deliveredBeforeFailure = delivered;
+			syncGate.resolve();
+			const outcomes = await settled;
+			expect(outcomes.map(outcome => outcome.status)).toEqual(["rejected", "rejected"]);
+			expect(deliveredBeforeFailure).toBe(false);
+			expect(delivered).toBe(false);
+			expect(
+				child.store
+					.getEntries()
+					.filter(entry => entry.type === "custom" && entry.customType === "irc:continuation-delivered"),
+			).toHaveLength(0);
+			expect(outbox.pending()).toHaveLength(1);
+		} finally {
+			failSyncs = false;
+			syncGate.resolve();
+			await settled;
+		}
+		await originalSync();
+	});
+
+	for (const timing of ["before replay", "after result barrier"] as const) {
+		it(`replay waits for an uncommitted sticky target ${timing}`, async () => {
+			const parent = await session("owner", [{ content: ["Parent received"], stopReason: "stop" }]);
+			const child = await session("worker", []);
+			const registry = AgentRegistry.global();
+			registry.register({
+				id: "owner",
+				displayName: "Owner",
+				kind: "main",
+				scope: "tree",
+				session: parent.instance,
+			});
+			registry.register({
+				id: "worker",
+				displayName: "Worker",
+				kind: "sub",
+				parentId: "owner",
+				scope: "tree",
+				session: child.instance,
+			});
+			const outbox = new IrcContinuationOutbox(child.store);
+			const phaseId = `sticky-target-${timing}`;
+			outbox.begin(phaseId);
+			const completion = await outbox.complete("worker", "owner", phaseId, '{"value":"result"}');
+			const pinStarted = Promise.withResolvers<void>();
+			const pinGate = Promise.withResolvers<void>();
+			const originalSync = child.store.sync.bind(child.store);
+			let injectAfterBarrier = timing === "after result barrier";
+			let claim: Promise<string> | undefined;
+			let replay: Promise<void> | undefined;
+			let released = false;
+			let sentBeforePinCommit = false;
+			spyOn(child.store, "sync").mockImplementation(async () => {
+				if (injectAfterBarrier) {
+					injectAfterBarrier = false;
+					expect(outbox.deliveryTarget(completion.id)).toBeUndefined();
+					await originalSync();
+					claim = outbox.claimDeliveryTarget(completion.id, "owner");
+					return;
+				}
+				if (outbox.deliveryTarget(completion.id)) {
+					pinStarted.resolve();
+					await pinGate.promise;
+				}
+				await originalSync();
+			});
+			const bus = IrcBus.global();
+			const originalSend = bus.send.bind(bus);
+			spyOn(bus, "send").mockImplementation(async (input, options) => {
+				if (input.from === "worker" && options?.completion?.id === completion.id) {
+					sentBeforePinCommit ||= !released;
+				}
+				return originalSend(input, options);
+			});
+			try {
+				if (timing === "before replay") {
+					claim = outbox.claimDeliveryTarget(completion.id, "owner");
+					await pinStarted.promise;
+				}
+				replay = child.instance.replayIrcContinuations();
+				await pinStarted.promise;
+				await setImmediate();
+				const prematureSend = sentBeforePinCommit;
+				released = true;
+				pinGate.resolve();
+				await replay;
+				await claim;
+				await parent.instance.waitForIdle();
+				expect(prematureSend).toBe(false);
+				expect(
+					parent.store
+						.getEntries()
+						.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+				).toHaveLength(1);
+				const file = child.store.getSessionFile()!;
+				await child.instance.dispose();
+				const reopened = await SessionManager.open(file);
+				const recovered = await session("worker", [], reopened);
+				expect(new IrcContinuationOutbox(reopened).deliveryTarget(completion.id)).toBe("owner");
+				await recovered.instance.replayIrcContinuations();
+				await parent.instance.waitForIdle();
+				expect(
+					parent.store
+						.getEntries()
+						.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+				).toHaveLength(1);
+			} finally {
+				released = true;
+				pinGate.resolve();
+				await Promise.allSettled(
+					[claim, replay].filter((pending): pending is Promise<string> | Promise<void> => pending !== undefined),
+				);
+			}
+		});
+	}
+
+	it("queues a real parent bus send behind a busy child journal without an early receipt or model turn", async () => {
+		const parent = await session("owner", [{ content: ["Received"], stopReason: "stop" }]);
+		const child = await session("worker", [yielded("BUS-B")]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "tree", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "tree",
+			session: child.instance,
+		});
+		await child.store.ensureOnDisk();
+		await child.store.sync();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const lock = withJournalLock(child.store.getSessionFile()!, async () => {
+			entered.resolve();
+			await release.promise;
+		});
+		await entered.promise;
+		const rewrite = child.store.rewriteEntries();
+		await setImmediate();
+		let receiptSettled = false;
+		const sending = IrcBus.global()
+			.send({ from: "owner", to: "worker", body: "Return BUS-B after the journal commits." })
+			.then(receipt => {
+				receiptSettled = true;
+				return receipt;
+			});
+		try {
+			await setImmediate();
+			const earlyReceipt = receiptSettled;
+			const earlyTurns = child.mock.calls.length;
+			release.resolve();
+			await lock;
+			await rewrite;
+			const receipt = await sending;
+			await child.instance.waitForIdle();
+			await parent.instance.waitForIdle();
+			expect(receipt.error).toBeUndefined();
+			expect(earlyReceipt).toBe(false);
+			expect(earlyTurns).toBe(0);
+			expect(receipt.outcome).not.toBe("failed");
+			expect(child.mock.calls).toHaveLength(1);
+			expect(
+				child.store
+					.getEntries()
+					.filter(entry => entry.type === "custom_message" && entry.customType === "irc:incoming"),
+			).toHaveLength(1);
+		} finally {
+			release.resolve();
+			await lock;
+			await Promise.allSettled([rewrite, sending]);
+		}
 	});
 
 	it("does not annotate arrivedAfter in withOrdering when newer entry is from a different sender", async () => {
