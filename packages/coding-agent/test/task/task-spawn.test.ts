@@ -231,7 +231,10 @@ describe("task spawn routing", () => {
 		const completions: Array<{ agentId: string; agentName: string; ticketId?: string; runId?: string }> = [];
 		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			events.push("execute");
-			return makeResult(options.id, { agent: "reviewer", output: JSON.stringify({ verdict: "pass", stage: "review" }) });
+			return makeResult(options.id, {
+				agent: "reviewer",
+				output: JSON.stringify({ verdict: "pass", stage: "review" }),
+			});
 		});
 		const tool = await TaskTool.create(
 			makeToolSession({

@@ -28,7 +28,11 @@ for (const previousState of ["pending", "implementation", "qa", "review"]) {
 			expect(ticket.state).toBe(previousState);
 			expect(ticket.stage).toBe(current.stage);
 			expect(ticket.native_claim).toEqual({
-				version: 1, state: "retryable", worker_id: null, run_id: null, task_handle: null,
+				version: 1,
+				state: "retryable",
+				worker_id: null,
+				run_id: null,
+				task_handle: null,
 			});
 		} finally {
 			await rm(root, { recursive: true, force: true });
