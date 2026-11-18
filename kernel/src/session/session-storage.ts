@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { retryWindowsRename } from "@veyyon/utils/atomic-write";
 import { reportFault } from "@veyyon/utils/fault-sink";
 import { hasFsCode, isEnoent } from "@veyyon/utils/fs-error";
 import { type PathState, pathStateSync } from "@veyyon/utils/fs-optional";
@@ -1077,7 +1078,7 @@ export class FileSessionStorage implements SessionStorage {
 				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
-			this.#publishStaged(tempPath, fpath, options);
+			await this.#publishStaged(tempPath, fpath, options);
 		});
 	}
 	/**
@@ -1125,34 +1126,28 @@ export class FileSessionStorage implements SessionStorage {
 				discardTemp(tempPath, fpath);
 				throw toError(err);
 			}
-			this.#publishStaged(tempPath, fpath, options);
+			await this.#publishStaged(tempPath, fpath, options);
 		});
 	}
 
 	/** Make a fully written temp file the file at `fpath`, or discard it. */
-	#publishStaged(tempPath: string, fpath: string, options?: WriteTextAtomicOptions): void {
-		// Guard-check + rename MUST NOT be separated by an await. A concurrent
-		// synchronous rewrite (flushSync -> #rewriteSynchronously) can otherwise
-		// publish a fresh body between the check and the rename, and this stale
-		// staged body would overwrite it. Sync rename closes that window.
-		if (options?.commitGuard && !options.commitGuard()) {
-			discardTemp(tempPath, fpath);
-			return;
-		}
+	async #publishStaged(tempPath: string, fpath: string, options?: WriteTextAtomicOptions): Promise<void> {
+		const guard = options?.commitGuard;
 		try {
-			this.renameSync(tempPath, fpath);
-			return;
-		} catch (err) {
-			if (!hasFsCode(err, "EPERM")) {
-				discardTemp(tempPath, fpath);
-				throw toError(err);
-			}
 			try {
-				this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, options?.commitGuard);
-			} catch (fallbackErr) {
-				discardTemp(tempPath, fpath);
-				throw fallbackErr;
+				await retryWindowsRename(() => {
+					// A delay belongs between attempts, never between the guard and rename.
+					if (guard && !guard()) discardTemp(tempPath, fpath);
+					else this.renameSync(tempPath, fpath);
+				});
+			} catch (err) {
+				if (!hasFsCode(err, "EPERM")) throw toError(err);
+				if (guard && !guard()) discardTemp(tempPath, fpath);
+				else this.#replaceSessionFileAfterEpermSync(tempPath, fpath, err, guard);
 			}
+		} catch (error) {
+			discardTemp(tempPath, fpath);
+			throw error;
 		}
 	}
 

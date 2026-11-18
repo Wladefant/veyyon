@@ -27,6 +27,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { isEnoent, isFsError, nonRegularKind } from "./fs-error";
 
 export interface AtomicWriteOptions {
@@ -345,33 +346,36 @@ const RENAME_RETRY_BUDGET_MS = 2_000;
 const RENAME_RETRY_INITIAL_MS = 5;
 const RENAME_RETRY_MAX_MS = 100;
 
+/**
+ * Retry a transient Windows rename denial without displacing the destination.
+ * A guarded publisher must recheck its guard inside each attempt.
+ */
+export async function retryWindowsRename<T>(attempt: () => T | Promise<T>): Promise<T> {
+	const deadline = Date.now() + RENAME_RETRY_BUDGET_MS;
+	for (let failures = 0; ; failures++) {
+		try {
+			return await attempt();
+		} catch (error) {
+			if (!isRetryableWindowsRenameError(error)) throw error;
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) throw error;
+			await delay(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
+		}
+	}
+}
+
 async function renameTempOverTarget(
 	tmpPath: string,
 	target: string,
 	requireAtomicReplace = false,
 	retryRename = false,
 ): Promise<void> {
-	// Windows readers briefly deny replacement with EPERM/EACCES/EEXIST/EBUSY;
-	// when retryRename is enabled, retry the same staged sibling rename first so
-	// readers never observe a missing target.
-	const deadline = retryRename ? Date.now() + RENAME_RETRY_BUDGET_MS : 0;
-	for (let failures = 0; ; failures++) {
-		try {
-			await fsp.rename(tmpPath, target);
-			return;
-		} catch (error) {
-			if (!retryRename) {
-				if (!isRenameClobberError(error) || requireAtomicReplace) throw error;
-				break;
-			}
-			if (!isRetryableWindowsRenameError(error)) throw error;
-			const remaining = deadline - Date.now();
-			if (remaining <= 0) {
-				if (requireAtomicReplace || !isRenameClobberError(error)) throw error;
-				break;
-			}
-			await Bun.sleep(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
-		}
+	try {
+		if (retryRename) await retryWindowsRename(() => fsp.rename(tmpPath, target));
+		else await fsp.rename(tmpPath, target);
+		return;
+	} catch (error) {
+		if (!isRenameClobberError(error) || requireAtomicReplace) throw error;
 	}
 	// Windows lacks a consistently atomic replace-existing rename. Preserve the
 	// displaced inode under an owned sibling until the replacement succeeds, so

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Share the Windows rename retry policy with guarded file publishers.
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed
