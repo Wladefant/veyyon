@@ -7,7 +7,7 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
-import { directoryExists, errorMessage, getSessionsDir, prompt, Snowflake } from "@veyyon/utils";
+import { directoryExists, errorMessage, getSessionsDir, isRecord, prompt, Snowflake } from "@veyyon/utils";
 import { formatBytes, formatDuration } from "@veyyon/utils/format";
 import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ToolSession } from "..";
@@ -507,6 +507,18 @@ async function landIsolatedChanges(
 	return { result: landed, summary: merged.summary + nestedSummary };
 }
 
+function parseStructuredResult(result: SingleResult): Record<string, unknown> | undefined {
+	const items = result.extractedToolData?.yield;
+	const last = items?.[items.length - 1];
+	if (isRecord(last) && isRecord(last.data)) return last.data;
+	try {
+		const value: unknown = JSON.parse(result.output);
+		return isRecord(value) ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Record the parent's index row for a settled spawn, pointing at the child's durable transcript, so a
  * study or backtest tool can enumerate a session's agents without scraping tool-result prose (GRAN-2).
@@ -533,6 +545,7 @@ function recordSpawn(
 		error: result.error,
 		ticketId: params.ticketId,
 		runId: params.runId,
+		structuredResult: parseStructuredResult(result),
 	};
 	session.recordAgentSpawn?.(record);
 	return record;
