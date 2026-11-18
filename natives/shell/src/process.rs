@@ -1749,7 +1749,9 @@ struct RegistryState {
 
 #[derive(Default)]
 pub struct SpawnRegistry {
-	state: Mutex<RegistryState>,
+	state:                  Mutex<RegistryState>,
+	#[cfg(windows)]
+	pub(crate) windows_job: crate::windows_job::RunJob,
 }
 
 impl SpawnRegistry {

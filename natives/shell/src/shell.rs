@@ -1793,10 +1793,8 @@ async fn read_pipe_chunk_windows(
 							}
 						}
 					}
-					let mut cancel_guard = CancelOnDrop {
-						handle: Some(join_handle),
-						cancel: worker_cancelled,
-					};
+					let mut cancel_guard =
+						CancelOnDrop { handle: Some(join_handle), cancel: worker_cancelled };
 					let chunk = tokio::select! {
 						biased;
 						() = cancel_token.cancelled() => {
@@ -1984,16 +1982,17 @@ impl SpawnObserver for process::SpawnRegistry {
 		veyyon_uutils_ctx::mark_host_descriptors_cloexec();
 	}
 
+	#[cfg(windows)]
+	fn spawn_windows(&self, command: tokio::process::Command) -> io::Result<tokio::process::Child> {
+		spawn_owned_windows(self, None, command)
+	}
+
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>) {
 		cpu_budget::lower_spawn_priority(pid);
-		// Pin a stable process reference *now*, before the pid can be recycled.
-		// On Windows an open handle keeps the pid slot reserved for the lifetime
-		// of the handle; on Linux the pidfd carries identity; on macOS the
-		// recorded start-time triple detects impersonation. Deferring the open
-		// to `build_targets` (as the old code did) let a recycled pid resolve
-		// to an unrelated process — issue #4605.
-		let process = process::Process::from_pid(pid);
-		self.record(pgid, process);
+		#[cfg(windows)]
+		let _ = pgid; // Already pinned on the blocking pool, before resume.
+		#[cfg(not(windows))]
+		self.record(pgid, process::Process::from_pid(pid));
 	}
 }
 
@@ -2013,12 +2012,35 @@ impl SpawnObserver for RunSpawnObserver {
 		SpawnObserver::before_spawn(&*self.registry);
 	}
 
+	#[cfg(windows)]
+	fn spawn_windows(&self, command: tokio::process::Command) -> io::Result<tokio::process::Child> {
+		spawn_owned_windows(&self.registry, self.budget.as_deref(), command)
+	}
+
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>) {
+		#[cfg(not(windows))]
 		if let Some(budget) = &self.budget {
 			budget.adopt(pid);
 		}
 		SpawnObserver::on_spawn(&*self.registry, pid, pgid);
 	}
+}
+
+#[cfg(windows)]
+fn spawn_owned_windows(
+	registry: &process::SpawnRegistry,
+	budget: Option<&BudgetGroup>,
+	command: tokio::process::Command,
+) -> io::Result<tokio::process::Child> {
+	registry.windows_job.spawn(command, |pid| {
+		if let Ok(pid) = i32::try_from(pid) {
+			if let Some(budget) = budget {
+				budget.adopt(pid);
+			}
+			// The Child keeps this PID pinned while we open our own handle.
+			registry.record(None, process::Process::from_pid(pid));
+		}
+	})
 }
 
 /// Build the observer a run hands to brush. With no CPU budget this is the
@@ -2051,6 +2073,11 @@ fn spawn_budget_for(run_config: &ShellRunConfig) -> Option<Arc<BudgetGroup>> {
 // process-global descendant diff) is what keeps a cancel from reaping a
 // concurrent run's children in a shared host process.
 async fn terminate_run(registry: &process::SpawnRegistry) {
+	#[cfg(windows)]
+	if registry.windows_job.stop() {
+		return;
+	}
+
 	const WAVES: u32 = 3;
 	let mut saw_targets = false;
 	for wave in 0..WAVES {
@@ -2079,28 +2106,37 @@ async fn terminate_run(registry: &process::SpawnRegistry) {
 	}
 }
 fn terminate_background_jobs(shell: &mut BrushShell) {
+	#[cfg(not(windows))]
 	let mut targets = process::TerminationTargets::new();
 	for job in &mut shell.jobs_mut().jobs {
 		job.abort_internal_tasks();
-		if let Some(pgid) = job.process_group_id() {
-			targets.add_pgid(pgid);
-		}
-		if let Some(pid) = job.representative_pid() {
-			targets.add_pid(pid);
+		// On Windows the run job owns external processes. Do not reopen a
+		// job table PID here after its process may have exited.
+		#[cfg(not(windows))]
+		{
+			if let Some(pgid) = job.process_group_id() {
+				targets.add_pgid(pgid);
+			}
+			if let Some(pid) = job.representative_pid() {
+				targets.add_pid(pid);
+			}
 		}
 	}
-	if targets.is_empty() {
-		// Shell-internal jobs were aborted above. Pure descendant cleanup is
-		// handled by `process_cancel_bridge` while the cancel was in flight;
-		// without job-tracked pgids or pids there is nothing else to signal here.
-		return;
-	}
+	#[cfg(not(windows))]
+	{
+		if targets.is_empty() {
+			// Shell-internal jobs were aborted above. Pure descendant cleanup is
+			// handled by `process_cancel_bridge` while the cancel was in flight;
+			// without job-tracked pgids or pids there is nothing else to signal here.
+			return;
+		}
 
-	targets.signal(process::TERM_SIGNAL);
-	tokio::spawn(async move {
-		time::sleep(Duration::from_millis(150)).await;
-		targets.signal(process::KILL_SIGNAL);
-	});
+		targets.signal(process::TERM_SIGNAL);
+		tokio::spawn(async move {
+			time::sleep(Duration::from_millis(150)).await;
+			targets.signal(process::KILL_SIGNAL);
+		});
+	}
 }
 
 /// Apply per-command environment variables onto a freshly pushed
@@ -4834,6 +4870,77 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			);
 		}
 		assert_eq!(std::process::id(), host_pid);
+	}
+
+	// WHY: A snapshot taken at timeout cannot find a grandchild through an
+	// intermediate process that already exited. Use real Windows processes
+	// and pin the surviving handles before the deadline. This does not exercise
+	// processes launched outside the command's Windows job.
+	#[cfg(windows)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn windows_timeout_stops_tree_after_intermediate_exits() {
+		let _guard = shell_test_lock().lock().await;
+		let dir = veyyon_test_scratch::scratch_dir("shell-timeout-tree");
+		let pids = dir.path().join("leaf.pid");
+		let middle = "$info = [Diagnostics.ProcessStartInfo]::new('powershell.exe', '-NoProfile \
+		              -NonInteractive -Command Start-Sleep -Seconds 30'); $info.UseShellExecute = \
+		              $false; $info.CreateNoWindow = $true; $leaf = \
+		              [Diagnostics.Process]::Start($info); Set-Content -LiteralPath \
+		              $env:VEYYON_TEST_LEAF_PID -Value $leaf.Id";
+		let options = ShellExecuteOptions {
+			command: "powershell.exe -NoProfile -NonInteractive -Command '$ErrorActionPreference = \
+			          \"Stop\"; & powershell.exe -NoProfile -NonInteractive -Command \
+			          $env:VEYYON_TEST_MIDDLE; Write-Output \"$PID $(Get-Content -LiteralPath \
+			          $env:VEYYON_TEST_LEAF_PID)\"; Start-Sleep -Seconds 30'"
+				.to_owned(),
+			env: Some(HashMap::from([
+				("VEYYON_TEST_MIDDLE".to_owned(), middle.to_owned()),
+				("VEYYON_TEST_LEAF_PID".to_owned(), pids.to_string_lossy().into_owned()),
+			])),
+			..Default::default()
+		};
+		let (sender, receiver) = flume::unbounded();
+		let mut run =
+			std::pin::pin!(execute_shell(options, Some(sender), CancelToken::new(Some(8000))));
+		let ((root, leaf), output) = time::timeout(Duration::from_secs(12), async {
+			tokio::join!(
+				async {
+					let mut text = String::new();
+					while !text.contains('\n') {
+						text.push_str(
+							&receiver
+								.recv_async()
+								.await
+								.expect("process fixture emitted no PIDs"),
+						);
+					}
+					let mut pids = text.split_whitespace().map(|pid| pid.parse().unwrap());
+					let root = process::Process::from_pid(pids.next().unwrap())
+						.expect("root alive before timeout");
+					let leaf = process::Process::from_pid(pids.next().unwrap())
+						.expect("leaf alive before timeout");
+					(root, leaf)
+				},
+				&mut run
+			)
+		})
+		.await
+		.expect("shell timeout must return within its bound");
+		let leaf_exited = leaf
+			.wait_for_exit(Some(Duration::from_secs(1)), CancelToken::default())
+			.await
+			.unwrap();
+		if !leaf_exited {
+			// Red control must not leave the fixture running.
+			let _ = leaf.kill_tree(None);
+		}
+		let output = output.expect("timeout must return shell metadata");
+		assert!(output.timed_out);
+		assert!(!output.cancelled);
+		assert_eq!(output.exit_code, None);
+		assert_ne!(root.pid() as u32, std::process::id());
+		assert_eq!(root.status(), process::ProcessStatus::Exited);
+		assert!(leaf_exited, "the grandchild survived the shell timeout");
 	}
 
 	#[cfg(unix)]
