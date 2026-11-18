@@ -627,4 +627,37 @@ describe("AgentLifecycleManager", () => {
 		expect(replacement.status).toBe("running");
 		expect(replacement.session).toBe(newStub.session);
 	});
+
+	// A reused ID must neither swallow the new session's close nor let the old
+	// close clear its in-flight marker. This does not exercise session I/O.
+	it("closes each session once when an agent ID is reused during disposal", async () => {
+		const oldGate = deferred();
+		const newGate = deferred();
+		const oldStub = makeSessionStub(() => oldGate.promise);
+		const newStub = makeSessionStub(() => newGate.promise);
+		registerIdleSub("Race", oldStub.session);
+		const oldClose = lifecycle.fallAsleep("Race", oldStub.session);
+		registry.unregister("Race");
+		const replacement = registerIdleSub("Race", newStub.session);
+		const newClose = lifecycle.fallAsleep("Race", newStub.session);
+
+		try {
+			expect(oldStub.disposeCalls()).toBe(1);
+			expect(newStub.disposeCalls()).toBe(1);
+			oldGate.resolve();
+			await oldClose;
+			const repeatedClose = lifecycle.fallAsleep("Race", newStub.session);
+			expect(newStub.disposeCalls()).toBe(1);
+			expect(replacement.session).toBe(newStub.session);
+
+			newGate.resolve();
+			await Promise.all([newClose, repeatedClose]);
+			expect(replacement.session).toBeNull();
+			expect(replacement.status).toBe("asleep");
+		} finally {
+			oldGate.resolve();
+			newGate.resolve();
+			await Promise.all([oldClose, newClose]);
+		}
+	});
 });
