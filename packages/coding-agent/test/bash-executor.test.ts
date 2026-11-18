@@ -775,8 +775,9 @@ exit 64
 			return;
 		}
 		let sawChunk = false;
-		const block = "a".repeat(1_000);
-		const result = await executeBash(`for _ in {1..100}; do printf %s '${block}'; done`, {
+		// Keep each record below the producer guard's line limit.
+		const block = "a".repeat(999);
+		const result = await executeBash(`for _ in {1..100}; do printf '%s\\n' '${block}'; done`, {
 			cwd: tempDir,
 			timeout: 5000,
 			onChunk: () => {
