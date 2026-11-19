@@ -495,7 +495,7 @@ describe("real EvalTool output stays redacted under its registered producer owne
 			'await tool.bash({ command: "echo safe-control" });',
 			'await tool.bash({ command: [...values, ":"].join("\\n") });',
 			`await tool.bash({ command: "printf '%s' '" + canary + "'" });`,
-			'await tool.search({ type: "files", input: "*" });',
+			'void (await tool.search({ type: "files", input: "*" }));',
 		].join("\n");
 
 		const result = await tool.execute(
