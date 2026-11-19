@@ -271,12 +271,7 @@ export function encodeDaemonOperation(operation: DaemonOperation): DaemonWireOpe
 		) {
 			throw new Error("expectedGeneration must be a positive safe integer");
 		}
-		if (
-			operation.op !== "send" &&
-			operation.op !== "stop" &&
-			operation.op !== "wait" &&
-			operation.op !== "restart"
-		) {
+		if (operation.op !== "send" && operation.op !== "stop" && operation.op !== "wait" && operation.op !== "restart") {
 			throw new Error(`Guarded identity is not supported for ${operation.op}`);
 		}
 		return {
@@ -460,7 +455,9 @@ export function parseDaemonSnapshot(value: unknown): DaemonSnapshot {
 		persist: booleanValue(source.persist, "daemon.persist"),
 		detached: source.detached === undefined ? false : booleanValue(source.detached, "daemon.detached"),
 		ownershipUncertain:
-			source.ownershipUncertain === undefined ? undefined : booleanValue(source.ownershipUncertain, "daemon.ownershipUncertain"),
+			source.ownershipUncertain === undefined
+				? undefined
+				: booleanValue(source.ownershipUncertain, "daemon.ownershipUncertain"),
 	};
 }
 
@@ -630,7 +627,9 @@ export function parseDaemonRpcResult(operation: DaemonOperation, value: unknown)
 				op: "start",
 				daemon: parseDaemonSnapshot(source.daemon),
 				readyTimedOut: booleanValue(source.readyTimedOut, "result.readyTimedOut"),
-				...(source.outputTail === undefined ? {} : { outputTail: rawString(source.outputTail, "result.outputTail") }),
+				...(source.outputTail === undefined
+					? {}
+					: { outputTail: rawString(source.outputTail, "result.outputTail") }),
 			};
 		case "list": {
 			if (!Array.isArray(source.daemons)) throw new Error("result.daemons must be an array");

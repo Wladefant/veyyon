@@ -531,10 +531,8 @@ export class LaunchTool implements AgentTool<typeof launchSchema.value, LaunchTo
 					: undefined;
 			watchPause = pauseLaunchExitWatch(this.session, client.projectDir, requiredName(params), expected);
 		}
-		let success = false;
 		try {
 			const result = await client.request(operation, signal);
-			success = true;
 			if (watchPause?.captured) {
 				cancelCapturedLaunchExitWatch(this.session, client.projectDir, requiredName(params), watchPause.captured);
 			}
