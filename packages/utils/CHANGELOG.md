@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Expose a synchronous advisory lock handle for session journal append batches ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+
+### Fixed
+
+- Wait for callbacks registered during process cleanup before shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
 ### Fixed
 
 - Fixed file locks that stayed held for the rest of a session after a burst of same-process callers on Windows, which made subagent spawns fail with "Failed to acquire lock for lane-admission.json": same-process contenders now queue, a Windows sharing violation during release is retried, and a lock whose release failed is reaped by its own process.

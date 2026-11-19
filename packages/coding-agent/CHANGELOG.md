@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Wait for pending journal writes during session disposal and awaitable process shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
 - Batch native lane heartbeats into one ledger write per cadence and skip a tick if the previous write is still pending ([#1208](https://github.com/Wladefant/veyyon/issues/1208)).
 - Log the cause and duration of each failed lane release attempt without paths or lease tokens ([#1200](https://github.com/Wladefant/veyyon/issues/1200)).
 - Let native lane admission wait through short host stalls without taking the lock from a live transaction ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).

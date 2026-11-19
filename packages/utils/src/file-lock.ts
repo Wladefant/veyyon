@@ -1148,7 +1148,8 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 	}
 }
 
-function acquireLockSync(filePath: string, options: FileLockOptions = {}): () => void {
+/** Acquire a synchronous advisory lock. Call the returned release function when finished. */
+export function acquireFileLockSync(filePath: string, options: FileLockOptions = {}): () => void {
 	const opts = validateOptions(options);
 	const lockPath = getLockPath(filePath);
 	for (let attempt = 0; attempt < opts.retries; attempt++) {
@@ -1239,7 +1240,7 @@ export async function tryWithFileLock<T>(
  * publication and inode-authorized transition protocol.
  */
 export function withFileLockSync<T>(filePath: string, fn: () => T, options: FileLockOptions = {}): T {
-	const release = acquireLockSync(filePath, options);
+	const release = acquireFileLockSync(filePath, options);
 	try {
 		return fn();
 	} finally {

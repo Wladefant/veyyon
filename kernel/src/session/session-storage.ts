@@ -1,11 +1,11 @@
-import * as fs from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { reportFault } from "@veyyon/utils/fault-sink";
+import { acquireFileLockSync, withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 import { hasFsCode, isEnoent } from "@veyyon/utils/fs-error";
 import { type PathState, pathStateSync } from "@veyyon/utils/fs-optional";
-import { withFileLock, withFileLockSync } from "@veyyon/utils/file-lock";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { peekFileEnds } from "@veyyon/utils/peek-file";
@@ -20,6 +20,48 @@ const utf8Decoder = new TextDecoder("utf-8");
 const journalLockStorage = new AsyncLocalStorage<Set<string>>();
 const inProcessJournalQueues = new Map<string, Promise<void>>();
 const syncJournalLockDepths = new Map<string, number>();
+interface JournalAppendBatch {
+	canonical: string;
+	end(): void;
+}
+
+// Do not carry one implicit lock into acquisition of another path. Different
+// processes can append to two journals in opposite orders.
+let appendBatch: JournalAppendBatch | undefined;
+
+/** Keep immediate append visibility without publishing a lock owner for every entry in a burst. */
+function appendInJournalBatch(canonical: string, write: () => void): void {
+	const held = journalLockStorage.getStore();
+	if (held?.has(canonical) || syncJournalLockDepths.has(canonical)) {
+		write();
+		return;
+	}
+	if (held?.size || syncJournalLockDepths.size) {
+		withJournalLockSync(canonical, write);
+		return;
+	}
+	if (appendBatch?.canonical !== canonical) {
+		appendBatch?.end();
+		const release = acquireFileLockSync(canonical);
+		const batch: JournalAppendBatch = {
+			canonical,
+			end() {
+				if (appendBatch !== batch) return;
+				appendBatch = undefined;
+				release();
+			},
+		};
+		appendBatch = batch;
+		queueMicrotask(batch.end);
+	}
+	const batch = appendBatch;
+	try {
+		write();
+	} catch (error) {
+		batch.end();
+		throw error;
+	}
+}
 
 /** @internal Test-only handle for verifying async journal queue cleanup. */
 export const __journalLockInternalsForTesting = {
@@ -43,6 +85,7 @@ export async function withJournalLock<T>(filePath: string, fn: () => Promise<T>)
 	const nextHeld = new Set(held);
 	nextHeld.add(canonical);
 	try {
+		appendBatch?.end();
 		await fsp.mkdir(path.dirname(canonical), { recursive: true });
 		return await withFileLock(canonical, async () => {
 			return await journalLockStorage.run(nextHeld, fn);
@@ -75,6 +118,7 @@ export function withJournalLockSync<T>(filePath: string, fn: () => T): T {
 	if (inProcessJournalQueues.has(canonical)) {
 		throw new Error(`Journal lock for ${canonical} is held asynchronously in this process`);
 	}
+	appendBatch?.end();
 	const currentDepth = syncJournalLockDepths.get(canonical) ?? 0;
 	if (currentDepth > 0) {
 		syncJournalLockDepths.set(canonical, currentDepth + 1);
@@ -661,7 +705,12 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			// would mix our new session with the peer's on the same inode.
 			// Prior appends (including an owned title-slot prefix) are allowed
 			// to complete our own session header on a subsequent call.
-			if (this.#emptyAtOpen && !this.#sessionIdAtOpen && !this.#hasAppendedToPinnedJournal && fs.fstatSync(this.#fd).size > 0) {
+			if (
+				this.#emptyAtOpen &&
+				!this.#sessionIdAtOpen &&
+				!this.#hasAppendedToPinnedJournal &&
+				fs.fstatSync(this.#fd).size > 0
+			) {
 				throw new Error("Session writer journal gained content before first append");
 			}
 			// A peer can truncate and overwrite an existing regular journal in place.
@@ -704,8 +753,11 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 		);
 		try {
 			const next = fs.lstatSync(this.#path);
-			if (!next.isFile() || next.isSymbolicLink() ||
-				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))) {
+			if (
+				!next.isFile() ||
+				next.isSymbolicLink() ||
+				fileObjectIdentity(next) !== fileObjectIdentity(fs.fstatSync(nextFd))
+			) {
 				throw new Error("Session writer target changed during reopen");
 			}
 			// A different regular session file is not an authorized continuation.
@@ -752,11 +804,20 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			}
 		};
 		const canonical = path.resolve(this.#path);
-		if ((inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) || this.#pendingAppendCount > 0) {
+		if (
+			(inProcessJournalQueues.has(canonical) && !journalLockStorage.getStore()?.has(canonical)) ||
+			this.#pendingAppendCount > 0
+		) {
 			this.#pendingAppendCount++;
 			const next = this.#pendingAppends.then(
-				() => withJournalLock(this.#path, async () => { writeLocked(); }),
-				() => withJournalLock(this.#path, async () => { writeLocked(); }),
+				() =>
+					withJournalLock(this.#path, async () => {
+						writeLocked();
+					}),
+				() =>
+					withJournalLock(this.#path, async () => {
+						writeLocked();
+					}),
 			);
 			this.#pendingAppends = next.catch(() => {});
 			try {
@@ -766,7 +827,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			}
 			return;
 		}
-		withJournalLockSync(this.#path, writeLocked);
+		appendInJournalBatch(canonical, writeLocked);
 	}
 
 	override async flush(): Promise<void> {
@@ -783,8 +844,7 @@ class FileSessionStorageWriter extends BaseSessionStorageWriter {
 			const pinnedIdentity = fileObjectIdentity(fs.fstatSync(this.#fd));
 			const assertCurrentTarget = (): void => {
 				const entry = fs.lstatSync(this.#path);
-				if (!entry.isFile() || entry.isSymbolicLink() ||
-					fileObjectIdentity(entry) !== pinnedIdentity) {
+				if (!entry.isFile() || entry.isSymbolicLink() || fileObjectIdentity(entry) !== pinnedIdentity) {
 					throw new Error("Session writer target changed before durable sync");
 				}
 			};
@@ -910,8 +970,12 @@ export class FileSessionStorage implements SessionStorage {
 					if (!hasFsCode(renameError, "EPERM")) throw renameError;
 					// Never truncate the previous journal when replacement is refused.
 					// The existing staged-file fallback preserves or restores its backup.
-					this.#replaceSessionFileAfterEpermSync(tempPath, fpath, renameError,
-						options?.commitGuard ? commitGuard : undefined);
+					this.#replaceSessionFileAfterEpermSync(
+						tempPath,
+						fpath,
+						renameError,
+						options?.commitGuard ? commitGuard : undefined,
+					);
 					if (guardRejected) throw new Error("Original journal changed before synchronous publication");
 				}
 			} catch (err) {
