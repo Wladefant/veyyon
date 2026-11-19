@@ -3347,6 +3347,41 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it.each(["close", "disconnect"])("rejects every queued prompt after session %s", async mode => {
+		const harness = await createHarness();
+		const { sessionId } = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(sessionId)!;
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		session.refreshExternalTurn = async () => {
+			entered.resolve();
+			await release.promise;
+			return [];
+		};
+		const prompt = (text: string) => harness.agent.prompt({ sessionId, prompt: [{ type: "text", text }] });
+		const active = Promise.allSettled([prompt("active")]);
+		try {
+			await entered.promise;
+			const queued = Promise.allSettled([prompt("queued A"), prompt("queued B"), prompt("queued C")]);
+			const closed = mode === "close" ? harness.agent.closeSession({ sessionId }) : session.whenDisposed;
+			if (mode === "disconnect") harness.abortController.abort();
+			release.resolve();
+			await closed;
+
+			expect(await queued).toEqual(
+				Array.from({ length: 3 }, () => ({
+					status: "rejected",
+					reason: expect.objectContaining({ code: "ACP_SESSION_CLOSED" }),
+				})),
+			);
+			expect(session.promptCalls).toEqual([]);
+		} finally {
+			release.resolve();
+			harness.abortController.abort();
+			await active;
+		}
+	});
+
 	it("keeps closeSession gated while cancel cleanup is pending", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
