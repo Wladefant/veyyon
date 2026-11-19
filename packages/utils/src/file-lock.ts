@@ -510,7 +510,11 @@ async function restoreTransition(lockPath: string, expected: LockObservation): P
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
 			if (code === "ENOENT") return false;
-			if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+			if (isWindowsRetirementAccessConflict(error)) {
+				if (attempt + 1 === RESTORE_ATTEMPTS) throw error;
+			} else if (code !== "EEXIST" && code !== "ENOTEMPTY") {
+				throw error;
+			}
 			await Bun.sleep(1);
 		}
 	}
@@ -533,7 +537,11 @@ function restoreTransitionSync(lockPath: string, expected: LockObservation): boo
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
 			if (code === "ENOENT") return false;
-			if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+			if (isWindowsRetirementAccessConflict(error)) {
+				if (attempt + 1 === RESTORE_ATTEMPTS) throw error;
+			} else if (code !== "EEXIST" && code !== "ENOTEMPTY") {
+				throw error;
+			}
 			sleepSync(1);
 		}
 	}
