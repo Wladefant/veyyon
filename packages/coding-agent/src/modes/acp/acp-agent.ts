@@ -67,7 +67,6 @@ import { MCPManager } from "../../mcp/manager";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "../../mcp/runtime-config";
 import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
 import type { MCPServerConfig } from "../../mcp/types";
-import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../../plan-mode/plan-path";
@@ -1449,8 +1448,7 @@ export class AcpAgent implements Agent {
 			.getAvailableModels()
 			.toSorted(
 				(left, right) =>
-					(ACP_MODEL_PROVIDER_PRIORITY[left.provider] ?? 4) -
-					(ACP_MODEL_PROVIDER_PRIORITY[right.provider] ?? 4),
+					(ACP_MODEL_PROVIDER_PRIORITY[left.provider] ?? 4) - (ACP_MODEL_PROVIDER_PRIORITY[right.provider] ?? 4),
 			);
 		const currentModel = session.model;
 		if (models.length > 0) {
@@ -1796,7 +1794,8 @@ export class AcpAgent implements Agent {
 		const cwd = record.session.sessionManager.getCwd();
 		const replayedToolCallIds = new Set<string>();
 		const replayedToolCallArgs = new Map<string, unknown>();
-		const messages = record.session.sessionManager.buildSessionContext({ transcript: true }).messages as ReplayableMessage[];
+		const messages = record.session.sessionManager.buildSessionContext({ transcript: true })
+			.messages as ReplayableMessage[];
 		const representedPendingIds = record.session.sessionManager
 			.getBranch()
 			.filter(entry => {
