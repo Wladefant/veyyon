@@ -1551,6 +1551,327 @@ function isBroadProcessStop(name: string, words: readonly ExpandedWord[], start:
 }
 
 /**
+ * Scope of a delete command recognized by {@link findShellDelete}.
+ *
+ * - `"single"`: removes individual files/links without recursion or delete-all scope.
+ * - `"recursive"`: removes directories, recurses, or uses delete-all forms.
+ */
+export type ShellDeleteKind = "single" | "recursive";
+
+const DELETE_ALL_TARGET = /^(?:\*(?:\.\*)?|\.\.?)$|[\\/]\*(?:\.\*)?$|[\\/]\.\.?$/;
+const POWERSHELL_RECURSE_FLAG = /^-(?:r|re|rec|recu|recur|recurs|recurse)$/i;
+const POWERSHELL_WHATIF_FLAG = /^-(?:wi|whatif)$/i;
+const POWERSHELL_PATH_FLAG = /^-(?:path|literalpath|lp)(?::(.*))?$/i;
+const POWERSHELL_VALUE_FLAG = /^-(?:filter|include|exclude|stream|credential)$/i;
+const GIT_VALUE_GLOBAL_FLAGS: Record<string, true> = {
+	"-C": true,
+	"-c": true,
+	"--git-dir": true,
+	"--work-tree": true,
+	"--namespace": true,
+	"--super-prefix": true,
+	"--exec-path": true,
+	"--config-env": true,
+};
+
+function mergeShellDeleteKind(
+	current: ShellDeleteKind | undefined,
+	next: ShellDeleteKind | undefined,
+): ShellDeleteKind | undefined {
+	if (current === "recursive" || next === "recursive") return "recursive";
+	return next ?? current;
+}
+function classifyShellDeleteCommand(name: string, words: readonly ExpandedWord[], start: number): ShellDeleteKind | undefined {
+	if (name === "unlink") {
+		let hasTarget = false;
+		let afterDoubleDash = false;
+		for (let index = start; index < words.length; index += 1) {
+			const arg = words[index]!.text;
+			if (!afterDoubleDash) {
+				if (arg === "--") {
+					afterDoubleDash = true;
+					continue;
+				}
+				if (arg === "--help" || arg === "--version" || arg === "/?") return undefined;
+				if (arg.startsWith("-") && arg !== "-") continue;
+			}
+			hasTarget = true;
+		}
+		return hasTarget ? "single" : undefined;
+	}
+
+	if (name === "rmdir" || name === "rd") {
+		let hasTarget = false;
+		let afterDoubleDash = false;
+		for (let index = start; index < words.length; index += 1) {
+			const arg = words[index]!.text;
+			if (!afterDoubleDash) {
+				if (arg === "--") {
+					afterDoubleDash = true;
+					continue;
+				}
+				if (arg === "--help" || arg === "--version" || arg === "/?" || arg === "-?") return undefined;
+				if (POWERSHELL_WHATIF_FLAG.test(arg)) return undefined;
+				if ((arg.startsWith("-") && arg !== "-") || /^\/{1,2}[a-z]+(?::.*)?$/i.test(arg)) continue;
+			}
+			hasTarget = true;
+		}
+		return hasTarget ? "recursive" : undefined;
+	}
+
+	if (name === "rm") {
+		let recursive = false;
+		let hasTarget = false;
+		let afterDoubleDash = false;
+		for (let index = start; index < words.length; index += 1) {
+			const word = words[index]!;
+			const arg = word.text;
+			if (!afterDoubleDash) {
+				if (arg === "--") {
+					afterDoubleDash = true;
+					continue;
+				}
+				if (arg === "--help" || arg === "--version" || arg === "/?" || arg === "-?") return undefined;
+				if (POWERSHELL_WHATIF_FLAG.test(arg)) return undefined;
+				if (
+					arg === "--recursive" ||
+					arg === "--dir" ||
+					POWERSHELL_RECURSE_FLAG.test(arg) ||
+					isShortFlagWith(word, ["r", "R", "d"])
+				) {
+					recursive = true;
+					continue;
+				}
+				const pathMatch = POWERSHELL_PATH_FLAG.exec(arg);
+				if (pathMatch) {
+					const inline = pathMatch[1];
+					if (inline !== undefined && inline !== "") {
+						hasTarget = true;
+						if (DELETE_ALL_TARGET.test(inline)) recursive = true;
+					}
+					continue;
+				}
+				if (POWERSHELL_VALUE_FLAG.test(arg)) {
+					index += 1;
+					continue;
+				}
+				if (arg.startsWith("-") && arg !== "-") continue;
+			}
+			hasTarget = true;
+			if (DELETE_ALL_TARGET.test(arg)) recursive = true;
+		}
+		if (!hasTarget) return undefined;
+		return recursive ? "recursive" : "single";
+	}
+
+	if (name === "remove-item" || name === "ri") {
+		let recursive = false;
+		let hasTarget = false;
+		let afterDoubleDash = false;
+		for (let index = start; index < words.length; index += 1) {
+			const arg = words[index]!.text;
+			if (!afterDoubleDash) {
+				if (arg === "--") {
+					afterDoubleDash = true;
+					continue;
+				}
+				if (arg === "--help" || arg === "-?" || arg === "/?") return undefined;
+				if (POWERSHELL_WHATIF_FLAG.test(arg)) return undefined;
+				if (POWERSHELL_RECURSE_FLAG.test(arg)) {
+					recursive = true;
+					continue;
+				}
+				const pathMatch = POWERSHELL_PATH_FLAG.exec(arg);
+				if (pathMatch) {
+					const inline = pathMatch[1];
+					if (inline !== undefined && inline !== "") {
+						hasTarget = true;
+						if (DELETE_ALL_TARGET.test(inline)) recursive = true;
+					}
+					continue;
+				}
+				if (POWERSHELL_VALUE_FLAG.test(arg)) {
+					index += 1;
+					continue;
+				}
+				if (arg.startsWith("-") && arg !== "-") continue;
+			}
+			hasTarget = true;
+			if (DELETE_ALL_TARGET.test(arg)) recursive = true;
+		}
+		if (!hasTarget) return undefined;
+		return recursive ? "recursive" : "single";
+	}
+
+	if (name === "del" || name === "erase") {
+		let recursive = false;
+		let hasTarget = false;
+		let afterDoubleDash = false;
+		for (let index = start; index < words.length; index += 1) {
+			const arg = words[index]!.text;
+			if (!afterDoubleDash) {
+				if (arg === "--") {
+					afterDoubleDash = true;
+					continue;
+				}
+				if (arg === "/?" || arg === "--help" || arg === "-?") return undefined;
+				if (POWERSHELL_WHATIF_FLAG.test(arg)) return undefined;
+				if (/^\/{1,2}s$/i.test(arg) || POWERSHELL_RECURSE_FLAG.test(arg)) {
+					recursive = true;
+					continue;
+				}
+				if (/^\/{1,2}[a-z]+(?::.*)?$/i.test(arg)) continue;
+				const pathMatch = POWERSHELL_PATH_FLAG.exec(arg);
+				if (pathMatch) {
+					const inline = pathMatch[1];
+					if (inline !== undefined && inline !== "") {
+						hasTarget = true;
+						if (DELETE_ALL_TARGET.test(inline)) recursive = true;
+					}
+					continue;
+				}
+				if (POWERSHELL_VALUE_FLAG.test(arg)) {
+					index += 1;
+					continue;
+				}
+				if (arg.startsWith("-") && arg !== "-") continue;
+			}
+			hasTarget = true;
+			if (DELETE_ALL_TARGET.test(arg)) recursive = true;
+		}
+		if (!hasTarget) return undefined;
+		return recursive ? "recursive" : "single";
+	}
+
+	if (name === "git") {
+		let subIndex = start;
+		for (; subIndex < words.length; subIndex += 1) {
+			const arg = words[subIndex]!.text;
+			if (!arg.startsWith("-")) break;
+			if (Object.hasOwn(GIT_VALUE_GLOBAL_FLAGS, arg)) subIndex += 1;
+		}
+		const sub = words[subIndex]?.text.toLowerCase();
+		if (sub === "clean") {
+			let recursive = false;
+			let hasForceOrInteractive = false;
+			let hasPathspec = false;
+			for (let index = subIndex + 1; index < words.length; index += 1) {
+				const word = words[index]!;
+				const arg = word.text;
+				if (arg === "--") {
+					hasPathspec = index + 1 < words.length;
+					break;
+				}
+				if (arg === "-h" || arg === "--help" || arg === "--dry-run" || isShortFlagWith(word, ["n"])) {
+					return undefined;
+				}
+				if (arg === "--force" || arg === "--interactive" || isShortFlagWith(word, ["f", "i"])) {
+					hasForceOrInteractive = true;
+				}
+				if (isShortFlagWith(word, ["d"])) {
+					recursive = true;
+				}
+				if (!arg.startsWith("-")) hasPathspec = true;
+			}
+			if (!hasForceOrInteractive) return undefined;
+			return recursive || !hasPathspec ? "recursive" : "single";
+		}
+		if (sub === "worktree") {
+			const action = words[subIndex + 1]?.text.toLowerCase();
+			if (action === "remove") {
+				let hasTarget = false;
+				let afterDoubleDash = false;
+				for (let index = subIndex + 2; index < words.length; index += 1) {
+					const arg = words[index]!.text;
+					if (!afterDoubleDash) {
+						if (arg === "--") {
+							afterDoubleDash = true;
+							continue;
+						}
+						if (arg === "-h" || arg === "--help") return undefined;
+						if (arg.startsWith("-") && arg !== "-") continue;
+					}
+					hasTarget = true;
+				}
+				return hasTarget ? "recursive" : undefined;
+			}
+		}
+		return undefined;
+	}
+
+	return undefined;
+}
+
+/**
+ * Best-effort scanner that detects known file/directory delete commands in a
+ * command line before dispatch, returning `"recursive"` (with precedence over
+ * `"single"`), `"single"`, or `undefined`.
+ *
+ * Covers `rm`, `unlink`, `rmdir`, `Remove-Item` and PowerShell aliases (`ri`,
+ * `del`, `erase`, `rd`, `rmdir`), `cmd /c` delete commands, `git clean`, and
+ * `git worktree remove`, including quoted paths, command tails, pipes, and
+ * obvious interpreter string wrappers.
+ *
+ * Limits and counterexamples (not a sandbox or security boundary):
+ * - Does not inspect arbitrary source scripts (`sh ./s.sh`, `powershell -File`).
+ * - Does not decode obfuscated/encoded commands (`-EncodedCommand`, `base64 | sh`,
+ *   `Invoke-Expression`) or dynamic command construction (`$CMD ...`).
+ * - Stops descending into nested interpreter strings past `MAX_INTERPRETED_SHELL_DEPTH`.
+ * - Does not model `xargs` pipelines, `find -delete`/`-exec`, PowerShell
+ *   script-block loops (`ForEach-Object { Remove-Item $_ }`), or `cmd` `if` tails.
+ */
+export function findShellDelete(
+	command: string,
+	env: NodeJS.ProcessEnv = process.env,
+	home: string = resolveGuardHome(env),
+	depth = 0,
+): ShellDeleteKind | undefined {
+	if (depth > MAX_INTERPRETED_SHELL_DEPTH) return undefined;
+	if (typeof command !== "string" || command === "") return undefined;
+	let result: ShellDeleteKind | undefined;
+	for (const { text } of splitCommandSpans(command, true)) {
+		const words = splitWords(text).map(word => expandWord(word, home, env));
+		if (isHostIsolatedContainerRun(words)) continue;
+		let index = 0;
+		for (; index < words.length; index += 1) {
+			const word = words[index]!.text;
+			if (word === "command" && /^-[vV]$/.test(words[index + 1]?.text ?? "")) break;
+			if (!PROCESS_STOP_PREFIX.test(word) && !isPrefixCommand(word) && !(index > 0 && word.startsWith("-"))) {
+				break;
+			}
+		}
+		const name = processCommandName(words[index]?.text ?? "");
+		result = mergeShellDeleteKind(result, classifyShellDeleteCommand(name, words, index + 1));
+		if (result === "recursive") return "recursive";
+
+		const shape = INTERPRETED_SCRIPT_COMMANDS.get(name);
+		const scriptFlag =
+			name === "cmd"
+				? CMD_SCRIPT_FLAG
+				: name === "powershell" || name === "pwsh"
+					? POWERSHELL_SCRIPT_FLAG
+					: SCRIPT_FLAG;
+		if (!shape && scriptFlag === SCRIPT_FLAG) continue;
+		const flag = words.findIndex((word, position) => position > index && scriptFlag.test(word.text));
+		const scriptIndex = shape === "nextWord" ? index + 1 : flag === -1 ? words.length : flag + 1;
+		const script = words[scriptIndex]?.text;
+		if (!script) continue;
+		if (scriptFlag !== SCRIPT_FLAG) {
+			const offset = name === "cmd" && script.toLowerCase() === "call" ? 1 : 0;
+			const executable = processCommandName(words[scriptIndex + offset]?.text ?? "");
+			result = mergeShellDeleteKind(
+				result,
+				classifyShellDeleteCommand(executable, words, scriptIndex + offset + 1),
+			);
+			if (result === "recursive") return "recursive";
+		}
+		result = mergeShellDeleteKind(result, findShellDelete(script, env, home, depth + 1));
+		if (result === "recursive") return "recursive";
+	}
+	return result;
+}
+
+/**
  * Find the first critical risk in a command line, or `undefined` when there is
  * none.
  *

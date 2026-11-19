@@ -106,6 +106,7 @@ import {
 import { createVibeModeTools } from "./tools/agent/manifest";
 import { normalizeToolNames, TOOL } from "./tools/core/builtin-names";
 import { ToolContextStore } from "./tools/core/context";
+import { checkDeleteAdmission } from "./tools/core/delete-admission";
 import {
 	type InitialActiveToolNames,
 	resolveDiscoveryAllForceActive,
@@ -1545,6 +1546,7 @@ class SessionStartup {
 			kimiApiFormat: settings.get("providers.kimiApiFormat"),
 			preferWebsockets: this.#preferWebsockets,
 			getToolContext: toolCall => this.#toolContextStore.getContext(toolCall),
+			beforeToolCall: context => checkDeleteAdmission(context, sessionManager.getCwd()),
 			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, agent.sessionId),
 			streamFn: createLeasedStreamFn(
 				hooks.requestLeases,

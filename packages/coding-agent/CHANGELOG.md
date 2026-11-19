@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Refuse known file-delete tool calls and task delegation from Gemini 4 Hydrogen ([#1189](https://github.com/Wladefant/veyyon/issues/1189)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

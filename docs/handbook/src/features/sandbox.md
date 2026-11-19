@@ -123,6 +123,20 @@ Separately, the bash interceptor (`bashInterceptor.enabled`, default off) blocks
 commands that duplicate dedicated tools, so the model uses `read`/`search`
 instead of `cat`/`rg`/`find`. Its rules are defined in `bashInterceptor.patterns`.
 
+## Gemini 4 Hydrogen delete check
+
+Veyyon checks the model that authored each tool call, even if the session changes models before
+the call runs. It refuses known Bash and launch delete commands, whole-file edit removal and
+rename operations, empty write payloads, AST rewrites with no replacement, and checkpoint
+rewinds. An empty write is treated as a destructive overwrite, even if the target does not exist.
+Ordinary nonempty edits and writes still work. The refusal tells the agent to report the path to
+its parent. Gemini 4 Hydrogen cannot bypass these checks by calling `task` to spawn another agent.
+
+This check does not inspect files or grant access to cleanup roots. It does not confine child
+processes, scripts, eval kernels, external tools, or a command sent to another session.
+It cannot restore a file once a deletion has run. Only use a separately approved cleanup
+operation for real cleanup. A dry run does not prove that deletion took place.
+
 ## Related
 
 - [Permission model](../concepts/permission-model.md)
