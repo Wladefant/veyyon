@@ -15,6 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
@@ -36,7 +37,12 @@ import type { AgentDefinition, SingleResult } from "@veyyon/coding-agent/task/ty
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { TempDir } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
-import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
+import {
+	createAssistantStopMessage,
+	createMockSession,
+	createSessionResult,
+	yieldSuccessEvent,
+} from "../helpers/agent-session";
 
 const testAgent: AgentDefinition = {
 	name: "task",
@@ -71,6 +77,59 @@ describe("native host-lane admission regressions", () => {
 		for (const dir of tempDirs.splice(0)) dir.removeSync();
 		isolated.restore();
 	});
+
+	it("admits another lane after a cancelled lane's stalled ledger transaction finishes", async () => {
+		const ledgerPath = getLaneAdmissionLedgerPath();
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const readFile = fsp.readFile;
+		const delayedRead = vi.spyOn(fsp, "readFile").mockImplementation((async (
+			...args: Parameters<typeof readFile>
+		) => {
+			if (args[0] === ledgerPath) {
+				delayedRead.mockRestore();
+				entered.resolve();
+				await resume.promise;
+			}
+			return readFile(...args);
+		}) as typeof readFile);
+		const controller = new AbortController();
+		const cancelled = acquireSubagentHostLane({
+			agentId: "Cancelled",
+			owner: "Cancelled",
+			signal: controller.signal,
+		});
+		void cancelled.catch(() => {});
+		await entered.promise;
+		controller.abort();
+		const queued = Promise.withResolvers<void>();
+		vi.useFakeTimers();
+		const schedule = globalThis.setTimeout;
+		const scheduleAndSignal = (...args: Parameters<typeof schedule>) => {
+			const handle = schedule(...args);
+			queued.resolve();
+			return handle;
+		};
+		const timer = vi
+			.spyOn(globalThis, "setTimeout")
+			.mockImplementation(Object.assign(scheduleAndSignal, { __promisify__: schedule.__promisify__ }));
+		const successor = acquireSubagentHostLane({ agentId: "Successor", owner: "Successor" });
+		void successor.catch(() => {});
+		try {
+			await queued.promise;
+			// Move past the original five-second timeout before the transaction can resume.
+			vi.advanceTimersByTime(5_250);
+		} finally {
+			timer.mockRestore();
+			vi.useRealTimers();
+			resume.resolve();
+		}
+		expect(await cancelled).toBeNull();
+		const lease = await successor;
+		expect(lease).not.toBeNull();
+		await lease?.release();
+		expect((await getLaneAdmissionStatus()).reservations).toEqual([]);
+	}, 15_000);
 
 	it("fails fast on waitIfFull=false while preserving cancellation and top-level polling", async () => {
 		const filler = await acquireLaneAdmission({
@@ -300,6 +359,30 @@ describe("native host-lane admission regressions", () => {
 
 		await releaseLaneAdmission({ slotId: filler.slot_id!, leaseToken: filler.lease_token! });
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
+	it("frees the reservation when the provider ends the lane with an error", async () => {
+		const providerError = "Provider stopped with PROHIBITED_CONTENT";
+		const session = createMockSession(async ({ pushTurn }) => {
+			expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+			pushTurn({ ...createAssistantStopMessage("", "error"), errorMessage: providerError });
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+		const result = await runSubprocess({
+			cwd: "/repo",
+			agent: testAgent,
+			task: "handle a provider error",
+			index: 0,
+			id: "ProviderStoppedLane",
+			settings: Settings.isolated(),
+			modelRegistry: { refresh: async () => {}, getAvailable: () => [], getApiKey: async () => "k" } as never,
+			enableLsp: false,
+			eventBus: new EventBus(),
+			artifactsDir: makeArtifactsDir(),
+		});
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe(providerError);
+		expect((await getLaneAdmissionStatus()).reservations).toEqual([]);
 	});
 
 	for (const followUp of [false, true]) {

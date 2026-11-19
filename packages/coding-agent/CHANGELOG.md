@@ -5,6 +5,8 @@
 ### Fixed
 
 - Wait for pending journal writes during session disposal and awaitable process shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Let native lane admission wait through short host stalls without taking the lock from a live transaction ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Give new lane admissions a bounded wait when another process holds the host ledger lock ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 
 ## [1.12.0] - 2026-11-18
 
