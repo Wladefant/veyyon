@@ -3373,7 +3373,7 @@ describe("ACP agent", () => {
 
 			expect(await queued).toEqual(
 				Array.from({ length: 3 }, () => ({
-					status: "rejected",
+					status: "rejected" as const,
 					reason: expect.objectContaining({ code: "ACP_SESSION_CLOSED" }),
 				})),
 			);
