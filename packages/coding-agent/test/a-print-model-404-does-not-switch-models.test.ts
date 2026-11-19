@@ -3,7 +3,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { mkdirSync } from "node:fs";
 import type { AssistantMessage } from "@veyyon/ai";
-import { unregisterCustomApis } from "@veyyon/ai/api-registry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { emptyUsage } from "@veyyon/catalog/models";
@@ -15,9 +14,9 @@ import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, TempDir } from "@veyyon/utils";
 
-const PROVIDER = "print-404-fixture";
-const PRIMARY = `${PROVIDER}/primary`;
-const FALLBACK = `${PROVIDER}/fallback`;
+const PROVIDER = "openai-codex";
+const PRIMARY = `${PROVIDER}/gpt-5.6-sol`;
+const FALLBACK = `${PROVIDER}/gpt-5.5`;
 const HTTP_ERROR = 'Provider request failed (404): Requested entity was not found. NOT_FOUND';
 const EXIT = new Error("print process exited");
 
@@ -58,7 +57,6 @@ describe("print-mode model availability", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		unregisterCustomApis(PROVIDER);
 		auth.close();
 		temp.removeSync();
 	});
@@ -78,41 +76,8 @@ describe("print-mode model availability", () => {
 					"retry.fallbackChains": { [PRIMARY]: [FALLBACK] },
 				}),
 				readPipedInput: async () => undefined,
-				createAgentSession: options => {
-					options.modelRegistry?.registerProvider(PROVIDER, {
-						baseUrl: "http://127.0.0.1:1",
-						api: PROVIDER,
-						apiKey: "literal:fixture-key",
-						models: ["primary", "fallback"].map(id => ({
-							id,
-							name: id,
-							reasoning: false,
-							input: ["text"],
-							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-							contextWindow: 128_000,
-							maxTokens: 8_192,
-						})),
-						streamSimple: model => {
-							requested.push(`${model.provider}/${model.id}`);
-							const failed = model.id === "primary";
-							const message: AssistantMessage = {
-								role: "assistant",
-								api: model.api,
-								provider: model.provider,
-								model: model.id,
-								content: failed ? [] : [{ type: "text", text: "FALLBACK ANSWER" }],
-								usage: { ...emptyUsage(), credentialId: "23" },
-								timestamp: Date.now(),
-								stopReason: failed ? "error" : "stop",
-								...(failed ? { errorStatus: 404, errorMessage: HTTP_ERROR } : {}),
-							};
-							const stream = new AssistantMessageEventStream();
-							stream.push(failed ? { type: "error", reason: "error", error: message } : { type: "done", reason: "stop", message });
-							stream.end(message);
-							return stream;
-						},
-					}, PROVIDER);
-					return createAgentSession({
+				createAgentSession: async options => {
+					const created = await createAgentSession({
 						...options,
 						cwd,
 						sessionManager: SessionManager.inMemory(cwd),
@@ -127,11 +92,35 @@ describe("print-mode model availability", () => {
 						rules: [],
 						workspaceTree: { rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
 					});
+					created.session.agent.streamFn = model => {
+						const selector = `${model.provider}/${model.id}`;
+						requested.push(selector);
+						const failed = selector === PRIMARY;
+						const message: AssistantMessage = {
+							role: "assistant",
+							api: model.api,
+							provider: model.provider,
+							model: model.id,
+							content: failed ? [] : [{ type: "text", text: "FALLBACK ANSWER" }],
+							usage: { ...emptyUsage(), credentialId: "23" },
+							timestamp: Date.now(),
+							stopReason: failed ? "error" : "stop",
+							...(failed ? { errorStatus: 404, errorMessage: HTTP_ERROR } : {}),
+						};
+						const stream = new AssistantMessageEventStream();
+						stream.push(
+							failed ? { type: "error", reason: "error", error: message } : { type: "done", reason: "stop", message },
+						);
+						stream.end(message);
+						return stream;
+					};
+					return created;
 				},
 			});
 		} catch (error) {
 			if (error !== EXIT) throw error;
 		}
+		if (requested.length === 0) throw new Error(`Fixture never called the provider: ${stderr || stdout}`);
 	}
 
 	for (const mode of launchModes) {
