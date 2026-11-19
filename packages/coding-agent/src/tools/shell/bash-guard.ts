@@ -501,11 +501,12 @@ export interface CommandSpan {
  * [`hostReachableCommand`] blanks one command in place rather than rejoining
  * the survivors, so it needs the bounds. Every other reader wants the strings.
  */
-export function splitCommandSpans(line: string): CommandSpan[] {
+export function splitCommandSpans(line: string, ignoreComments = false): CommandSpan[] {
 	const spans: CommandSpan[] = [];
 	let current = "";
 	let start = 0;
 	let quote: '"' | "'" | undefined;
+	let wordStart = true;
 	const push = (end: number): void => {
 		const text = current.trim();
 		if (text !== "") spans.push({ text, start, end });
@@ -515,6 +516,7 @@ export function splitCommandSpans(line: string): CommandSpan[] {
 	for (let index = 0; index < line.length; index += 1) {
 		const character = line[index]!;
 		if (character === "\\" && quote !== "'" && index + 1 < line.length) {
+			wordStart = false;
 			current += character + line[index + 1]!;
 			index += 1;
 			continue;
@@ -525,6 +527,7 @@ export function splitCommandSpans(line: string): CommandSpan[] {
 			continue;
 		}
 		if (character === "`") {
+			wordStart = false;
 			const end = line.indexOf("`", index + 1);
 			const stop = end === -1 ? line.length : end + 1;
 			current += line.slice(index, stop);
@@ -532,20 +535,32 @@ export function splitCommandSpans(line: string): CommandSpan[] {
 			continue;
 		}
 		if (character === "$" && line[index + 1] === "(") {
+			wordStart = false;
 			const stop = endOfCommandSubstitution(line, index + 1);
 			current += line.slice(index, stop);
 			index = stop - 1;
 			continue;
 		}
 		if (character === '"' || character === "'") {
+			wordStart = false;
 			quote = character;
 			current += character;
 			continue;
 		}
-		if (SEGMENT_BREAKS.has(character)) {
-			push(index);
+		if (ignoreComments && character === "#" && wordStart) {
+			const newline = line.indexOf("\n", index);
+			if (newline === -1) break;
+			push(newline);
+			wordStart = true;
+			index = newline;
 			continue;
 		}
+		if (SEGMENT_BREAKS.has(character)) {
+			push(index);
+			wordStart = true;
+			continue;
+		}
+		wordStart = character === " " || character === "\t";
 		current += character;
 	}
 	push(line.length);
@@ -1446,6 +1461,93 @@ export function hostReachableCommand(
 		result = result.slice(0, span.start) + " ".repeat(span.end - span.start) + result.slice(span.end);
 	}
 	return result;
+}
+
+const PROCESS_STOP_PREFIX = /^(?:command|exec|then|do|else|if|elif|while|until|!|\{)$/;
+const CMD_SCRIPT_FLAG = /^\/{1,2}[ck]$/i;
+const POWERSHELL_SCRIPT_FLAG = /^-(?:c|command)$/i;
+const PROCESS_STOP_DENIAL = "Stopping processes by name or pattern is blocked. Use a verified process ID (PID).";
+
+/** A host guard for common process-stop commands, not a sandbox for external scripts. */
+export function findBroadProcessStopDenial(
+	command: string,
+	env: NodeJS.ProcessEnv = process.env,
+	home: string = resolveGuardHome(),
+	depth = 0,
+): string | undefined {
+	if (depth > MAX_INTERPRETED_SHELL_DEPTH) return undefined;
+	if (command === "") return undefined;
+	for (const { text } of splitCommandSpans(command, true)) {
+		const words = splitWords(text).map(word => expandWord(word, home, env));
+		if (isHostIsolatedContainerRun(words)) continue;
+		let index = 0;
+		for (; index < words.length; index += 1) {
+			const word = words[index]!.text;
+			if (word === "command" && /^-[vV]$/.test(words[index + 1]?.text ?? "")) break;
+			if (!PROCESS_STOP_PREFIX.test(word) && !isPrefixCommand(word) && !(index > 0 && word.startsWith("-"))) {
+				break;
+			}
+		}
+		const name = processCommandName(words[index]?.text ?? "");
+		if (isBroadProcessStop(name, words, index + 1)) return PROCESS_STOP_DENIAL;
+
+		const shape = INTERPRETED_SCRIPT_COMMANDS.get(name);
+		const scriptFlag =
+			name === "cmd"
+				? CMD_SCRIPT_FLAG
+				: name === "powershell" || name === "pwsh"
+					? POWERSHELL_SCRIPT_FLAG
+					: SCRIPT_FLAG;
+		if (!shape && scriptFlag === SCRIPT_FLAG) continue;
+		const flag = words.findIndex((word, position) => position > index && scriptFlag.test(word.text));
+		const scriptIndex = shape === "nextWord" ? index + 1 : flag === -1 ? words.length : flag + 1;
+		const script = words[scriptIndex]?.text;
+		if (!script) continue;
+		// Windows shells accept a command tail as well as a single script word.
+		if (scriptFlag !== SCRIPT_FLAG) {
+			const offset = name === "cmd" && script.toLowerCase() === "call" ? 1 : 0;
+			const executable = processCommandName(words[scriptIndex + offset]?.text ?? "");
+			if (isBroadProcessStop(executable, words, scriptIndex + offset + 1)) return PROCESS_STOP_DENIAL;
+		}
+		const inner = findBroadProcessStopDenial(script, env, home, depth + 1);
+		if (inner) return inner;
+	}
+	return undefined;
+}
+
+function processCommandName(word: string): string {
+	const start = Math.max(word.lastIndexOf("/"), word.lastIndexOf("\\")) + 1;
+	return word
+		.slice(start)
+		.toLowerCase()
+		.replace(/\.exe$/, "");
+}
+
+function isBroadProcessStop(name: string, words: readonly ExpandedWord[], start: number): boolean {
+	if (name === "pkill" || name === "killall") {
+		for (let index = start; index < words.length; index += 1) {
+			const arg = words[index]!.text;
+			if (arg === "--") return index + 1 < words.length;
+			// These options exit without stopping a process.
+			if (arg === "--help" || arg === "--version" || (name === "killall" && /^(?:-l|--list)$/.test(arg))) {
+				return false;
+			}
+		}
+		return words.length > start;
+	}
+	for (let index = start; index < words.length; index += 1) {
+		const arg = words[index]!.text;
+		if (name === "taskkill") {
+			if (/^\/{1,2}im$/i.test(arg)) return true;
+			if (/^\/{1,2}fi$/i.test(arg) && /^imagename\s/i.test(words[index + 1]?.text ?? "")) return true;
+			if (/^\/{1,2}(?:fi|pid|s|u|p)$/i.test(arg)) index += 1;
+		} else if (name === "stop-process" || name === "spps") {
+			if (/^-(?:n|na|nam|name)(?::|$)/i.test(arg)) return true;
+		} else {
+			return false;
+		}
+	}
+	return false;
 }
 
 /**

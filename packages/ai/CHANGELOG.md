@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Strip unsupported array validation keywords from Gemini tool declarations while retaining local argument validation ([#1190](https://github.com/Wladefant/veyyon/issues/1190)).
+
+## [1.10.11] - 2026-11-17
+
+### Fixed
+
+- Keep Antigravity's fixed Hydrogen Extra High wire variant free of conflicting thinking overrides, without changing the selected model or medium/default routing.
+
 ## [1.10.4] - 2026-11-16
 
 ### Fixed

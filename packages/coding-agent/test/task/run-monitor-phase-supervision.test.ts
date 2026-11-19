@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
-import { createAgentRunMonitor } from "@veyyon/coding-agent/task/run-monitor";
+import {
+	createAgentRunMonitor,
+	PHASE_WATCHDOG_LIMITS_MS,
+	WATCHDOG_TRANSPORT_SLACK_MS,
+} from "@veyyon/coding-agent/task/run-monitor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 
 const agent: AgentDefinition = {
@@ -11,12 +16,13 @@ const agent: AgentDefinition = {
 	source: "bundled",
 };
 
-function createMonitor() {
+function createMonitor(options?: { model?: Record<string, unknown>; settings?: Settings }) {
 	const monitor = createAgentRunMonitor({
 		index: 0,
 		id: "phase-test",
 		agent,
 		task: "test phase watchdog",
+		settings: options?.settings,
 		softRequestBudget: 0,
 		softRequestBudgetNotice: false,
 		maxRuntimeMs: 0,
@@ -24,7 +30,7 @@ function createMonitor() {
 	let listener: ((event: AgentSessionEvent) => void) | undefined;
 	const abort = vi.fn(async () => {});
 	const session = {
-		model: { id: "test-model" },
+		model: options?.model ?? { id: "test-model" },
 		subscribe: vi.fn((callback: (event: AgentSessionEvent) => void) => {
 			listener = callback;
 			return vi.fn();
@@ -55,11 +61,64 @@ afterEach(() => {
 });
 
 describe("run monitor phase supervision", () => {
-	it("aborts a startup run at the two-minute no-progress boundary", () => {
+	it("allows the provider default first-response window before declaring a stall", () => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor();
+		emit(event("agent_start"));
+		emit(event("turn_start"));
+		vi.advanceTimersByTime(299_999);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		monitor.finish();
+	});
+
+	it("renews the watchdog for nonempty thinking deltas", () => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor();
+		emit(event("message_start", { message: { role: "assistant", content: [] } }));
+		vi.advanceTimersByTime(299_999);
+		emit(
+			event("message_update", {
+				message: { role: "assistant", content: [] },
+				assistantMessageEvent: { type: "thinking_delta", delta: "reasoning" },
+			}),
+		);
+		vi.advanceTimersByTime(120_001);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		monitor.finish();
+	});
+
+	it("renews the watchdog when a retry changes the active model", () => {
+		vi.useFakeTimers();
+		const { monitor, emit } = createMonitor();
+		emit(event("agent_start"));
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.startup - 1);
+		emit(event("retry_fallback_applied", { from: "first", to: "fallback" }));
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.startup - 1);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
+	});
+
+	it("does not recover into a session that is still streaming after abort", async () => {
+		vi.useFakeTimers();
+		const { monitor } = createMonitor();
+		monitor.setActiveSession({
+			isStreaming: true,
+			abort: async () => {},
+		} as unknown as AgentSession);
+		monitor.requestAbort("stalled");
+		await monitor.waitForActiveSessionAbort();
+		expect(monitor.prepareStallRecovery()).toBe(false);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
+	});
+
+	it("aborts a startup run at the five-minute no-progress boundary", () => {
 		vi.useFakeTimers();
 		const { monitor } = createMonitor();
 
-		vi.advanceTimersByTime(119_999);
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.startup - 1);
 		expect(monitor.abortSignal.aborted).toBe(false);
 		vi.advanceTimersByTime(1);
 		expect(monitor.abortSignal.aborted).toBe(true);
@@ -76,7 +135,7 @@ describe("run monitor phase supervision", () => {
 		expect(monitor.abortSignal.aborted).toBe(false);
 		expect(monitor.watchdogPhase()).toBe("session-initializing");
 		monitor.attach({ subscribe: vi.fn(() => vi.fn()) } as unknown as AgentSession);
-		vi.advanceTimersByTime(119_999);
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.startup - 1);
 		expect(monitor.abortSignal.aborted).toBe(false);
 		expect(monitor.watchdogPhase()).toBe("startup");
 		vi.advanceTimersByTime(1);
@@ -100,7 +159,7 @@ describe("run monitor phase supervision", () => {
 		vi.useFakeTimers();
 		const { monitor, emit } = createMonitor();
 		emit(event("message_start", { message: { role: "assistant", content: [] } }));
-		vi.advanceTimersByTime(179_999);
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.streaming - 1);
 		emit(
 			event("message_update", {
 				message: { role: "assistant", content: [] },
@@ -163,9 +222,9 @@ describe("run monitor phase supervision", () => {
 		vi.useFakeTimers();
 		const { monitor, emit } = createMonitor();
 		emit(event("message_start", { message: { role: "assistant", content: [] } }));
-		vi.advanceTimersByTime(179_999);
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.streaming - 1);
 		emit(event("message_update", { message: { role: "assistant", content: [{ type: "text", text: "working" }] } }));
-		vi.advanceTimersByTime(179_998);
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.streaming - 2);
 		monitor.scheduleProgress(true);
 		vi.advanceTimersByTime(1);
 		expect(monitor.abortSignal.aborted).toBe(false);
@@ -219,15 +278,60 @@ describe("run monitor phase supervision", () => {
 		const { monitor, emit } = createMonitor();
 		emit(event("message_start", { message: { role: "assistant", content: [] } }));
 		for (let i = 0; i < 4; i++) {
-			vi.advanceTimersByTime(179_999);
+			vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.streaming - 1);
 			emit(
 				event("message_update", { message: { role: "assistant", content: [{ type: "text", text: `step ${i}` }] } }),
 			);
 			expect(monitor.abortSignal.aborted).toBe(false);
 		}
 		monitor.finish();
-		vi.advanceTimersByTime(180_000);
+		vi.advanceTimersByTime(PHASE_WATCHDOG_LIMITS_MS.streaming);
 		expect(monitor.abortSignal.aborted).toBe(false);
 		expect(monitor.abortKind()).toBeUndefined();
+	});
+
+	it("scales the streaming watchdog above an elevated provider first-event timeout", () => {
+		vi.useFakeTimers();
+		const previous = process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS = "420000";
+		try {
+			const { monitor, emit } = createMonitor();
+			emit(event("agent_start"));
+			vi.advanceTimersByTime(420_000 + WATCHDOG_TRANSPORT_SLACK_MS - 1);
+			expect(monitor.abortSignal.aborted).toBe(false);
+			vi.advanceTimersByTime(1);
+			expect(monitor.abortSignal.aborted).toBe(true);
+			expect(monitor.abortKind()).toBe("stalled");
+			monitor.finish();
+		} finally {
+			if (previous === undefined) delete process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			else process.env.VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS = previous;
+		}
+	});
+
+	it("scales the startup and streaming watchdogs from model.compat.streamIdleTimeoutMs", () => {
+		vi.useFakeTimers();
+		const { monitor } = createMonitor({
+			model: { id: "slow-local-model", compat: { streamIdleTimeoutMs: 420_000 } },
+		});
+		vi.advanceTimersByTime(420_000 + WATCHDOG_TRANSPORT_SLACK_MS - 1);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
+	});
+
+	it("scales the streaming watchdog from providers.streamIdleTimeoutSeconds settings", () => {
+		vi.useFakeTimers();
+		const settings = Settings.isolated({ "providers.streamIdleTimeoutSeconds": 420 });
+		const { monitor, emit } = createMonitor({ settings });
+		emit(event("agent_start"));
+		vi.advanceTimersByTime(420_000 + WATCHDOG_TRANSPORT_SLACK_MS - 1);
+		expect(monitor.abortSignal.aborted).toBe(false);
+		vi.advanceTimersByTime(1);
+		expect(monitor.abortSignal.aborted).toBe(true);
+		expect(monitor.abortKind()).toBe("stalled");
+		monitor.finish();
 	});
 });

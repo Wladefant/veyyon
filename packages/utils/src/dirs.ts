@@ -33,6 +33,7 @@ import {
 	getSharedAuthDir,
 	normalizeProfileName,
 	PROFILES_DIR_NAME,
+	RUN_DIR_NAME,
 	SUBAGENTS_DIR_NAME,
 } from "./config-root";
 import { AGENT_DIR_ENV_KEYS, PROFILE_ENV_KEYS, pickProcessEnv } from "./dir-env-keys";
@@ -876,6 +877,7 @@ export function profileExists(profile: string | undefined): boolean {
 const GLOBAL_ROOT_ENTRIES: Record<string, true> = {
 	[PROFILES_DIR_NAME]: true,
 	[SUBAGENTS_DIR_NAME]: true,
+	[RUN_DIR_NAME]: true,
 	[INSTALL_ID_FILE]: true,
 	"shared-auth": true,
 	"AGENTS.md": true,

@@ -163,4 +163,31 @@ describe("a title change during a rewrite is written once", () => {
 			});
 		}
 	}
+	it("writes a late prompt once when setCwd publishes after reading the journal body", async () => {
+		const storage = new HeldPublishStorage();
+		const nextCwd = path.join(agentDir, "next-cwd");
+		fs.mkdirSync(nextCwd, { recursive: true });
+		const session = SessionManager.create(cwd, undefined, storage);
+		session.appendMessage({ role: "user", content: "first", timestamp: 1 });
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+		const file = session.getSessionFile();
+		if (file === undefined) throw new Error("the session wrote no file");
+		storage.publishes = [];
+		storage.hold = "after-body";
+
+		const changingCwd = session.setCwd(nextCwd);
+		await storage.held.promise;
+		session.appendMessage({ role: "user", content: "late prompt", timestamp: 2 });
+		storage.release.resolve();
+		await changingCwd;
+		await session.flush();
+
+		expect(storage.publishes).toEqual(["tail"]);
+		const raw = fs.readFileSync(file, "utf8");
+		expect(raw.match(/late prompt/g)).toHaveLength(1);
+		expect(raw.indexOf('"first"')).toBeLessThan(raw.indexOf('"late prompt"'));
+		expect((await SessionManager.open(file)).getCwd()).toBe(nextCwd);
+		await session.close();
+	});
 });

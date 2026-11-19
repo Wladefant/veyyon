@@ -155,6 +155,7 @@ import {
 	type IrcPersistedDeliveryTelemetry,
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
+import { acquireSubagentHostLane, type NativeHostLaneLease } from "../task/lane-admission";
 import type { YieldItem } from "../task/types";
 import { arrayValuedLabels, assembleYieldResult } from "../task/yield-assembly";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -238,7 +239,7 @@ import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
 import { type ImageAttachment, ImageAttachments } from "./runtime/image-attachments";
 import { IrcDelivery } from "./runtime/irc-delivery";
-import { IrcContinuationOutbox } from "./runtime/irc-inbox";
+import { IrcContinuationOutbox, sameIrcRecord } from "./runtime/irc-inbox";
 import { LoopGuards } from "./runtime/loop-guards";
 import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
 import { MemoryContext } from "./runtime/memory-context";
@@ -532,6 +533,14 @@ async function sendModeContext(
 	);
 }
 
+function withIrcWakeReleaseFailure(wakeError: unknown, releaseError: unknown): unknown {
+	if (wakeError === undefined) return releaseError;
+	return new AggregateError(
+		[wakeError, releaseError],
+		`${errorMessage(releaseError)}\nIRC wake also failed: ${errorMessage(wakeError)}`,
+	);
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -738,6 +747,7 @@ export class AgentSession {
 	/** The per-family service tiers `/fast` and `tier.*` set, and the tier each request resolves to. */
 	readonly #tiers: ServiceTiers;
 	#isDisposed = false;
+	#wakeAbortController = new AbortController();
 	/** Subscribers, the extension forwarding every session event passes through, and the held `agent_end`. */
 	readonly #events: SessionEvents;
 	readonly #persistence: MessagePersistence;
@@ -895,7 +905,7 @@ export class AgentSession {
 	 *  Runs whenever the session settles; the guard makes it a no-op when the
 	 *  queue was consumed normally or a new turn already started. */
 	#drainStrandedQueuedMessages(): void {
-		if (this.#abortInProgress) return;
+		if (this.#abortInProgress || this.#isDisposed) return;
 		// A concern steered into a resumed streaming run after a user interrupt can
 		// strand at the turn tail (steered past the loop's final boundary poll). While
 		// that interrupt's suppression is still in effect, reclaim such advisor steers
@@ -976,6 +986,11 @@ export class AgentSession {
 				record.customType === "task:continuation" ||
 				(record.customType === "irc:incoming" && Reflect.get(record.details ?? {}, "relation") === "parent"),
 		);
+		records = records.map(record =>
+			record.customType === "task:continuation" && record !== parentRecord
+				? { ...record, details: { ...(record.details ?? {}), streamingCompletion: true } }
+				: record,
+		);
 		const completionId =
 			parentRecord?.customType === "task:continuation"
 				? Reflect.get(parentRecord.details ?? {}, "completionId")
@@ -994,14 +1009,16 @@ export class AgentSession {
 					: undefined;
 		if (typeof phaseId === "string" && selfId) {
 			if (this.#ircActivePhase === phaseId) return Promise.resolve();
-			if (!recovering && typeof parentId === "string" && !outbox.begin(phaseId, parentRecord))
-				return Promise.resolve();
+			if (!recovering && outbox.hasPhase(phaseId)) return Promise.resolve();
+			outbox.begin(phaseId, parentRecord);
 			this.#ircActivePhase = phaseId;
 		}
+		if (typeof completionId === "string" && parentRecord) this.#irc.inbox.takeCompletion(parentRecord);
 		const yields: YieldItem[] = [];
 		let terminal = false;
 		let published = false;
-		let phaseEnd: number | undefined;
+		let recoveredAssistantText: string | undefined;
+		let recoveredTurnEnded = false;
 		const unsubscribe = this.subscribe(event => {
 			if (event.type !== "tool_execution_end" || event.toolName !== "yield" || event.isError) return;
 			const details = event.result?.details as YieldDetails | undefined;
@@ -1012,12 +1029,8 @@ export class AgentSession {
 		const publish = async (failure?: unknown): Promise<void> => {
 			if (!selfId || typeof parentId !== "string" || typeof phaseId !== "string") return;
 			const last = yields.at(-1);
-			let lastAssistantText: string | undefined;
-			for (
-				let index = Math.min(this.agent.state.messages.length, phaseEnd ?? this.agent.state.messages.length) - 1;
-				index >= phaseStart;
-				index--
-			) {
+			let lastAssistantText = recoveredAssistantText;
+			for (let index = this.agent.state.messages.length - 1; index >= phaseStart; index--) {
 				const message = this.agent.state.messages[index];
 				if (message?.role !== "assistant") continue;
 				const text = contentText(message.content, { separator: "" });
@@ -1091,6 +1104,7 @@ export class AgentSession {
 			!this.#queue.canAutoContinueForFollowUp()
 				? this.agent.peekFollowUpQueue().slice()
 				: [];
+		let parkedFollowUpsRestored = false;
 		if (parkedFollowUps.length > 0) {
 			this.agent.replaceQueues(this.agent.peekSteeringQueue().slice(), []);
 		}
@@ -1098,87 +1112,162 @@ export class AgentSession {
 		this.#inFlight.begin();
 		const retainedIndex = parentRecord
 			? this.agent.state.messages.findIndex(
-					message =>
-						message.role === "custom" &&
-						message.customType === parentRecord.customType &&
-						Reflect.get(message.details ?? {}, "id") === Reflect.get(parentRecord.details ?? {}, "id"),
+					message => message.role === "custom" && sameIrcRecord(message, parentRecord),
 				)
 			: -1;
-		const phaseStart = retainedIndex >= 0 ? retainedIndex + 1 : this.agent.state.messages.length;
-		if (retainedIndex >= 0) {
-			// A crash after native yield persistence must publish B, not execute the phase again.
-			for (let index = retainedIndex + 1; index < this.agent.state.messages.length; index++) {
-				const message = this.agent.state.messages[index]!;
-				if (
-					message.role === "custom" &&
-					(message.customType === "task:continuation" ||
-						(message.customType === "irc:incoming" &&
-							Reflect.get(message.details ?? {}, "relation") === "parent"))
-				) {
-					phaseEnd = index;
-					break;
-				}
-				if (message.role !== "toolResult" || message.toolName !== "yield" || message.isError) continue;
-				const details = message.details as YieldDetails | undefined;
-				if (!details || (details.status !== "success" && details.status !== "aborted")) continue;
-				yields.push(details);
-				terminal ||= isTerminalYieldToolResult({ toolName: "yield", result: { details } });
-				if (terminal) {
-					phaseEnd = index + 1;
-					break;
-				}
-			}
+		const phaseStart = this.agent.state.messages.length;
+		const recovered =
+			retainedIndex >= 0 && parentRecord && typeof phaseId === "string"
+				? (outbox.recoveryMessages(phaseId, parentRecord) ?? [])
+				: [];
+		for (const message of recovered) {
+			if (
+				message.role === "custom" &&
+				parentRecord &&
+				!sameIrcRecord(message, parentRecord) &&
+				((message.customType === "task:continuation" &&
+					Reflect.get(message.details ?? {}, "streamingCompletion") !== true) ||
+					(message.customType === "irc:incoming" &&
+						Reflect.get(message.details ?? {}, "relation") === "parent" &&
+						Reflect.get(message.details ?? {}, "streamingSteer") !== true))
+			)
+				break;
+			if (message.role === "assistant") {
+				const text = contentText(message.content, { separator: "" });
+				if (text.trim()) recoveredAssistantText = text;
+				recoveredTurnEnded = message.stopReason !== "toolUse";
+			} else recoveredTurnEnded = false;
+			if (message.role !== "toolResult" || message.toolName !== "yield" || message.isError) continue;
+			const details = message.details as YieldDetails | undefined;
+			if (!details || (details.status !== "success" && details.status !== "aborted")) continue;
+			yields.push(details);
+			terminal ||= isTerminalYieldToolResult({ toolName: "yield", result: { details } });
+			if (terminal) break;
 		}
+		if (
+			!terminal &&
+			!recoveredTurnEnded &&
+			retainedIndex >= 0 &&
+			recovered.length === 0 &&
+			retainedIndex !== this.agent.state.messages.length - 1
+		) {
+			// Older journals stored delivery receipts during another turn. Re-present the same identity
+			// at a valid user boundary without writing a second receipt or borrowing that turn's result.
+			const messages = this.agent.state.messages.slice();
+			const [record] = messages.splice(retainedIndex, 1);
+			messages.push(record!);
+			this.agent.replaceMessages(messages);
+		}
+		const inputs = records.filter(
+			record =>
+				!this.agent.state.messages.some(message => message.role === "custom" && sameIrcRecord(message, record)),
+		);
 		const ready =
 			this.#ircActivePhase === phaseId && typeof phaseId === "string"
 				? this.sessionManager.ensureOnDisk().then(() => this.sessionManager.sync())
 				: Promise.resolve();
+		const needsPrompt = !terminal && !recoveredTurnEnded;
+		const canPublishFailure = Boolean(selfId && typeof parentId === "string" && typeof phaseId === "string");
+		let wakeLease: NativeHostLaneLease | null = null;
+		let wakeAdmitted = false;
+		const wakeSignal = this.#wakeAbortController.signal;
+		let failure: unknown;
+		let releaseFailed = false;
 		const settled = ready
-			.then(() =>
-				terminal
-					? undefined
-					: records.length > 0 && retainedIndex < 0
-						? this.agent.prompt(records)
-						: this.agent.continue(),
-			)
-			.then(
-				() => publish(),
-				error => publish(error),
-			)
+			.catch(error => {
+				failure = error;
+			})
 			.then(async () => {
-				if (typeof completionId === "string") {
+				if (failure === undefined && !needsPrompt) {
+					wakeAdmitted = true;
+				} else if (failure === undefined && this.#config.agentKind === "sub") {
+					try {
+						const agentId = this.#config.agentId ?? this.sessionId;
+						wakeLease = await acquireSubagentHostLane({
+							agentId,
+							owner: path.resolve(this.sessionManager.getSessionFile() ?? this.sessionId),
+							signal: wakeSignal,
+						});
+					} catch (error) {
+						failure = error;
+					}
+				}
+				if (needsPrompt && failure === undefined && this.#config.agentKind === "sub") {
+					if (!wakeLease || this.#isDisposed || wakeSignal.aborted) return;
+				}
+				if (needsPrompt && failure === undefined) {
+					wakeAdmitted = true;
+					try {
+						await (inputs.length > 0 ? this.agent.prompt(inputs) : this.agent.continue());
+					} catch (error) {
+						failure = error;
+					}
+				}
+				if (parkedFollowUps.length > 0) {
+					try {
+						this.agent.replaceQueues(
+							this.agent.peekSteeringQueue().slice(),
+							parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
+						);
+						parkedFollowUpsRestored = true;
+					} catch (error) {
+						failure ??= error;
+					}
+				}
+				if (wakeLease) {
+					try {
+						await wakeLease.release();
+					} catch (error) {
+						releaseFailed = true;
+						failure = withIrcWakeReleaseFailure(failure, error);
+					}
+				}
+				if (releaseFailed && !canPublishFailure) throw failure;
+				await publish(failure);
+				if (wakeAdmitted && typeof completionId === "string") {
 					this.sessionManager.appendCustomEntry("irc:completion-consumed", completionId);
-					this.sessionManager.flushSync();
 					await this.sessionManager.sync();
 				}
-				published = true;
+				published = wakeAdmitted;
 			})
 			.catch(error => {
+				if (releaseFailed) throw error === failure ? error : withIrcWakeReleaseFailure(error, failure);
 				logger.warn("Publishing an IRC continuation failed; retained phase will recover on activation", {
 					error: errorMessage(error),
 				});
 			})
 			.finally(async () => {
-				unsubscribe();
-				if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
-				if (parkedFollowUps.length > 0) {
-					this.agent.replaceQueues(
-						this.agent.peekSteeringQueue().slice(),
-						parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
-					);
+				try {
+					unsubscribe();
+					if (this.#ircActivePhase === phaseId) this.#ircActivePhase = undefined;
+					if (parkedFollowUps.length > 0 && !parkedFollowUpsRestored) {
+						this.agent.replaceQueues(
+							this.agent.peekSteeringQueue().slice(),
+							parkedFollowUps.concat(this.agent.peekFollowUpQueue()),
+						);
+						parkedFollowUpsRestored = true;
+					}
+					if (wakeLease && !wakeAdmitted) await wakeLease.release();
+					// Claim the next retained phase before dropping this turn's idle accounting.
+					if (published) {
+						await this.replayIrcContinuations(true).catch(error =>
+							logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
+						);
+					}
+				} finally {
+					this.#endInFlight();
 				}
-				// Claim the next retained phase before dropping this turn's idle accounting.
-				if (published) {
-					await this.replayIrcContinuations(true).catch(error =>
-						logger.warn("Recovering the next IRC phase failed", { error: errorMessage(error) }),
-					);
-				}
-				this.#endInFlight();
 			});
 		this.#ircWakeSettled = settled;
-		void settled.finally(() => {
-			if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
-		});
+		void settled
+			.finally(() => {
+				if (this.#ircWakeSettled === settled) this.#ircWakeSettled = undefined;
+			})
+			.catch(error =>
+				logger.error("Settling a detached IRC wake failed", {
+					error: errorMessage(error),
+				}),
+			);
 		return ready;
 	}
 
@@ -1255,16 +1344,9 @@ export class AgentSession {
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
 			planModeEnabled: () => this.#planMode.enabled,
-			asyncEnabled: () => this.settings.get("async.enabled"),
-			emitIrcMessage: record => void this.#events.send({ type: "irc_message", message: record }),
 			appendToContext: record => this.#custom.append(record),
 			canAutoContinueForFollowUp: () => this.#queue.canAutoContinueForFollowUp(),
-			beginWakeTurn: () => {
-				this.#resetPromptMaintenanceState();
-				this.#inFlight.begin();
-			},
-			endWakeTurn: () => this.#endInFlight(),
-			runEphemeralTurn: args => this.runEphemeralTurn(args),
+			wake: records => this.#wakeForIrc(records),
 		});
 		this.#stopHook = new SessionStopHook({
 			isHalted: () =>
@@ -3025,6 +3107,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#wakeAbortController.abort();
 		this.#irc.flushPending();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -3054,7 +3137,7 @@ export class AgentSession {
 		this.#clearLifecycleMarkers();
 		this.#cancelExitCleanup?.();
 		this.#cancelExitCleanup = undefined;
-		this.#exitRecord.close(options.reason ?? "dispose");
+		const exitRecordFlushed = this.#exitRecord.close(options.reason ?? "dispose");
 		try {
 			if (this.#config.extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#config.extensionRunner.emit({ type: "session_shutdown" });
@@ -3097,6 +3180,7 @@ export class AgentSession {
 		let persistenceFailed = false;
 		let persistenceError: unknown;
 		try {
+			await exitRecordFlushed;
 			await this.sessionManager.close();
 		} catch (error) {
 			persistenceFailed = true;
@@ -4594,6 +4678,7 @@ export class AgentSession {
 		this.#abortInProgress = true;
 		try {
 			this.abortRetry();
+			this.#wakeAbortController.abort();
 			this.#promptGeneration++;
 			this.#nextTurn.forgetRequestedTurn();
 			if (options?.preserveCompaction) {
@@ -4643,6 +4728,7 @@ export class AgentSession {
 				this.#advisorRoster.preserveCard(card);
 			}
 		} finally {
+			if (!this.#isDisposed) this.#wakeAbortController = new AbortController();
 			this.#abortInProgress = false;
 			this.#drainStrandedQueuedMessages();
 		}
@@ -4696,20 +4782,22 @@ export class AgentSession {
 		// identity, while this agent still routes requests and memory on the old one.
 		// Restore the last durable transcript instead of leaving a split identity.
 		const beforeFork = this.sessionManager.captureState();
-		const forkResult = await this.sessionManager.fork().catch((error: unknown) => {
+		const forkResult = await this.sessionManager.fork().catch(async (error: unknown) => {
 			if (
 				this.sessionManager.getSessionId() !== beforeFork.sessionId ||
 				this.sessionManager.getSessionFile() !== beforeFork.sessionFile
 			) {
 				try {
-					// The failed fork abandoned its published-file layout. The next
-					// persistence operation must revalidate the original file, including
-					// any foreign writer's tail, before writing to it again.
+					// The failed fork abandoned its published-file layout. Revalidate
+					// the source, including any genuine foreign writer's tail, then
+					// durably remove our own aborted session_switched before rejecting.
+					// A restart must not require an extra caller-initiated flush.
 					this.sessionManager.restoreState({ ...beforeFork, needsRewrite: true });
+					await this.sessionManager.flush();
 				} catch (restoreError) {
 					throw new AggregateError(
 						[error, restoreError],
-						"Fork failed and could not restore its original session",
+						"Fork failed and could not durably restore its original session",
 					);
 				}
 			}
@@ -5242,32 +5330,19 @@ export class AgentSession {
 	}
 
 	/**
-	 * Deliver an IRC message into this session (recipient side; called by the IrcBus); see
-	 * {@link IrcDelivery.deliver}.
+	 * Deliver an IRC message through the session's verified frame, durable inbox, and phase owner.
 	 */
 	async deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
 		if (this.#isDisposed) {
 			throw new Error("Recipient session is disposed.");
 		}
-		if (msg.completion) {
-			const completionId = msg.completion.id;
-			if (
-				this.sessionManager
-					.getEntries()
-					.some(
-						entry =>
-							entry.type === "custom_message" &&
-							entry.customType === "task:continuation" &&
-							Reflect.get(entry.details ?? {}, "completionId") === completionId,
-					)
-			) {
-				await this.sessionManager.ensureOnDisk();
-				await this.sessionManager.sync();
-				return "injected";
-			}
-		}
 		if (!this.#ircContinuations) {
 			this.#ircContinuations = new IrcContinuationOutbox(this.sessionManager);
+		}
+		if (msg.completion && this.#ircContinuations.hasReceivedCompletion(msg.completion.id)) {
+			await this.sessionManager.ensureOnDisk();
+			await this.sessionManager.sync();
+			return "injected";
 		}
 		if (!msg.completion && this.#ircContinuations.hasPhase(msg.id)) {
 			await this.sessionManager.ensureOnDisk();
@@ -5283,6 +5358,15 @@ export class AgentSession {
 			(opts?.expectsReply ?? false) && ((this.isStreaming && !this.settings.get("async.enabled")) || planModeIdle);
 		const registry = AgentRegistry.global();
 		const identity = registry.actorContext(msg.to);
+		const senderIdentity = registry.actorContext(msg.from);
+		const senderRef = registry.get(msg.from);
+		const senderParent = !senderRef
+			? "unverified"
+			: (senderIdentity.parentId ?? (senderRef.kind === "main" && !senderRef.parentId ? "root" : "unverified"));
+		const recipientRef = registry.get(msg.to);
+		const recipientParent = !recipientRef
+			? "unverified"
+			: (identity.parentId ?? (recipientRef.kind === "main" && !recipientRef.parentId ? "root" : "unverified"));
 		const relation = registry.relationTo(msg.to, msg.from);
 		if (
 			!msg.completion &&
@@ -5309,11 +5393,15 @@ export class AgentSession {
 				from: msg.from,
 				message: msg.body,
 				source: "agent",
+				agentSource: true,
 				replyTo: msg.replyTo ?? "",
 				autoReplied: autoReply,
 				interrupting: this.isStreaming,
 				...identity,
-				parentId: identity.parentId ?? "unknown",
+				parentId: recipientParent,
+				senderId: senderIdentity.selfId,
+				senderParent,
+				senderAncestorIds: senderIdentity.ancestorIds.join(", ") || "none verified",
 				ancestorIds: identity.ancestorIds.join(", ") || "none verified",
 				relation,
 				parentUpdate: relation === "parent",
@@ -5331,7 +5419,14 @@ export class AgentSession {
 				source: "agent",
 				relation,
 				...identity,
-				actor: { source: "agent", relation, ...identity },
+				actor: {
+					source: "agent",
+					relation,
+					...identity,
+					triggeringIncomingActor: senderIdentity,
+					senderRegistered: registry.get(msg.from) !== undefined,
+				},
+				senderParent,
 				...(msg.completion
 					? {
 							completionId: msg.completion.id,
@@ -5347,18 +5442,15 @@ export class AgentSession {
 		};
 		if (msg.completion) {
 			record = this.#ircContinuations.withOrdering(record);
-			// Persist before acknowledging delivery. A sender crash may replay the same result.
-			this.#appendCustomMessageToContext(record);
-			this.sessionManager.flushSync();
+			// Persist acknowledgement state separately from model input. The next valid step owns consumption.
+			this.#ircContinuations.receiveCompletion(record);
 			await this.sessionManager.ensureOnDisk();
 			await this.sessionManager.sync();
 			void this.#events.send({ type: "irc_message", message: record });
-			if (this.isStreaming) {
-				this.#irc.inbox.queueCompletionWake(record);
+			if (this.isStreaming || this.#planMode.enabled) {
+				this.#irc.inbox.queueInterrupt(record);
 				return "injected";
 			}
-			if (this.#planMode.enabled) return "injected";
-			// The record is already in context; wake on it without persisting a second copy.
 			await this.#wakeForIrc([record]);
 			return "woken";
 		}
@@ -5459,8 +5551,8 @@ export class AgentSession {
 					return parent && parent.status !== "aborted" && (parent.session || parent.sessionFile);
 				});
 				if (!parentId) return false;
-				parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			}
+			parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			if (!context.ancestorIds.includes(parentId)) return false;
 			const parent = registry.get(parentId);
 			if (!parent || parent.status === "aborted") return false;
@@ -5485,24 +5577,18 @@ export class AgentSession {
 			this.#ircActivePhase
 		)
 			return false;
-		const consumed = new Set(
-			this.sessionManager
-				.getEntries()
-				.flatMap(entry =>
-					entry.type === "custom" &&
-					entry.customType === "irc:completion-consumed" &&
-					typeof entry.data === "string"
-						? [entry.data]
-						: [],
-				),
-		);
-		const pendingCompletion = this.agent.state.messages.find(
-			message =>
-				message.role === "custom" &&
-				message.customType === "task:continuation" &&
-				typeof Reflect.get(message.details ?? {}, "completionId") === "string" &&
-				!consumed.has(Reflect.get(message.details ?? {}, "completionId")),
-		);
+		const consumedInContext = new Set<string>();
+		for (const message of this.agent.state.messages) {
+			if (
+				message.role !== "custom" ||
+				message.customType !== "task:continuation" ||
+				Reflect.get(message.details ?? {}, "streamingCompletion") !== true
+			)
+				continue;
+			const id = Reflect.get(message.details ?? {}, "completionId");
+			if (typeof id === "string") consumedInContext.add(id);
+		}
+		const pendingCompletion = outbox.pendingReceivedCompletions(consumedInContext)[0];
 		if (pendingCompletion?.role === "custom") {
 			const from = Reflect.get(pendingCompletion.details ?? {}, "from");
 			const selfId = this.#config.agentId;
@@ -5546,14 +5632,26 @@ export class AgentSession {
 		try {
 			const registry = AgentRegistry.global();
 			const identity = registry.actorContext(msg.to);
+			const senderIdentity = registry.actorContext(msg.from);
+			const senderRef = registry.get(msg.from);
+			const senderParent = !senderRef
+				? "unverified"
+				: (senderIdentity.parentId ?? (senderRef.kind === "main" && !senderRef.parentId ? "root" : "unverified"));
+			const recipientRef = registry.get(msg.to);
+			const recipientParent = !recipientRef
+				? "unverified"
+				: (identity.parentId ?? (recipientRef.kind === "main" && !recipientRef.parentId ? "root" : "unverified"));
 			const relation = registry.relationTo(msg.to, msg.from);
 			const { replyText } = await this.runEphemeralTurn({
 				promptText: prompt.render(sideChannelPrompts["side-channel/irc-autoreply"].text, {
 					from: msg.from,
 					...identity,
-					parentId: identity.parentId ?? "unknown",
+					parentId: recipientParent,
 					ancestorIds: identity.ancestorIds.join(", ") || "none verified",
 					relation,
+					senderId: senderIdentity.selfId,
+					senderParent,
+					senderAncestorIds: senderIdentity.ancestorIds.join(", ") || "none verified",
 					parentUpdate: relation === "parent",
 					message: msg.body,
 					replyTo: msg.replyTo ?? "",
@@ -5566,7 +5664,19 @@ export class AgentSession {
 				customType: "irc:autoreply",
 				content: `[IRC you → \`${msg.from}\` (auto)]\n\n${body}`,
 				display: true,
-				details: { to: msg.from, body, replyTo: msg.id },
+				details: {
+					to: msg.from,
+					body,
+					replyTo: msg.id,
+					triggeringIncomingActor: {
+						source: "agent",
+						relation,
+						...identity,
+						sender: senderIdentity,
+						senderRegistered: senderRef !== undefined,
+					},
+					triggeringSenderParent: senderParent,
+				},
 				attribution: "agent",
 				timestamp: Date.now(),
 			};
@@ -5669,7 +5779,13 @@ export class AgentSession {
 	 * the turn. A crash before this point leaves the claim in `claimed/`, and it is offered again.
 	 */
 	#takeIrcRecords(): CustomMessage[] {
-		const records = this.#irc.inbox.takeAll();
+		const records = this.#irc.inbox
+			.takeAll()
+			.map(record =>
+				record.customType === "task:continuation"
+					? { ...record, details: { ...(record.details ?? {}), streamingCompletion: true } }
+					: record,
+			);
 		const noticeIds: string[] = [];
 		for (const record of records) {
 			const id = record.customType === "session:notice" ? Reflect.get(record.details ?? {}, "id") : undefined;
@@ -5730,6 +5846,7 @@ export class AgentSession {
 					from: notice.from,
 					message: formatNoticeMessage(notice, Date.now()),
 					source: "external-session notice",
+					agentSource: false,
 					selfId: this.#config.agentId ?? sessionId,
 					relation: "external-session notice",
 					parentId: "not agent lineage",

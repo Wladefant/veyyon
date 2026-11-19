@@ -1,0 +1,209 @@
+/**
+ * WHY: persistent ledger faults must bound teardown without freeing held capacity.
+ * Real filesystem and retry timers are intentional; this does not simulate power loss.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
+import * as laneModule from "@veyyon/coding-agent/task/lane-admission";
+import {
+	acquireLaneAdmission,
+	acquireNativeHostLaneWait,
+	acquireSubagentHostLane,
+	getLaneAdmissionLedgerPath,
+	getLaneAdmissionStatus,
+	setLaneAdmissionCap,
+} from "@veyyon/coding-agent/task/lane-admission";
+import { logger } from "@veyyon/utils";
+import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
+
+describe("persistent lane release recovery", () => {
+	let isolated: IsolatedConfigRoot;
+	beforeEach(() => {
+		isolated = enterIsolatedConfigRoot("persistent-lane-release", { defaultProfile: true });
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+		isolated.restore();
+	});
+
+	it("escalates persistent corrupt-ledger release without borrowing an ended worker's fence", async () => {
+		await setLaneAdmissionCap({ cap: 1 });
+		const lease = await acquireSubagentHostLane({
+			agentId: "persistent-release",
+			owner: "persistent-release",
+			cap: 1,
+		});
+		const ledgerPath = getLaneAdmissionLedgerPath();
+		const original = fs.readFileSync(ledgerPath, "utf8");
+		const log = vi.spyOn(logger, "error");
+		fs.writeFileSync(ledgerPath, "{");
+		const release = lease!.release();
+		// Real filesystem failures and retry timers must settle together; this deadline detects the former infinite loop.
+		const deadline = new AbortController();
+		let outcome: unknown;
+		try {
+			outcome = await Promise.race([
+				release.then(
+					() => "released",
+					error => error,
+				),
+				delay(1_000, "unbounded", { signal: deadline.signal }),
+			]);
+		} finally {
+			deadline.abort();
+			fs.writeFileSync(ledgerPath, original);
+			await release.catch(() => {});
+		}
+		expect(outcome).toMatchObject({ code: "lane_release_reconciliation_required" });
+		expect(log.mock.calls).toEqual([
+			[
+				"Host lane release requires reconciliation",
+				{
+					operation: "lane-release",
+					stage: "durable-release",
+					errorCode: "lane_release_reconciliation_required",
+					attempts: [1, 2, 3].map(attempt => ({
+						attempt,
+						errorClass: "LaneAdmissionError",
+						code: "corrupt_admission_ledger",
+						message: "The lane admission ledger is corrupt.",
+						durationMs: expect.any(Number),
+					})),
+				},
+			],
+		]);
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+		expect((await acquireLaneAdmission({ owner: "must-stay-full", kind: "native" })).admitted).toBe(false);
+		const recovered = await acquireSubagentHostLane({
+			agentId: "persistent-release",
+			owner: "persistent-release",
+			cap: 1,
+		});
+		expect(recovered!.slotId).not.toBe(lease!.slotId);
+		await lease!.release();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+		await recovered!.release();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
+	it("bounds cancelled acquisition compensation and permits fenced recovery after ledger repair", async () => {
+		const controller = new AbortController();
+		const realAcquire = laneModule.laneAdmissionDriver.acquire;
+		let ledgerPath = "";
+		let original = "";
+		vi.spyOn(laneModule.laneAdmissionDriver, "acquire").mockImplementationOnce(async options => {
+			const admitted = await realAcquire(options);
+			ledgerPath = getLaneAdmissionLedgerPath();
+			original = fs.readFileSync(ledgerPath, "utf8");
+			fs.writeFileSync(ledgerPath, "{");
+			controller.abort();
+			return admitted;
+		});
+		const acquire = acquireNativeHostLaneWait({
+			owner: "persistent-compensation",
+			cap: 1,
+			signal: controller.signal,
+		});
+		const deadline = new AbortController();
+		let outcome: unknown;
+		try {
+			outcome = await Promise.race([
+				acquire.then(
+					() => "cancelled",
+					error => error,
+				),
+				delay(1_000, "unbounded", { signal: deadline.signal }),
+			]);
+		} finally {
+			deadline.abort();
+			fs.writeFileSync(ledgerPath, original);
+			await acquire.catch(() => {});
+		}
+		expect(outcome).toMatchObject({ code: "lane_release_reconciliation_required" });
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+		const recovered = await acquireNativeHostLaneWait({
+			owner: "persistent-compensation",
+			cap: 1,
+			waitIfFull: false,
+		});
+		expect(recovered).not.toBeNull();
+		await recovered!.release();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
+	it("bounds failed atomic replacements and retries the retained handle after access recovers", async () => {
+		const lease = await acquireNativeHostLaneWait({ owner: "unwritable-release", cap: 1 });
+		const ledgerPath = getLaneAdmissionLedgerPath();
+		const original = fs.readFileSync(ledgerPath, "utf8");
+		const log = vi.spyOn(logger, "error");
+		const realRename = fsp.rename;
+		const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+			if (String(target) === ledgerPath) {
+				const error = new Error("Denied C:\\private\\ledger.json and fence-test-secret") as NodeJS.ErrnoException;
+				error.code = "EACCES";
+				throw error;
+			}
+			return realRename(source, target);
+		});
+		await expect(lease!.release()).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
+		const record = log.mock.calls.find(([message]) => message === "Host lane release requires reconciliation");
+		expect(record?.[1]).toMatchObject({
+			attempts: [1, 2, 3].map(attempt => ({
+				attempt,
+				errorClass: "SystemError",
+				code: "EACCES",
+				message: "Permission denied.",
+				durationMs: expect.any(Number),
+			})),
+		});
+		const rendered = JSON.stringify(record);
+		expect(rendered).not.toContain("private");
+		expect(rendered).not.toContain("fence-test-secret");
+		expect(fs.readFileSync(ledgerPath, "utf8")).toBe(original);
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+		rename.mockRestore();
+		await lease!.release();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	});
+
+	it.each([
+		{
+			name: "a filesystem code that changes after validation",
+			error: () => {
+				let reads = 0;
+				return Object.defineProperty(new Error("Denied"), "code", {
+					get: () => (++reads <= 2 ? "EACCES" : "C:\\private\\synthetic-fence"),
+				});
+			},
+			code: "EACCES",
+		},
+		{
+			name: "a non-string error message",
+			error: () => Object.assign(new Error("Denied"), { message: { path: "C:\\private\\synthetic-fence" } }),
+			code: "release_exception",
+		},
+	])(
+		"keeps retries and safe logs for $name",
+		async fixture => {
+			const lease = await acquireNativeHostLaneWait({ owner: "malformed-rejection", cap: 1 });
+			if (!lease) throw new Error("test lane was not acquired");
+			const log = vi.spyOn(logger, "error");
+			const release = vi.spyOn(laneModule.laneAdmissionDriver, "release").mockImplementation(async () => {
+				throw fixture.error();
+			});
+			await expect(lease.release()).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
+			const record = log.mock.calls.find(([message]) => message === "Host lane release requires reconciliation");
+			expect(record?.[1]).toMatchObject({
+				attempts: [1, 2, 3].map(attempt => ({ attempt, code: fixture.code })),
+			});
+			expect(JSON.stringify(record)).not.toContain("synthetic-fence");
+			expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+			release.mockRestore();
+			await lease.release();
+			expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+		},
+		2_000,
+	);
+});

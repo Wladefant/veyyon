@@ -14,7 +14,7 @@ import type {
 	ClientBridgeTerminalHandle,
 	ClientBridgeTerminalOutput,
 } from "@veyyon/kernel/session/client-bridge";
-import { errorMessage, isEnoent, lazy, logger, normalizePathForComparison, prompt, settleWithin } from "@veyyon/utils";
+import { errorMessage, isEnoent, logger, normalizePathForComparison, prompt, settleWithin } from "@veyyon/utils";
 import { SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils/signal-exit";
 import { resolveAutoBackgroundWaitMs } from "../../async/auto-background";
 import type { AsyncJobManager } from "../../async/job-manager";
@@ -50,9 +50,11 @@ import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
 import { bashApprovalPattern } from "./bash-approval-pattern";
+import { RESERVED_CALLER_ENV_KEYS, resolveBashCallerEnv } from "./bash-caller-attestation";
 import { registerForegroundBashWait } from "./bash-foreground-registry";
 import {
 	bashCredentialTargets,
+	findBroadProcessStopDenial,
 	findCriticalBashRisk,
 	findFlaggedBashPattern,
 	hostReachableCommand,
@@ -116,8 +118,7 @@ export { FLAGGED_BASH_PATTERNS } from "./bash-guard";
  * with the call's own `env` argument spread over it, which is exactly what
  * `buildNonInteractiveEnv` hands the child.
  *
- * Both judgements that read variables (`findCriticalBashRisk` and
- * `bashCredentialTargets`) go through this. Judging against `process.env`
+ * Guard checks that read variables use this environment. Judging against `process.env`
  * alone let a caller hand the guard one value and the shell another, so
  * `bash({command:"rm -rf $LANG", env:{LANG:"/"}})` was approved and deleted the
  * root. Only string values are taken; anything else is not something the child
@@ -203,6 +204,8 @@ export function bashApprovalDecision(
 	if (polysimDenial) {
 		return { tier: "exec", deny: true, reason: polysimDenial.reason };
 	}
+	const processStopDenial = findBroadProcessStopDenial(command, judgementEnv);
+	if (processStopDenial) return { tier: "exec", deny: true, reason: processStopDenial };
 	const risk =
 		command === "" ? undefined : findCriticalBashRisk(command, undefined, extraProtectedPaths, judgementEnv, cwd);
 	// Same split as the flagged patterns below: `critical` is the floor yolo
@@ -436,6 +439,9 @@ function normalizeBashEnv(env: Record<string, string> | undefined): Record<strin
 	for (const [key, value] of Object.entries(env)) {
 		if (!BASH_ENV_NAME_PATTERN.test(key)) {
 			throw new ToolError(`Invalid bash env name: ${key}`);
+		}
+		if (Object.hasOwn(RESERVED_CALLER_ENV_KEYS, key.toUpperCase())) {
+			throw new ToolError(`Bash env override refused: ${key} is reserved for host caller attestation.`);
 		}
 		normalized[key] = value;
 	}
@@ -744,7 +750,6 @@ export class BashTool
 		// already held to the budget is not cut again for the bytes a notice adds. A
 		// sink that spilled saved the full stream already, so a cut here points at that
 		// artifact rather than saving the sink's window as a second one.
-		const sinkArtifactId = result.artifactId;
 		const cappedBody = await enforceInlineByteCap(body, {
 			...inlineOutputPricing(this.session),
 			saveArtifact:
@@ -1098,6 +1103,8 @@ export class BashTool
 			});
 		}
 		const expanded = await this.#expandInternalUrls(extracted.command, env, extracted.cwd);
+		const processStopDenial = findBroadProcessStopDenial(expanded.command, bashJudgementEnv(input));
+		if (processStopDenial) throw new ToolError(processStopDenial);
 
 		// Best-effort cache invalidation: drop github-cache rows for any issue/PR
 		// number touched by a mutating `gh` subcommand inside this bash call so
@@ -1132,10 +1139,14 @@ export class BashTool
 			if (timeoutClampNotice) notices.push(timeoutClampNotice);
 		}
 		if (skillScopeUnresolved) notices.push(SKILL_SCOPE_UNRESOLVED_NOTICE);
+		const resolvedEnv = {
+			...expanded.env,
+			...resolveBashCallerEnv(this.session),
+		};
 		return {
 			command: expanded.command,
 			commandCwd,
-			resolvedEnv: expanded.env,
+			resolvedEnv,
 			requestedTimeoutSec,
 			timeoutSec,
 			timeoutMs: timeoutSec === undefined ? undefined : timeoutSec * 1000,

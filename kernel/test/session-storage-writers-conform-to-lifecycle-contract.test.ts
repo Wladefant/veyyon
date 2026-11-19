@@ -277,7 +277,7 @@ describe("session storage writers conform to lifecycle and error contracts", () 
 							fd: number,
 							data: NodeJS.ArrayBufferView | string,
 							offset?: number | null,
-							length?: number | null,
+							length?: number | BufferEncoding | null,
 							position?: number | null,
 						) => {
 							writeCalls++;
@@ -293,9 +293,15 @@ describe("session storage writers conform to lifecycle and error contracts", () 
 								return written;
 							}
 							if (typeof data === "string") {
-								return realWriteSync(fd, data, offset ?? undefined);
+								return realWriteSync(fd, data, offset, typeof length === "string" ? length : undefined);
 							}
-							return realWriteSync(fd, data, offset ?? undefined, length ?? undefined, position ?? undefined);
+							return realWriteSync(
+								fd,
+								data,
+								offset ?? undefined,
+								typeof length === "number" ? length : undefined,
+								position ?? undefined,
+							);
 						},
 					);
 
