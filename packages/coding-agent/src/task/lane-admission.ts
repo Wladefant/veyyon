@@ -6,7 +6,7 @@ import { logger } from "@veyyon/utils";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { getGlobalConfigRootDir, getGlobalRunDir, PROFILES_DIR_NAME } from "@veyyon/utils/config-root";
 import { withFileLock } from "@veyyon/utils/file-lock";
-import { isEnoent, isFsError } from "@veyyon/utils/fs-error";
+import { isEnoent } from "@veyyon/utils/fs-error";
 import { readOwnerOnlyFileSync } from "@veyyon/utils/owner-only-read";
 import { getProcessStartIdentity, isProcessAlive, isToolCallProcessAlive } from "@veyyon/utils/process-liveness";
 
@@ -1012,6 +1012,8 @@ function laneReleaseRejection(reason: string | undefined): LaneReleaseFailure {
 				code: reason,
 				message: "The lane admission ledger version is unsupported.",
 			};
+		case "lease_token_mismatch":
+			return { errorClass: "LaneAdmissionError", code: reason, message: "The slot belongs to another lease." };
 		default:
 			return {
 				errorClass: "LaneAdmissionError",
@@ -1022,31 +1024,41 @@ function laneReleaseRejection(reason: string | undefined): LaneReleaseFailure {
 }
 
 function laneReleaseException(error: unknown): LaneReleaseFailure {
-	if (error instanceof LaneAdmissionError) return laneReleaseRejection(error.code);
-	// Filesystem messages can include paths and exception causes. Log only known codes and fixed text.
-	if (isFsError(error) && Object.hasOwn(constants.errno, error.code)) {
-		return {
-			errorClass: "SystemError",
-			code: error.code,
-			message: RELEASE_FS_MESSAGES[error.code] ?? "Filesystem operation failed.",
-		};
-	}
-	if (error instanceof Error && error.message.startsWith("Failed to acquire lock for ")) {
-		if (
-			error.message.endsWith(": an earlier holder in this process did not release it") ||
-			error.message.includes(": in-process queue made no progress for ")
-		) {
-			return {
-				errorClass: "Error",
-				code: "ledger_local_lock_timeout",
-				message: "The previous holder in this process did not release the ledger lock.",
-			};
+	try {
+		if (error instanceof Error) {
+			const code: unknown = (error as NodeJS.ErrnoException).code;
+			if (error instanceof LaneAdmissionError) {
+				return laneReleaseRejection(typeof code === "string" ? code : undefined);
+			}
+			// Log the same code we validated. Neither an errno's message nor a cause is safe to log.
+			if (typeof code === "string" && Object.hasOwn(constants.errno, code)) {
+				return {
+					errorClass: "SystemError",
+					code,
+					message: RELEASE_FS_MESSAGES[code] ?? "Filesystem operation failed.",
+				};
+			}
+			const message: unknown = error.message;
+			if (typeof message === "string" && message.startsWith("Failed to acquire lock for ")) {
+				if (
+					message.endsWith(": an earlier holder in this process did not release it") ||
+					message.includes(": in-process queue made no progress for ")
+				) {
+					return {
+						errorClass: "Error",
+						code: "ledger_local_lock_timeout",
+						message: "The previous holder in this process did not release the ledger lock.",
+					};
+				}
+				return {
+					errorClass: "Error",
+					code: "ledger_lock_timeout",
+					message: "The ledger lock could not be acquired before retries ended.",
+				};
+			}
 		}
-		return {
-			errorClass: "Error",
-			code: "ledger_lock_timeout",
-			message: "The ledger lock could not be acquired before retries ended.",
-		};
+	} catch {
+		// A throwing accessor must not interrupt release retries or reconciliation.
 	}
 	return { errorClass: "Error", code: "release_exception", message: "The release threw an unexpected exception." };
 }
@@ -1068,8 +1080,8 @@ async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> 
 			}
 			failure = laneReleaseRejection(res.reason);
 		} catch (error) {
-			if (error instanceof LaneAdmissionError && error.code === "lease_token_mismatch") throw error;
 			failure = laneReleaseException(error);
+			if (failure.code === "lease_token_mismatch") throw error;
 		}
 		attempts ??= [];
 		attempts.push({ attempt: attempt + 1, durationMs: Math.round(performance.now() - started), ...failure });
