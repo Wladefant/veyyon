@@ -43,6 +43,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { AgentToolResult } from "@veyyon/agent-core";
 import { BlobStore, resolveImageDataSync } from "@veyyon/kernel/session/blob-store";
+import { readColdMessage } from "@veyyon/kernel/session/session-cold-payloads";
 import type { UsageStatistics } from "@veyyon/kernel/session/session-entries";
 import type { SessionInfo as StoredSessionInfo } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -67,7 +68,6 @@ import { MCPManager } from "../../mcp/manager";
 import { mergeRuntimeMCPConfig, type RuntimeMCPConfig } from "../../mcp/runtime-config";
 import type { McpConnectionStatusEvent } from "../../mcp/startup-events";
 import type { MCPServerConfig } from "../../mcp/types";
-import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../../plan-mode/plan-path";
@@ -1808,10 +1808,12 @@ export class AcpAgent implements Agent {
 				);
 			})
 			.map(entry => entry.id);
+		// Replay reads compacted payloads once. Do not warm and retain the whole
+		// transcript in the session manager while the client drains it.
 		for (const message of messages) {
 			for (const notification of this.#messageToReplayNotifications(
 				record.session.sessionId,
-				message,
+				readColdMessage(message),
 				cwd,
 				replayedToolCallIds,
 				replayedToolCallArgs,
