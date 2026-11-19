@@ -1128,7 +1128,7 @@ export class AgentSession {
 		let crossedPhaseBoundary = false;
 		for (const message of recovered) {
 			if (
-				message.role === "user" ||
+				(message.role === "user" && message.steering !== true) ||
 				(message.role === "custom" &&
 					parentRecord &&
 					!sameIrcRecord(message, parentRecord) &&
@@ -1205,6 +1205,11 @@ export class AgentSession {
 								parentRecord &&
 								(recovered.length === 0 || crossedPhaseBoundary || messages.at(-1)?.role === "assistant")
 							) {
+								if (crossedPhaseBoundary && typeof phaseId === "string") {
+									// Record ownership before a replay can append assistant or tool output.
+									outbox.beginAttempt(phaseId);
+									await this.sessionManager.sync();
+								}
 								const index = messages.findIndex(
 									message => message.role === "custom" && sameIrcRecord(message, parentRecord),
 								);

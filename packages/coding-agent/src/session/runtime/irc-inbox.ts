@@ -218,9 +218,33 @@ export class IrcContinuationOutbox {
 				Reflect.get(entry.data, "version") === 1 &&
 				Reflect.get(entry.data, "phaseId") === phaseId,
 		);
-		const input = entries.findIndex(entry => entry.type === "custom_message" && sameIrcRecord(entry, record));
+		let input = -1;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i]!;
+			if (entry.type === "custom_message" && sameIrcRecord(entry, record)) {
+				input = i;
+				break;
+			}
+		}
 		if (claim < 0 || input < 0) return undefined;
-		return entries.slice(Math.max(claim, input) + 1).flatMap(entry => this.#store.buildEntryContext(entry).messages);
+		let attempt = -1;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i]!;
+			if (
+				entry.type === "custom" &&
+				entry.customType === "irc:continuation-attempt" &&
+				typeof entry.data === "object" &&
+				entry.data !== null &&
+				Reflect.get(entry.data, "version") === 1 &&
+				Reflect.get(entry.data, "phaseId") === phaseId
+			) {
+				attempt = i;
+				break;
+			}
+		}
+		return entries
+			.slice(Math.max(claim, input, attempt) + 1)
+			.flatMap(entry => this.#store.buildEntryContext(entry).messages);
 	}
 
 	hasPhase(phaseId: string): boolean {
@@ -355,6 +379,10 @@ export class IrcContinuationOutbox {
 		if (this.hasPhase(phaseId)) return false;
 		this.#store.appendCustomEntry("irc:continuation-phase", { version: 1, phaseId, record });
 		return true;
+	}
+
+	beginAttempt(phaseId: string): void {
+		this.#store.appendCustomEntry("irc:continuation-attempt", { version: 1, phaseId });
 	}
 
 	complete(
