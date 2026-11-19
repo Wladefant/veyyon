@@ -88,7 +88,7 @@ describe("extension worker access", () => {
 			id: "Parked",
 			displayName: "Parked",
 			kind: "sub",
-			status: "parked",
+			status: "asleep",
 			session: null,
 			scope: OWN_SCOPE,
 		});
@@ -96,7 +96,7 @@ describe("extension worker access", () => {
 		const workers = access(OWN_SCOPE).listWorkers();
 
 		expect(workers).toHaveLength(1);
-		expect(workers[0]).toMatchObject({ id: "Parked", status: "parked", live: false });
+		expect(workers[0]).toMatchObject({ id: "Parked", status: "asleep", live: false });
 	});
 
 	test("omits advisor transcripts unless asked, and refuses to steer one either way", async () => {

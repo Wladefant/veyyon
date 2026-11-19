@@ -1384,7 +1384,10 @@ describe("native retained child resume", () => {
 		registry.attachSession("child", recoveredChild.instance, reopened.getSessionFile()!);
 
 		const parentEntry = registry.get("parent");
-		if (parentEntry) parentEntry.status = "aborted";
+		if (parentEntry) {
+			parentEntry.status = "asleep";
+			parentEntry.session = null;
+		}
 
 		await recoveredChild.instance.replayIrcContinuations();
 		await root.instance.waitForIdle();
@@ -2499,10 +2502,17 @@ describe("native retained child resume", () => {
 			const completions = parent.store
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation");
+<<<<<<< HEAD
+			expect(completions.some(c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"'))).toBe(true);
+			expect(
+				completions.filter(c => c.type === "custom_message" && typeof c.content === "string" && c.content.includes('"value":"P2"')),
+			).toHaveLength(1);
+=======
 			const hasP2 = (content: string | readonly unknown[]): boolean =>
 				(typeof content === "string" ? content : JSON.stringify(content)).includes('"value":"P2"');
 			expect(completions.some(c => c.type === "custom_message" && hasP2(c.content))).toBe(true);
 			expect(completions.filter(c => c.type === "custom_message" && hasP2(c.content))).toHaveLength(1);
+>>>>>>> origin/main
 		} finally {
 			openSpy.mockRestore();
 		}

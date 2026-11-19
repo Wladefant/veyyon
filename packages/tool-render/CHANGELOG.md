@@ -9,6 +9,7 @@
 ### Changed
 
 - `resultTextOf` joins a result's text blocks through `contentText` from `@veyyon/utils/content-text`; rendered output is unchanged.
+- The `irc` roster card sorts and colours `asleep` peers where it sorted and coloured `parked` ones.
 
 ## [1.6.0] - 2026-10-28
 

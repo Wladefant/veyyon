@@ -2,15 +2,18 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import type { FetchImpl } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AUTHENTICATED_API_KEY_SENTINEL } from "@veyyon/ai/provider-env-keys";
+import { createMockModel } from "@veyyon/ai/providers/mock";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@veyyon/catalog/provider-models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
+import { kNoAuth } from "@veyyon/coding-agent/config/auth-state";
 import { ModelRegistry, type ProviderConfigInput } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
@@ -249,6 +252,57 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	async function createDeferredSession(
+		modelPattern: string[],
+		credential: (model: { provider: string; id: string }) => string | undefined,
+	) {
+		const parentModel = requireBundledModel("anthropic", "claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(path.join(tempDir, `chain-auth-${Snowflake.next()}.db`));
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, `chain-models-${Snowflake.next()}.yml`));
+		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async requested => credential(requested));
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			extensions: [providerExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			modelPattern,
+			modelPatternAuthFallback: `${parentModel.provider}/${parentModel.id}`,
+			modelPatternFallbackChain: true,
+		});
+		sessionsToDispose.push(session);
+		return { session };
+	}
+
+	test("a later deferred agent pattern with working credentials outranks the auth fallback", async () => {
+		const { session } = await createDeferredSession(
+			["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"],
+			model => (model.id === "runtime-model" ? undefined : "test-key"),
+		);
+
+		expect(session.model?.provider).toBe("runtime-provider");
+		expect(session.model?.id).toBe("runtime-reasoning-model");
+	});
+
+	test("a keyless auth fallback model is used when no deferred pattern has credentials", async () => {
+		const { session } = await createDeferredSession(["runtime-provider/runtime-model"], model =>
+			model.provider === "anthropic" ? kNoAuth : undefined,
+		);
+
+		expect(session.model?.provider).toBe("anthropic");
+		expect(session.model?.id).toBe("claude-sonnet-4-5");
+	});
+
 	test("installs fallback chain for remaining deferred agent modelPattern candidates", async () => {
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"])),
@@ -281,6 +335,45 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		} finally {
 			await session.dispose();
 		}
+	});
+
+	test("sets modelPatternFallbackKey and falls back to the second model even with retry.modelFallback disabled", async () => {
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.modelFallback": false,
+			"retry.baseDelayMs": 1,
+			"retry.maxRetries": 1,
+		});
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"])),
+			settings,
+			modelPatternFallbackChain: true,
+		});
+		sessionsToDispose.push(session);
+
+		expect(session.model?.provider).toBe("runtime-provider");
+		expect(session.model?.id).toBe("runtime-model");
+		expect(session.modelPatternFallbackKey).toBe("runtime-provider/runtime-model");
+
+		const mock = createMockModel();
+		const requestedModels: string[] = [];
+		session.agent.streamFn = (requested, context, options) => {
+			requestedModels.push(`${requested.provider}/${requested.id}`);
+			mock.push(
+				requested.id === "runtime-model"
+					? { throw: "HTTP 502 Bad Gateway" }
+					: { content: ["recovered on second model"] },
+			);
+			return mock.stream(requested, context, options);
+		};
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+
+		await session.prompt("Trigger deferred fallback chain");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"]);
+		expect(session.model?.provider).toBe("runtime-provider");
+		expect(session.model?.id).toBe("runtime-reasoning-model");
 	});
 
 	test("does not apply the default model's thinking override when modelPattern is explicit", async () => {

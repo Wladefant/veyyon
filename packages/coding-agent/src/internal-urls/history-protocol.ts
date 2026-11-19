@@ -2,7 +2,7 @@
  * Protocol handler for history:// URLs.
  *
  * Exposes agent transcripts as concise markdown. Live refs render from the
- * in-memory message array; parked refs (session disposed, sessionFile
+ * in-memory message array; asleep refs (session disposed, sessionFile
  * retained) load read-only from the JSONL session file — no writer, no lock.
  *
  * Agents that are no longer in the `AgentRegistry` — one-shot helpers
@@ -201,7 +201,7 @@ function archivedTargetForCaller(caller: ResolvedHistoryCaller, agentId: string)
 		!target ||
 		target.kind === "advisor" ||
 		target.scope !== caller.scope ||
-		(target.status !== "parked" && target.status !== "aborted") ||
+		target.status !== "asleep" ||
 		target.session !== null ||
 		typeof target.sessionFile !== "string" ||
 		target.sessionFile.trim().length === 0
@@ -219,7 +219,7 @@ function renderArchivedIndex(refs: Iterable<AgentRef>, scope: string, request: A
 		if (
 			ref.kind === "advisor" ||
 			ref.scope !== scope ||
-			ref.status !== "parked" ||
+			ref.status !== "asleep" ||
 			ref.session !== null ||
 			typeof ref.sessionFile !== "string" ||
 			ref.sessionFile.trim().length === 0
@@ -402,7 +402,7 @@ async function resolveArchivedHistory(
 			archivedTargetForCaller(currentCaller, agentId) !== target ||
 			target.kind === "advisor" ||
 			target.scope !== caller.scope ||
-			(target.status !== "parked" && target.status !== "aborted") ||
+			target.status !== "asleep" ||
 			target.session !== null ||
 			target.sessionFile !== rawSessionFile
 		) {
@@ -459,7 +459,7 @@ async function resolveArchivedHistory(
  * Handler for history:// URLs.
  *
  * Resolves agent ids against the global AgentRegistry, then falls back to
- * on-disk `.jsonl` transcripts, serving read-only history for live, parked,
+ * on-disk `.jsonl` transcripts, serving read-only history for live, asleep,
  * and unregistered agents alike.
  */
 const HISTORY_RESOLVE_DEADLINE_MS = 5000;

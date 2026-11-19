@@ -257,18 +257,31 @@ function settleInlineProgress(
 	}
 }
 
-/** What the parent reads once a background agent stops: how to reach it and where its transcript is. */
-function followUpHint(agentId: string, aborted: boolean, ircEnabled: boolean): string {
-	if (aborted) {
-		const status = AgentRegistry.global().get(agentId)?.status;
-		if (status === "idle" || status === "parked") {
-			const followUp = ircEnabled ? "message it via `irc` to resume; " : "";
-			return `\n\n${agentId} was stopped but is still resumable — ${followUp}transcript at history://${agentId}`;
-		}
-		return `\n\n${agentId} was aborted — transcript at history://${agentId}`;
+/**
+ * What the parent reads once a background agent stops: how to reach it and where its transcript is. An
+ * agent wakes only in the workspace it ran in, and an isolated run's worktree is removed when the run
+ * ends, so an isolated agent is offered its transcript alone.
+ */
+function followUpHint(agentId: string, run: { aborted: boolean; isolated: boolean; ircEnabled: boolean }): string {
+	const transcript = `transcript at history://${agentId}`;
+	if (run.isolated) {
+		const ended = run.aborted ? "was stopped" : "finished";
+		return `\n\n${agentId} ${ended}; its isolated worktree is removed, so messages cannot reach it — ${transcript}`;
 	}
-	const followUp = ircEnabled ? "message it via `irc` to follow up; " : "";
-	return `\n\n${agentId} is now idle — ${followUp}transcript at history://${agentId}`;
+	if (run.aborted) {
+		// A request-limit stop leaves the agent idle and every other stop puts it to
+		// sleep; a message picks either back up with its full context.
+		const status = AgentRegistry.global().get(agentId)?.status;
+		if (status) {
+			const followUp = run.ircEnabled
+				? `message it via \`irc\` to ${status === "asleep" ? "wake it and " : ""}continue its work instead of redoing it; `
+				: "";
+			return `\n\n${agentId} was stopped and is ${status} — ${followUp}${transcript}`;
+		}
+		return `\n\n${agentId} was stopped — ${transcript}`;
+	}
+	const followUp = run.ircEnabled ? "message it via `irc` to follow up; " : "";
+	return `\n\n${agentId} is now idle — ${followUp}${transcript}`;
 }
 
 /** How the parent follows the jobs a call started. */
@@ -617,6 +630,8 @@ export class SpawnScheduler {
 	#registerJob(call: SpawnCall, spawn: ScheduledSpawn, batch: BackgroundBatch, options: BackgroundOptions): string {
 		const { agentId, progress } = spawn;
 		const params = spawnParamsFor(call.params, spawn.item, call.defaultAgent);
+		// A spawn that names isolation either runs isolated or is refused before it starts.
+		const isolated = params.isolated === true;
 		return options.manager.register(
 			"task", // not-a-tool-name: async job kind
 			agentId,
@@ -646,7 +661,7 @@ export class SpawnScheduler {
 					);
 					const finalText = result.content.find(part => part.type === "text")?.text ?? "(no output)";
 					delivery = {
-						text: `${finalText}${followUpHint(agentId, single?.aborted === true, options.ircEnabled)}`,
+						text: `${finalText}${followUpHint(agentId, { aborted: single?.aborted === true, isolated, ircEnabled: options.ircEnabled })}`,
 						failed,
 					};
 				} catch (error) {
@@ -654,7 +669,9 @@ export class SpawnScheduler {
 					progress.durationMs = Math.max(0, Date.now() - startedAt);
 					batch.settle(true);
 					await reportProgress(`Background task ${agentId} failed.`);
-					const hint = AgentRegistry.global().get(agentId) ? followUpHint(agentId, false, options.ircEnabled) : "";
+					const hint = AgentRegistry.global().get(agentId)
+						? followUpHint(agentId, { aborted: false, isolated, ircEnabled: options.ircEnabled })
+						: "";
 					throw new Error(`${errorMessage(error)}${hint}`);
 				} finally {
 					this.#release();

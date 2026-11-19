@@ -76,7 +76,7 @@ const TOOL_PROMPT_CEILINGS: Record<string, number> = {
 	write: 700,
 	goal: 700,
 	resolve: 480,
-	web_search: 340,
+	web_search: 500,
 };
 
 /**

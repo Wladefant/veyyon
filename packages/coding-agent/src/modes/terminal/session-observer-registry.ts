@@ -182,7 +182,7 @@ export class SessionObserverRegistry {
 			this.#settledBeforeWake.delete(ref.id);
 			// The bus reported the woken turn itself (a `task` follow-up) and its outcome stands.
 			if (session.status !== "active") return;
-			session.status = ref.status === "aborted" ? "aborted" : settled.status;
+			session.status = settled.status;
 			session.detached = settled.detached;
 		}
 		session.lastUpdate = Date.now();

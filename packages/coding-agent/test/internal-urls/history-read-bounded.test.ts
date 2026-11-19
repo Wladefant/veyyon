@@ -661,7 +661,7 @@ describe("history read bounded regressions", () => {
 				kind: "sub",
 				session: null,
 				sessionFile: sessionFilePath,
-				status: "parked",
+				status: "asleep",
 			});
 
 			const callerReason = new Error("caller aborted parked transcript load mid-flight");

@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
+import { RAIL_SETTLE_FRAME_MS, RAIL_SETTLE_FRAMES } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type Component, TUI } from "@veyyon/tui";
 import { StressRenderScheduler } from "../../../hosts/terminal/engine/test/render-stress-scheduler";
@@ -43,6 +44,7 @@ describe("ToolExecutionComponent write repaint seam", () => {
 		for (const component of components) component.stopAnimation();
 		components.length = 0;
 		vi.restoreAllMocks();
+		vi.useRealTimers();
 	});
 
 	function makeComponent(args: unknown) {
@@ -99,6 +101,10 @@ describe("ToolExecutionComponent write repaint seam", () => {
 	});
 
 	it("removes stale pending tail rows from the terminal buffer when the first partial result arrives", async () => {
+		// Fake timers so the rail settle animation a coloured live card plays after
+		// its final result can be run to its end below; the stress scheduler drains
+		// renders but never advances a real interval.
+		vi.useFakeTimers();
 		const term = new VirtualTerminal(80, 8, 1_000);
 		const scheduler = new StressRenderScheduler();
 		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
@@ -114,10 +120,11 @@ describe("ToolExecutionComponent write repaint seam", () => {
 			// Counted rather than merely present, for the same reason as the SSH
 			// repaint suite: the bug this exists to catch is a frame drawn a second
 			// time below the first, and `some(...)` is true whether the row was
-			// repainted in place or duplicated.
-			// The note is the host's: it counts the WRAPPED rows it dropped, one of which it spends on
-			// the note itself, and it offers the expand gesture the tool no longer words.
-			expect(pendingRows.filter(row => row.includes("… 9 earlier lines"))).toHaveLength(1);
+			// repainted in place or duplicated. The card is live and taller than the
+			// three rows above the editor, so only its tail is on screen: its earlier
+			// rows, the host's elision note among them, are not final and never
+			// enter native scrollback.
+			expect(pendingRows.filter(row => row.includes("earlier lines"))).toHaveLength(0);
 			expect(pendingRows.filter(row => row.includes("… (streaming)"))).toHaveLength(1);
 			expect(pendingRows.filter(row => row.includes("20 line 20"))).toHaveLength(1);
 
@@ -134,11 +141,28 @@ describe("ToolExecutionComponent write repaint seam", () => {
 			expect(rows.some(row => row.includes("… (streaming)"))).toBe(false);
 			expect(rows.some(row => row.includes("earlier lines"))).toBe(false);
 			expect(rows.some(row => row.includes("20 line 20"))).toBe(false);
-			// The first partial-result frame is what remains: progress line plus the
-			// top-anchored preview.
-			expect(rows.filter(row => row.includes("Writing notes.txt..."))).toHaveLength(1);
-			expect(rows.filter(row => row.includes("  1 line 1"))).toHaveLength(1);
+			// The first partial-result frame's tail is what the window shows: the
+			// top-anchored preview's last line and its continuation note.
+			expect(rows.filter(row => row.includes("  6 line 6"))).toHaveLength(1);
 			expect(rows.filter(row => row.includes("… 14 more lines"))).toHaveLength(1);
+
+			component.updateResult(partialWriteResult("Wrote notes.txt"), false);
+			// A card that streamed under a coloured rail settles for RAIL_SETTLE_FRAMES
+			// frames and stays in the live region until the last one. With no colour
+			// (NO_COLOR) there is no rail to animate and the card is final at once.
+			vi.advanceTimersByTime(RAIL_SETTLE_FRAME_MS * RAIL_SETTLE_FRAMES);
+			tui.requestRender();
+			await scheduler.drain(term);
+
+			// Settled, the card is final and enters native scrollback whole and
+			// once, with nothing of the pending tail window above it.
+			const settledRows = plainBuffer(term);
+			expect(settledRows.some(row => row.includes("… (streaming)"))).toBe(false);
+			expect(settledRows.some(row => row.includes("20 line 20"))).toBe(false);
+			expect(settledRows.filter(row => row.includes("Write: notes.txt"))).toHaveLength(1);
+			expect(settledRows.filter(row => row.includes("  1 line 1"))).toHaveLength(1);
+			expect(settledRows.filter(row => row.includes("  6 line 6"))).toHaveLength(1);
+			expect(settledRows.filter(row => row.includes("… 14 more lines"))).toHaveLength(1);
 		} finally {
 			tui.stop();
 			await term.flush();

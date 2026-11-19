@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ## [1.8.0] - 2026-11-05
+### Breaking Changes
+
+- Bumped `COLLAB_PROTO` to `5`: `AgentSnapshot.status` is `"running" | "idle" | "asleep"`, `"parked"` and `"aborted"` are removed, and an asleep agent wakes when messaged. Peers speaking proto v4 or below are rejected with the protocol-mismatch error.
 
 ### Added
 

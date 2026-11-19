@@ -620,10 +620,7 @@ veyyon config get compaction.threshold
 
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
-| `agent.idleTtlMs` | Park Idle Agents After | number | `300000` | How long a spawned agent that has finished its turn stays live before it is parked. A parked agent releases its process, MCP clients and memory; it stays in the roster and is rebuilt from its transcript when messaged or opened. Counted from the agent's last activity. Until exit: idle agents stay live for the whole session. |
-| `agent.prune.enabled` | Prune Parked Agents | boolean | `true` | Remove parked agents from the roster after Prune After. A pruned agent cannot be messaged or opened again; its transcript stays on disk and readable at history://\<agent>. Off: parked agents stay in the roster until the session exits. |
-| `agent.prune.afterMs` | Prune After | number | `3600000` | How long a parked agent stays in the roster before it is pruned, counted from when it was parked. |
-| `agent.prune.waitingAfterMs` | Prune After While Waiting | number | `7200000` | Prune After for a parked agent whose last message was that it is waiting on another agent. A value below Prune After is raised to it. |
+| `agent.idleTtlMs` | Sleep Idle Agents After | number | `300000` | How long a spawned agent that has finished its turn stays live before it falls asleep. An asleep agent releases its process, MCP clients and memory; it stays in the roster and wakes from its transcript when messaged or opened. Counted from the agent's last activity. Never: idle agents stay live until the session exits. |
 
 ### Isolation
 

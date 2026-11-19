@@ -11,6 +11,7 @@ violate**. Scope is the core engine only:
 - [`hosts/terminal/engine/src/core/frame-plan.ts`](../../hosts/terminal/engine/src/core/frame-plan.ts): the records one frame phase returns to the next (transition, prefix reconciliation, window plan, assembled window, update geometry).
 - [`hosts/terminal/engine/src/core/render-intent.ts`](../../hosts/terminal/engine/src/core/render-intent.ts): the render intent a planned frame takes (full paint or incremental update) and the rule that selects it.
 - [`hosts/terminal/engine/src/core/renderer.ts`](../../hosts/terminal/engine/src/core/renderer.ts): per-row frame preparation (`PreparedFrameCache`, `prepareLine`), cursor-marker extraction, the bytes each row is written as (`terminalLine`, which merges byte-adjacent SGR sequences with `coalesceAdjacentSgr`), and the ConPTY full-paint bound (`truncateLargeConptyFrame`).
+- [`hosts/terminal/engine/src/core/component-path.ts`](../../hosts/terminal/engine/src/core/component-path.ts): the component chain from a root to one descendant (`pathToDescendant`) and whether a chain found on an earlier paint still holds (`isPathIntact`), which the root uses to keep a scoped frame's chain between paints.
 - [`hosts/terminal/engine/src/core/committed-prefix.ts`](../../hosts/terminal/engine/src/core/committed-prefix.ts): the committed-prefix audit (`auditCommittedPrefix`, `findCommittedPrefixResync`, `firstRowDivergence`), which checks a frame against the rows already in native scrollback and returns the row to re-anchor at.
 - [`hosts/terminal/engine/src/core/component-types.ts`](../../hosts/terminal/engine/src/core/component-types.ts): `Component`, the native-scrollback seam interfaces and their accessors.
 - [`hosts/terminal/engine/src/core/overlay.ts`](../../hosts/terminal/engine/src/core/overlay.ts), [`core/scroll.ts`](../../hosts/terminal/engine/src/core/scroll.ts), [`core/cursor.ts`](../../hosts/terminal/engine/src/core/cursor.ts), [`core/image-budget.ts`](../../hosts/terminal/engine/src/core/image-budget.ts), [`core/container.ts`](../../hosts/terminal/engine/src/core/container.ts), [`core/terminal-session.ts`](../../hosts/terminal/engine/src/core/terminal-session.ts), [`core/mouse-routing.ts`](../../hosts/terminal/engine/src/core/mouse-routing.ts), [`core/frame-segments.ts`](../../hosts/terminal/engine/src/core/frame-segments.ts), [`core/render-scheduler.ts`](../../hosts/terminal/engine/src/core/render-scheduler.ts), [`core/frame-pacing.ts`](../../hosts/terminal/engine/src/core/frame-pacing.ts): the sibling modules the pipeline calls. `hosts/terminal/engine/src/tui.ts` is a barrel over them and holds no logic.
@@ -48,37 +49,43 @@ selection, transcript persists after exit). The engine maintains one ledger:
 - **`windowTopRow` (W)**: the frame row mapped to grid row 0. The visible
   window is frame rows `[W, W + height)`, repainted in place with relative
   cursor moves.
-- **live-region boundary**: reported by the component tree per frame
+- live-region boundary: reported by the component tree per frame
   (`NativeScrollbackLiveRegion.getNativeScrollbackLiveRegionStart()`), a single
-  frame-row index. Rows above the boundary are declared **FINAL**, byte-stable
+  frame-row index. Rows above the boundary are declared FINAL, byte-stable
   at the current width for the component's lifetime, and commit as exact,
-  **audited** content. Rows at/after the boundary repaint in place inside the
-  window; when they scroll above the window top they *still commit* (the tape
-  records what was on screen) but as **frozen visual snapshots** that are
-  audit-exempt while their source stays live, later drift of the source never
-  re-anchors or recommits them mid-run.
+  audited content. Rows at/after the boundary are live: they repaint in place
+  inside the window, and when they scroll above the window top they commit
+  nowhere. They wait off-screen, painted nowhere, until the boundary passes
+  them, then commit as final rows.
 
-Per ordinary frame: `W = max(C, L − height)` and the only bytes that ever touch
-history are the **chunk** `frame[C, C')` written at the scrollback seam. The
-engine also tracks **`#committedPrefixAuditRows` (A ≤ C)**, rows in `[0, A)`
-are HARD-VERIFIED exact-final bytes; rows in `[A, C)` are the frozen snapshots.
-When the boundary later rises past a frozen snapshot (the block finalized), it
-is strict-scanned exactly once: unchanged rows join the verified zone; a
-divergence re-anchors so the final content lands in history correctly, via an
-erase-and-replay rebuild where enabled, else by recommitting below the stale
-snapshot (duplication, never loss). Scrollback therefore equals `frame[0..C)`,
-every row exactly once, in order, with its content at commit time. There is
-nothing to guess, nothing to defer, and nothing to reconcile: the scroll
-position is irrelevant because ordinary updates never rewrite anything a
-scrolled reader could be looking at.
+Per ordinary frame: `W = max(C, L − height)` and `C' = max(C, min(W, B))`,
+where `B` is the boundary. The only bytes that ever touch history are the
+chunk `frame[C, C')` written at the scrollback seam. Rows in `[C, W)` are the
+off-screen live rows; a frame that slides the window over them rewrites the
+window in place, because a scroll would push them into history before they
+are final. The engine also tracks
+`#committedPrefixAuditRows` (A ≤ C): rows in `[0, A)` are HARD-VERIFIED
+exact-final bytes; rows in `[A, C)` committed final and then the boundary
+retreated over them (a markdown rewind, a re-opened block). When the boundary
+later rises past them it strict-scans them exactly once: unchanged rows join
+the verified zone; a divergence re-anchors so the final content lands in
+history, via an erase-and-replay rebuild where enabled, else by recommitting
+below the stale copy (duplication, never loss). Scrollback therefore equals
+`frame[0..C)`, every row exactly once, in order, final. There is nothing to
+guess, nothing to defer, and nothing to reconcile: the scroll position is
+irrelevant because ordinary updates never rewrite anything a scrolled reader
+could be looking at.
 
 ### What this costs (the accepted tradeoffs)
 
-- A block that has scrolled past the window top cannot reflow in place. A
-  still-live block's scrolled-off rows commit as frozen snapshots, so a late
-  layout change of an already-committed row is a frozen stale row in history
-  (repaired by the one-time strict scan at finalization, rebuild or
-  duplication, never loss), not a dropped row.
+- A live block taller than the window shows only its rows inside the window
+  until it finalizes or declares rows settled
+  (`getTranscriptBlockSettledRows`): its rows above the window are not in
+  native scrollback yet, so scrolling up mid-run does not reach them. They
+  enter history once, final, which is what removes the mid-run duplicate
+  copies and the whole-transcript replays a stale committed row used to cost.
+- Each frame that slides the window over off-screen live rows is an in-place
+  rewrite of the window rather than a scroll.
 - A component tree that reports **no seam** gets shell semantics: whatever
   scrolls off is final. Shrinking such a frame into its committed prefix
   re-anchors the window and leaves the stale copy in history (§3).
@@ -106,7 +113,8 @@ scrolled reader could be looking at.
 1. Compose the frame (`render(width)`), collecting `liveRegionStart` from the
    root children (absolute row indices; the topmost reporter wins).
 2. **Audit the committed prefix** (`auditCommittedPrefix` in `core/committed-prefix.ts`, skipped on geometry
-   frames and on `clearScrollback` frames). Components must never
+   frames, on `clearScrollback` frames, and on a frame shorter than the committed rows, which the
+   re-base in step 3 judges alone). Components must never
    re-layout declared-final rows, but real flows violate it (a TTSR rewind
    truncating a streamed block, an image-cap demotion shrinking a committed
    image) and the violation must not become content loss. The verified zone's
@@ -134,9 +142,13 @@ scrolled reader could be looking at.
    `VEYYON_TUI_RESIZE_IN_PLACE=1`), and a host that owns the grid
    (`Terminal.hostOwnsGridOnResize`: conhost reprints its own viewport, so an
    in-place repaint lands on a screen nobody is looking at).
-   A frame that collapsed to a byte-identical prefix of the committed record
-   (pinned chrome taller than the viewport squeezed the transcript) re-bases
-   the commit index and takes no divergence rebuild. When a root child that
+   A frame shorter than the committed rows (a live suffix collapsing on abort or
+   result) re-bases the commit index at its first row that differs from the
+   recorded prefix, so a row the collapse replaced is committed again and
+   reaches history; the audit's one-edit tolerance would have kept it counted
+   as committed. A collapse to a byte-identical prefix of the record (pinned
+   chrome taller than the viewport squeezed the transcript) re-bases the commit
+   index and takes no divergence rebuild. When a root child that
    implements `NativeScrollbackReplay` may have dropped committed rows, the
    divergence rebuild discards the frame and composes it again as a replace
    (`#rehydrateDivergence`), so the replay holds the whole transcript.
@@ -170,7 +182,11 @@ scrolled reader could be looking at.
    coordinates, an overlay never touches the frame or the ledger) and re-fit
    the composited window with the stateless `prepareLinesArray`. Each row is
    written through `terminalLine`, which merges byte-adjacent SGR sequences
-   (`coalesceAdjacentSgr`) and appends the line terminator.
+   (`coalesceAdjacentSgr`) and appends the line terminator. A rewrite that
+   erases the rest of its row (`lineRewriteSequence`) first drops the row's
+   trailing spaces under no attribute that marks a blank (`SgrState.marksBlank`),
+   since an erased cell draws the same; components pad every row to the width,
+   so that padding was most of a repainted row's bytes.
 6. Emit:
 
 | Emitter | Bytes | When |
@@ -212,13 +228,18 @@ of the audited history. The interface is a **single method**:
   boundary wins.
 
 There is no component-reported deeper boundary: the engine itself guarantees
-no loss, because live rows that scroll above the window top commit as frozen,
-audit-exempt visual snapshots, then get their one-time strict scan when the
-boundary rises past them (§1). Adjacent engine hooks components may implement:
+no loss, because live rows that scroll above the window top wait off-screen
+and commit once the boundary passes them (§1). Adjacent engine hooks
+components may implement:
 
 - `NativeScrollbackCommittedRows.setNativeScrollbackCommittedRows(rows)`: the
   engine pushes each child's committed-row count down after commits, letting
-  the child drop or seal content it no longer needs to re-render.
+  the child drop content it no longer needs to re-render.
+- `NativeScrollbackDepartedRows.setNativeScrollbackDepartedRows(rows)`: the
+  engine pushes each child's count of rows above the window (committed plus
+  off-screen live) after each paint. A block kept live only so a later call
+  can retract it seals itself once its rows leave the screen; left live, it
+  would hold every row below it out of history.
 - `NativeScrollbackReplay.prepareNativeScrollbackReplay()`: a component that
   discards rows after they enter scrollback rehydrates its complete frame here
   before a destructive full replay.
@@ -484,9 +505,15 @@ a non-answering terminal is detected when DA1 returns first. Replies can arrive
   **complete** reply. A new `\x1b` mid-reassembly or >256 bytes abandons the
   partial so real keys still reach input.
 - `#da1SentinelOwners` is a **typed FIFO** discriminated by `kind`
-  (`keyboard`, `osc11`, `privateMode`, `osc99Probe`) so a keyboard DA1 cannot be
-  mistaken for an OSC 11 background query, a DECRQM report, or the OSC 99
-  notification-capability probe.
+  (`keyboard`, `osc11`, `privateMode`, `osc99Probe`, `inputFence`) so a keyboard
+  DA1 cannot be mistaken for an OSC 11 background query, a DECRQM report, or the
+  OSC 99 notification-capability probe.
+- `drainInput()` at exit pops the keyboard protocols, then, on a terminal that
+  answered a DA1 sentinel since `start()`, writes one more DA1 query
+  (`inputFence`) and ends when its answer arrives: the terminal answers in the
+  order it reads, so a key it encoded under a popped protocol arrives first. A
+  terminal that never answered DA1 is drained until no input arrives for
+  `idleMs` (50 ms).
 - DECRQM probes drive runtime feature gating: 2026 (synchronized output) gates
   the begin/end markers, 2048 (in-band resize) is enabled only once the terminal
   confirms it, 2031 (appearance change) drives mid-session theme tracking, and
@@ -711,9 +738,8 @@ entry.
   in scrollback is what this must not look like. A crash cannot run it: the alt
   buffer restores whatever preceded launch and the transcript is then only in the
   session file.
-- **Still open.** No settings entry yet (adding one regenerates
-  `docs/handbook/src/reference/settings-reference.md`, which currently carries unrelated pending schema
-  changes), and the engine does not yet push a kitty level that guarantees event
+- **Still open.** No settings entry yet, and the engine does not yet push a kitty
+  level that guarantees event
   reporting, so terminals that support the protocol still take the fallback until
   it does. `test/scroll-transport-alt-arrows.test.ts` covers the transport,
   residency, classification, exit replay and the env door; it states the transport
@@ -736,4 +762,4 @@ thumb) and the attributes the terminal presents, through
 `VirtualTerminal#getViewportRowFaintColumns`. A byte assertion alone would still
 pass if a later reset in the same row cancelled the dim.
 
-*Verified against `7c10649879` on 2026-10-09.*
+*Verified against `454ff6aec890de9fcb236f4563e12db6f873d25c` on 2026-11-04.*

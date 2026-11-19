@@ -1465,6 +1465,7 @@ export class AgentSession {
 			localProtocol: localProtocolOptions(this.sessionManager),
 			telemetry: () => this.agent.telemetry,
 			sessionId: () => this.sessionId,
+			thinkingLevel: () => this.thinkingLevel,
 		});
 		this.#approvals = new SessionApprovals(
 			{
@@ -1640,6 +1641,7 @@ export class AgentSession {
 				settings: this.settings,
 				modelRegistry: config.modelRegistry,
 				model: () => this.model,
+				thinkingLevel: () => this.thinkingLevel,
 				obfuscateProviderText: text => this.obfuscateProviderText(text),
 				sideComplete: this.#transport.sideComplete,
 			},
@@ -1813,6 +1815,7 @@ export class AgentSession {
 					settings: this.settings,
 					registry: this.#config.modelRegistry,
 					model: this.model ?? undefined,
+					thinkingLevel: this.thinkingLevel,
 					sessionId: this.sessionId,
 					metadataResolver: provider => this.agent.metadataForProvider(provider),
 					signal,
@@ -4111,11 +4114,21 @@ export class AgentSession {
 			!options?.synthetic && !hasPendingUserDirective ? this.#todo.eagerPrelude(expandedText) : undefined;
 		const eagerTaskPrelude =
 			!options?.synthetic && !hasPendingUserDirective ? this.#preludes.eagerTask(expandedText) : undefined;
+
+		// Claim the turn before the first await. Nothing since the busy check above awaits, so a prompt
+		// called while this one normalizes its images reads the session busy and queues behind it.
+		// Unclaimed, that later prompt passed the check, started its turn first and reached the model
+		// ahead of this one.
+		this.#inFlight.begin();
+		const generation = this.#promptGeneration;
 		const {
 			content: imageContent,
 			images: normalizedImages,
 			imageDescriptionNotice,
-		} = await this.#images.textWithImages(expandedText, options?.images);
+		} = await this.#images.textWithImages(expandedText, options?.images).catch((error: unknown) => {
+			this.#endInFlight();
+			throw error;
+		});
 		const userContent: (TextContent | ImageContent | VideoContent)[] = imageContent;
 		if (options?.videos?.length) userContent.push(...options.videos);
 
@@ -4148,6 +4161,7 @@ export class AgentSession {
 					preludeMessages.length > 0 || keywordNotices.length > 0 || imageDescriptionNotice
 						? [...preludeMessages, ...keywordNotices, ...(imageDescriptionNotice ? [imageDescriptionNotice] : [])]
 						: undefined,
+				claimedGeneration: generation,
 			});
 		} finally {
 			// Clean up residual eager-todo directive if the prompt never consumed it
@@ -4174,15 +4188,20 @@ export class AgentSession {
 			prepended?: NextTurnLease;
 			skipPostPromptRecoveryWait?: boolean;
 			acceptTerminalEmptyStop?: boolean;
+			/** The prompt generation of a turn the caller claimed with `#inFlight.begin()`; this call ends that turn. */
+			claimedGeneration?: number;
 		},
 	): Promise<void> {
-		this.#inFlight.begin();
+		const claimedGeneration = options?.claimedGeneration;
+		if (claimedGeneration === undefined) this.#inFlight.begin();
 		startupMarker("prompt:start");
-		const generation = this.#promptGeneration;
+		const generation = claimedGeneration ?? this.#promptGeneration;
 		// Queued context leaves its queue only when the agent takes this prompt's input; a prompt that
 		// ends before that (an interrupt, a throw) puts it back for the next one.
 		let queued: NextTurnLease | undefined;
 		try {
+			// An abort while the caller prepared a claimed turn ends it here, before it touches the session.
+			if (this.#promptGeneration !== generation) return;
 			// The turn leaves rest: take the held at-rest reading before the flush below or the prompt
 			// appends a message, since the reading is at rest only while the session holds none.
 			takeHeldAtRestReading(this);
@@ -5547,14 +5566,14 @@ export class AgentSession {
 			if (!parentId) {
 				parentId = context.ancestorIds.find(id => {
 					const parent = registry.get(id);
-					return parent && parent.status !== "aborted" && (parent.session || parent.sessionFile);
+					return parent && (parent.session || parent.sessionFile);
 				});
 				if (!parentId) return false;
 			}
 			parentId = await outbox.claimDeliveryTarget(completion.id, parentId);
 			if (!context.ancestorIds.includes(parentId)) return false;
 			const parent = registry.get(parentId);
-			if (!parent || parent.status === "aborted") return false;
+			if (!parent) return false;
 			const receipt = await IrcBus.global().send(
 				{ from: completion.agentId, to: parentId, body: completion.output },
 				{
