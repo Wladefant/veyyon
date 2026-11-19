@@ -1204,49 +1204,43 @@ describe("native retained child resume", () => {
 				await releaseGate.promise;
 			},
 		});
-		await firstRecovered.instance.replayIrcContinuations();
-		await enteredRelease.promise;
-		await firstReopened.sync();
-		expect(
-			parent.store
-				.getEntries()
-				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
-		).toHaveLength(0);
+		try {
+			await firstRecovered.instance.replayIrcContinuations();
+			await enteredRelease.promise;
+			await firstReopened.sync();
+			expect(
+				parent.store
+					.getEntries()
+					.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+			).toHaveLength(0);
+		} finally {
+			// Simulate losing this process before its result write. Do not leave two managers writing the same journal.
+			acquire.mockRestore();
+			const completeSpy = spyOn(IrcContinuationOutbox.prototype, "complete").mockRejectedValue(
+				new Error("simulated crash before publishing the result"),
+			);
+			firstRecovered.instance.beginDispose();
+			releaseGate.resolve();
+			await firstRecovered.instance.waitForIdle().catch(() => {});
+			completeSpy.mockRestore();
+			await firstRecovered.instance.dispose();
+		}
 
-		acquire.mockRestore();
 		const secondReopened = await SessionManager.open(journal);
 		const secondRecovered = await session("worker", [], secondReopened);
 		registry.attachSession("worker", secondRecovered.instance, journal);
+		await secondRecovered.instance.replayIrcContinuations();
+		await secondRecovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
 
-		try {
-			await secondRecovered.instance.replayIrcContinuations();
-			await secondRecovered.instance.waitForIdle();
-			await parent.instance.waitForIdle();
-
-			expect(secondRecovered.mock.calls).toHaveLength(0);
-			const completions = parent.store
-				.getEntries()
-				.flatMap(entry =>
-					entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
-				);
-			expect(completions).toHaveLength(1);
-			expect(completions[0]?.content).toContain('"value":"B"');
-		} finally {
-			const completeSpy = spyOn(IrcContinuationOutbox.prototype, "complete").mockResolvedValue({
-				version: 1,
-				id: "aborted",
-				agentId: "worker",
-				parentId: "owner",
-				phaseId: "resume-A",
-				handle: "agent://worker.phase-aborted",
-				output: "{}",
-				resultSource: "harness",
-			});
-			firstRecovered.instance.beginDispose();
-			releaseGate.reject(new Error("aborted before outbox completion"));
-			await firstRecovered.instance.waitForIdle().catch(() => {});
-			completeSpy.mockRestore();
-		}
+		expect(secondRecovered.mock.calls).toHaveLength(0);
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
+		expect(completions).toHaveLength(1);
+		expect(completions[0]?.content).toContain('"value":"B"');
 	});
 
 	it("a mid-turn steer within a phase does not cross the phase boundary on reopen", async () => {
@@ -1301,53 +1295,47 @@ describe("native retained child resume", () => {
 			},
 		});
 
-		await worker.instance.deliverIrcMessage({
-			id: "steer-A",
-			from: "owner",
-			to: "worker",
-			body: "Run phase A.",
-			ts: Date.now(),
-		});
-		await toolEntered.promise;
-		await worker.instance.steer("Keep this result brief");
-		toolRelease.resolve();
-		await enteredRelease.promise;
-		await worker.store.sync();
+		try {
+			await worker.instance.deliverIrcMessage({
+				id: "steer-A",
+				from: "owner",
+				to: "worker",
+				body: "Run phase A.",
+				ts: Date.now(),
+			});
+			await toolEntered.promise;
+			await worker.instance.steer("Keep this result brief");
+			toolRelease.resolve();
+			await enteredRelease.promise;
+			await worker.store.sync();
+		} finally {
+			toolRelease.resolve();
+			acquire.mockRestore();
+			const completeSpy = spyOn(IrcContinuationOutbox.prototype, "complete").mockRejectedValue(
+				new Error("simulated crash before publishing the result"),
+			);
+			worker.instance.beginDispose();
+			releaseGate.resolve();
+			await worker.instance.waitForIdle().catch(() => {});
+			completeSpy.mockRestore();
+			await worker.instance.dispose();
+		}
 		const journal = worker.store.getSessionFile()!;
-
-		acquire.mockRestore();
 		const reopened = await SessionManager.open(journal);
 		const recovered = await session("worker", [], reopened);
 		registry.attachSession("worker", recovered.instance, journal);
+		await recovered.instance.replayIrcContinuations();
+		await recovered.instance.waitForIdle();
+		await parent.instance.waitForIdle();
 
-		try {
-			await recovered.instance.replayIrcContinuations();
-			await recovered.instance.waitForIdle();
-			await parent.instance.waitForIdle();
-
-			expect(recovered.mock.calls).toHaveLength(0);
-			const completions = parent.store
-				.getEntries()
-				.flatMap(entry =>
-					entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
-				);
-			expect(completions).toHaveLength(1);
-			expect(completions[0]?.content).toContain('"value":"B-brief"');
-		} finally {
-			const completeSpy = spyOn(IrcContinuationOutbox.prototype, "complete").mockResolvedValue({
-				version: 1,
-				id: "aborted",
-				agentId: "worker",
-				parentId: "owner",
-				phaseId: "steer-A",
-				handle: "agent://worker.phase-aborted",
-				output: "{}",
-				resultSource: "harness",
-			});
-			worker.instance.beginDispose();
-			releaseGate.reject(new Error("aborted before outbox completion"));
-			await worker.instance.waitForIdle().catch(() => {});
-		}
+		expect(recovered.mock.calls).toHaveLength(0);
+		const completions = parent.store
+			.getEntries()
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
+		expect(completions).toHaveLength(1);
+		expect(completions[0]?.content).toContain('"value":"B-brief"');
 	});
 
 	it("does not create a turn or completion when replaying an already delivered parent message missing a continuation phase", async () => {
