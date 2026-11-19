@@ -1,6 +1,6 @@
 /**
  * WHY: overlapping native lanes used to publish a separate ledger replacement for each heartbeat.
- * Exercise the actual ledger and rotation on two ticks. This does not simulate Windows disk stalls.
+ * Exercise the actual ledger across held writes, release, and separate cohorts. This does not simulate Windows disk stalls.
  */
 import { expect, it, vi } from "bun:test";
 import * as fsp from "node:fs/promises";
@@ -8,6 +8,7 @@ import {
 	acquireNativeHostLaneWait,
 	getLaneAdmissionLedgerPath,
 	getLaneAdmissionStatus,
+	type LaneAdmissionLedger,
 	type LaneReservation,
 	type NativeHostLaneLease,
 } from "@veyyon/coding-agent/task/lane-admission";
@@ -29,10 +30,10 @@ it("publishes one snapshot for all due native lanes and leaves released lanes ou
 	vi.useFakeTimers();
 	const clock = vi.spyOn(Date, "now").mockReturnValue(start);
 	const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
-		await realRename(source, target);
-		if (target !== ledgerPath) return;
-		const ledger = JSON.parse(await fsp.readFile(ledgerPath, "utf8")) as { reservations: LaneReservation[] };
+		if (target !== ledgerPath) return realRename(source, target);
+		const ledger = JSON.parse(await fsp.readFile(source, "utf8")) as LaneAdmissionLedger;
 		const snapshot = ledger.reservations.map(({ slotId, lastHeartbeatAt }) => ({ slotId, lastHeartbeatAt }));
+		await realRename(source, target);
 		if (!snapshot.some(row => row.lastHeartbeatAt === Date.now() && row.lastHeartbeatAt !== start)) return;
 		seen.push(snapshot);
 		nextSnapshot.resolve(snapshot);
@@ -67,6 +68,101 @@ it("publishes one snapshot for all due native lanes and leaves released lanes ou
 		rename.mockRestore();
 		clock.mockRestore();
 		vi.useRealTimers();
+		await Promise.all(handles.map(lease => lease.release()));
+	}
+}, 15_000);
+
+it("skips a tick while its write is pending and checks every lease fence on the next tick", async () => {
+	using dir = TempDir.createSync("@veyyon-heartbeat-fence-");
+	using otherDir = TempDir.createSync("@veyyon-heartbeat-other-");
+	const globalConfigRoot = dir.path();
+	const ledgerPath = getLaneAdmissionLedgerPath(globalConfigRoot);
+	const otherLedgerPath = getLaneAdmissionLedgerPath(otherDir.path());
+	const interval = 30_000;
+	const start = Date.now();
+	const handles: NativeHostLaneLease[] = [];
+	const realRename = fsp.rename;
+	const held = Promise.withResolvers<void>();
+	const resume = Promise.withResolvers<void>();
+	const next = Promise.withResolvers<void>();
+	const seen: number[] = [];
+	let fencedRow: LaneReservation | undefined;
+	const otherTick = Promise.withResolvers<void>();
+
+	const readLedger = async (target: string): Promise<LaneAdmissionLedger> =>
+		JSON.parse(await fsp.readFile(target, "utf8")) as LaneAdmissionLedger;
+	vi.useFakeTimers();
+	const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+	const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+		if (target === otherLedgerPath) {
+			const heartbeat = (await readLedger(String(source))).reservations[0]?.lastHeartbeatAt;
+			await realRename(source, target);
+			if (heartbeat === start + 2 * interval) otherTick.resolve();
+			return;
+		}
+		if (target !== ledgerPath) return realRename(source, target);
+		const heartbeat = (await readLedger(String(source))).reservations[0]?.lastHeartbeatAt;
+		if (heartbeat !== undefined && heartbeat > start) {
+			seen.push(heartbeat);
+			if (seen.length === 1) {
+				held.resolve();
+				await resume.promise;
+			}
+		}
+		await realRename(source, target);
+		if (heartbeat === start + 3 * interval) next.resolve();
+	});
+	try {
+		for (const [owner, root, cadence] of [
+			["probe-live", globalConfigRoot, interval],
+			["probe-fenced", globalConfigRoot, interval],
+			["probe-other", otherDir.path(), 2 * interval],
+		] as const) {
+			const lease = await acquireNativeHostLaneWait({
+				owner,
+				globalConfigRoot: root,
+				heartbeatIntervalMs: cadence,
+				waitIfFull: false,
+			});
+			if (!lease) throw new Error("Expected a live native lease");
+			handles.push(lease);
+		}
+		const ledger = await readLedger(ledgerPath);
+		fencedRow = ledger.reservations[1]!;
+		fencedRow.leaseToken = "fixture-other-lease";
+		await fsp.writeFile(ledgerPath, JSON.stringify(ledger));
+
+		clock.mockReturnValue(start + interval);
+		vi.advanceTimersByTime(interval);
+		await held.promise;
+		expect((await readLedger(otherLedgerPath)).reservations[0]?.lastHeartbeatAt).toBe(start);
+		clock.mockReturnValue(start + 2 * interval);
+		vi.advanceTimersByTime(interval);
+		await otherTick.promise;
+		resume.resolve();
+		const afterHold = await getLaneAdmissionStatus({ globalConfigRoot });
+		expect(afterHold.reservations.map(row => row.lastHeartbeatAt)).toEqual([start + interval, start]);
+
+		clock.mockReturnValue(start + 3 * interval);
+		vi.advanceTimersByTime(interval);
+		await next.promise;
+		const afterNext = await getLaneAdmissionStatus({ globalConfigRoot });
+		expect(afterNext.reservations.map(row => row.lastHeartbeatAt)).toEqual([start + 3 * interval, start]);
+		expect(seen).toEqual([start + interval, start + 3 * interval]);
+		const otherStatus = await getLaneAdmissionStatus({ globalConfigRoot: otherDir.path() });
+		expect(otherStatus.reservations[0]?.lastHeartbeatAt).toBe(start + 2 * interval);
+	} finally {
+		resume.resolve();
+		rename.mockRestore();
+		clock.mockRestore();
+		vi.useRealTimers();
+		if (fencedRow) {
+			await handles[0]!.release();
+			const ledger = await readLedger(ledgerPath);
+			const row = ledger.reservations.find(row => row.slotId === fencedRow?.slotId);
+			if (row) row.leaseToken = handles[1]!.leaseToken;
+			await fsp.writeFile(ledgerPath, JSON.stringify(ledger));
+		}
 		await Promise.all(handles.map(lease => lease.release()));
 	}
 }, 15_000);

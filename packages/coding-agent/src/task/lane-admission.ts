@@ -933,9 +933,84 @@ function waitAbortably(ms: number, signal?: AbortSignal): Promise<void> {
 /** Internal indirection enabling deterministic spies on ledger calls inside wait loops. */
 export const laneAdmissionDriver = {
 	acquire: acquireLaneAdmission,
-	heartbeat: heartbeatLaneAdmission,
 	release: releaseLaneAdmission,
 };
+
+interface NativeHeartbeatRegistration {
+	slotId: string;
+	leaseToken: string;
+	owner: string;
+}
+
+interface NativeHeartbeatGroup {
+	registrations: Map<string, NativeHeartbeatRegistration>;
+	timer?: NodeJS.Timeout;
+	inFlight: boolean;
+}
+
+const nativeHeartbeatGroups = new Map<string, NativeHeartbeatGroup>();
+
+async function writeNativeHeartbeats(
+	ledgerPath: string,
+	group: NativeHeartbeatGroup,
+	due: Map<string, NativeHeartbeatRegistration>,
+): Promise<void> {
+	const owner = due.values().next().value?.owner;
+	await withLedgerLock(ledgerPath, "heartbeat", owner, async () => {
+		const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
+		const now = Date.now();
+		let changed = false;
+		for (const reservation of ledger.reservations) {
+			const registration = due.get(reservation.slotId);
+			if (
+				!registration ||
+				group.registrations.get(reservation.slotId) !== registration ||
+				reservation.kind !== "native" ||
+				reservation.leaseToken !== registration.leaseToken
+			) {
+				continue;
+			}
+			reservation.lastHeartbeatAt = now;
+			changed = true;
+		}
+		if (changed) await writeLedgerUnderLock(ledgerPath, ledger);
+	});
+}
+
+function registerNativeHeartbeat(
+	ledgerPath: string,
+	intervalMs: number,
+	registration: NativeHeartbeatRegistration,
+): () => void {
+	const key = `${ledgerPath}\0${intervalMs}`;
+	let group = nativeHeartbeatGroups.get(key);
+	if (!group) {
+		group = { registrations: new Map(), inFlight: false };
+		nativeHeartbeatGroups.set(key, group);
+	}
+	const cohort = group;
+	cohort.registrations.set(registration.slotId, registration);
+	if (!cohort.timer) {
+		cohort.timer = setInterval(() => {
+			if (cohort.inFlight) return;
+			cohort.inFlight = true;
+			void writeNativeHeartbeats(ledgerPath, cohort, new Map(cohort.registrations))
+				.catch(() => {})
+				.finally(() => {
+					cohort.inFlight = false;
+					if (cohort.registrations.size === 0) nativeHeartbeatGroups.delete(key);
+				});
+		}, intervalMs);
+		cohort.timer.unref?.();
+	}
+	return () => {
+		if (!cohort.registrations.delete(registration.slotId) || cohort.registrations.size !== 0) return;
+		clearInterval(cohort.timer);
+		cohort.timer = undefined;
+		// Keep the group until its write settles so new members cannot bypass it.
+		if (!cohort.inFlight) nativeHeartbeatGroups.delete(key);
+	};
+}
 
 interface ActiveNativeLeaseEntry {
 	lease: NativeHostLaneLease;
@@ -1275,18 +1350,11 @@ export async function acquireNativeHostLaneWait(options: {
 			}
 			let released = false;
 			let inFlightRelease: Promise<void> | null = null;
-			const timer = setInterval(() => {
-				if (released || inFlightRelease) return;
-				void laneAdmissionDriver
-					.heartbeat({
-						slotId,
-						leaseToken,
-						owner: options.owner,
-						globalConfigRoot: options.globalConfigRoot,
-					})
-					.catch(() => {});
-			}, heartbeatMs);
-			timer.unref?.();
+			const stopHeartbeat = registerNativeHeartbeat(
+				path.resolve(getLaneAdmissionLedgerPath(options.globalConfigRoot)),
+				heartbeatMs,
+				{ slotId, leaseToken, owner: options.owner },
+			);
 
 			return {
 				slotId,
@@ -1294,7 +1362,7 @@ export async function acquireNativeHostLaneWait(options: {
 				release(): Promise<void> {
 					if (released) return Promise.resolve();
 					if (inFlightRelease) return inFlightRelease;
-					clearInterval(timer);
+					stopHeartbeat();
 					let pending: Promise<void>;
 					pending = releaseSlotDurably({
 						owner: options.owner,
@@ -1305,7 +1373,6 @@ export async function acquireNativeHostLaneWait(options: {
 					}).then(
 						() => {
 							released = true;
-							clearInterval(timer);
 							if (inFlightRelease === pending) inFlightRelease = null;
 						},
 						error => {
