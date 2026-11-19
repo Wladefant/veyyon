@@ -176,17 +176,11 @@ it("keeps two cadences on one ledger and the same cadence on two ledgers indepen
 	const start = Date.now();
 	const tick = start + interval;
 	const handles: NativeHostLaneLease[] = [];
-	const realMkdir = fsp.mkdir;
 
 	vi.useFakeTimers();
 	const clock = vi.spyOn(Date, "now").mockReturnValue(start);
 	// Track the real directory operations that a tick starts before it enters the ledger lock queue.
-	const setups: Promise<string | undefined>[] = [];
-	const mkdir = vi.spyOn(fsp, "mkdir").mockImplementation((dir, options) => {
-		const pending = realMkdir(dir, options);
-		setups.push(pending);
-		return pending;
-	});
+	const mkdir = vi.spyOn(fsp, "mkdir");
 	try {
 		for (const [owner, globalConfigRoot, heartbeatIntervalMs] of [
 			["probe-fast", root, interval],
@@ -202,10 +196,10 @@ it("keeps two cadences on one ledger and the same cadence on two ledgers indepen
 			if (!lease) throw new Error("Expected a live native lease");
 			handles.push(lease);
 		}
-		setups.length = 0;
+		const beforeTick = mkdir.mock.results.length;
 		clock.mockReturnValue(tick);
 		vi.advanceTimersByTime(interval);
-		await Promise.all(setups);
+		await Promise.all(mkdir.mock.results.slice(beforeTick).map(result => result.value));
 		// These status reads take the same locks, after any heartbeats submitted by this tick.
 		const [main, other] = await Promise.all([
 			getLaneAdmissionStatus({ globalConfigRoot: root }),
