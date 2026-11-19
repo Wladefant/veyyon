@@ -792,9 +792,9 @@ export class AcpAgent implements Agent {
 			promise: nextQueue.promise,
 			release: releaseQueue,
 		};
-		await previousQueue.promise;
-		throwIfRecordClosed(record);
 		try {
+			await previousQueue.promise;
+			throwIfRecordClosed(record);
 			return await run();
 		} finally {
 			releaseQueue();
