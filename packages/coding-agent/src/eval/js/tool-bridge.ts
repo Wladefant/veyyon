@@ -5,6 +5,7 @@ import { toolWireSchema } from "@veyyon/ai/utils/schema/wire";
 import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { errorMessage, isRecord } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
+import { ProducerOutputGuard } from "../../secrets/producer-output";
 import type { ToolSession } from "../../tools";
 import { TOOL_EXECUTION_ENTRIES } from "../../tools/core/execution-registry";
 import { ToolError } from "../../tools/core/tool-errors";
@@ -61,7 +62,11 @@ function normalizeArgs(args: unknown): unknown {
 }
 
 function executionArgsForTool(tool: AgentTool, args: unknown): unknown {
-	if (!isRecord(args) || schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD) || !Object.hasOwn(args, INTENT_FIELD)) {
+	if (
+		!isRecord(args) ||
+		schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD) ||
+		!Object.hasOwn(args, INTENT_FIELD)
+	) {
 		return args;
 	}
 	const { [INTENT_FIELD]: _intent, ...executionArgs } = args;
@@ -119,6 +124,7 @@ function summarizeToolResult(
 	result: AgentToolResult,
 	text: string,
 	hasError: boolean,
+	session: ToolSession,
 ): JsStatusEvent {
 	const record = (args && typeof args === "object" ? (args as Record<string, unknown>) : {}) as Record<
 		string,
@@ -127,7 +133,8 @@ function summarizeToolResult(
 	const details = (
 		result.details && typeof result.details === "object" ? (result.details as Record<string, unknown>) : {}
 	) as Record<string, unknown>;
-	const safePreview = redactUsageText(text, []).slice(0, 500);
+	const guard = new ProducerOutputGuard(session.obfuscateProviderText);
+	const safePreview = redactUsageText(guard.sanitizeStatus(text), []).slice(0, 500);
 	const withError = (event: JsStatusEvent): JsStatusEvent =>
 		hasError ? { ...event, hasError: true, error: safePreview } : event;
 
@@ -209,7 +216,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		);
 		const text = textBlocks.map(block => block.text).join("");
 		const hasError = toolResultHasError(result);
-		options.emitStatus?.(summarizeToolResult(name, statusArgs, result, text, hasError));
+		options.emitStatus?.(summarizeToolResult(name, statusArgs, result, text, hasError, options.session));
 		if (result.details === undefined && imageBlocks.length === 0 && !hasError) {
 			return text;
 		}

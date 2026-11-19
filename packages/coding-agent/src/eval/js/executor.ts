@@ -1,5 +1,4 @@
-import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
-import { sanitizeText } from "@veyyon/utils/sanitize-text";
+import { errorMessage, isCancellation, isRecord, isTimeoutError } from "@veyyon/utils";
 import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { BLOCKED_OUTPUT_RECORD, ProducerOutputGuard, sanitizeProducerJson } from "../../secrets/producer-output";
 import { OutputSink } from "../../session/streaming-output";
@@ -110,20 +109,15 @@ function cellErrorText(error: unknown): string {
 export async function executeJs(code: string, options: JsExecutorOptions): Promise<JsResult> {
 	const displayOutputs: JsDisplayOutput[] = [];
 	const outputGuard = new ProducerOutputGuard(options.session.obfuscateProviderText);
-	// Status callbacks publish immediately, so they cannot retract the prefix of
-	// an inventory split across events. Conservatively withhold each assignment
-	// record, including a single assignment, without delaying safe progress.
-	const sanitizeStatus = (text: string): string =>
-		sanitizeText(text)
-			.split("\n")
-			.some(line => /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line))
-			? BLOCKED_OUTPUT_RECORD
-			: outputGuard.sanitize(text);
-	const outputSink = new OutputSink({ outputGuard,
+	const outputSink = new OutputSink({
+		outputGuard,
 		artifactPath: options.artifactPath,
 		artifactId: options.artifactId,
-		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings), ...resolveOutputSinkWindow(options.session.settings, inlineBudgetFor(options.session)), maxColumns: resolveOutputMaxColumns(options.session.settings),
-		onChunk: chunk => options.onChunk?.(chunk), });
+		artifactMaxBytes: resolveOutputSinkArtifactMaxBytes(options.session.settings),
+		...resolveOutputSinkWindow(options.session.settings, inlineBudgetFor(options.session)),
+		maxColumns: resolveOutputMaxColumns(options.session.settings),
+		onChunk: chunk => options.onChunk?.(chunk),
+	});
 	const legacyTimeoutMs = getExecutionTimeoutMs(options);
 	const scopedTimeout =
 		typeof legacyTimeoutMs === "number" && Number.isFinite(legacyTimeoutMs) && legacyTimeoutMs > 0
@@ -179,20 +173,23 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 					}
 					if (output.type === "status") {
 						const { event } = output;
-						if (typeof event.message === "string" || typeof event.title === "string") {
-							output = {
-								...output,
-								event: {
-									...event,
-									...(typeof event.message === "string" ? { message: sanitizeStatus(event.message) } : {}),
-									...(typeof event.title === "string" ? { title: sanitizeStatus(event.title) } : {}),
-								},
-							};
+						// Pass only trusted control fields to the watchdog. Never retain these events.
+						if (isEvalTimeoutControlEvent(event)) {
+							options.onStatus?.({
+								op: event.op,
+								...(event.deferExternalAbort === true ? { deferExternalAbort: true } : {}),
+							});
+							return;
 						}
-						// Timeout-control events drive the eval watchdog only; never
-						// store or render them as cell output.
-						options.onStatus?.(output.event);
-						if (isEvalTimeoutControlEvent(output.event)) return;
+						let safeEvent: JsStatusEvent = { op: "log", message: BLOCKED_OUTPUT_RECORD };
+						try {
+							const safe = sanitizeProducerJson(event, outputGuard, "status");
+							if (isRecord(safe) && typeof safe.op === "string") safeEvent = { ...safe, op: safe.op };
+						} catch {
+							// Fail closed if a status cannot be represented as safe structured output.
+						}
+						output = { type: "status", event: safeEvent };
+						options.onStatus?.(safeEvent);
 					}
 					displayOutputs.push(output);
 				},

@@ -20,6 +20,7 @@ const CREDENTIAL_KEY_PREFIX =
 // Two ordinary assignments remain useful; a bulk run is an inventory even when
 // none of its names says "secret". Hold the prefix until that decision is known.
 const ENV_ASSIGNMENT = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
+const STATUS_ENV_ASSIGNMENT = new RegExp(ENV_ASSIGNMENT.source, "m");
 const ENV_MAP_KEY = /^(?:[A-Z_][A-Z0-9_]*|Path|SystemRoot|ComSpec)$/;
 const ENV_TABLE_HEADER = /^\s*Name\s+Value\s*$/im;
 
@@ -152,11 +153,11 @@ function classifyCredentialText(text: string, rawRedact?: (text: string) => stri
 		)
 			continue;
 		const escapedBreak = stripped.lastIndexOf("\\n", match.index);
-		const logicalLineStart = Math.max(
-			sourceLineStart,
-			escapedBreak >= 0 ? escapedBreak + 2 : 0,
-		);
-		if (PERSIST_CREDENTIALS_LABEL.test(stripped.slice(logicalLineStart, start)) && PERSIST_CREDENTIALS_BOOLEAN.test(tail))
+		const logicalLineStart = Math.max(sourceLineStart, escapedBreak >= 0 ? escapedBreak + 2 : 0);
+		if (
+			PERSIST_CREDENTIALS_LABEL.test(stripped.slice(logicalLineStart, start)) &&
+			PERSIST_CREDENTIALS_BOOLEAN.test(tail)
+		)
 			continue;
 		if (match.groups!.key.toLowerCase() === "persist-credentials" && PERSIST_CREDENTIALS_BOOLEAN.test(tail)) continue;
 		const shape = match[0].includes(":") ? DEFINITION_SHAPE.exec(tail) : null;
@@ -659,27 +660,37 @@ function appendBoundedTail(existing: string, addition: string, maxChars: number)
 }
 
 /** Keep JSON structure and primitive metadata out of the text-record grammar. */
-export function sanitizeProducerJson(value: unknown, guard: ProducerOutputGuard): unknown {
-	const safe = sanitizeJsonValue(value, text => guard.sanitize(text), {
-		cycles: "mark",
-		transformValue: (nested, key) => {
-			if (key !== undefined && CREDENTIAL_RECORD.test(`${stripCaretCsi(key)}=`)) {
-				if (typeof nested === "number" || typeof nested === "bigint") {
-					if (!NUMERIC_METADATA_KEY.test(key)) return "[REDACTED]";
-				} else if (typeof nested === "string") {
-					if (JSON_REDACTION_MARKER.test(nested)) return nested;
-					if (NUMERIC_METADATA_KEY.test(key) && NUMERIC_METADATA_VALUE.exec(nested)?.[0] === nested) return nested;
-					return "[REDACTED]";
-				} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {
-					if (/^(?:auth|authorization)$/i.test(key)) return "[REDACTED]";
-					return BLOCKED_OUTPUT_RECORD;
+export function sanitizeProducerJson(
+	value: unknown,
+	guard: ProducerOutputGuard,
+	context: "display" | "status" = "display",
+): unknown {
+	const safe = sanitizeJsonValue(
+		value,
+		text => (context === "status" ? guard.sanitizeStatus(text) : guard.sanitize(text)),
+		{
+			cycles: "mark",
+			transformValue: (nested, key) => {
+				if (key !== undefined && CREDENTIAL_RECORD.test(`${stripCaretCsi(key)}=`)) {
+					if (typeof nested === "number" || typeof nested === "bigint") {
+						if (!NUMERIC_METADATA_KEY.test(key)) return "[REDACTED]";
+					} else if (typeof nested === "string") {
+						if (JSON_REDACTION_MARKER.test(nested)) return nested;
+						if (NUMERIC_METADATA_KEY.test(key) && NUMERIC_METADATA_VALUE.exec(nested)?.[0] === nested)
+							return nested;
+						return "[REDACTED]";
+					} else if (nested !== null && typeof nested !== "boolean" && nested !== undefined) {
+						if (/^(?:auth|authorization)$/i.test(key)) return "[REDACTED]";
+						return BLOCKED_OUTPUT_RECORD;
+					}
 				}
-			}
-			if (typeof nested === "bigint") return `${nested}n`;
-			if (typeof nested === "function" || typeof nested === "symbol") return JSON.parse(stringifyJsonSafe(nested));
-			return nested;
+				if (typeof nested === "bigint") return `${nested}n`;
+				if (typeof nested === "function" || typeof nested === "symbol")
+					return JSON.parse(stringifyJsonSafe(nested));
+				return nested;
+			},
 		},
-	});
+	);
 	const serialized = JSON.stringify(safe);
 	if (typeof serialized === "string" && serialized.length > MAX_RECORD_CHARS) return OVERSIZED_OUTPUT_RECORD;
 	return typeof serialized !== "string" || isInventory(sanitizeText(serialized)) ? BLOCKED_OUTPUT_RECORD : safe;
@@ -723,6 +734,11 @@ export class ProducerOutputGuard {
 	}
 	sanitize(text: string): string {
 		return this.#sanitize(text, true);
+	}
+
+	/** Status events publish immediately, so even a single assignment may start an inventory. */
+	sanitizeStatus(text: string): string {
+		return STATUS_ENV_ASSIGNMENT.test(sanitizeText(text)) ? BLOCKED_OUTPUT_RECORD : this.sanitize(text);
 	}
 
 	#sanitize(text: string, allowJsonStringScalar: boolean): string {
