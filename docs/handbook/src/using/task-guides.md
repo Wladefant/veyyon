@@ -43,6 +43,8 @@ $ veyyon -p \
 
 The prompt can be an argument or piped on stdin. Leave the rung alone unless you have a reason to move it: the default `auto` auto-approves every tier, while a target outside the working directory, a call that spends a stored credential, a per-tool `prompt`/`deny` policy, and a critical command such as a recursive delete of your home directory all still ask, and a headless run has no terminal to ask on, so each of those becomes a failed tool call rather than a silent pass. Do NOT pass `--approval-mode ask-command` here: it prompts for every exec-tier call, which in `-p` means every command fails. `--yolo` auto-approves all tiers and drops the two boundaries (use only on disposable runners). JSON event streams: `--mode json`. For review, pass a review prompt to `-p`, or use the passive advisor (`--advisor`) in the TUI. See [Non-interactive mode](../features/exec.md).
 
+Use `--account N` with a single explicit `--model` in print mode. Get the one-based number from `veyyon token PROVIDER --list`. The selection applies to this run only. If the pinned account cannot serve the request, Veyyon does not switch to another account.
+
 ---
 
 ## Give the agent a new tool (MCP or skills)

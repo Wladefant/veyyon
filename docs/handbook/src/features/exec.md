@@ -34,8 +34,10 @@ Run `veyyon --help` for the generated flag set. Common options:
 | --- | --- |
 | `--mode json` | Machine-readable event stream on stdout |
 | `--model` / `--plan` | Model selection for the run |
+| `--account N` | Pin the one-based OAuth account for a single explicit `--model` |
 | `--approval-mode` / `--yolo` | Approval policy for the run |
 
+An explicit single `--model` stops on HTTP 404. Veyyon reports the model and status on stderr and exits nonzero. Configured model fallback still works for unpinned runs. The fallback warning goes to stderr, including in JSON mode.
 Headless runs have no TTY for approval prompts: choose a mode that does not block (`--yolo` only on disposable runners) or expect the turn to stop when a prompt would be required. See [Approvals](./sandbox.md).
 
 ## Related

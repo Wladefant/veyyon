@@ -2146,13 +2146,7 @@ export class ModelRegistry {
 	 * Get API key for a model.
 	 */
 	async getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined> {
-		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
-		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
-		const apiKey = await this.authStorage.getApiKey(model.provider, sessionId, {
-			baseUrl: model.baseUrl,
-			modelId: model.id,
-		});
-		return apiKey === undefined && this.#isKeylessProvider(model.provider) ? kNoAuth : apiKey;
+		return this.getApiKeyForProvider(model.provider, sessionId, { baseUrl: model.baseUrl, modelId: model.id });
 	}
 
 	/**
@@ -2173,6 +2167,7 @@ export class ModelRegistry {
 			onCredentialSelected?: (credentialId: string) => void;
 		},
 	): Promise<string | undefined> {
+		if (this.authStorage.hasRunOAuthPin(provider)) return this.authStorage.getApiKey(provider, sessionId, options);
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		const apiKey = await this.authStorage.getApiKey(provider, sessionId, {

@@ -273,6 +273,9 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 
 	session.subscribe(event => {
 		if (event.type === "agent_end") runEndAssistant = findLastAssistantMessage(event.messages);
+		if (event.type === "retry_fallback_applied") {
+			process.stderr.write(`${sanitizeText(`Warning: Model fallback ${event.from} -> ${event.to}`)}\n`);
+		}
 		// In JSON mode, output all events
 		if (mode === "json") {
 			writeJsonLine(printableEvent(event));
@@ -356,7 +359,10 @@ async function runPrintModeCore(session: PrintModeSession, options: PrintModeOpt
 			(finalAssistant.stopReason === "error" || finalAssistant.stopReason === "aborted") &&
 			!isSilentAbort(finalAssistant)
 		) {
-			const errorLine = sanitizeText(finalAssistant.errorMessage || `Request ${finalAssistant.stopReason}`);
+			const { provider, model, errorStatus, usage } = finalAssistant;
+			const account = usage.credentialId === undefined ? "" : `account #${usage.credentialId}, `;
+			const source = errorStatus === undefined ? "" : `${provider}/${model} (${account}HTTP ${errorStatus}): `;
+			const errorLine = sanitizeText(source + (finalAssistant.errorMessage || `Request ${finalAssistant.stopReason}`));
 			// Flush before this hard exit — it bypasses the awaited postmortem.quit()
 			// in main(), and the postmortem `exit` handler can't await, so the error
 			// spans would otherwise stay buffered in the batch processor and drop.

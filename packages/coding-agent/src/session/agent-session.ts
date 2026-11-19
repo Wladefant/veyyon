@@ -680,6 +680,11 @@ export class AgentSession {
 		},
 		resetSessionStopContinuationState: () => this.#stopHook.reset(),
 	});
+
+	/** Fail a print run's explicit model instead of retrying or switching after HTTP 404. */
+	keepExplicitPrintModelOnNotFound(): void {
+		this.#retry.stopOnModelNotFound = true;
+	}
 	/**
 	 * The title refresh a re-plan starts, and the TITLE_SYSTEM.md override every automatic title
 	 * request uses. Refresh the override via {@link AgentSession.setTitleSystemPrompt} when the
