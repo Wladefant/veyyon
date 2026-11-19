@@ -146,11 +146,12 @@ describe("postmortem expected cleanup errors", () => {
 			await drained;
 		`);
 		expect(result.exitCode).toBe(0);
-		expect(result.stdout.trim().split("\n").map(line => line.trim())).toEqual([
-			"late manual true",
-			"nested true",
-			"drained",
-		]);
+		expect(
+			result.stdout
+				.trim()
+				.split("\n")
+				.map(line => line.trim()),
+		).toEqual(["late manual true", "nested true", "drained"]);
 	});
 
 	it("releases manual cleanup at the deadline even when a callback never settles", async () => {
