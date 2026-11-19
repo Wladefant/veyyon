@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Pin an OAuth account for one run without changing the saved account selection or replacing it with another credential ([Refs #1205](https://github.com/Wladefant/veyyon/issues/1205)).
+
 ## [1.10.11] - 2026-11-17
 
 ### Fixed

@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Use `--account N` with an explicit print model to select a stored OAuth account for that run only ([Refs #1205](https://github.com/Wladefant/veyyon/issues/1205)).
+
 ### Fixed
 
 - Let native lane admission wait through short host stalls without taking the lock from a live transaction ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Stop an explicit print model on HTTP 404 and report configured model switches on stderr ([Refs #1205](https://github.com/Wladefant/veyyon/issues/1205)).
 
 ## [1.12.0] - 2026-11-18
 
