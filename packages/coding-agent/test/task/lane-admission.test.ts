@@ -934,6 +934,10 @@ describe("host-wide shared lane admission", () => {
 		promptHold.resolve();
 		await wakeReleased.promise;
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(DEFAULT_HOST_LANE_CAP - 1);
+		// The injected second message runs its own follow-up turn, which legitimately takes the freed
+		// slot; let it finish and release before refilling, so the refill does not race it.
+		await subSession.waitForIdle();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(DEFAULT_HOST_LANE_CAP - 1);
 
 		// Disposal while waiting for a full cap aborts wake cleanly without leaking a slot or calling prompt
 		const refill = await acquireLaneAdmission({

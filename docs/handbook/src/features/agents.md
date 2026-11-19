@@ -104,6 +104,15 @@ reservations end. The version-1 ledger format does not change.
 `acquire --cap` and `status --cap` only narrow that call's ceiling.
 Admission, status and release never change an existing saved limit.
 
+Admission gives its in-process queue time to recover from a short host stall.
+If the queue stops making progress, the log names the transaction, its age,
+and its phase. A slow or cancelled lane is not proof that its transaction
+stopped. Admission never takes a lock away from a live transaction.
+
+When another process holds the ledger lock, new admissions retry with small
+random delays for up to 20 seconds after reaching the front of their local
+queue. This wait does not change the saved lane limit or release a live holder.
+
 ### Release reconciliation
 
 Native teardown tries fenced release at most three times, with two 100 ms waits.
