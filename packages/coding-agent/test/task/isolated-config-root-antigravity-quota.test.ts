@@ -131,12 +131,12 @@ function assertIsolatedCanaryOutcome(
 	// 1. Non-success termination on simulated Antigravity quota 429.
 	expect(report.result.exitCode).not.toBe(0);
 	expect(report.result.terminalOutcome).toBe("failed");
-	expect(report.result.resolvedModel).toBe("google-antigravity/gemini-3.8-flash:high");
+	expect(report.result.resolvedModel).toBe("google-antigravity/gemini-3.8-flash-high");
 
 	// 2. Outbound request sequence restricted strictly to the verified canary credential.
 	expect(report.requests.length).toBeGreaterThan(0);
-	expect(new Set(report.requests.map(request => request.account))).toEqual(new Set(["canary"]));
-	expect(report.requests.every(request => request.model?.startsWith("gemini-3.8-flash"))).toBe(true);
+	expect(report.requests.every(request => request.account === "canary")).toBe(true);
+	expect(report.requests.every(request => request.model === "gemini-3.8-flash-high")).toBe(true);
 
 	// 3. Config/path readback matches the isolated canary root, never the normal root.
 	expect(path.resolve(report.resolved.globalConfigRoot)).toBe(path.resolve(expected.canaryRoot));
@@ -227,7 +227,7 @@ describe("isolated VEYYON_CONFIG_DIR child execution under simulated Antigravity
 		expect(path.resolve(report.resolved.globalConfigRoot)).toBe(path.resolve(normalRoot));
 		expect(report.resolved.retryMaxDelayMs).toBe(65);
 		expect(report.requests.length).toBeGreaterThan(0);
-	expect(new Set(report.requests.map(request => request.account))).toEqual(new Set(["sibling"]));
+		expect(report.requests.every(request => request.account === "sibling")).toBe(true);
 		expect(report.normalSessionFiles.length).toBeGreaterThan(0);
 	}, 40_000);
 });
