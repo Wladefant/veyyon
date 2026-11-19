@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import type { AssistantMessage } from "@veyyon/ai";
 import { resolveApiKeyOnce } from "@veyyon/ai/auth-retry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
-import * as oauth from "@veyyon/ai/registry/oauth";
+import { registerOAuthProvider, unregisterOAuthProviders } from "@veyyon/ai/registry/oauth";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { emptyUsage } from "@veyyon/catalog/models";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
@@ -17,6 +17,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, TempDir } from "@veyyon/utils";
 
 const PROVIDER = "openai-codex";
+const AUTH_FIXTURE = "explicit-print-account-fixture";
 const PRIMARY = `${PROVIDER}/gpt-5.6-sol`;
 const FALLBACK = `${PROVIDER}/gpt-5.5`;
 const HTTP_ERROR = 'Provider request failed (404): Requested entity was not found. NOT_FOUND';
@@ -61,6 +62,7 @@ describe("print-mode model availability", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		unregisterOAuthProviders(AUTH_FIXTURE);
 		auth.close();
 		temp.removeSync();
 	});
@@ -160,10 +162,19 @@ describe("print-mode model availability", () => {
 				accountId,
 			})),
 		);
-		vi.spyOn(oauth, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
-			const credential = credentials[provider];
-			return credential ? { newCredentials: credential, apiKey: credential.access } : null;
+		registerOAuthProvider({
+			id: PROVIDER,
+			name: "Print OAuth fixture",
+			sourceId: AUTH_FIXTURE,
+			async login() {
+				throw new Error("Unexpected login in the print fixture");
+			},
+			async refreshToken() {
+				throw new Error("Unexpected refresh in the print fixture");
+			},
+			getApiKey: credential => credential.access,
 		});
+		expect(await auth.getOAuthAccessAt(PROVIDER, 1)).toMatchObject({ ok: true, accountId: "second" });
 		await launch(["-p", "--model", PRIMARY, "--account", "2"]);
 		expect(requested).toEqual([PRIMARY]);
 		expect(requestKeys).toEqual(["access-second"]);
