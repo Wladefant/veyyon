@@ -139,6 +139,8 @@ interface ManagedDaemon {
 	persistQueue: Promise<void>;
 	/** Attribution for the death of the CURRENT generation, set before the signal goes out. */
 	termination?: DaemonTerminationSource;
+	/** Generation superseded by an accepted explicit restart, before its stop settles. */
+	explicitRestartGeneration?: number;
 	/** Native handles for the current generation's process tree; absent before the first spawn. */
 	tree?: ProcessTree;
 	/** Settles when the output drains of this generation end. Settle waits for it only up to a bound. */
@@ -727,7 +729,13 @@ export class DaemonBroker {
 				() => {
 					this.#assertExpected(expectedGuard, record);
 					const { state } = record.snapshot;
-					return state === "ready" || state === "restarting" || terminalState(state) || this.#shuttingDown;
+					return (
+						record.explicitRestartGeneration === expectedGeneration ||
+						state === "ready" ||
+						state === "restarting" ||
+						terminalState(state) ||
+						this.#shuttingDown
+					);
 				},
 				spec.ready.timeoutMs,
 			);
@@ -739,7 +747,7 @@ export class DaemonBroker {
 		this.#assertExpected(expectedGuard, record);
 		// An explicit restart can stop the original generation before it can spawn a replacement.
 		// In that window the identity still matches, but this start has been superseded.
-		if (spec.ready && record.snapshot.terminatedBy === "operator-restart") {
+		if (spec.ready && record.explicitRestartGeneration === expectedGeneration) {
 			throw new Error(`Daemon identity mismatch: ${spec.name} start was superseded by an explicit restart`);
 		}
 		const daemon = { ...record.snapshot };
@@ -1569,6 +1577,7 @@ export class DaemonBroker {
 			return { op: "restart", daemon: { ...relaunched.snapshot } };
 		}
 		const record = found;
+		record.explicitRestartGeneration = record.generation;
 		await this.#stopRecord(record, 2_000, {
 			owner: "operator-restart",
 			reason: "stopped by launch restart to start a new generation",
