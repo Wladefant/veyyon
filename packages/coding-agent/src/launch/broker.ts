@@ -726,8 +726,15 @@ export class DaemonBroker {
 				record,
 				() => {
 					this.#assertExpected(expectedGuard, record);
-					const { state } = record.snapshot;
-					return state === "ready" || state === "restarting" || terminalState(state) || this.#shuttingDown;
+					const { state, terminatedBy } = record.snapshot;
+					// An explicit restart publishes the old terminal state before it replaces the generation.
+					// Keep waiting so the identity guard can reject that replacement.
+					return (
+						state === "ready" ||
+						state === "restarting" ||
+						(terminalState(state) && terminatedBy !== "operator-restart") ||
+						this.#shuttingDown
+					);
 				},
 				spec.ready.timeoutMs,
 			);
