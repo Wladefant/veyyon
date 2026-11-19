@@ -294,6 +294,34 @@ setInterval(() => {}, 1000);
 		}
 	}, 20_000);
 
+	it.each([0, 1])("returns before the readiness deadline when the child exits with code %i", async exitCode => {
+		const projectDir = makeTempDir("veyyon-daemon-early-exit-project-");
+		const runtimeDir = makeTempDir("veyyon-daemon-early-exit-runtime-");
+		const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 5_000 });
+		try {
+			await client.request({ op: "list" });
+			const spec: DaemonSpec = {
+				name: "early-exit",
+				application: process.execPath,
+				args: ["-e", `process.exit(${exitCode})`],
+				env: {},
+				cwd: projectDir,
+				pty: false,
+				ready: { log: "NEVER_READY", timeoutMs: 15_000 },
+				restart: "no",
+				persist: false,
+				detached: false,
+			};
+			const result = await client.request({ op: "start", spec }, AbortSignal.timeout(5_000));
+			if (result.op !== "start") throw new Error("unexpected start result");
+			expect(result.daemon.state).toBe(exitCode === 0 ? "exited" : "failed");
+			expect(result.daemon.exitCode).toBe(exitCode);
+			expect(result.readyTimedOut).toBeFalse();
+		} finally {
+			await shutdownBroker(client);
+		}
+	}, 20_000);
+
 	// Regression: a start whose log pattern matched but whose port never accepted
 	// used to report "Ready: <match>" AND "Readiness timed out" with no hint of
 	// which condition failed. The snapshot now names the unmet condition(s).
