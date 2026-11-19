@@ -350,7 +350,11 @@ describe("AgentSession retry delay cap", () => {
 			responses: [codexClose(1006), codexClose(1012), recovered],
 			order: ["primary", "primary", "fallback"],
 		},
-		{ name: "a policy close uses fallback", responses: [codexClose(1008), recovered], order: ["primary", "fallback"] },
+		{
+			name: "a policy close uses fallback",
+			responses: [codexClose(1008), recovered],
+			order: ["primary", "fallback"],
+		},
 		{
 			name: "another provider uses fallback",
 			responses: [codexClose(1006), recovered],
@@ -375,49 +379,52 @@ describe("AgentSession retry delay cap", () => {
 			responses: [{ ...codexClose(1006), content: ["Already shown"] }],
 			order: ["primary"],
 		},
-	])("handles Codex WebSocket failure: $name", async ({ responses, order, otherProvider, maxRetries, baseDelayMs, maxDelayMs }) => {
-		const primary = otherProvider
-			? requireBundledModel("openai", "gpt-5")
-			: requireBundledModel("openai-codex", "gpt-5.6-sol");
-		const fallback = requireBundledModel("openai-codex", "gpt-5.5");
-		authStorage.setRuntimeApiKey("openai", "openai-test-key");
-		authStorage.setRuntimeApiKey("openai-codex", "codex-test-key");
-		const selector = `${primary.provider}/${primary.id}`;
-		const fallbackSelector = `${fallback.provider}/${fallback.id}`;
-		const requested: string[] = [];
-		const mock = createMockModel({ responses });
-		const agent = new Agent({
-			initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
-			streamFn: (model, context, options) => {
-				requested.push(`${model.provider}/${model.id}`);
-				return mock.stream(model, context, options);
-			},
-		});
-		const settings = Settings.isolated({
-			"compaction.enabled": false,
-			"retry.enabled": true,
-			"retry.baseDelayMs": baseDelayMs ?? 1,
-			"retry.maxDelayMs": maxDelayMs ?? 100,
-			"retry.maxRetries": maxRetries ?? 2,
-			"retry.modelFallback": true,
-			"retry.fallbackChains": { default: [fallbackSelector] },
-		});
-		settings.setDefaultModel(selector);
-		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+	])(
+		"handles Codex WebSocket failure: $name",
+		async ({ responses, order, otherProvider, maxRetries, baseDelayMs, maxDelayMs }) => {
+			const primary = otherProvider
+				? requireBundledModel("openai", "gpt-5")
+				: requireBundledModel("openai-codex", "gpt-5.6-sol");
+			const fallback = requireBundledModel("openai-codex", "gpt-5.5");
+			authStorage.setRuntimeApiKey("openai", "openai-test-key");
+			authStorage.setRuntimeApiKey("openai-codex", "codex-test-key");
+			const selector = `${primary.provider}/${primary.id}`;
+			const fallbackSelector = `${fallback.provider}/${fallback.id}`;
+			const requested: string[] = [];
+			const mock = createMockModel({ responses });
+			const agent = new Agent({
+				initialState: { model: primary, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requested.push(`${model.provider}/${model.id}`);
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.enabled": true,
+				"retry.baseDelayMs": baseDelayMs ?? 1,
+				"retry.maxDelayMs": maxDelayMs ?? 100,
+				"retry.maxRetries": maxRetries ?? 2,
+				"retry.modelFallback": true,
+				"retry.fallbackChains": { default: [fallbackSelector] },
+			});
+			settings.setDefaultModel(selector);
+			session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
 
-		await session.prompt("Answer after a transient failure");
-		await session.waitForIdle();
+			await session.prompt("Answer after a transient failure");
+			await session.waitForIdle();
 
-		expect(requested).toEqual(order.map(target => (target === "primary" ? selector : fallbackSelector)));
-		const final = lastAssistant(session);
-		if (order.length === 1) {
-			expect(final.stopReason).toBe("error");
-			expect(final.content).toContainEqual({ type: "text", text: "Already shown" });
-		} else {
-			expect(final.stopReason).toBe("stop");
-			expect(final.content).toContainEqual({ type: "text", text: "Recovered" });
-		}
-	});
+			expect(requested).toEqual(order.map(target => (target === "primary" ? selector : fallbackSelector)));
+			const final = lastAssistant(session);
+			if (order.length === 1) {
+				expect(final.stopReason).toBe("error");
+				expect(final.content).toContainEqual({ type: "text", text: "Already shown" });
+			} else {
+				expect(final.stopReason).toBe("stop");
+				expect(final.content).toContainEqual({ type: "text", text: "Recovered" });
+			}
+		},
+	);
 
 	it("switches same-provider credentials before model fallback on ChatGPT usage limits", async () => {
 		await withAccountMovement();

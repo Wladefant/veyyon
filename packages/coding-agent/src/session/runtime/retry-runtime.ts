@@ -521,7 +521,9 @@ export class RetryRuntime {
 			maxAttempts: policy.maxRetries,
 			policySource: describeRetryPolicySource(policy),
 			delayMs: attempt.delayMs,
-			errorMessage: attempt.quotaMessage ? `${attempt.errorMessage} (${attempt.quotaMessage})` : attempt.errorMessage,
+			errorMessage: attempt.quotaMessage
+				? `${attempt.errorMessage} (${attempt.quotaMessage})`
+				: attempt.errorMessage,
 			errorId: message.errorId,
 		});
 
