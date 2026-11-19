@@ -982,7 +982,7 @@ function registerNativeHeartbeat(
 	intervalMs: number,
 	registration: NativeHeartbeatRegistration,
 ): () => void {
-	const key = `${ledgerPath}\0${intervalMs}`;
+	const key = ledgerPath;
 	let group = nativeHeartbeatGroups.get(key);
 	if (!group) {
 		group = { registrations: new Map(), inFlight: false };
