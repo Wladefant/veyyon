@@ -155,7 +155,7 @@ function assertIsolatedCanaryOutcome(
 		),
 	).toBe(true);
 	expect(report.normalSessionFiles).toEqual([]);
-	expect(report.sessionInitFirstLine).toContain('"type":"session"');
+	expect(report.hasChildTranscript).toBe(true);
 }
 
 describe("isolated VEYYON_CONFIG_DIR child execution under simulated Antigravity 429", () => {

@@ -24,6 +24,7 @@ import {
 	postmortem,
 	readGlobalProfileSharingSafe,
 } from "@veyyon/utils";
+import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import { Settings } from "../../src/config/settings";
 import { runSubprocess } from "../../src/task/executor";
 import type { AgentDefinition } from "../../src/task/types";
@@ -32,6 +33,7 @@ const CANARY_ACCOUNT = "access-verified-canary";
 const SIBLING_ACCOUNT = "access-normal-sibling";
 const PROVIDER = "google-antigravity";
 const MODEL = `${PROVIDER}/gemini-3.8-flash:high`;
+const CHILD_ID = "isolated-child-probe";
 type Account = "canary" | "sibling" | "other";
 
 export interface InterceptedRequest {
@@ -59,7 +61,7 @@ export interface IsolatedChildProbeReport {
 	};
 	sessionFiles: string[];
 	normalSessionFiles: string[];
-	sessionInitFirstLine: string | null;
+	hasChildTranscript: boolean;
 }
 
 function listFilesRecursive(dir: string): string[] {
@@ -150,7 +152,7 @@ try {
 		agent,
 		task: "Reply with ok.",
 		index: 0,
-		id: "isolated-child-probe",
+		id: CHILD_ID,
 		modelOverride: MODEL,
 		settings,
 		enableLsp: false,
@@ -164,11 +166,8 @@ try {
 
 	const sessionFiles = listFilesRecursive(sessionsDir);
 	const normalSessionFiles = listFilesRecursive(normalSessionsDir);
-	const firstSessionFile = sessionFiles[0];
-	const sessionInitFirstLine =
-		firstSessionFile && fs.existsSync(firstSessionFile)
-			? (fs.readFileSync(firstSessionFile, "utf8").split("\n")[0] ?? null)
-			: null;
+	const childTranscript = path.join(sessionsDir, sessionFileName(`${ORPHAN_AGENT_TRANSCRIPT_PREFIX}${CHILD_ID}`));
+	const hasChildTranscript = sessionFiles.includes(childTranscript);
 
 	const report: IsolatedChildProbeReport = {
 		resolved: {
@@ -190,7 +189,7 @@ try {
 		},
 		sessionFiles,
 		normalSessionFiles,
-		sessionInitFirstLine,
+		hasChildTranscript,
 	};
 
 	process.stdout.write(`${JSON.stringify(report)}\n`);
