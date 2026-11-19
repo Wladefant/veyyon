@@ -17,6 +17,7 @@ import {
 	CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS,
 	CLOUD_CODE_ASSIST_TYPE_SPECIFIC_KEYS,
 	COMBINATOR_KEYS,
+	GEMINI_UNSUPPORTED_ARRAY_FIELDS,
 	LIFTABLE_TO_DESCRIPTION_FIELDS,
 	NON_STRUCTURAL_SCHEMA_KEYS,
 	SCHEMA_MAP_KEYWORDS,
@@ -106,7 +107,7 @@ const CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA = {
 } as const;
 
 function isGoogleUnsupportedSchemaField(key: string): boolean {
-	return Object.hasOwn(UNSUPPORTED_SCHEMA_FIELDS, key);
+	return Object.hasOwn(UNSUPPORTED_SCHEMA_FIELDS, key) || Object.hasOwn(GEMINI_UNSUPPORTED_ARRAY_FIELDS, key);
 }
 
 function isMcpUnsupportedSchemaField(key: string): boolean {
@@ -1072,7 +1073,7 @@ export function normalizeSchemaForGoogle(value: unknown): unknown {
 
 export function normalizeSchemaForCCA(value: unknown): unknown {
 	return normalizeSchema(value, {
-		unsupportedFields: isGoogleUnsupportedSchemaField,
+		unsupportedFields: key => Object.hasOwn(UNSUPPORTED_SCHEMA_FIELDS, key),
 		normalizeFieldNames: true,
 		collapseNullFields: false,
 		normalizeTypeArrayToNullable: true,

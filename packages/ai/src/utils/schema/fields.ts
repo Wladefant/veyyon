@@ -28,10 +28,6 @@ export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 	propertyNames: true,
 	minItems: true,
 	maxItems: true,
-	uniqueItems: true,
-	contains: true,
-	minContains: true,
-	maxContains: true,
 	minLength: true,
 	maxLength: true,
 	minimum: true,
@@ -41,6 +37,18 @@ export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 	multipleOf: true,
 	pattern: true,
 	format: true,
+};
+
+/**
+ * Gemini / Code Assist array validation keywords rejected on `parametersJsonSchema`.
+ * Kept separate from `UNSUPPORTED_SCHEMA_FIELDS` so Cloud Code Assist Claude
+ * declarations (`normalizeSchemaForCCA`) preserve them on `parameters`.
+ */
+export const GEMINI_UNSUPPORTED_ARRAY_FIELDS: Record<string, true> = {
+	uniqueItems: true,
+	contains: true,
+	minContains: true,
+	maxContains: true,
 };
 
 /**

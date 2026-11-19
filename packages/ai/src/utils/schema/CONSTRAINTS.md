@@ -62,12 +62,11 @@ When strict mode is requested (`strict=true` at call site), the schema MUST sati
 Schemas sent on the Google JSON Schema path MUST follow:
 
 1. **Unsupported JSON Schema keywords are stripped (except names under a schema map)**
-   - Unsupported keys (`UNSUPPORTED_SCHEMA_FIELDS`):
+   - Unsupported keys (`UNSUPPORTED_SCHEMA_FIELDS` plus Gemini-only `GEMINI_UNSUPPORTED_ARRAY_FIELDS`):
      - `$schema`, `$ref`, `$defs`, `$dynamicRef`, `$dynamicAnchor`
      - `examples`, `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`
      - `patternProperties`, `additionalProperties`
-     - `minItems`, `maxItems`, `uniqueItems`, `contains`, `minContains`, `maxContains`
-     - `minLength`, `maxLength`
+     - `minItems`, `maxItems` (plus `uniqueItems`, `contains`, `minContains`, `maxContains` on Gemini only)
      - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
      - `pattern`, `format`
    - Keys of a schema map (`SCHEMA_MAP_KEYWORDS`: `properties`, `patternProperties`, `dependencies`, `dependentSchemas`, `$defs`, `definitions`) are property, pattern or definition names and MUST NOT be stripped or rewritten by keyword match. Every walker, including the CCA nullable pass, the residual check and the compatibility audit, descends into the map's values and leaves its keys alone.
@@ -96,7 +95,7 @@ For Cloud Code Assist Claude tool declarations, schema MUST satisfy stricter con
 
 ### 3.2 Sanitization contract
 
-1. Start with Google unsupported-key stripping behavior.
+1. Start with Google base unsupported-key stripping behavior (`UNSUPPORTED_SCHEMA_FIELDS`, keeping `uniqueItems`, `contains`, `minContains`, `maxContains`).
 2. **`nullable` keyword MUST be stripped** in CCA Claude path.
 3. `type: ["T", "null"]` becomes `type: "T"` with no `nullable` marker.
 4. Human-meaningful stripped keys are appended to `description` with the same spill format used by the Google dispatcher.

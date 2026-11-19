@@ -459,6 +459,52 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		);
 	});
 
+	it("preserves array validation keywords on Claude via Cloud Code Assist while stripping them on Gemini", () => {
+		const tool: Tool = {
+			name: "inspect_ids",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					ids: {
+						type: "array",
+						items: { type: "integer" },
+						uniqueItems: true,
+						contains: { type: "integer" },
+						minContains: 1,
+						maxContains: 2,
+					},
+				},
+				required: ["ids"],
+			},
+		};
+
+		const claudeDeclaration = convertTools([tool], createModel("claude-sonnet-4-5"))?.[0]?.functionDeclarations[0];
+		const claudeParams = claudeDeclaration?.parameters as {
+			properties: { ids: Record<string, unknown> };
+		};
+		expect(claudeDeclaration?.parametersJsonSchema).toBeUndefined();
+		expect(claudeParams.properties.ids).toEqual({
+			type: "array",
+			items: { type: "integer" },
+			uniqueItems: true,
+			contains: { type: "integer" },
+			minContains: 1,
+			maxContains: 2,
+		});
+
+		const geminiDeclaration = convertTools([tool], createModel("gemini-4-hydrogen"))?.[0]?.functionDeclarations[0];
+		const geminiSchema = geminiDeclaration?.parametersJsonSchema as {
+			properties: { ids: Record<string, unknown> };
+		};
+		expect(geminiDeclaration?.parameters).toBeUndefined();
+		expect(geminiSchema.properties.ids).toEqual({
+			type: "array",
+			items: { type: "integer" },
+			description: "{uniqueItems: true}",
+		});
+	});
+
 	it("infers type:string for a bare string-literal enum under properties (Vertex rejects type-less enums)", () => {
 		// Regression: ArkType emits string-literal unions (e.g. the lsp tool's
 		// `action`) as a bare `{ enum: [...] }` with no `type`. Vertex / Cloud
