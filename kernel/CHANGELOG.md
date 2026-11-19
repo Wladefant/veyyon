@@ -7,6 +7,7 @@
 ### Fixed
 
 - Share one file lock across a synchronous burst of session journal appends without delaying their visibility ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+- Wait for the session's own queued journal append before rejecting an operator answer as stale ([#1211](https://github.com/Wladefant/veyyon/pull/1211)).
 
 ## [1.10.11] - 2026-11-17
 
