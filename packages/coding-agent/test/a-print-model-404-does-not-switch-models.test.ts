@@ -34,7 +34,6 @@ describe("print-mode model availability", () => {
 	beforeEach(async () => {
 		temp = TempDir.createSync("@veyyon-print-404-");
 		auth = await AuthStorage.create(temp.join("auth.db"));
-		auth.setRuntimeApiKey(PROVIDER, "fixture-key");
 		stdout = stderr = "";
 		exit = undefined;
 		requested = [];
@@ -82,7 +81,16 @@ describe("print-mode model availability", () => {
 					options.modelRegistry?.registerProvider(PROVIDER, {
 						baseUrl: "http://127.0.0.1:1",
 						api: PROVIDER,
-						models: ["primary", "fallback"].map(id => ({ id, name: id })),
+						apiKey: "literal:fixture-key",
+						models: ["primary", "fallback"].map(id => ({
+							id,
+							name: id,
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 128_000,
+							maxTokens: 8_192,
+						})),
 						streamSimple: model => {
 							requested.push(`${model.provider}/${model.id}`);
 							const failed = model.id === "primary";
