@@ -2,6 +2,7 @@ import { isRecord } from "@veyyon/utils/type-guards";
 import {
 	CCA_UNSUPPORTED_SCHEMA_FIELDS,
 	COMBINATOR_KEYS,
+	GEMINI_UNSUPPORTED_ARRAY_FIELDS,
 	NON_STRUCTURAL_SCHEMA_KEYS,
 	SCHEMA_MAP_KEYWORDS,
 	UNSUPPORTED_SCHEMA_FIELDS,
@@ -45,7 +46,11 @@ export interface StrictSchemaEnforcementResult {
 // plus a few provider-specific extras (`const`, `nullable`) folded in here so
 // each rule is defined in exactly one place.
 const STRICT_FORBIDDEN_KEYS: Record<string, true> = { ...NON_STRUCTURAL_SCHEMA_KEYS, const: true, nullable: true };
-const GOOGLE_FORBIDDEN_KEYS: Record<string, true> = { ...UNSUPPORTED_SCHEMA_FIELDS, const: true };
+const GOOGLE_FORBIDDEN_KEYS: Record<string, true> = {
+	...UNSUPPORTED_SCHEMA_FIELDS,
+	...GEMINI_UNSUPPORTED_ARRAY_FIELDS,
+	const: true,
+};
 const CCA_FORBIDDEN_KEYS: Record<string, true> = { ...CCA_UNSUPPORTED_SCHEMA_FIELDS, const: true };
 
 // Keys whose values are JSON-Schema *containers* (arrays of values, scalars,
