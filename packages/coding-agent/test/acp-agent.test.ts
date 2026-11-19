@@ -1724,7 +1724,9 @@ describe("ACP agent", () => {
 		await harness.agent.loadSession({ sessionId: created.sessionId, cwd: harness.cwdA, mcpServers: [] });
 		const replay = harness.updates.flatMap(({ update }) =>
 			(update.sessionUpdate === "user_message_chunk" || update.sessionUpdate === "agent_message_chunk") &&
-			update.content.type === "text" ? [update.content.text] : [],
+			update.content.type === "text"
+				? [update.content.text]
+				: [],
 		);
 		expect(replay).toContain("EARLY-USER-ORIGINAL");
 		expect(replay).toContain("EARLY-ASSISTANT-ORIGINAL");
@@ -3349,6 +3351,7 @@ describe("ACP agent", () => {
 
 	it.each(["close", "disconnect"])("rejects every queued prompt after session %s", async mode => {
 		const harness = await createHarness();
+		await harness.agent.initialize({ protocolVersion: 1, clientCapabilities: {} });
 		const { sessionId } = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
 		const session = harness.findSession(sessionId)!;
 		const entered = Promise.withResolvers<void>();
