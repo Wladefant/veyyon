@@ -43,6 +43,9 @@ import { sameMessageContent, sessionMessagePersistenceKey } from "../turn-persis
 import { parkUsageLimitedCredential } from "./provider-usage";
 import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
 
+// Match the exact socket-close error that the Codex transport emits.
+const CODEX_RETRYABLE_CLOSE = /^websocket closed \((?:1000|1006|1012)\)$/;
+
 /** How a failed turn entered retry handling: which switches the recovery may make. */
 interface RetryEntryOptions {
 	allowModelFallback?: boolean;
@@ -106,6 +109,7 @@ export class RetryRuntime {
 	readonly #host: RetryHost;
 	#abortController: AbortController | undefined = undefined;
 	#attempt = 0;
+	#retriedCodexClose = false;
 	/** Continuations spent on transport deaths inside an unreplayable tool batch;
 	 *  charged against the same budget as a retry, and restored both by a turn that
 	 *  lands and by a new prompt, which is a new incident. */
@@ -151,6 +155,7 @@ export class RetryRuntime {
 		// the scheduled continue, which does not pass through here, so the cap still terminates a
 		// provider that dies every attempt.
 		this.#batchContinues = 0;
+		this.#retriedCodexClose = false;
 	}
 
 	/**
@@ -618,6 +623,20 @@ export class RetryRuntime {
 		// A refusal chain stops at the retry budget: the exhausted-attempt
 		// last resort is for provider failures, not classifier decisions.
 		const chainEnabled = this.#fallback.chainEnabled;
+		if (
+			allowModelFallback &&
+			chainEnabled &&
+			!attempt.budgetExhausted &&
+			!attempt.options?.hardErrorFallback &&
+			!attempt.classifierRefusal &&
+			!this.#retriedCodexClose &&
+			activeModel.api === "openai-codex-responses" &&
+			CODEX_RETRYABLE_CLOSE.test(attempt.errorMessage)
+		) {
+			// Do not cool down the model until it has had one chance to recover.
+			this.#retriedCodexClose = true;
+			return;
+		}
 		const isUsageLimit = AIError.is(attempt.id, AIError.Flag.UsageLimit);
 		if (allowModelFallback && !attempt.classifierRefusal && (chainEnabled || isUsageLimit)) {
 			this.#fallback.noteCooldown(currentSelector, attempt.parsedRetryAfterMs, attempt.errorMessage, {
@@ -830,6 +849,7 @@ export class RetryRuntime {
 
 		// Reset retry budget for a fresh attempt
 		this.#attempt = 0;
+		this.#retriedCodexClose = false;
 
 		// Re-attempt the turn
 		this.#host.scheduleAgentContinue({ delayMs: 1 });
@@ -877,6 +897,7 @@ export class RetryRuntime {
 			// not that evidence: clearing the counter on one would leave the end event below nothing
 			// to fire on once the empty-stop ladder produced a real turn.
 			this.#batchContinues = 0;
+			this.#retriedCodexClose = false;
 		}
 		// An unreplayable-batch continuation announces its wait through the same event as the retry
 		// ladder but counts on its own allowance, so it needs its own arm here or its start has no
