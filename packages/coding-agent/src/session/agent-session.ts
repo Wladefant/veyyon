@@ -1223,7 +1223,8 @@ export class AgentSession {
 							}
 							await this.agent.continue();
 						}
-						phaseTail = this.agent.state.messages.length > phaseStart ? this.agent.state.messages.at(-1) : undefined;
+						phaseTail =
+							this.agent.state.messages.length > phaseStart ? this.agent.state.messages.at(-1) : undefined;
 					} catch (error) {
 						failure = error;
 					}

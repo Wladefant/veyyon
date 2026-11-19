@@ -1037,10 +1037,11 @@ describe("native retained child resume", () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
 		const parent = await session("owner", [{ content: ["Fresh result"], stopReason: "stop" }]);
-		const worker = await session(
-			"worker",
-			[interruption === "user-yield" ? yielded("Unrelated private result") : { content: ["Unrelated final text"], stopReason: "stop" }],
-		);
+		const worker = await session("worker", [
+			interruption === "user-yield"
+				? yielded("Unrelated private result")
+				: { content: ["Unrelated final text"], stopReason: "stop" },
+		]);
 		const registry = AgentRegistry.global();
 		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
 		registry.register({
@@ -1075,15 +1076,15 @@ describe("native retained child resume", () => {
 		if (interruption !== "parent") {
 			await worker.instance.prompt("Independent user request");
 		} else {
-		await worker.instance.sendCustomMessage(
-			{
-				...oldPhase,
-				content: "Unrelated phase",
-				timestamp: 2000,
-				details: { ...oldPhase.details, id: "unrelated" },
-			},
-			{ triggerTurn: true },
-		);
+			await worker.instance.sendCustomMessage(
+				{
+					...oldPhase,
+					content: "Unrelated phase",
+					timestamp: 2000,
+					details: { ...oldPhase.details, id: "unrelated" },
+				},
+				{ triggerTurn: true },
+			);
 		}
 		await worker.instance.waitForIdle();
 
@@ -1126,7 +1127,9 @@ describe("native retained child resume", () => {
 
 		const completions = parent.store
 			.getEntries()
-			.flatMap(entry => entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : []);
+			.flatMap(entry =>
+				entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+			);
 		expect(completions).toHaveLength(1);
 		expect(completions[0]?.content).toContain('"value":"B"');
 		expect(recovered.mock.calls).toHaveLength(1);
@@ -1136,12 +1139,14 @@ describe("native retained child resume", () => {
 			content: [{ type: "text", text: oldPhase.content }],
 		});
 		expect(
-			reopened.getEntries().filter(
-				entry =>
-					entry.type === "custom_message" &&
-					entry.customType === "irc:incoming" &&
-					Reflect.get(entry.details ?? {}, "id") === oldPhase.details.id,
-			),
+			reopened
+				.getEntries()
+				.filter(
+					entry =>
+						entry.type === "custom_message" &&
+						entry.customType === "irc:incoming" &&
+						Reflect.get(entry.details ?? {}, "id") === oldPhase.details.id,
+				),
 		).toHaveLength(1);
 	});
 
