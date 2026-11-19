@@ -509,7 +509,7 @@ export class RetryRuntime {
 			if (!attempt.budgetExhausted && model && AIError.is(id, AIError.Flag.UsageLimit)) {
 				await this.#parkUsageLimit(attempt, model);
 			}
-			if (!attempt.switchedCredential) await this.#switchModel(attempt);
+			if (!attempt.switchedCredential) await this.#switchModel(attempt, policy.maxDelayMs);
 		}
 		if (await this.#closeUnrecoverable(attempt, policy.maxDelayMs)) return false;
 
@@ -615,7 +615,7 @@ export class RetryRuntime {
 	 * after a switch, else at least the provider's retry-after hint unless a usage limit already
 	 * pinned it.
 	 */
-	async #switchModel(attempt: RetryAttempt): Promise<void> {
+	async #switchModel(attempt: RetryAttempt, maxDelayMs: number): Promise<void> {
 		const activeModel = this.#session.model;
 		if (!activeModel) return;
 		const currentSelector = formatRetryFallbackSelector(activeModel, this.#session.thinkingLevel);
@@ -627,6 +627,7 @@ export class RetryRuntime {
 			allowModelFallback &&
 			chainEnabled &&
 			!attempt.budgetExhausted &&
+			(maxDelayMs <= 0 || attempt.delayMs <= maxDelayMs) &&
 			!attempt.options?.hardErrorFallback &&
 			!attempt.classifierRefusal &&
 			!this.#retriedCodexClose &&
