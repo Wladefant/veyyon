@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Log the cause and duration of each failed lane release attempt without paths or lease tokens ([#1200](https://github.com/Wladefant/veyyon/issues/1200)).
 - Let native lane admission wait through short host stalls without taking the lock from a live transaction ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
 - Give new lane admissions a bounded wait when another process holds the host ledger lock ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
 
