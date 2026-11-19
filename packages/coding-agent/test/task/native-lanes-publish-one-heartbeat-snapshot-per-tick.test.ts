@@ -166,3 +166,68 @@ it("skips a tick while its write is pending and checks every lease fence on the 
 		await Promise.all(handles.map(lease => lease.release()));
 	}
 }, 15_000);
+
+it("keeps two cadences on one ledger and the same cadence on two ledgers independent", async () => {
+	using dir = TempDir.createSync("@veyyon-heartbeat-ledger-");
+	using otherDir = TempDir.createSync("@veyyon-heartbeat-ledger-");
+	const root = dir.path();
+	const otherRoot = otherDir.path();
+	const ledgerPath = getLaneAdmissionLedgerPath(root);
+	const otherLedgerPath = getLaneAdmissionLedgerPath(otherRoot);
+	const interval = 30_000;
+	const start = Date.now();
+	const tick = start + interval;
+	const handles: NativeHostLaneLease[] = [];
+	const mainSnapshot = Promise.withResolvers<HeartbeatSnapshot>();
+	const otherSnapshot = Promise.withResolvers<HeartbeatSnapshot>();
+	const deadline = Promise.withResolvers<never>();
+	const realRename = fsp.rename;
+	const realSetTimeout = setTimeout;
+	const realClearTimeout = clearTimeout;
+	let timer: NodeJS.Timeout | undefined;
+
+	vi.useFakeTimers();
+	const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+	const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
+		const captured = target === ledgerPath ? mainSnapshot : target === otherLedgerPath ? otherSnapshot : undefined;
+		if (!captured || Date.now() !== tick) return realRename(source, target);
+		const ledger = JSON.parse(await fsp.readFile(source, "utf8")) as LaneAdmissionLedger;
+		const snapshot = ledger.reservations.map(({ slotId, lastHeartbeatAt }) => ({ slotId, lastHeartbeatAt }));
+		await realRename(source, target);
+		captured.resolve(snapshot);
+	});
+	try {
+		for (const [owner, globalConfigRoot, heartbeatIntervalMs] of [
+			["probe-fast", root, interval],
+			["probe-slow", root, 2 * interval],
+			["probe-other-fast", otherRoot, interval],
+		] as const) {
+			const lease = await acquireNativeHostLaneWait({
+				owner,
+				globalConfigRoot,
+				heartbeatIntervalMs,
+				waitIfFull: false,
+			});
+			if (!lease) throw new Error("Expected a live native lease");
+			handles.push(lease);
+		}
+		clock.mockReturnValue(tick);
+		vi.advanceTimersByTime(interval);
+		timer = realSetTimeout(() => deadline.reject(new Error("Both ledgers must advance at the shared cadence")), 5_000);
+		const [main, other] = await Promise.race([
+			Promise.all([mainSnapshot.promise, otherSnapshot.promise]),
+			deadline.promise,
+		]);
+		expect(main).toEqual([
+			{ slotId: handles[0]!.slotId, lastHeartbeatAt: tick },
+			{ slotId: handles[1]!.slotId, lastHeartbeatAt: start },
+		]);
+		expect(other).toEqual([{ slotId: handles[2]!.slotId, lastHeartbeatAt: tick }]);
+	} finally {
+		realClearTimeout(timer);
+		rename.mockRestore();
+		clock.mockRestore();
+		vi.useRealTimers();
+		await Promise.all(handles.map(lease => lease.release()));
+	}
+}, 15_000);
