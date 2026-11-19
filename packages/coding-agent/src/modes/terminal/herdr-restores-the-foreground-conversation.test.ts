@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import type { AgentSession } from "../../session/agent-session";
 import type { AgentSessionEvent } from "../../session/agent-session-types";
 import { HerdrReporter, herdrResumeArgv } from "./herdr-reporter";
@@ -183,6 +183,46 @@ describe("Herdr restores the foreground Veyyon conversation", () => {
 		current.id = "c";
 		await Bun.sleep(30);
 		expect(calls).toHaveLength(sent);
+	});
+
+	it("restores lost resume metadata for an unchanged foreground session", async () => {
+		const calls: string[][] = [];
+		const reporter = new HerdrReporter(
+			env,
+			async (_binary, args) => {
+				calls.push(args);
+			},
+			"work",
+			[],
+			"/launch",
+			5,
+			30,
+		);
+		const s = session("a");
+		vi.useFakeTimers();
+		reporter.attach(s.value);
+		try {
+			// Herdr accepted the first report but no longer has its resume command.
+			// No turn or session change occurs to trigger another report.
+			vi.advanceTimersByTime(25);
+			expect(calls).toHaveLength(1);
+			vi.advanceTimersByTime(5);
+			await settle();
+			const refresh = calls[1];
+			expect(refresh?.slice(refresh.indexOf("--"))).toEqual([
+				"--",
+				"veyyon",
+				"--profile",
+				"work",
+				"--resume",
+				"/sessions/a.jsonl",
+			]);
+			const seq = (args: string[]) => Number(args[args.indexOf("--seq") + 1]);
+			expect(seq(refresh!)).toBeGreaterThan(seq(calls[0]!));
+		} finally {
+			reporter.release();
+			vi.useRealTimers();
+		}
 	});
 
 	it("pins relative extension paths to the launch directory", () => {
