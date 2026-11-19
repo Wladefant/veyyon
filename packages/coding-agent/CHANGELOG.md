@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Return the exit code and available output when a launched child exits before readiness ([#1094](https://github.com/Wladefant/veyyon/issues/1094)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added
