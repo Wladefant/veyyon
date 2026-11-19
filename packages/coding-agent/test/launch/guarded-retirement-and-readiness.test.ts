@@ -671,4 +671,51 @@ describe("guarded retirement and readiness regressions", () => {
 			await restarted;
 		}
 	}, 10_000);
+
+	it.skipIf(process.platform === "win32")(
+		"rejects a waiting start while explicit restart is still reaping its child",
+		async () => {
+			const projectDir = await tempDir("reaping-start-project-");
+			const runtimeDir = await tempDir("reaping-start-runtime-");
+			const { client } = await startInProcessBroker(projectDir, runtimeDir);
+			const spec: DaemonSpec = {
+				name: "reaping-start",
+				application: process.execPath,
+				args: ["-e", 'process.on("SIGTERM", () => {}); console.log("armed"); setInterval(() => {}, 1_000)'],
+				env: {},
+				cwd: projectDir,
+				pty: false,
+				restart: "no",
+				persist: false,
+				detached: false,
+				ready: { log: "NEVER_READY", timeoutMs: 1_000 },
+			};
+			const startOutcome = Promise.allSettled([client.request({ op: "start", spec })]);
+			expect(
+				await waitUntil(async () => {
+					const result = await client.request({ op: "list" });
+					return (
+						result.op === "list" &&
+						result.daemons.some(daemon => daemon.name === spec.name && daemon.outputBytes > 0)
+					);
+				}, 1_000),
+			).toBeTrue();
+			const restarted = Promise.allSettled([client.request({ op: "restart", name: spec.name })]);
+			try {
+				expect(await startOutcome).toEqual([
+					{
+						status: "rejected",
+						reason: expect.objectContaining({ message: expect.stringContaining("superseded") }),
+					},
+				]);
+				expect(await client.request({ op: "describe", name: spec.name })).toMatchObject({
+					op: "describe",
+					daemon: { state: "stopping", generation: 1 },
+				});
+			} finally {
+				await restarted;
+			}
+		},
+		10_000,
+	);
 });
