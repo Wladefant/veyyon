@@ -8,13 +8,15 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@veyyon/agent-core";
+import type { AgentTool, AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { disposeAllVmContexts } from "@veyyon/coding-agent/eval/js/context-manager";
 import type { EvalToolDetails } from "@veyyon/coding-agent/eval/types";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { wrapToolWithMetaNotice } from "@veyyon/coding-agent/tools/core/output-meta";
+import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
+import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { EvalTool } from "@veyyon/coding-agent/tools/shell/eval";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { makeToolSession } from "../helpers/tool-session";
@@ -30,7 +32,7 @@ afterEach(() => {
 	disposeAllVmContexts();
 });
 
-function makeSession(artifactPath: string): ToolSession {
+function makeSession(artifactPath: string, overrides: Omit<Partial<ToolSession>, "settings"> = {}): ToolSession {
 	const settings = Settings.isolated();
 	settings.set("tools.artifactSpillThreshold", 128);
 	const owner = {
@@ -45,6 +47,7 @@ function makeSession(artifactPath: string): ToolSession {
 		settings,
 		captureProducerSecretOwner: () => owner,
 		allocateOutputArtifact: async (toolType: string) => ({ id: `synthetic-${toolType}`, path: artifactPath }),
+		...overrides,
 	});
 }
 
@@ -464,5 +467,108 @@ describe("real EvalTool output stays redacted under its registered producer owne
 		const reopened = await SessionManager.open(sessionFile!);
 		const reopenedText = JSON.stringify(reopened.getBranch());
 		for (const sentinel of inventoryParts) expect(reopenedText).not.toContain(sentinel);
+	});
+
+	it("withholds tool-bridge bash and search status inventories while keeping ordinary metadata visible", async () => {
+		directory = fs.mkdtempSync(path.join(os.tmpdir(), "eval-tool-status-"));
+		const searchDir = path.join(directory, "search-dir");
+		fs.mkdirSync(searchDir, { recursive: true });
+		fs.writeFileSync(path.join(searchDir, "safe-file.txt"), "safe\n", "utf8");
+		fs.writeFileSync(path.join(searchDir, "ALPHA=fake-a.txt"), "safe\n", "utf8");
+
+		const sessionTools: Record<string, AgentTool> = {};
+		const session = makeSession(path.join(directory, "eval-output.txt"), {
+			cwd: searchDir,
+			getToolByName: name => sessionTools[name],
+		});
+		sessionTools.bash = wrapToolWithMetaNotice(new BashTool(session), session);
+		sessionTools.search = wrapToolWithMetaNotice(new SearchTool(session), session);
+
+		const progress: AgentToolResult[] = [];
+		const tool = wrapToolWithMetaNotice(new EvalTool(session), session);
+		const inventoryParts = ["ALPHA=fake-a", "BETA=fake-b", "GAMMA=fake-c"];
+		const encodedParts = inventoryParts.map(part => [...part].map(char => char.charCodeAt(0)).join(","));
+		const encodedCanary = [...CANARY].map(char => char.charCodeAt(0)).join(",");
+		const code = [
+			`const values = [${encodedParts.map(part => `String.fromCharCode(${part})`).join(", ")}];`,
+			`const canary = String.fromCharCode(${encodedCanary});`,
+			'await tool.bash({ command: "echo safe-control" });',
+			'await tool.bash({ command: [...values, ":"].join("\\n") });',
+			`await tool.bash({ command: "printf '%s' '" + canary + "'" });`,
+			'await tool.search({ type: "files", input: "*" });',
+		].join("\n");
+
+		const result = await tool.execute(
+			"synthetic-eval-tool-status-call",
+			{
+				language: "js",
+				code,
+				reset: true,
+			},
+			undefined,
+			update => progress.push(update),
+		);
+
+		const manager = SessionManager.create(directory, path.join(directory, "sessions"));
+		await manager.ensureOnDisk();
+		manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "synthetic-eval-tool-status-call",
+			toolName: "eval",
+			content: result.content,
+			details: result.details,
+			isError: result.isError ?? false,
+			timestamp: Date.now(),
+		});
+		await manager.flush();
+		const sessionFile = manager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const persisted = fs.readFileSync(sessionFile!, "utf8");
+		const reopened = await SessionManager.open(sessionFile!);
+		const reopenedText = JSON.stringify(reopened.getBranch());
+
+		const retained = [
+			JSON.stringify(progress),
+			JSON.stringify(result.content),
+			JSON.stringify(result.details),
+			persisted,
+			reopenedText,
+		];
+		for (const sink of retained) {
+			for (const sentinel of inventoryParts) expect(sink).not.toContain(sentinel);
+			let candidate = CANARY;
+			for (let depth = 0; depth < 5; depth++) {
+				expect(sink).not.toContain(candidate);
+				candidate = JSON.stringify(candidate).slice(1, -1);
+			}
+		}
+
+		const details = result.details as EvalToolDetails | undefined;
+		const statusEvents = details?.statusEvents ?? [];
+		expect(progress.length).toBeGreaterThan(0);
+		expect(
+			progress.some(update => {
+				const updateDetails = update.details as EvalToolDetails | undefined;
+				return (
+					updateDetails?.statusEvents?.some(
+						event => event.op === "run" && event.cmd === "echo safe-control" && event.code === 0,
+					) ?? false
+				);
+			}),
+		).toBe(true);
+
+		const runEvents = statusEvents.filter(event => event.op === "run");
+		expect(runEvents.length).toBe(3);
+		expect(runEvents[0]).toMatchObject({
+			op: "run",
+			cmd: "echo safe-control",
+			code: 0,
+		});
+		expect(String(runEvents[0]?.output ?? "")).toContain("safe-control");
+
+		const searchEvents = statusEvents.filter(event => event.op === "search");
+		expect(searchEvents.length).toBe(1);
+		expect(Array.isArray(searchEvents[0]?.matches)).toBe(true);
+		expect(searchEvents[0]?.matches).toContain("safe-file.txt");
 	});
 });
