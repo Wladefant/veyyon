@@ -34,6 +34,7 @@ describe("print-mode model availability", () => {
 	beforeEach(async () => {
 		temp = TempDir.createSync("@veyyon-print-404-");
 		auth = await AuthStorage.create(temp.join("auth.db"));
+		auth.setRuntimeApiKey(PROVIDER, "fixture-key");
 		stdout = stderr = "";
 		exit = undefined;
 		requested = [];

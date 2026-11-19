@@ -141,6 +141,7 @@ describe("AuthStorage OAuth account selection", () => {
 		expect(storage.selectedProviderCredentialId(PROVIDER)).toBe(accounts[0]!.credentialId);
 
 		rejectPinned = true;
+		expect(await storage.getApiKey(PROVIDER, "probe")).toBeUndefined();
 		storage.setRuntimeApiKey(PROVIDER, "wrong-account-override");
 		expect(await storage.getApiKey(PROVIDER, "probe")).toBeUndefined();
 		expect(await storage.getOAuthAccess(PROVIDER, "probe")).toBeUndefined();
