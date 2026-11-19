@@ -72,11 +72,16 @@ describe("contenders in one process", () => {
 
 	test("a holder that never releases makes the next in-process caller fail within its budget", async () => {
 		const file = await target("hung-holder");
-		const held = await acquireFileLock(file);
+		const held = await acquireFileLock(file, { queueContext: { owner: "HoldingLane", site: "test/acquire" } });
 		const started = Date.now();
-		await expect(acquireFileLock(file, { retries: 5, retryDelayMs: 10 })).rejects.toThrow("Failed to acquire lock");
+		try {
+			await expect(acquireFileLock(file, { retries: 5, retryDelayMs: 10 })).rejects.toThrow(
+				/queue made no progress for 50ms \(owner=HoldingLane, site=test\/acquire, ageMs=\d+, phase=holding; reap not attempted\)/,
+			);
+		} finally {
+			await held.release();
+		}
 		expect(Date.now() - started).toBeLessThan(2_000);
-		await held.release();
 		const next = await acquireFileLock(file, { retries: 1, retryDelayMs: 0 });
 		await next.release();
 	});
@@ -95,12 +100,12 @@ describe("contenders in one process", () => {
 		try {
 			for (let attempt = 0; attempt < 10; attempt++) {
 				await expect(acquireFileLock(file, { retries: 1, retryDelayMs: 100 })).rejects.toThrow(
-					"an earlier holder in this process did not release it",
+					"in-process queue made no progress",
 				);
 			}
 			const { error, elapsed } = await longWait;
 			expect(error).toBeInstanceOf(Error);
-			expect(String(error)).toContain("an earlier holder in this process did not release it");
+			expect(String(error)).toContain("in-process queue made no progress");
 			expect(elapsed).toBeLessThan(900);
 		} finally {
 			await held.release();

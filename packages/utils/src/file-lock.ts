@@ -17,6 +17,10 @@ export interface FileLockOptions {
 	staleMs?: number;
 	retries?: number;
 	retryDelayMs?: number;
+	/** Maximum time an async queue may make no progress, separate from filesystem retries. */
+	queueWaitMs?: number;
+	/** Non-secret labels for the asynchronous transaction, used only on a stall. */
+	queueContext?: { owner?: string; site: string };
 }
 
 /** An exclusive advisory lock handle. Releasing an already-released handle is idempotent and safe. */
@@ -24,7 +28,9 @@ export interface FileLockHandle {
 	release(): Promise<void>;
 }
 
-const DEFAULT_OPTIONS: Required<FileLockOptions> = {
+type FilesystemLockOptions = Required<Pick<FileLockOptions, "staleMs" | "retries" | "retryDelayMs">>;
+
+const DEFAULT_OPTIONS: FilesystemLockOptions = {
 	staleMs: 10_000,
 	retries: 50,
 	retryDelayMs: 100,
@@ -132,7 +138,7 @@ function buildLockInfo(token: string): LockInfo {
 	};
 }
 
-function validateOptions(options: FileLockOptions): Required<FileLockOptions> {
+function validateOptions(options: FileLockOptions): FilesystemLockOptions {
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 	if (!(opts.staleMs >= 0) || Number.isNaN(opts.staleMs)) {
 		throw new TypeError("file-lock: staleMs must be a non-negative number");
@@ -142,6 +148,9 @@ function validateOptions(options: FileLockOptions): Required<FileLockOptions> {
 	}
 	if (!Number.isFinite(opts.retryDelayMs) || opts.retryDelayMs < 0) {
 		throw new TypeError("file-lock: retryDelayMs must be a finite non-negative number");
+	}
+	if (options.queueWaitMs !== undefined && (!Number.isSafeInteger(options.queueWaitMs) || options.queueWaitMs < 1)) {
+		throw new TypeError("file-lock: queueWaitMs must be a positive safe integer");
 	}
 	return opts;
 }
@@ -957,7 +966,7 @@ function releaseLockSync(lockPath: string, expected: LockLease | string): void {
  * to be fixed in the acquire loop. The grace that IS consulted is 1s against a
  * default retry window of 50 x 100ms, so it stays reachable inside one acquire.
  */
-async function reapStaleAndAcquire(lockPath: string, opts: Required<FileLockOptions>): Promise<LockLease | null> {
+async function reapStaleAndAcquire(lockPath: string, opts: FilesystemLockOptions): Promise<LockLease | null> {
 	const observation = await inspectLockDirectory(lockPath);
 	if (!observation || !observationIsStale(observation, opts.staleMs, Date.now())) return null;
 	const retired = await retireObservedLock(lockPath, observation, { kind: "stale", staleMs: opts.staleMs });
@@ -966,7 +975,7 @@ async function reapStaleAndAcquire(lockPath: string, opts: Required<FileLockOpti
 }
 
 /** Synchronous twin of {@link reapStaleAndAcquire}. */
-function reapStaleAndAcquireSync(lockPath: string, opts: Required<FileLockOptions>): LockLease | null {
+function reapStaleAndAcquireSync(lockPath: string, opts: FilesystemLockOptions): LockLease | null {
 	const observation = inspectLockDirectorySync(lockPath);
 	if (!observation || !observationIsStale(observation, opts.staleMs, Date.now())) return null;
 	const retired = retireObservedLockSync(lockPath, observation, { kind: "stale", staleMs: opts.staleMs });
@@ -974,19 +983,47 @@ function reapStaleAndAcquireSync(lockPath: string, opts: Required<FileLockOption
 	return tryAcquireLockSync(lockPath);
 }
 
+interface ActiveTurn {
+	context: FileLockOptions["queueContext"];
+	startedAt: number;
+	phase: "acquiring" | "holding" | "releasing";
+	reportedStall: boolean;
+}
+
 /**
- * The in-process queue on each lock path. Contenders in one process take turns before they touch
- * the filesystem. Without it, a burst of same-process callers (twenty subagent spawns reserving host
- * lanes at once) spent every retry renaming candidates against each other, and on Windows their
- * constant reads of the owner record kept the holder's release rename failing.
+ * Contenders in one process take turns before they touch the filesystem. On Windows,
+ * concurrent reads of the owner record can prevent the holder from renaming it at release.
  */
 interface TurnQueue {
 	tail: Promise<void>;
 	/** Resolves, and is replaced, each time a holder releases this path. */
 	progress: PromiseWithResolvers<void>;
+	active?: ActiveTurn;
 }
 
 const inProcessTurns = new Map<string, TurnQueue>();
+
+function stalledQueueError(filePath: string, turn: ActiveTurn | undefined, budgetMs: number): Error {
+	const lock = escapeTerminalText(filePath);
+	const owner = escapeTerminalText(turn?.context?.owner ?? "(unknown)");
+	const site = escapeTerminalText(turn?.context?.site ?? "(unspecified)");
+	const ageMs = turn ? Math.round(performance.now() - turn.startedAt) : null;
+	const phase = turn?.phase ?? "handoff";
+	const message = `Failed to acquire lock for ${lock}: in-process queue made no progress for ${budgetMs}ms (owner=${owner}, site=${site}, ageMs=${ageMs}, phase=${phase}; reap not attempted)`;
+	if (!turn?.reportedStall) {
+		if (turn) turn.reportedStall = true;
+		logger.warn("file-lock: in-process queue stalled", {
+			filePath: lock,
+			owner,
+			site,
+			ageMs,
+			phase,
+			budgetMs,
+			reapDecision: "not_attempted_live_turn",
+		});
+	}
+	return new Error(message);
+}
 
 /**
  * Wait for `previous` to finish. Fails only when the queue makes no progress for `budgetMs`, so a
@@ -1019,28 +1056,43 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 	const previous = turnQueue.tail;
 	const { promise: turnDone, resolve: finishTurn } = Promise.withResolvers<void>();
 	const tail = previous.then(() => turnDone);
+	let active: ActiveTurn | undefined;
+	const complete = () => {
+		finishTurn();
+		if (active === undefined || turnQueue.active !== active) return;
+		turnQueue.active = undefined;
+		const progressed = turnQueue.progress;
+		turnQueue.progress = Promise.withResolvers<void>();
+		progressed.resolve();
+	};
 	turnQueue.tail = tail;
 	void tail.then(() => {
 		if (turnQueue.tail === tail && inProcessTurns.get(lockPath) === turnQueue) inProcessTurns.delete(lockPath);
 	});
 	try {
-		if (!(await waitForTurn(turnQueue, previous, opts.retries * Math.max(opts.retryDelayMs, 1)))) {
-			throw new Error(
-				`Failed to acquire lock for ${escapeTerminalText(filePath)}: an earlier holder in this process did not release it`,
-			);
+		const budgetMs = options.queueWaitMs ?? opts.retries * Math.max(opts.retryDelayMs, 1);
+		if (!(await waitForTurn(turnQueue, previous, budgetMs))) {
+			throw stalledQueueError(filePath, turnQueue.active, budgetMs);
 		}
+		const turn: ActiveTurn = {
+			context: options.queueContext,
+			startedAt: performance.now(),
+			phase: "acquiring",
+			reportedStall: false,
+		};
+		active = turn;
+		turnQueue.active = turn;
 		for (let attempt = 0; attempt < opts.retries; attempt++) {
 			await settleTransition(lockPath, opts.staleMs);
 			const lease = (await tryAcquireLock(lockPath)) ?? (await reapStaleAndAcquire(lockPath, opts));
 			if (lease !== null) {
+				turn.phase = "holding";
 				return async () => {
+					turn.phase = "releasing";
 					try {
 						await releaseLock(lockPath, lease);
 					} finally {
-						finishTurn();
-						const progressed = turnQueue.progress;
-						turnQueue.progress = Promise.withResolvers<void>();
-						progressed.resolve();
+						complete();
 					}
 				};
 			}
@@ -1048,7 +1100,7 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 		}
 		throw new Error(`Failed to acquire lock for ${escapeTerminalText(filePath)} after ${opts.retries} attempts`);
 	} catch (error) {
-		finishTurn();
+		complete();
 		throw error;
 	}
 }
