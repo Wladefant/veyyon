@@ -20,29 +20,45 @@ const utf8Decoder = new TextDecoder("utf-8");
 const journalLockStorage = new AsyncLocalStorage<Set<string>>();
 const inProcessJournalQueues = new Map<string, Promise<void>>();
 const syncJournalLockDepths = new Map<string, number>();
-const appendBatches = new Map<string, () => void>();
+interface JournalAppendBatch {
+	canonical: string;
+	end(): void;
+}
+
+// Do not carry one implicit lock into acquisition of another path. Different
+// processes can append to two journals in opposite orders.
+let appendBatch: JournalAppendBatch | undefined;
 
 /** Keep immediate append visibility without publishing a lock owner for every entry in a burst. */
 function appendInJournalBatch(canonical: string, write: () => void): void {
-	if (journalLockStorage.getStore()?.has(canonical) || syncJournalLockDepths.has(canonical)) {
+	const held = journalLockStorage.getStore();
+	if (held?.has(canonical) || syncJournalLockDepths.has(canonical)) {
 		write();
 		return;
 	}
-	let endBatch = appendBatches.get(canonical);
-	if (!endBatch) {
-		const release = acquireFileLockSync(canonical);
-		endBatch = () => {
-			if (appendBatches.get(canonical) !== endBatch) return;
-			appendBatches.delete(canonical);
-			release();
-		};
-		appendBatches.set(canonical, endBatch);
-		queueMicrotask(endBatch);
+	if (held?.size || syncJournalLockDepths.size) {
+		withJournalLockSync(canonical, write);
+		return;
 	}
+	if (appendBatch?.canonical !== canonical) {
+		appendBatch?.end();
+		const release = acquireFileLockSync(canonical);
+		const batch: JournalAppendBatch = {
+			canonical,
+			end() {
+				if (appendBatch !== batch) return;
+				appendBatch = undefined;
+				release();
+			},
+		};
+		appendBatch = batch;
+		queueMicrotask(batch.end);
+	}
+	const batch = appendBatch;
 	try {
 		write();
 	} catch (error) {
-		endBatch();
+		batch.end();
 		throw error;
 	}
 }
@@ -69,7 +85,7 @@ export async function withJournalLock<T>(filePath: string, fn: () => Promise<T>)
 	const nextHeld = new Set(held);
 	nextHeld.add(canonical);
 	try {
-		appendBatches.get(canonical)?.();
+		appendBatch?.end();
 		await fsp.mkdir(path.dirname(canonical), { recursive: true });
 		return await withFileLock(canonical, async () => {
 			return await journalLockStorage.run(nextHeld, fn);
@@ -102,7 +118,7 @@ export function withJournalLockSync<T>(filePath: string, fn: () => T): T {
 	if (inProcessJournalQueues.has(canonical)) {
 		throw new Error(`Journal lock for ${canonical} is held asynchronously in this process`);
 	}
-	if (appendBatches.has(canonical)) return fn();
+	appendBatch?.end();
 	const currentDepth = syncJournalLockDepths.get(canonical) ?? 0;
 	if (currentDepth > 0) {
 		syncJournalLockDepths.set(canonical, currentDepth + 1);

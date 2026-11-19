@@ -39,6 +39,35 @@ it("acquires one journal lock for a synchronous burst and still syncs the journa
 	}
 });
 
+it.each(["append", "rewrite"])("releases the first path before a synchronous %s on a second path", async operation => {
+	const dir = temp("journal-handoff-");
+	const first = path.join(dir, "first.jsonl");
+	const second = path.join(dir, "second.jsonl");
+	const storage = new FileSessionStorage();
+	const writer = storage.openWriter(first);
+	const line = '{"type":"session","id":"handoff"}\n';
+	try {
+		const initial = writer.append(line);
+		let next: Promise<void> | undefined;
+		if (operation === "append") {
+			const other = storage.openWriter(second);
+			next = other.append(line).finally(() => other.close());
+		} else {
+			storage.withJournalLockSync(second, () => {
+				expect(fs.existsSync(`${first}.lock`)).toBe(false);
+				storage.writeTextSync(second, line);
+			});
+		}
+		expect(fs.existsSync(`${first}.lock`)).toBe(false);
+		await initial;
+		await next;
+		expect(fs.readFileSync(first, "utf8")).toBe(line);
+		expect(fs.readFileSync(second, "utf8")).toBe(line);
+	} finally {
+		await writer.close();
+	}
+});
+
 it("waits for an async journal hold before reporting dispose complete", async () => {
 	const cwd = temp("journal-exit-");
 	const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
