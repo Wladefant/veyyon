@@ -3562,7 +3562,8 @@ export class AuthStorage {
 			getProviderTypeKey(provider, "oauth"),
 			undefined,
 			options,
-			{ checkUsage: false, allowBlocked: true, allowFallback: false },
+			// A diagnostic pin asks this account. Local plan checks must not preempt its response.
+			{ checkUsage: false, allowBlocked: true, allowFallback: false, planRequirement: "none" },
 		);
 		return resolved?.credentialId === id ? resolved : undefined;
 	}

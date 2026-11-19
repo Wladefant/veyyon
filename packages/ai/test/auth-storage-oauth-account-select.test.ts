@@ -131,7 +131,7 @@ describe("AuthStorage OAuth account selection", () => {
 		});
 		await storage.set(PROVIDER, [oauthCredential("a"), oauthCredential("b")]);
 		const accounts = storage.listOAuthAccounts(PROVIDER);
-		expect(storage.selectProviderCredential(PROVIDER, accounts[0]!.credentialId!, "saved-session")).toBe(true);
+		expect(storage.selectProviderCredential(PROVIDER, accounts[0]!.credentialId!, { sessionId: "saved-session" })).toBe(true);
 		expect(storage.pinOAuthAccountForRun(PROVIDER, 1)).toBe(true);
 
 		const selectedIds: string[] = [];
