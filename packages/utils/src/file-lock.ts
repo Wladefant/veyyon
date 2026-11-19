@@ -5,6 +5,7 @@
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { isEnoent } from "./fs-error";
 import { tryParseJson } from "./json";
 import * as logger from "./logger";
@@ -19,6 +20,8 @@ export interface FileLockOptions {
 	retryDelayMs?: number;
 	/** Maximum time an async queue may make no progress, separate from filesystem retries. */
 	queueWaitMs?: number;
+	/** Async filesystem wait budget after the local turn starts. Replaces the attempt count when set. */
+	contentionTimeoutMs?: number;
 	/** Non-secret labels for the asynchronous transaction, used only on a stall. */
 	queueContext?: { owner?: string; site: string };
 }
@@ -151,6 +154,12 @@ function validateOptions(options: FileLockOptions): FilesystemLockOptions {
 	}
 	if (options.queueWaitMs !== undefined && (!Number.isSafeInteger(options.queueWaitMs) || options.queueWaitMs < 1)) {
 		throw new TypeError("file-lock: queueWaitMs must be a positive safe integer");
+	}
+	if (
+		options.contentionTimeoutMs !== undefined &&
+		(!Number.isSafeInteger(options.contentionTimeoutMs) || options.contentionTimeoutMs < 1)
+	) {
+		throw new TypeError("file-lock: contentionTimeoutMs must be a positive safe integer");
 	}
 	return opts;
 }
@@ -662,9 +671,17 @@ async function prepareCandidate(lockPath: string): Promise<{
 	observation: LockObservation;
 	lease: LockLease;
 	parentIdentity: FileIdentity;
-}> {
-	const candidatePath = `${lockPath}.candidate-${process.pid}-${crypto.randomUUID()}`;
+} | null> {
 	const parentIdentity = await inspectParent(lockPath);
+	// Do not flush a speculative owner record while another process holds the pathname.
+	// The checks after preparation still fence races before publication.
+	try {
+		await fs.lstat(lockPath);
+		return null;
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	const candidatePath = `${lockPath}.candidate-${process.pid}-${crypto.randomUUID()}`;
 	await fs.mkdir(candidatePath, { mode: 0o700 });
 	await assertParentIdentity(lockPath, parentIdentity);
 	try {
@@ -790,6 +807,7 @@ function isWindowsRetirementAccessConflict(error: unknown): boolean {
 
 async function tryAcquireLock(lockPath: string): Promise<LockLease | null> {
 	const candidate = await prepareCandidate(lockPath);
+	if (candidate === null) return null;
 	let published = false;
 	try {
 		await assertParentIdentity(lockPath, candidate.parentIdentity);
@@ -1082,7 +1100,10 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 		};
 		active = turn;
 		turnQueue.active = turn;
-		for (let attempt = 0; attempt < opts.retries; attempt++) {
+		const timeoutMs = options.contentionTimeoutMs;
+		const deadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
+		for (let attempt = 0; ; attempt++) {
+			if (attempt > 0 && deadline !== undefined && performance.now() >= deadline) break;
 			await settleTransition(lockPath, opts.staleMs);
 			const lease = (await tryAcquireLock(lockPath)) ?? (await reapStaleAndAcquire(lockPath, opts));
 			if (lease !== null) {
@@ -1096,7 +1117,21 @@ async function acquireLock(filePath: string, options: FileLockOptions = {}): Pro
 					}
 				};
 			}
-			if (attempt + 1 < opts.retries) await Bun.sleep(opts.retryDelayMs);
+			if (deadline === undefined) {
+				if (attempt + 1 >= opts.retries) break;
+				await Bun.sleep(opts.retryDelayMs);
+			} else {
+				const remaining = deadline - performance.now();
+				if (remaining <= 0) break;
+				// Other processes poll the same pathname. Give them different wake times.
+				const interval = Math.max(1, opts.retryDelayMs);
+				await delay(Math.min(remaining, interval * (1 + Math.random())));
+			}
+		}
+		if (timeoutMs !== undefined) {
+			throw new Error(
+				`Failed to acquire lock for ${escapeTerminalText(filePath)} within ${timeoutMs} ms under filesystem contention`,
+			);
 		}
 		throw new Error(`Failed to acquire lock for ${escapeTerminalText(filePath)} after ${opts.retries} attempts`);
 	} catch (error) {

@@ -486,6 +486,7 @@ async function withLedgerLock<T>(
 	await fsp.mkdir(path.dirname(ledgerPath), { recursive: true, mode: 0o700 });
 	return withFileLock(ledgerPath, fn, {
 		...LOCK_OPTIONS,
+		contentionTimeoutMs: operation === "acquire" ? LOCK_OPTIONS.queueWaitMs : undefined,
 		queueContext: { site: `lane-admission:${operation}`, owner: owner ? path.basename(owner) : undefined },
 	});
 }
