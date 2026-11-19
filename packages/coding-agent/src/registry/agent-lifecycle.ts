@@ -532,6 +532,7 @@ export class AgentLifecycleManager {
 				ref.kind !== "sub" ||
 				ref.status !== "parked" ||
 				!ref.parentId ||
+				ref.coldRestoredFromDisk ||
 				this.#registry.get(ref.parentId) ||
 				this.#parking.has(ref.id) ||
 				this.#revivals.has(ref.id) ||
@@ -540,7 +541,7 @@ export class AgentLifecycleManager {
 				continue;
 			}
 			const reason = "Parent session no longer exists.";
-			if (!ref.terminalOutcome && !ref.coldRestoredFromDisk && ref.kind === "sub") {
+			if (!ref.terminalOutcome) {
 				this.#stalling.add(ref.id);
 				let reported = false;
 				try {
@@ -561,7 +562,7 @@ export class AgentLifecycleManager {
 			) {
 				continue;
 			}
-			if (!ref.terminalOutcome && !ref.coldRestoredFromDisk) {
+			if (!ref.terminalOutcome) {
 				this.#registry.recordTerminalOutcome(ref.id, "stalled", reason);
 			}
 			await this.release(ref.id);

@@ -860,6 +860,23 @@ describe("AgentLifecycleManager", () => {
 		}
 	});
 
+	it("does not drop a cold-restored parked ref during the orphan sweep when its parent is absent", async () => {
+		const ref = registry.register({
+			id: "ColdOrphan",
+			displayName: "child",
+			kind: "sub",
+			parentId: "AbsentParent",
+			session: null,
+			sessionFile: "/tmp/ColdOrphan.jsonl",
+			status: "parked",
+			coldRestoredFromDisk: true,
+			scope: "session-a",
+		});
+		await lifecycle.cleanupParkedOrphans();
+		expect(registry.get(ref.id)).toBe(ref);
+		expect(ref.terminalOutcome).toBeUndefined();
+	});
+
 	it("does not classify root sessions without a parent as missing-parent orphans", async () => {
 		const root = registry.register({
 			id: "main:root",
