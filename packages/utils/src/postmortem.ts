@@ -32,8 +32,10 @@ export enum Reason {
 	MANUAL = "manual", // Manual cleanup (not triggered by process)
 }
 
+type CleanupCallback = (reason: Reason, canWait: boolean) => Promise<void> | void;
+
 // Internal list of active cleanup callbacks (in registration order)
-const callbackList: ((reason: Reason) => Promise<void> | void)[] = [];
+const callbackList: CleanupCallback[] = [];
 // Tracks cleanup run state (to prevent recursion/reentry issues)
 let cleanupStage: "idle" | "running" | "complete" = "idle";
 const CLEANUP_DEADLINE_MS = 10_000;
@@ -44,7 +46,7 @@ const CLEANUP_DEADLINE_MS = 10_000;
  *
  * Returns a Promise that settles after all cleanups complete or error out.
  */
-function runCleanup(reason: Reason): Promise<void> {
+function runCleanup(reason: Reason, canWait = true): Promise<void> {
 	switch (cleanupStage) {
 		case "idle":
 			cleanupStage = "running";
@@ -58,7 +60,7 @@ function runCleanup(reason: Reason): Promise<void> {
 	// Call .cleanup() for each callback that is still "armed".
 	// Use Promise.try to handle sync/async, but only those armed.
 	const promises = callbackList.toReversed().map(callback => {
-		return Promise.try(() => callback(reason));
+		return Promise.try(() => callback(reason, canWait));
 	});
 
 	const cleanupSettled = Promise.allSettled(promises).then(results => {
@@ -363,8 +365,8 @@ if (isMainThread) {
 			await runCleanup(Reason.UNHANDLED_REJECTION);
 			process.exit(1);
 		})
-		.on("exit", async () => {
-			void runCleanup(Reason.EXIT); // fire and forget (exit imminent)
+		.on("exit", () => {
+			void runCleanup(Reason.EXIT, false); // fire and forget (exit imminent)
 		})
 		.on("SIGTERM", async () => {
 			await runCleanup(Reason.SIGTERM);
@@ -392,7 +394,7 @@ if (isMainThread) {
 	// they would swallow errors before the worker's own handlers (self.addEventListener)
 	// can report failures back to the parent thread.
 	process.on("exit", () => {
-		void runCleanup(Reason.EXIT);
+		void runCleanup(Reason.EXIT, false);
 	});
 }
 
@@ -402,13 +404,13 @@ if (isMainThread) {
  * Returns a Callback instance that can be used to cancel (unregister) or manually clean up.
  * If register is called after cleanup already began, invokes callback on a microtask.
  */
-export function register(id: string, callback: (reason: Reason) => void | Promise<void>): () => void {
+export function register(id: string, callback: CleanupCallback): () => void {
 	let done = false;
-	const exec = (reason: Reason) => {
+	const exec: CleanupCallback = (reason, canWait) => {
 		if (done) return;
 		done = true;
 		try {
-			return callback(reason);
+			return callback(reason, canWait);
 		} catch (e) {
 			const err = toError(e);
 			logger.error("Cleanup callback failed", { err, id, stack: err.stack });
@@ -428,7 +430,7 @@ export function register(id: string, callback: (reason: Reason) => void | Promis
 		// without re-entering the global cleanup pass.
 		logger.debug("Cleanup already started; running late callback once", { id });
 		try {
-			callback(Reason.MANUAL);
+			callback(Reason.MANUAL, true);
 		} catch (e) {
 			const err = toError(e);
 			logger.error("Cleanup callback failed", { err, id, stack: err.stack });

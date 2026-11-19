@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Wait for pending journal writes during session disposal and awaitable process shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

@@ -3137,7 +3137,7 @@ export class AgentSession {
 		this.#clearLifecycleMarkers();
 		this.#cancelExitCleanup?.();
 		this.#cancelExitCleanup = undefined;
-		this.#exitRecord.close(options.reason ?? "dispose");
+		const exitRecordFlushed = this.#exitRecord.close(options.reason ?? "dispose");
 		try {
 			if (this.#config.extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#config.extensionRunner.emit({ type: "session_shutdown" });
@@ -3180,6 +3180,7 @@ export class AgentSession {
 		let persistenceFailed = false;
 		let persistenceError: unknown;
 		try {
+			await exitRecordFlushed;
 			await this.sessionManager.close();
 		} catch (error) {
 			persistenceFailed = true;

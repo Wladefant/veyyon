@@ -28,6 +28,7 @@ import { errorMessage, logger, postmortem } from "@veyyon/utils";
 export type ExitRecordStore = Pick<
 	SessionManager,
 	| "appendCustomEntry"
+	| "flush"
 	| "flushSync"
 	| "getBranch"
 	| "getEntries"
@@ -50,15 +51,14 @@ export type SessionExitReason = postmortem.Reason | "dispose";
 export class ExitRecord {
 	readonly #host: ExitRecordHost;
 	#written = false;
+	#flushed: Promise<void> | undefined;
 	#withdrawProcessCallback: (() => void) | undefined;
 
 	constructor(host: ExitRecordHost) {
 		this.#host = host;
 		this.#withdrawProcessCallback = postmortem.register(
 			`agent-session:${host.sessionStore.getSessionId()}`,
-			reason => {
-				this.#write(reason);
-			},
+			(reason, canWait) => this.#write(reason, !canWait),
 		);
 	}
 
@@ -91,14 +91,15 @@ export class ExitRecord {
 	 * Write the exit entry for a dispose and withdraw the process callback, so a later teardown of
 	 * the process neither writes a second entry nor keeps the closed session reachable.
 	 */
-	close(reason: SessionExitReason): void {
-		this.#write(reason);
+	async close(reason: SessionExitReason): Promise<void> {
+		const flushed = this.#write(reason, false);
 		this.#withdrawProcessCallback?.();
 		this.#withdrawProcessCallback = undefined;
+		await flushed;
 	}
 
-	#write(reason: SessionExitReason): void {
-		if (this.#written) return;
+	#write(reason: SessionExitReason, synchronous: boolean): void | Promise<void> {
+		if (this.#written) return this.#flushed;
 		this.#written = true;
 		const store = this.#host.sessionStore;
 		const pendingToolCalls = collectPendingToolCalls(store.getBranch());
@@ -122,11 +123,7 @@ export class ExitRecord {
 			recordedAt: new Date().toISOString(),
 		};
 		if (pendingToolCalls.length > 0) data.pendingToolCalls = pendingToolCalls;
-		try {
-			store.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, data);
-			store.flushSync();
-			// Looked up on `logger` at call time, not captured in a table: the level is the
-			// method name, and a captured function would also detach the spy a test installs.
+		const recorded = () => {
 			logger[sessionExitLogLevel(kind, pendingToolCalls.length)]("Session exit recorded", {
 				sessionId: store.getSessionId(),
 				sessionFile: store.getSessionFile(),
@@ -134,13 +131,26 @@ export class ExitRecord {
 				kind,
 				pendingToolCalls: pendingToolCalls.length,
 			});
-		} catch (error) {
+		};
+		const failed = (error: unknown) => {
 			logger.error("Failed to record session exit", {
 				sessionId: store.getSessionId(),
 				sessionFile: store.getSessionFile(),
 				reason,
 				error: errorMessage(error),
 			});
+		};
+		try {
+			store.appendCustomEntry(SESSION_EXIT_CUSTOM_TYPE, data);
+			// An actual process exit callback cannot await a journal turn.
+			if (!synchronous) {
+				this.#flushed = store.flush().then(recorded, failed);
+				return this.#flushed;
+			}
+			store.flushSync();
+			recorded();
+		} catch (error) {
+			failed(error);
 		}
 	}
 }
