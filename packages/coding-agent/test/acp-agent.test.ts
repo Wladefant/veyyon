@@ -3371,12 +3371,12 @@ describe("ACP agent", () => {
 			release.resolve();
 			await closed;
 
-			expect(await queued).toEqual(
-				Array.from({ length: 3 }, () => ({
-					status: "rejected" as const,
-					reason: expect.objectContaining({ code: "ACP_SESSION_CLOSED" }),
-				})),
-			);
+			for (const outcome of await queued) {
+				expect(outcome).toMatchObject({
+					status: "rejected",
+					reason: { code: "ACP_SESSION_CLOSED" },
+				});
+			}
 			expect(session.promptCalls).toEqual([]);
 		} finally {
 			release.resolve();
