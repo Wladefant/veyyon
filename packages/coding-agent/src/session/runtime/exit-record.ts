@@ -92,10 +92,12 @@ export class ExitRecord {
 	 * the process neither writes a second entry nor keeps the closed session reachable.
 	 */
 	async close(reason: SessionExitReason): Promise<void> {
-		const flushed = this.#write(reason, false);
-		this.#withdrawProcessCallback?.();
-		this.#withdrawProcessCallback = undefined;
-		await flushed;
+		try {
+			await this.#write(reason, false);
+		} finally {
+			this.#withdrawProcessCallback?.();
+			this.#withdrawProcessCallback = undefined;
+		}
 	}
 
 	#write(reason: SessionExitReason, synchronous: boolean): void | Promise<void> {

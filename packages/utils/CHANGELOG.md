@@ -8,6 +8,10 @@
 
 - Expose a synchronous advisory lock handle for session journal append batches ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
 
+### Fixed
+
+- Wait for callbacks registered during process cleanup before shutdown ([#1194](https://github.com/Wladefant/veyyon/issues/1194)).
+
 ## [1.10.7] - 2026-11-16
 
 ### Fixed
