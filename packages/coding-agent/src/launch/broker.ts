@@ -726,15 +726,8 @@ export class DaemonBroker {
 				record,
 				() => {
 					this.#assertExpected(expectedGuard, record);
-					const { state, terminatedBy } = record.snapshot;
-					// An explicit restart publishes the old terminal state before it replaces the generation.
-					// Keep waiting so the identity guard can reject that replacement.
-					return (
-						state === "ready" ||
-						state === "restarting" ||
-						(terminalState(state) && terminatedBy !== "operator-restart") ||
-						this.#shuttingDown
-					);
+					const { state } = record.snapshot;
+					return state === "ready" || state === "restarting" || terminalState(state) || this.#shuttingDown;
 				},
 				spec.ready.timeoutMs,
 			);
@@ -744,6 +737,11 @@ export class DaemonBroker {
 		}
 		await record.persistQueue;
 		this.#assertExpected(expectedGuard, record);
+		// An explicit restart can stop the original generation before it can spawn a replacement.
+		// In that window the identity still matches, but this start has been superseded.
+		if (spec.ready && record.snapshot.terminatedBy === "operator-restart") {
+			throw new Error(`Daemon identity mismatch: ${spec.name} start was superseded by an explicit restart`);
+		}
 		const daemon = { ...record.snapshot };
 		const outputTail =
 			spec.ready && (terminalState(daemon.state) || daemon.state === "restarting")

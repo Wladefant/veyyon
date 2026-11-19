@@ -566,7 +566,7 @@ describe("guarded retirement and readiness regressions", () => {
 			ready: { log: "READY", timeoutMs: 5_000 },
 		};
 
-		const startPromise = client.request({ op: "start", spec });
+		const startOutcome = Promise.allSettled([client.request({ op: "start", spec })]);
 
 		let daemonId: string | undefined;
 		let daemonGen: number | undefined;
@@ -612,7 +612,12 @@ describe("guarded retirement and readiness regressions", () => {
 		expect(sendResult.op).toBe("send");
 
 		// Original start must reject with identity mismatch and never return generation 2
-		await expect(startPromise).rejects.toThrow("Daemon identity mismatch");
+		expect(await startOutcome).toEqual([
+			{
+				status: "rejected",
+				reason: expect.objectContaining({ message: expect.stringContaining("Daemon identity mismatch") }),
+			},
+		]);
 	}, 20_000);
 
 	it("rejects a waiting start if explicit restart has stopped it but cannot replace it before the deadline", async () => {
