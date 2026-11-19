@@ -525,12 +525,12 @@ class FailOnceReadStorage extends FileSessionStorage {
 		return undefined;
 	}
 
-	override async readText(filePath: string): Promise<string> {
+	override async readTextStrict(filePath: string): Promise<string> {
 		if (this.failNextRead) {
 			this.failNextRead = false;
 			throw new Error("synthetic durable-read fault");
 		}
-		return super.readText(filePath);
+		return super.readTextStrict(filePath);
 	}
 }
 
