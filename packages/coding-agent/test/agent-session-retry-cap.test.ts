@@ -364,11 +364,18 @@ describe("AgentSession retry delay cap", () => {
 			maxRetries: 0,
 		},
 		{
+			name: "a first retry beyond the delay cap uses fallback",
+			responses: [codexClose(1006), recovered],
+			order: ["primary", "fallback"],
+			baseDelayMs: 2000,
+			maxDelayMs: 1000,
+		},
+		{
 			name: "visible output blocks replay",
 			responses: [{ ...codexClose(1006), content: ["Already shown"] }],
 			order: ["primary"],
 		},
-	])("handles Codex WebSocket failure: $name", async ({ responses, order, otherProvider, maxRetries }) => {
+	])("handles Codex WebSocket failure: $name", async ({ responses, order, otherProvider, maxRetries, baseDelayMs, maxDelayMs }) => {
 		const primary = otherProvider
 			? requireBundledModel("openai", "gpt-5")
 			: requireBundledModel("openai-codex", "gpt-5.6-sol");
@@ -389,8 +396,8 @@ describe("AgentSession retry delay cap", () => {
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"retry.enabled": true,
-			"retry.baseDelayMs": 1,
-			"retry.maxDelayMs": 100,
+			"retry.baseDelayMs": baseDelayMs ?? 1,
+			"retry.maxDelayMs": maxDelayMs ?? 100,
 			"retry.maxRetries": maxRetries ?? 2,
 			"retry.modelFallback": true,
 			"retry.fallbackChains": { default: [fallbackSelector] },
