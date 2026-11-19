@@ -347,7 +347,6 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 	return applyNodePostProcessing(result, options);
 }
 
-
 /**
  * The rewrites python-genai applies to a schema node before recursing into
  * it: snake_case keywords renamed, then null fields collapsed.
