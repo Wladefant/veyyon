@@ -116,4 +116,35 @@ describe("AuthStorage OAuth account selection", () => {
 		// Target-only: no sibling credential was refreshed/rotated on the failure path.
 		expect(seen).toEqual(["access-b"]);
 	});
+
+	test("an exact run pin never serves a sibling or changes saved selection", async () => {
+		const storage = authStorage;
+		if (!storage) throw new Error("test setup failed");
+		let rejectPinned = false;
+		const seen: string[] = [];
+		vi.spyOn(oauthUtils, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
+			const credential = credentials[provider];
+			if (!credential) return null;
+			seen.push(credential.access);
+			if (rejectPinned && credential.access === "access-b") throw new Error("invalid_grant");
+			return { newCredentials: credential, apiKey: credential.access };
+		});
+		await storage.set(PROVIDER, [oauthCredential("a"), oauthCredential("b")]);
+		const accounts = storage.listOAuthAccounts(PROVIDER);
+		expect(storage.selectProviderCredential(PROVIDER, accounts[0]!.credentialId!, { sessionId: "saved-session" })).toBe(true);
+		expect(storage.pinOAuthAccountForRun(PROVIDER, 1)).toBe(true);
+
+		const selectedIds: string[] = [];
+		await storage.getApiKey(PROVIDER, "probe", { onCredentialSelected: id => selectedIds.push(id) });
+		expect(selectedIds).toEqual([String(accounts[1]!.credentialId)]);
+		expect(await storage.getOAuthAccess(PROVIDER, "probe")).toMatchObject({ accountId: "acc-b" });
+		expect(storage.selectedProviderCredentialId(PROVIDER)).toBe(accounts[0]!.credentialId);
+
+		rejectPinned = true;
+		expect(await storage.getApiKey(PROVIDER, "probe")).toBeUndefined();
+		storage.setRuntimeApiKey(PROVIDER, "wrong-account-override");
+		expect(await storage.getApiKey(PROVIDER, "probe")).toBeUndefined();
+		expect(await storage.getOAuthAccess(PROVIDER, "probe")).toBeUndefined();
+		expect(seen).toEqual(["access-b", "access-b", "access-b"]);
+	});
 });

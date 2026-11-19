@@ -1970,6 +1970,25 @@ async function buildLaunchSessionOptions(
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.hasUI = launch.isInteractive || launch.mode === "rpc-ui";
 	sessionOptions.settings = launch.settings;
+	if (parsedArgs.account !== undefined) {
+		const provider = sessionOptions.model?.provider;
+		if (
+			launch.isInteractive ||
+			launch.isProtocolMode ||
+			normalizeModelPatternList(parsedArgs.model).length !== 1 ||
+			provider === undefined ||
+			parsedArgs.apiKey !== undefined
+		) {
+			process.stderr.write("--account requires print mode and a single resolved --model, without --api-key.\n");
+			process.exit(EXIT_FAILURE);
+		}
+		if (!modelRegistry.pinOAuthAccountForRun(provider, parsedArgs.account - 1)) {
+			process.stderr.write(
+				`${provider}: OAuth account #${parsedArgs.account} is unavailable. Run veyyon token ${provider} --list.\n`,
+			);
+			process.exit(EXIT_FAILURE);
+		}
+	}
 	if (parsedArgs.mcpConfig !== undefined) {
 		sessionOptions.runtimeMCPConfig = await loadRuntimeMCPConfig(parsedArgs.mcpConfig);
 	}
@@ -2335,7 +2354,8 @@ async function runPrintLaunch(mode: "text" | "json", started: StartedLaunch): Pr
 	stopStartupWatchdog();
 	const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 	const { session } = started.created;
-	refreshModelsOnFirstResponse(session);
+	if (normalizeModelPatternList(started.initialArgs.model).length === 1) session.keepExplicitPrintModelOnNotFound();
+	if (started.initialArgs.account === undefined) refreshModelsOnFirstResponse(session);
 	await runPrintMode(session, {
 		mode,
 		messages: started.initialArgs.messages,

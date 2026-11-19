@@ -40,6 +40,7 @@ export interface Args {
 	allowHome?: boolean;
 	provider?: string;
 	model?: string;
+	account?: number;
 	config?: string[];
 	mcpConfig?: string;
 	plan?: string;

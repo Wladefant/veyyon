@@ -2142,17 +2142,18 @@ export class ModelRegistry {
 		return models.find(m => m.provider === provider && m.baseUrl)?.baseUrl;
 	}
 
+	/** An explicit OAuth pin must not replace a key configured for a redirected provider. */
+	pinOAuthAccountForRun(provider: string, position: number): boolean {
+		const config = this.#customProviderApiKeys.get(provider);
+		if (config && !config.fallback) return false;
+		return this.authStorage.pinOAuthAccountForRun(provider, position);
+	}
+
 	/**
 	 * Get API key for a model.
 	 */
 	async getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined> {
-		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
-		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
-		const apiKey = await this.authStorage.getApiKey(model.provider, sessionId, {
-			baseUrl: model.baseUrl,
-			modelId: model.id,
-		});
-		return apiKey === undefined && this.#isKeylessProvider(model.provider) ? kNoAuth : apiKey;
+		return this.getApiKeyForProvider(model.provider, sessionId, { baseUrl: model.baseUrl, modelId: model.id });
 	}
 
 	/**
@@ -2173,6 +2174,11 @@ export class ModelRegistry {
 			onCredentialSelected?: (credentialId: string) => void;
 		},
 	): Promise<string | undefined> {
+		if (this.authStorage.hasRunOAuthPin(provider)) {
+			const config = this.#customProviderApiKeys.get(provider);
+			if (config && !config.fallback) return undefined;
+			return this.authStorage.getApiKey(provider, sessionId, options);
+		}
 		const commandKey = this.#resolveCommandBackedApiKey(provider);
 		if (commandKey.configured && !commandKey.fallback) return commandKey.value;
 		const apiKey = await this.authStorage.getApiKey(provider, sessionId, {

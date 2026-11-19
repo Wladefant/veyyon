@@ -320,6 +320,7 @@ export class AuthStorage {
 	/** Provider -> credentials cache, populated from store on reload(). */
 	#data: Map<string, StoredCredential[]> = new Map();
 	#runtimeOverrides: Map<string, string> = new Map();
+	readonly #runOAuthCredentialIds = new Map<string, number>();
 	#configOverrides: Map<string, string> = new Map();
 	#configFallbacks: Map<string, string> = new Map();
 	/** Tracks next credential index per provider:type key for round-robin distribution (non-session use). */
@@ -2062,6 +2063,8 @@ export class AuthStorage {
 	}
 
 	#resolveActiveOAuthCredential(provider: string, sessionId?: string): OAuthCredential | undefined {
+		const runPin = this.#runOAuthCredentialIds.get(provider);
+		if (runPin !== undefined) return this.#findPinnedOAuthSelection(provider, runPin)?.credential;
 		const allCredentials = this.#getCredentialsForProvider(provider);
 		const oauthCredentials = allCredentials.filter((c): c is OAuthCredential => c.type === "oauth");
 		if (oauthCredentials.length === 0) return undefined;
@@ -2473,6 +2476,7 @@ export class AuthStorage {
 			modelNotInPlan?: boolean;
 		},
 	): Promise<UsageLimitMarkResult> {
+		if (this.hasRunOAuthPin(requestedProvider)) return { switched: false };
 		const provider = this.#chatgptWebOAuthFallback(requestedProvider) ? "openai-codex" : requestedProvider;
 		let sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
 			credentialId: options?.credentialId,
@@ -3402,6 +3406,13 @@ export class AuthStorage {
 	 * 8. Fallback resolver (models.yml custom providers, last-resort)
 	 */
 	async getApiKey(provider: string, sessionId?: string, options?: AuthApiKeyOptions): Promise<string | undefined> {
+		const runPin = this.#runOAuthCredentialIds.get(provider);
+		if (runPin !== undefined) {
+			const resolved = await this.#resolvePinnedOAuth(provider, runPin, options);
+			if (resolved) options?.onCredentialSelected?.(String(runPin));
+			return resolved?.apiKey;
+		}
+
 		// Runtime override takes highest priority
 		const runtimeKey = this.#runtimeOverrides.get(provider);
 		if (runtimeKey) {
@@ -3498,10 +3509,12 @@ export class AuthStorage {
 		// Runtime / config overrides intentionally short-circuit OAuth: when the
 		// user has pinned an API key, they expect the OAuth identity to be
 		// suppressed (same contract as `getOAuthAccountId`).
-		if (this.hasApiKeyOverride(provider)) {
-			return undefined;
-		}
-		const resolved = await this.#resolveOAuthSelection(provider, sessionId, options);
+		const runPin = this.#runOAuthCredentialIds.get(provider);
+		if (runPin === undefined && this.hasApiKeyOverride(provider)) return undefined;
+		const resolved =
+			runPin === undefined
+				? await this.#resolveOAuthSelection(provider, sessionId, options)
+				: await this.#resolvePinnedOAuth(provider, runPin, options);
 		if (!resolved) return undefined;
 		const { credential, credentialId } = resolved;
 		return {
@@ -3515,6 +3528,44 @@ export class AuthStorage {
 			orgId: credential.orgId,
 			orgName: credential.orgName,
 		};
+	}
+
+	/** Pin a stored OAuth row for this AuthStorage instance only. Position is zero-based, as in listOAuthAccounts. */
+	pinOAuthAccountForRun(provider: string, position: number): boolean {
+		const id = this.listOAuthAccounts(provider)[position]?.credentialId;
+		if (id === undefined) return false;
+		this.#runOAuthCredentialIds.set(provider, id);
+		return true;
+	}
+
+	hasRunOAuthPin(provider: string): boolean {
+		return this.#runOAuthCredentialIds.has(provider);
+	}
+
+	#findPinnedOAuthSelection(provider: string, id: number): StoredOAuthSelection | undefined {
+		const entries = this.#getStoredCredentials(provider);
+		const index = entries.findIndex(entry => entry.id === id);
+		const credential = entries[index]?.credential;
+		return credential?.type === "oauth" ? { credential, credentialId: id, index } : undefined;
+	}
+
+	async #resolvePinnedOAuth(
+		provider: string,
+		id: number,
+		options: AuthApiKeyOptions | undefined,
+	): Promise<OAuthResolutionResult | undefined> {
+		const selection = this.#findPinnedOAuthSelection(provider, id);
+		if (!selection) return undefined;
+		const resolved = await this.#tryOAuthCredential(
+			provider,
+			selection,
+			getProviderTypeKey(provider, "oauth"),
+			undefined,
+			options,
+			// A diagnostic pin asks this account. Local plan checks must not preempt its response.
+			{ checkUsage: false, allowBlocked: true, allowFallback: false, planRequirement: "none" },
+		);
+		return resolved?.credentialId === id ? resolved : undefined;
 	}
 
 	/** Stored OAuth credentials for `provider` in stable order, paired with their full-list index and row id. */
@@ -4052,6 +4103,7 @@ export class AuthStorage {
 			signal?: AbortSignal;
 		},
 	): Promise<boolean> {
+		if (this.hasRunOAuthPin(requestedProvider)) return false;
 		const provider = this.#chatgptWebOAuthFallback(requestedProvider) ? "openai-codex" : requestedProvider;
 		const error = options?.error;
 		if (AIError.isUsageLimit(error)) {

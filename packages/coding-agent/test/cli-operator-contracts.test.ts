@@ -66,6 +66,13 @@ describe("CLI operator contracts (parseArgs)", () => {
 		expect(model.unrecognizedFlags).toEqual([]);
 	});
 
+	it("accepts only positive OAuth account numbers", () => {
+		expect(parseArgs(["-p", "--model", "google-antigravity/claude-opus-5-5", "--account", "3"]).account).toBe(3);
+		for (const value of ["0", "-1", "1.5", "1e2", "9007199254740993"]) {
+			expect(() => parseArgs(["-p", "--account", value])).toThrow("--account");
+		}
+	});
+
 	it("parses --profile space and equals forms", () => {
 		expect(parseArgs(["--profile", "work"]).profile).toBe("work");
 		expect(parseArgs(["--profile=lab"]).profile).toBe("lab");

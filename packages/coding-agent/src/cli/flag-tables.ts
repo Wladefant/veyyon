@@ -177,6 +177,13 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	"--model": (result, value) => {
 		result.model = value;
 	},
+	"--account": (result, value) => {
+		const position = Number(value);
+		if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(position)) {
+			throw new CliUsageError("--account expects a positive OAuth account number from `veyyon token PROVIDER --list`.");
+		}
+		result.account = position;
+	},
 	"--plan": (result, value) => {
 		result.plan = value;
 	},

@@ -114,6 +114,7 @@ export class RetryRuntime {
 	#release: (() => void) | undefined = undefined;
 	readonly #fallback: RetryFallback;
 	#pendingRecoveredErrors: PendingRecoveredRetryError[] = [];
+	stopOnModelNotFound = false;
 	/** The classification each failed message last logged: one failure is classified at each recovery check, and logged once. */
 	readonly #loggedClassification = new WeakMap<AssistantMessage, string>();
 
@@ -388,6 +389,16 @@ export class RetryRuntime {
 			this.#host.resetSessionStopContinuationState();
 			return true;
 		}
+		const pinned = this.#session.modelRegistry.authStorage.hasRunOAuthPin(msg.provider);
+		const status = msg.errorStatus;
+		if (
+			msg.stopReason === "error" &&
+			((this.stopOnModelNotFound && status === 404) ||
+				(pinned && (status === 401 || status === 403 || status === 404 || status === 429)))
+		) {
+			if (this.#gate) await this.#endWithFailure(msg, this.#attempt, msg.errorMessage);
+			return true;
+		}
 		// Fireworks Fast variants degrade to their base model on a failed turn — including hard
 		// router errors the generic retry classifier rejects — so this runs before the standard
 		// retryability check.
@@ -578,6 +589,7 @@ export class RetryRuntime {
 	 * credential or a banked Codex reset takes over, else {@link parkUsageLimitedCredential}'s.
 	 */
 	async #parkUsageLimit(attempt: RetryAttempt, model: Model): Promise<void> {
+		if (this.#session.modelRegistry.authStorage.hasRunOAuthPin(model.provider)) return;
 		const failedCredentialId = Number(attempt.message.usage?.credentialId);
 		const park = await parkUsageLimitedCredential(
 			this.#session.modelRegistry.authStorage,
@@ -614,7 +626,9 @@ export class RetryRuntime {
 		const activeModel = this.#session.model;
 		if (!activeModel) return;
 		const currentSelector = formatRetryFallbackSelector(activeModel, this.#session.thinkingLevel);
-		const allowModelFallback = attempt.options?.allowModelFallback !== false;
+		const allowModelFallback =
+			attempt.options?.allowModelFallback !== false &&
+			!this.#session.modelRegistry.authStorage.hasRunOAuthPin(activeModel.provider);
 		// A refusal chain stops at the retry budget: the exhausted-attempt
 		// last resort is for provider failures, not classifier decisions.
 		const chainEnabled = this.#fallback.chainEnabled;
