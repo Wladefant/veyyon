@@ -172,29 +172,20 @@ it("keeps two cadences on one ledger and the same cadence on two ledgers indepen
 	using otherDir = TempDir.createSync("@veyyon-heartbeat-ledger-");
 	const root = dir.path();
 	const otherRoot = otherDir.path();
-	const ledgerPath = getLaneAdmissionLedgerPath(root);
-	const otherLedgerPath = getLaneAdmissionLedgerPath(otherRoot);
 	const interval = 30_000;
 	const start = Date.now();
 	const tick = start + interval;
 	const handles: NativeHostLaneLease[] = [];
-	const mainSnapshot = Promise.withResolvers<HeartbeatSnapshot>();
-	const otherSnapshot = Promise.withResolvers<HeartbeatSnapshot>();
-	const deadline = Promise.withResolvers<never>();
-	const realRename = fsp.rename;
-	const realSetTimeout = setTimeout;
-	const realClearTimeout = clearTimeout;
-	let timer: NodeJS.Timeout | undefined;
+	const realMkdir = fsp.mkdir;
 
 	vi.useFakeTimers();
 	const clock = vi.spyOn(Date, "now").mockReturnValue(start);
-	const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
-		const captured = target === ledgerPath ? mainSnapshot : target === otherLedgerPath ? otherSnapshot : undefined;
-		if (!captured || Date.now() !== tick) return realRename(source, target);
-		const ledger = JSON.parse(await fsp.readFile(source, "utf8")) as LaneAdmissionLedger;
-		const snapshot = ledger.reservations.map(({ slotId, lastHeartbeatAt }) => ({ slotId, lastHeartbeatAt }));
-		await realRename(source, target);
-		captured.resolve(snapshot);
+	// Track the real directory operations that a tick starts before it enters the ledger lock queue.
+	const setups: Promise<string | undefined>[] = [];
+	const mkdir = vi.spyOn(fsp, "mkdir").mockImplementation((dir, options) => {
+		const pending = realMkdir(dir, options);
+		setups.push(pending);
+		return pending;
 	});
 	try {
 		for (const [owner, globalConfigRoot, heartbeatIntervalMs] of [
@@ -211,21 +202,24 @@ it("keeps two cadences on one ledger and the same cadence on two ledgers indepen
 			if (!lease) throw new Error("Expected a live native lease");
 			handles.push(lease);
 		}
+		setups.length = 0;
 		clock.mockReturnValue(tick);
 		vi.advanceTimersByTime(interval);
-		timer = realSetTimeout(() => deadline.reject(new Error("Both ledgers must advance at the shared cadence")), 5_000);
-		const [main, other] = await Promise.race([
-			Promise.all([mainSnapshot.promise, otherSnapshot.promise]),
-			deadline.promise,
+		await Promise.all(setups);
+		// These status reads take the same locks, after any heartbeats submitted by this tick.
+		const [main, other] = await Promise.all([
+			getLaneAdmissionStatus({ globalConfigRoot: root }),
+			getLaneAdmissionStatus({ globalConfigRoot: otherRoot }),
 		]);
-		expect(main).toEqual([
+		expect(main.reservations.map(({ slotId, lastHeartbeatAt }) => ({ slotId, lastHeartbeatAt }))).toEqual([
 			{ slotId: handles[0]!.slotId, lastHeartbeatAt: tick },
 			{ slotId: handles[1]!.slotId, lastHeartbeatAt: start },
 		]);
-		expect(other).toEqual([{ slotId: handles[2]!.slotId, lastHeartbeatAt: tick }]);
+		expect(other.reservations.map(({ slotId, lastHeartbeatAt }) => ({ slotId, lastHeartbeatAt }))).toEqual([
+			{ slotId: handles[2]!.slotId, lastHeartbeatAt: tick },
+		]);
 	} finally {
-		realClearTimeout(timer);
-		rename.mockRestore();
+		mkdir.mockRestore();
 		clock.mockRestore();
 		vi.useRealTimers();
 		await Promise.all(handles.map(lease => lease.release()));
