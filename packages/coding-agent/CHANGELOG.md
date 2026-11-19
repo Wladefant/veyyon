@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Log the cause and duration of each failed lane release attempt without paths or lease tokens ([#1200](https://github.com/Wladefant/veyyon/issues/1200)).
+
 ## [1.12.0] - 2026-11-18
 
 ### Added

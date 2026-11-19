@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import { constants } from "node:os";
 import * as path from "node:path";
 import { logger } from "@veyyon/utils";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { getGlobalConfigRootDir, getGlobalRunDir, PROFILES_DIR_NAME } from "@veyyon/utils/config-root";
 import { withFileLock } from "@veyyon/utils/file-lock";
-import { isEnoent } from "@veyyon/utils/fs-error";
+import { isEnoent, isFsError } from "@veyyon/utils/fs-error";
 import { readOwnerOnlyFileSync } from "@veyyon/utils/owner-only-read";
 import { getProcessStartIdentity, isProcessAlive, isToolCallProcessAlive } from "@veyyon/utils/process-liveness";
 
@@ -969,9 +970,82 @@ function nativeReleaseKey(options: { owner: string; globalConfigRoot?: string })
 	return `${getLaneAdmissionLedgerPath(options.globalConfigRoot)}\0${options.owner}`;
 }
 
+interface LaneReleaseFailure {
+	errorClass: string;
+	code: string;
+	message: string;
+}
+
+interface LaneReleaseAttempt extends LaneReleaseFailure {
+	attempt: number;
+	durationMs: number;
+}
+
+const RELEASE_FS_MESSAGES: Record<string, string> = {
+	EACCES: "Permission denied.",
+	EBUSY: "The filesystem resource is busy.",
+	EEXIST: "The filesystem target already exists.",
+	ENOSPC: "The filesystem is out of space.",
+	EPERM: "The filesystem operation is not permitted.",
+};
+
+function laneReleaseRejection(reason: string | undefined): LaneReleaseFailure {
+	switch (reason) {
+		case "invalid_cap":
+			return { errorClass: "LaneAdmissionError", code: reason, message: "The lane admission cap is invalid." };
+		case "corrupt_admission_ledger":
+			return { errorClass: "LaneAdmissionError", code: reason, message: "The lane admission ledger is corrupt." };
+		case "unsupported_ledger_version":
+			return {
+				errorClass: "LaneAdmissionError",
+				code: reason,
+				message: "The lane admission ledger version is unsupported.",
+			};
+		default:
+			return {
+				errorClass: "LaneAdmissionError",
+				code: "release_rejected",
+				message: "The ledger rejected the release.",
+			};
+	}
+}
+
+function laneReleaseException(error: unknown): LaneReleaseFailure {
+	if (error instanceof LaneAdmissionError) return laneReleaseRejection(error.code);
+	// Filesystem messages can include paths and exception causes. Log only known codes and fixed text.
+	if (isFsError(error) && Object.hasOwn(constants.errno, error.code)) {
+		return {
+			errorClass: "SystemError",
+			code: error.code,
+			message: RELEASE_FS_MESSAGES[error.code] ?? "Filesystem operation failed.",
+		};
+	}
+	if (error instanceof Error && error.message.startsWith("Failed to acquire lock for ")) {
+		if (
+			error.message.endsWith(": an earlier holder in this process did not release it") ||
+			error.message.includes(": in-process queue made no progress for ")
+		) {
+			return {
+				errorClass: "Error",
+				code: "ledger_local_lock_timeout",
+				message: "The previous holder in this process did not release the ledger lock.",
+			};
+		}
+		return {
+			errorClass: "Error",
+			code: "ledger_lock_timeout",
+			message: "The ledger lock could not be acquired before retries ended.",
+		};
+	}
+	return { errorClass: "Error", code: "release_exception", message: "The release threw an unexpected exception." };
+}
+
 async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> {
 	const key = nativeReleaseKey(options);
+	let attempts: LaneReleaseAttempt[] | undefined;
 	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const started = performance.now();
+		let failure: LaneReleaseFailure;
 		try {
 			const res = await laneAdmissionDriver.release(options);
 			if (res.ok) {
@@ -981,9 +1055,13 @@ async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> 
 			if (res.reason === "lease_token_mismatch") {
 				throw new LaneAdmissionError(res.reason, `Host lane slot ${options.slotId} belongs to another lease`);
 			}
+			failure = laneReleaseRejection(res.reason);
 		} catch (error) {
 			if (error instanceof LaneAdmissionError && error.code === "lease_token_mismatch") throw error;
+			failure = laneReleaseException(error);
 		}
+		attempts ??= [];
+		attempts.push({ attempt: attempt + 1, durationMs: Math.round(performance.now() - started), ...failure });
 		if (attempt < 2) await waitAbortably(100);
 	}
 	pendingNativeReleases.set(key, options);
@@ -991,6 +1069,7 @@ async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> 
 		operation: "lane-release",
 		stage: "durable-release",
 		errorCode: "lane_release_reconciliation_required",
+		attempts,
 	});
 	throw new LaneAdmissionError(
 		"lane_release_reconciliation_required",

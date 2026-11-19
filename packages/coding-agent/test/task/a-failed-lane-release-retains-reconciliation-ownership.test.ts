@@ -64,6 +64,13 @@ describe("persistent lane release recovery", () => {
 					operation: "lane-release",
 					stage: "durable-release",
 					errorCode: "lane_release_reconciliation_required",
+					attempts: [1, 2, 3].map(attempt => ({
+						attempt,
+						errorClass: "LaneAdmissionError",
+						code: "corrupt_admission_ledger",
+						message: "The lane admission ledger is corrupt.",
+						durationMs: expect.any(Number),
+					})),
 				},
 			],
 		]);
@@ -130,16 +137,30 @@ describe("persistent lane release recovery", () => {
 		const lease = await acquireNativeHostLaneWait({ owner: "unwritable-release", cap: 1 });
 		const ledgerPath = getLaneAdmissionLedgerPath();
 		const original = fs.readFileSync(ledgerPath, "utf8");
+		const log = vi.spyOn(logger, "error");
 		const realRename = fsp.rename;
 		const rename = vi.spyOn(fsp, "rename").mockImplementation(async (source, target) => {
 			if (String(target) === ledgerPath) {
-				const error = new Error("synthetic denied replacement") as NodeJS.ErrnoException;
+				const error = new Error("Denied C:\\private\\ledger.json and fence-test-secret") as NodeJS.ErrnoException;
 				error.code = "EACCES";
 				throw error;
 			}
 			return realRename(source, target);
 		});
 		await expect(lease!.release()).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
+		const record = log.mock.calls.find(([message]) => message === "Host lane release requires reconciliation");
+		expect(record?.[1]).toMatchObject({
+			attempts: [1, 2, 3].map(attempt => ({
+				attempt,
+				errorClass: "SystemError",
+				code: "EACCES",
+				message: "Permission denied.",
+				durationMs: expect.any(Number),
+			})),
+		});
+		const rendered = JSON.stringify(record);
+		expect(rendered).not.toContain("private");
+		expect(rendered).not.toContain("fence-test-secret");
 		expect(fs.readFileSync(ledgerPath, "utf8")).toBe(original);
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
 		rename.mockRestore();
