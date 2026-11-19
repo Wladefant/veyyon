@@ -5,6 +5,7 @@
 ### Fixed
 
 - Let native lane admission wait through short host stalls without taking the lock from a live transaction ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Retry the current Codex model once after a replay-safe WebSocket close before switching models ([Refs #1203](https://github.com/Wladefant/veyyon/issues/1203)).
 
 ## [1.12.0] - 2026-11-18
 
