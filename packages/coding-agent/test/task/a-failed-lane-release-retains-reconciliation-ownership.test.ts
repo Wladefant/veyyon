@@ -167,4 +167,39 @@ describe("persistent lane release recovery", () => {
 		await lease!.release();
 		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
 	});
+
+	it.each([
+		{
+			name: "a filesystem code that changes after validation",
+			error: () => {
+				let reads = 0;
+				return Object.defineProperty(new Error("Denied"), "code", {
+					get: () => (++reads <= 2 ? "EACCES" : "C:\\private\\synthetic-fence"),
+				});
+			},
+			code: "EACCES",
+		},
+		{
+			name: "a non-string error message",
+			error: () => Object.assign(new Error("Denied"), { message: { path: "C:\\private\\synthetic-fence" } }),
+			code: "release_exception",
+		},
+	])("keeps retries and safe logs for $name", async fixture => {
+		const lease = await acquireNativeHostLaneWait({ owner: "malformed-rejection", cap: 1 });
+		if (!lease) throw new Error("test lane was not acquired");
+		const log = vi.spyOn(logger, "error");
+		const release = vi.spyOn(laneModule.laneAdmissionDriver, "release").mockImplementation(async () => {
+			throw fixture.error();
+		});
+		await expect(lease.release()).rejects.toMatchObject({ code: "lane_release_reconciliation_required" });
+		const record = log.mock.calls.find(([message]) => message === "Host lane release requires reconciliation");
+		expect(record?.[1]).toMatchObject({
+			attempts: [1, 2, 3].map(attempt => ({ attempt, code: fixture.code })),
+		});
+		expect(JSON.stringify(record)).not.toContain("synthetic-fence");
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(1);
+		release.mockRestore();
+		await lease.release();
+		expect((await getLaneAdmissionStatus()).active_lanes).toBe(0);
+	}, 2_000);
 });
