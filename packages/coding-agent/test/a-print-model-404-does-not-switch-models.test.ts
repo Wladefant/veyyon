@@ -3,7 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { mkdirSync } from "node:fs";
 import type { AssistantMessage } from "@veyyon/ai";
+import { resolveApiKeyOnce } from "@veyyon/ai/auth-retry";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as oauth from "@veyyon/ai/registry/oauth";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { emptyUsage } from "@veyyon/catalog/models";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
@@ -29,6 +31,7 @@ describe("print-mode model availability", () => {
 	let stderr: string;
 	let exit: number | undefined;
 	let requested: string[];
+	let requestKeys: (string | undefined)[];
 
 	beforeEach(async () => {
 		temp = TempDir.createSync("@veyyon-print-404-");
@@ -37,6 +40,7 @@ describe("print-mode model availability", () => {
 		stdout = stderr = "";
 		exit = undefined;
 		requested = [];
+		requestKeys = [];
 		vi.spyOn(process.stdout, "write").mockImplementation((chunk, callback) => {
 			stdout += String(chunk);
 			if (typeof callback === "function") callback();
@@ -92,7 +96,8 @@ describe("print-mode model availability", () => {
 						rules: [],
 						workspaceTree: { rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
 					});
-					created.session.agent.streamFn = model => {
+					created.session.agent.streamFn = async (model, _context, options) => {
+						if (args.includes("--account")) requestKeys.push(await resolveApiKeyOnce(options?.apiKey));
 						const selector = `${model.provider}/${model.id}`;
 						requested.push(selector);
 						const failed = selector === PRIMARY;
@@ -142,4 +147,26 @@ describe("print-mode model availability", () => {
 			if (mode[0] === "--mode") expect(() => stdout.trim().split("\n").map(line => JSON.parse(line))).not.toThrow();
 		});
 	}
+
+	it("sends the print request with only the explicitly pinned account", async () => {
+		auth.removeRuntimeApiKey(PROVIDER);
+		await auth.set(
+			PROVIDER,
+			["first", "second"].map(accountId => ({
+				type: "oauth" as const,
+				access: `access-${accountId}`,
+				refresh: `refresh-${accountId}`,
+				expires: Date.now() + 60 * 60_000,
+				accountId,
+			})),
+		);
+		vi.spyOn(oauth, "getOAuthApiKey").mockImplementation(async (provider, credentials) => {
+			const credential = credentials[provider];
+			return credential ? { newCredentials: credential, apiKey: credential.access } : null;
+		});
+		await launch(["-p", "--model", PRIMARY, "--account", "2"]);
+		expect(requested).toEqual([PRIMARY]);
+		expect(requestKeys).toEqual(["access-second"]);
+		expect(exit).toBe(1);
+	});
 });

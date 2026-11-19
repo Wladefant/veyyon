@@ -1982,7 +1982,7 @@ async function buildLaunchSessionOptions(
 			process.stderr.write("--account requires print mode and a single resolved --model, without --api-key.\n");
 			process.exit(EXIT_FAILURE);
 		}
-		if (!authStorage.pinOAuthAccountForRun(provider, parsedArgs.account - 1)) {
+		if (!modelRegistry.pinOAuthAccountForRun(provider, parsedArgs.account - 1)) {
 			process.stderr.write(
 				`${provider}: OAuth account #${parsedArgs.account} is unavailable. Run veyyon token ${provider} --list.\n`,
 			);
@@ -2355,7 +2355,7 @@ async function runPrintLaunch(mode: "text" | "json", started: StartedLaunch): Pr
 	const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
 	const { session } = started.created;
 	if (normalizeModelPatternList(started.initialArgs.model).length === 1) session.keepExplicitPrintModelOnNotFound();
-	refreshModelsOnFirstResponse(session);
+	if (started.initialArgs.account === undefined) refreshModelsOnFirstResponse(session);
 	await runPrintMode(session, {
 		mode,
 		messages: started.initialArgs.messages,

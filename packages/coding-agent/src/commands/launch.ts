@@ -55,6 +55,9 @@ export default class Index extends Command {
 		"api-key": Flags.string({
 			description: "API key (defaults to env vars)",
 		}),
+		account: Flags.string({
+			description: "Pin a one-based OAuth account from `veyyon token PROVIDER --list` for this print run",
+		}),
 		"system-prompt": Flags.string({
 			description: "System prompt (default: coding assistant prompt)",
 		}),
