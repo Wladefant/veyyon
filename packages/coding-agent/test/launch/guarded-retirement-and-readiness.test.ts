@@ -21,7 +21,6 @@ import {
 } from "../../src/launch/protocol";
 import { waitUntil } from "../helpers/daemon-broker";
 
-
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-guarded-retire-ready-tests");
 let testRoot = "";
@@ -141,14 +140,17 @@ describe("guarded retirement and readiness regressions", () => {
 		const spec: DaemonSpec = {
 			name: "stdin-ready-service",
 			application: process.execPath,
-			args: ["-e", `
+			args: [
+				"-e",
+				`
 				process.stdin.setEncoding("utf8");
 				process.stdin.on("data", chunk => {
 					if (chunk.includes("go")) process.stdout.write("READY\\\\n");
 				});
 				process.stdin.resume();
 				setInterval(() => {}, 1000);
-			`],
+			`,
+			],
 			env: {},
 			cwd: projectDir,
 			pty: false,
@@ -176,13 +178,17 @@ describe("guarded retirement and readiness regressions", () => {
 		expect(admitted).toBeTrue();
 		expect(daemonId).toBeDefined();
 		expect(daemonGen).toBeDefined();
-		expect((await client.request({
-			op: "send",
-			name: spec.name,
-			data: "go\n",
-			expectedId: daemonId,
-			expectedGeneration: daemonGen,
-		})).op).toBe("send");
+		expect(
+			(
+				await client.request({
+					op: "send",
+					name: spec.name,
+					data: "go\n",
+					expectedId: daemonId,
+					expectedGeneration: daemonGen,
+				})
+			).op,
+		).toBe("send");
 		const startResult = await Promise.race([
 			startPromise,
 			delay(10_000).then(() => {
@@ -206,15 +212,19 @@ describe("guarded retirement and readiness regressions", () => {
 			spec: {
 				name: "detached-service",
 				application: process.execPath,
-				args: ["-e", `
+				args: [
+					"-e",
+					`
 					const fs = require("node:fs");
 					process.on("SIGHUP", () => fs.appendFileSync(${JSON.stringify(marker)}, "signal\\n"));
 					process.stdout.write("started\\\\n");
 					setInterval(() => {}, 1000);
-				`],
+				`,
+				],
 				env: {},
 				cwd: projectDir,
 				pty: false,
+				ready: { log: "started", timeoutMs: 5_000 },
 				restart: "no",
 				persist: true,
 				detached: true,
@@ -222,6 +232,7 @@ describe("guarded retirement and readiness regressions", () => {
 		});
 		expect(startResult.op).toBe("start");
 		if (startResult.op !== "start") return;
+		expect(startResult.daemon.state).toBe("ready");
 		if (startResult.daemon.pid) cleanupPids.push(startResult.daemon.pid);
 		const endpoint = daemonBrokerEndpoint(runtimeDir);
 		const endpointReady = await waitUntil(async () => {
@@ -307,6 +318,16 @@ describe("guarded retirement and readiness regressions", () => {
 			expect(replyIndex).toBeGreaterThanOrEqual(0);
 			expect(noticeIndex).toBeGreaterThanOrEqual(0);
 			expect(replyIndex).toBeLessThan(noticeIndex);
+			expect(
+				await waitUntil(
+					() =>
+						fs.access(marker).then(
+							() => true,
+							() => false,
+						),
+					2_000,
+				),
+			).toBeTrue();
 			expect(await fs.readFile(marker, "utf8")).toBe("signal\n");
 		} finally {
 			statHold.resolve();
@@ -593,4 +614,56 @@ describe("guarded retirement and readiness regressions", () => {
 		// Original start must reject with identity mismatch and never return generation 2
 		await expect(startPromise).rejects.toThrow("Daemon identity mismatch");
 	}, 20_000);
+
+	it("rejects a waiting start if explicit restart has stopped it but cannot replace it before the deadline", async () => {
+		const projectDir = await tempDir("superseded-start-project-");
+		const runtimeDir = await tempDir("superseded-start-runtime-");
+		const { client } = await startInProcessBroker(projectDir, runtimeDir);
+		const spec: DaemonSpec = {
+			name: "superseded-start",
+			application: process.execPath,
+			args: ["-e", 'console.log("started"); setInterval(() => {}, 1_000)'],
+			env: {},
+			cwd: projectDir,
+			pty: false,
+			restart: "no",
+			persist: false,
+			detached: false,
+			ready: { log: "NEVER_READY", timeoutMs: 2_000 },
+		};
+		const startOutcome = Promise.allSettled([client.request({ op: "start", spec })]);
+		expect(
+			await waitUntil(async () => {
+				const result = await client.request({ op: "list" });
+				return (
+					result.op === "list" &&
+					result.daemons.some(daemon => daemon.name === spec.name && daemon.outputBytes > 0)
+				);
+			}, 1_000),
+		).toBeTrue();
+
+		const targetLog = managedDaemonLogPath(path.join(runtimeDir, "daemons", spec.name));
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const original = fs.rename.bind(fs);
+		const rename = spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+			if (path.resolve(String(oldPath)) === targetLog) {
+				entered.resolve();
+				await release.promise;
+			}
+			await original(oldPath, newPath);
+		});
+		const restarted = Promise.allSettled([client.request({ op: "restart", name: spec.name })]);
+		try {
+			const result = await Promise.race([entered.promise.then(() => "held"), restarted.then(() => "restarted")]);
+			expect(result).toBe("held");
+			expect(await startOutcome).toEqual([
+				{ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("superseded") }) },
+			]);
+		} finally {
+			release.resolve();
+			rename.mockRestore();
+			await restarted;
+		}
+	}, 10_000);
 });
