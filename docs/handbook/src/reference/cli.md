@@ -21,13 +21,24 @@ Common launch options:
 | `--mcp-config <absolute-file>` | Add explicit MCP servers for this run, including ACP sessions; never writes the active profile |
 | `--approval-mode <policy>` | When to ask before running commands |
 | `--profile <name>` | Use an isolated profile agent directory |
-| `--model <id>` | Interactive model (`provider/model`) |
+| `--model <id>` | Select a model (`provider/model`) |
 | `--compaction-model <id>` | Model for context compaction |
 | `-p, --print` | Single-shot run: send the prompt, print the answer, exit |
+| `--account <number>` | Pin one stored OAuth account for an explicit print-mode model |
 | `--mode <mode>` | Output mode: `text` (default), `json`, `rpc`, `rpc-ui` ([RPC](./rpc.md)), or `acp` ([ACP](./acp.md)) |
 
 Config precedence: CLI flags → `--config` overlays → profile config → defaults. See
 [Configuration](../using/configuration.md).
+
+In print mode, an explicit `--model` that returns HTTP 404 fails the command.
+The error names the model, provider, account when known, and HTTP status.
+Configured fallback chains can still change models when you do not pin a model with `--model`.
+Print mode writes a fallback warning to stderr in both text and JSON modes.
+
+Run `veyyon token <provider> --list` to find the account number. Then pass it to
+`veyyon -p --model <provider/model> --account <number> <prompt>`.
+This selects an OAuth account for this run only. It does not change the saved account
+choice or replace the selected account with a sibling if it fails.
 
 ## Registered subcommands
 
