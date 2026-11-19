@@ -10,6 +10,8 @@
 - Fixed lock waits that exceeded their retry budget when other waiters timed out while the holder still held the lock.
 - File-lock release warnings now keep the underlying Windows access error when cleanup stays blocked.
 - Report the owner, age, and phase when an asynchronous file-lock queue stalls ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Skip speculative owner writes while a lock is held, and let async callers opt into a bounded contention wait ([#1183](https://github.com/Wladefant/veyyon/issues/1183)).
+- Retry transient Windows access errors when restoring a live file lock from its transition directory ([Refs #1183](https://github.com/Wladefant/veyyon/issues/1183)).
 
 ## [1.10.7] - 2026-11-16
 
