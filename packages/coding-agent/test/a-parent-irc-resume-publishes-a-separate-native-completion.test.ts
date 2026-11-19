@@ -1145,6 +1145,206 @@ describe("native retained child resume", () => {
 		).toHaveLength(1);
 	});
 
+	it("a second reopen publishes a repaired phase's saved yield without another provider request", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Fresh result"], stopReason: "stop" }]);
+		const worker = await session("worker", [{ content: ["Unrelated final text"], stopReason: "stop" }]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: worker.instance,
+		});
+
+		const oldPhase = {
+			role: "custom" as const,
+			customType: "irc:incoming",
+			content: "Older phase A",
+			display: true,
+			timestamp: 1000,
+			attribution: "agent" as const,
+			details: { id: "resume-A", from: "owner", source: "agent", relation: "parent" },
+		};
+		new IrcContinuationOutbox(worker.store).begin("resume-A", oldPhase);
+		worker.store.appendCustomMessageEntry(
+			oldPhase.customType,
+			oldPhase.content,
+			oldPhase.display,
+			oldPhase.details,
+			oldPhase.attribution,
+		);
+		await worker.store.ensureOnDisk();
+		await worker.store.sync();
+
+		await worker.instance.prompt("Independent user request");
+		await worker.instance.waitForIdle();
+		await worker.instance.dispose();
+		const journal = worker.store.getSessionFile()!;
+
+		const firstReopened = await SessionManager.open(journal);
+		const firstRecovered = await session("worker", [yielded("B")], firstReopened, [], "sub");
+		registry.attachSession("worker", firstRecovered.instance, journal);
+		const enteredRelease = Promise.withResolvers<void>();
+		const releaseGate = Promise.withResolvers<void>();
+		const acquire = spyOn(laneAdmission, "acquireSubagentHostLane").mockResolvedValue({
+			slotId: "worker-slot",
+			leaseToken: "lease",
+			release: async () => {
+				enteredRelease.resolve();
+				await releaseGate.promise;
+			},
+		});
+		await firstRecovered.instance.replayIrcContinuations();
+		await enteredRelease.promise;
+		await firstReopened.sync();
+		expect(
+			parent.store
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "task:continuation"),
+		).toHaveLength(0);
+
+		acquire.mockRestore();
+		const secondReopened = await SessionManager.open(journal);
+		const secondRecovered = await session("worker", [], secondReopened);
+		registry.attachSession("worker", secondRecovered.instance, journal);
+
+		try {
+			await secondRecovered.instance.replayIrcContinuations();
+			await secondRecovered.instance.waitForIdle();
+			await parent.instance.waitForIdle();
+
+			expect(secondRecovered.mock.calls).toHaveLength(0);
+			const completions = parent.store
+				.getEntries()
+				.flatMap(entry =>
+					entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+				);
+			expect(completions).toHaveLength(1);
+			expect(completions[0]?.content).toContain('"value":"B"');
+		} finally {
+			const completeSpy = spyOn(IrcContinuationOutbox.prototype, "complete").mockResolvedValue({
+				version: 1,
+				id: "aborted",
+				agentId: "worker",
+				parentId: "owner",
+				phaseId: "resume-A",
+				handle: "agent://worker.phase-aborted",
+				output: "{}",
+				resultSource: "harness",
+			});
+			firstRecovered.instance.beginDispose();
+			releaseGate.reject(new Error("aborted before outbox completion"));
+			await firstRecovered.instance.waitForIdle().catch(() => {});
+			completeSpy.mockRestore();
+		}
+	});
+
+	it("a mid-turn steer within a phase does not cross the phase boundary on reopen", async () => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+		const parent = await session("owner", [{ content: ["Steered result received"], stopReason: "stop" }]);
+		const toolEntered = Promise.withResolvers<void>();
+		const toolRelease = Promise.withResolvers<void>();
+		const stepTool: AgentTool = {
+			name: "step_tool",
+			label: "Step Tool",
+			description: "Nonterminal step tool",
+			parameters: z.object({}),
+			execute: async () => {
+				toolEntered.resolve();
+				await toolRelease.promise;
+				return { content: [{ type: "text", text: "stepped" }], details: {} };
+			},
+		};
+		const worker = await session(
+			"worker",
+			[
+				{
+					content: [{ type: "toolCall", id: "call-step", name: "step_tool", arguments: {} }],
+					stopReason: "toolUse",
+				},
+				yielded("B-brief"),
+			],
+			undefined,
+			[stepTool],
+			"sub",
+		);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "owner", displayName: "Owner", kind: "main", scope: "test", session: parent.instance });
+		registry.register({
+			id: "worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: "owner",
+			scope: "test",
+			session: worker.instance,
+		});
+
+		const enteredRelease = Promise.withResolvers<void>();
+		const releaseGate = Promise.withResolvers<void>();
+		const acquire = spyOn(laneAdmission, "acquireSubagentHostLane").mockResolvedValue({
+			slotId: "worker-slot",
+			leaseToken: "lease",
+			release: async () => {
+				enteredRelease.resolve();
+				await releaseGate.promise;
+			},
+		});
+
+		await worker.instance.deliverIrcMessage({
+			id: "steer-A",
+			from: "owner",
+			to: "worker",
+			body: "Run phase A.",
+			ts: Date.now(),
+		});
+		await toolEntered.promise;
+		await worker.instance.steer("Keep this result brief");
+		toolRelease.resolve();
+		await enteredRelease.promise;
+		await worker.store.sync();
+		const journal = worker.store.getSessionFile()!;
+
+		acquire.mockRestore();
+		const reopened = await SessionManager.open(journal);
+		const recovered = await session("worker", [], reopened);
+		registry.attachSession("worker", recovered.instance, journal);
+
+		try {
+			await recovered.instance.replayIrcContinuations();
+			await recovered.instance.waitForIdle();
+			await parent.instance.waitForIdle();
+
+			expect(recovered.mock.calls).toHaveLength(0);
+			const completions = parent.store
+				.getEntries()
+				.flatMap(entry =>
+					entry.type === "custom_message" && entry.customType === "task:continuation" ? [entry] : [],
+				);
+			expect(completions).toHaveLength(1);
+			expect(completions[0]?.content).toContain('"value":"B-brief"');
+		} finally {
+			const completeSpy = spyOn(IrcContinuationOutbox.prototype, "complete").mockResolvedValue({
+				version: 1,
+				id: "aborted",
+				agentId: "worker",
+				parentId: "owner",
+				phaseId: "steer-A",
+				handle: "agent://worker.phase-aborted",
+				output: "{}",
+				resultSource: "harness",
+			});
+			worker.instance.beginDispose();
+			releaseGate.reject(new Error("aborted before outbox completion"));
+			await worker.instance.waitForIdle().catch(() => {});
+		}
+	});
+
 	it("does not create a turn or completion when replaying an already delivered parent message missing a continuation phase", async () => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
