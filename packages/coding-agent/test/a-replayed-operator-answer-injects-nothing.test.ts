@@ -428,6 +428,36 @@ test("concurrent reconnect managers share one pending answer and preserve it aft
 	expect(afterRetry.getEntries().filter(entry => entry.type === "custom" && entry.customType === "terminal:operator-answer")).toHaveLength(1);
 });
 
+test("a pending append by the receiving manager does not make its answer journal stale", async () => {
+	const { manager } = newSession();
+	await manager.ensureOnDisk();
+	const journal = manager.getSessionFile()!;
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const holder = new FileSessionStorage().withJournalLock(journal, async () => {
+		entered.resolve();
+		await release.promise;
+	});
+	const queue: string[] = [];
+	const answer = envelope("q-contended", "evt-original");
+	const inbox = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+	try {
+		await Promise.race([entered.promise, holder]);
+		manager.appendMessage({ role: "user", content: "local input", timestamp: Date.now() });
+		const accepted = inbox.accept(answer, "auto").catch((error: unknown) => error);
+		await new Promise<void>(resolve => setImmediate(resolve));
+		expect(queue).toEqual([]);
+		release.resolve();
+		expect(await accepted).toBe("queued");
+		expect(queue).toEqual([answer]);
+		expect(await inbox.accept(envelope("q-contended", "evt-retry"), "auto")).toBe("duplicate");
+	} finally {
+		release.resolve();
+		await holder;
+		await manager.close();
+	}
+});
+
 test("retained reconnect manager never writes retry text over an answer already persisted by another manager", async () => {
 	const { manager, dir } = newSession();
 	manager.appendMessage({ role: "user", content: "seed", timestamp: Date.now() });
