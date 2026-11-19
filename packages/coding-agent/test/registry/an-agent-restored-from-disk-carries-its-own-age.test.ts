@@ -160,9 +160,10 @@ describe("the prune budget reaches an agent restored from disk", () => {
 		vi.advanceTimersByTime(30_000);
 		await flushAsync();
 		expect(registry.get("Otter")).toBeDefined();
-
-		vi.advanceTimersByTime(50 * 60_000);
-		await flushAsync();
+		for (let elapsed = 0; elapsed < 50 * 60_000; elapsed += 30_000) {
+			vi.advanceTimersByTime(30_000);
+			await flushAsync();
+		}
 		expect(registry.get("Otter")).toBeUndefined();
 	});
 
@@ -263,6 +264,7 @@ describe("the prune budget reaches an agent restored from disk", () => {
 				session: null,
 				sessionFile: file,
 				status: "parked",
+				coldRestoredFromDisk: true,
 				lastActivity: Date.now() - 3 * HOUR,
 			});
 			expect(ref.kind).toBe(kind);
