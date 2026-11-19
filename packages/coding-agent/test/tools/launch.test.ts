@@ -303,7 +303,7 @@ setInterval(() => {}, 1000);
 			const spec: DaemonSpec = {
 				name: "early-exit",
 				application: process.execPath,
-				args: ["-e", `process.exit(${exitCode})`],
+				args: ["-e", `process.stderr.write("startup output\\n", () => process.exit(${exitCode}))`],
 				env: {},
 				cwd: projectDir,
 				pty: false,
@@ -317,6 +317,7 @@ setInterval(() => {}, 1000);
 			expect(result.daemon.state).toBe(exitCode === 0 ? "exited" : "failed");
 			expect(result.daemon.exitCode).toBe(exitCode);
 			expect(result.readyTimedOut).toBeFalse();
+			expect(result.outputTail).toContain("startup output");
 		} finally {
 			await shutdownBroker(client);
 		}

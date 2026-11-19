@@ -212,7 +212,7 @@ export type DaemonOperation =
 /** Typed broker result decoded before it reaches tool code. */
 export type DaemonRpcResult =
 	| { op: "ping"; projectDir: string; pid?: number }
-	| { op: "start"; daemon: DaemonSnapshot; readyTimedOut: boolean }
+	| { op: "start"; daemon: DaemonSnapshot; readyTimedOut: boolean; outputTail?: string }
 	| {
 			op: "list";
 			daemons: DaemonSnapshot[];
@@ -630,6 +630,7 @@ export function parseDaemonRpcResult(operation: DaemonOperation, value: unknown)
 				op: "start",
 				daemon: parseDaemonSnapshot(source.daemon),
 				readyTimedOut: booleanValue(source.readyTimedOut, "result.readyTimedOut"),
+				...(source.outputTail === undefined ? {} : { outputTail: rawString(source.outputTail, "result.outputTail") }),
 			};
 		case "list": {
 			if (!Array.isArray(source.daemons)) throw new Error("result.daemons must be an array");

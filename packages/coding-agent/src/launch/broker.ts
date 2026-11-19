@@ -726,16 +726,23 @@ export class DaemonBroker {
 				record,
 				() => {
 					this.#assertExpected(expectedGuard, record);
-					return record.snapshot.state === "ready" || this.#shuttingDown;
+					const { state } = record.snapshot;
+					return state === "ready" || state === "restarting" || terminalState(state) || this.#shuttingDown;
 				},
 				spec.ready.timeoutMs,
 			);
 			this.#assertExpected(expectedGuard, record);
-			readyTimedOut = record.snapshot.state !== "ready" && !terminalState(record.snapshot.state);
+			const { state } = record.snapshot;
+			readyTimedOut = state !== "ready" && state !== "restarting" && !terminalState(state);
 		}
 		await record.persistQueue;
 		this.#assertExpected(expectedGuard, record);
-		return { op: "start", daemon: { ...record.snapshot }, readyTimedOut };
+		const daemon = { ...record.snapshot };
+		const outputTail =
+			spec.ready && (terminalState(daemon.state) || daemon.state === "restarting")
+				? record.readinessBuffer.slice(-COMPLETION_TAIL_BYTES).toWellFormed()
+				: "";
+		return { op: "start", daemon, readyTimedOut, ...(outputTail ? { outputTail } : {}) };
 	}
 
 	/** Validate `spec`, register a fresh record under its name, and launch its first generation. */

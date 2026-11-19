@@ -292,6 +292,8 @@ export function toolContent(result: DaemonRpcResult, params: LaunchParams): stri
 			const lines = [`${daemon.state === "failed" ? "Failed to launch" : "Started"} ${daemonLabel(daemon)}`];
 			if (daemon.state === "failed" && daemon.exitReason) lines.push(`Reason: ${daemon.exitReason}`);
 			if (daemon.readyMatch) lines.push(`Ready log matched: ${daemon.readyMatch}`);
+			const tailLine = result.outputTail?.trimEnd().split("\n").pop()?.trim();
+			if (tailLine) lines.push(`Last output: ${previewLine(tailLine, TRUNCATE_LENGTHS.SHORT)}`);
 			if (result.readyTimedOut) {
 				const pending = readyPendingSummary(daemon, params.ready);
 				const cause = pending.length > 0 ? `: ${pending.join("; ")}` : "";
