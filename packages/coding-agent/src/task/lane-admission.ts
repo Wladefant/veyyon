@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import { constants } from "node:os";
 import * as path from "node:path";
 import { logger } from "@veyyon/utils";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
@@ -932,9 +933,84 @@ function waitAbortably(ms: number, signal?: AbortSignal): Promise<void> {
 /** Internal indirection enabling deterministic spies on ledger calls inside wait loops. */
 export const laneAdmissionDriver = {
 	acquire: acquireLaneAdmission,
-	heartbeat: heartbeatLaneAdmission,
 	release: releaseLaneAdmission,
 };
+
+interface NativeHeartbeatRegistration {
+	slotId: string;
+	leaseToken: string;
+	owner: string;
+}
+
+interface NativeHeartbeatGroup {
+	registrations: Map<string, NativeHeartbeatRegistration>;
+	timer?: NodeJS.Timeout;
+	inFlight: boolean;
+}
+
+const nativeHeartbeatGroups = new Map<string, NativeHeartbeatGroup>();
+
+async function writeNativeHeartbeats(
+	ledgerPath: string,
+	group: NativeHeartbeatGroup,
+	due: Map<string, NativeHeartbeatRegistration>,
+): Promise<void> {
+	const owner = due.values().next().value?.owner;
+	await withLedgerLock(ledgerPath, "heartbeat", owner, async () => {
+		const ledger = await readLedgerUnderLock(ledgerPath, DEFAULT_HOST_LANE_CAP);
+		const now = Date.now();
+		let changed = false;
+		for (const reservation of ledger.reservations) {
+			const registration = due.get(reservation.slotId);
+			if (
+				!registration ||
+				group.registrations.get(reservation.slotId) !== registration ||
+				reservation.kind !== "native" ||
+				reservation.leaseToken !== registration.leaseToken
+			) {
+				continue;
+			}
+			reservation.lastHeartbeatAt = now;
+			changed = true;
+		}
+		if (changed) await writeLedgerUnderLock(ledgerPath, ledger);
+	});
+}
+
+function registerNativeHeartbeat(
+	ledgerPath: string,
+	intervalMs: number,
+	registration: NativeHeartbeatRegistration,
+): () => void {
+	const key = `${ledgerPath}\0${intervalMs}`;
+	let group = nativeHeartbeatGroups.get(key);
+	if (!group) {
+		group = { registrations: new Map(), inFlight: false };
+		nativeHeartbeatGroups.set(key, group);
+	}
+	const cohort = group;
+	cohort.registrations.set(registration.slotId, registration);
+	if (!cohort.timer) {
+		cohort.timer = setInterval(() => {
+			if (cohort.inFlight) return;
+			cohort.inFlight = true;
+			void writeNativeHeartbeats(ledgerPath, cohort, new Map(cohort.registrations))
+				.catch(() => {})
+				.finally(() => {
+					cohort.inFlight = false;
+					if (cohort.registrations.size === 0) nativeHeartbeatGroups.delete(key);
+				});
+		}, intervalMs);
+		cohort.timer.unref?.();
+	}
+	return () => {
+		if (!cohort.registrations.delete(registration.slotId) || cohort.registrations.size !== 0) return;
+		clearInterval(cohort.timer);
+		cohort.timer = undefined;
+		// Keep the group until its write settles so new members cannot bypass it.
+		if (!cohort.inFlight) nativeHeartbeatGroups.delete(key);
+	};
+}
 
 interface ActiveNativeLeaseEntry {
 	lease: NativeHostLaneLease;
@@ -980,9 +1056,94 @@ function nativeReleaseKey(options: { owner: string; globalConfigRoot?: string })
 	return `${getLaneAdmissionLedgerPath(options.globalConfigRoot)}\0${options.owner}`;
 }
 
+interface LaneReleaseFailure {
+	errorClass: string;
+	code: string;
+	message: string;
+}
+
+interface LaneReleaseAttempt extends LaneReleaseFailure {
+	attempt: number;
+	durationMs: number;
+}
+
+const RELEASE_FS_MESSAGES: Record<string, string> = {
+	EACCES: "Permission denied.",
+	EBUSY: "The filesystem resource is busy.",
+	EEXIST: "The filesystem target already exists.",
+	ENOSPC: "The filesystem is out of space.",
+	EPERM: "The filesystem operation is not permitted.",
+};
+
+function laneReleaseRejection(reason: string | undefined): LaneReleaseFailure {
+	switch (reason) {
+		case "invalid_cap":
+			return { errorClass: "LaneAdmissionError", code: reason, message: "The lane admission cap is invalid." };
+		case "corrupt_admission_ledger":
+			return { errorClass: "LaneAdmissionError", code: reason, message: "The lane admission ledger is corrupt." };
+		case "unsupported_ledger_version":
+			return {
+				errorClass: "LaneAdmissionError",
+				code: reason,
+				message: "The lane admission ledger version is unsupported.",
+			};
+		case "lease_token_mismatch":
+			return { errorClass: "LaneAdmissionError", code: reason, message: "The slot belongs to another lease." };
+		default:
+			return {
+				errorClass: "LaneAdmissionError",
+				code: "release_rejected",
+				message: "The ledger rejected the release.",
+			};
+	}
+}
+
+function laneReleaseException(error: unknown): LaneReleaseFailure {
+	try {
+		if (error instanceof Error) {
+			const code: unknown = (error as NodeJS.ErrnoException).code;
+			if (error instanceof LaneAdmissionError) {
+				return laneReleaseRejection(typeof code === "string" ? code : undefined);
+			}
+			// Log the same code we validated. Neither an errno's message nor a cause is safe to log.
+			if (typeof code === "string" && Object.hasOwn(constants.errno, code)) {
+				return {
+					errorClass: "SystemError",
+					code,
+					message: RELEASE_FS_MESSAGES[code] ?? "Filesystem operation failed.",
+				};
+			}
+			const message: unknown = error.message;
+			if (typeof message === "string" && message.startsWith("Failed to acquire lock for ")) {
+				if (
+					message.endsWith(": an earlier holder in this process did not release it") ||
+					message.includes(": in-process queue made no progress for ")
+				) {
+					return {
+						errorClass: "Error",
+						code: "ledger_local_lock_timeout",
+						message: "The previous holder in this process did not release the ledger lock.",
+					};
+				}
+				return {
+					errorClass: "Error",
+					code: "ledger_lock_timeout",
+					message: "The ledger lock could not be acquired before retries ended.",
+				};
+			}
+		}
+	} catch {
+		// A throwing accessor must not interrupt release retries or reconciliation.
+	}
+	return { errorClass: "Error", code: "release_exception", message: "The release threw an unexpected exception." };
+}
+
 async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> {
 	const key = nativeReleaseKey(options);
+	let attempts: LaneReleaseAttempt[] | undefined;
 	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const started = performance.now();
+		let failure: LaneReleaseFailure;
 		try {
 			const res = await laneAdmissionDriver.release(options);
 			if (res.ok) {
@@ -992,9 +1153,13 @@ async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> 
 			if (res.reason === "lease_token_mismatch") {
 				throw new LaneAdmissionError(res.reason, `Host lane slot ${options.slotId} belongs to another lease`);
 			}
+			failure = laneReleaseRejection(res.reason);
 		} catch (error) {
-			if (error instanceof LaneAdmissionError && error.code === "lease_token_mismatch") throw error;
+			failure = laneReleaseException(error);
+			if (failure.code === "lease_token_mismatch") throw error;
 		}
+		attempts ??= [];
+		attempts.push({ attempt: attempt + 1, durationMs: Math.round(performance.now() - started), ...failure });
 		if (attempt < 2) await waitAbortably(100);
 	}
 	pendingNativeReleases.set(key, options);
@@ -1002,6 +1167,7 @@ async function releaseSlotDurably(options: PendingNativeRelease): Promise<void> 
 		operation: "lane-release",
 		stage: "durable-release",
 		errorCode: "lane_release_reconciliation_required",
+		attempts,
 	});
 	throw new LaneAdmissionError(
 		"lane_release_reconciliation_required",
@@ -1184,18 +1350,11 @@ export async function acquireNativeHostLaneWait(options: {
 			}
 			let released = false;
 			let inFlightRelease: Promise<void> | null = null;
-			const timer = setInterval(() => {
-				if (released || inFlightRelease) return;
-				void laneAdmissionDriver
-					.heartbeat({
-						slotId,
-						leaseToken,
-						owner: options.owner,
-						globalConfigRoot: options.globalConfigRoot,
-					})
-					.catch(() => {});
-			}, heartbeatMs);
-			timer.unref?.();
+			const stopHeartbeat = registerNativeHeartbeat(
+				path.resolve(getLaneAdmissionLedgerPath(options.globalConfigRoot)),
+				heartbeatMs,
+				{ slotId, leaseToken, owner: options.owner },
+			);
 
 			return {
 				slotId,
@@ -1203,7 +1362,7 @@ export async function acquireNativeHostLaneWait(options: {
 				release(): Promise<void> {
 					if (released) return Promise.resolve();
 					if (inFlightRelease) return inFlightRelease;
-					clearInterval(timer);
+					stopHeartbeat();
 					let pending: Promise<void>;
 					pending = releaseSlotDurably({
 						owner: options.owner,
@@ -1214,7 +1373,6 @@ export async function acquireNativeHostLaneWait(options: {
 					}).then(
 						() => {
 							released = true;
-							clearInterval(timer);
 							if (inFlightRelease === pending) inFlightRelease = null;
 						},
 						error => {
