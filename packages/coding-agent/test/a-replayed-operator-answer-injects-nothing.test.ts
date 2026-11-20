@@ -6,6 +6,7 @@
 // (which manager it reads, how it asks the runtime queue) is not exercised here, and a dequeue between the runtime
 // taking an answer and journaling it is the one window a retry can inject twice.
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { logger, TempDir } from "@veyyon/utils";
@@ -19,10 +20,10 @@ afterEach(() => {
 const envelope = (question: string, event: string, body = "the secret answer text") =>
 	`[operator-answer question=${question} event=${event}] ${body}`;
 
-function newSession(): { manager: SessionManager; dir: TempDir } {
+function newSession(storage?: FileSessionStorage): { manager: SessionManager; dir: TempDir } {
 	const dir = TempDir.createSync("@operator-answer-");
 	dirs.push(dir);
-	return { manager: SessionManager.create(dir.path(), dir.path()), dir };
+	return { manager: SessionManager.create(dir.path(), dir.path(), storage), dir };
 }
 
 /** Injection as the live session does it: the answer becomes a user message in the journal. */
@@ -530,6 +531,67 @@ test.each(["new", "consumed"])("an answer rechecks owned appends queued during i
 		secondRelease.resolve();
 		await holder;
 		await secondHolder;
+		await manager.close();
+	}
+});
+
+test("an operator answer refuses within its deadline when a rewrite traps the writer drain", async () => {
+	const storage = new FileSessionStorage();
+	const opened = spyOn(storage, "openWriter");
+	const { manager } = newSession(storage);
+	await manager.ensureOnDisk();
+	const journal = manager.getSessionFile()!;
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const holder = storage.withJournalLock(journal, async () => {
+		entered.resolve();
+		await release.promise;
+	});
+	const closing = Promise.withResolvers<void>();
+	const abortClose = Promise.withResolvers<void>();
+	let rewrite: Promise<unknown> | undefined;
+	let writerClosed: Promise<void> | undefined;
+	const watchdog = new AbortController();
+	const queue: string[] = [];
+	try {
+		await Promise.race([entered.promise, holder]);
+		manager.appendMessage({ role: "user", content: "append A", timestamp: Date.now() });
+		manager.appendMessage({ role: "user", content: "append B", timestamp: Date.now() });
+		const writer = opened.mock.results.findLast(result => result.type === "return")!.value;
+		const close = writer.close.bind(writer);
+		spyOn(writer, "close").mockImplementation(async () => {
+			writerClosed = close();
+			closing.resolve();
+			await Promise.race([
+				writerClosed,
+				abortClose.promise.then(() => {
+					throw new Error("release the test's blocked rewrite");
+				}),
+			]);
+		});
+		const inbox = new OperatorAnswerInbox(() => manager, queueingInto(queue), waiting(queue));
+		const accepted = inbox.accept(envelope("q-rewrite", "evt-original"), "auto").catch((error: unknown) => error);
+		await nextTurn();
+		// A is ahead of the rewrite. B joins the lock only after A completes.
+		// The rewrite takes the lock and closes the writer, whose close waits for B.
+		rewrite = manager.rewriteEntries().catch((error: unknown) => error);
+		await nextTurn();
+		release.resolve();
+		await Promise.race([closing.promise, rewrite]);
+		// This test checks a real deadline while the filesystem lock is held.
+		// The watchdog lets the negative control release the deliberate lock cycle.
+		const result = await Promise.race([accepted, delay(2_500, "answer did not settle", { signal: watchdog.signal })]);
+		expect(result).toBeInstanceOf(Error);
+		expect(String(result)).toContain("Operator-answer journal is stale: timed out draining owned appends");
+		expect(queue).toEqual([]);
+	} finally {
+		watchdog.abort();
+		release.resolve();
+		abortClose.resolve();
+		await holder;
+		await rewrite;
+		await writerClosed;
+		opened.mockRestore();
 		await manager.close();
 	}
 });
