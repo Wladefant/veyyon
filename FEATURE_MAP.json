@@ -39,6 +39,19 @@
       "docs": [
         "docs/tools/launch.md"
       ]
+    },
+    "herdr-session-restore": {
+      "name": "Herdr session restore",
+      "description": "Report and refresh the foreground Veyyon conversation for restore after a Herdr server restart.",
+      "entry_files": [
+        "packages/coding-agent/src/modes/terminal/herdr-reporter.ts"
+      ],
+      "tests": [
+        "packages/coding-agent/src/modes/terminal/herdr-restores-the-foreground-conversation.test.ts"
+      ],
+      "owning_issue": "https://github.com/Wladefant/super-board/issues/375",
+      "risk": "medium",
+      "components": ["coding-agent", "Herdr"]
     }
   }
 }

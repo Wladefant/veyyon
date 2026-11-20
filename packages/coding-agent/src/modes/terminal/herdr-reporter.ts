@@ -65,6 +65,7 @@ export class HerdrReporter {
 	#released = false;
 	#reported?: string;
 	#timer?: NodeJS.Timeout;
+	#refreshAt?: number;
 
 	constructor(
 		private readonly env: NodeJS.ProcessEnv = process.env,
@@ -73,6 +74,7 @@ export class HerdrReporter {
 		private readonly launchArgs = process.argv.slice(2),
 		private readonly startupCwd = process.cwd(),
 		private readonly identityPollMs = 1000,
+		private readonly resumeRefreshMs = 30_000,
 	) {}
 
 	#stopWatching(): void {
@@ -103,12 +105,14 @@ export class HerdrReporter {
 			}
 		});
 		// `switchSession`, `newSession`, `fork` and `branch` replace the session in place and raise no
-		// event this reporter can see. Herdr would keep restoring the previous conversation until the
-		// next turn, so compare identity on a short timer. A report only spawns when it changed.
+		// event this reporter can see. Check identity on a short timer. Also refresh the
+		// current resume command in case Herdr dropped it or missed a report during a stall.
 		this.#timer = setInterval(() => {
 			try {
 				const current = this.#session;
-				if (!current || this.#released || identityOf(current) === this.#reported) return;
+				if (!current || this.#released) return;
+				const refreshDue = this.#refreshAt !== undefined && Date.now() >= this.#refreshAt;
+				if (!refreshDue && identityOf(current) === this.#reported) return;
 				this.#report(current.isStreaming ? "working" : "idle");
 			} catch (error) {
 				logger.warn("herdr identity report failed", { error: String(error) });
@@ -122,6 +126,7 @@ export class HerdrReporter {
 		const file = manager?.getSessionFile();
 		const resume = file ? herdrResumeArgv(file, this.profile, this.launchArgs, this.startupCwd) : undefined;
 		this.#reported = this.#session ? identityOf(this.#session) : undefined;
+		this.#refreshAt = resume ? Date.now() + this.resumeRefreshMs : undefined;
 		const args = [
 			"pane",
 			"report-agent",
