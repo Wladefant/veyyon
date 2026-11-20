@@ -16,7 +16,7 @@ import {
 	stringifyJson,
 	toError,
 } from "@veyyon/utils";
-import { acquireFileLock, type FileLockHandle } from "@veyyon/utils/file-lock";
+import { acquireFileLock, type FileLockHandle, tryWithFileLock, withFileLock } from "@veyyon/utils/file-lock";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { ArtifactManager } from "./artifacts";
@@ -217,6 +217,38 @@ function fileSafeTimestamp(iso: string): string {
 
 function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	return sessionFile ? sessionFileStem(sessionFile) : null;
+}
+
+const NATIVE_OWNER_SUFFIX = ".active-owner";
+const NATIVE_OWNER_LOCK = `${NATIVE_OWNER_SUFFIX}.lock`;
+const NATIVE_OWNER_TRANSITION = `${NATIVE_OWNER_LOCK}.transition`;
+const nativeRelocationGate = (directory: string): string => `${directory}.native-relocation`;
+
+async function canonicalArtifactDirectory(directory: string): Promise<string> {
+	return fs.promises.realpath(directory).catch(async error => {
+		if (!isEnoent(error)) throw error;
+		return path.join(await fs.promises.realpath(path.dirname(directory)), path.basename(directory));
+	});
+}
+
+async function assertNoNativeOwners(directory: string): Promise<void> {
+	const names = await fs.promises.readdir(directory).catch(error => {
+		if (!isEnoent(error)) throw error;
+		return [];
+	});
+	// Native children share their root's artifact directory. Use the owner lock's
+	// stale-owner rules rather than treating a dead child as a permanent move veto.
+	for (const name of names) {
+		const suffix = name.endsWith(NATIVE_OWNER_LOCK)
+			? NATIVE_OWNER_LOCK
+			: name.endsWith(NATIVE_OWNER_TRANSITION)
+				? NATIVE_OWNER_TRANSITION
+				: undefined;
+		if (!suffix) continue;
+		const transcript = name.slice(0, -suffix.length);
+		const owner = await tryWithFileLock(path.join(directory, `${transcript}${NATIVE_OWNER_SUFFIX}`), async () => {});
+		if (!owner.acquired) throw new Error(`Cannot move session: active native transcript ${transcript}.`);
+	}
 }
 
 /**
@@ -472,7 +504,7 @@ export class SessionManager {
 
 	/** The single open append writer; the manager only ever writes one file at a time. */
 	#writer: SessionStorageWriter | undefined;
-	#exclusiveOwner: { handle: FileLockHandle; closing?: Promise<void> } | undefined;
+	#exclusiveOwner: { handle: FileLockHandle; gate: string; closing?: Promise<void> } | undefined;
 	/** Serializes async disk work (flush/close/atomic rewrite). Appends are synchronous and bypass it. */
 	#diskTail: Promise<void> = Promise.resolve();
 	#diskFailure: Error | undefined;
@@ -3132,6 +3164,33 @@ export class SessionManager {
 					? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
 					: computeDefaultSessionDir(resolvedCwd, this.#storage));
 
+		if (this.#persist && this.#sessionFile && this.#storage instanceof FileSessionStorage) {
+			const nextFile = path.join(nextSessionDir, path.basename(this.#sessionFile));
+			const sourceDir = sessionFileStem(this.#sessionFile);
+			const relocating = nextFile !== this.#sessionFile;
+			if (relocating && this.#exclusiveOwner) throw new Error("Cannot move an active native transcript.");
+			if (relocating && sourceDir !== this.#sessionFile) {
+				await fs.promises.mkdir(path.dirname(sourceDir), { recursive: true });
+				const source = await canonicalArtifactDirectory(sourceDir);
+				// The gate is outside the tree being moved. Hold it across the scan,
+				// rename and header rewrite, including storage rollback on rewrite failure.
+				return withFileLock(nativeRelocationGate(source), async () => {
+					await assertNoNativeOwners(source);
+					await fs.promises.mkdir(nextSessionDir, { recursive: true });
+					const target = await canonicalArtifactDirectory(sessionFileStem(nextFile));
+					if (target === source) return this.#moveTo(resolvedCwd, nextSessionDir);
+					// Fail fast rather than deadlock with a competing move in the opposite direction.
+					return withFileLock(nativeRelocationGate(target), () => this.#moveTo(resolvedCwd, nextSessionDir), {
+						retries: 1,
+						queueWaitMs: 1,
+					});
+				});
+			}
+		}
+		return this.#moveTo(resolvedCwd, nextSessionDir);
+	}
+
+	async #moveTo(resolvedCwd: string, nextSessionDir: string): Promise<void> {
 		let sessionFileExisted = false;
 		const previousCwd = this.#cwd;
 		const previousSessionDir = this.#sessionDir;
@@ -3533,7 +3592,9 @@ export class SessionManager {
 	close(): Promise<void> {
 		const owner = this.#exclusiveOwner;
 		if (!owner) return this.#close();
-		owner.closing ??= this.#close().finally(() => owner.handle.release());
+		if (!owner.closing) {
+			owner.closing = this.#close().finally(() => withFileLock(owner.gate, () => owner.handle.release()));
+		}
 		return owner.closing;
 	}
 
@@ -4592,15 +4653,18 @@ export class SessionManager {
 			if (isEnoent(error)) return path.join(await fs.promises.realpath(parent), path.basename(resolved));
 			throw error;
 		});
-		// This marker covers a running session, not individual append transactions. A peer
-		// cannot load the same journal while we own it, but unrelated paths never wait here.
-		const handle = await acquireFileLock(`${transcript}.active-owner`, { retries: 1, queueWaitMs: 1 });
+		// Reserve the journal under the directory gate so a concurrent move
+		// cannot rename the marker after checking for active owners.
+		const gate = nativeRelocationGate(path.dirname(transcript));
+		const handle = await withFileLock(gate, () =>
+			acquireFileLock(`${transcript}${NATIVE_OWNER_SUFFIX}`, { retries: 1, queueWaitMs: 1 }),
+		);
 		try {
 			const manager = await SessionManager.#open(transcript, sessionDir, storage, options);
-			manager.#exclusiveOwner = { handle };
+			manager.#exclusiveOwner = { handle, gate };
 			return manager;
 		} catch (error) {
-			await handle.release();
+			await withFileLock(gate, () => handle.release());
 			throw error;
 		}
 	}
