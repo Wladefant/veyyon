@@ -577,13 +577,20 @@ test("an operator answer refuses within its deadline when a rewrite traps the wr
 		rewrite = manager.rewriteEntries().catch((error: unknown) => error);
 		await nextTurn();
 		release.resolve();
-		await Promise.race([closing.promise, rewrite]);
+		expect(await Promise.race([closing.promise.then(() => true), rewrite.then(() => false)])).toBe(true);
 		// This test checks a real deadline while the filesystem lock is held.
 		// The watchdog lets the negative control release the deliberate lock cycle.
 		const result = await Promise.race([accepted, delay(2_500, "answer did not settle", { signal: watchdog.signal })]);
 		expect(result).toBeInstanceOf(Error);
 		expect(String(result)).toContain("Operator-answer journal is stale: timed out draining owned appends");
 		expect(queue).toEqual([]);
+		abortClose.resolve();
+		await rewrite;
+		await writerClosed;
+		await manager.rewriteEntries();
+		const retry = envelope("q-rewrite", "evt-retry");
+		expect(await inbox.accept(retry, "auto")).toBe("queued");
+		expect(queue).toEqual([retry]);
 	} finally {
 		watchdog.abort();
 		release.resolve();
