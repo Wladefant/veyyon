@@ -48,7 +48,6 @@ const baseOptions = {
 	agent: baseAgent,
 	task: "do work",
 	index: 0,
-	id: "agent-pass-through",
 	settings: Settings.isolated(),
 	modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 	enableLsp: false,
@@ -80,6 +79,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 
 		const result = await runSubprocess({
 			...baseOptions,
+			id: "agent-pass-through-discovered",
 			rules,
 			preloadedExtensionPaths,
 			preloadedCustomToolPaths,
@@ -98,7 +98,7 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
 
-		const result = await runSubprocess({ ...baseOptions });
+		const result = await runSubprocess({ ...baseOptions, id: "agent-pass-through-undiscovered" });
 
 		expect(result.exitCode).toBe(0);
 		const forwarded = spy.mock.calls[0]?.[0];
